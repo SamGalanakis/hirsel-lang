@@ -352,7 +352,17 @@ or a logical Perfetto trace without host admission. Replay enrichment uses the s
 checked, bound interpreter host-replay path and `Execution::observable` as execution
 comparison. It never opens live providers or invokes transport exporters. See
 [Offline observation views](determinism.md#offline-observation-views) for evidence,
-timing-sidecar, completeness and diagnostic format contracts.
+timing-sidecar, completeness and diagnostic format contracts. The host recording
+adapter wraps either journal in `observation_timing::TimingJournal`; it delegates
+preparation, barriers and completion unchanged and collects host `Instant` stamps
+outside the application adapter state. It writes the approved sidecar v1 on end
+or teardown, never during replay. Its epoch/elapsed structure follows
+tracing-subscriber `9d0e557728ec`, `tracing-subscriber/src/fmt/time/mod.rs:118-150`
+(`Uptime`); integer ns replace its text formatter to preserve exact evidence.
+The timed Perfetto instant vector ports Perfetto `c7b436451a48`,
+`src/trace_processor/export_json_unittest.cc:920-951` (`InstantEventOnThread`,
+10,000,000 ns becomes 10,000 us). Sparse events use a separate logical track
+because inventing measured coordinates would violate the evidence contract.
 
 The standalone `tools/obs_export.py` converts those views and explicit typed
 projections into pinned OTLP/HTTP JSON bundles, then sends only through a separate

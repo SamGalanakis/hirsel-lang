@@ -3618,6 +3618,17 @@ They are external tooling: they add no source API, ambient context or authority.
 application metadata must still be passed explicitly; a tape cannot reconstruct
 missing domain names, trace parents or original elapsed time.
 
+Diagnostic telemetry timing belongs to host tooling, outside `std@1/telemetry`:
+recorded host runs preserve `<recording>.timing.json` by default. Programs cannot
+read this sidecar through a granted directory or request its stamps through a
+telemetry API. `HIRSEL_TIMING=off` affects diagnostics only. An application that
+needs to decide based on elapsed time must take an explicit MonotonicClock and
+record its samples. The [timing-sidecar contract](determinism.md#offline-observation-views)
+defines archival identity, timestamp provenance and unknown-time behavior;
+OTLP spans and metric intervals still require actual samples and a separately
+supplied original Unix/monotonic correlation. Logical ordinals and replay time
+never substitute for original latency.
+
 ## Shell words
 
 `std@1/shlex` splits and quotes POSIX shell words, as Python `shlex` does with

@@ -97,9 +97,14 @@ pub fn record(
     path: &Path,
     outputs: &[(&str, &File)],
 ) -> Result<(), String> {
-    let (file, header, _) = header(io, admitted, path, outputs)?;
+    let (file, header, path) = header(io, admitted, path, outputs)?;
     let writer = RecordingWriter::new(file, &header).map_err(|e| format!("the Io tape: {e}"))?;
-    io.record_to(writer);
+    timing_journal(
+        io,
+        Box::new(crate::journal::TapeJournal(writer)),
+        path,
+        outputs,
+    );
     Ok(())
 }
 
@@ -119,8 +124,38 @@ pub fn durable(
     File::open(parent)
         .and_then(|directory| directory.sync_all())
         .map_err(failed)?;
-    io.journal_to(Box::new(journal));
+    timing_journal(io, Box::new(journal), path, outputs);
     Ok(())
+}
+
+/// Attach diagnostic observation without changing the recording protocol. Reuse
+/// the recorder's pinned destination checks: sidecars cannot alias a granted
+/// output or enter a program-readable mount. Failure disables diagnostic timing.
+fn timing_journal(
+    io: &mut RealIo,
+    journal: Box<dyn crate::journal::Journal>,
+    path: std::path::PathBuf,
+    outputs: &[(&str, &File)],
+) {
+    let timing = crate::observation_timing::capture_id().and_then(|capture| {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(".timing.json");
+        let mut protected = outputs.to_vec();
+        // Opening the tape itself protects against hardlink aliases as well.
+        let tape = File::open(&path).ok()?;
+        protected.push(("recording", &tape));
+        let output = io
+            .prepare_recording_with_files(Path::new(&sidecar), &protected)
+            .ok()?;
+        Some((capture, output))
+    });
+    if let Some((capture, output)) = timing {
+        io.journal_to(Box::new(crate::observation_timing::TimingJournal::new(
+            journal, path, output, capture,
+        )));
+    } else {
+        io.journal_to(journal);
+    }
 }
 
 /// Simulated Io that serves exactly a recording's events under the run it bound,

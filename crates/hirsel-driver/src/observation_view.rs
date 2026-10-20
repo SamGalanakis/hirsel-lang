@@ -209,6 +209,7 @@ impl View {
         for (ordinal, ns) in checked {
             self.document["events"][ordinal]["original_time_ns"] = json!(ns);
         }
+        self.document["time_basis"] = json!("host-monotonic-ns");
         self.document["timing"] =
             json!({"clock": "host-monotonic-ns", "includes_runtime_overhead": true});
         Ok(())
@@ -243,6 +244,40 @@ impl View {
             "{}\n",
             serde_json::to_string_pretty(&self.document).expect("JSON value")
         )
+    }
+
+    /// Select original timing when evidence supplies it; sparse unknown events
+    /// retain a separate logical track. Never turn absent times into durations.
+    pub fn perfetto(&self) -> String {
+        if self.document.get("timing").is_none() {
+            return self.logical_perfetto();
+        }
+        let mut events = vec![
+            json!({"ph": "M", "pid": 1, "tid": 1, "name": "thread_name",
+                "args": {"name": "Original host-monotonic time (includes runtime overhead)"}}),
+            json!({"ph": "M", "pid": 2, "tid": 1, "name": "thread_name",
+                "args": {"name": "Unknown time: logical order (ordinals; not elapsed time)"}}),
+        ];
+        for event in self.document["events"].as_array().expect("events") {
+            let ns = event["original_time_ns"].as_u64();
+            // Perfetto's Chrome JSON import uses microseconds. Preserve the exact
+            // ns in args and split before conversion to avoid rounding large u64s.
+            let ts = ns.map_or_else(
+                || event["ordinal"].clone(),
+                |ns| json!((ns / 1000) as f64 + (ns % 1000) as f64 / 1000.0),
+            );
+            events.push(
+                json!({"name": event["request"].as_str().unwrap().split(' ').next(),
+                "cat": if ns.is_some() { "hirsel.host-monotonic" } else { "hirsel.logical-order" },
+                "ph": "I", "s": "t", "pid": if ns.is_some() { 1 } else { 2 }, "tid": 1,
+                "ts": ts, "args": event}),
+            );
+        }
+        format!("{}\n", serde_json::to_string_pretty(&json!({"traceEvents": events,
+            "hirsel": {"version": 1, "evidence": self.evidence.value(),
+                "time_basis": "host-monotonic-ns", "complete": self.document["complete"],
+                "includes_runtime_overhead": true,
+                "warning": "Original monotonic instants; unknown samples use a separate logical track; no durations inferred"}})).expect("JSON value"))
     }
 
     /// Perfetto's Chrome trace-event import. Instants represent ordinal positions,
@@ -722,8 +757,43 @@ mod tests {
             assert!(view.apply_timing(&sidecar.to_string()).is_err());
             assert_eq!(view.normalized(), before);
         }
+        sidecar["samples"] = json!([{"ordinal": 1, "ns": 200}]);
+        for (key, value) in [("version", json!(2)), ("clock", json!("replay-duration"))] {
+            let mut wrong = sidecar.clone();
+            wrong[key] = value;
+            assert!(view.apply_timing(&wrong.to_string()).is_err());
+            assert_eq!(view.normalized(), before);
+        }
+        let mut wrong = sidecar.clone();
+        wrong["evidence"]["sha256"] = json!("0".repeat(64));
+        assert!(view.apply_timing(&wrong.to_string()).is_err());
+        assert_eq!(view.normalized(), before);
         sidecar["evidence"]["capture"] = json!("another");
         assert!(view.apply_timing(&sidecar.to_string()).is_err());
+    }
+
+    #[test]
+    fn timed_perfetto_uses_reference_nanosecond_to_microsecond_vector() {
+        // Perfetto c7b436451a48 export_json_unittest.cc:920-951,
+        // InstantEventOnThread: 10,000,000 ns -> 10,000 us, no duration.
+        let mut view = View::parse("fixture", ORDINARY).unwrap();
+        assert_eq!(view.perfetto(), view.logical_perfetto());
+        let sidecar = json!({"schema": "hirsel-observation-timing", "version": 1,
+            "evidence": view.evidence.value(), "clock": "host-monotonic-ns",
+            "samples": [{"ordinal": 1, "ns": 10_000_000}]});
+        view.apply_timing(&sidecar.to_string()).unwrap();
+        let trace: Value = serde_json::from_str(&view.perfetto()).unwrap();
+        let logical = &trace["traceEvents"][2];
+        let measured = &trace["traceEvents"][3];
+        assert_eq!(logical["cat"], "hirsel.logical-order");
+        assert_eq!(logical["pid"], 2);
+        assert_eq!(measured["pid"], 1);
+        assert_eq!(measured["ts"], 10_000.0);
+        assert_eq!(measured["ph"], "I");
+        assert_eq!(measured["s"], "t");
+        assert_eq!(measured["args"]["original_time_ns"], 10_000_000);
+        assert!(measured.get("dur").is_none());
+        assert_eq!(trace["hirsel"]["time_basis"], "host-monotonic-ns");
     }
 
     #[test]

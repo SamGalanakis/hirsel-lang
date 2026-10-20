@@ -1164,7 +1164,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                     )?;
                 }
                 Ok(if perfetto {
-                    view.logical_perfetto()
+                    view.perfetto()
                 } else {
                     view.normalized()
                 })

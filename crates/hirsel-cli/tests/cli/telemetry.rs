@@ -284,3 +284,168 @@ fn exporter_congestion_changes_no_observation_or_schedule() {
         }
     }
 }
+
+#[test]
+fn diagnostic_timing_is_default_isolated_and_used_by_the_viewer() {
+    let fixture = Fixture::new("timing");
+    let grants = fixture.grants(
+        "timed.json",
+        serde_json::json!({"provider":"telemetry.null@1", "seed":3}),
+        true,
+    );
+    for backend in BACKENDS {
+        let mut seen = None;
+        for enabled in [false, true] {
+            let tape = fixture
+                .0
+                .join(format!("{}-{enabled}.tape", backend.unwrap_or("interp")));
+            let mut command = hirsel(
+                backend,
+                &fixture.source(),
+                &[
+                    "--grants".as_ref(),
+                    grants.as_os_str(),
+                    "--record".as_ref(),
+                    tape.as_os_str(),
+                ],
+            );
+            command.env("HIRSEL_TIMING_CAPTURE_ID", "timing-test");
+            if enabled {
+                command.env_remove("HIRSEL_TIMING");
+            } else {
+                command.env("HIRSEL_TIMING", "off");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success() && output.stderr.is_empty(),
+                "{backend:?}: {output:?}"
+            );
+            let observations = (output.stdout.clone(), events(&tape));
+            if let Some(before) = &seen {
+                assert_eq!(before, &observations);
+            } else {
+                seen = Some(observations);
+            }
+            let sidecar = PathBuf::from(format!("{}.timing.json", tape.display()));
+            assert_eq!(sidecar.exists(), enabled);
+            let view = fixture.0.join("view.json");
+            let result = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .arg("view")
+                .arg(&tape)
+                .args(["--capture", "timing-test", "-o"])
+                .arg(&view)
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "{result:?}");
+            let document: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&view).unwrap()).unwrap();
+            let rows = document["events"].as_array().unwrap();
+            let mut previous = 0;
+            for row in rows {
+                if enabled {
+                    let ns = row["original_time_ns"].as_u64().unwrap();
+                    assert!(ns >= previous);
+                    previous = ns;
+                } else {
+                    assert!(row["original_time_ns"].is_null());
+                }
+            }
+            let result = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .arg("view")
+                .arg(&tape)
+                .args(["--capture", "timing-test", "--perfetto", "-o"])
+                .arg(&view)
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "{result:?}");
+            let trace: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&view).unwrap()).unwrap();
+            assert_eq!(
+                trace["hirsel"]["time_basis"],
+                if enabled {
+                    "host-monotonic-ns"
+                } else {
+                    "logical-order"
+                }
+            );
+            assert!(
+                trace["traceEvents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|e| e.get("dur").is_none())
+            );
+            // Replaying never reads or rewrites original timing, even when enabled.
+            let original = std::fs::read(&sidecar).ok();
+            let replay = hirsel(
+                backend,
+                &fixture.source(),
+                &["--replay".as_ref(), tape.as_os_str()],
+            )
+            .env_remove("HIRSEL_TIMING")
+            .output()
+            .unwrap();
+            assert!(
+                replay.status.success() && replay.stdout == output.stdout,
+                "{replay:?}"
+            );
+            assert_eq!(std::fs::read(&sidecar).ok(), original);
+        }
+    }
+}
+
+#[test]
+fn diagnostic_sidecar_cannot_alias_the_tape_or_a_program_mount() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new("timing-overlap");
+    let grants = fixture.grants(
+        "timed.json",
+        serde_json::json!({"provider":"telemetry.null@1", "seed":3}),
+        false,
+    );
+    let program_directory = fixture.0.join("program");
+    std::fs::create_dir(&program_directory).unwrap();
+    let protected = program_directory.join("protected");
+    std::fs::write(&protected, "keep me").unwrap();
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&grants).unwrap()).unwrap();
+    config["io"]["dirs"] =
+        serde_json::json!([{"path":"data", "host":program_directory, "access":"read_write"}]);
+    std::fs::write(&grants, config.to_string()).unwrap();
+    for alias in [false, true] {
+        let tape = fixture.0.join(format!("{alias}.tape"));
+        let sidecar = PathBuf::from(format!("{}.timing.json", tape.display()));
+        std::fs::write(&tape, "old tape").unwrap();
+        if alias {
+            std::fs::hard_link(&tape, &sidecar).unwrap();
+        } else {
+            symlink(&protected, &sidecar).unwrap();
+        }
+        let output = hirsel(
+            None,
+            &fixture.source(),
+            &[
+                "--grants".as_ref(),
+                grants.as_os_str(),
+                "--record".as_ref(),
+                tape.as_os_str(),
+            ],
+        )
+        .env_remove("HIRSEL_TIMING")
+        .output()
+        .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(std::fs::read_to_string(&protected).unwrap(), "keep me");
+        assert!(
+            std::fs::read_to_string(&tape)
+                .unwrap()
+                .contains("complete ")
+        );
+        if alias {
+            assert_eq!(
+                std::fs::read(&tape).unwrap(),
+                std::fs::read(&sidecar).unwrap()
+            );
+        }
+    }
+}

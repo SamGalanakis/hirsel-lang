@@ -693,9 +693,39 @@ ordinals strictly increase, timestamps never decrease, and each ordinal names an
 existing event. Sparse samples leave other timestamps null. Evidence mismatch,
 duplicate samples, invalid clocks, and invalid values refuse the sidecar atomically.
 Sidecar timestamps are original execution evidence and include runtime and
-instrumentation overhead; replay duration is never original latency. Generating
-sidecars requires a runtime observer; the offline viewer itself reads no host clock.
+instrumentation overhead; replay duration is never original latency. The host journal
+observer generates this sidecar by default for ordinary and durable recordings in
+both engines. Each accepted journal event (including begin, event,
+log, measurement, finish and implicit abandonment) receives a host `Instant`
+stamp relative to the observer's epoch, immediately before journal append. All
+other events are stamped too, so ordinals always match the recording. No request,
+completion, scheduler input, Random stream, run identity or program-visible clock
+sample is added or changed. The offline viewer itself reads no host clock.
 
+The tooling environment `HIRSEL_TIMING=off` disables this observer;
+`HIRSEL_TIMING_CAPTURE_ID` supplies a capture identity of 1..256 ASCII letters,
+digits, `-`, `_` or `.`. Otherwise tooling draws an independent 128-bit archival
+identity, recorded only in the sidecar. Use that identity with `view --capture`.
+These variables are host tooling inputs, never implicit application environment
+or run-record fields. Sidecars are written on orderly recording completion or
+observer teardown, with a SHA-256 digest of the exact persisted tape/journal bytes.
+Teardown of an incomplete recording includes only persisted event ordinals. A
+process killed before teardown may have no usable sidecar; it keeps a logical
+view. Replay never opens, rewrites or regenerates the original sidecar.
+
+Sidecar creation uses the same pinned path and inode overlap checks as recording:
+it cannot enter a granted mount or alias a granted output or the tape. Diagnostic
+setup/write failure disables timing without changing application outcomes or
+journal durability. An incomplete sidecar refuses parsing; never use it as timing
+evidence. Keep the sidecar with its exact recording. Independent live admissions
+have their own admission timestamps in the tape header; observer-on/off byte
+invariance compares executions with identical admitted recording inputs.
+
+`view --perfetto` uses sidecar timestamps when present, converting ns to Chrome
+trace-event microseconds and retaining exact ns in event arguments. Missing samples
+occupy a separate, visibly logical track. These remain instant events: request
+order alone does not establish a span interval. Without a sidecar it selects the
+logical export. An explicit `View::logical_perfetto` always remains available.
 Logical Perfetto exports always label the track and category as logical ordinal
 order, retaining evidence identity and completeness in metadata. Each event is a
 thread-scoped instant with its ordinal as a synthetic coordinate, without duration.
