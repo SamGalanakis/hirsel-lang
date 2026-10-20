@@ -64,6 +64,7 @@ pub mod host;
 #[cfg(feature = "measurement")]
 pub mod measurement;
 mod memcheck;
+pub mod multicore_policy;
 pub mod region;
 pub mod release;
 pub mod shared;
