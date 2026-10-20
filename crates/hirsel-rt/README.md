@@ -604,8 +604,8 @@ it completes, or at the detach if it already has; only live children keep scope 
 
 - A message crosses as the block of a one-element `List[T]` in an `Option` slot, so the runtime
   moves block references and never reads a payload's layout.
-- A send fails `Canceled` when the running task is canceled, else `Closed` when no receiver is
-  left.
+- A send never checks cancellation. It moves the payload into the queue, or returns `Closed`
+  with the payload when no receiver is left, and still yields.
 - A receive returns `Canceled`, else the oldest message, else `Closed` once no sender is left,
   else parks on the channel's list of waiting receivers; its poll performs the receive. A
   send, or the close of the last sender, touches the channel, and the next scheduling point

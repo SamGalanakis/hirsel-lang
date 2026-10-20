@@ -360,8 +360,9 @@ schedule (`hirsel-rt/src/tasks.rs`), with one activity stack per task in place o
   after the close took it, each with a passing twin.
 - A task running destruction (a drain, a finalizer frame, or an inline drop body between
   `FinalizeBegin` and `FinalizeEnd`) is shielded, as the runtime's finalizer shield makes it:
-  no cancellation check (check_canceled, send, receive, spawn) observes its cancellation. The
-  shield lives in the task's own stack, so it swaps with the task.
+  no cancellation check (check_canceled, receive, spawn) observes its cancellation. Send
+  never checks cancellation, shielded or otherwise. The shield lives in the task's own
+  stack, so it swaps with the task.
 - `$intrinsic.TaskScopeEnterUntil` arms its scope's deadline (a `Deadline` record: the clock
   handle, then the Instant's ticks), and a deadline already reached expires the scope before
   the entry's yield. An expiry cancels the scope `DeadlineExceeded`, as it does each child,

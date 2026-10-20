@@ -1869,8 +1869,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
 }
 
 /// `$intrinsic.ChannelSend[T](mut s, mut message)`: queue the `Some` block of `message`,
-/// leaving `None`, unless the running task is canceled or no receiver is left; then the
-/// message stays and the status says why.
+/// leaving `None`, unless no receiver is left; then the message stays and the status is
+/// `Closed`. Send never checks cancellation (CONC-3).
 ///
 /// # Safety
 /// `ctx` is live, `out` writable, `sender` an open Sender word and `message` a `Some` slot.
@@ -1884,20 +1884,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let channel = s.channels.channel(unsafe { sender.read() }, true);
-    let shield = unsafe { (*ctx).shield };
-    let status = match s.canceled(shield) {
-        Some(cause) => crate::channels::CANCELED + cause,
-        None => {
-            // SAFETY: caller contract.
-            let block = NonNull::new(unsafe { message.read() })
-                .unwrap_or_else(|| fault("a send of an empty message slot"));
-            let status = s.channels.send(channel, block);
-            if status == crate::channels::DONE {
-                unsafe { message.write(std::ptr::null_mut()) };
-            }
-            status
-        }
-    };
+    // SAFETY: caller contract.
+    let block = NonNull::new(unsafe { message.read() })
+        .unwrap_or_else(|| fault("a send of an empty message slot"));
+    let status = s.channels.send(channel, block);
+    if status == crate::channels::DONE {
+        unsafe { message.write(std::ptr::null_mut()) };
+    }
     // SAFETY: caller contract.
     unsafe {
         out.write(status);

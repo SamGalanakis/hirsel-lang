@@ -1,0 +1,41 @@
+// rule: CONC-3
+// expect: run
+// A canceled producer still transfers an owned payload to an open receiver.
+type Payload {
+  bytes: unique List[u8],
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[Payload], Receiver[Payload]) = channel.open(tasks)
+      let (wake, sleep): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let child = task.async(
+        s,
+        fn() -> bool {
+          let mut gate = take sleep
+          let _ = channel.receive(tasks, mut gate)
+          let mut tx = take sender
+          let payload = Payload(bytes: unique [7u8, 9u8])
+          match channel.send(tasks, mut tx, take payload) {
+            Ok(()) => true,
+            Error(_) => false,
+          }
+        }
+      )
+      task.cancel(s, child)
+      failure.check(task.await(s, take child), Arithmetic())
+      let mut rx = take receiver
+      let received = match channel.receive(tasks, mut rx) {
+        Ok(payload) => payload.bytes == [7u8, 9u8],
+        Error(_) => false,
+      }
+      failure.check(received, Arithmetic())
+      failure.check(channel.receive(tasks, mut rx) == Error(Closed()), Arithmetic())
+      let _ = wake
+    }
+  )
+  Ok(())
+}

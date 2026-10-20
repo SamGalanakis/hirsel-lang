@@ -1210,8 +1210,10 @@ immutable capture and rebind it mutable inside its own body.
 A mutex body has `uses {}`: no captured authority, I/O, channel operations or
 other lock acquisitions. Compute under the lock, then perform effects outside.
 A failed mutex body kills the mutex. A channel send consumes its payload and
-returns it with the error if delivery fails. This example returns one value
-through a channel and explicitly joins the child; its output is independent of
+returns it with `Closed` if no receiver remains. Send never checks cancellation;
+a producer loop uses `task.check_canceled(s)?` before sending when it should stop
+on cancellation. Receive still returns `Canceled` before delivering a message.
+This example returns one value through a channel and explicitly joins the child; its output is independent of
 which task gets scheduled first.
 
 <!-- tour: conformance/CONC/CONC-2-tour-11-concurrency-run.hir -->

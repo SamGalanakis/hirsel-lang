@@ -1,0 +1,41 @@
+// rule: CONC-3
+// expect: run
+// Receive still checks cancellation before either a queued message or Closed.
+fn discard[T](take value: T) -> () {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let mut tx = take sender
+      let _ = channel.send(tasks, mut tx, 7u8)
+      let (closed_sender, closed_receiver): (Sender[u8], Receiver[u8]) = channel.open(
+        tasks
+      )
+      discard(take closed_sender)
+      let (wake, sleep): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let child = task.async(
+        s,
+        fn() -> bool {
+          let mut gate = take sleep
+          let waiting = channel.receive(tasks, mut gate) == Error(Canceled(Requested()))
+          let mut rx = take receiver
+          let queued = channel.receive(tasks, mut rx) == Error(Canceled(Requested()))
+          let mut closed_rx = take closed_receiver
+          let closed = channel.receive(tasks, mut closed_rx) == Error(
+            Canceled(Requested())
+          )
+          waiting && queued && closed
+        }
+      )
+      task.cancel(s, child)
+      failure.check(task.await(s, take child), Arithmetic())
+      let _ = wake
+    }
+  )
+  Ok(())
+}

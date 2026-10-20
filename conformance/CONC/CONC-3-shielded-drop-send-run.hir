@@ -1,8 +1,8 @@
 // rule: CONC-3
 // expect: run
 // stdout: shielded
-// A canceled task's resource drops are shielded, so a send in a drop body is no cancellation
-// point: the message arrives.
+// A canceled task's resource drops are shielded. Send never checks cancellation,
+// including in a drop body: the message arrives.
 resource type Note {
   tasks: Tasks,
   tx: Sender[u8],

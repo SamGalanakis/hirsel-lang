@@ -71,6 +71,11 @@ browser never sees a change that was not saved. Each event stream re-renders its
 own browser's view (its filters and its selected task) for each new revision and
 sends it as one `datastar-patch-elements` event.
 
+The hub's channel sends never check cancellation: an open stream receives the
+revision even if the producer was canceled, and a closed stream returns `Closed`.
+The hub stops at its next `channel.receive`, which checks cancellation. A producer
+loop that only sends should call `task.check_canceled(s)?` before each send.
+
 Actions that take input answer with Datastar signal patches: create clears the
 form, edit closes it, and an invalid draft sets `$error`. The other actions
 answer `204`, and the stream carries the result.

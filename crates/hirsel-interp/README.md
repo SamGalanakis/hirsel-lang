@@ -524,7 +524,8 @@ Blocking simulated network operations retain their typed arguments and mutable
 loans while another task runs.
 
 Channels own FIFO payload values, endpoint counts and suspended receives. A send
-transfers its argument only on success; a closed or canceled send returns it.
+transfers its argument only on success; a closed send returns it. Send never checks
+cancellation, while receive still does.
 Closing the final receiver schedules buffered payload destruction through evaluator
 work items. Mutex callbacks run on the acquiring stack, without a scheduling point
 inside the body. Mutable callback results replace the payload on success; failure

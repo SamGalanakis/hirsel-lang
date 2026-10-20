@@ -1,0 +1,38 @@
+// rule: CONC-3
+// expect: run
+// Producer loops must check explicitly: observing cancellation does not stop send.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let (wake, sleep): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let child = task.async(
+        s,
+        fn() -> bool {
+          task.scope(
+            tasks,
+            fn(inner: Scope) -> bool {
+              let mut gate = take sleep
+              let _ = channel.receive(tasks, mut gate)
+              let checked = task.check_canceled(inner) == Error(Canceled(Requested()))
+              let mut tx = take sender
+              let sent = match channel.send(tasks, mut tx, 7u8) {
+                Ok(()) => true,
+                Error(_) => false,
+              }
+              checked && sent
+            }
+          )
+        }
+      )
+      task.cancel(s, child)
+      failure.check(task.await(s, take child), Arithmetic())
+      let mut rx = take receiver
+      failure.check(channel.receive(tasks, mut rx) == Ok(7u8), Arithmetic())
+      let _ = wake
+    }
+  )
+  Ok(())
+}

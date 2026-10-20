@@ -114,12 +114,7 @@ impl Library {
                 let channel = self.channels.channel(arg(a, 1)?, true)?;
                 let payload = arg(a, 2)?.clone();
                 let state = self.channels.channels.get_mut(&channel).unwrap();
-                let result = if let Some(cause) = self.tasks.canceled() {
-                    error(Value::Tuple(vec![
-                        Some(payload),
-                        Some(variant(1, vec![variant(cause, vec![])])),
-                    ]))
-                } else if state.receivers == 0 {
+                let result = if state.receivers == 0 {
                     error(Value::Tuple(vec![Some(payload), Some(variant(0, vec![]))]))
                 } else {
                     state.queue.push_back(payload);
