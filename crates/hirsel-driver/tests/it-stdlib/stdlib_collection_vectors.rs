@@ -51,7 +51,7 @@ fn run_expanded(case_name: &str, replacements: &[(&str, &str)]) {
         assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
         assert_eq!(
             outcome,
-            RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+            RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
         );
         std::fs::remove_dir_all(dir).unwrap();
     });

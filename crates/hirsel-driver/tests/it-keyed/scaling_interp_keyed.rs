@@ -129,7 +129,7 @@ fn map_and_set_drains_inspect_linearly_many_entries() {
                 .unwrap();
                 assert_eq!(
                     result,
-                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
                 );
                 let rows = hirsel_intern::work::read(hirsel_intern::work::Counter::InterpKeyedRows)
                     - before;
