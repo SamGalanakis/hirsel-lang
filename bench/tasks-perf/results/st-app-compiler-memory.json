@@ -1,0 +1,269 @@
+{
+  "before": {
+    "peak_rss_bytes": 1607106560,
+    "retained": [
+      {
+        "bytes": 223268004,
+        "name": "precheck"
+      },
+      {
+        "bytes": 80274451,
+        "name": "V signature inputs"
+      },
+      {
+        "bytes": 76596149,
+        "name": "package cache"
+      },
+      {
+        "bytes": 36669814,
+        "name": "engine: signatures"
+      },
+      {
+        "bytes": 25136734,
+        "name": "engine: reads"
+      },
+      {
+        "bytes": 21412710,
+        "name": "engine: signature resolutions"
+      },
+      {
+        "bytes": 7667262,
+        "name": "engine: modes"
+      },
+      {
+        "bytes": 7567992,
+        "name": "engine: adapters"
+      },
+      {
+        "bytes": 6642455,
+        "name": "engine: checked"
+      },
+      {
+        "bytes": 6486097,
+        "name": "engine: sources"
+      },
+      {
+        "bytes": 2668510,
+        "name": "engine: lowered"
+      },
+      {
+        "bytes": 1520593,
+        "name": "engine: resolutions"
+      },
+      {
+        "bytes": 926899,
+        "name": "engine: recomputes"
+      },
+      {
+        "bytes": 771677,
+        "name": "engine: representations"
+      },
+      {
+        "bytes": 568583,
+        "name": "engine: resolver outputs"
+      },
+      {
+        "bytes": 326948,
+        "name": "engine: syntax keys"
+      },
+      {
+        "bytes": 62625,
+        "name": "engine: prechecks"
+      },
+      {
+        "bytes": 16493,
+        "name": "engine: package publications"
+      },
+      {
+        "bytes": 12566,
+        "name": "engine: constant values"
+      },
+      {
+        "bytes": 7567,
+        "name": "engine: items"
+      },
+      {
+        "bytes": 3675,
+        "name": "engine: parsed"
+      },
+      {
+        "bytes": 2944,
+        "name": "engine: signature input"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: builtins"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: compiler state"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: generated"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: instance bodies"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: package proofs"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: staged values"
+      }
+    ],
+    "counts": {
+      "V runs": 284,
+      "definitions": 30,
+      "lowered": 27,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 3516,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 311
+    }
+  },
+  "after": {
+    "peak_rss_bytes": 1605136384,
+    "retained": [
+      {
+        "bytes": 223284045,
+        "name": "precheck"
+      },
+      {
+        "bytes": 80307743,
+        "name": "V signature inputs"
+      },
+      {
+        "bytes": 76637101,
+        "name": "package cache"
+      },
+      {
+        "bytes": 36678686,
+        "name": "engine: signatures"
+      },
+      {
+        "bytes": 25142292,
+        "name": "engine: reads"
+      },
+      {
+        "bytes": 21417707,
+        "name": "engine: signature resolutions"
+      },
+      {
+        "bytes": 7667262,
+        "name": "engine: modes"
+      },
+      {
+        "bytes": 7572069,
+        "name": "engine: adapters"
+      },
+      {
+        "bytes": 6642455,
+        "name": "engine: checked"
+      },
+      {
+        "bytes": 6491081,
+        "name": "engine: sources"
+      },
+      {
+        "bytes": 2668510,
+        "name": "engine: lowered"
+      },
+      {
+        "bytes": 1520593,
+        "name": "engine: resolutions"
+      },
+      {
+        "bytes": 926944,
+        "name": "engine: recomputes"
+      },
+      {
+        "bytes": 771677,
+        "name": "engine: representations"
+      },
+      {
+        "bytes": 568583,
+        "name": "engine: resolver outputs"
+      },
+      {
+        "bytes": 326948,
+        "name": "engine: syntax keys"
+      },
+      {
+        "bytes": 62625,
+        "name": "engine: prechecks"
+      },
+      {
+        "bytes": 16493,
+        "name": "engine: package publications"
+      },
+      {
+        "bytes": 12566,
+        "name": "engine: constant values"
+      },
+      {
+        "bytes": 7567,
+        "name": "engine: items"
+      },
+      {
+        "bytes": 3675,
+        "name": "engine: parsed"
+      },
+      {
+        "bytes": 2944,
+        "name": "engine: signature input"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: builtins"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: compiler state"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: generated"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: instance bodies"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: package proofs"
+      },
+      {
+        "bytes": 0,
+        "name": "engine: staged values"
+      }
+    ],
+    "counts": {
+      "V runs": 284,
+      "definitions": 30,
+      "lowered": 27,
+      "object hits": 0,
+      "object misses": 0,
+      "recomputes": 3517,
+      "store hits": 0,
+      "store misses": 0,
+      "units": 311
+    }
+  },
+  "compiler_sha256": "40977d363f0b16b1faa24e555cc9e17f83ef279fb53ade52c70f189d9aefe119",
+  "protocol": "One control build per frozen std source with the identical release compiler and matching precheck; not a timing or instruction benchmark, and not the debug compiler used by the failing test.",
+  "debug_test": {
+    "command": ".buck2/bin/buck2 test //:hirsel-cli-test-examples-shard-1 -- --test-arg=tasks_e2e_client_builds_with_llvm_in_bounded_memory",
+    "limit_mib": 1536,
+    "observed_peak_mib": [
+      1537,
+      1540
+    ],
+    "status": "failed; attribution unresolved"
+  }
+}

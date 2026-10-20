@@ -123,5 +123,10 @@ Four benchmark-report tests pass.
 
 The separate compiler-memory assertion for building the E2E client fails at
 1537 and 1540 MiB against a strict 1536 MiB bound. The generated client and
-functional E2E tests pass. Attribution is being compared against original std
-sources; this failure is not silently classified as unrelated or bypassed.
+functional E2E tests pass. A control using
+the same frozen release compiler and matching original/final std prechecks
+built successfully at 1532.7/1530.8 MiB, respectively (raw
+[control](../../tasks-perf/results/st-app-compiler-memory.json)). It does not
+reproduce a std-caused increase, but uses a different compiler build from the
+debug test. The debug assertion remains unresolved; it is not classified as
+unrelated or bypassed.
