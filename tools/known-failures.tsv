@@ -3,7 +3,6 @@
 # id: a test target (hirsel-rt-test-it-shard-2), a binary and case (hirsel-rt-test-it::replay::kill_order)
 # or a corpus case (conformance/MEM/MEM-7-x-run.hir). Rows are added to main directly, never through
 # tools/land (it refuses a change that adds one); tools/land removes a lane's rows when that lane lands.
-gate-perf-counts	native micro counts improved 1-7% beyond the symmetric 1% baseline tolerance after runtime landings; baseline re-bless pending	perf-rebless	2026-10-20
 conformance/SEM/SEM-3-yaml-edit-crlf-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20
 conformance/SEM/SEM-3-yaml-edit-explicit-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20
 conformance/SEM/SEM-3-yaml-edit-merge-run.hir	fails natively on main (launch timeout, native check refusal or M2 unavailable); found by mc-root-anchors	native-bugs-6	2026-10-20

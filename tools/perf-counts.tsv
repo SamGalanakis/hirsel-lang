@@ -2,43 +2,43 @@
 # check/hello-web: open: checked compiler took 113s; compiler counts exceed the pool budget
 # check/todo-api: open: release compiler took 232.56s / 27,528,240,687 Ir; checked exceeded 240s
 case	Ir	function
-micro/channel	7371461	<total>
+micro/channel	6832058	<total>
 micro/channel	1068550	hirsel_rt::tasks::switch_to
-micro/channel	950744	hirsel_rt::tasks::poll_parked
-micro/channel	792918	hirsel_rt::tasks::scheduler
-micro/channel	305981	hirsel_rt::tasks::try_block
-micro/channel	288000	<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, u32, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<u64, u32>>::remove_kv::{closure#0}, alloc::alloc::Global>
+micro/channel	868760	hirsel_rt::tasks::poll_parked
+micro/channel	792917	hirsel_rt::tasks::scheduler
+micro/channel	268000	hirsel_rt::tasks::try_block
 micro/channel	264088	hirsel_rt::tasks::pick
-micro/channel	229173	_int_free
-micro/channel	211745	_int_malloc
-micro/channel	210124	__memcpy_avx_unaligned_erms
-micro/channel	200000	hirsel_rt_v2_channel_receive
-micro/channel	192010	hirsel_rt_v2_channel_send
-micro/channel	180018	<alloc::collections::btree::map::entry::VacantEntry<u64, u32>>::insert_entry
-micro/channel	174079	<hirsel_rt::tasks::Scheduler>::canceled_task
-micro/channel	166641	malloc
-micro/channel	147592	core::str::converts::from_utf8
+micro/channel	229575	_int_free
+micro/channel	209733	_int_malloc
+micro/channel	204000	hirsel_rt_v2_channel_receive
+micro/channel	174014	hirsel_rt_v2_channel_send
+micro/channel	166598	malloc
+micro/channel	150760	__memcpy_avx_unaligned_erms
+micro/channel	144000	<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, u32, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<u64, u32>>::remove_kv::{closure#0}, alloc::alloc::Global>
 micro/channel	130000	_H14core117channel7receiveI21678068813b977dE
 micro/channel	126126	hirsel_rt::fiber::fiber_switch
 micro/channel	126008	_H14core117channel4sendI9ec0c5a0f596ef4dE
-micro/channel	124000	<alloc::collections::btree::map::entry::OccupiedEntry<u64, u32>>::remove_kv
-micro/channel	112995	free
-micro/channel	107886	_dl_relocate_object
+micro/channel	116079	<hirsel_rt::tasks::Scheduler>::canceled_task
+micro/channel	115250	core::str::converts::from_utf8
+micro/channel	112964	free
+micro/channel	108978	_dl_relocate_object
+micro/channel	104000	<alloc::collections::btree::map::BTreeMap<u64, u32>>::remove::<u64>
 micro/channel	103876	do_lookup_x
 micro/channel	94207	hirsel_rt::tasks::yield_now
+micro/channel	85984	<alloc::collections::btree::map::BTreeMap<u64, u32>>::insert
 micro/channel	85511	<alloc::raw_vec::RawVecInner>::finish_grow
-micro/channel	84404	malloc_consolidate
+micro/channel	82916	malloc_consolidate
 micro/channel	82338	sha2::sha256::soft::compress
+micro/channel	78039	hirsel_rt::tasks::next_task
 micro/channel	76479	hirsel_rt::isolate::decode::text
-micro/channel	74037	hirsel_rt::tasks::next_task
 micro/channel	54815	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
 micro/channel	48192	<alloc::raw_vec::RawVec<u32>>::grow_one
 micro/channel	47881	_dl_lookup_symbol_x
-micro/channel	41149	_H19benchmark114mainI5a55c4c5bc094e1cE
-micro/channel	41047	_H19benchmark114mainI66ba8dc2148ae6e1E
-micro/channel	32856	__rustc::__rdl_alloc
-micro/channel	32712	unlink_chunk.isra.0
-micro/channel	27249	strcmp
+micro/channel	41149	_H19benchmark114mainI398c2677f72112a3E
+micro/channel	41047	_H19benchmark114mainIad10f76e1169ae68E
+micro/channel	33024	unlink_chunk.isra.0
+micro/channel	32847	__rustc::__rdl_alloc
+micro/channel	27165	strcmp
 micro/channel	21605	hirsel_rt_v2_main
 micro/channel	18060	hirsel_run_config::integer_tokens
 micro/channel	17200	check_match
@@ -49,34 +49,34 @@ micro/channel	10802	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u
 micro/channel	9935	hirsel_run_config::digest
 micro/channel	9430	_dl_check_map_versions
 micro/channel	8169	core::fmt::write
-micro/channel	7880	_dl_map_object_from_fd
+micro/channel	7867	_dl_map_object_from_fd
 micro/channel	7631	alloc::fmt::format::format_inner
 micro/channel	6871	<serde_json::read::SliceRead>::skip_to_escape
-micro/channel	6857	<hirsel_rt::alloc::Heap>::refill
-micro/map_remove	2584429	<total>
-micro/map_remove	214927	_int_malloc
+micro/channel	6851	<hirsel_rt::alloc::Heap>::refill
+micro/map_remove	2539119	<total>
+micro/map_remove	214324	_int_malloc
 micro/map_remove	209230	_H14core119_24native10map__probeI85044cda063bedf7E
 micro/map_remove	204000	hirsel_kernels::siphash::siphash13
-micro/map_remove	152814	core::str::converts::from_utf8
-micro/map_remove	144603	_H14core119_24native10map__indexIa87570b5c6e0f3d3E.roots9
-micro/map_remove	132499	__memcpy_avx_unaligned_erms
-micro/map_remove	121119	_int_free
-micro/map_remove	106924	_dl_relocate_object
+micro/map_remove	144643	_H14core119_24native10map__indexIa87570b5c6e0f3d3E.roots9
+micro/map_remove	125273	__memcpy_avx_unaligned_erms
+micro/map_remove	121851	_int_free
+micro/map_remove	112362	core::str::converts::from_utf8
+micro/map_remove	108016	_dl_relocate_object
 micro/map_remove	103876	do_lookup_x
 micro/map_remove	101261	_H14core113map6insertIa3e275b0b233e5e8E.roots9
-micro/map_remove	84521	malloc_consolidate
+micro/map_remove	83124	malloc_consolidate
 micro/map_remove	82338	sha2::sha256::soft::compress
-micro/map_remove	76742	malloc
+micro/map_remove	76744	malloc
 micro/map_remove	76691	hirsel_rt::isolate::decode::text
 micro/map_remove	67000	_H14core113map6removeIde77d0cfe9cf2b11E.roots9
 micro/map_remove	54967	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-micro/map_remove	51465	free
+micro/map_remove	51460	free
 micro/map_remove	47881	_dl_lookup_symbol_x
 micro/map_remove	44000	_H14core119_24native12map__prepareIe248851c374de736E.roots9
 micro/map_remove	42108	_H19benchmark113runI128f36b796047178E
-micro/map_remove	32805	unlink_chunk.isra.0
-micro/map_remove	29220	__memset_avx2_unaligned_erms
-micro/map_remove	27238	strcmp
+micro/map_remove	33453	unlink_chunk.isra.0
+micro/map_remove	29231	__memset_avx2_unaligned_erms
+micro/map_remove	27176	strcmp
 micro/map_remove	21747	hirsel_rt_v2_main
 micro/map_remove	18158	hirsel_run_config::integer_tokens
 micro/map_remove	17200	check_match
@@ -92,92 +92,92 @@ micro/map_remove	9430	_dl_check_map_versions
 micro/map_remove	7877	_dl_map_object_from_fd
 micro/map_remove	7631	alloc::fmt::format::format_inner
 micro/map_remove	6995	<serde_json::read::SliceRead>::skip_to_escape
-micro/map_remove	6144	alloc_perturb
-micro/map_remove	5787	<alloc::string::String as core::fmt::Write>::write_str
+micro/map_remove	6088	alloc_perturb
+micro/map_remove	5799	<alloc::string::String as core::fmt::Write>::write_str
 micro/map_remove	5660	strsep
 micro/map_remove	5590	intel_check_word.constprop.0
-micro/map_remove	5530	<hirsel_rt::alloc::Heap>::refill
+micro/map_remove	5500	<hirsel_rt::alloc::Heap>::refill
 micro/map_remove	5335	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 micro/map_remove	4911	<alloc::raw_vec::RawVecInner>::finish_grow
-micro/map_remove	4416	<core::fmt::Formatter>::pad_integral
 micro/map_remove	4404	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 micro/map_remove	4373	realloc
+micro/map_remove	4356	<core::fmt::Formatter>::pad_integral
 micro/map_remove	4000	hirsel_rt_v2_hash_begin
 micro/map_remove	3501	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
-micro/map_str	9919033	<total>
+micro/map_str	9588497	<total>
 micro/map_str	1623801	_H14core119_24native10map__probeI0c8e7a9188d26efbE
 micro/map_str	759600	hirsel_kernels::siphash::siphash13
-micro/map_str	671916	hirsel_rt_v2_seq_grow
-micro/map_str	557235	_H13std118internal7decimal6appendI723e876f8e1f743dE
-micro/map_str	496601	__memcpy_avx_unaligned_erms
-micro/map_str	489017	core::str::converts::from_utf8
+micro/map_str	549049	_H13std118internal7decimal6appendI723e876f8e1f743dE
+micro/map_str	488270	__memcpy_avx_unaligned_erms
 micro/map_str	475108	hirsel_rt::alloc::grow
+micro/map_str	456229	core::str::converts::from_utf8
+micro/map_str	409772	hirsel_rt_v2_seq_grow
 micro/map_str	406188	_H19benchmark113runI128f36b796047178E
 micro/map_str	303664	hirsel_rt::copy::clone_block
 micro/map_str	254993	hirsel_rt::release::release_block
 micro/map_str	249897	hirsel_rt::io::append_byte_list
-micro/map_str	244629	_int_malloc
-micro/map_str	218744	hirsel_rt::copy::holders
+micro/map_str	242890	_int_malloc
+micro/map_str	222744	hirsel_rt::copy::holders
 micro/map_str	218005	hirsel_rt_v2_alloc
 micro/map_str	204800	hirsel_rt::copy::copy_held
-micro/map_str	196634	_H13std114text6appendI861d17da5e73169fE
+micro/map_str	188442	_H13std114text6appendI861d17da5e73169fE
 micro/map_str	155686	_H13std114text13finish__validI6fb5de04a9ab16e0E
-micro/map_str	135717	_int_free
+micro/map_str	136842	_int_free
 micro/map_str	135201	hirsel_rt_v2_string_from_bytes
-micro/map_str	119563	_H14core119_24native10map__indexI4eb9cbebfa893942E.roots9
+micro/map_str	119598	_H14core119_24native10map__indexI4eb9cbebfa893942E.roots9
 micro/map_str	118784	hirsel_rt_v2_detach
-micro/map_str	112000	hirsel_rt_v2_unique_copy_value
-micro/map_str	109075	???
+micro/map_str	115002	hirsel_rt_v2_unique_copy_value
+micro/map_str	109077	???
+micro/map_str	108311	_dl_relocate_object
 micro/map_str	107695	_H14core113map6insertI9bcfb65c8115dd76E.roots9
-micro/map_str	107219	_dl_relocate_object
 micro/map_str	104254	do_lookup_x
-micro/map_str	95916	malloc_consolidate
-micro/map_str	93000	hirsel_rt::copy::copy_graph::<hirsel_rt::copy::hirsel_rt_v2_unique_copy::{closure#1}>::{closure#0}
+micro/map_str	94000	hirsel_rt::copy::copy_graph::<hirsel_rt::copy::hirsel_rt_v2_unique_copy::{closure#1}>::{closure#0}
+micro/map_str	93833	malloc_consolidate
 micro/map_str	91782	hirsel_rt_v2_release
 micro/map_str	87079	hirsel_rt::isolate::decode::text
-micro/map_str	86177	malloc
+micro/map_str	86179	malloc
 micro/map_str	82338	sha2::sha256::soft::compress
 micro/map_str	62415	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-micro/map_str	57949	free
+micro/map_str	57944	free
 micro/map_str	48768	hirsel_rt_v2_hash_bytes
 micro/map_str	48020	_dl_lookup_symbol_x
 micro/map_str	40275	_H14core119_24native12map__prepareI84985b623535736dE.roots9
-micro/map_str	37362	unlink_chunk.isra.0
+micro/map_str	38067	unlink_chunk.isra.0
 micro/map_str	32776	hirsel_rt_v2_bytes_append
-micro/map_str	30305	<hirsel_rt::alloc::Heap>::refill
-micro/map_str	27279	strcmp
+micro/map_str	30259	<hirsel_rt::alloc::Heap>::refill
+micro/map_str	27237	strcmp
 micro/map_str	24589	hirsel_rt_v2_main
-micro/map_str	24000	<hirsel_rt::copy::Copies>::insert
 micro/map_str	18158	hirsel_run_config::integer_tokens
 micro/map_str	17265	check_match
 micro/map_str	17152	__rustc::__rdl_alloc
-micro/map_str	16000	<hirsel_rt::copy::Copies>::get
 micro/map_str	13237	core::ptr::drop_glue::<hirsel_rt::isolate::FailureTable>
-micro/map_str	12819	__memset_avx2_unaligned_erms
+micro/map_str	12830	__memset_avx2_unaligned_erms
 micro/map_str	12192	hirsel_rt_v2_hash_begin
-micro/map_u64	2519781	<total>
-micro/map_u64	215894	_int_malloc
+micro/map_str	11803	__GI___tunables_init
+micro/map_str	11210	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, serde_json::ser::CompactFormatter>
+micro/map_u64	2482189	<total>
+micro/map_u64	215495	_int_malloc
 micro/map_u64	209230	_H14core119_24native10map__probeI85044cda063bedf7E
 micro/map_u64	204000	hirsel_kernels::siphash::siphash13
-micro/map_u64	152518	core::str::converts::from_utf8
-micro/map_u64	144603	_H14core119_24native10map__indexIa87570b5c6e0f3d3E.roots9
-micro/map_u64	132719	__memcpy_avx_unaligned_erms
-micro/map_u64	121800	_int_free
-micro/map_u64	106924	_dl_relocate_object
+micro/map_u64	144643	_H14core119_24native10map__indexIa87570b5c6e0f3d3E.roots9
+micro/map_u64	125293	__memcpy_avx_unaligned_erms
+micro/map_u64	122601	_int_free
+micro/map_u64	119413	core::str::converts::from_utf8
+micro/map_u64	108016	_dl_relocate_object
 micro/map_u64	103876	do_lookup_x
 micro/map_u64	101261	_H14core113map6insertIa3e275b0b233e5e8E.roots9
-micro/map_u64	85111	malloc_consolidate
+micro/map_u64	83802	malloc_consolidate
 micro/map_u64	82338	sha2::sha256::soft::compress
 micro/map_u64	77221	hirsel_rt::isolate::decode::text
-micro/map_u64	77213	malloc
+micro/map_u64	77217	malloc
 micro/map_u64	55347	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
 micro/map_u64	51775	free
 micro/map_u64	47881	_dl_lookup_symbol_x
 micro/map_u64	44000	_H14core119_24native12map__prepareIe248851c374de736E.roots9
 micro/map_u64	40107	_H19benchmark113runI128f36b796047178E
-micro/map_u64	32952	unlink_chunk.isra.0
-micro/map_u64	29220	__memset_avx2_unaligned_erms
-micro/map_u64	27229	strcmp
+micro/map_u64	33738	unlink_chunk.isra.0
+micro/map_u64	29231	__memset_avx2_unaligned_erms
+micro/map_u64	27167	strcmp
 micro/map_u64	21892	hirsel_rt_v2_main
 micro/map_u64	18158	hirsel_run_config::integer_tokens
 micro/map_u64	17200	check_match
@@ -193,44 +193,44 @@ micro/map_u64	9430	_dl_check_map_versions
 micro/map_u64	7867	_dl_map_object_from_fd
 micro/map_u64	7631	alloc::fmt::format::format_inner
 micro/map_u64	6995	<serde_json::read::SliceRead>::skip_to_escape
-micro/map_u64	6188	alloc_perturb
-micro/map_u64	5787	<alloc::string::String as core::fmt::Write>::write_str
+micro/map_u64	6136	alloc_perturb
+micro/map_u64	5793	<alloc::string::String as core::fmt::Write>::write_str
 micro/map_u64	5660	strsep
 micro/map_u64	5590	intel_check_word.constprop.0
-micro/map_u64	5530	<hirsel_rt::alloc::Heap>::refill
+micro/map_u64	5500	<hirsel_rt::alloc::Heap>::refill
 micro/map_u64	5335	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 micro/map_u64	4911	<alloc::raw_vec::RawVecInner>::finish_grow
-micro/map_u64	4416	<core::fmt::Formatter>::pad_integral
 micro/map_u64	4404	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+micro/map_u64	4386	<core::fmt::Formatter>::pad_integral
 micro/map_u64	4373	realloc
 micro/map_u64	4000	hirsel_rt_v2_hash_begin
 micro/map_u64	3501	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 micro/map_u64	3110	hirsel_rt_v2_seq_grow
-micro/print	3127223	<total>
-micro/print	220475	core::str::converts::from_utf8
-micro/print	192075	_int_malloc
-micro/print	163000	hirsel_rt_v2_seq_grow
-micro/print	156839	__memcpy_avx_unaligned_erms
-micro/print	123590	_H13std118internal7decimal6appendI723e876f8e1f743dE
+micro/print	3016648	<total>
+micro/print	189212	_int_malloc
+micro/print	187217	core::str::converts::from_utf8
+micro/print	150238	__memcpy_avx_unaligned_erms
+micro/print	121590	_H13std118internal7decimal6appendI723e876f8e1f743dE
 micro/print	116024	hirsel_rt::alloc::grow
-micro/print	109686	_int_free
-micro/print	106716	_dl_relocate_object
+micro/print	109770	_int_free
+micro/print	107808	_dl_relocate_object
 micro/print	103876	do_lookup_x
 micro/print	102000	hirsel_rt::io::append_byte_list
+micro/print	99000	hirsel_rt_v2_seq_grow
 micro/print	82338	sha2::sha256::soft::compress
-micro/print	74000	_H13std114text6appendI861d17da5e73169fE
-micro/print	73156	malloc_consolidate
+micro/print	74893	malloc_consolidate
 micro/print	72100	_H19benchmark114mainI870813562345c542E
+micro/print	72000	_H13std114text6appendI861d17da5e73169fE
 micro/print	69072	malloc
 micro/print	68953	hirsel_rt::isolate::decode::text
-micro/print	63000	<hirsel_rt::launch::Shared<hirsel_rt::io_real::RealIo> as hirsel_rt::io::Adapter>::print
+micro/print	61000	<hirsel_rt::launch::Shared<hirsel_rt::io_real::RealIo> as hirsel_rt::io::Adapter>::print
 micro/print	59000	hirsel_rt::copy::clone_block
-micro/print	52043	<hirsel_rt::io::State>::expect
 micro/print	52000	hirsel_rt::io_real::write_output
 micro/print	51055	hirsel_rt::release::release_block
 micro/print	51000	hirsel_rt::io::native_print
 micro/print	50000	hirsel_rt::copy::copy_held
 micro/print	49419	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
+micro/print	49049	<hirsel_rt::io::State>::expect
 micro/print	47881	_dl_lookup_symbol_x
 micro/print	45942	free
 micro/print	42973	hirsel_rt_v2_alloc
@@ -238,9 +238,9 @@ micro/print	40000	hirsel_rt_v2_out_print
 micro/print	39000	hirsel_rt::copy::holders
 micro/print	38000	_H13std114text13finish__validI6fb5de04a9ab16e0E
 micro/print	33000	hirsel_rt_v2_string_from_bytes
+micro/print	29685	unlink_chunk.isra.0
 micro/print	29000	hirsel_rt_v2_detach
-micro/print	27249	strcmp
-micro/print	27090	unlink_chunk.isra.0
+micro/print	27165	strcmp
 micro/print	24048	core::ptr::drop_glue::<hirsel_rt::io::Completion>
 micro/print	22000	<hirsel_rt::host::Sink as core::io::write::Write>::flush
 micro/print	22000	<hirsel_rt::host::Sink as core::io::write::Write>::write
@@ -248,7 +248,7 @@ micro/print	19546	hirsel_rt_v2_main
 micro/print	18060	hirsel_run_config::integer_tokens
 micro/print	18018	hirsel_rt_v2_release
 micro/print	17200	check_match
-micro/print	16048	core::ptr::drop_glue::<hirsel_rt::handles::Grant>
+micro/print	16016	core::ptr::drop_glue::<hirsel_rt::handles::Grant>
 micro/print	16000	hirsel_rt_v2_bytes_append
 micro/print	13375	__rustc::__rdl_alloc
 micro/print	11803	__GI___tunables_init
@@ -257,15 +257,15 @@ micro/print	11022	hirsel_rt::tasks::yield_now
 micro/print	10802	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, hirsel_run_config::canonical_bytes::Canonical>
 micro/print	10491	core::ptr::drop_glue::<hirsel_rt::isolate::FailureTable>
 micro/print	10000	<hirsel_rt::launch::RawStdout as core::io::write::Write>::write
-micro/sha	2482484	<total>
-micro/sha	408787	_int_malloc
-micro/sha	281610	core::str::converts::from_utf8
-micro/sha	230571	_int_free
-micro/sha	204364	__memcpy_avx_unaligned_erms
+micro/sha	2350229	<total>
+micro/sha	409364	_int_malloc
+micro/sha	230652	_int_free
+micro/sha	200505	core::str::converts::from_utf8
 micro/sha	153965	hirsel_rt::isolate::decode::text
-micro/sha	144887	malloc
+micro/sha	151835	__memcpy_avx_unaligned_erms
+micro/sha	144889	malloc
 micro/sha	110371	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-micro/sha	106781	_dl_relocate_object
+micro/sha	107873	_dl_relocate_object
 micro/sha	103876	do_lookup_x
 micro/sha	96012	free
 micro/sha	82338	sha2::sha256::soft::compress
@@ -273,11 +273,11 @@ micro/sha	63056	_H13std116sha2566roundsI7b73ff0daafae3a5E
 micro/sha	47881	_dl_lookup_symbol_x
 micro/sha	42842	hirsel_rt_v2_main
 micro/sha	27924	__rustc::__rdl_alloc
-micro/sha	27541	strcmp
+micro/sha	27457	strcmp
 micro/sha	23323	core::ptr::drop_glue::<hirsel_rt::isolate::FailureTable>
 micro/sha	18158	hirsel_run_config::integer_tokens
 micro/sha	17200	check_match
-micro/sha	11880	alloc_perturb
+micro/sha	11868	alloc_perturb
 micro/sha	11803	__GI___tunables_init
 micro/sha	11210	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, serde_json::ser::CompactFormatter>
 micro/sha	10924	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, hirsel_run_config::canonical_bytes::Canonical>
@@ -289,48 +289,48 @@ micro/sha	8160	_H13std116sha25615compress__inputI39854a460dd2a33eE
 micro/sha	7867	_dl_map_object_from_fd
 micro/sha	7631	alloc::fmt::format::format_inner
 micro/sha	6995	<serde_json::read::SliceRead>::skip_to_escape
-micro/sha	5787	<alloc::string::String as core::fmt::Write>::write_str
+micro/sha	5799	<alloc::string::String as core::fmt::Write>::write_str
 micro/sha	5660	strsep
 micro/sha	5590	intel_check_word.constprop.0
 micro/sha	5335	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 micro/sha	4951	<alloc::raw_vec::RawVecInner>::finish_grow
 micro/sha	4450	realloc
 micro/sha	4436	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
-micro/sha	4416	<core::fmt::Formatter>::pad_integral
+micro/sha	4356	<core::fmt::Formatter>::pad_integral
 micro/sha	3501	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 micro/sha	3098	__rustc::__rust_alloc
 micro/sha	3098	__rustc::__rust_no_alloc_shim_is_unstable_v2
 micro/sha	3097	__rustc::__rdl_dealloc
 micro/sha	3097	__rustc::__rust_dealloc
-micro/sha	2960	_int_realloc
-micro/sha	2905	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+micro/sha	2951	_int_realloc
+micro/sha	2887	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 micro/sha	2689	_dl_init_paths
 micro/sha	2619	_dl_name_match_p
-micro/sha	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-micro/sha	2455	hirsel_rt::release::check_frame
-micro/sort	2856059	<total>
-micro/sort	449832	_int_malloc
-micro/sort	313720	core::str::converts::from_utf8
-micro/sort	252381	_int_free
-micro/sort	210560	__memcpy_avx_unaligned_erms
-micro/sort	177727	_H13std114list16partition__rangeI27746ef626624a58E
+micro/sha	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+micro/sha	2473	<hirsel_rt::context::RunCtx>::exit
+micro/sort	2803514	<total>
+micro/sort	444235	_int_malloc
+micro/sort	287683	core::str::converts::from_utf8
+micro/sort	253440	_int_free
+micro/sort	194852	__memcpy_avx_unaligned_erms
+micro/sort	174749	_H13std114list16partition__rangeI27746ef626624a58E
 micro/sort	169971	hirsel_rt::isolate::decode::text
-micro/sort	159169	malloc
+micro/sort	159171	malloc
 micro/sort	121847	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-micro/sort	106820	_dl_relocate_object
-micro/sort	105591	free
+micro/sort	107912	_dl_relocate_object
+micro/sort	105596	free
 micro/sort	103876	do_lookup_x
 micro/sort	82338	sha2::sha256::soft::compress
-micro/sort	67275	_H13std114list9quicksortIfa202980ee79990cE
+micro/sort	66596	_H13std114list9quicksortIfa202980ee79990cE
 micro/sort	47881	_dl_lookup_symbol_x
 micro/sort	47221	hirsel_rt_v2_main
 micro/sort	30775	__rustc::__rdl_alloc
-micro/sort	27510	strcmp
+micro/sort	27448	strcmp
 micro/sort	27095	_H19benchmark113runI128f36b796047178E
 micro/sort	25739	core::ptr::drop_glue::<hirsel_rt::isolate::FailureTable>
 micro/sort	18158	hirsel_run_config::integer_tokens
 micro/sort	17200	check_match
-micro/sort	13140	alloc_perturb
+micro/sort	13104	alloc_perturb
 micro/sort	11803	__GI___tunables_init
 micro/sort	11210	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, serde_json::ser::CompactFormatter>
 micro/sort	10924	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, hirsel_run_config::canonical_bytes::Canonical>
@@ -339,46 +339,45 @@ micro/sort	9465	core::fmt::write
 micro/sort	9430	_dl_check_map_versions
 micro/sort	7877	_dl_map_object_from_fd
 micro/sort	7631	alloc::fmt::format::format_inner
+micro/sort	7001	__memset_avx2_unaligned_erms
 micro/sort	6995	<serde_json::read::SliceRead>::skip_to_escape
-micro/sort	6990	__memset_avx2_unaligned_erms
-micro/sort	6669	_H13std114list11sort__threeI7aabe6075b95a58dE
-micro/sort	5799	<alloc::string::String as core::fmt::Write>::write_str
+micro/sort	5805	<alloc::string::String as core::fmt::Write>::write_str
 micro/sort	5660	strsep
 micro/sort	5590	intel_check_word.constprop.0
 micro/sort	5335	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 micro/sort	4951	<alloc::raw_vec::RawVecInner>::finish_grow
 micro/sort	4450	realloc
 micro/sort	4436	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
-micro/sort	4356	<core::fmt::Formatter>::pad_integral
+micro/sort	4326	<core::fmt::Formatter>::pad_integral
 micro/sort	3501	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 micro/sort	3407	__rustc::__rust_alloc
 micro/sort	3407	__rustc::__rust_no_alloc_shim_is_unstable_v2
 micro/sort	3406	__rustc::__rdl_dealloc
 micro/sort	3406	__rustc::__rust_dealloc
-micro/sort	2956	<hirsel_rt::alloc::Heap>::refill
-micro/sort	2905	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+micro/sort	2969	_int_realloc
+micro/sort	2940	<hirsel_rt::alloc::Heap>::refill
+micro/sort	2887	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 micro/sort	2689	_dl_init_paths
-micro/sort	2670	_int_realloc
-micro/strbuild	1985911	<total>
-micro/strbuild	209617	_int_malloc
-micro/strbuild	151560	core::str::converts::from_utf8
-micro/strbuild	124053	_H13std118internal7decimal6appendI723e876f8e1f743dE
-micro/strbuild	122882	__memcpy_avx_unaligned_erms
-micro/strbuild	119421	_int_free
-micro/strbuild	106716	_dl_relocate_object
+micro/sort	2633	hirsel_rt::release::check_frame
+micro/strbuild	1880798	<total>
+micro/strbuild	207546	_int_malloc
+micro/strbuild	122123	_H13std118internal7decimal6appendI723e876f8e1f743dE
+micro/strbuild	119835	_int_free
+micro/strbuild	118283	core::str::converts::from_utf8
+micro/strbuild	115454	__memcpy_avx_unaligned_erms
+micro/strbuild	107808	_dl_relocate_object
 micro/strbuild	103876	do_lookup_x
-micro/strbuild	83469	malloc_consolidate
 micro/strbuild	82338	sha2::sha256::soft::compress
+micro/strbuild	82151	malloc_consolidate
 micro/strbuild	75525	hirsel_rt::isolate::decode::text
-micro/strbuild	75374	malloc
-micro/strbuild	62838	hirsel_rt_v2_seq_grow
+micro/strbuild	75376	malloc
 micro/strbuild	54131	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-micro/strbuild	50313	free
+micro/strbuild	50318	free
 micro/strbuild	47881	_dl_lookup_symbol_x
 micro/strbuild	41061	hirsel_rt::io::append_byte_list
-micro/strbuild	38670	_H19benchmark113runI128f36b796047178E
-micro/strbuild	32427	unlink_chunk.isra.0
-micro/strbuild	27260	strcmp
+micro/strbuild	38669	_H19benchmark113runI128f36b796047178E
+micro/strbuild	32643	unlink_chunk.isra.0
+micro/strbuild	27176	strcmp
 micro/strbuild	26026	_H13std114text6appendI861d17da5e73169fE
 micro/strbuild	21375	hirsel_rt_v2_main
 micro/strbuild	18158	hirsel_run_config::integer_tokens
@@ -395,37 +394,38 @@ micro/strbuild	8008	hirsel_rt_v2_bytes_append
 micro/strbuild	7867	_dl_map_object_from_fd
 micro/strbuild	7631	alloc::fmt::format::format_inner
 micro/strbuild	6995	<serde_json::read::SliceRead>::skip_to_escape
-micro/strbuild	5996	alloc_perturb
-micro/strbuild	5799	<alloc::string::String as core::fmt::Write>::write_str
+micro/strbuild	5980	alloc_perturb
+micro/strbuild	5787	<alloc::string::String as core::fmt::Write>::write_str
 micro/strbuild	5660	strsep
 micro/strbuild	5590	intel_check_word.constprop.0
 micro/strbuild	5335	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 micro/strbuild	4911	<alloc::raw_vec::RawVecInner>::finish_grow
+micro/strbuild	4416	<core::fmt::Formatter>::pad_integral
 micro/strbuild	4404	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 micro/strbuild	4373	realloc
-micro/strbuild	4356	<core::fmt::Formatter>::pad_integral
 micro/strbuild	3501	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
-micro/strbuild	2956	<hirsel_rt::alloc::Heap>::refill
-micro/strbuild	2905	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
-micro/strbuild	2815	_int_realloc
+micro/strbuild	2940	<hirsel_rt::alloc::Heap>::refill
+micro/strbuild	2904	_int_realloc
+micro/strbuild	2887	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 micro/strbuild	2689	_dl_init_paths
 micro/strbuild	2619	_dl_name_match_p
-native/batch-validation-small	1691193	<total>
-native/batch-validation-small	201809	_int_malloc
-native/batch-validation-small	145120	core::str::converts::from_utf8
-native/batch-validation-small	116601	_int_free
-native/batch-validation-small	106781	_dl_relocate_object
-native/batch-validation-small	105728	__memcpy_avx_unaligned_erms
+micro/strbuild	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/batch-validation-small	1641000	<total>
+native/batch-validation-small	199037	_int_malloc
+native/batch-validation-small	116784	_int_free
+native/batch-validation-small	107873	_dl_relocate_object
+native/batch-validation-small	104708	core::str::converts::from_utf8
 native/batch-validation-small	103876	do_lookup_x
 native/batch-validation-small	102828	sha2::sha256::soft::compress
-native/batch-validation-small	79491	malloc_consolidate
-native/batch-validation-small	73761	malloc
+native/batch-validation-small	98907	__memcpy_avx_unaligned_erms
+native/batch-validation-small	78033	malloc_consolidate
+native/batch-validation-small	73759	malloc
 native/batch-validation-small	72239	hirsel_rt::isolate::decode::text
 native/batch-validation-small	51775	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-native/batch-validation-small	49166	free
+native/batch-validation-small	49171	free
 native/batch-validation-small	47881	_dl_lookup_symbol_x
-native/batch-validation-small	30822	unlink_chunk.isra.0
-native/batch-validation-small	27685	strcmp
+native/batch-validation-small	31179	unlink_chunk.isra.0
+native/batch-validation-small	27601	strcmp
 native/batch-validation-small	23231	hirsel_run_config::integer_tokens
 native/batch-validation-small	20414	hirsel_rt_v2_main
 native/batch-validation-small	17200	check_match
@@ -434,7 +434,7 @@ native/batch-validation-small	14016	serde_json::ser::format_escaped_str::<&mut a
 native/batch-validation-small	13653	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, hirsel_run_config::canonical_bytes::Canonical>
 native/batch-validation-small	11803	__GI___tunables_init
 native/batch-validation-small	10987	core::ptr::drop_glue::<hirsel_rt::isolate::FailureTable>
-native/batch-validation-small	10910	_H19benchmark118workloadId63c2bb31936cb4dE
+native/batch-validation-small	10789	_H19benchmark118workloadId63c2bb31936cb4dE
 native/batch-validation-small	9935	hirsel_run_config::digest
 native/batch-validation-small	9430	_dl_check_map_versions
 native/batch-validation-small	8645	<serde_json::read::SliceRead>::skip_to_escape
@@ -442,44 +442,44 @@ native/batch-validation-small	7867	_dl_map_object_from_fd
 native/batch-validation-small	7822	alloc::fmt::format::format_inner
 native/batch-validation-small	7351	core::fmt::write
 native/batch-validation-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
-native/batch-validation-small	5744	alloc_perturb
+native/batch-validation-small	5728	alloc_perturb
 native/batch-validation-small	5660	strsep
 native/batch-validation-small	5590	intel_check_word.constprop.0
 native/batch-validation-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/batch-validation-small	5141	<alloc::string::String as core::fmt::Write>::write_str
+native/batch-validation-small	5165	<alloc::string::String as core::fmt::Write>::write_str
 native/batch-validation-small	4664	realloc
 native/batch-validation-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/batch-validation-small	4509	hirsel_run_config::portable_path
 native/batch-validation-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 native/batch-validation-small	3307	core::slice::memchr::memchr_aligned
-native/batch-validation-small	3113	_int_realloc
+native/batch-validation-small	3116	_int_realloc
 native/batch-validation-small	2908	hirsel_rt::release::check_frame
-native/batch-validation-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/batch-validation-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/batch-validation-small	2689	_dl_init_paths
 native/batch-validation-small	2619	_dl_name_match_p
-native/batch-validation-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/batch-validation-small	2426	<hirsel_rt::alloc::Heap>::release_all
+native/batch-validation-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/batch-validation-small	2488	<hirsel_rt::context::RunCtx>::exit
 native/batch-validation-small	2353	_dl_map_object_deps
-native/batch-validation-small	2229	<core::fmt::Formatter>::pad_integral
-native/binarytrees-small	1828452	<total>
-native/binarytrees-small	188018	_int_malloc
-native/binarytrees-small	131034	core::str::converts::from_utf8
-native/binarytrees-small	109416	_int_free
-native/binarytrees-small	106703	_dl_relocate_object
-native/binarytrees-small	103976	__memcpy_avx_unaligned_erms
+native/batch-validation-small	2287	_int_free_merge_chunk
+native/binarytrees-small	1800502	<total>
+native/binarytrees-small	185549	_int_malloc
+native/binarytrees-small	109521	_int_free
+native/binarytrees-small	107908	core::str::converts::from_utf8
+native/binarytrees-small	107795	_dl_relocate_object
 native/binarytrees-small	103876	do_lookup_x
 native/binarytrees-small	102828	sha2::sha256::soft::compress
+native/binarytrees-small	97460	__memcpy_avx_unaligned_erms
 native/binarytrees-small	87200	???
-native/binarytrees-small	71919	malloc_consolidate
-native/binarytrees-small	69233	malloc
+native/binarytrees-small	72495	malloc_consolidate
+native/binarytrees-small	69231	malloc
 native/binarytrees-small	67151	hirsel_rt::isolate::decode::text
 native/binarytrees-small	65204	_H19benchmark114treeI286c4738b435eaa2E
 native/binarytrees-small	62332	_H19benchmark115checkI2122ed9e38b01f58E
 native/binarytrees-small	48127	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
 native/binarytrees-small	47881	_dl_lookup_symbol_x
-native/binarytrees-small	46164	free
-native/binarytrees-small	27706	strcmp
-native/binarytrees-small	26766	unlink_chunk.isra.0
+native/binarytrees-small	46159	free
+native/binarytrees-small	28995	unlink_chunk.isra.0
+native/binarytrees-small	27622	strcmp
 native/binarytrees-small	23231	hirsel_run_config::integer_tokens
 native/binarytrees-small	19022	hirsel_rt_v2_main
 native/binarytrees-small	17200	check_match
@@ -494,40 +494,40 @@ native/binarytrees-small	8645	<serde_json::read::SliceRead>::skip_to_escape
 native/binarytrees-small	7877	_dl_map_object_from_fd
 native/binarytrees-small	7822	alloc::fmt::format::format_inner
 native/binarytrees-small	7351	core::fmt::write
-native/binarytrees-small	6801	<hirsel_rt::alloc::Heap>::refill
+native/binarytrees-small	6795	<hirsel_rt::alloc::Heap>::refill
 native/binarytrees-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 native/binarytrees-small	5660	strsep
 native/binarytrees-small	5590	intel_check_word.constprop.0
-native/binarytrees-small	5324	alloc_perturb
+native/binarytrees-small	5320	alloc_perturb
 native/binarytrees-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/binarytrees-small	5165	<alloc::string::String as core::fmt::Write>::write_str
+native/binarytrees-small	5153	<alloc::string::String as core::fmt::Write>::write_str
 native/binarytrees-small	4664	realloc
 native/binarytrees-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/binarytrees-small	4509	hirsel_run_config::portable_path
 native/binarytrees-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 native/binarytrees-small	3116	_int_realloc
 native/binarytrees-small	2980	core::slice::memchr::memchr_aligned
-native/binarytrees-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/binarytrees-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/binarytrees-small	2689	_dl_init_paths
 native/binarytrees-small	2619	_dl_name_match_p
-native/binarytrees-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/binarytrees-small	2446	hirsel_rt::release::check_frame
-native/closure-iter-erased-small	1598504	<total>
-native/closure-iter-erased-small	183834	_int_malloc
-native/closure-iter-erased-small	136157	core::str::converts::from_utf8
-native/closure-iter-erased-small	106755	_dl_relocate_object
-native/closure-iter-erased-small	106737	_int_free
+native/binarytrees-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/binarytrees-small	2473	<hirsel_rt::context::RunCtx>::exit
+native/closure-iter-erased-small	1557821	<total>
+native/closure-iter-erased-small	181275	_int_malloc
+native/closure-iter-erased-small	107847	_dl_relocate_object
+native/closure-iter-erased-small	106905	_int_free
 native/closure-iter-erased-small	103876	do_lookup_x
-native/closure-iter-erased-small	103380	__memcpy_avx_unaligned_erms
 native/closure-iter-erased-small	102828	sha2::sha256::soft::compress
-native/closure-iter-erased-small	69933	malloc_consolidate
-native/closure-iter-erased-small	67547	malloc
+native/closure-iter-erased-small	99627	core::str::converts::from_utf8
+native/closure-iter-erased-small	97310	__memcpy_avx_unaligned_erms
+native/closure-iter-erased-small	70744	malloc_consolidate
+native/closure-iter-erased-small	67545	malloc
 native/closure-iter-erased-small	65243	hirsel_rt::isolate::decode::text
 native/closure-iter-erased-small	47881	_dl_lookup_symbol_x
 native/closure-iter-erased-small	46759	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-native/closure-iter-erased-small	45048	free
-native/closure-iter-erased-small	27449	strcmp
-native/closure-iter-erased-small	25854	unlink_chunk.isra.0
+native/closure-iter-erased-small	45043	free
+native/closure-iter-erased-small	28284	unlink_chunk.isra.0
+native/closure-iter-erased-small	27365	strcmp
 native/closure-iter-erased-small	23231	hirsel_run_config::integer_tokens
 native/closure-iter-erased-small	18500	hirsel_rt_v2_main
 native/closure-iter-erased-small	17200	check_match
@@ -546,7 +546,7 @@ native/closure-iter-erased-small	6160	<serde_json::read::SliceRead as serde_json
 native/closure-iter-erased-small	5660	strsep
 native/closure-iter-erased-small	5590	intel_check_word.constprop.0
 native/closure-iter-erased-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/closure-iter-erased-small	5204	alloc_perturb
+native/closure-iter-erased-small	5196	alloc_perturb
 native/closure-iter-erased-small	5159	<alloc::string::String as core::fmt::Write>::write_str
 native/closure-iter-erased-small	4664	realloc
 native/closure-iter-erased-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
@@ -554,31 +554,31 @@ native/closure-iter-erased-small	4509	hirsel_run_config::portable_path
 native/closure-iter-erased-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 native/closure-iter-erased-small	3502	core::slice::memchr::memchr_aligned
 native/closure-iter-erased-small	3116	_int_realloc
-native/closure-iter-erased-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/closure-iter-erased-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/closure-iter-erased-small	2689	_dl_init_paths
 native/closure-iter-erased-small	2619	_dl_name_match_p
-native/closure-iter-erased-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/closure-iter-erased-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/closure-iter-erased-small	2580	hirsel_rt::release::check_frame
-native/closure-iter-erased-small	2409	<hirsel_rt::alloc::Heap>::release_all
+native/closure-iter-erased-small	2473	<hirsel_rt::context::RunCtx>::exit
 native/closure-iter-erased-small	2353	_dl_map_object_deps
 native/closure-iter-erased-small	2287	_int_free_merge_chunk
 native/closure-iter-erased-small	2223	dl_main
-native/closure-iter-scoped-small	1592219	<total>
-native/closure-iter-scoped-small	183037	_int_malloc
-native/closure-iter-scoped-small	135264	core::str::converts::from_utf8
-native/closure-iter-scoped-small	106703	_dl_relocate_object
-native/closure-iter-scoped-small	106095	_int_free
+native/closure-iter-scoped-small	1551995	<total>
+native/closure-iter-scoped-small	180154	_int_malloc
+native/closure-iter-scoped-small	107795	_dl_relocate_object
+native/closure-iter-scoped-small	106305	_int_free
 native/closure-iter-scoped-small	103876	do_lookup_x
-native/closure-iter-scoped-small	103316	__memcpy_avx_unaligned_erms
 native/closure-iter-scoped-small	102828	sha2::sha256::soft::compress
-native/closure-iter-scoped-small	69305	malloc_consolidate
-native/closure-iter-scoped-small	67171	malloc
+native/closure-iter-scoped-small	98994	core::str::converts::from_utf8
+native/closure-iter-scoped-small	97184	__memcpy_avx_unaligned_erms
+native/closure-iter-scoped-small	70352	malloc_consolidate
+native/closure-iter-scoped-small	67169	malloc
 native/closure-iter-scoped-small	64819	hirsel_rt::isolate::decode::text
 native/closure-iter-scoped-small	47881	_dl_lookup_symbol_x
 native/closure-iter-scoped-small	46455	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-native/closure-iter-scoped-small	44800	free
-native/closure-iter-scoped-small	27449	strcmp
-native/closure-iter-scoped-small	25626	unlink_chunk.isra.0
+native/closure-iter-scoped-small	44795	free
+native/closure-iter-scoped-small	28065	unlink_chunk.isra.0
+native/closure-iter-scoped-small	27365	strcmp
 native/closure-iter-scoped-small	23231	hirsel_run_config::integer_tokens
 native/closure-iter-scoped-small	18384	hirsel_rt_v2_main
 native/closure-iter-scoped-small	17200	check_match
@@ -597,43 +597,43 @@ native/closure-iter-scoped-small	6160	<serde_json::read::SliceRead as serde_json
 native/closure-iter-scoped-small	5660	strsep
 native/closure-iter-scoped-small	5590	intel_check_word.constprop.0
 native/closure-iter-scoped-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/closure-iter-scoped-small	5168	alloc_perturb
-native/closure-iter-scoped-small	5159	<alloc::string::String as core::fmt::Write>::write_str
+native/closure-iter-scoped-small	5160	alloc_perturb
+native/closure-iter-scoped-small	5141	<alloc::string::String as core::fmt::Write>::write_str
 native/closure-iter-scoped-small	4664	realloc
 native/closure-iter-scoped-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/closure-iter-scoped-small	4509	hirsel_run_config::portable_path
 native/closure-iter-scoped-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 native/closure-iter-scoped-small	3502	core::slice::memchr::memchr_aligned
 native/closure-iter-scoped-small	3116	_int_realloc
-native/closure-iter-scoped-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/closure-iter-scoped-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/closure-iter-scoped-small	2689	_dl_init_paths
 native/closure-iter-scoped-small	2619	_dl_name_match_p
-native/closure-iter-scoped-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/closure-iter-scoped-small	2517	<hirsel_rt::alloc::Heap>::refill
-native/closure-iter-scoped-small	2409	<hirsel_rt::alloc::Heap>::release_all
+native/closure-iter-scoped-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/closure-iter-scoped-small	2511	<hirsel_rt::alloc::Heap>::refill
+native/closure-iter-scoped-small	2473	<hirsel_rt::context::RunCtx>::exit
 native/closure-iter-scoped-small	2353	_dl_map_object_deps
 native/closure-iter-scoped-small	2287	_int_free_merge_chunk
-native/closure-iter-scoped-small	2223	dl_main
-native/expr-compiler-small	2104315	<total>
-native/expr-compiler-small	213907	_int_malloc
-native/expr-compiler-small	148045	core::str::converts::from_utf8
+native/closure-iter-scoped-small	2229	<core::fmt::Formatter>::pad_integral
+native/expr-compiler-small	2074357	<total>
+native/expr-compiler-small	212503	_int_malloc
 native/expr-compiler-small	126746	_H19benchmark115parseI5df210138acc1d60E
-native/expr-compiler-small	123753	_int_free
-native/expr-compiler-small	107980	__memcpy_avx_unaligned_erms
-native/expr-compiler-small	106768	_dl_relocate_object
+native/expr-compiler-small	126283	core::str::converts::from_utf8
+native/expr-compiler-small	124353	_int_free
+native/expr-compiler-small	107860	_dl_relocate_object
 native/expr-compiler-small	103876	do_lookup_x
-native/expr-compiler-small	103291	_H19benchmark116insertI9be3fc7bfffa3ab3E
 native/expr-compiler-small	102828	sha2::sha256::soft::compress
+native/expr-compiler-small	101307	_H19benchmark116insertI9be3fc7bfffa3ab3E
+native/expr-compiler-small	100379	__memcpy_avx_unaligned_erms
 native/expr-compiler-small	86720	_H19benchmark118evaluateIe4ce2eb467980321E
-native/expr-compiler-small	85170	malloc_consolidate
-native/expr-compiler-small	78496	malloc
+native/expr-compiler-small	83972	malloc_consolidate
+native/expr-compiler-small	78494	malloc
 native/expr-compiler-small	77539	hirsel_rt::isolate::decode::text
 native/expr-compiler-small	55575	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-native/expr-compiler-small	52297	free
-native/expr-compiler-small	49399	_H19benchmark118workloadId63c2bb31936cb4dE
+native/expr-compiler-small	52302	free
+native/expr-compiler-small	49404	_H19benchmark118workloadId63c2bb31936cb4dE
 native/expr-compiler-small	47881	_dl_lookup_symbol_x
-native/expr-compiler-small	32487	unlink_chunk.isra.0
-native/expr-compiler-small	27685	strcmp
+native/expr-compiler-small	33615	unlink_chunk.isra.0
+native/expr-compiler-small	27601	strcmp
 native/expr-compiler-small	23231	hirsel_run_config::integer_tokens
 native/expr-compiler-small	21864	hirsel_rt_v2_main
 native/expr-compiler-small	17200	check_match
@@ -645,49 +645,49 @@ native/expr-compiler-small	11787	core::ptr::drop_glue::<hirsel_rt::isolate::Fail
 native/expr-compiler-small	9935	hirsel_run_config::digest
 native/expr-compiler-small	9430	_dl_check_map_versions
 native/expr-compiler-small	8645	<serde_json::read::SliceRead>::skip_to_escape
-native/expr-compiler-small	8033	<hirsel_rt::alloc::Heap>::refill
+native/expr-compiler-small	8025	<hirsel_rt::alloc::Heap>::refill
 native/expr-compiler-small	7877	_dl_map_object_from_fd
 native/expr-compiler-small	7822	alloc::fmt::format::format_inner
 native/expr-compiler-small	7351	core::fmt::write
-native/expr-compiler-small	6176	alloc_perturb
 native/expr-compiler-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
+native/expr-compiler-small	6124	alloc_perturb
 native/expr-compiler-small	5660	strsep
 native/expr-compiler-small	5590	intel_check_word.constprop.0
 native/expr-compiler-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/expr-compiler-small	5153	<alloc::string::String as core::fmt::Write>::write_str
+native/expr-compiler-small	5159	<alloc::string::String as core::fmt::Write>::write_str
 native/expr-compiler-small	4664	realloc
 native/expr-compiler-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/expr-compiler-small	4509	hirsel_run_config::portable_path
 native/expr-compiler-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
+native/expr-compiler-small	3116	_int_realloc
 native/expr-compiler-small	3112	core::slice::memchr::memchr_aligned
-native/expr-compiler-small	2978	_int_realloc
 native/expr-compiler-small	2890	hirsel_rt::release::check_frame
-native/expr-compiler-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/expr-compiler-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/expr-compiler-small	2689	_dl_init_paths
 native/expr-compiler-small	2619	_dl_name_match_p
-native/json-roundtrip-small	2799282	<total>
-native/json-roundtrip-small	306205	_int_malloc
-native/json-roundtrip-small	218661	__memcpy_avx_unaligned_erms
-native/json-roundtrip-small	200990	core::str::converts::from_utf8
-native/json-roundtrip-small	173334	_int_free
+native/json-roundtrip-small	2761685	<total>
+native/json-roundtrip-small	301477	_int_malloc
+native/json-roundtrip-small	207444	__memcpy_avx_unaligned_erms
+native/json-roundtrip-small	183820	core::str::converts::from_utf8
+native/json-roundtrip-small	173418	_int_free
 native/json-roundtrip-small	135790	_H19benchmark115parseI5df210138acc1d60E
 native/json-roundtrip-small	112201	hirsel_rt::isolate::decode::text
-native/json-roundtrip-small	109369	malloc
-native/json-roundtrip-small	106894	_dl_relocate_object
+native/json-roundtrip-small	109373	malloc
+native/json-roundtrip-small	107986	_dl_relocate_object
 native/json-roundtrip-small	104254	do_lookup_x
 native/json-roundtrip-small	102828	sha2::sha256::soft::compress
 native/json-roundtrip-small	98635	hirsel_rt_v2_seq_grow
 native/json-roundtrip-small	84864	hirsel_rt::io::append_byte_list
-native/json-roundtrip-small	83899	_H19benchmark114emitIf354e5c11f04ef6fE
-native/json-roundtrip-small	82629	_H19benchmark114nodeI61b9de0f9ef0efe1E
+native/json-roundtrip-small	84476	_H19benchmark114emitIf354e5c11f04ef6fE
+native/json-roundtrip-small	82129	_H19benchmark114nodeI61b9de0f9ef0efe1E
 native/json-roundtrip-small	80427	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
 native/json-roundtrip-small	72638	free
-native/json-roundtrip-small	52616	_H19benchmark116quotedI5e010b657a17b1d3E
 native/json-roundtrip-small	48020	_dl_lookup_symbol_x
+native/json-roundtrip-small	46802	_H19benchmark116quotedI5e010b657a17b1d3E
 native/json-roundtrip-small	41749	hirsel_rt::release::release_block
 native/json-roundtrip-small	40344	???
 native/json-roundtrip-small	31407	hirsel_rt_v2_main
-native/json-roundtrip-small	27750	strcmp
+native/json-roundtrip-small	27631	strcmp
 native/json-roundtrip-small	27163	_H19benchmark114mainI870813562345c542E
 native/json-roundtrip-small	25792	hirsel_rt_v2_bytes_slice
 native/json-roundtrip-small	23231	hirsel_run_config::integer_tokens
@@ -703,57 +703,56 @@ native/json-roundtrip-small	13312	hirsel_rt_v2_bytes_append
 native/json-roundtrip-small	11803	__GI___tunables_init
 native/json-roundtrip-small	9935	hirsel_run_config::digest
 native/json-roundtrip-small	9430	_dl_check_map_versions
-native/json-roundtrip-small	8748	alloc_perturb
+native/json-roundtrip-small	8732	alloc_perturb
 native/json-roundtrip-small	8645	<serde_json::read::SliceRead>::skip_to_escape
 native/json-roundtrip-small	7867	_dl_map_object_from_fd
 native/json-roundtrip-small	7822	alloc::fmt::format::format_inner
 native/json-roundtrip-small	7351	core::fmt::write
-native/json-roundtrip-small	7225	<hirsel_rt::alloc::Heap>::refill
+native/json-roundtrip-small	7219	<hirsel_rt::alloc::Heap>::refill
 native/json-roundtrip-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 native/json-roundtrip-small	5660	strsep
 native/json-roundtrip-small	5590	intel_check_word.constprop.0
 native/json-roundtrip-small	5254	<alloc::raw_vec::RawVecInner>::finish_grow
-native/json-roundtrip-small	5159	<alloc::string::String as core::fmt::Write>::write_str
+native/json-roundtrip-small	5165	<alloc::string::String as core::fmt::Write>::write_str
 native/json-roundtrip-small	4741	realloc
 native/json-roundtrip-small	4572	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
-native/persistent-list-map-shared-small	1718920	<total>
-native/persistent-list-map-shared-small	202973	_int_malloc
-native/persistent-list-map-shared-small	140991	core::str::converts::from_utf8
-native/persistent-list-map-shared-small	117843	_int_free
-native/persistent-list-map-shared-small	106729	_dl_relocate_object
-native/persistent-list-map-shared-small	105801	__memcpy_avx_unaligned_erms
+native/persistent-list-map-shared-small	1678756	<total>
+native/persistent-list-map-shared-small	201119	_int_malloc
+native/persistent-list-map-shared-small	118405	core::str::converts::from_utf8
+native/persistent-list-map-shared-small	118113	_int_free
+native/persistent-list-map-shared-small	107821	_dl_relocate_object
 native/persistent-list-map-shared-small	103876	do_lookup_x
 native/persistent-list-map-shared-small	102828	sha2::sha256::soft::compress
-native/persistent-list-map-shared-small	80222	malloc_consolidate
-native/persistent-list-map-shared-small	74541	malloc
+native/persistent-list-map-shared-small	99175	__memcpy_avx_unaligned_erms
+native/persistent-list-map-shared-small	78463	malloc_consolidate
+native/persistent-list-map-shared-small	74539	malloc
 native/persistent-list-map-shared-small	73193	hirsel_rt::isolate::decode::text
 native/persistent-list-map-shared-small	52459	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-native/persistent-list-map-shared-small	49724	free
+native/persistent-list-map-shared-small	49729	free
 native/persistent-list-map-shared-small	47881	_dl_lookup_symbol_x
-native/persistent-list-map-shared-small	30996	unlink_chunk.isra.0
-native/persistent-list-map-shared-small	27362	strcmp
+native/persistent-list-map-shared-small	30564	unlink_chunk.isra.0
+native/persistent-list-map-shared-small	27278	strcmp
 native/persistent-list-map-shared-small	23231	hirsel_run_config::integer_tokens
 native/persistent-list-map-shared-small	20675	hirsel_rt_v2_main
 native/persistent-list-map-shared-small	17200	check_match
 native/persistent-list-map-shared-small	14501	__rustc::__rdl_alloc
 native/persistent-list-map-shared-small	14016	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, serde_json::ser::CompactFormatter>
 native/persistent-list-map-shared-small	13653	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, hirsel_run_config::canonical_bytes::Canonical>
-native/persistent-list-map-shared-small	12913	_H13std118internal7decimal6appendI723e876f8e1f743dE
+native/persistent-list-map-shared-small	12657	_H13std118internal7decimal6appendI723e876f8e1f743dE
 native/persistent-list-map-shared-small	11803	__GI___tunables_init
 native/persistent-list-map-shared-small	11131	core::ptr::drop_glue::<hirsel_rt::isolate::FailureTable>
 native/persistent-list-map-shared-small	9935	hirsel_run_config::digest
 native/persistent-list-map-shared-small	9430	_dl_check_map_versions
 native/persistent-list-map-shared-small	8645	<serde_json::read::SliceRead>::skip_to_escape
-native/persistent-list-map-shared-small	8542	hirsel_rt_v2_seq_grow
 native/persistent-list-map-shared-small	7877	_dl_map_object_from_fd
 native/persistent-list-map-shared-small	7822	alloc::fmt::format::format_inner
 native/persistent-list-map-shared-small	7351	core::fmt::write
 native/persistent-list-map-shared-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
-native/persistent-list-map-shared-small	5820	alloc_perturb
+native/persistent-list-map-shared-small	5792	alloc_perturb
 native/persistent-list-map-shared-small	5660	strsep
 native/persistent-list-map-shared-small	5590	intel_check_word.constprop.0
 native/persistent-list-map-shared-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/persistent-list-map-shared-small	5165	<alloc::string::String as core::fmt::Write>::write_str
+native/persistent-list-map-shared-small	5153	<alloc::string::String as core::fmt::Write>::write_str
 native/persistent-list-map-shared-small	4664	realloc
 native/persistent-list-map-shared-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/persistent-list-map-shared-small	4509	hirsel_run_config::portable_path
@@ -761,28 +760,29 @@ native/persistent-list-map-shared-small	4480	_H19benchmark1113number_24intoI76aa
 native/persistent-list-map-shared-small	4106	_H19benchmark114emitIf354e5c11f04ef6fE
 native/persistent-list-map-shared-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 native/persistent-list-map-shared-small	3264	core::slice::memchr::memchr_aligned
-native/persistent-list-map-shared-small	3101	_int_realloc
+native/persistent-list-map-shared-small	3116	_int_realloc
 native/persistent-list-map-shared-small	3047	???
-native/persistent-list-map-shared-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/persistent-list-map-shared-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/persistent-list-map-shared-small	2712	_H19benchmark1114mapped__sharedI4473ec55d2c0bf8fE
 native/persistent-list-map-shared-small	2689	_dl_init_paths
-native/persistent-list-map-shared-small	2681	<hirsel_rt::alloc::Heap>::refill
-native/persistent-list-map-unique-small	1693987	<total>
-native/persistent-list-map-unique-small	201596	_int_malloc
-native/persistent-list-map-unique-small	139029	core::str::converts::from_utf8
-native/persistent-list-map-unique-small	116784	_int_free
-native/persistent-list-map-unique-small	106729	_dl_relocate_object
-native/persistent-list-map-unique-small	105572	__memcpy_avx_unaligned_erms
+native/persistent-list-map-shared-small	2673	<hirsel_rt::alloc::Heap>::refill
+native/persistent-list-map-shared-small	2619	_dl_name_match_p
+native/persistent-list-map-unique-small	1656203	<total>
+native/persistent-list-map-unique-small	199311	_int_malloc
+native/persistent-list-map-unique-small	117063	_int_free
+native/persistent-list-map-unique-small	116351	core::str::converts::from_utf8
+native/persistent-list-map-unique-small	107821	_dl_relocate_object
 native/persistent-list-map-unique-small	103876	do_lookup_x
 native/persistent-list-map-unique-small	102828	sha2::sha256::soft::compress
-native/persistent-list-map-unique-small	79447	malloc_consolidate
-native/persistent-list-map-unique-small	73883	malloc
+native/persistent-list-map-unique-small	98952	__memcpy_avx_unaligned_erms
+native/persistent-list-map-unique-small	77689	malloc_consolidate
+native/persistent-list-map-unique-small	73881	malloc
 native/persistent-list-map-unique-small	72451	hirsel_rt::isolate::decode::text
 native/persistent-list-map-unique-small	51927	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-native/persistent-list-map-unique-small	49290	free
+native/persistent-list-map-unique-small	49295	free
 native/persistent-list-map-unique-small	47881	_dl_lookup_symbol_x
-native/persistent-list-map-unique-small	30804	unlink_chunk.isra.0
-native/persistent-list-map-unique-small	27362	strcmp
+native/persistent-list-map-unique-small	30384	unlink_chunk.isra.0
+native/persistent-list-map-unique-small	27278	strcmp
 native/persistent-list-map-unique-small	23231	hirsel_run_config::integer_tokens
 native/persistent-list-map-unique-small	20472	hirsel_rt_v2_main
 native/persistent-list-map-unique-small	17200	check_match
@@ -794,47 +794,47 @@ native/persistent-list-map-unique-small	11019	core::ptr::drop_glue::<hirsel_rt::
 native/persistent-list-map-unique-small	9935	hirsel_run_config::digest
 native/persistent-list-map-unique-small	9430	_dl_check_map_versions
 native/persistent-list-map-unique-small	8645	<serde_json::read::SliceRead>::skip_to_escape
-native/persistent-list-map-unique-small	7877	_dl_map_object_from_fd
+native/persistent-list-map-unique-small	7867	_dl_map_object_from_fd
 native/persistent-list-map-unique-small	7822	alloc::fmt::format::format_inner
 native/persistent-list-map-unique-small	7351	core::fmt::write
-native/persistent-list-map-unique-small	6467	_H13std118internal7decimal6appendI723e876f8e1f743dE
+native/persistent-list-map-unique-small	6339	_H13std118internal7decimal6appendI723e876f8e1f743dE
 native/persistent-list-map-unique-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
-native/persistent-list-map-unique-small	5744	alloc_perturb
+native/persistent-list-map-unique-small	5732	alloc_perturb
 native/persistent-list-map-unique-small	5660	strsep
 native/persistent-list-map-unique-small	5590	intel_check_word.constprop.0
 native/persistent-list-map-unique-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/persistent-list-map-unique-small	5153	<alloc::string::String as core::fmt::Write>::write_str
+native/persistent-list-map-unique-small	5147	<alloc::string::String as core::fmt::Write>::write_str
 native/persistent-list-map-unique-small	4664	realloc
 native/persistent-list-map-unique-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/persistent-list-map-unique-small	4509	hirsel_run_config::portable_path
-native/persistent-list-map-unique-small	4446	hirsel_rt_v2_seq_grow
 native/persistent-list-map-unique-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 native/persistent-list-map-unique-small	3264	core::slice::memchr::memchr_aligned
-native/persistent-list-map-unique-small	3150	_H19benchmark116mappedIaedae5d63f262ae3E
-native/persistent-list-map-unique-small	3101	_int_realloc
-native/persistent-list-map-unique-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/persistent-list-map-unique-small	3116	_int_realloc
+native/persistent-list-map-unique-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/persistent-list-map-unique-small	2689	_dl_init_paths
-native/persistent-list-map-unique-small	2681	<hirsel_rt::alloc::Heap>::refill
+native/persistent-list-map-unique-small	2673	<hirsel_rt::alloc::Heap>::refill
 native/persistent-list-map-unique-small	2619	_dl_name_match_p
-native/persistent-list-map-unique-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/persistent-list-map-unique-small	2609	hirsel_rt::release::check_frame
-native/records-messages-flat-small	1732914	<total>
-native/records-messages-flat-small	193632	_int_malloc
-native/records-messages-flat-small	144308	core::str::converts::from_utf8
-native/records-messages-flat-small	111696	_int_free
-native/records-messages-flat-small	106872	_dl_relocate_object
-native/records-messages-flat-small	105918	__memcpy_avx_unaligned_erms
+native/persistent-list-map-unique-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/persistent-list-map-unique-small	2488	<hirsel_rt::context::RunCtx>::exit
+native/persistent-list-map-unique-small	2353	_dl_map_object_deps
+native/records-messages-flat-small	1689072	<total>
+native/records-messages-flat-small	191157	_int_malloc
+native/records-messages-flat-small	111843	_int_free
+native/records-messages-flat-small	107964	_dl_relocate_object
+native/records-messages-flat-small	105817	core::str::converts::from_utf8
 native/records-messages-flat-small	103876	do_lookup_x
 native/records-messages-flat-small	102828	sha2::sha256::soft::compress
+native/records-messages-flat-small	99502	__memcpy_avx_unaligned_erms
 native/records-messages-flat-small	86250	_H19benchmark118workloadId63c2bb31936cb4dE
-native/records-messages-flat-small	73510	malloc_consolidate
-native/records-messages-flat-small	70685	malloc
+native/records-messages-flat-small	74160	malloc_consolidate
+native/records-messages-flat-small	70683	malloc
 native/records-messages-flat-small	68635	hirsel_rt::isolate::decode::text
 native/records-messages-flat-small	49191	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
 native/records-messages-flat-small	47881	_dl_lookup_symbol_x
-native/records-messages-flat-small	47244	free
-native/records-messages-flat-small	27396	strcmp
-native/records-messages-flat-small	27381	unlink_chunk.isra.0
+native/records-messages-flat-small	47249	free
+native/records-messages-flat-small	29844	unlink_chunk.isra.0
+native/records-messages-flat-small	27297	strcmp
 native/records-messages-flat-small	23231	hirsel_run_config::integer_tokens
 native/records-messages-flat-small	19428	hirsel_rt_v2_main
 native/records-messages-flat-small	17200	check_match
@@ -852,40 +852,40 @@ native/records-messages-flat-small	7351	core::fmt::write
 native/records-messages-flat-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 native/records-messages-flat-small	5660	strsep
 native/records-messages-flat-small	5590	intel_check_word.constprop.0
-native/records-messages-flat-small	5472	alloc_perturb
+native/records-messages-flat-small	5468	alloc_perturb
 native/records-messages-flat-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/records-messages-flat-small	5153	<alloc::string::String as core::fmt::Write>::write_str
+native/records-messages-flat-small	5165	<alloc::string::String as core::fmt::Write>::write_str
 native/records-messages-flat-small	4664	realloc
 native/records-messages-flat-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/records-messages-flat-small	4509	hirsel_run_config::portable_path
-native/records-messages-flat-small	4035	<hirsel_rt::alloc::Heap>::refill
+native/records-messages-flat-small	4021	<hirsel_rt::alloc::Heap>::refill
 native/records-messages-flat-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 native/records-messages-flat-small	3116	_int_realloc
 native/records-messages-flat-small	2939	core::slice::memchr::memchr_aligned
-native/records-messages-flat-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/records-messages-flat-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/records-messages-flat-small	2785	hirsel_rt::release::check_frame
 native/records-messages-flat-small	2689	_dl_init_paths
-native/records-messages-flat-small	2664	_int_free_merge_chunk
+native/records-messages-flat-small	2658	_int_free_merge_chunk
 native/records-messages-flat-small	2619	_dl_name_match_p
-native/records-messages-flat-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/records-messages-flat-small	2477	<hirsel_rt::alloc::Heap>::release_all
-native/records-messages-scalar-small	1623181	<total>
-native/records-messages-scalar-small	186458	_int_malloc
-native/records-messages-scalar-small	127927	core::str::converts::from_utf8
-native/records-messages-scalar-small	108174	_int_free
-native/records-messages-scalar-small	106703	_dl_relocate_object
+native/records-messages-flat-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/records-messages-flat-small	2550	<hirsel_rt::context::RunCtx>::exit
+native/records-messages-scalar-small	1595730	<total>
+native/records-messages-scalar-small	183809	_int_malloc
+native/records-messages-scalar-small	108363	_int_free
+native/records-messages-scalar-small	107795	_dl_relocate_object
+native/records-messages-scalar-small	104669	core::str::converts::from_utf8
 native/records-messages-scalar-small	103876	do_lookup_x
-native/records-messages-scalar-small	103757	__memcpy_avx_unaligned_erms
 native/records-messages-scalar-small	102828	sha2::sha256::soft::compress
-native/records-messages-scalar-small	70879	malloc_consolidate
-native/records-messages-scalar-small	68482	malloc
+native/records-messages-scalar-small	97645	__memcpy_avx_unaligned_erms
+native/records-messages-scalar-small	71880	malloc_consolidate
+native/records-messages-scalar-small	68480	malloc
 native/records-messages-scalar-small	66303	hirsel_rt::isolate::decode::text
 native/records-messages-scalar-small	47881	_dl_lookup_symbol_x
 native/records-messages-scalar-small	47519	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
 native/records-messages-scalar-small	45663	free
-native/records-messages-scalar-small	27381	strcmp
+native/records-messages-scalar-small	28665	unlink_chunk.isra.0
+native/records-messages-scalar-small	27297	strcmp
 native/records-messages-scalar-small	26295	_H19benchmark118workloadId63c2bb31936cb4dE
-native/records-messages-scalar-small	26208	unlink_chunk.isra.0
 native/records-messages-scalar-small	23231	hirsel_run_config::integer_tokens
 native/records-messages-scalar-small	18790	hirsel_rt_v2_main
 native/records-messages-scalar-small	17200	check_match
@@ -903,7 +903,7 @@ native/records-messages-scalar-small	7351	core::fmt::write
 native/records-messages-scalar-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 native/records-messages-scalar-small	5660	strsep
 native/records-messages-scalar-small	5590	intel_check_word.constprop.0
-native/records-messages-scalar-small	5276	alloc_perturb
+native/records-messages-scalar-small	5264	alloc_perturb
 native/records-messages-scalar-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
 native/records-messages-scalar-small	5153	<alloc::string::String as core::fmt::Write>::write_str
 native/records-messages-scalar-small	4664	realloc
@@ -912,30 +912,30 @@ native/records-messages-scalar-small	4509	hirsel_run_config::portable_path
 native/records-messages-scalar-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 native/records-messages-scalar-small	3116	_int_realloc
 native/records-messages-scalar-small	3069	core::slice::memchr::memchr_aligned
-native/records-messages-scalar-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/records-messages-scalar-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/records-messages-scalar-small	2689	_dl_init_paths
 native/records-messages-scalar-small	2619	_dl_name_match_p
-native/records-messages-scalar-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/records-messages-scalar-small	2409	<hirsel_rt::alloc::Heap>::release_all
+native/records-messages-scalar-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/records-messages-scalar-small	2473	<hirsel_rt::context::RunCtx>::exit
 native/records-messages-scalar-small	2353	_dl_map_object_deps
 native/records-messages-scalar-small	2287	_int_free_merge_chunk
 native/records-messages-scalar-small	2223	dl_main
-native/resource-failure-heavy-small	1768599	<total>
-native/resource-failure-heavy-small	218089	_int_malloc
-native/resource-failure-heavy-small	168063	core::str::converts::from_utf8
-native/resource-failure-heavy-small	126285	_int_free
-native/resource-failure-heavy-small	107955	__memcpy_avx_unaligned_erms
-native/resource-failure-heavy-small	106716	_dl_relocate_object
+native/resource-failure-heavy-small	1720072	<total>
+native/resource-failure-heavy-small	216866	_int_malloc
+native/resource-failure-heavy-small	127434	_int_free
+native/resource-failure-heavy-small	123456	core::str::converts::from_utf8
+native/resource-failure-heavy-small	107808	_dl_relocate_object
 native/resource-failure-heavy-small	103876	do_lookup_x
 native/resource-failure-heavy-small	102828	sha2::sha256::soft::compress
-native/resource-failure-heavy-small	87492	malloc_consolidate
+native/resource-failure-heavy-small	100477	__memcpy_avx_unaligned_erms
+native/resource-failure-heavy-small	85827	malloc_consolidate
 native/resource-failure-heavy-small	80421	malloc
 native/resource-failure-heavy-small	79765	hirsel_rt::isolate::decode::text
 native/resource-failure-heavy-small	57171	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
 native/resource-failure-heavy-small	53506	free
 native/resource-failure-heavy-small	47881	_dl_lookup_symbol_x
-native/resource-failure-heavy-small	32973	unlink_chunk.isra.0
-native/resource-failure-heavy-small	27381	strcmp
+native/resource-failure-heavy-small	34377	unlink_chunk.isra.0
+native/resource-failure-heavy-small	27297	strcmp
 native/resource-failure-heavy-small	23231	hirsel_run_config::integer_tokens
 native/resource-failure-heavy-small	22473	hirsel_rt_v2_main
 native/resource-failure-heavy-small	17200	check_match
@@ -950,43 +950,43 @@ native/resource-failure-heavy-small	8645	<serde_json::read::SliceRead>::skip_to_
 native/resource-failure-heavy-small	7877	_dl_map_object_from_fd
 native/resource-failure-heavy-small	7822	alloc::fmt::format::format_inner
 native/resource-failure-heavy-small	7351	core::fmt::write
-native/resource-failure-heavy-small	6316	alloc_perturb
+native/resource-failure-heavy-small	6272	alloc_perturb
 native/resource-failure-heavy-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 native/resource-failure-heavy-small	5660	strsep
 native/resource-failure-heavy-small	5590	intel_check_word.constprop.0
 native/resource-failure-heavy-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/resource-failure-heavy-small	5159	<alloc::string::String as core::fmt::Write>::write_str
+native/resource-failure-heavy-small	5135	<alloc::string::String as core::fmt::Write>::write_str
 native/resource-failure-heavy-small	4664	realloc
 native/resource-failure-heavy-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/resource-failure-heavy-small	4509	hirsel_run_config::portable_path
 native/resource-failure-heavy-small	4368	_H19benchmark118workloadId63c2bb31936cb4dE
 native/resource-failure-heavy-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
+native/resource-failure-heavy-small	3116	_int_realloc
 native/resource-failure-heavy-small	3004	core::slice::memchr::memchr_aligned
-native/resource-failure-heavy-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/resource-failure-heavy-small	2801	_int_realloc
+native/resource-failure-heavy-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/resource-failure-heavy-small	2689	_dl_init_paths
 native/resource-failure-heavy-small	2619	_dl_name_match_p
-native/resource-failure-heavy-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/resource-failure-heavy-small	2392	<hirsel_rt::alloc::Heap>::release_all
+native/resource-failure-heavy-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/resource-failure-heavy-small	2458	<hirsel_rt::context::RunCtx>::exit
 native/resource-failure-heavy-small	2353	_dl_map_object_deps
-native/resource-failure-heavy-small	2223	dl_main
-native/resource-failure-heavy-small	2172	hirsel_rt::release::check_frame
-native/resource-failure-throughput-small	1755268	<total>
-native/resource-failure-throughput-small	218164	_int_malloc
-native/resource-failure-throughput-small	152866	core::str::converts::from_utf8
-native/resource-failure-throughput-small	126264	_int_free
-native/resource-failure-throughput-small	108001	__memcpy_avx_unaligned_erms
-native/resource-failure-throughput-small	106716	_dl_relocate_object
+native/resource-failure-heavy-small	2287	_int_free_merge_chunk
+native/resource-failure-heavy-small	2259	<core::fmt::Formatter>::pad_integral
+native/resource-failure-throughput-small	1729734	<total>
+native/resource-failure-throughput-small	217669	_int_malloc
+native/resource-failure-throughput-small	131400	core::str::converts::from_utf8
+native/resource-failure-throughput-small	127413	_int_free
+native/resource-failure-throughput-small	107808	_dl_relocate_object
 native/resource-failure-throughput-small	103876	do_lookup_x
 native/resource-failure-throughput-small	102828	sha2::sha256::soft::compress
-native/resource-failure-throughput-small	87410	malloc_consolidate
-native/resource-failure-throughput-small	80423	malloc
+native/resource-failure-throughput-small	100517	__memcpy_avx_unaligned_erms
+native/resource-failure-throughput-small	85916	malloc_consolidate
+native/resource-failure-throughput-small	80421	malloc
 native/resource-failure-throughput-small	79765	hirsel_rt::isolate::decode::text
 native/resource-failure-throughput-small	57171	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-native/resource-failure-throughput-small	53506	free
+native/resource-failure-throughput-small	53511	free
 native/resource-failure-throughput-small	47881	_dl_lookup_symbol_x
-native/resource-failure-throughput-small	32910	unlink_chunk.isra.0
-native/resource-failure-throughput-small	27362	strcmp
+native/resource-failure-throughput-small	33846	unlink_chunk.isra.0
+native/resource-failure-throughput-small	27278	strcmp
 native/resource-failure-throughput-small	23231	hirsel_run_config::integer_tokens
 native/resource-failure-throughput-small	22473	hirsel_rt_v2_main
 native/resource-failure-throughput-small	17200	check_match
@@ -998,46 +998,46 @@ native/resource-failure-throughput-small	11803	__GI___tunables_init
 native/resource-failure-throughput-small	9935	hirsel_run_config::digest
 native/resource-failure-throughput-small	9430	_dl_check_map_versions
 native/resource-failure-throughput-small	8645	<serde_json::read::SliceRead>::skip_to_escape
-native/resource-failure-throughput-small	7877	_dl_map_object_from_fd
+native/resource-failure-throughput-small	7867	_dl_map_object_from_fd
 native/resource-failure-throughput-small	7822	alloc::fmt::format::format_inner
 native/resource-failure-throughput-small	7351	core::fmt::write
-native/resource-failure-throughput-small	6324	alloc_perturb
+native/resource-failure-throughput-small	6276	alloc_perturb
 native/resource-failure-throughput-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 native/resource-failure-throughput-small	5929	_H19benchmark118workloadId63c2bb31936cb4dE
 native/resource-failure-throughput-small	5660	strsep
 native/resource-failure-throughput-small	5590	intel_check_word.constprop.0
 native/resource-failure-throughput-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/resource-failure-throughput-small	5147	<alloc::string::String as core::fmt::Write>::write_str
+native/resource-failure-throughput-small	5159	<alloc::string::String as core::fmt::Write>::write_str
 native/resource-failure-throughput-small	4664	realloc
 native/resource-failure-throughput-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/resource-failure-throughput-small	4509	hirsel_run_config::portable_path
 native/resource-failure-throughput-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 native/resource-failure-throughput-small	3201	core::slice::memchr::memchr_aligned
-native/resource-failure-throughput-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/resource-failure-throughput-small	2801	_int_realloc
+native/resource-failure-throughput-small	3116	_int_realloc
+native/resource-failure-throughput-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/resource-failure-throughput-small	2689	_dl_init_paths
 native/resource-failure-throughput-small	2619	_dl_name_match_p
-native/resource-failure-throughput-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/resource-failure-throughput-small	2392	<hirsel_rt::alloc::Heap>::release_all
+native/resource-failure-throughput-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/resource-failure-throughput-small	2458	<hirsel_rt::context::RunCtx>::exit
 native/resource-failure-throughput-small	2353	_dl_map_object_deps
+native/resource-failure-throughput-small	2303	_int_free_merge_chunk
 native/resource-failure-throughput-small	2223	dl_main
-native/resource-failure-throughput-small	2199	<core::fmt::Formatter>::pad_integral
-native/saxpy-checked-f32-small	1612504	<total>
-native/saxpy-checked-f32-small	187274	_int_malloc
-native/saxpy-checked-f32-small	136670	core::str::converts::from_utf8
-native/saxpy-checked-f32-small	108645	_int_free
-native/saxpy-checked-f32-small	106703	_dl_relocate_object
+native/saxpy-checked-f32-small	1571065	<total>
+native/saxpy-checked-f32-small	184831	_int_malloc
+native/saxpy-checked-f32-small	108834	_int_free
+native/saxpy-checked-f32-small	107795	_dl_relocate_object
 native/saxpy-checked-f32-small	103876	do_lookup_x
-native/saxpy-checked-f32-small	103850	__memcpy_avx_unaligned_erms
 native/saxpy-checked-f32-small	102828	sha2::sha256::soft::compress
-native/saxpy-checked-f32-small	71173	malloc_consolidate
-native/saxpy-checked-f32-small	68766	malloc
+native/saxpy-checked-f32-small	99335	core::str::converts::from_utf8
+native/saxpy-checked-f32-small	97550	__memcpy_avx_unaligned_erms
+native/saxpy-checked-f32-small	72145	malloc_consolidate
+native/saxpy-checked-f32-small	68764	malloc
 native/saxpy-checked-f32-small	66621	hirsel_rt::isolate::decode::text
 native/saxpy-checked-f32-small	47881	_dl_lookup_symbol_x
 native/saxpy-checked-f32-small	47747	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
 native/saxpy-checked-f32-small	45849	free
-native/saxpy-checked-f32-small	27449	strcmp
-native/saxpy-checked-f32-small	26295	unlink_chunk.isra.0
+native/saxpy-checked-f32-small	28836	unlink_chunk.isra.0
+native/saxpy-checked-f32-small	27365	strcmp
 native/saxpy-checked-f32-small	23231	hirsel_run_config::integer_tokens
 native/saxpy-checked-f32-small	18877	hirsel_rt_v2_main
 native/saxpy-checked-f32-small	17200	check_match
@@ -1055,9 +1055,9 @@ native/saxpy-checked-f32-small	7351	core::fmt::write
 native/saxpy-checked-f32-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 native/saxpy-checked-f32-small	5660	strsep
 native/saxpy-checked-f32-small	5590	intel_check_word.constprop.0
-native/saxpy-checked-f32-small	5308	alloc_perturb
+native/saxpy-checked-f32-small	5288	alloc_perturb
 native/saxpy-checked-f32-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/saxpy-checked-f32-small	5153	<alloc::string::String as core::fmt::Write>::write_str
+native/saxpy-checked-f32-small	5159	<alloc::string::String as core::fmt::Write>::write_str
 native/saxpy-checked-f32-small	4664	realloc
 native/saxpy-checked-f32-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/saxpy-checked-f32-small	4509	hirsel_run_config::portable_path
@@ -1065,30 +1065,30 @@ native/saxpy-checked-f32-small	3795	<serde_json::de::MapAccess<_> as serde_core:
 native/saxpy-checked-f32-small	3372	core::slice::memchr::memchr_aligned
 native/saxpy-checked-f32-small	3116	_int_realloc
 native/saxpy-checked-f32-small	3090	_H19benchmark118workloadId63c2bb31936cb4dE
-native/saxpy-checked-f32-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/saxpy-checked-f32-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/saxpy-checked-f32-small	2689	_dl_init_paths
 native/saxpy-checked-f32-small	2619	_dl_name_match_p
-native/saxpy-checked-f32-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/saxpy-checked-f32-small	2409	<hirsel_rt::alloc::Heap>::release_all
+native/saxpy-checked-f32-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/saxpy-checked-f32-small	2473	<hirsel_rt::context::RunCtx>::exit
 native/saxpy-checked-f32-small	2353	_dl_map_object_deps
 native/saxpy-checked-f32-small	2287	_int_free_merge_chunk
 native/saxpy-checked-f32-small	2223	dl_main
-native/saxpy-checked-f64-small	1611259	<total>
-native/saxpy-checked-f64-small	187104	_int_malloc
-native/saxpy-checked-f64-small	136475	core::str::converts::from_utf8
-native/saxpy-checked-f64-small	108495	_int_free
-native/saxpy-checked-f64-small	106703	_dl_relocate_object
+native/saxpy-checked-f64-small	1570062	<total>
+native/saxpy-checked-f64-small	184481	_int_malloc
+native/saxpy-checked-f64-small	108684	_int_free
+native/saxpy-checked-f64-small	107795	_dl_relocate_object
 native/saxpy-checked-f64-small	103876	do_lookup_x
-native/saxpy-checked-f64-small	103755	__memcpy_avx_unaligned_erms
 native/saxpy-checked-f64-small	102828	sha2::sha256::soft::compress
-native/saxpy-checked-f64-small	71059	malloc_consolidate
-native/saxpy-checked-f64-small	68672	malloc
+native/saxpy-checked-f64-small	99314	core::str::converts::from_utf8
+native/saxpy-checked-f64-small	97523	__memcpy_avx_unaligned_erms
+native/saxpy-checked-f64-small	72017	malloc_consolidate
+native/saxpy-checked-f64-small	68670	malloc
 native/saxpy-checked-f64-small	66515	hirsel_rt::isolate::decode::text
 native/saxpy-checked-f64-small	47881	_dl_lookup_symbol_x
 native/saxpy-checked-f64-small	47671	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
-native/saxpy-checked-f64-small	45792	free
-native/saxpy-checked-f64-small	27449	strcmp
-native/saxpy-checked-f64-small	26274	unlink_chunk.isra.0
+native/saxpy-checked-f64-small	45787	free
+native/saxpy-checked-f64-small	28788	unlink_chunk.isra.0
+native/saxpy-checked-f64-small	27365	strcmp
 native/saxpy-checked-f64-small	23231	hirsel_run_config::integer_tokens
 native/saxpy-checked-f64-small	18848	hirsel_rt_v2_main
 native/saxpy-checked-f64-small	17200	check_match
@@ -1106,9 +1106,9 @@ native/saxpy-checked-f64-small	7351	core::fmt::write
 native/saxpy-checked-f64-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 native/saxpy-checked-f64-small	5660	strsep
 native/saxpy-checked-f64-small	5590	intel_check_word.constprop.0
-native/saxpy-checked-f64-small	5300	alloc_perturb
+native/saxpy-checked-f64-small	5288	alloc_perturb
 native/saxpy-checked-f64-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/saxpy-checked-f64-small	5159	<alloc::string::String as core::fmt::Write>::write_str
+native/saxpy-checked-f64-small	5153	<alloc::string::String as core::fmt::Write>::write_str
 native/saxpy-checked-f64-small	4664	realloc
 native/saxpy-checked-f64-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/saxpy-checked-f64-small	4509	hirsel_run_config::portable_path
@@ -1116,30 +1116,30 @@ native/saxpy-checked-f64-small	3795	<serde_json::de::MapAccess<_> as serde_core:
 native/saxpy-checked-f64-small	3372	core::slice::memchr::memchr_aligned
 native/saxpy-checked-f64-small	3116	_int_realloc
 native/saxpy-checked-f64-small	3096	_H19benchmark118workloadId63c2bb31936cb4dE
-native/saxpy-checked-f64-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/saxpy-checked-f64-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/saxpy-checked-f64-small	2689	_dl_init_paths
 native/saxpy-checked-f64-small	2619	_dl_name_match_p
-native/saxpy-checked-f64-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/saxpy-checked-f64-small	2409	<hirsel_rt::alloc::Heap>::release_all
+native/saxpy-checked-f64-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/saxpy-checked-f64-small	2473	<hirsel_rt::context::RunCtx>::exit
 native/saxpy-checked-f64-small	2353	_dl_map_object_deps
 native/saxpy-checked-f64-small	2287	_int_free_merge_chunk
 native/saxpy-checked-f64-small	2223	dl_main
-native/saxpy-checked-integer-small	1637497	<total>
-native/saxpy-checked-integer-small	191854	_int_malloc
-native/saxpy-checked-integer-small	144087	core::str::converts::from_utf8
-native/saxpy-checked-integer-small	111324	_int_free
-native/saxpy-checked-integer-small	106690	_dl_relocate_object
-native/saxpy-checked-integer-small	104480	__memcpy_avx_unaligned_erms
+native/saxpy-checked-integer-small	1594102	<total>
+native/saxpy-checked-integer-small	189371	_int_malloc
+native/saxpy-checked-integer-small	111513	_int_free
+native/saxpy-checked-integer-small	107782	_dl_relocate_object
+native/saxpy-checked-integer-small	105823	core::str::converts::from_utf8
 native/saxpy-checked-integer-small	103876	do_lookup_x
 native/saxpy-checked-integer-small	102828	sha2::sha256::soft::compress
-native/saxpy-checked-integer-small	73411	malloc_consolidate
-native/saxpy-checked-integer-small	70456	malloc
+native/saxpy-checked-integer-small	98036	__memcpy_avx_unaligned_erms
+native/saxpy-checked-integer-small	74106	malloc_consolidate
+native/saxpy-checked-integer-small	70454	malloc
 native/saxpy-checked-integer-small	68529	hirsel_rt::isolate::decode::text
 native/saxpy-checked-integer-small	49115	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
 native/saxpy-checked-integer-small	47881	_dl_lookup_symbol_x
 native/saxpy-checked-integer-small	46965	free
-native/saxpy-checked-integer-small	27381	strcmp
-native/saxpy-checked-integer-small	27243	unlink_chunk.isra.0
+native/saxpy-checked-integer-small	29595	unlink_chunk.isra.0
+native/saxpy-checked-integer-small	27297	strcmp
 native/saxpy-checked-integer-small	23231	hirsel_run_config::integer_tokens
 native/saxpy-checked-integer-small	19399	hirsel_rt_v2_main
 native/saxpy-checked-integer-small	17200	check_match
@@ -1151,46 +1151,46 @@ native/saxpy-checked-integer-small	10427	core::ptr::drop_glue::<hirsel_rt::isola
 native/saxpy-checked-integer-small	9935	hirsel_run_config::digest
 native/saxpy-checked-integer-small	9430	_dl_check_map_versions
 native/saxpy-checked-integer-small	8645	<serde_json::read::SliceRead>::skip_to_escape
-native/saxpy-checked-integer-small	7867	_dl_map_object_from_fd
+native/saxpy-checked-integer-small	7877	_dl_map_object_from_fd
 native/saxpy-checked-integer-small	7822	alloc::fmt::format::format_inner
 native/saxpy-checked-integer-small	7351	core::fmt::write
 native/saxpy-checked-integer-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 native/saxpy-checked-integer-small	5660	strsep
 native/saxpy-checked-integer-small	5590	intel_check_word.constprop.0
-native/saxpy-checked-integer-small	5444	alloc_perturb
+native/saxpy-checked-integer-small	5432	alloc_perturb
 native/saxpy-checked-integer-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/saxpy-checked-integer-small	5147	<alloc::string::String as core::fmt::Write>::write_str
+native/saxpy-checked-integer-small	5165	<alloc::string::String as core::fmt::Write>::write_str
 native/saxpy-checked-integer-small	4664	realloc
 native/saxpy-checked-integer-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/saxpy-checked-integer-small	4509	hirsel_run_config::portable_path
 native/saxpy-checked-integer-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 native/saxpy-checked-integer-small	3116	_int_realloc
 native/saxpy-checked-integer-small	2939	core::slice::memchr::memchr_aligned
-native/saxpy-checked-integer-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/saxpy-checked-integer-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/saxpy-checked-integer-small	2689	_dl_init_paths
 native/saxpy-checked-integer-small	2619	_dl_name_match_p
-native/saxpy-checked-integer-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/saxpy-checked-integer-small	2409	<hirsel_rt::alloc::Heap>::release_all
+native/saxpy-checked-integer-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/saxpy-checked-integer-small	2473	<hirsel_rt::context::RunCtx>::exit
 native/saxpy-checked-integer-small	2397	_H19benchmark118workloadId63c2bb31936cb4dE
 native/saxpy-checked-integer-small	2353	_dl_map_object_deps
 native/saxpy-checked-integer-small	2287	_int_free_merge_chunk
 native/saxpy-checked-integer-small	2223	dl_main
-native/slots-churn-small	1717629	<total>
-native/slots-churn-small	210637	_int_malloc
-native/slots-churn-small	144716	core::str::converts::from_utf8
-native/slots-churn-small	122118	_int_free
-native/slots-churn-small	106935	__memcpy_avx_unaligned_erms
-native/slots-churn-small	106716	_dl_relocate_object
+native/slots-churn-small	1687341	<total>
+native/slots-churn-small	208214	_int_malloc
+native/slots-churn-small	122782	core::str::converts::from_utf8
+native/slots-churn-small	122571	_int_free
+native/slots-churn-small	107808	_dl_relocate_object
 native/slots-churn-small	103876	do_lookup_x
 native/slots-churn-small	102828	sha2::sha256::soft::compress
-native/slots-churn-small	83621	malloc_consolidate
-native/slots-churn-small	77408	malloc
+native/slots-churn-small	99414	__memcpy_avx_unaligned_erms
+native/slots-churn-small	82125	malloc_consolidate
+native/slots-churn-small	77406	malloc
 native/slots-churn-small	76373	hirsel_rt::isolate::decode::text
 native/slots-churn-small	54739	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
 native/slots-churn-small	51553	free
 native/slots-churn-small	47881	_dl_lookup_symbol_x
-native/slots-churn-small	32073	unlink_chunk.isra.0
-native/slots-churn-small	27675	strcmp
+native/slots-churn-small	32844	unlink_chunk.isra.0
+native/slots-churn-small	27613	strcmp
 native/slots-churn-small	23231	hirsel_run_config::integer_tokens
 native/slots-churn-small	21545	hirsel_rt_v2_main
 native/slots-churn-small	17200	check_match
@@ -1202,78 +1202,78 @@ native/slots-churn-small	11611	core::ptr::drop_glue::<hirsel_rt::isolate::Failur
 native/slots-churn-small	9935	hirsel_run_config::digest
 native/slots-churn-small	9430	_dl_check_map_versions
 native/slots-churn-small	8645	<serde_json::read::SliceRead>::skip_to_escape
-native/slots-churn-small	7877	_dl_map_object_from_fd
+native/slots-churn-small	7867	_dl_map_object_from_fd
 native/slots-churn-small	7822	alloc::fmt::format::format_inner
 native/slots-churn-small	7351	core::fmt::write
 native/slots-churn-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
-native/slots-churn-small	6040	alloc_perturb
+native/slots-churn-small	6012	alloc_perturb
 native/slots-churn-small	5660	strsep
 native/slots-churn-small	5590	intel_check_word.constprop.0
 native/slots-churn-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/slots-churn-small	5153	<alloc::string::String as core::fmt::Write>::write_str
+native/slots-churn-small	5165	<alloc::string::String as core::fmt::Write>::write_str
 native/slots-churn-small	4664	realloc
 native/slots-churn-small	4541	_H19benchmark118workloadId63c2bb31936cb4dE
 native/slots-churn-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/slots-churn-small	4509	hirsel_run_config::portable_path
 native/slots-churn-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
-native/slots-churn-small	3023	_int_realloc
+native/slots-churn-small	3116	_int_realloc
 native/slots-churn-small	2980	core::slice::memchr::memchr_aligned
-native/slots-churn-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/slots-churn-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
 native/slots-churn-small	2689	_dl_init_paths
 native/slots-churn-small	2619	_dl_name_match_p
-native/slots-churn-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/slots-churn-small	2409	<hirsel_rt::alloc::Heap>::release_all
+native/slots-churn-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/slots-churn-small	2473	<hirsel_rt::context::RunCtx>::exit
 native/slots-churn-small	2353	_dl_map_object_deps
+native/slots-churn-small	2287	_int_free_merge_chunk
 native/slots-churn-small	2223	dl_main
-native/slots-churn-small	2172	hirsel_rt::release::check_frame
-native/wordfreq-small	1784450	<total>
-native/wordfreq-small	217762	_int_malloc
-native/wordfreq-small	144832	core::str::converts::from_utf8
-native/wordfreq-small	126045	_int_free
-native/wordfreq-small	107787	__memcpy_avx_unaligned_erms
-native/wordfreq-small	106920	_dl_relocate_object
+native/wordfreq-small	1715778	<total>
+native/wordfreq-small	218618	_int_malloc
+native/wordfreq-small	125904	_int_free
+native/wordfreq-small	123070	core::str::converts::from_utf8
+native/wordfreq-small	108012	_dl_relocate_object
 native/wordfreq-small	104254	do_lookup_x
 native/wordfreq-small	102828	sha2::sha256::soft::compress
-native/wordfreq-small	86994	malloc_consolidate
-native/wordfreq-small	80134	malloc
+native/wordfreq-small	84276	malloc_consolidate
+native/wordfreq-small	80142	malloc
 native/wordfreq-small	79447	hirsel_rt::isolate::decode::text
+native/wordfreq-small	62861	__memcpy_avx_unaligned_erms
 native/wordfreq-small	56943	<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::ops::range::Range<u64>, hirsel_rt::isolate::decode::{closure#0}>, core::option::Option<core::convert::Infallible>> as core::iter::traits::iterator::Iterator>::next
 native/wordfreq-small	53475	free
 native/wordfreq-small	48020	_dl_lookup_symbol_x
-native/wordfreq-small	32949	unlink_chunk.isra.0
-native/wordfreq-small	27989	strcmp
+native/wordfreq-small	33084	unlink_chunk.isra.0
+native/wordfreq-small	27962	strcmp
 native/wordfreq-small	23231	hirsel_run_config::integer_tokens
 native/wordfreq-small	22439	hirsel_rt_v2_main
 native/wordfreq-small	17265	check_match
 native/wordfreq-small	15618	__rustc::__rdl_alloc
-native/wordfreq-small	15580	_H19benchmark118workloadId63c2bb31936cb4dE
+native/wordfreq-small	15583	_H19benchmark118workloadId63c2bb31936cb4dE
 native/wordfreq-small	14016	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, serde_json::ser::CompactFormatter>
 native/wordfreq-small	13653	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, hirsel_run_config::canonical_bytes::Canonical>
 native/wordfreq-small	12085	core::ptr::drop_glue::<hirsel_rt::isolate::FailureTable>
 native/wordfreq-small	11803	__GI___tunables_init
 native/wordfreq-small	9935	hirsel_run_config::digest
-native/wordfreq-small	9617	hirsel_rt_v2_seq_grow
 native/wordfreq-small	9430	_dl_check_map_versions
+native/wordfreq-small	9105	hirsel_rt_v2_seq_grow
 native/wordfreq-small	8645	<serde_json::read::SliceRead>::skip_to_escape
 native/wordfreq-small	7877	_dl_map_object_from_fd
 native/wordfreq-small	7822	alloc::fmt::format::format_inner
 native/wordfreq-small	7351	core::fmt::write
-native/wordfreq-small	6320	alloc_perturb
+native/wordfreq-small	6324	alloc_perturb
 native/wordfreq-small	6160	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
 native/wordfreq-small	5741	_H19benchmark115ownedI53e629fba4b4234aE
 native/wordfreq-small	5660	strsep
 native/wordfreq-small	5590	intel_check_word.constprop.0
 native/wordfreq-small	5214	<alloc::raw_vec::RawVecInner>::finish_grow
-native/wordfreq-small	5159	<alloc::string::String as core::fmt::Write>::write_str
+native/wordfreq-small	5165	<alloc::string::String as core::fmt::Write>::write_str
 native/wordfreq-small	4664	realloc
 native/wordfreq-small	4540	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 native/wordfreq-small	4509	hirsel_run_config::portable_path
 native/wordfreq-small	3795	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
 native/wordfreq-small	3762	hirsel_rt::release::release_block
 native/wordfreq-small	2901	core::slice::memchr::memchr_aligned
-native/wordfreq-small	2855	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
-native/wordfreq-small	2846	_int_realloc
+native/wordfreq-small	2840	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/wordfreq-small	2788	_int_realloc
 native/wordfreq-small	2696	hirsel_rt::release::check_frame
 native/wordfreq-small	2689	_dl_init_paths
 native/wordfreq-small	2619	_dl_name_match_p
-native/wordfreq-small	2613	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
+native/wordfreq-small	2601	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_config::RunConfig as serde_core::de::Deserialize>::deserialize::__Visitor>
