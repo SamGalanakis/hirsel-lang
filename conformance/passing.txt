@@ -3121,6 +3121,7 @@ conformance/MODE/MODE-2-map-update-unique-ok.hir
 conformance/MODE/MODE-2-mut-loop-element-copy-bad.hir
 conformance/MODE/MODE-2-mut-loop-element-copy-ok.hir
 conformance/MODE/MODE-2-mut-loop-element-copy-run.hir
+conformance/MODE/MODE-2-mut-loop-variant-field-run.hir
 conformance/MODE/MODE-2-nested-view-borrow-ok.hir
 conformance/MODE/MODE-2-nested-view-borrow-still-unique-ok.hir
 conformance/MODE/MODE-2-nested-view-copy-kept-bad.hir
