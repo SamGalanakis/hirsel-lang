@@ -9,14 +9,14 @@ fn serve(tasks: Tasks, n: Net, mut listener: Listener of n) -> Result[
   String,
   ExchangeError
 ] {
-  let (stream, _) = net.accept(n, mut listener) ? Network
+  let (stream, _) = net.accept(n, mut listener) ?
   let mut connection = http.server_connection(
     tasks,
     n,
     take stream,
     http.default_config()
   )
-  let Some((current1, incoming)) = http.next_stream(mut connection, None()) ? Http else {
+  let Some((current1, incoming)) = http.next_stream(mut connection, None()) ? else {
     return Error(Http(Closed()))
   }
   let mut exchange1 = take current1
@@ -27,27 +27,27 @@ fn serve(tasks: Tasks, n: Net, mut listener: Listener of n) -> Result[
     [http.Header(name: "Content-Type", value: "text/plain")],
     string.as_bytes(reply),
     true
-  ) ? Http
+  ) ?
   Ok(incoming.target)
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), ExchangeError] {
-  let tasks = io.tasks(rt) ? Grant
-  let n = io.net(rt) ? Grant
-  let output = io.stdout(rt) ? Grant
-  let socket = arg.path(args, 0u64) ? Usage
-  let mut listener = net.unix_listen(n, socket) ? Network
+  let tasks = io.tasks(rt) ?
+  let n = io.net(rt) ?
+  let output = io.stdout(rt) ?
+  let socket = arg.path(args, 0u64) ?
+  let mut listener = net.unix_listen(n, socket) ?
   let mut config = http.default_config()
   config.unix_socket = Some(socket)
-  let mut request = http.request(n, config, Get(), "http://localhost/status", []) ? Http
-  http.send_bodiless(mut request) ? Http
+  let mut request = http.request(n, config, Get(), "http://localhost/status", []) ?
+  http.send_bodiless(mut request) ?
   let target = serve(tasks, n, mut listener)?
-  let head = http.receive_head(mut request) ? Http
-  let body = http.read_all(mut request, 1024u64) ? Http
+  let head = http.receive_head(mut request) ?
+  let body = http.read_all(mut request, 1024u64) ?
   let text = match string.from_bytes(take body) {
     Ok(s) => s,
     Error(_) => "",
   }
-  let _ = out.print(output, f"request {target}; status {head.status}; body {text}\n") ? Output
+  let _ = out.print(output, f"request {target}; status {head.status}; body {text}\n") ?
   Ok(())
 }

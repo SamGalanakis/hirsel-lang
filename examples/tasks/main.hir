@@ -164,14 +164,14 @@ pub fn main(rt: Io, args: Args, environment: Env) -> Result[(), StartError] {
   let Ok(ip) = net.parse_ip(config.host) else {
     return Error(Usage(f"host must be an IP address, not {config.host}"))
   }
-  let n = io.net(rt) ? Grant
-  let tasks = io.tasks(rt) ? Grant
-  let data = io.dir(rt, path.of("data")) ? Files
-  let static_files = io.dir(rt, path.of("static")) ? Files
+  let n = io.net(rt) ?
+  let tasks = io.tasks(rt) ?
+  let data = io.dir(rt, path.of("data")) ?
+  let static_files = io.dir(rt, path.of("static")) ?
   let logger = app.Logger(sink: results.ok(io.stderr(rt)), minimum: config.level)
   let wall = results.ok(io.wall_clock(rt))
-  let board = store.load(data) ? Store
-  let files = app.load_assets(static_files) ? Files
+  let board = store.load(data) ?
+  let files = app.load_assets(static_files) ?
   app.note(
     logger,
     Info(),
@@ -197,8 +197,8 @@ pub fn main(rt: Io, args: Args, environment: Env) -> Result[(), StartError] {
     state: mutex.create(tasks, take board),
     assets: shared.freeze(take files)
   )
-  let listener = net.listen(n, SocketAddr(ip: ip, port: config.port)) ? Network
-  let bound = net.local_addr(n, listener) ? Network
+  let listener = net.listen(n, SocketAddr(ip: ip, port: config.port)) ?
+  let bound = net.local_addr(n, listener) ?
   let shown = net.socket_addr_to_string(bound)
   app.note(logger, Info(), "listening", [("address", copy shown)], wall)
   if let Some(out) = stdout {

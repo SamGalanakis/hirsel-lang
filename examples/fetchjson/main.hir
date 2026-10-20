@@ -4,17 +4,17 @@ pub type Error = Grants(GrantError) | Arguments(ArgError) | Http(http.HttpError)
 ) | Output(OutputError)
 
 pub fn main(rt: Io, args: Args) -> Result[(), Error] {
-  let url = path.text(arg.path(args, 0) ? Arguments)
-  let n = io.net(rt) ? Grants
-  let c = io.monotonic_clock(rt) ? Grants
-  let output = io.stdout(rt) ? Grants
-  let mut client = http.client(n, Some(c), http.default_config()) ? Http
+  let url = path.text(arg.path(args, 0) ?)
+  let n = io.net(rt) ?
+  let c = io.monotonic_clock(rt) ?
+  let output = io.stdout(rt) ?
+  let mut client = http.client(n, Some(c), http.default_config()) ?
   for index in 0u64..2u64 {
-    let body = http.json_body(Number(u64.to_string(index))) ? Http
-    let response = http.client_send(mut client, Post(), url, [], body) ? Http
-    let value = http.response_json(response) ? Http
-    out.print(output, json.stringify(value) ? Json) ? Output
-    out.print(output, "\n") ? Output
+    let body = http.json_body(Number(u64.to_string(index))) ?
+    let response = http.client_send(mut client, Post(), url, [], body) ?
+    let value = http.response_json(response) ?
+    out.print(output, json.stringify(value) ?) ?
+    out.print(output, "\n") ?
   }
   Ok(())
 }

@@ -1,7 +1,7 @@
 // One-shot HTTP GET; authority is supplied by the launch's exact Net rules.
 pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
-  let url = path.text(arg.path(args, 0) ? Arguments)
-  let net = io.net(rt) ? Grant
+  let url = path.text(arg.path(args, 0) ?)
+  let net = io.net(rt) ?
   let Ok(response) = http.fetch(net, http.default_config(), Get(), url, [], None()) else {
     return Error(Invalid())
   }

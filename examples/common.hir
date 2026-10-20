@@ -8,13 +8,13 @@ pub fn input(rt: Io, args: Args, take demo: String) -> Result[String, Error] {
     Ok(p) => p,
     Error(_) => return Ok(take demo),
   }
-  let dir = io.dir(rt, path.of("")) ? Files
-  let data = file.read_bytes(dir, p) ? Files
+  let dir = io.dir(rt, path.of("")) ?
+  let data = file.read_bytes(dir, p) ?
   Ok(string.from_bytes(copy data) ? Utf8)
 }
 
 pub fn print(rt: Io, text: String) -> Result[(), Error] {
-  out.print(io.stdout(rt) ? Grant, text) ? Output
+  out.print(io.stdout(rt) ?, text) ?
   Ok(())
 }
 

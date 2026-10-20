@@ -6,16 +6,16 @@ fn address(port: u16) -> SocketAddr uses {} {
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), QueryError] {
-  let n = io.net(rt) ? Grant
-  let output = io.stdout(rt) ? Grant
-  let mut socket = net.udp_bind(n, address(19000u16)) ? Network
-  let sent = udp.send_to(n, mut socket, b"hello", address(19001u16)) ? Network
+  let n = io.net(rt) ?
+  let output = io.stdout(rt) ?
+  let mut socket = net.udp_bind(n, address(19000u16)) ?
+  let sent = udp.send_to(n, mut socket, b"hello", address(19001u16)) ?
   let mut buffer: List[u8] = []
-  let reply = udp.recv_from(n, mut socket, mut buffer, 512u64) ? Network
+  let reply = udp.recv_from(n, mut socket, mut buffer, 512u64) ?
   let _ = out.print(
     output,
     f"sent {sent}; received {reply.count} from port {reply.peer.port}; truncated {reply.truncated}\n"
-  ) ? Output
+  ) ?
   udp.close(n, take socket)
   Ok(())
 }

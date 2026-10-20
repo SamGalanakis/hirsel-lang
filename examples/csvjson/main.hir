@@ -25,7 +25,7 @@ fn file_refill(mut source: FileSource, mut out: List[u8], max: u64) -> Result[
   Error
 ] {
   Ok(
-    bufio.file_read(source.dir, mut source.file, mut source.buffer, mut out, max) ? Files
+    bufio.file_read(source.dir, mut source.file, mut source.buffer, mut out, max) ?
   )
 }
 
@@ -33,7 +33,7 @@ fn input_refill(mut source: InputSource, mut out: List[u8], max: u64) -> Result[
   u64,
   Error
 ] {
-  Ok(bufio.stdin_read(source.input, mut source.buffer, mut out, max) ? Input)
+  Ok(bufio.stdin_read(source.input, mut source.buffer, mut out, max) ?)
 }
 
 fn memory_refill(mut source: MemorySource, mut out: List[u8], max: u64) -> Result[
@@ -58,7 +58,7 @@ fn convert[S](
   refill: fn(mut S, mut List[u8], u64) -> Result[u64, Error],
   encoded_column: Option[String]
 ) -> Result[String, Error] {
-  let mut reader = std@1/csv.reader(std@1/csv.default_config()) ? Csv
+  let mut reader = std@1/csv.reader(std@1/csv.default_config()) ?
   let mut headers: List[String] = []
   let mut first = true
   let mut encoded_index: Option[u64] = None()
@@ -143,7 +143,7 @@ fn specs() -> List[std@1/cli.Flag] {
 }
 
 fn emit(rt: Io, text: String) -> Result[(), Error] {
-  out.print(io.stdout(rt) ? Grant, text) ? Output
+  out.print(io.stdout(rt) ?, text) ?
   Ok(())
 }
 
@@ -151,9 +151,9 @@ fn run(rt: Io, args: Args) -> Result[(), Error] {
   let mut snapshot: List[String] = []
   let count = arg.len(args)
   for i in 0u64..count {
-    list.push(mut snapshot, arg.text(args, i) ? Arguments)
+    list.push(mut snapshot, arg.text(args, i) ?)
   }
-  let parsed = std@1/cli.parse(take snapshot, specs()) ? Flags
+  let parsed = std@1/cli.parse(take snapshot, specs()) ?
   if let Some(_) = map.get(parsed.flags, "help") {
     return emit(rt, std@1/cli.usage("csvjson", specs()))
   }
@@ -174,11 +174,11 @@ Lin,"a ""quote"""
     )
     convert(mut source, memory_refill, column)?
   } else if parsed.positional[0] == "-" {
-    let mut source = InputSource(input: io.stdin(rt) ? Grant, buffer: bufio.new(4096))
+    let mut source = InputSource(input: io.stdin(rt) ?, buffer: bufio.new(4096))
     convert(mut source, input_refill, column)?
   } else {
-    let dir = io.dir(rt, path.of("")) ? Open
-    let file = file.open(dir, path.of(parsed.positional[0])) ? Open
+    let dir = io.dir(rt, path.of("")) ?
+    let file = file.open(dir, path.of(parsed.positional[0])) ?
     let mut source = FileSource(dir: dir, file: take file, buffer: bufio.new(4096))
     convert(mut source, file_refill, column)?
   }
@@ -219,7 +219,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), Error] {
       )
       if let Ok(sink) = io.stderr(rt) {
         // The launcher also reports the returned error after program stderr.
-        std@1/log.write(sink, Debug(), entry) ? Output
+        std@1/log.write(sink, Debug(), entry) ?
       }
       Error(Invalid())
     },

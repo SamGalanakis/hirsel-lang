@@ -21,11 +21,11 @@ fn serve(tasks: Tasks, n: Net, mut listener: Listener of n) -> Result[(), Server
 
 pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   let tasks = io.tasks(rt)?
-  let n = io.net(rt) ? Grant
+  let n = io.net(rt) ?
   let mut listener = net.listen(
     n,
     SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
-  ) ? Network
+  ) ?
   // Accept connections until stopped.
   while true {
     serve(tasks, n, mut listener)?

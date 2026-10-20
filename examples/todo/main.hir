@@ -5,7 +5,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
     Ok(p) => p,
     Error(_) => path.of("todo.txt"),
   }
-  let dir = io.dir(rt, path.of("")) ? Files
+  let dir = io.dir(rt, path.of("")) ?
   let mut tasks: unique List[String] = []
   let data = match file.read_bytes(dir, state) {
     Ok(data) => take data,
@@ -20,9 +20,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   }
   execute(mut tasks, take commands)?
   let saved = string.join(tasks, "\n")
-  let mut file = file.create_atomic(dir, state) ? Files
-  file.write_all(dir, mut file, string.as_bytes(saved)) ? Files
-  file.commit(dir, take file) ? Files
+  let mut file = file.create_atomic(dir, state) ?
+  file.write_all(dir, mut file, string.as_bytes(saved)) ?
+  file.commit(dir, take file) ?
   let mut builder: List[u8] = []
   for i in 0u64..list.len(tasks) {
     text.append(mut builder, f"{i + 1}. {tasks[i]}\n")

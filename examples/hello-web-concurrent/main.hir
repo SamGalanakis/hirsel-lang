@@ -22,26 +22,26 @@ fn serve(tasks: Tasks, n: Net, clock: MonotonicClock, take incoming_stream: Stre
       [http.Header(name: "Content-Type", value: "text/plain")],
       b"Hello, world",
       false
-    ) ? Http
+    ) ?
   }
   Ok(())
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
-  let tasks = io.tasks(rt) ? Grant
-  let n = io.net(rt) ? Grant
-  let clock = io.monotonic_clock(rt) ? Grant
+  let tasks = io.tasks(rt) ?
+  let n = io.net(rt) ?
+  let clock = io.monotonic_clock(rt) ?
   let listener = net.listen(
     n,
     SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
-  ) ? Network
+  ) ?
   task.scope(
-    io.tasks(rt) ? Grant,
+    io.tasks(rt) ?,
     fn(s: Scope) -> Result[(), ServerError] {
       let mut accepting = take listener
       // Accept connections until stopped.
       while true {
-        let (stream, _) = net.accept(n, mut accepting) ? Network
+        let (stream, _) = net.accept(n, mut accepting) ?
         let child = task.async(
           s,
           fn() -> Result[(), ServerError] {
