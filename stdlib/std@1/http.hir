@@ -1578,7 +1578,11 @@ pub fn serve_tls(
   core@1/net.set_read_timeout(n, mut plain, rt) ? http_net_error
   core@1/net.set_write_timeout(n, mut plain, wt) ? http_net_error
   // This server speaks HTTP/1.1 alone, so it selects that protocol whatever the caller lists.
-  let http1 = TlsServer(identities: server.identities, clients: server.clients, alpn: ["http/1.1"])
+  let http1 = TlsServer(
+    identities: server.identities,
+    clients: server.clients,
+    alpn: ["http/1.1"]
+  )
   let secure = core@1/tls.accept(n, take plain, http1) ? http_net_error
   Ok(server_connection(tasks, n, take secure, config))
 }
@@ -1610,19 +1614,49 @@ pub fn detach(take s: ServerStream) -> Result[Detached, HttpError] {
   }
   // As http_exchange_from_transfer, without rebuilding the exchange: the stream and
   // its unread bytes leave, and the connection sees the exchange as gone.
-  let HttpTransfer(tasks: tasks, active: active, net: n, stream: stream, data: frozen) = take transfer
+  let HttpTransfer(tasks: tasks, active: active, net: n, stream: stream, data: data) = take transfer
   core@1/atomic.store(tasks, active, 3u8)
-  let mut snapshot = match core@1/shared.thaw(take frozen) {
-    Ok(data) => take data,
-    Error(_) => return Error(Closed()),
+  let mut serial = match take data {
+    Serial(current) => take current,
+    Multiplexed(_) => return Error(OutOfOrder()),
   }
-  Ok(
-    Detached(
-      net: n,
-      stream: take stream,
-      input: replace(mut snapshot.input, bufio.new(0))
-    )
+  let mut unread = replace(mut serial.input, HttpInput(bytes: [], offset: 0))
+  let have = http_input_buffered(unread)
+  let mut input = bufio.new(
+    if have > 4096 {
+      have
+    } else {
+      4096
+    }
   )
+  while http_input_buffered(unread) > 0 {
+    let left = http_input_buffered(unread)
+    match bufio.read_more(mut input, mut unread, http_input_refill, left) {
+      Ok(0) | Error(_) => return Error(Closed()),
+      Ok(_) => (),
+    }
+  }
+  Ok(Detached(net: n, stream: take stream, input: input))
+}
+
+// Moves up to `max` unread bytes of `source` to `out`, for bufio.read_more.
+fn http_input_refill(mut source: HttpInput, mut out: List[u8], max: u64) -> Result[
+  u64,
+  ()
+] uses {} {
+  let have = http_input_buffered(source)
+  let count = if max < have {
+    max
+  } else {
+    have
+  }
+  let mut i: u64 = 0
+  while i < count {
+    core@1/list.push(mut out, source.bytes[source.offset + i])
+    i += 1
+  }
+  source.offset += count
+  Ok(count)
 }
 
 // All Connection fields contribute tokens; close wins regardless of order.
