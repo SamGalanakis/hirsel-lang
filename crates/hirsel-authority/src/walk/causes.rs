@@ -19,7 +19,7 @@ impl Checker<'_> {
     /// annotation: its header with scalar and tuple parts. None where a part
     /// has no short, certain spelling (a nominal type, a relation, generics).
     pub(super) fn function_spelling(&self, ty: TypeId, qualified: bool) -> Option<String> {
-        fn part(types: &TypeStore, ty: TypeId, depth: usize) -> Option<String> {
+        fn part(types: &TypeInterner, ty: TypeId, depth: usize) -> Option<String> {
             let row = types.get(ty)?;
             Some(match &row.kind {
                 TypeKind::Primitive(p) => match p {
@@ -51,7 +51,7 @@ impl Checker<'_> {
                 _ => return None,
             })
         }
-        let types = &self.out.body.types;
+        let types = self.t;
         let row = types.get(ty)?;
         let TypeKind::Function(f) = &row.kind else {
             return None;
@@ -310,7 +310,7 @@ impl Checker<'_> {
                 .and_then(|call| {
                     call.arguments.iter().map(|a| a.expression).find(|part| {
                         self.ty(*part).is_some_and(|t| {
-                            let relation = &self.out.body.types.get(t).unwrap().modes.relation;
+                            let relation = &self.t.get(t).unwrap().modes.relation;
                             self.named_arena(relation).as_ref() == Some(arena)
                         })
                     })
@@ -410,7 +410,7 @@ impl Checker<'_> {
             match declared.as_ref().and_then(|f| f.get(field.0 as usize)) {
                 Some(f) => {
                     name.push('.');
-                    name.push_str(&f.name);
+                    name.push_str(f.name.as_str());
                     ty = Some(f.ty);
                 }
                 None => {
@@ -527,7 +527,7 @@ impl Checker<'_> {
                 .frames
                 .last()
                 .and_then(|f| f.result)
-                .and_then(|r| self.out.body.types.get(r))
+                .and_then(|r| self.t.get(r))
                 .is_some_and(|r| self.named_arena(&r.modes.relation).as_ref() == Some(expected));
             let result = self.receiving.as_ref().is_some_and(|r| r.result) || result_arena;
             let (repairs, cautions) = placement_repairs(&x, &from, &to, result);

@@ -76,18 +76,18 @@ pub fn type_row(kind: TypeKind) -> Type {
 }
 #[derive(Default)]
 pub struct Provider {
-    pub signatures: BTreeMap<DefPath, SignatureRef>,
-    pub failures: BTreeMap<DefPath, QueryError>,
-    pub calls: Vec<DefPath>,
+    pub signatures: BTreeMap<DefId, SignatureRef>,
+    pub failures: BTreeMap<DefId, QueryError>,
+    pub calls: Vec<DefId>,
 }
 impl SignatureProvider for Provider {
-    fn signature(&mut self, d: &DefPath) -> Result<SignatureRef, QueryError> {
-        self.calls.push(d.clone());
-        if let Some(e) = self.failures.get(d) {
+    fn signature(&mut self, d: DefId) -> Result<SignatureRef, QueryError> {
+        self.calls.push(d);
+        if let Some(e) = self.failures.get(&d) {
             return Err(e.clone());
         }
         self.signatures
-            .get(d)
+            .get(&d)
             .cloned()
             .ok_or(QueryError::NotImplemented)
     }
@@ -96,6 +96,8 @@ impl SignatureProvider for Provider {
     }
 }
 pub struct Fixture {
+    pub types: std::sync::Arc<TypeInterner>,
+    pub memo: TypeMemo,
     pub tree: SyntaxTree,
     pub body: CheckedBody,
     pub signature: Signature,
@@ -105,12 +107,11 @@ pub struct Fixture {
 }
 impl Fixture {
     pub fn new() -> Self {
-        let mut types = TypeStore::default();
-        let unit = types.push(type_row(TypeKind::Tuple(vec![].into())));
+        let types = TypeInterner::new(None);
+        let unit = types.intern(type_row(TypeKind::Tuple(vec![].into())));
         let signature = Signature {
-            definition: path("example"),
+            definition: DefId::intern(&path("example")),
             metadata: SignatureMetadata::default(),
-            types: types.clone(),
             kind: SignatureKind::Function(function(unit)),
             fingerprint: ContentHash([1; 32]),
         };
@@ -120,7 +121,6 @@ impl Fixture {
             tails: vec![],
             places: vec![],
             calls: vec![],
-            types,
             bindings: vec![],
             patterns: vec![],
             resolution: Resolution::default(),
@@ -129,6 +129,8 @@ impl Fixture {
             closures: vec![],
         };
         Self {
+            types,
+            memo: TypeMemo::new(),
             tree,
             body,
             signature,
@@ -144,7 +146,7 @@ impl Fixture {
                 name: Symbol::intern("example"),
                 name_span: node_origin(1).span,
                 origin: node_origin(1),
-                definition: self.signature.definition.clone(),
+                definition: self.signature.definition.path().clone(),
                 visibility: Visibility::Private,
                 attributes: vec![],
                 kind: ItemKind::Function {
@@ -161,12 +163,12 @@ impl Fixture {
         }
     }
     pub fn ty(&mut self, kind: TypeKind) -> TypeId {
-        self.body.types.push(type_row(kind))
+        self.types.intern(type_row(kind))
     }
     pub fn adjusted(&mut self, id: TypeId, change: impl FnOnce(&mut Type)) -> TypeId {
-        let mut t = self.body.types.get(id).unwrap().clone();
+        let mut t = self.types.row(id).clone();
         change(&mut t);
-        self.body.types.push(t)
+        self.types.intern(t)
     }
     pub fn expr(&mut self, kind: ExprKind, ty: TypeId) -> ExprId {
         let id = ExprId(self.tree.expressions.len() as u32);
@@ -190,7 +192,7 @@ impl Fixture {
         usage: UseKind,
         mutable: bool,
     ) -> ExprId {
-        let ty = bind_parameter_scopes(&mut self.body.types, ty, &[scoped(owner)]).unwrap();
+        let ty = bind_parameter_scopes(&self.types, ty, &[scoped(owner)]).unwrap();
         let symbol = Symbol::intern(&format!("binding{}", self.body.bindings.len()));
         let p = hirsel_syntax::PatternId(self.tree.patterns.len() as u32);
         self.tree.patterns.push(Pattern {
@@ -253,11 +255,10 @@ impl Fixture {
     ) -> ExprId {
         let definition = path(name);
         self.provider.signatures.insert(
-            definition.clone(),
+            DefId::intern(&definition),
             Arc::new(Signature {
-                definition: definition.clone(),
+                definition: DefId::intern(&definition),
                 metadata: SignatureMetadata::default(),
-                types: self.body.types.clone(),
                 kind: SignatureKind::Function(f.clone()),
                 fingerprint: ContentHash([2; 32]),
             }),
@@ -319,12 +320,11 @@ impl Fixture {
         representation: Option<TypeId>,
         resource: bool,
     ) -> TypeId {
-        let definition = path(name);
+        let definition = DefId::intern(&path(name));
         self.provider.signatures.insert(
-            definition.clone(),
+            definition,
             Arc::new(Signature {
-                definition: definition.clone(),
-                types: self.body.types.clone(),
+                definition,
                 metadata: SignatureMetadata::default(),
                 fingerprint: ContentHash([3; 32]),
                 kind: SignatureKind::Type(TypeDefinition {
@@ -383,7 +383,7 @@ impl Fixture {
                 .find(|r| r.expression == *callee)
                 .unwrap()
                 .ty;
-            let (target, parameters, result) = match self.body.types.get(ty).unwrap().kind.clone() {
+            let (target, parameters, result) = match self.types.row(ty).kind.clone() {
                 TypeKind::Function(f) => (target, f.parameters, f.result),
                 TypeKind::Named { definition, .. } => {
                     let signature = &self.provider.signatures[&definition];
@@ -391,12 +391,14 @@ impl Fixture {
                         panic!("constructor fixture")
                     };
                     let TypeKind::Record(fields) =
-                        &signature.types.get(t.representation.unwrap()).unwrap().kind
+                        &self.types.row(t.representation.unwrap()).kind
                     else {
                         panic!("record fixture")
                     };
                     (
-                        CallTarget::Constructor(ContextualName::Constructor(definition)),
+                        CallTarget::Constructor(ContextualName::Constructor(
+                            definition.path().clone(),
+                        )),
                         fields
                             .iter()
                             .map(|f| parameter(f.ty, PassingMode::Take))
@@ -429,9 +431,11 @@ impl Fixture {
                 state: CallState::Complete,
             });
         }
-        publish_places(&self.tree, &mut self.body);
+        publish_places(&self.types, &self.tree, &mut self.body);
         let syntax = self.syntax(Some(root));
         check_file_with_clauses(
+            &self.types,
+            &self.memo,
             &syntax,
             &self.signature,
             self.body,
@@ -465,7 +469,7 @@ pub fn rejected(out: &AuthorityOutput, rule: &str) {
 }
 
 /// Manufacture the checked storage rows specified by these typed test fixtures.
-pub fn publish_places(tree: &SyntaxTree, body: &mut CheckedBody) {
+pub fn publish_places(t: &TypeInterner, tree: &SyntaxTree, body: &mut CheckedBody) {
     let specified = body.places.clone();
     body.places.clear();
     for row in &body.expressions.clone() {
@@ -565,7 +569,7 @@ pub fn publish_places(tree: &SyntaxTree, body: &mut CheckedBody) {
                     .and_then(|p| p.projections.iter().find(|p| p.expression == id))
                     .map(|p| p.kind.clone());
                 let kind = supplied.or(contextual).unwrap_or_else(|| {
-                    let field = match &body.types.get(ty).unwrap().kind {
+                    let field = match &t.row(ty).kind {
                         TypeKind::Record(fields) => fields
                             .iter()
                             .position(|f| f.name.as_str() == field.as_str())

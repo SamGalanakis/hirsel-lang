@@ -25,7 +25,7 @@ impl Checker<'_> {
             ) => const { RuleId::of("CAP-2") },
             _ => {
                 let branded_resource = f.parameters.iter().any(|p| {
-                    let Some(row) = self.out.body.types.get(p.ty) else {
+                    let Some(row) = self.t.get(p.ty) else {
                         return false;
                     };
                     // A resource charges CAP-2 only for its governing argument.
@@ -42,7 +42,7 @@ impl Checker<'_> {
                         return false;
                     };
                     let definition = definition.clone();
-                    self.read(&definition)
+                    self.read(definition)
                         .is_some_and(|s| matches!(&s.kind, SignatureKind::Type(t) if t.resource))
                 });
                 if branded_resource {
@@ -54,27 +54,27 @@ impl Checker<'_> {
         }
     }
     pub(super) fn capability_definition(&mut self, ty: TypeId) -> Option<DefPath> {
-        let TypeKind::Named { definition, .. } = self.out.body.types.get(ty)?.kind.clone() else {
+        let TypeKind::Named { definition, .. } = self.t.get(ty)?.kind.clone() else {
             return None;
         };
-        let signature = self.read(&definition)?;
+        let signature = self.read(definition)?;
         matches!(&signature.kind, SignatureKind::Type(t) if t.capability.is_some())
-            .then_some(definition)
+            .then(|| definition.path().clone())
     }
     pub(super) fn scoped_authority(&mut self, summary: AuthoritySummary) -> AuthoritySummary {
-        let store = self.out.body.types.clone();
-        self.scoped_authority_in(&store, summary)
+        let store = self.t;
+        self.scoped_authority_in(store, summary)
     }
     /// `scoped_authority`, reading the body's parameter rows from `store`,
     /// which holds every row of the body's store.
     pub(super) fn scoped_authority_in(
         &mut self,
-        store: &TypeStore,
+        store: &TypeInterner,
         summary: AuthoritySummary,
     ) -> AuthoritySummary {
         fn expand(
             checker: &mut Checker<'_>,
-            store: &TypeStore,
+            store: &TypeInterner,
             summary: AuthoritySummary,
             active: &mut BTreeSet<ParameterRef>,
         ) -> AuthoritySummary {
@@ -127,13 +127,13 @@ impl Checker<'_> {
         expand(self, store, summary, &mut BTreeSet::new())
     }
     pub(super) fn authority(&mut self, id: TypeId) -> AuthoritySummary {
-        self.authority_in(&self.out.body.types.clone(), id)
+        self.authority_in(self.t, id)
     }
-    fn authority_in(&mut self, store: &TypeStore, id: TypeId) -> AuthoritySummary {
+    fn authority_in(&mut self, store: &TypeInterner, id: TypeId) -> AuthoritySummary {
         let summary = self.raw_authority(store, id);
         self.scoped_authority(summary)
     }
-    pub(super) fn raw_authority(&mut self, store: &TypeStore, id: TypeId) -> AuthoritySummary {
+    pub(super) fn raw_authority(&mut self, store: &TypeInterner, id: TypeId) -> AuthoritySummary {
         let roles = self.signature.metadata.roles.clone();
         let declarations = self.declarations();
         structural_authority(store, id, &roles, &declarations, &mut |_, path| {
@@ -142,11 +142,11 @@ impl Checker<'_> {
         .unwrap()
     }
     pub(super) fn contains_resource(&mut self, root: TypeId) -> bool {
-        let mut store = self.out.body.types.clone();
+        let store = self.t;
         let mut pending = vec![(root, false)];
-        let mut seen = BTreeSet::new();
+        let mut seen = HashSet::new();
         let mut nominal_roots = hirsel_types::NominalExpansions::default();
-        let mut checked_closures = BTreeSet::new();
+        let mut checked_closures = HashSet::new();
         while let Some((t, exit)) = pending.pop() {
             if exit {
                 nominal_roots.leave(t, 0);
@@ -164,7 +164,7 @@ impl Checker<'_> {
                     definition,
                     arguments,
                 } => {
-                    let Some(signature) = self.read(&definition) else {
+                    let Some(signature) = self.read(definition) else {
                         return true;
                     };
                     let SignatureKind::Type(declaration) = &signature.kind else {
@@ -185,7 +185,7 @@ impl Checker<'_> {
                         return true;
                     }
                     if !nominal_roots
-                        .enter(t, 0, |_| &store)
+                        .enter(t, 0, store)
                         .unwrap_or_else(|error| self.proof_failure(error, false))
                     {
                         continue;
@@ -195,13 +195,9 @@ impl Checker<'_> {
                         return true;
                     };
                     let representation = if arguments.is_empty() {
-                        import_type(&signature.types, representation, &mut store)
+                        Ok::<TypeId, GraphError>(representation)
                     } else {
-                        substitute_type(
-                            &signature.types,
-                            representation,
-                            &mut store,
-                            Substitution {
+                        substitute(self.t, self.m, representation, &Substitution {
                                 binder: Some(hirsel_types::GenericBinder::Bound(0)),
                                 roles: &self.signature.metadata.roles,
                                 arguments: &arguments,
@@ -215,7 +211,7 @@ impl Checker<'_> {
                     pending.push((representation, false));
                 }
                 TypeKind::Parameter(_) => {
-                    if !self.property_in(store.clone(), t, Bound::Copyable, None) {
+                    if !self.property(t, Bound::Copyable) {
                         return true;
                     }
                 }
@@ -227,8 +223,7 @@ impl Checker<'_> {
                         .closures
                         .iter()
                         .filter(|closure| {
-                            semantic_equal(&store, t, &self.out.body.types, closure.ty)
-                                .unwrap_or(false)
+                            self.t.semantic_eq(t, closure.ty)
                         })
                         .cloned()
                         .collect();
@@ -238,11 +233,7 @@ impl Checker<'_> {
                     for closure in matching {
                         if checked_closures.insert(closure.expression) {
                             for capture in closure.captures {
-                                let Ok(t) =
-                                    import_type(&self.out.body.types, capture.ty, &mut store)
-                                else {
-                                    return true;
-                                };
+                                let t = capture.ty;
                                 pending.push((t, false));
                             }
                         }
@@ -273,66 +264,53 @@ impl Checker<'_> {
     /// Whether a copy of this value is an independent global value: plain
     /// bits and `Shared`, `Mutex` or `Atomic` handles only (MEM-11, CONC-2).
     pub(super) fn copy_detaches(&mut self, id: TypeId) -> bool {
-        let store = self.out.body.types.clone();
-        let generics = self.declarations();
-        hirsel_types::copy_detaches(&store, id, &generics, &mut |path| {
-            Ok::<_, hirsel_types::QueryError>(self.read(path))
-        })
-        .unwrap_or_else(|error| self.proof_failure(error, false))
+        self.proof(false, |memo| hirsel_modes::proofs::copy_detaches(memo, id))
+    }
+    /// A proof through the query's memo; its reads are recorded, and an
+    /// unavailable declaration fails the query with `fallback`.
+    pub(super) fn proof<T>(
+        &mut self,
+        fallback: T,
+        proof: impl FnOnce(&mut ContextMemo<'_>) -> Result<T, QueryError>,
+    ) -> T {
+        let result = proof(&mut self.memo);
+        self.record_reads();
+        result.unwrap_or_else(|error| self.proof_failure(error, fallback))
     }
     pub(super) fn property(&mut self, id: TypeId, bound: Bound) -> bool {
-        self.property_in(self.out.body.types.clone(), id, bound, None)
-    }
-    fn property_in(
-        &mut self,
-        store: TypeStore,
-        id: TypeId,
-        bound: Bound,
-        declaration_generics: Option<&GenericDeclarations>,
-    ) -> bool {
-        if bound == Bound::Serializable {
-            let generics = declaration_generics
-                .cloned()
-                .unwrap_or_else(|| self.declarations());
-            return structural_serializable(&store, id, &generics, &mut |path| {
-                Ok::<_, hirsel_types::QueryError>(self.read(path))
-            })
-            .unwrap_or_else(|error| self.proof_failure(error, false));
+        match bound {
+            Bound::Serializable => {
+                let generics = self.declarations();
+                structural_serializable(self.t, id, &generics, &mut |d| {
+                    Ok::<_, hirsel_types::QueryError>(self.read(d))
+                })
+                .unwrap_or_else(|error| self.proof_failure(error, false))
+            }
+            Bound::Plain => self.proof(false, |memo| {
+                hirsel_modes::proofs::property(memo, id, StructuralProperty::Plain)
+            }),
+            Bound::Copyable => self.proof(false, |memo| {
+                hirsel_modes::proofs::property(memo, id, StructuralProperty::Copyable)
+            }),
+            Bound::Sendable => self.proof(false, |memo| {
+                hirsel_modes::proofs::property(memo, id, StructuralProperty::Sendable)
+            }),
+            bound => {
+                debug_assert_eq!(bound, Bound::Flat);
+                self.proof(false, |memo| hirsel_modes::proofs::flat(memo, id))
+            }
         }
-        let property = match bound {
-            Bound::Plain => Some(StructuralProperty::Plain),
-            Bound::Copyable => Some(StructuralProperty::Copyable),
-            Bound::Sendable => Some(StructuralProperty::Sendable),
-            _ => None,
-        };
-        if let Some(property) = property {
-            let generics = declaration_generics
-                .cloned()
-                .unwrap_or_else(|| self.declarations());
-            return structural_property(&store, id, property, &generics, &mut |path| {
-                Ok::<_, hirsel_types::QueryError>(self.read(path))
-            })
-            .unwrap_or_else(|error| self.proof_failure(error, false));
-        }
-        debug_assert_eq!(bound, Bound::Flat);
-        let generics = declaration_generics
-            .cloned()
-            .unwrap_or_else(|| self.declarations());
-        structural_flat(&store, id, &generics, &mut |path| {
-            Ok::<_, hirsel_types::QueryError>(self.read(path))
-        })
-        .unwrap_or_else(|error| self.proof_failure(error, false))
     }
     pub(super) fn scoped(&mut self, id: TypeId) -> bool {
-        self.scoped_in(self.out.body.types.clone(), id, &mut BTreeSet::new())
+        self.scoped_in(self.t, id, &mut BTreeSet::new())
     }
-    fn scoped_in(&mut self, store: TypeStore, id: TypeId, active: &mut BTreeSet<DefPath>) -> bool {
+    fn scoped_in(&mut self, store: &TypeInterner, id: TypeId, active: &mut BTreeSet<DefId>) -> bool {
         // Specialize generic and erased authority before opening a shape. A
         // nominal generic holder must not hide the scoped seal of its actual.
-        if let AuthoritySummary::Known(terms) = self.authority_in(&store, id) {
+        if let AuthoritySummary::Known(terms) = self.authority_in(store, id) {
             for term in terms {
                 if let AuthorityTerm::Capability(path) = term {
-                    if self.read(&path).is_some_and(|s|
+                    if self.read(DefId::intern(&path)).is_some_and(|s|
                         matches!(&s.kind, SignatureKind::Type(d) if d.capability == Some(CapabilityKind::Scoped))) {
                         return true;
                     }
@@ -349,7 +327,7 @@ impl Checker<'_> {
             arguments,
         } = &t.kind
         {
-            let Some(s) = self.read(definition) else {
+            let Some(s) = self.read(*definition) else {
                 return false;
             };
             let SignatureKind::Type(d) = &s.kind else {
@@ -358,22 +336,22 @@ impl Checker<'_> {
             if d.capability == Some(CapabilityKind::Scoped) {
                 return true;
             }
-            if !active.insert(definition.clone()) {
+            if !active.insert(*definition) {
                 return false;
             }
             // Opaque authority also exposes contained scoped capabilities.
             if let AuthoritySummary::Known(terms) = &d.authority {
                 for term in terms {
                     if let AuthorityTerm::Capability(cap) = term {
-                        if self.read(cap).is_some_and(|s| matches!(&s.kind, SignatureKind::Type(t) if t.capability == Some(CapabilityKind::Scoped))) { active.remove(definition); return true }
+                        if self.read(DefId::intern(cap)).is_some_and(|s| matches!(&s.kind, SignatureKind::Type(t) if t.capability == Some(CapabilityKind::Scoped))) { active.remove(definition); return true }
                     }
                 }
             }
             let r = d
                 .representation
-                .is_some_and(|r| self.scoped_in(s.types.clone(), r, active))
+                .is_some_and(|r| self.scoped_in(self.t, r, active))
                 || arguments.iter().any(|a| match a {
-                    GenericArgument::Type(actual) => self.scoped_in(store.clone(), *actual, active),
+                    GenericArgument::Type(actual) => self.scoped_in(store, *actual, active),
                     _ => false,
                 });
             active.remove(definition);
@@ -382,7 +360,7 @@ impl Checker<'_> {
         t.kind
             .value_parts()
             .into_iter()
-            .any(|t| self.scoped_in(store.clone(), t, active))
+            .any(|t| self.scoped_in(store, t, active))
     }
     pub(super) fn sendable(&mut self, id: TypeId) -> bool {
         self.property(id, Bound::Sendable)
@@ -393,22 +371,22 @@ impl Checker<'_> {
         if self.sendable(id) {
             return true;
         }
-        let row = self.out.body.types.get(id).unwrap().clone();
+        let row = self.t.get(id).unwrap().clone();
         if row.modes.uniqueness == Uniqueness::Unique || self.property(id, Bound::Plain) {
             return false;
         }
-        let mut store = self.out.body.types.clone();
+        let store = self.t;
         let mut row = row;
         row.modes.uniqueness = Uniqueness::Unique;
-        let unique = store.push(row.clone());
+        let unique = store.intern(row.clone());
         let declarations = self.declarations();
         row.modes.sendability =
-            structural_sendability(&store, unique, &declarations, &mut |path| {
+            structural_sendability(store, unique, &declarations, &mut |path| {
                 Ok(self.read(path))
             })
             .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable));
-        let root = store.push(row);
-        self.property_in(store, root, Bound::Sendable, None)
+        let root = store.intern(row);
+        self.property(root, Bound::Sendable)
     }
     /// Whether a row's sendability is evidence about what it captures
     /// (MODE-4: "computed where it is built and is part of its type") rather
@@ -427,16 +405,16 @@ impl Checker<'_> {
     /// own lifetime, which MODE-1 judges. Placement still counts: an arena
     /// value does not cross.
     fn content_sendable(&mut self, id: TypeId) -> bool {
-        let mut store = self.out.body.types.clone();
+        let store = self.t;
         let mut row = store.get(id).unwrap().clone();
         row.modes.relation = self.placement(&row.modes.relation);
-        let root = store.push(row);
-        self.property_in(store, root, Bound::Sendable, None)
+        let root = store.intern(row);
+        self.property(root, Bound::Sendable)
     }
     /// A symbolic crossing promise is a conjunction: the actual may require
     /// only dependencies that the receiving type already requires.
     pub(super) fn receives_sendability(&mut self, actual: TypeId, expected: &Sendability) -> bool {
-        let row = self.out.body.types.get(actual).unwrap().clone();
+        let row = self.t.get(actual).unwrap().clone();
         if row.modes.sendability == Sendability::NotSendable
             && row.modes.relation.named_parameters().is_some()
         {
@@ -445,13 +423,13 @@ impl Checker<'_> {
         if row.modes.sendability == Sendability::Sendable {
             return self.content_sendable(actual);
         }
-        let mut store = self.out.body.types.clone();
+        let store = self.t;
         let mut row = row;
         row.modes.relation = self.placement(&row.modes.relation);
-        let actual = store.push(row);
+        let actual = store.intern(row);
         let generics = self.declarations();
         let derived =
-            content_sendability(&store, actual, &generics, &mut |path| Ok(self.read(path)))
+            content_sendability(store, actual, &generics, &mut |path| Ok(self.read(path)))
                 .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable));
         Self::crossing_satisfies(&derived, expected)
     }
@@ -470,7 +448,7 @@ impl Checker<'_> {
         let Some(root) = self.ty(expression) else {
             return;
         };
-        let row = self.out.body.types.get(root).unwrap();
+        let row = self.t.get(root).unwrap();
         if !row.modes.relation.is_global() {
             return;
         }
@@ -478,13 +456,13 @@ impl Checker<'_> {
             self.construction_part_type(*part)
                 .is_some_and(|ty| self.sendable(ty))
         });
-        let mut row = self.out.body.types.get(root).unwrap().clone();
+        let mut row = self.t.get(root).unwrap().clone();
         row.modes.sendability = if proved {
             Sendability::Sendable
         } else {
             Sendability::NotSendable
         };
-        let root = self.out.body.types.push(row);
+        let root = self.intern(row);
         self.set_ty(expression, root);
     }
 }

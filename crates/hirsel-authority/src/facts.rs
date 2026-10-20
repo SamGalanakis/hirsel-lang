@@ -43,17 +43,17 @@ pub(super) fn substitute_authority(
     })
 }
 pub(super) fn origins(
-    store: &mut TypeStore,
+    t: &TypeInterner,
     root: TypeId,
     arguments: &BTreeMap<ParameterRef, OriginArgument>,
     actuals: &BTreeMap<ParameterRef, TypeId>,
 ) -> TypeId {
-    instantiate_parameter_sources(store, root, arguments, actuals).expect("checked parameter graph")
+    instantiate_parameter_sources(t, root, arguments, actuals).expect("checked parameter graph")
 }
 pub(super) fn siblings(
-    store: &mut TypeStore,
+    t: &TypeInterner,
     root: TypeId,
     fields: &BTreeMap<FieldId, Origin>,
 ) -> TypeId {
-    instantiate_sibling_origins(store, root, fields).expect("checked sibling graph")
+    instantiate_sibling_origins(t, root, fields).expect("checked sibling graph")
 }

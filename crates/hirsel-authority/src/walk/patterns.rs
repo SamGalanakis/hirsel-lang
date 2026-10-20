@@ -55,7 +55,7 @@ impl Checker<'_> {
         if self.property(ty, Bound::Plain) {
             return true;
         }
-        let row = self.out.body.types.get(ty).unwrap();
+        let row = self.t.get(ty).unwrap();
         if matches!(
             row.kind,
             TypeKind::Builtin {
@@ -97,22 +97,22 @@ impl Checker<'_> {
         if owned && source.access != SourceAccess::Copy {
             return Some(ty);
         }
-        let mut row = self.out.body.types.get(ty)?.clone();
+        let mut row = self.t.get(ty)?.clone();
         row.modes.uniqueness = Uniqueness::Aliased;
-        let shared = self.out.body.types.push(row.clone());
-        let store = self.out.body.types.clone();
+        let shared = self.intern(row.clone());
+        let store = self.t;
         let generics = self.declarations();
         row.modes.sendability =
-            sendability_after_sharing(&store, shared, &generics, &mut |path| Ok(self.read(path)))
+            sendability_after_sharing(store, shared, &generics, &mut |path| Ok(self.read(path)))
                 .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable));
-        Some(self.out.body.types.push(row))
+        Some(self.intern(row))
     }
     pub(super) fn copy_value_type(&mut self, e: ExprId, value: ExprId) {
         if let (Some(_), Some(src)) = (self.ty(e), self.ty(value)) {
             // A value marker preserves the complete occurrence graph, including
             // origins substituted into nominal arguments and aggregate payloads.
-            let ty = self.out.body.types.get(src).unwrap().clone();
-            let t = self.out.body.types.push(ty);
+            let ty = self.t.get(src).unwrap().clone();
+            let t = self.intern(ty);
 
             if let Some(stale) = self.invalid.get(&src).copied() {
                 self.invalid.insert(t, stale);
@@ -162,7 +162,7 @@ impl Checker<'_> {
                 .binding(value)
                 .is_some_and(|binding| binding.usage == UseKind::Take);
         let deep_unique = owned
-            && self.out.body.types.get(actual).unwrap().modes.uniqueness == Uniqueness::Unique;
+            && self.t.get(actual).unwrap().modes.uniqueness == Uniqueness::Unique;
         let ownership = if deep_unique {
             PatternOwnership::Unique
         } else if owned {
@@ -184,8 +184,8 @@ impl Checker<'_> {
         let Some(decision) = self.pattern_row(pattern).cloned() else {
             return;
         };
-        let mut ty = self.out.body.types.get(decision.ty).unwrap().clone();
-        let a = self.out.body.types.get(actual).unwrap().clone();
+        let mut ty = self.t.get(decision.ty).unwrap().clone();
+        let a = self.t.get(actual).unwrap().clone();
         ty.sendability_requirement = a.sendability_requirement;
         ty.brand = a.brand.clone();
         ty.modes = a.modes.clone();
@@ -194,7 +194,7 @@ impl Checker<'_> {
         ty.allocation_target = a.allocation_target;
         // MEM-5: a cleanup summary travels with the value it describes.
         ty.drop_allocation = a.drop_allocation.clone();
-        let refined = self.out.body.types.push(ty);
+        let refined = self.intern(ty);
 
         if let Some(stale) = self.invalid.get(&actual).copied() {
             self.invalid.insert(refined, stale);
@@ -219,7 +219,7 @@ impl Checker<'_> {
             return;
         }
         let boundary = matches!(
-            self.out.body.types.get(refined).unwrap().kind,
+            self.t.get(refined).unwrap().kind,
             TypeKind::Builtin {
                 kind: BuiltinType::Shared,
                 ..
@@ -232,7 +232,7 @@ impl Checker<'_> {
         };
         let deep_unique = matches!(ownership, PatternOwnership::Unique);
         let received = if part && !boundary && !self.property(refined, Bound::Plain) {
-            let mut row = self.out.body.types.get(refined).unwrap().clone();
+            let mut row = self.t.get(refined).unwrap().clone();
             // I checks the current ownership of this root. J must retain
             // the declaration's payload contract for an owned transfer.
             row.modes.uniqueness = if deep_unique
@@ -243,7 +243,7 @@ impl Checker<'_> {
             } else {
                 Uniqueness::Aliased
             };
-            self.out.body.types.push(row)
+            self.intern(row)
         } else {
             refined
         };
@@ -367,7 +367,7 @@ impl Checker<'_> {
             .collect();
         for (field, child) in decision.fields {
             if let Some(part) = actual_fields.get(field.0 as usize) {
-                let part = super::facts::siblings(&mut self.out.body.types, *part, &roots);
+                let part = super::facts::siblings(self.t, *part, &roots);
                 let part = self.projected_item(refined, part);
                 self.bind_pattern_value(child, part, value, ownership, true, iteration);
                 if let Some(b) = self.out.body.bindings.iter().find(|b| {

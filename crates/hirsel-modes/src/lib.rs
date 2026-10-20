@@ -5,6 +5,9 @@
 hirsel_guard::install!();
 
 pub mod explain;
+pub mod proofs;
+pub mod reader;
+pub mod rows;
 
 use hirsel_syntax::{ExprId, ExprKind, StmtKind, SyntaxTree};
 /// The direct subexpressions of `e`, statements' expressions included.

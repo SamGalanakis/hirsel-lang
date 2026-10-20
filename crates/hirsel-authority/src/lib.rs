@@ -13,9 +13,10 @@ mod source_rows;
 mod type_bindings;
 mod walk;
 use hirsel_diag::Diagnostic;
+use hirsel_intern::Symbol;
 use hirsel_intern::work::{self, Counter};
 use hirsel_span::Span;
-use hirsel_syntax::{DefPath, ExprId, ItemSyntax, LexicalOwner, SyntaxTree};
+use hirsel_syntax::{DefId, DefPath, ExprId, ItemSyntax, LexicalOwner, SyntaxTree};
 use hirsel_types::core_roles::Intrinsic;
 use hirsel_types::*;
 use std::collections::BTreeMap;
@@ -91,6 +92,8 @@ impl AuthorityOutput {
 
 /// H's signature clauses are checked in distinct all-borrow frames.
 pub fn check_file_with_clauses(
+    t: &TypeInterner,
+    m: &TypeMemo,
     syntax: &ItemSyntax,
     signature: &Signature,
     body: CheckedBody,
@@ -99,7 +102,12 @@ pub fn check_file_with_clauses(
     loops: &[CursorPlan],
     clauses: &[(ExprId, TypeId)],
 ) -> AuthorityOutput {
-    walk::Checker::new(syntax, signature, body, provider, intrinsics)
+    let generics = body.resolution.generic_declarations.clone();
+    let reader = hirsel_modes::reader::Reader::new(&mut *provider, signature);
+    // A failed read proves nothing; the pass records its diagnostics.
+    let mut lookup = |d: DefId| Ok(reader.borrow_mut().read(d).ok());
+    let memo = ContextMemo::new(t, &generics, &mut lookup);
+    walk::Checker::new(t, m, syntax, signature, body, &reader, memo, intrinsics)
         .with_cursor_loops(loops)
         .with_clauses(clauses)
         .run()
