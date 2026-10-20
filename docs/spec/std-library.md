@@ -86,6 +86,9 @@ pub type Field { name: String, aliases: List[String], scalar: Scalar, predicate_
 pub type Record { identity: Identity, fields: List[Field] }
 pub type Finding { field: String, code: String, compatibility: Compatibility }
 pub type Report { compatibility: Compatibility, findings: List[Finding] }
+```
+
+```text
 fn schema_evolution.compare(writer: Record, reader: Record, options: schema.Options)
   -> Result[Report, schema.SchemaError] uses {}
 ```
