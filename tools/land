@@ -70,8 +70,11 @@ def check(name, command):
     return done.returncode == 0
 
 
-def checks():
-    """Generated files, the workspace build, Clippy and formatting, in that order."""
+def checks(lint=True):
+    """Generated files, the workspace build, Clippy and formatting, in that order.
+
+    A retry after a clean rebase passes lint=False: the change already passed Clippy and
+    formatting, and only the build can catch it combining badly with what landed meanwhile."""
     if not Path(BUCK2).exists() and not check('prepare.py', [PY, 'tools/buck2/prepare.py']):
         return False
     if not check('sync.py --if-stale', [PY, 'tools/buck2/sync.py', '--if-stale']):
@@ -82,8 +85,8 @@ def checks():
         return False
     return (check('workspace build', [PY, 'tools/buck2/event_logs.py', 'build', *CONFIG,
                                       '--materializations', 'none', *query.stdout.split()])
-            and check('Clippy', [PY, 'tools/buck2/clippy.py'])
-            and check('formatting', [PY, 'tools/buck2/fmt.py', '--check']))
+            and (not lint or (check('Clippy', [PY, 'tools/buck2/clippy.py'])
+                              and check('formatting', [PY, 'tools/buck2/fmt.py', '--check']))))
 
 
 def main():
@@ -95,6 +98,7 @@ def main():
         return 1
     branch = git('branch', '--show-current').stdout.strip()
     started = time.monotonic()
+    linted = False
     for attempt in range(1, ATTEMPTS + 1):
         if (fetched := git('fetch', '-q', 'origin', 'main')).returncode:
             say('git fetch failed\n' + fetched.stderr)
@@ -118,10 +122,12 @@ def main():
         if (ROOT / 'tools/land').read_bytes() != Path(__file__).read_bytes():
             say('the rebased tree has another tools/land; running it')
             os.execv(PY, [PY, str(ROOT / 'tools/land')])
-        say(f'attempt {attempt}: checking {head[:12]} on origin/main {main_sha[:12]}')
-        if not checks():
+        say(f'attempt {attempt}: checking {head[:12]} on origin/main {main_sha[:12]}'
+            + ('' if not linted else ' (build only: Clippy and formatting passed on attempt 1)'))
+        if not checks(lint=not linted):
             say('refusing to push a red tree')
             return 1
+        linted = True
         pushed = git('push', 'origin', 'HEAD:main')
         if pushed.returncode == 0:
             common = Path(git('rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())

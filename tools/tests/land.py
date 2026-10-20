@@ -71,11 +71,13 @@ class Land(unittest.TestCase):
     def main_log(self):
         return self.git(self.origin, 'log', '--format=%s', 'main').split('\n')[:-1]
 
-    def test_a_push_rejected_because_main_moved_rebases_checks_again_and_lands(self):
+    def test_a_push_rejected_because_main_moved_rebases_rebuilds_and_lands(self):
         landed = self.land(FAKE_OTHER_LANE=str(self.top / 'other'))
         self.assertEqual(landed.returncode, 0, landed.stdout + landed.stderr)
         self.assertIn('main moved during the checks; rebasing again', landed.stdout)
-        self.assertEqual(landed.stdout.count('pass  Clippy'), 2)
+        # The retry rebuilds the rebased tree but does not lint again.
+        self.assertEqual(landed.stdout.count('pass  workspace build'), 2)
+        self.assertEqual(landed.stdout.count('pass  Clippy'), 1)
         self.assertEqual(self.main_log(), ['change', 'other', 'base'])
         [row] = [json.loads(line) for line in (self.lane / '.git/hirsel-landings.jsonl').read_text().splitlines()]
         self.assertEqual((row['branch'], row['landed']), ('my-lane', self.git(self.origin, 'rev-parse', 'main').strip()))
