@@ -1,0 +1,185 @@
+// rule: SEM-3
+// expect: run
+// steps: 6000000
+// each case decodes and opens up to 129 bytes, about 188k steps a case
+// Wycheproof aes_gcm_test.json (0.9rc5), part 1 of 2: for each
+// key size and flag set with a 96-bit nonce, the first case of each of up to four message and data lengths
+// up to 129 bytes, 23 of the 316 cases. A valid case opens to its message
+// and an invalid one fails to open. Cases 1, 2, 3, 4, 5, 6, 7, 39, 41, 91, 92, 93, 94, 95, 96, 128, 130, 176.
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+fn check(
+  key_hex: String,
+  nonce_hex: String,
+  data_hex: String,
+  message_hex: String,
+  sealed_hex: String,
+  valid: bool
+) -> () {
+  match std@1/aes_gcm.open(
+    decode(key_hex),
+    decode(nonce_hex),
+    decode(sealed_hex),
+    decode(data_hex)
+  ) {
+    Ok(message) => {
+      failure.check(valid, TextInvariant())
+      failure.check(std@1/hex.encode(message) == message_hex, TextInvariant())
+    },
+    Error(AuthenticationFailed()) => failure.check(!valid, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  check(
+    "5b9604fe14eadba931b0ccf34843dab9",
+    "028318abc1824029138141a2",
+    "",
+    "001d0c231287c1182784554ca3a21908",
+    "26073cc1d851beff176384dc9896d5ff0a3ea7a5487cb5f7d70fb6c58d038554",
+    true
+  )
+  check(
+    "5b9604fe14eadba931b0ccf34843dab9",
+    "921d2507fa8007b7bd067d34",
+    "00112233445566778899aabbccddeeff",
+    "001d0c231287c1182784554ca3a21908",
+    "49d8b9783e911913d87094d1f63cc7651e348ba07cca2cf04c618cb4d43a5b92",
+    true
+  )
+  check(
+    "aa023d0478dcb2b2312498293d9a9129",
+    "0432bc49ac34412081288127",
+    "aac39231129872a2",
+    "2035af313d1346ab00154fea78322105",
+    "eea945f3d0f98cc0fbab472a0cf24e874bb9b4812519dadf9e1232016d068133",
+    true
+  )
+  check(
+    "bedcfb5a011ebc84600fcb296c15af0d",
+    "438a547a94ea88dce46c6c85",
+    "",
+    "",
+    "960247ba5cde02e41a313c4c0136edc3",
+    true
+  )
+  check(
+    "384ea416ac3c2f51a76e7d8226346d4e",
+    "b30c084727ad1c592ac21d12",
+    "",
+    "35",
+    "547c1e4ae88bb27e5638343cb9fd3f6337",
+    true
+  )
+  check(
+    "cae31cd9f55526eb038241fc44cac1e5",
+    "b5e006ded553110e6dc56529",
+    "",
+    "d10989f2c52e94ad",
+    "a036ead03193903f3b626940e0e9f0cbea8e18c437fd6011",
+    true
+  )
+  check(
+    "dd6197cd63c963919cf0c273ef6b28bf",
+    "ecb0c42f7000ef0e6f95f24d",
+    "",
+    "4dcc1485365866e25ac3f2ca6aba97",
+    "8a9992388e735f80ee18f4a63c10ad1486a91cccf92c9a5b00f7b0e034891c",
+    true
+  )
+  check(
+    "00112233445566778899aabbccddeeff",
+    "000000000000000000000000",
+    "",
+    "ebd4a3e10cf6d41c50aeae007563b072",
+    "f62d84d649e56bc8cfedc5d74a51e2f7ffffffffffffffffffffffffffffffff",
+    true
+  )
+  check(
+    "000102030405060708090a0b0c0d0e0f",
+    "505152535455565758595a5b",
+    "",
+    "202122232425262728292a2b2c2d2e2f",
+    "eb156d081ed6b6b55f4612f021d87b39d9847dbc326a06e988c77ad3863e6083",
+    false
+  )
+  check(
+    "92ace3e348cd821092cd921aa3546374299ab46209691bc28b8752d17f123c20",
+    "00112233445566778899aabb",
+    "00000000ffffffff",
+    "00010203040506070809",
+    "e27abdd2d2a53d2f136b9a4a2579529301bcfb71c78d4060f52c",
+    true
+  )
+  check(
+    "29d3a44f8723dc640239100c365423a312934ac80239212ac3df3421a2098123",
+    "00112233445566778899aabb",
+    "aabbccddeeff",
+    "",
+    "2a7d77fa526b8250cb296078926b5020",
+    true
+  )
+  check(
+    "80ba3192c803ce965ea371d5ff073cf0f43b6a2ab576b208426e11409c09b9b0",
+    "4da5bf8dfd5852c1ea12379d",
+    "",
+    "",
+    "4771a7c404a472966cea8f73c8bfe17a",
+    true
+  )
+  check(
+    "cc56b680552eb75008f5484b4cb803fa5063ebd6eab91f6ab6aef4916a766273",
+    "99e23ec48985bccdeeab60f1",
+    "",
+    "2a",
+    "06633c1e9703ef744ffffb40edf9d14355",
+    true
+  )
+  check(
+    "51e4bf2bad92b7aff1a4bc05550ba81df4b96fabf41c12c7b00e60e48db7e152",
+    "4f07afedfdc3b6c2361823d3",
+    "",
+    "be3308f72a2c6aed",
+    "cf332a12fdee800b602e8d7c4799d62c140c9bb834876b09",
+    true
+  )
+  check(
+    "67119627bd988eda906219e08c0d0d779a07d208ce8a4fe0709af755eeec6dcb",
+    "68ab7fdbf61901dad461d23c",
+    "",
+    "51f8c1f731ea14acdb210a6d973e07",
+    "43fc101bff4b32bfadd3daf57a590eec04aacb7148a8b8be44cb7eaf4efa69",
+    true
+  )
+  check(
+    "00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f",
+    "000000000000000000000000",
+    "",
+    "561008fa07a68f5c61285cd013464eaf",
+    "23293e9b07ca7d1b0cae7cc489a973b3ffffffffffffffffffffffffffffffff",
+    true
+  )
+  check(
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "505152535455565758595a5b",
+    "",
+    "202122232425262728292a2b2c2d2e2f",
+    "b2061457c0759fc1749f174ee1ccadfa9de8fef6d8ab1bf1bf887232eab590dd",
+    false
+  )
+  check(
+    "00112233445566778899aabbccddeeff1021324354657687",
+    "000000000000000000000000",
+    "",
+    "0b4dbbba8982e0f649f8ba85f3aa061b",
+    "3f875c9bd7d8511448459468e398c3b2ffffffffffffffffffffffffffffffff",
+    true
+  )
+  Ok(())
+}

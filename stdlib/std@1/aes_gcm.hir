@@ -1,0 +1,733 @@
+// AES-128, AES-192 and AES-256 (FIPS 197) in Galois/Counter Mode (NIST SP 800-38D)
+// with a 12-byte nonce and a 16-byte tag, from Zig std/crypto/aes/bitsliced.zig and
+// ghash_polyval.zig (MIT). AES runs on bit planes: plane k holds bit 7 - k of each
+// of 64 state bytes, four blocks side by side, and SubBytes is the S-box as a
+// Boolean circuit. GHASH multiplies with masked integer products. Neither reads a
+// table at a secret index, and the operation sequence depends only on the key
+// size and the input lengths.
+// The largest plaintext SP 800-38D allows: 2^39 - 256 bits.
+const MAX_MESSAGE: u64 = 68719476704
+
+// The largest associated data: 2^64 - 1 bits.
+const MAX_DATA: u64 = 2305843009213693951
+
+// The round keys as bit planes, each 16-bit block plane repeated in all four lanes.
+type Schedule {
+  planes: Inline[u64, 120],
+  rounds: u64,
+}
+
+// The 8 x 8 bit matrix whose row i is byte i of `x`, transposed: bit 8t + i of the
+// result is bit t of byte i.
+@noalloc
+fn transpose(x: u64) -> u64 uses {} {
+  let a = (x ^ x >> 7) & 0x00aa00aa00aa00aa
+  let y = x ^ a ^ a << 7
+  let b = (y ^ y >> 14) & 0x0000cccc0000cccc
+  let z = y ^ b ^ b << 14
+  let c = (z ^ z >> 28) & 0x00000000f0f0f0f0
+  z ^ c ^ c << 28
+}
+
+// The S-box on every byte of the planes at once: Zig's 113-gate circuit.
+@noalloc
+fn sub(mut u: Inline[u64, 8]) -> () uses {} {
+  let s0 = u[1] ^ u[4]
+  let s1 = u[5] ^ u[7]
+  let s2 = u[3] ^ s0
+  let s3 = u[0] ^ u[2]
+  let q0 = s1 ^ s2
+  let s4 = u[0] ^ u[6]
+  let s5 = u[2] ^ u[6]
+  let s6 = u[3] ^ s1
+  let s7 = u[5] ^ s3
+  let q1 = s1 ^ s5
+  let q2 = u[2] ^ q0
+  let q3 = s4 ^ s2
+  let q4 = s3 ^ q0
+  let s8 = u[4] ^ s3
+  let q5 = s6 ^ s8
+  let q6 = u[2] ^ u[3]
+  let q7 = u[6] ^ s2
+  let s9 = u[6] ^ s0
+  let q8 = s3 ^ s9
+  let q9 = s4 ^ s6
+  let q10 = s0 ^ s5
+  let q12 = u[7] ^ s2
+  let q13 = u[1] ^ s7
+  let q14 = u[7] ^ s3
+  let q15 = s2 ^ s7
+  let q16 = u[1] ^ s1
+  let q17 = u[1] ^ u[7]
+  let q11 = u[5]
+  let t20 = q6 & q12
+  let t21 = q3 & q14
+  let t22 = q1 & q16
+  let t23 = q2 & q17
+  let x0 = (q3 | q14) ^ q0 & q7 ^ (t20 ^ t22)
+  let x1 = (q4 | q13) ^ q10 & q11 ^ (t21 ^ t20)
+  let x2 = (q2 | q17) ^ q5 & q9 ^ (t21 ^ t22)
+  let x3 = (q8 | q15) ^ t23 ^ (t21 ^ q4 & q13)
+  let a = x1 & ~x3
+  let b = x0 & ~x3
+  let c = x3 & ~x1
+  let d = x2 & ~x1
+  let e = x0 ^ a
+  let y0 = x3 ^ x2 & ~e
+  let f = x1 ^ b
+  let y1 = c ^ x2 & f
+  let g = x2 ^ c
+  let y2 = x1 ^ x0 & ~g
+  let h = x3 ^ d
+  let y3 = a ^ x0 & h
+  let y02 = y2 ^ y0
+  let y13 = y3 ^ y1
+  let y23 = y3 ^ y2
+  let y01 = y1 ^ y0
+  let y00 = y02 ^ y13
+  let a0 = y01 & q11
+  let a1 = y0 & q12
+  let a2 = y1 & q0
+  let a3 = y23 & q17
+  let a4 = y2 & q5
+  let a5 = y3 & q15
+  let a6 = y13 & q14
+  let a7 = y00 & q16
+  let a8 = y02 & q13
+  let a9 = y01 & q7
+  let a10 = y0 & q10
+  let a11 = y1 & q6
+  let a12 = y23 & q2
+  let a13 = y2 & q9
+  let a14 = y3 & q8
+  let a15 = y13 & q3
+  let a16 = y00 & q1
+  let a17 = y02 & q4
+  let r0 = a1 ^ a5
+  let r1 = a9 ^ a15
+  let r2 = a4 ^ r0
+  let r3 = a2 ^ a10
+  let r4 = a11 ^ a17
+  let r5 = a8 ^ r1
+  let r6 = a0 ^ a16
+  let r7 = a7 ^ a13
+  let r8 = a11 ^ a14
+  let r9 = r3 ^ r4
+  let r10 = r5 ^ r6
+  let r11 = r2 ^ r9
+  let r12 = a3 ^ r0
+  let r13 = r7 ^ r8
+  let r14 = r12 ^ r13
+  u[0] = r10 ^ r14
+  let r15 = a6 ^ a10
+  let r16 = r15 ^ r2
+  u[1] = ~(r10 ^ r16)
+  u[2] = ~(a2 ^ r2)
+  let r17 = a12 ^ a13
+  let r18 = a15 ^ r17
+  u[3] = r18 ^ r11
+  let r19 = a1 ^ a14
+  let r20 = a17 ^ r3
+  let r21 = r7 ^ r19
+  let r22 = r5 ^ r20
+  u[4] = r21 ^ r22
+  let r23 = a9 ^ a12
+  u[5] = r8 ^ r23
+  u[6] = ~(r1 ^ r4)
+  u[7] = ~(a16 ^ r11)
+}
+
+// SubWord: the S-box on each byte of a little-endian 32-bit word.
+@noalloc
+fn sub_word(word: u64) -> u64 uses {} {
+  let x = transpose(word)
+  let mut u: Inline[u64, 8] = [
+    x >> 56 & 0xff,
+    x >> 48 & 0xff,
+    x >> 40 & 0xff,
+    x >> 32 & 0xff,
+    x >> 24 & 0xff,
+    x >> 16 & 0xff,
+    x >> 8 & 0xff,
+    x & 0xff
+  ]
+  sub(mut u)
+  transpose(
+    (u[0] & 0xf) << 56 | (u[1] & 0xf) << 48 | (u[2] & 0xf) << 40 | (u[3] & 0xf) << 32 | (u[4] & 0xf) << 24 | (u[5] & 0xf) << 16 | (u[6] & 0xf) << 8 | u[7] & 0xf
+  )
+}
+
+@noalloc
+fn load32(data: Bytes, at: u64) -> u64 uses {} {
+  let b0: u64 = core@1/int.widen(data[at])
+  let b1: u64 = core@1/int.widen(data[at + 1])
+  let b2: u64 = core@1/int.widen(data[at + 2])
+  let b3: u64 = core@1/int.widen(data[at + 3])
+  b0 | b1 << 8 | b2 << 16 | b3 << 24
+}
+
+// A 16-bit block plane repeated in all four lanes.
+@noalloc
+fn lanes(x: u64) -> u64 uses {} {
+  x | x << 16 | x << 32 | x << 48
+}
+
+// The FIPS 197 key expansion over little-endian words, then each round key as planes.
+@noalloc
+fn expand(key: Bytes) -> Schedule uses {} {
+  let nk = core@1/bytes.len(key) / 4
+  let rounds = nk + 6
+  let mut w: Inline[u64, 60] = [
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64
+  ]
+  let mut i: u64 = 0
+  while i < nk {
+    w[i] = load32(key, 4 * i)
+    i += 1
+  }
+  let mut rcon: u64 = 1
+  while i < 4 * (rounds + 1) {
+    let mut t = w[i - 1]
+    if i % nk == 0 {
+      t = sub_word(t >> 8 | t << 24 & 0xffffffff) ^ rcon
+      rcon = (rcon << 1 ^ (rcon >> 7) * 0x1b) & 0xff
+    } else if nk > 6 && i % nk == 4 {
+      t = sub_word(t)
+    }
+    w[i] = w[i - nk] ^ t
+    i += 1
+  }
+  let mut planes: Inline[u64, 120] = [
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64
+  ]
+  let mut r: u64 = 0
+  while r <= rounds {
+    let x0 = transpose(w[4 * r] | w[4 * r + 1] << 32)
+    let x1 = transpose(w[4 * r + 2] | w[4 * r + 3] << 32)
+    let mut k: u64 = 0
+    while k < 8 {
+      let s: u64 = 56 - 8 * k
+      planes[8 * r + k] = lanes(x0 >> s & 0xff | (x1 >> s & 0xff) << 8)
+      k += 1
+    }
+    r += 1
+  }
+  Schedule(planes: planes, rounds: rounds)
+}
+
+// ShiftRows: bit j of a lane is byte j, in row j % 4 of column j / 4, and row r
+// moves r columns left.
+@noalloc
+fn shift_rows(x: u64) -> u64 uses {} {
+  let row1 = x & 0x2222222222222222
+  let row2 = x & 0x4444444444444444
+  let row3 = x & 0x8888888888888888
+  x & 0x1111111111111111 | row1 >> 4 & 0x0fff0fff0fff0fff | row1 << 12 & 0xf000f000f000f000 | row2 >> 8 & 0x00ff00ff00ff00ff | row2 << 8 & 0xff00ff00ff00ff00 | row3 >> 12 & 0x000f000f000f000f | row3 << 4 & 0xfff0fff0fff0fff0
+}
+
+// Each column's rows rotated up by one, then by two.
+@noalloc
+fn rotate1(x: u64) -> u64 uses {} {
+  x >> 1 & 0x7777777777777777 | x << 3 & 0x8888888888888888
+}
+
+@noalloc
+fn rotate2(x: u64) -> u64 uses {} {
+  x >> 2 & 0x3333333333333333 | x << 2 & 0xcccccccccccccccc
+}
+
+// The cipher on four blocks of planes in place.
+@noalloc
+fn encrypt(schedule: Schedule, mut p: Inline[u64, 8]) -> () uses {} {
+  p[0] = p[0] ^ schedule.planes[0]
+  p[1] = p[1] ^ schedule.planes[1]
+  p[2] = p[2] ^ schedule.planes[2]
+  p[3] = p[3] ^ schedule.planes[3]
+  p[4] = p[4] ^ schedule.planes[4]
+  p[5] = p[5] ^ schedule.planes[5]
+  p[6] = p[6] ^ schedule.planes[6]
+  p[7] = p[7] ^ schedule.planes[7]
+  let mut round: u64 = 1
+  while round <= schedule.rounds {
+    sub(mut p)
+    let s0 = shift_rows(p[0])
+    let s1 = shift_rows(p[1])
+    let s2 = shift_rows(p[2])
+    let s3 = shift_rows(p[3])
+    let s4 = shift_rows(p[4])
+    let s5 = shift_rows(p[5])
+    let s6 = shift_rows(p[6])
+    let s7 = shift_rows(p[7])
+    if round < schedule.rounds {
+      // MixColumns: with u = x ^ rotate1(x), x ^ rotate2(u) ^ xtime(u).
+      let u0 = s0 ^ rotate1(s0)
+      let u1 = s1 ^ rotate1(s1)
+      let u2 = s2 ^ rotate1(s2)
+      let u3 = s3 ^ rotate1(s3)
+      let u4 = s4 ^ rotate1(s4)
+      let u5 = s5 ^ rotate1(s5)
+      let u6 = s6 ^ rotate1(s6)
+      let u7 = s7 ^ rotate1(s7)
+      let t0 = u0 ^ rotate2(u0)
+      let t1 = u1 ^ rotate2(u1)
+      let t2 = u2 ^ rotate2(u2)
+      let t3 = u3 ^ rotate2(u3)
+      let t4 = u4 ^ rotate2(u4)
+      let t5 = u5 ^ rotate2(u5)
+      let t6 = u6 ^ rotate2(u6)
+      let t7 = u7 ^ rotate2(u7)
+      p[0] = s0 ^ t0 ^ u1
+      p[1] = s1 ^ t1 ^ u2
+      p[2] = s2 ^ t2 ^ u3
+      p[3] = s3 ^ t3 ^ u4 ^ u0
+      p[4] = s4 ^ t4 ^ u5 ^ u0
+      p[5] = s5 ^ t5 ^ u6
+      p[6] = s6 ^ t6 ^ u7 ^ u0
+      p[7] = s7 ^ t7 ^ u0
+    } else {
+      p[0] = s0
+      p[1] = s1
+      p[2] = s2
+      p[3] = s3
+      p[4] = s4
+      p[5] = s5
+      p[6] = s6
+      p[7] = s7
+    }
+    let at = 8 * round
+    p[0] = p[0] ^ schedule.planes[at + 0]
+    p[1] = p[1] ^ schedule.planes[at + 1]
+    p[2] = p[2] ^ schedule.planes[at + 2]
+    p[3] = p[3] ^ schedule.planes[at + 3]
+    p[4] = p[4] ^ schedule.planes[at + 4]
+    p[5] = p[5] ^ schedule.planes[at + 5]
+    p[6] = p[6] ^ schedule.planes[at + 6]
+    p[7] = p[7] ^ schedule.planes[at + 7]
+    round += 1
+  }
+}
+
+// Four blocks, as eight little-endian words, encrypted.
+@noalloc
+fn encrypt_words(schedule: Schedule, words: Inline[u64, 8]) -> Inline[u64, 8] uses {} {
+  let mut p: Inline[u64, 8] = [0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64]
+  let mut m: u64 = 0
+  while m < 8 {
+    let x = transpose(words[m])
+    let s = 8 * m
+    p[0] = p[0] | (x >> 56 & 0xff) << s
+    p[1] = p[1] | (x >> 48 & 0xff) << s
+    p[2] = p[2] | (x >> 40 & 0xff) << s
+    p[3] = p[3] | (x >> 32 & 0xff) << s
+    p[4] = p[4] | (x >> 24 & 0xff) << s
+    p[5] = p[5] | (x >> 16 & 0xff) << s
+    p[6] = p[6] | (x >> 8 & 0xff) << s
+    p[7] = p[7] | (x & 0xff) << s
+    m += 1
+  }
+  encrypt(schedule, mut p)
+  let mut out: Inline[u64, 8] = [0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64]
+  m = 0
+  while m < 8 {
+    let s = 8 * m
+    out[m] = transpose(
+      (p[0] >> s & 0xff) << 56 | (p[1] >> s & 0xff) << 48 | (p[2] >> s & 0xff) << 40 | (p[3] >> s & 0xff) << 32 | (p[4] >> s & 0xff) << 24 | (p[5] >> s & 0xff) << 16 | (p[6] >> s & 0xff) << 8 | p[7] >> s & 0xff
+    )
+    m += 1
+  }
+  out
+}
+
+// The high word of the counter block nonce || counter, little-endian.
+@noalloc
+fn counter_word(nonce: Bytes, counter: u64) -> u64 uses {} {
+  let swapped = counter >> 24 & 0xff | counter >> 8 & 0xff00 | counter << 8 & 0xff0000 | counter << 24 & 0xff000000
+  load32(nonce, 8) | swapped << 32
+}
+
+// All ones when `bit` is 1, zero when it is 0.
+@noalloc
+fn mask(bit: u64) -> u64 uses {} {
+  core@1/int.wrapping_add(~bit, 1)
+}
+
+// The carry-less product of two 64-bit polynomials: Zig's clmulSoft128, whose
+// masks leave holes in each integer product for the carries.
+@noalloc
+fn clmul(x: u64, y: u64) -> u128 uses {} {
+  let x0: u128 = core@1/int.widen(x & 0x1111111111111110)
+  let x1: u128 = core@1/int.widen(x & 0x2222222222222220)
+  let x2: u128 = core@1/int.widen(x & 0x4444444444444440)
+  let x3: u128 = core@1/int.widen(x & 0x8888888888888880)
+  let y0: u128 = core@1/int.widen(y & 0x1111111111111111)
+  let y1: u128 = core@1/int.widen(y & 0x2222222222222222)
+  let y2: u128 = core@1/int.widen(y & 0x4444444444444444)
+  let y3: u128 = core@1/int.widen(y & 0x8888888888888888)
+  let z0 = x0 * y0 ^ x1 * y3 ^ x2 * y2 ^ x3 * y1
+  let z1 = x0 * y1 ^ x1 * y0 ^ x2 * y3 ^ x3 * y2
+  let z2 = x0 * y2 ^ x1 * y1 ^ x2 * y0 ^ x3 * y3
+  let z3 = x0 * y3 ^ x1 * y2 ^ x2 * y1 ^ x3 * y0
+  let e0: u128 = core@1/int.widen(mask(x & 1) & y)
+  let e1: u128 = core@1/int.widen(mask(x >> 1 & 1) & y)
+  let e2: u128 = core@1/int.widen(mask(x >> 2 & 1) & y)
+  let e3: u128 = core@1/int.widen(mask(x >> 3 & 1) & y)
+  z0 & 0x11111111111111111111111111111111 ^ z1 & 0x22222222222222222222222222222222 ^ z2 & 0x44444444444444444444444444444444 ^ z3 & 0x88888888888888888888888888888888 ^ e0 ^ e1 << 1 ^ e2 << 2 ^ e3 << 3
+}
+
+// a * h in GHASH's field, with blocks read big-endian and h pre-shifted: three
+// products (Karatsuba), then Gueron's reduction modulo x^128 + x^127 + x^126 + x^121 + 1.
+@noalloc
+fn multiply(a: u128, h: u128) -> u128 uses {} {
+  let a0: u64 = core@1/int.truncate(a)
+  let a1: u64 = core@1/int.truncate(a >> 64)
+  let h0: u64 = core@1/int.truncate(h)
+  let h1: u64 = core@1/int.truncate(h >> 64)
+  let lo = clmul(a0, h0)
+  let hi = clmul(a1, h1)
+  let mid = clmul(a0 ^ a1, h0 ^ h1) ^ lo ^ hi
+  let high = hi ^ mid >> 64
+  let low = lo ^ mid << 64
+  let low0: u64 = core@1/int.truncate(low)
+  let b = (low << 64 | low >> 64) ^ clmul(low0, 0xc200000000000000)
+  let b0: u64 = core@1/int.truncate(b)
+  let d = (b << 64 | b >> 64) ^ clmul(b0, 0xc200000000000000)
+  d ^ high
+}
+
+// `start` after absorbing `data` zero-padded to whole blocks.
+@noalloc
+fn ghash(start: u128, h: u128, data: Bytes) -> u128 uses {} {
+  let mut acc = start
+  let len = core@1/bytes.len(data)
+  let mut at: u64 = 0
+  while at < len {
+    let mut block: u128 = 0
+    let mut i: u64 = 0
+    while i < 16 {
+      let byte: u128 = if at + i < len {
+        core@1/int.widen(data[at + i])
+      } else {
+        0
+      }
+      block = block << 8 | byte
+      i += 1
+    }
+    acc = multiply(acc ^ block, h)
+    at += 16
+  }
+  acc
+}
+
+// AES(0), AES(nonce || 1) and the keystream blocks for counters 2 and 3.
+@noalloc
+fn first(schedule: Schedule, nonce: Bytes) -> Inline[u64, 8] uses {} {
+  let prefix = load32(nonce, 0) | load32(nonce, 4) << 32
+  encrypt_words(
+    schedule,
+    [
+      0u64,
+      0u64,
+      prefix,
+      counter_word(nonce, 1),
+      prefix,
+      counter_word(nonce, 2),
+      prefix,
+      counter_word(nonce, 3)
+    ]
+  )
+}
+
+@noalloc
+fn word_byte(words: Inline[u64, 8], at: u64) -> u8 uses {} {
+  core@1/int.truncate(words[at >> 3] >> (at & 7) * 8)
+}
+
+// `data` XORed with the keystream from counter 2: the last two blocks of `start`,
+// then four blocks per encryption.
+fn ctr(schedule: Schedule, nonce: Bytes, start: Inline[u64, 8], data: Bytes) -> unique Bytes uses {} {
+  let prefix = load32(nonce, 0) | load32(nonce, 4) << 32
+  let len = core@1/bytes.len(data)
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, len)
+  let mut stream = start
+  let mut offset: u64 = 32
+  let mut counter: u64 = 4
+  let mut at: u64 = 0
+  while at < len {
+    if offset == 64 {
+      stream = encrypt_words(
+        schedule,
+        [
+          prefix,
+          counter_word(nonce, counter),
+          prefix,
+          counter_word(nonce, counter + 1),
+          prefix,
+          counter_word(nonce, counter + 2),
+          prefix,
+          counter_word(nonce, counter + 3)
+        ]
+      )
+      counter += 4
+      offset = 0
+    }
+    core@1/list.push(mut out, data[at] ^ word_byte(stream, offset))
+    offset += 1
+    at += 1
+  }
+  core@1/bytes.from_list(take out)
+}
+
+// GHASH over `data` and `ciphertext` and their bit lengths, masked with AES(nonce || 1).
+fn tag(start: Inline[u64, 8], data: Bytes, ciphertext: Bytes) -> unique Bytes uses {} {
+  let mut key: u128 = 0
+  let mut i: u64 = 0
+  while i < 16 {
+    let byte: u128 = core@1/int.widen(word_byte(start, i))
+    key = key << 8 | byte
+    i += 1
+  }
+  // H times x, reduced, so that big-endian blocks multiply in GCM's bit order.
+  let top: u128 = core@1/int.widen(mask(core@1/int.truncate(key >> 127)))
+  let h = key << 1 ^ 0xc2000000000000000000000000000001 & (top << 64 | top)
+  let mut acc = ghash(0, h, data)
+  acc = ghash(acc, h, ciphertext)
+  let data_bits: u128 = core@1/int.widen(core@1/bytes.len(data) * 8)
+  let text_bits: u128 = core@1/int.widen(core@1/bytes.len(ciphertext) * 8)
+  acc = multiply(acc ^ (data_bits << 64 | text_bits), h)
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, 16)
+  i = 0
+  while i < 16 {
+    let shift: u128 = core@1/int.widen(120u64 - 8 * i)
+    let byte: u8 = core@1/int.truncate(acc >> shift)
+    core@1/list.push(mut out, byte ^ word_byte(start, 16 + i))
+    i += 1
+  }
+  core@1/bytes.from_list(take out)
+}
+
+fn key_schedule(key: Bytes, nonce: Bytes) -> Schedule uses {} {
+  let len = core@1/bytes.len(key)
+  core@1/failure.check(len == 16 || len == 24 || len == 32, TextInvariant())
+  core@1/failure.check(core@1/bytes.len(nonce) == 12, TextInvariant())
+  expand(key)
+}
+
+// The ciphertext followed by its 16-byte tag; the key's length (16, 24 or 32 bytes)
+// selects AES-128, AES-192 or AES-256.
+pub fn seal(key: Bytes, nonce: Bytes, plaintext: Bytes, data: Bytes) -> unique Bytes uses {} {
+  let schedule = key_schedule(key, nonce)
+  core@1/failure.check(core@1/bytes.len(plaintext) <= MAX_MESSAGE, Arithmetic())
+  core@1/failure.check(core@1/bytes.len(data) <= MAX_DATA, Arithmetic())
+  let start = first(schedule, nonce)
+  let ciphertext = ctr(schedule, nonce, start, plaintext)
+  let mac = tag(start, data, ciphertext)
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, core@1/bytes.len(ciphertext) + 16)
+  for byte in ciphertext {
+    core@1/list.push(mut out, byte)
+  }
+  for byte in mac {
+    core@1/list.push(mut out, byte)
+  }
+  core@1/bytes.from_list(take out)
+}
+
+// The plaintext, or AuthenticationFailed() before any is produced when the tag
+// does not match, compared through constant_time.equal.
+pub fn open(key: Bytes, nonce: Bytes, sealed: Bytes, data: Bytes) -> Result[
+  unique Bytes,
+  std@1/aead.OpenError
+] uses {} {
+  let schedule = key_schedule(key, nonce)
+  let len = core@1/bytes.len(sealed)
+  if len < 16 || len - 16 > MAX_MESSAGE || core@1/bytes.len(data) > MAX_DATA {
+    return Error(AuthenticationFailed())
+  }
+  let ciphertext = core@1/bytes.slice(sealed, 0, len - 16)
+  let start = first(schedule, nonce)
+  let expected = tag(start, data, ciphertext)
+  if !std@1/constant_time.equal(expected, core@1/bytes.slice(sealed, len - 16, len)) {
+    return Error(AuthenticationFailed())
+  }
+  Ok(ctr(schedule, nonce, start, ciphertext))
+}

@@ -1,0 +1,16 @@
+// RFC 8439 ChaCha20-Poly1305 with a 32-byte key and a 12-byte nonce.
+// A sealed message is the ciphertext followed by its 16-byte tag.
+pub fn seal(key: Bytes, nonce: Bytes, plaintext: Bytes, data: Bytes) -> unique Bytes uses {} {
+  internal.chacha_poly.check_sizes(key, nonce, 12)
+  internal.chacha_poly.seal(key, nonce, plaintext, data)
+}
+
+// The plaintext, or AuthenticationFailed() before any is produced when the tag
+// does not match, compared through constant_time.equal.
+pub fn open(key: Bytes, nonce: Bytes, sealed: Bytes, data: Bytes) -> Result[
+  unique Bytes,
+  std@1/aead.OpenError
+] uses {} {
+  internal.chacha_poly.check_sizes(key, nonce, 12)
+  internal.chacha_poly.open(key, nonce, sealed, data)
+}

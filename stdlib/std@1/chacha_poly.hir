@@ -1,0 +1,435 @@
+// RFC 8439 ChaCha20, HChaCha20 and the ChaCha20-Poly1305 AEAD construction, from
+// Zig std/crypto/chacha20.zig (MIT), with Poly1305 in 44-bit limbs from
+// poly1305-donna (public domain) as Zig std/crypto/poly1305.zig computes it.
+// Every operation sequence depends only on the input lengths.
+const MASK44: u64 = 0xfffffffffff
+
+const MASK42: u64 = 0x3ffffffffff
+
+// The largest message RFC 8439's 32-bit block counter covers after the Poly1305 key block.
+const MAX_MESSAGE: u64 = 274877906880
+
+@noalloc
+fn word(data: Bytes, at: u64) -> u32 uses {} {
+  let b0: u32 = core@1/int.widen(data[at])
+  let b1: u32 = core@1/int.widen(data[at + 1])
+  let b2: u32 = core@1/int.widen(data[at + 2])
+  let b3: u32 = core@1/int.widen(data[at + 3])
+  b0 | b1 << 8 | b2 << 16 | b3 << 24
+}
+
+// The initial state: the "expand 32-byte k" constants, the 32-byte key at
+// `key`, then the counter and 12-byte nonce, or HChaCha20's 16 input bytes.
+@noalloc
+fn initial(key: Bytes, input: Bytes, counter: u32, counted: bool) -> Inline[u32, 16] uses {} {
+  let mut x: Inline[u32, 16] = [
+    0x61707865u32,
+    0x3320646eu32,
+    0x79622d32u32,
+    0x6b206574u32,
+    word(key, 0),
+    word(key, 4),
+    word(key, 8),
+    word(key, 12),
+    word(key, 16),
+    word(key, 20),
+    word(key, 24),
+    word(key, 28),
+    0u32,
+    0u32,
+    0u32,
+    0u32
+  ]
+  if counted {
+    x[12] = counter
+    x[13] = word(input, 0)
+    x[14] = word(input, 4)
+    x[15] = word(input, 8)
+  } else {
+    x[12] = word(input, 0)
+    x[13] = word(input, 4)
+    x[14] = word(input, 8)
+    x[15] = word(input, 12)
+  }
+  take x
+}
+
+// The 20 rounds: ten double rounds of column then diagonal quarter rounds,
+// over the sixteen words in locals.
+@noalloc
+fn rounds(mut x: Inline[u32, 16]) -> () uses {} {
+  let mut x0 = x[0]
+  let mut x1 = x[1]
+  let mut x2 = x[2]
+  let mut x3 = x[3]
+  let mut x4 = x[4]
+  let mut x5 = x[5]
+  let mut x6 = x[6]
+  let mut x7 = x[7]
+  let mut x8 = x[8]
+  let mut x9 = x[9]
+  let mut x10 = x[10]
+  let mut x11 = x[11]
+  let mut x12 = x[12]
+  let mut x13 = x[13]
+  let mut x14 = x[14]
+  let mut x15 = x[15]
+  let mut i: u64 = 0
+  while i < 10 {
+    x0 = core@1/int.wrapping_add(x0, x4)
+    x12 = x12 ^ x0
+    x12 = x12 << 16 | x12 >> 16
+    x8 = core@1/int.wrapping_add(x8, x12)
+    x4 = x4 ^ x8
+    x4 = x4 << 12 | x4 >> 20
+    x0 = core@1/int.wrapping_add(x0, x4)
+    x12 = x12 ^ x0
+    x12 = x12 << 8 | x12 >> 24
+    x8 = core@1/int.wrapping_add(x8, x12)
+    x4 = x4 ^ x8
+    x4 = x4 << 7 | x4 >> 25
+    x1 = core@1/int.wrapping_add(x1, x5)
+    x13 = x13 ^ x1
+    x13 = x13 << 16 | x13 >> 16
+    x9 = core@1/int.wrapping_add(x9, x13)
+    x5 = x5 ^ x9
+    x5 = x5 << 12 | x5 >> 20
+    x1 = core@1/int.wrapping_add(x1, x5)
+    x13 = x13 ^ x1
+    x13 = x13 << 8 | x13 >> 24
+    x9 = core@1/int.wrapping_add(x9, x13)
+    x5 = x5 ^ x9
+    x5 = x5 << 7 | x5 >> 25
+    x2 = core@1/int.wrapping_add(x2, x6)
+    x14 = x14 ^ x2
+    x14 = x14 << 16 | x14 >> 16
+    x10 = core@1/int.wrapping_add(x10, x14)
+    x6 = x6 ^ x10
+    x6 = x6 << 12 | x6 >> 20
+    x2 = core@1/int.wrapping_add(x2, x6)
+    x14 = x14 ^ x2
+    x14 = x14 << 8 | x14 >> 24
+    x10 = core@1/int.wrapping_add(x10, x14)
+    x6 = x6 ^ x10
+    x6 = x6 << 7 | x6 >> 25
+    x3 = core@1/int.wrapping_add(x3, x7)
+    x15 = x15 ^ x3
+    x15 = x15 << 16 | x15 >> 16
+    x11 = core@1/int.wrapping_add(x11, x15)
+    x7 = x7 ^ x11
+    x7 = x7 << 12 | x7 >> 20
+    x3 = core@1/int.wrapping_add(x3, x7)
+    x15 = x15 ^ x3
+    x15 = x15 << 8 | x15 >> 24
+    x11 = core@1/int.wrapping_add(x11, x15)
+    x7 = x7 ^ x11
+    x7 = x7 << 7 | x7 >> 25
+    x0 = core@1/int.wrapping_add(x0, x5)
+    x15 = x15 ^ x0
+    x15 = x15 << 16 | x15 >> 16
+    x10 = core@1/int.wrapping_add(x10, x15)
+    x5 = x5 ^ x10
+    x5 = x5 << 12 | x5 >> 20
+    x0 = core@1/int.wrapping_add(x0, x5)
+    x15 = x15 ^ x0
+    x15 = x15 << 8 | x15 >> 24
+    x10 = core@1/int.wrapping_add(x10, x15)
+    x5 = x5 ^ x10
+    x5 = x5 << 7 | x5 >> 25
+    x1 = core@1/int.wrapping_add(x1, x6)
+    x12 = x12 ^ x1
+    x12 = x12 << 16 | x12 >> 16
+    x11 = core@1/int.wrapping_add(x11, x12)
+    x6 = x6 ^ x11
+    x6 = x6 << 12 | x6 >> 20
+    x1 = core@1/int.wrapping_add(x1, x6)
+    x12 = x12 ^ x1
+    x12 = x12 << 8 | x12 >> 24
+    x11 = core@1/int.wrapping_add(x11, x12)
+    x6 = x6 ^ x11
+    x6 = x6 << 7 | x6 >> 25
+    x2 = core@1/int.wrapping_add(x2, x7)
+    x13 = x13 ^ x2
+    x13 = x13 << 16 | x13 >> 16
+    x8 = core@1/int.wrapping_add(x8, x13)
+    x7 = x7 ^ x8
+    x7 = x7 << 12 | x7 >> 20
+    x2 = core@1/int.wrapping_add(x2, x7)
+    x13 = x13 ^ x2
+    x13 = x13 << 8 | x13 >> 24
+    x8 = core@1/int.wrapping_add(x8, x13)
+    x7 = x7 ^ x8
+    x7 = x7 << 7 | x7 >> 25
+    x3 = core@1/int.wrapping_add(x3, x4)
+    x14 = x14 ^ x3
+    x14 = x14 << 16 | x14 >> 16
+    x9 = core@1/int.wrapping_add(x9, x14)
+    x4 = x4 ^ x9
+    x4 = x4 << 12 | x4 >> 20
+    x3 = core@1/int.wrapping_add(x3, x4)
+    x14 = x14 ^ x3
+    x14 = x14 << 8 | x14 >> 24
+    x9 = core@1/int.wrapping_add(x9, x14)
+    x4 = x4 ^ x9
+    x4 = x4 << 7 | x4 >> 25
+    i += 1
+  }
+  x[0] = x0
+  x[1] = x1
+  x[2] = x2
+  x[3] = x3
+  x[4] = x4
+  x[5] = x5
+  x[6] = x6
+  x[7] = x7
+  x[8] = x8
+  x[9] = x9
+  x[10] = x10
+  x[11] = x11
+  x[12] = x12
+  x[13] = x13
+  x[14] = x14
+  x[15] = x15
+}
+
+// `data` XORed with the ChaCha20 keystream from block `counter` on.
+fn xor(key: Bytes, nonce: Bytes, counter: u32, data: Bytes) -> unique Bytes uses {} {
+  let len = core@1/bytes.len(data)
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, len)
+  let mut block = counter
+  let mut at: u64 = 0
+  while at < len {
+    let start = initial(key, nonce, block, true)
+    let mut x = start
+    rounds(mut x)
+    let mut i: u64 = 0
+    while i < 64 && at + i < len {
+      let shift: u32 = core@1/int.truncate((i & 3) * 8)
+      let stream = core@1/int.wrapping_add(x[i >> 2], start[i >> 2]) >> shift
+      let byte: u8 = core@1/int.truncate(stream)
+      core@1/list.push(mut out, data[at + i] ^ byte)
+      i += 1
+    }
+    at += 64
+    block = core@1/int.wrapping_add(block, 1)
+  }
+  core@1/bytes.from_list(take out)
+}
+
+// HChaCha20 (draft-irtf-cfrg-xchacha): the subkey for a 24-byte nonce's first 16 bytes.
+fn hchacha20(key: Bytes, input: Bytes) -> unique Bytes uses {} {
+  let mut x = initial(key, input, 0, false)
+  rounds(mut x)
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, 32)
+  let mut i: u64 = 0
+  while i < 32 {
+    let index = if i < 16 {
+      i >> 2
+    } else {
+      (i >> 2) + 8
+    }
+    let shift: u32 = core@1/int.truncate((i & 3) * 8)
+    let byte: u8 = core@1/int.truncate(x[index] >> shift)
+    core@1/list.push(mut out, byte)
+    i += 1
+  }
+  core@1/bytes.from_list(take out)
+}
+
+type Poly1305 {
+  r: Inline[u64, 3],
+  h: Inline[u64, 3],
+  pad: Inline[u64, 2],
+}
+
+@noalloc
+fn le64(data: Bytes, at: u64) -> u64 uses {} {
+  let mut value: u64 = 0
+  let mut i: u64 = 8
+  while i > 0 {
+    i -= 1
+    let byte: u64 = core@1/int.widen(data[at + i])
+    value = value << 8 | byte
+  }
+  value
+}
+
+// The one-time authenticator keyed by the first 32 keystream bytes, with `r` clamped.
+@noalloc
+fn poly_new(key: Bytes) -> Poly1305 uses {} {
+  let t0 = le64(key, 0)
+  let t1 = le64(key, 8)
+  Poly1305(
+    r: [
+      t0 & 0xffc0fffffff,
+      (t0 >> 44 | t1 << 20) & 0xfffffc0ffff,
+      t1 >> 24 & 0x00ffffffc0f
+    ],
+    h: [0u64, 0u64, 0u64],
+    pad: [le64(key, 16), le64(key, 24)]
+  )
+}
+
+@noalloc
+fn wide(value: u64) -> u128 uses {} {
+  core@1/int.widen(value)
+}
+
+// One 16-byte block, little-endian, with the 2^128 bit set.
+@noalloc
+fn poly_block(mut state: Poly1305, t0: u64, t1: u64) -> () uses {} {
+  let h0 = state.h[0] + (t0 & MASK44)
+  let h1 = state.h[1] + ((t0 >> 44 | t1 << 20) & MASK44)
+  let h2 = state.h[2] + (t1 >> 24 | 1u64 << 40)
+  let r0 = wide(state.r[0])
+  let r1 = wide(state.r[1])
+  let r2 = wide(state.r[2])
+  let s1 = r1 * 20
+  let s2 = r2 * 20
+  let d0 = wide(h0) * r0 + wide(h1) * s2 + wide(h2) * s1
+  let d1 = wide(h0) * r1 + wide(h1) * r0 + wide(h2) * s2 + (d0 >> 44)
+  let d2 = wide(h0) * r2 + wide(h1) * r1 + wide(h2) * r0 + (d1 >> 44)
+  let carry: u64 = core@1/int.narrow(d2 >> 42)
+  let low0: u64 = core@1/int.truncate(d0)
+  let low1: u64 = core@1/int.truncate(d1)
+  let low2: u64 = core@1/int.truncate(d2)
+  let next0 = (low0 & MASK44) + carry * 5
+  state.h[0] = next0 & MASK44
+  state.h[1] = (low1 & MASK44) + (next0 >> 44)
+  state.h[2] = low2 & MASK42
+}
+
+// `data` zero-padded to a whole number of blocks, as the AEAD pads the
+// associated data and the ciphertext.
+@noalloc
+fn poly_padded(mut state: Poly1305, data: Bytes) -> () uses {} {
+  let len = core@1/bytes.len(data)
+  let mut at: u64 = 0
+  while at < len {
+    let mut t: Inline[u64, 2] = [0u64, 0u64]
+    let mut i: u64 = 0
+    while i < 16 && at + i < len {
+      let byte: u64 = core@1/int.widen(data[at + i])
+      t[i >> 3] = t[i >> 3] | byte << (i & 7) * 8
+      i += 1
+    }
+    poly_block(mut state, t[0], t[1])
+    at += 16
+  }
+}
+
+// The tag: h fully reduced modulo 2^130 - 5, plus the pad modulo 2^128.
+fn poly_finish(take state: Poly1305) -> unique Bytes uses {} {
+  let Poly1305(r: _, h: h, pad: pad) = take state
+  let mut h0 = h[0]
+  let mut h1 = h[1]
+  let mut h2 = h[2]
+  let mut carry = h1 >> 44
+  h1 = h1 & MASK44
+  h2 += carry
+  carry = h2 >> 42
+  h2 = h2 & MASK42
+  h0 += carry * 5
+  carry = h0 >> 44
+  h0 = h0 & MASK44
+  h1 += carry
+  carry = h1 >> 44
+  h1 = h1 & MASK44
+  h2 += carry
+  carry = h2 >> 42
+  h2 = h2 & MASK42
+  h0 += carry * 5
+  carry = h0 >> 44
+  h0 = h0 & MASK44
+  h1 += carry
+  // g = h + 5 - 2^130 is h - p; it is kept exactly when it does not borrow.
+  let mut g0 = h0 + 5
+  carry = g0 >> 44
+  g0 = g0 & MASK44
+  let mut g1 = h1 + carry
+  carry = g1 >> 44
+  g1 = g1 & MASK44
+  let g2 = core@1/int.wrapping_add(h2 + carry, 0xfffffc0000000000)
+  let keep = core@1/int.wrapping_add(g2 >> 63, 0xffffffffffffffff)
+  h0 = h0 & ~keep | g0 & keep
+  h1 = h1 & ~keep | g1 & keep
+  h2 = h2 & ~keep | g2 & keep
+  let pad0 = pad[0]
+  let pad1 = pad[1]
+  h0 += pad0 & MASK44
+  carry = h0 >> 44
+  h0 = h0 & MASK44
+  h1 += ((pad0 >> 44 | pad1 << 20) & MASK44) + carry
+  carry = h1 >> 44
+  h1 = h1 & MASK44
+  h2 = h2 + (pad1 >> 24) + carry & MASK42
+  let low = h0 | h1 << 44
+  let high = h1 >> 20 | h2 << 24
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, 16)
+  let mut i: u64 = 0
+  while i < 16 {
+    let lane = if i < 8 {
+      low
+    } else {
+      high
+    }
+    core@1/list.push(mut out, core@1/int.truncate(lane >> (i & 7) * 8))
+    i += 1
+  }
+  core@1/bytes.from_list(take out)
+}
+
+// RFC 8439 section 2.8: Poly1305 over the padded associated data and
+// ciphertext and their 64-bit little-endian lengths.
+fn tag(key: Bytes, nonce: Bytes, data: Bytes, ciphertext: Bytes) -> unique Bytes uses {} {
+  let block = xor(
+    key,
+    nonce,
+    0,
+    b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  )
+  let mut state = poly_new(block)
+  poly_padded(mut state, data)
+  poly_padded(mut state, ciphertext)
+  poly_block(mut state, core@1/bytes.len(data), core@1/bytes.len(ciphertext))
+  poly_finish(take state)
+}
+
+fn check_sizes(key: Bytes, nonce: Bytes, nonce_len: u64) -> () uses {} {
+  core@1/failure.check(core@1/bytes.len(key) == 32, TextInvariant())
+  core@1/failure.check(core@1/bytes.len(nonce) == nonce_len, TextInvariant())
+}
+
+fn seal(key: Bytes, nonce: Bytes, plaintext: Bytes, data: Bytes) -> unique Bytes uses {} {
+  core@1/failure.check(core@1/bytes.len(plaintext) <= MAX_MESSAGE, Arithmetic())
+  let ciphertext = xor(key, nonce, 1, plaintext)
+  let mac = tag(key, nonce, data, ciphertext)
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, core@1/bytes.len(ciphertext) + 16)
+  for byte in ciphertext {
+    core@1/list.push(mut out, byte)
+  }
+  for byte in mac {
+    core@1/list.push(mut out, byte)
+  }
+  core@1/bytes.from_list(take out)
+}
+
+fn open(key: Bytes, nonce: Bytes, sealed: Bytes, data: Bytes) -> Result[
+  unique Bytes,
+  std@1/aead.OpenError
+] uses {} {
+  let len = core@1/bytes.len(sealed)
+  if len < 16 {
+    return Error(AuthenticationFailed())
+  }
+  let ciphertext = core@1/bytes.slice(sealed, 0, len - 16)
+  let expected = tag(key, nonce, data, ciphertext)
+  if !std@1/constant_time.equal(expected, core@1/bytes.slice(sealed, len - 16, len)) {
+    return Error(AuthenticationFailed())
+  }
+  Ok(xor(key, nonce, 1, ciphertext))
+}

@@ -1,0 +1,36 @@
+// FIPS 202 SHAKE256: the extendable-output Keccak-f[1600] sponge at a
+// 136-byte rate with the SHAKE domain padding 0x1f, from Zig std/crypto/sha3.zig (MIT).
+pub opaque type State: plain + inert uses {} {
+  sponge: internal.keccak.State,
+}
+
+@noalloc
+pub fn new() -> State uses {} {
+  State(sponge: internal.keccak.new(136, 0x1f))
+}
+
+@noalloc
+pub fn update(mut state: State, data: Bytes) -> () uses {} {
+  internal.keccak.absorb(mut state.sponge, data)
+}
+
+// The first `length` bytes of output; every prefix of a longer output is the shorter one.
+pub fn finish(take state: State, length: u64) -> unique Bytes uses {} {
+  let State(sponge: sponge) = take state
+  let mut padded = sponge
+  internal.keccak.pad(mut padded)
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, length)
+  let mut i: u64 = 0
+  while i < length {
+    core@1/list.push(mut out, internal.keccak.squeeze_byte(mut padded))
+    i += 1
+  }
+  core@1/bytes.from_list(take out)
+}
+
+pub fn digest(data: Bytes, length: u64) -> unique Bytes uses {} {
+  let mut state = new()
+  update(mut state, data)
+  finish(take state, length)
+}

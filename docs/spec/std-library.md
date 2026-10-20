@@ -1966,6 +1966,35 @@ words per 128-byte block (BLAKE2b) and 10 rounds over 32-bit words per 64-byte
 block (BLAKE2s). BLAKE2b runs fewer operations per byte than SHA-512 and SHA-256
 on a 64-bit target; BLAKE2s suits 32-bit ones. There is no bench gate.
 
+## SHA-3 and SHAKE
+
+`sha3_224`, `sha3_256`, `sha3_384` and `sha3_512` are FIPS 202 SHA3-224 to SHA3-512 in
+the `sha256` shape, with 28-, 32-, 48- and 64-byte digests and their own opaque
+`plain + inert` `State`. `shake128` and `shake256` are the FIPS 202 extendable-output
+functions, whose output length the caller chooses:
+
+```text
+fn shake128.new() -> State uses {}
+fn shake128.update(mut state: State, data: Bytes) -> () uses {}
+fn shake128.finish(take state: State, length: u64) -> unique Bytes uses {}
+fn shake128.digest(data: Bytes, length: u64) -> unique Bytes uses {}
+```
+
+and the same for `shake256`. Every output is a prefix of every longer output of the
+same input; a length of zero is the empty `Bytes`. All six share one Keccak-f[1600]
+sponge (`internal.keccak`): 24 rounds over 25 64-bit lanes, at a rate of 144, 136, 104
+and 72 bytes for SHA3-224 to SHA3-512 and 168 and 136 bytes for SHAKE128 and SHAKE256.
+Input is absorbed into little-endian lanes, a whole lane at a time where it is
+lane-aligned, and output squeezed a byte at a time. SHA-3 pads with the domain byte
+0x06 and SHAKE with 0x1f, each followed by the final 0x80 bit of pad10*1. The sponge
+has no length field, so update accepts any total length. Keccak has no
+length-extension weakness. The SHA-3 digests return a `digest.Hash` from `hash()`,
+whose block size is the rate, so they key HMAC, HKDF and PBKDF2.
+
+Throughput: one permutation per rate-sized block, each round unrolled over the lanes
+in locals, so SHA3-512 costs nearly twice SHA3-256 per byte and SHAKE128 least; Keccak
+is slower in software than SHA-256 or BLAKE2 per byte. There is no bench gate.
+
 ## Checksums
 
 `crc32` (IEEE 802.3, reflected polynomial 0xedb88320: Ethernet, gzip, zip, PNG),
@@ -2018,10 +2047,11 @@ pub type digest.Hash[S: plain + inert, n: size] {
 fn <hash>.hash() -> digest.Hash[State, n] uses {}
 ```
 
-`sha1`, `sha224`, `sha256`, `sha384`, `sha512`, `sha512_256`, `blake2b` and
-`blake2s` each return theirs from `hash()`, with block sizes 64, 64, 64, 128, 128,
-128, 128 and 64. `md5` has none, so it cannot key an HMAC, and the checksums have
-none. A record holding functions is not a compile-time constant, hence a function.
+`sha1`, `sha224`, `sha256`, `sha384`, `sha512`, `sha512_256`, `sha3_224`,
+`sha3_256`, `sha3_384`, `sha3_512`, `blake2b` and `blake2s` each return theirs from
+`hash()`, with block sizes 64, 64, 64, 128, 128, 128, 144, 136, 104, 72, 128 and 64.
+`md5` has none, so it cannot key an HMAC, and the checksums have none. A record
+holding functions is not a compile-time constant, hence a function.
 Every operation below is generic over `[S: plain + inert, n: size]`, takes the
 dictionary first, and is ordinary allocating source:
 
@@ -2069,6 +2099,66 @@ Throughput: HMAC costs two extra compressions per key (the pads, done once per
 `new`), plus two finishes per tag; HKDF one HMAC per output block; PBKDF2 two
 compressions per iteration per output block, which is its intended cost.
 `constant_time.equal` is one pass. There is no bench gate.
+
+## Authenticated encryption
+
+`chacha20poly1305` is RFC 8439 ChaCha20-Poly1305, `xchacha20poly1305` its
+extended-nonce variant (draft-irtf-cfrg-xchacha-03) and `aes_gcm` AES (FIPS 197) in
+Galois/Counter Mode (NIST SP 800-38D). Each seals a plaintext with a key, a nonce and
+associated data, and opens what it sealed:
+
+```text
+pub type aead.OpenError = AuthenticationFailed()
+fn <aead>.seal(key: Bytes, nonce: Bytes, plaintext: Bytes, data: Bytes) -> unique Bytes uses {}
+fn <aead>.open(key: Bytes, nonce: Bytes, sealed: Bytes, data: Bytes) -> Result[unique Bytes, aead.OpenError] uses {}
+```
+
+A sealed message is the ciphertext, as long as the plaintext, followed by a 16-byte
+tag over the ciphertext and `data`; `data` is authenticated but not encrypted. Keys
+are 32 bytes for both ChaCha20 forms and 16, 24 or 32 for `aes_gcm`, whose key length
+selects AES-128, AES-192 or AES-256. Nonces are 12 bytes, and 24 for
+`xchacha20poly1305`. Any other key or nonce length fails SEM-3: these are the caller's
+own values, never the peer's. `open` recomputes the tag, compares it with the received
+one through `constant_time.equal`, and decrypts only when they match; otherwise, and
+for a sealed message shorter than a tag, it returns `AuthenticationFailed()` and no
+plaintext. A nonce must never repeat under one key: reuse reveals the XOR of two
+plaintexts and, for Poly1305 and GHASH, lets the authenticator be forged. A 24-byte
+XChaCha20 nonce is long enough to choose at random; a 12-byte one is better a counter.
+
+ChaCha20-Poly1305 encrypts from block counter 1, keys Poly1305 with the first 32 bytes
+of block 0, and authenticates the data and ciphertext each zero-padded to 16 bytes,
+then both lengths as 64-bit little-endian words. A plaintext longer than (2^32 - 1) *
+64 bytes, the 32-bit counter's reach, fails SEM-1. XChaCha20-Poly1305 is
+ChaCha20-Poly1305 under the HChaCha20 subkey of the key and the nonce's first 16
+bytes, with a 12-byte nonce of four zero bytes and the nonce's last 8. AES-GCM keys
+GHASH with H = AES(key, 0^128), encrypts from counter block nonce || 2 and masks the
+tag with the encryption of nonce || 1; a plaintext over 2^36 - 32 bytes or data over
+2^61 - 1 bytes fails SEM-1 when sealing and does not open. Tags are always 16 bytes;
+there are no truncated tags and no other nonce sizes.
+
+Throughput: ChaCha20 runs 20 rounds per 64-byte block and Poly1305 one 130-bit
+multiplication per 16 bytes. AES works on bit planes, four blocks at once: plane k
+holds bit 7 - k of all 64 state bytes, so SubBytes is one pass of Zig's 113-gate
+Boolean S-box circuit, and the counter blocks are encrypted four per pass (the first
+pass also yields GHASH's key and the tag mask). GHASH multiplies with Zig's masked
+integer carry-less products, three per 16 bytes, and Gueron's reduction. AES-GCM
+remains the slowest of the three without hardware AES. There is no bench gate.
+
+**Side channels.** These modules are written so their operation sequence and memory
+access pattern do not depend on secrets: secret-dependent choices are mask-selects,
+never branches or indices (Poly1305's final reduction, AES SubBytes as a Boolean
+circuit instead of a table, GHASH's masked multiplication), and tags are compared
+through `constant_time.equal`. Length checks are variable-time in public lengths only.
+As for `constant_time.equal`, this is a property of the source operation sequence, and
+the driver test `stdlib_constant_time` checks it on the reference interpreter:
+`aes_gcm.seal` and `chacha20poly1305.seal` under two different keys and plaintexts of
+one length run identical instruction traces and step counts. The reference interpreter
+is not constant time: its dispatch, allocation and integer representation take time
+that can depend on values, and it makes no promise about caches. Native code
+generators and processors may also introduce branches or variable-time instructions.
+Nothing here erases secrets from memory after use: copies of keys may remain in freed
+storage. Use these modules where those limits are acceptable, and a vetted native
+library through FFI where they are not.
 
 ## FNV-1a hashing
 

@@ -46,6 +46,13 @@ the license named in its row; the license texts follow once each.
 | Go standard library | `src/crypto/sha1/{sha1.go,sha1block.go}` and `src/crypto/md5/{md5.go,md5block.go}` generic blocks, constants and padding; `sha1_test.go`/`md5_test.go` golden vectors | `stdlib/std@1/{sha1,md5}.hir`, SHA-1 and MD5 conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/crypto/internal/fips140/sha256/sha256.go` SHA-224 initial words and `src/crypto/internal/fips140/sha512/{sha512.go,sha512block.go}` constants, generic block, 128-bit length padding and SHA-384/512-256 initial words; `src/crypto/sha256/sha256_test.go` golden224 and `src/crypto/sha512/sha512_test.go` golden384/512/256 vectors | `stdlib/std@1/{sha224,sha384,sha512,sha512_256}.hir`, SHA-2 conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go supplementary crypto | `blake2b/{blake2b.go,blake2b_generic.go}` and `blake2s/{blake2s.go,blake2s_generic.go}` parameter block, keyed first block, held-back final block and G/round schedule; `blake2b_test.go`/`blake2s_test.go` keyed known-answer vectors | `stdlib/std@1/{blake2b,blake2s}.hir`, BLAKE2 conformance | golang/crypto `0ae6809b7559060fe62abe65e26bd18b1fcaf6b7` | BSD-3-Clause (Go) |
+| Zig standard library | `lib/std/crypto/keccak_p.zig` and `sha3.zig` Keccak-f[1600] round constants, rotation offsets, sponge padding and SHA-3/SHAKE vectors | `stdlib/std@1/{keccak,sha3_224,sha3_256,sha3_384,sha3_512,shake128,shake256}.hir`, SHA-3 and SHAKE conformance | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
+| Go standard library | `src/crypto/internal/fips140/sha3/keccakf.go` round structure over the 25 lanes in locals | `stdlib/std@1/keccak.hir` permute | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
+| Zig standard library | `lib/std/crypto/chacha20.zig` ChaCha20 and HChaCha20 rounds, the ChaCha20-Poly1305 and XChaCha20-Poly1305 constructions and their seal/open vectors; `poly1305.zig` final reduction | `stdlib/std@1/{chacha_poly,chacha20poly1305,xchacha20poly1305,aead}.hir`, ChaCha20-Poly1305 conformance | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
+| poly1305-donna | `poly1305-donna-64.h` 44-bit limb multiplication and carry chain | `stdlib/std@1/chacha_poly.hir` Poly1305 | floodyberry/poly1305-donna (2016) | Public domain (MIT where unavailable) |
+| Zig standard library | `lib/std/crypto/aes/bitsliced.zig` S-box Boolean circuit; `ghash_polyval.zig` clmulSoft128 carry-less product and reduce; `aes_gcm.zig` AES-256-GCM vectors | `stdlib/std@1/aes_gcm.hir`, AES-GCM conformance | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
+| Wycheproof | `testvectors_v1/{chacha20_poly1305,xchacha20_poly1305,aes_gcm}_test.json` cases | AEAD Wycheproof conformance | C2SP/wycheproof `7a325932231bd7a724c791c8b0d65ea4d6d2f435` | Apache-2.0 |
+| RFC 8439 | ChaCha20-Poly1305 (2.8.2) test vectors | ChaCha20-Poly1305 conformance | RFC 8439 (June 2018) | Simplified BSD (IETF Trust) |
 | Go standard library | `src/crypto/internal/fips140/{hmac/hmac.go,hkdf/hkdf.go,pbkdf2/pbkdf2.go}` key padding, keyed-state reuse, HKDF extract/expand and PBKDF2 block loop; `src/crypto/subtle/constant_time.go` ConstantTimeCompare and its test vectors; `src/crypto/hmac/hmac_test.go` FIPS 198 sample; RFC 2202, 4231, 5869, 6070 and 7914 vectors | `stdlib/std@1/{digest,hmac,hkdf,pbkdf2,constant_time}.hir`, HMAC/HKDF/PBKDF2/constant-time conformance and the constant-time trace test | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/hash/crc32/{crc32.go,crc32_generic.go}` IEEE and Castagnoli simple tables and update, `src/hash/adler32/adler32.go` nmax-batched sums; `crc32_test.go` and `adler32_test.go` golden vectors | `stdlib/std@1/{crc32,crc32c,adler32}.hir`, checksum conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | cespare/xxhash | `xxhash.go` XXH64 primes, lanes, merge rounds and tail finalization; `xxhash_test.go` TestAll seeded and unseeded vectors | `stdlib/std@1/xxhash64.hir`, xxHash64 conformance | cespare/xxhash `ab37246c889f9db16b606fda1c232d659df9271d` | MIT |
@@ -180,6 +187,8 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - bincode: Copyright (c) 2014 Ty Overby
 - RFC 8878: Copyright (c) 2021 IETF Trust and the persons identified as the document authors
 - RFC 8949: Copyright (c) 2020 IETF Trust and the persons identified as the document authors
+- RFC 8439: Copyright (c) 2018 IETF Trust and the persons identified as the document authors
+- Wycheproof: Copyright 2016-2026 The Wycheproof Authors
 - lexopt: Copyright (c) 2021 Jan Verbeek
 - Cranelift: Copyright (c) the Bytecode Alliance and Cranelift contributors
 - Zig standard library: Copyright (c) Zig contributors
@@ -477,6 +486,9 @@ SUCH DAMAGE.
 ```
 
 ## Apache License 2.0 with LLVM Exception (Cranelift, LLVM)
+
+Wycheproof is under the Apache License 2.0 alone: the text below without the
+LLVM exceptions that follow it.
 
 ```
                                  Apache License

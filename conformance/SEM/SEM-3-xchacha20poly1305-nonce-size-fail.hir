@@ -1,0 +1,13 @@
+// rule: SEM-3
+// expect: fail SEM-3 at line 403
+// A 12-byte XChaCha20-Poly1305 nonce is refused before any encryption.
+pub fn main() -> Result[(), ()] {
+  let sealed = std@1/xchacha20poly1305.seal(
+    b"0123456789abcdef0123456789abcdef",
+    b"0123456789ab",
+    b"",
+    b""
+  )
+  failure.check(bytes.len(sealed) == 16, TextInvariant())
+  Ok(())
+}

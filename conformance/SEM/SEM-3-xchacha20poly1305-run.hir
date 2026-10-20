@@ -1,0 +1,54 @@
+// rule: SEM-3
+// expect: run
+// steps: 2000000
+// a seal, an open and two rejected opens of 114 bytes take about 0.6M steps
+// Zig std/crypto/chacha20.zig "xchacha20": all-0x45 key, all-0x2a nonce, the RFC 8439
+// sunscreen message with "Additional data"; a flipped first byte fails to open.
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+fn rejects(key: Bytes, nonce: Bytes, sealed: Bytes, data: Bytes) -> () {
+  let Error(AuthenticationFailed()) = std@1/xchacha20poly1305.open(
+    key,
+    nonce,
+    sealed,
+    data
+  ) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+}
+
+// `data` with byte `at` XORed with 1.
+fn flip(data: Bytes, at: u64) -> unique Bytes {
+  let mut out: List[u8] = []
+  for byte in data {
+    list.push(mut out, byte)
+  }
+  out[at] = out[at] ^ 1
+  bytes.from_list(take out)
+}
+
+pub fn main() -> Result[(), ()] {
+  let key = decode("4545454545454545454545454545454545454545454545454545454545454545")
+  let nonce = decode("2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a")
+  let message = b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+  let sealed = std@1/xchacha20poly1305.seal(key, nonce, message, b"Additional data")
+  failure.check(
+    std@1/hex.encode(sealed) == "994d2dd32333f48e53650c02c7a2abb8e018b0836d7175aec779f52e961780768f815c58f1aa52d211498db89b9216763f569c9433a6bbfcefb4d4a49387a4c5207fbb3b5a92b5941294df30588c6740d39dc16fa1f0e634f7246cf7cdcb978e44347d89381b7a74eb7084f754b90bde9aaf5a94b8f2a85efd0b50692ae2d425e234",
+    TextInvariant()
+  )
+  let Ok(opened) = std@1/xchacha20poly1305.open(key, nonce, sealed, b"Additional data") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(opened == message, TextInvariant())
+  rejects(key, nonce, flip(sealed, 0), b"Additional data")
+  rejects(key, flip(nonce, 23), sealed, b"Additional data")
+  Ok(())
+}

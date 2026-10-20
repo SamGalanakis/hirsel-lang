@@ -1,0 +1,8 @@
+// rule: SEM-3
+// expect: fail SEM-3 at line 691
+// A 16-byte AES-GCM nonce is refused before any encryption.
+pub fn main() -> Result[(), ()] {
+  let sealed = std@1/aes_gcm.seal(b"0123456789abcdef", b"0123456789abcdef", b"", b"")
+  failure.check(bytes.len(sealed) == 16, TextInvariant())
+  Ok(())
+}

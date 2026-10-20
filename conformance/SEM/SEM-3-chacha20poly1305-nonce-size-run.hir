@@ -1,0 +1,13 @@
+// rule: SEM-3
+// expect: run
+// A 12-byte ChaCha20-Poly1305 nonce seals; the fail twin's 8-byte nonce is refused.
+pub fn main() -> Result[(), ()] {
+  let sealed = std@1/chacha20poly1305.seal(
+    b"0123456789abcdef0123456789abcdef",
+    b"0123456789ab",
+    b"",
+    b""
+  )
+  failure.check(bytes.len(sealed) == 16, TextInvariant())
+  Ok(())
+}

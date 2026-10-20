@@ -543,6 +543,80 @@
       ]
     },
     {
+      "path": "aes_gcm.hir",
+      "module": [
+        "aes_gcm"
+      ]
+    },
+    {
+      "path": "aead.hir",
+      "module": [
+        "aead"
+      ]
+    },
+    {
+      "path": "chacha_poly.hir",
+      "module": [
+        "internal",
+        "chacha_poly"
+      ]
+    },
+    {
+      "path": "chacha20poly1305.hir",
+      "module": [
+        "chacha20poly1305"
+      ]
+    },
+    {
+      "path": "xchacha20poly1305.hir",
+      "module": [
+        "xchacha20poly1305"
+      ]
+    },
+    {
+      "path": "keccak.hir",
+      "module": [
+        "internal",
+        "keccak"
+      ]
+    },
+    {
+      "path": "sha3_224.hir",
+      "module": [
+        "sha3_224"
+      ]
+    },
+    {
+      "path": "sha3_256.hir",
+      "module": [
+        "sha3_256"
+      ]
+    },
+    {
+      "path": "sha3_384.hir",
+      "module": [
+        "sha3_384"
+      ]
+    },
+    {
+      "path": "sha3_512.hir",
+      "module": [
+        "sha3_512"
+      ]
+    },
+    {
+      "path": "shake128.hir",
+      "module": [
+        "shake128"
+      ]
+    },
+    {
+      "path": "shake256.hir",
+      "module": [
+        "shake256"
+      ]
+    },
+    {
       "path": "sha1.hir",
       "module": [
         "sha1"

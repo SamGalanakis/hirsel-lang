@@ -1,0 +1,21 @@
+// rule: SEM-3
+// expect: run
+// SHA3-256 of zero bytes at the 136-byte rate boundaries, the values Python hashlib (OpenSSL) gives.
+fn check(count: u64, expected: String) -> () {
+  let mut data: List[u8] = []
+  while list.len(data) < count {
+    list.push(mut data, 0)
+  }
+  failure.check(
+    std@1/sha3_256.digest_hex(bytes.from_list(take data)) == expected,
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check(135, "7d080d7ba978a75c8a7d1f9be566c859084509c9c2b4928435c225d5777d98e3")
+  check(136, "e772c9cf9eb9c991cdfcf125001b454fdbc0a95f188d1b4c844aa032ad6e075e")
+  check(137, "9ed57188470a83b758cd71c00c6cc3beb984b36a6c35864b4e53017b24cf5699")
+  check(272, "5d86a8cc4aa8f0d98146a747281865a625a19f9580eef32e38905920bc532c5c")
+  Ok(())
+}

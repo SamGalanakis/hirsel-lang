@@ -1,0 +1,44 @@
+// rule: SEM-3
+// expect: run
+// Zig std/crypto/sha3.zig SHAKE vectors and the FIPS 202 empty-input SHAKE128 and SHAKE256
+// outputs; a 300-byte output spans two SHAKE128 squeezes and its every prefix is a shorter output.
+fn hex(data: Bytes) -> unique String {
+  std@1/hex.encode(data)
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    hex(std@1/shake128.digest(b"hello123", 10)) == "1b85861510bc4d8e467d",
+    TextInvariant()
+  )
+  failure.check(
+    hex(std@1/shake256.digest(b"hello123", 10)) == "ade612ba265f92de4a37",
+    TextInvariant()
+  )
+  failure.check(
+    hex(std@1/shake128.digest(b"", 32)) == "7f9c2ba4e88f827d616045507605853ed73b8093f6efbc88eb1a6eacfa66ef26",
+    TextInvariant()
+  )
+  failure.check(
+    hex(std@1/shake256.digest(b"", 64)) == "46b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762fd75dc4ddd8c0f200cb05019d67b592f6fc821c49479ab48640292eacb3b7c4be",
+    TextInvariant()
+  )
+  failure.check(core@1/bytes.len(std@1/shake128.digest(b"", 0)) == 0, TextInvariant())
+  let mut state = std@1/shake128.new()
+  std@1/shake128.update(mut state, b"hello")
+  std@1/shake128.update(mut state, b"123")
+  let long = std@1/shake128.finish(take state, 300)
+  failure.check(
+    hex(long) == "1b85861510bc4d8e467d6f8a92270533cbaa7ba5e06c2d2a502854bac468b8b92dd274d28a4359da7eb5061b10277eb66fd7a5b4ae06fe27a8ff5e1012793a0bf945e47a932c879d2c6c3e11b3aa70d938abb43b946f255f007b3e073ab84b29cbb46200778a657b57d8efae616f925a4a058fffe34f248ed210717ca9b35b23f6f1584d3736b18b5619c897c6dfe008a9d3801f7fb35cc2c23a4ef719804a521be70aa5a6807e1e3c5284fcfd86ba07238febc82263468d0dec9a6091243722ad2828cec53f3686b038e440082f9e264c96ffc5b4e61fded1266322087a6a5b4a0a8f30441e15c559f4f2949dad86cdbc5365379760636bed70c777cb73e28bf812f675333926633c78b48556115311c290618d88699dff6922318233b2b8ad087b6440124ad0a29e774b8a",
+    TextInvariant()
+  )
+  failure.check(
+    bytes.slice(long, 0, 10) == std@1/shake128.digest(b"hello123", 10),
+    TextInvariant()
+  )
+  failure.check(
+    bytes.slice(long, 0, 168) == std@1/shake128.digest(b"hello123", 168),
+    TextInvariant()
+  )
+  Ok(())
+}

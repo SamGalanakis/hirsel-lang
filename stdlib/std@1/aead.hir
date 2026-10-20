@@ -1,0 +1,3 @@
+// The one failure of opening a sealed message with an AEAD: its tag does not
+// authenticate the ciphertext and associated data under that key and nonce.
+pub type OpenError = AuthenticationFailed()

@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Zig std/crypto/sha3.zig SHA3-256 vectors (FIPS 202 examples), one-shot and streamed.
+fn check(input: String, expected: String) -> () {
+  failure.check(
+    std@1/sha3_256.digest_hex(string.as_bytes(input)) == expected,
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check("", "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a")
+  check("abc", "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532")
+  check(
+    "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+    "916f6061fe879741ca6469b43971dfdb28b1a32dc36cb3254e812be27aad1d18"
+  )
+  let mut state = std@1/sha3_256.new()
+  std@1/sha3_256.update(mut state, b"a")
+  std@1/sha3_256.update(mut state, b"")
+  std@1/sha3_256.update(mut state, b"b")
+  std@1/sha3_256.update(mut state, b"c")
+  failure.check(
+    std@1/hex.encode(std@1/bytes.from_inline(std@1/sha3_256.finish(take state))) == "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532",
+    TextInvariant()
+  )
+  Ok(())
+}

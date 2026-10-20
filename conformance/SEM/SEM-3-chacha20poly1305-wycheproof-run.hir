@@ -1,0 +1,185 @@
+// rule: SEM-3
+// expect: run
+// steps: 4000000
+// each case decodes and opens up to 129 bytes, about 128k steps a case
+// Wycheproof chacha20_poly1305_test.json (0.9rc5), part 1 of 1: for each
+// key size and flag set with a 96-bit nonce, the first case of each of up to four message and data lengths
+// up to 129 bytes, 18 of the 325 cases. A valid case opens to its message
+// and an invalid one fails to open. Cases 1, 2, 3, 4, 5, 122, 123, 124, 146, 166, 186, 206, 216, 226, 233, 244, 248, 283.
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+fn check(
+  key_hex: String,
+  nonce_hex: String,
+  data_hex: String,
+  message_hex: String,
+  sealed_hex: String,
+  valid: bool
+) -> () {
+  match std@1/chacha20poly1305.open(
+    decode(key_hex),
+    decode(nonce_hex),
+    decode(sealed_hex),
+    decode(data_hex)
+  ) {
+    Ok(message) => {
+      failure.check(valid, TextInvariant())
+      failure.check(std@1/hex.encode(message) == message_hex, TextInvariant())
+    },
+    Error(AuthenticationFailed()) => failure.check(!valid, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  check(
+    "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+    "070000004041424344454647",
+    "50515253c0c1c2c3c4c5c6c7",
+    "4c616469657320616e642047656e746c656d656e206f662074686520636c617373206f66202739393a204966204920636f756c64206f6666657220796f75206f6e6c79206f6e652074697020666f7220746865206675747572652c2073756e73637265656e20776f756c642062652069742e",
+    "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b61161ae10b594f09e26a7e902ecbd0600691",
+    true
+  )
+  check(
+    "80ba3192c803ce965ea371d5ff073cf0f43b6a2ab576b208426e11409c09b9b0",
+    "4da5bf8dfd5852c1ea12379d",
+    "",
+    "",
+    "76acb342cf3166a5b63c0c0ea1383c8d",
+    true
+  )
+  check(
+    "7a4cd759172e02eb204db2c3f5c746227df584fc1345196391dbb9577a250742",
+    "a92ef0ac991dd516a3c6f689",
+    "bd506764f2d2c410",
+    "",
+    "906fa6284b52f87b7359cbaa7563c709",
+    true
+  )
+  check(
+    "cc56b680552eb75008f5484b4cb803fa5063ebd6eab91f6ab6aef4916a766273",
+    "99e23ec48985bccdeeab60f1",
+    "",
+    "2a",
+    "3acac27dec0968801e9f6eded69d807522",
+    true
+  )
+  check(
+    "46f0254965f769d52bdb4a70b443199f8ef207520d1220c55e4b70f0fda620ee",
+    "ab0dca716ee051d2782f4403",
+    "91ca6c592cbcca53",
+    "51",
+    "c4168310ca45b1f7c66cad4e99e43f72b9",
+    true
+  )
+  check(
+    "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+    "000102030405060708090a0b",
+    "00000000000000000000000000000000",
+    "65b63bf074b7283992e24b1ac0df0d22b555dbe2254d94a43f1de748d3cc6f0d",
+    "000000000000000000000000000000000000000000000000000000000000000039f4fce3026d83789ffd1ee6f2cd7c4f",
+    true
+  )
+  check(
+    "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+    "000102030405060708090a0b",
+    "00000000000000000000000000000000",
+    "65b63bf074b7283992e24b1ac0df0d22b555dbe2254d94a43f1de748d3cc6f0d20c142fe898fbbe668d4324394434c1b18b58ead710aed9c31db1f2a8a1f1bb2",
+    "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f5eaa804605c3a4785f9d7f13b6f67d6",
+    true
+  )
+  check(
+    "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+    "000102030405060708090a0b",
+    "00000000000000000000000000000000",
+    "65b63bf074b7283992e24b1ac0df0d22b555dbe2254d94a43f1de748d3cc6f0d20c142fe898fbbe668d4324394434c1b18b58ead710aed9c31db1f2a8a1f1bb24405c183af94ee1ad630cd931158a6213d48c8fff10d0a1f9ef760188e658802aad55e41a1d99069a18db55c56af7c10a6f21ecc8af9b7ce0a7ea0b67426e925",
+    "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000009b5c43a78d954e8a3c659eebc13d5d55",
+    true
+  )
+  check(
+    "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "000102030405060708090a0b",
+    "000102",
+    "",
+    "f5409bb729039d0814ac514054323f44",
+    false
+  )
+  check(
+    "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "000102030405060708090a0b",
+    "000102",
+    "000102030405060708090a0b0c0d0e0f",
+    "d03bcb3ca52d48d1d203b1e7b1a5995a28914007a6119dd3f109bba21ce9a7d6",
+    false
+  )
+  check(
+    "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "000102030405060708090a0b",
+    "000102",
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "d03bcb3ca52d48d1d203b1e7b1a5995af1a0466a61bb386a2e12d189a2c4ea15e967405a16e8b44eba92aa47f5cea52b7a",
+    false
+  )
+  check(
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "000102030405060710abb165",
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "dc8ce708bf26aab862d97e1b42f31ef38c382cf07174142ea564920612997b1c2e38aca2438b588d5459493e97e7fa330ff9bc3b9458297ba0967d86ed090b435103478f2869b93ee29c837e95fb6b9903f3b735b7345428eb93b3db1d9b5187cebb889aa177d83e4f63fc9a5c0596eed939883d06aacdfdea44fdecdf5cb7fc",
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc296436246c3a7c4b3ba09ab2a6a0889",
+    true
+  )
+  check(
+    "9de836aa579585081f330a7c4036e20e38ef15eff3945184d231867f505fffdf",
+    "00000000101112130bc672c3",
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "3619cb470af86dceceb6940f2d9abb34c9a9131476053387445ffebbe240d4f9818377855652f46a8219c7f71c3554f8acef8258de4b7d17c0f3d353ac981cc6a13287be1e6b41dc6d133df4ababebdf43d665ce7a4a5c982a0b139cb8202eebc74173e3224a440e4c37d2b595f384290e939ba016df0d49b36cdb4bd91c39",
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff133fe62391744d11ce44594b96c53baf",
+    true
+  )
+  check(
+    "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "000102030405060708090a0b",
+    "ffffffffffffffffffffffffffffffff415771fda4fbcc55c377f73203e60226",
+    "e48caf8a76183327c9561a4651c07c822ccd1642c06607d0d4bc0afb4de15915dbfa3b0b422e77e15c64bf6247031f15fdb643117809821870000adf83834da5",
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000102030405060708090a0b0c0d0e0f",
+    true
+  )
+  check(
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "000102030405060710abb165",
+    "ffffffff",
+    "c68ce708bf26aab862d97e1b42f31ef37bb66f8090c149e452ec7f20327eb2ea2e38aca2438b588d5459493e97e7fa330ff9bc23c897df6b00af86931d6c81555103478f2869b93ee29c837e95fb6b9903f3b72debfba2384baa48ceedfedb91",
+    "e5ffffffffffffffffffffffffffffff0871bc8f1e4aa235087712d9df183609ffffffffffffffffffffffffffffffffffffffe7a33009ef5fc604ea0f9a75e9ffffffffffffffffffffffffffffffffffffffe7a33009ef5fc604ea0f9a75e93572162777262c518eef573b720e8e64",
+    true
+  )
+  check(
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "000102030405060710abb165",
+    "ffffffff",
+    "f59d56151de28bef83505f6d89c0b0f7f75b2fa8e6dce386075db283ec85ee62555baffad423af25f66069bb69fb6f4d",
+    "d6ee4ee25d3bdea81e76de8934cc51fb849cfca7685708575dc6df7a01e36a81849cfca7685708575dc6df7a01e36a81831312cbb0f165dc3e8ff52125f48640",
+    true
+  )
+  check(
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "000102030405060710abb165",
+    "ffffffff",
+    "dc8ce708bf26aab862d97e1b42f31ef32e6784d857df07543d0dc72f179935fbede8c8baf01ee2044b162cbb343b355acc29d82327cd93f2bfd918034ed5c42a",
+    "ffffffffffffffffffffffffffffffff5da057d7d954ec856796aad6faffb1183c2f9be74c6a4576e0b09a7a5c2330963c2f9be74c6a4576e0b09a7a5c23309664e7efd24516a83e2c87e06a76e2dea3",
+    true
+  )
+  check(
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "00010203040506072dd4cd40",
+    "ffffffff",
+    "9064b88a282052a1ee44df05ad213da679f8d1f971da17437a2b5e04fbca167151b2650ec945fec70588bc65a616a5f24f354c0c1580af3662d5f8151e3f7e82dd557ec8a4d63df7274594367bef09cd",
+    "098a19123b0c79499df7401d41758c07e0ffffffffffffffffffffffffffffff460a896b69f43eb668a0e02d475da503e0ffffffffffffffffffffffffffffff460a896b69f43eb668a0e02d475da503ce8a3d4d887d95613d829b538ed01196",
+    true
+  )
+  Ok(())
+}

@@ -1,0 +1,84 @@
+// rule: SEM-3
+// expect: run
+// steps: 3000000
+// four seals and four opens of up to 60 bytes take about 1.6M steps
+// The GCM specification's test cases 2, 4, 10 and 16 (McGrew and Viega, also NIST's
+// GCM examples) for AES-128, AES-192 and AES-256: each seals to the published
+// ciphertext and tag and opens again, and a flipped tag bit fails to open.
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+fn roundtrip(
+  key_hex: String,
+  nonce_hex: String,
+  message_hex: String,
+  data_hex: String,
+  sealed_hex: String
+) -> () {
+  let key = decode(key_hex)
+  let nonce = decode(nonce_hex)
+  let data = decode(data_hex)
+  let sealed = std@1/aes_gcm.seal(key, nonce, decode(message_hex), data)
+  failure.check(std@1/hex.encode(sealed) == sealed_hex, TextInvariant())
+  let Ok(opened) = std@1/aes_gcm.open(key, nonce, sealed, data) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(std@1/hex.encode(opened) == message_hex, TextInvariant())
+  let mut tampered: List[u8] = []
+  for byte in sealed {
+    list.push(mut tampered, byte)
+  }
+  let last = list.len(tampered) - 1
+  tampered[last] = tampered[last] ^ 1
+  let Error(AuthenticationFailed()) = std@1/aes_gcm.open(
+    key,
+    nonce,
+    bytes.from_list(take tampered),
+    data
+  ) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  // Test case 2: AES-128.
+  roundtrip(
+    "00000000000000000000000000000000",
+    "000000000000000000000000",
+    "00000000000000000000000000000000",
+    "",
+    "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf"
+  )
+  // Test case 4: AES-128.
+  roundtrip(
+    "feffe9928665731c6d6a8f9467308308",
+    "cafebabefacedbaddecaf888",
+    "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39",
+    "feedfacedeadbeeffeedfacedeadbeefabaddad2",
+    "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e0915bc94fbc3221a5db94fae95ae7121a47"
+  )
+  // Test case 10: AES-192.
+  roundtrip(
+    "feffe9928665731c6d6a8f9467308308feffe9928665731c",
+    "cafebabefacedbaddecaf888",
+    "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39",
+    "feedfacedeadbeeffeedfacedeadbeefabaddad2",
+    "3980ca0b3c00e841eb06fac4872a2757859e1ceaa6efd984628593b40ca1e19c7d773d00c144c525ac619d18c84a3f4718e2448b2fe324d9ccda27102519498e80f1478f37ba55bd6d27618c"
+  )
+  // Test case 16: AES-256.
+  roundtrip(
+    "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308",
+    "cafebabefacedbaddecaf888",
+    "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39",
+    "feedfacedeadbeeffeedfacedeadbeefabaddad2",
+    "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b"
+  )
+  Ok(())
+}

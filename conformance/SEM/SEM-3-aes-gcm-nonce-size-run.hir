@@ -1,0 +1,8 @@
+// rule: SEM-3
+// expect: run
+// A 12-byte AES-GCM nonce seals; the fail twin's 16-byte nonce is refused.
+pub fn main() -> Result[(), ()] {
+  let sealed = std@1/aes_gcm.seal(b"0123456789abcdef", b"0123456789ab", b"", b"")
+  failure.check(bytes.len(sealed) == 16, TextInvariant())
+  Ok(())
+}

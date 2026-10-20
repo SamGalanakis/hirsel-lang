@@ -1,0 +1,13 @@
+// rule: SEM-3
+// expect: run
+// A 24-byte AES-GCM key selects AES-192 and seals; the fail twin's 20-byte key is refused.
+pub fn main() -> Result[(), ()] {
+  let sealed = std@1/aes_gcm.seal(
+    b"0123456789abcdef01234567",
+    b"0123456789ab",
+    b"",
+    b""
+  )
+  failure.check(bytes.len(sealed) == 16, TextInvariant())
+  Ok(())
+}

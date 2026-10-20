@@ -1,0 +1,110 @@
+// FIPS 202 SHA3-512: the Keccak-f[1600] sponge at a 72-byte rate with the
+// SHA-3 domain padding 0x06, from Zig std/crypto/sha3.zig (MIT).
+pub opaque type State: plain + inert uses {} {
+  sponge: internal.keccak.State,
+}
+
+@noalloc
+pub fn new() -> State uses {} {
+  State(sponge: internal.keccak.new(72, 0x06))
+}
+
+@noalloc
+pub fn update(mut state: State, data: Bytes) -> () uses {} {
+  internal.keccak.absorb(mut state.sponge, data)
+}
+
+@noalloc
+pub fn finish(take state: State) -> Inline[u8, 64] uses {} {
+  let State(sponge: sponge) = take state
+  let mut padded = sponge
+  internal.keccak.pad(mut padded)
+  let mut out: Inline[u8, 64] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  let mut i: u64 = 0
+  while i < 64 {
+    out[i] = internal.keccak.squeeze_byte(mut padded)
+    i += 1
+  }
+  take out
+}
+
+@noalloc
+pub fn digest(data: Bytes) -> Inline[u8, 64] uses {} {
+  let mut state = new()
+  update(mut state, data)
+  finish(take state)
+}
+
+pub fn digest_hex(data: Bytes) -> unique String uses {} {
+  std@1/hex.encode(std@1/bytes.from_inline(digest(data)))
+}
+
+// The dictionary that keys HMAC, HKDF and PBKDF2 with this hash.
+pub fn hash() -> std@1/digest.Hash[State, 64] uses {} {
+  std@1/digest.Hash(new: new, update: update, finish: finish, block_size: 72)
+}
