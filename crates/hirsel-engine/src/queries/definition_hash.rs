@@ -113,11 +113,18 @@ impl QueryEngine {
             return Err(QueryError::Diagnostics(signature.diagnostics));
         }
         let is_type = matches!(signature.value.kind, SignatureKind::Type(_));
-        let form = if let Some(node) = self.prechecked_node(path)? {
+        let record = self.image_node(path);
+        if record.is_none() {
+            self.materialize(path)?;
+        }
+        let form = if let Some(record) = record {
             match () {
-                _ if node.has_lowering() => Form::Tir,
+                _ if record.has_lowering() => Form::Tir,
                 _ if is_type => Form::Type,
-                _ => Form::Named(node.content.clone(), node.dependencies.clone()),
+                _ => Form::Named(
+                    record.node.content.clone(),
+                    record.node.dependencies.clone(),
+                ),
             }
         } else if let Some(source) = self.items.get(path).and_then(|items| items.first()) {
             match () {

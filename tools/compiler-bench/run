@@ -6,7 +6,7 @@ schema-1 result file.
         [--work DIR] [--groups G,...] [--select REGEX] [--modes M,...]
         [--repeat N] [--jobs 1,8] [--timeout S]
 
-DIR holds `hirsel` and its sibling `hirsel-std.precheck` (the release
+DIR holds `hirsel` and its sibling `hirsel-std.image` (the release
 `//:hirsel-toolchain` bundle). Each cell is one program in one mode at one job
 count, run N times; the file keeps every run and each metric's median and
 median absolute deviation. Hirsel check and build cells also keep the
@@ -16,16 +16,16 @@ work time of each phase, which overlap them. `compare` reads two such files.
 
 Modes. Hirsel: check, clif (`build --debug --backend cranelift`), llvm-o0
 (`build --debug`), llvm-o2 (`build`), all four for the examples and check and
-clif for stress and scale programs; std is measured by `precheck`. Rust:
+clif for stress and scale programs; std is measured by `image`. Rust:
 check (`cargo check`) and debug (`cargo build`). The edit loop (group `edit`)
 measures `check` after one edit to the 10k synthetic program: edit-body,
 edit-private-sig, edit-public-sig.
 
-Caches. Every Hirsel run is a fresh process that reads the std precheck and
+Caches. Every Hirsel run is a fresh process that maps the std image and
 retains nothing else: its query cache is process-local, so cold and warm are
 the same command and a cell's `cache` says so. A Rust cell's dependencies are
 built beforehand, in one target directory all pairs share (as Hirsel's std is
-prechecked); a cold run first removes the program's own artifacts and
+imaged); a cold run first removes the program's own artifacts and
 incremental state (`cargo clean -p`), and an edit
 cell runs after an untimed check of the unedited program, keeping Cargo's
 incremental cache: the warm number.
@@ -68,11 +68,11 @@ EDITS = ('edit-body', 'edit-private-sig', 'edit-public-sig')
 # The Rust mode a Hirsel mode is compared with in the scoreboard.
 PAIRED = {'check': 'check', 'clif': 'debug', 'llvm-o0': 'debug', **{e: e for e in EDITS}}
 NATIVE = ('clif', 'llvm-o0', 'llvm-o2')
-HIRSEL_CACHE = 'none retained: fresh process, std precheck read, query cache process-local'
+HIRSEL_CACHE = 'none retained: fresh process, std image mapped, query cache process-local'
 RUST_COLD = 'cold: dependencies built, package artifacts and incremental state removed'
 RUST_WARM = 'warm: incremental cache of the unedited program retained'
 # Environment that would change what a run reads or caches.
-UNSET = ('HIRSEL_PRECHECK', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL')
+UNSET = ('HIRSEL_IMAGE', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL')
 
 
 def say(text):
@@ -187,9 +187,9 @@ class Runner:
 
     def hirsel_command(self, path, mode):
         hirsel = str(self.hirsel)
-        if mode == 'precheck':
-            # precheck has no phase report; perf still counts it.
-            return [hirsel, 'precheck', str(path), '-o', str(self.scratch / 'std.precheck')]
+        if mode == 'image':
+            # image has no phase report; perf still counts it.
+            return [hirsel, 'image', str(path), '-o', str(self.scratch / 'std.image')]
         if mode == 'check' or mode in EDITS:
             return [hirsel, 'check', *self.timings, str(path)]
         profile = {'clif': ['--debug', '--backend', 'cranelift'], 'llvm-o0': ['--debug'], 'llvm-o2': []}[mode]
@@ -313,7 +313,7 @@ class Runner:
 
 def modes(program, wanted):
     if program.name == 'std@1':
-        own = ('precheck',)
+        own = ('image',)
     elif program.language == 'hirsel' and program.check_only:
         own = ('check',)
     elif program.language == 'hirsel':
@@ -321,7 +321,7 @@ def modes(program, wanted):
         own = HIRSEL_MODES if 'examples' in program.groups else ('check', 'clif')
     else:
         own = RUST_MODES
-    return [m for m in own if wanted is None or m in wanted or (m == 'precheck' and 'check' in wanted)]
+    return [m for m in own if wanted is None or m in wanted or (m == 'image' and 'check' in wanted)]
 
 
 def environment(native):
@@ -360,7 +360,7 @@ def pairs(cells):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--toolchain', required=True, help='directory with hirsel and hirsel-std.precheck')
+    parser.add_argument('--toolchain', required=True, help='directory with hirsel and hirsel-std.image')
     parser.add_argument('--output', required=True, help='result file to write')
     parser.add_argument('--work', default=None, help='corpus and scratch directory (default: a temporary one)')
     parser.add_argument('--groups', help='comma-separated: examples, pairs, conformance, tour, std, stress, scale, edit')
@@ -396,7 +396,7 @@ def main():
         'host': {'machine': platform.machine(), 'cpus': os.cpu_count(), 'load1': os.getloadavg()[0]},
         'toolchain': {'hirsel': str(Path(args.toolchain).resolve() / 'hirsel'), 'rustc': rustc,
                       'hirsel_sha256': file_hash(Path(args.toolchain) / 'hirsel'),
-                      'std_precheck_sha256': file_hash(Path(args.toolchain) / 'hirsel-std.precheck')},
+                      'std_image_sha256': file_hash(Path(args.toolchain) / 'hirsel-std.image')},
         'selection': {'groups': args.groups, 'select': args.select, 'modes': args.modes, 'jobs': args.jobs},
         'repeat': args.repeat, 'cells': cells, 'pairs': pairs(cells),
     }

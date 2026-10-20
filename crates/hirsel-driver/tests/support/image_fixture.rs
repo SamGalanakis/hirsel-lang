@@ -1,5 +1,5 @@
-//! The precheck tests' fixture: a temporary directory of packages, std named
-//! absolutely, and loading through a chosen package cache.
+//! The image tests' fixture: a temporary directory of packages, std named
+//! absolutely, and loading with a chosen set of std images.
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_syntax::PackageId;
@@ -13,7 +13,7 @@ impl Fixture {
     pub fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "hirsel-precheck-test-{}-{}",
+            "hirsel-image-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -60,8 +60,15 @@ pub fn std_manifest() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
-pub fn load(path: &Path, cache: &Prechecks) -> LoadedProgram {
-    load_program_source_with_prechecks(path, None, cache).unwrap()
+pub fn load(path: &Path, images: &StdImages) -> LoadedProgram {
+    load_program_source_with_images(path, None, images).unwrap()
+}
+/// The toolchain's std image: Buck2 writes it once for all tests; Cargo users
+/// write it with the documented `hirsel image` command and set HIRSEL_IMAGE.
+pub fn std_image() -> std::sync::Arc<StdImage> {
+    let path =
+        std::env::var_os("HIRSEL_IMAGE").expect("set HIRSEL_IMAGE to the toolchain's std image");
+    StdImage::open(Path::new(&path)).unwrap()
 }
 
 pub const STD_PROGRAM: &str = "pub type AppError = Grant(GrantError) | Output(OutputError)

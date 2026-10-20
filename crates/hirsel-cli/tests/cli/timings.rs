@@ -63,7 +63,7 @@ const PHASES: [&str; 18] = [
     "store lookup",
     "debug object",
 ];
-const COUNTS: [&str; 24] = [
+const COUNTS: [&str; 25] = [
     "definitions",
     "units",
     "V runs",
@@ -72,6 +72,7 @@ const COUNTS: [&str; 24] = [
     "object hits",
     "object misses",
     "lowered",
+    "dependency parses",
     "recomputes",
     "invalidated by signature",
     "invalidated by failed signature",
@@ -268,7 +269,7 @@ fn mem_usage_reports_peak_rss_and_the_tables_held() {
             .unwrap_or_else(|| panic!("no {name:?} in {memory}"))
     };
     assert!(
-        held("precheck") > 0 && held("package cache") > 0,
+        held("std image") > 0 && held("package cache") > 0,
         "{memory}"
     );
     assert!(held("engine: signatures") > 0, "{memory}");

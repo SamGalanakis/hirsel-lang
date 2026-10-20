@@ -204,24 +204,34 @@ impl QueryEngine {
         (Some(revision) != self.published_manifest).then_some(revision)
     }
     /// H(count, then (file path, header hash) for each candidate in occurrence order).
+    /// An indexed definition's is its row's; a generated instance, which is
+    /// never indexed, hashes its own items the same way.
     pub(crate) fn candidates_value(&self, path: &DefPath) -> ContentHash {
+        if let Some(candidates) = self.declarations.candidates(path) {
+            return candidates;
+        }
         let Some(items) = self.items.get(path) else {
             return tag("hirsel.read.no-candidates", &[]);
         };
         let mut parts: Vec<Vec<u8>> = vec![(items.len() as u64).to_le_bytes().to_vec()];
         for item in items {
-            let (file, _) = self.position(item);
-            parts.push(file.to_string_lossy().as_bytes().to_vec());
+            parts.push(crate::snapshot::logical(&self.sources, item));
             parts.push(self.header_hash(item).0.to_vec());
         }
-        ContentHash::of_parts("hirsel.read.candidates", parts.iter().map(Vec::as_slice))
+        ContentHash::of_parts(
+            "hirsel.declaration-candidates.v1",
+            parts.iter().map(Vec::as_slice),
+        )
     }
     /// Every candidate's name site and text: which one a citation picks
     /// depends on the citing owner's file, but the observed value may not,
     /// so readers in different files merge.
     pub(crate) fn cited_value(&self, path: &DefPath) -> ContentHash {
         let Some(candidates) = self.items.get(path) else {
-            return tag("hirsel.read.uncited", &[]);
+            return match self.image_inputs(path) {
+                Some(inputs) => inputs.cited,
+                None => tag("hirsel.read.uncited", &[]),
+            };
         };
         let parts: Vec<Vec<u8>> = candidates
             .iter()
@@ -465,7 +475,7 @@ impl QueryEngine {
     }
 
     /// The inputs indexing diffs for `path`, if it is indexed.
-    fn definition_inputs(&self, path: &DefPath) -> Option<DefInputs> {
+    pub(crate) fn definition_inputs(&self, path: &DefPath) -> Option<DefInputs> {
         let items = self.items.get(path)?;
         let first = items.first()?;
         let item = &first.item;
@@ -485,6 +495,17 @@ impl QueryEngine {
             candidates: self.candidates_value(path),
             anchors: items.iter().map(|c| c.anchor).collect(),
             names: tag("hirsel.read.name", &[&[u8::from(public), kind]]),
+        })
+    }
+
+    /// The inputs `path`'s readers observe that a std image holds for it.
+    pub(crate) fn observed_inputs(&self, path: &DefPath) -> Option<crate::image::ImageInputs> {
+        let inputs = self.definition_inputs(path)?;
+        Some(crate::image::ImageInputs {
+            body: inputs.body,
+            header: inputs.header,
+            cited: self.cited_value(path),
+            names: inputs.names,
         })
     }
 

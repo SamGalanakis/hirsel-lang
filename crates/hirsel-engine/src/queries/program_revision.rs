@@ -94,15 +94,18 @@ impl QueryEngine {
             if !visited.insert(path.clone()) {
                 continue;
             }
-            let (content, dependencies) = match self.prechecked_node(&path)? {
-                Some(node) => {
-                    // Closed materializations are already in the precheck. Only
+            let (content, dependencies) = match self.image_node(&path) {
+                Some(record) => {
+                    // Closed materializations are already in the image. Only
                     // size-generic reads need declarations for client selection.
-                    if node.has_staged_reads() {
+                    if record.has_staged_reads() {
                         let body = self.mode_query(&path)?;
                         self.register_staged(&body.value)?;
                     }
-                    (node.content.clone(), node.dependencies.clone())
+                    (
+                        record.node.content.clone(),
+                        record.node.dependencies.clone(),
+                    )
                 }
                 None => self.semantic_node(&path)?,
             };
@@ -142,6 +145,7 @@ impl QueryEngine {
             )
             .map_err(|e| operational(format!("signature encoding: {e:?}")))?,
         ];
+        self.materialize(path)?;
         if self.items.contains_key(path) {
             let analyzed = self.mode_query(path)?;
             if has_errors(&analyzed.diagnostics) {

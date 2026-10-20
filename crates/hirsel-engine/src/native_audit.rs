@@ -125,7 +125,7 @@ impl QueryEngine {
         &mut self,
         path: &DefPath,
     ) -> Result<SourceAuditProducts, QueryError> {
-        if let Some(products) = self.prechecked_audit_products(path)? {
+        if let Some(products) = self.image_audit_products(path) {
             return Ok(products);
         }
         let signature = self.item_signature(path)?.value;

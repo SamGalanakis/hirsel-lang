@@ -12,7 +12,7 @@
 //! `VerifyStore::Recompute` once it exists; `tools/buck2/sync.py` then passes
 //! the switch to their targets.
 use super::{
-    Config, Report, Switch, Verdict, difference, fresh_prechecks, o1::produce_in_child, produce,
+    Config, Report, Switch, Verdict, difference, fresh_images, o1::produce_in_child, produce,
     switches,
 };
 use std::path::{Path, PathBuf};
@@ -26,14 +26,14 @@ pub fn run(exe: &Path, root: &Path, programs: &[PathBuf], work: &Path) -> Report
             .display()
             .to_string();
         let config = Config::default();
-        let cold = match produce(program, &config, &fresh_prechecks()) {
+        let cold = match produce(program, &config, &fresh_images()) {
             Ok(cold) => cold,
             Err(switch) => {
                 report.add(format!("{name} [cold]"), Verdict::Todo(switch));
                 continue;
             }
         };
-        let shared = fresh_prechecks();
+        let shared = fresh_images();
         let hit =
             produce(program, &config, &shared).and_then(|_| produce(program, &config, &shared));
         report.add(

@@ -59,6 +59,65 @@ impl PartialEq for Row {
     }
 }
 
+/// A row as the std image holds it.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct RowImage {
+    definition: DefPath,
+    types: bool,
+    visibility: Visibility,
+    span: Span,
+    metadata: DefinitionMetadata,
+    sites: Vec<DeclarationSite>,
+    headers: Vec<ContentHash>,
+    candidates: ContentHash,
+    identity: [u64; 4],
+}
+impl RowImage {
+    pub(crate) fn definition(&self) -> &DefPath {
+        &self.definition
+    }
+    /// Each candidate's name site, in occurrence order.
+    pub(crate) fn sites(&self) -> &[DeclarationSite] {
+        &self.sites
+    }
+}
+impl From<&Row> for RowImage {
+    fn from(row: &Row) -> Self {
+        Self {
+            definition: row.entry.definition.clone(),
+            types: row.entry.namespace == Namespace::Type,
+            visibility: row.entry.visibility,
+            span: row.entry.span,
+            metadata: row.metadata.clone(),
+            sites: row.sites.to_vec(),
+            headers: row.headers.to_vec(),
+            candidates: row.candidates,
+            identity: row.identity,
+        }
+    }
+}
+impl From<RowImage> for Row {
+    fn from(row: RowImage) -> Self {
+        Self {
+            entry: DefinitionEntry {
+                definition: row.definition,
+                namespace: if row.types {
+                    Namespace::Type
+                } else {
+                    Namespace::Value
+                },
+                visibility: row.visibility,
+                span: row.span,
+            },
+            metadata: row.metadata,
+            sites: row.sites.into(),
+            headers: row.headers.into(),
+            candidates: row.candidates,
+            identity: row.identity,
+        }
+    }
+}
+
 /// The module input resolution and signature normalization read, frozen.
 pub struct Declarations {
     index: ManifestIndex,
@@ -123,6 +182,21 @@ fn place(sources: &SourceMap, syntax: &ItemSyntax) -> (FileId, std::path::PathBu
         .anchor(syntax.anchor)
         .expect("an indexed item's anchor is placed");
     (file, sources.file(file).unwrap().path.clone(), base)
+}
+/// The package-relative path of the source an item stands in: candidates
+/// hash it rather than where the package lies, so persisted reads of them
+/// hold wherever the package is read from.
+pub(crate) fn logical(sources: &SourceMap, syntax: &ItemSyntax) -> Vec<u8> {
+    let (file, _) = sources
+        .anchor(syntax.anchor)
+        .expect("an indexed item's anchor is placed");
+    sources
+        .file(file)
+        .unwrap()
+        .logical_path()
+        .as_os_str()
+        .as_encoded_bytes()
+        .to_vec()
 }
 /// An item's header: its text up to its body, positioned in its item.
 pub(crate) fn header_hash(sources: &SourceMap, syntax: &ItemSyntax) -> ContentHash {
@@ -198,6 +272,40 @@ impl DeclarationIndex {
             frozen: OnceLock::new(),
             ..image.clone()
         };
+    }
+    /// `path`'s row as the std image holds it.
+    pub(crate) fn row_image(&self, path: &DefPath) -> Option<RowImage> {
+        self.rows.get(path).map(RowImage::from)
+    }
+    /// Set `path`'s row from an image, whose items stand in sources not
+    /// indexed here (`place_file` lists them once parsed).
+    pub(crate) fn adopt_row(&mut self, path: &DefPath, row: impl Into<RowImage>) {
+        let row: Row = Row::from(row.into());
+        self.replace_row(path, Some(row));
+    }
+    /// Every row of `image`, added to this index.
+    pub(crate) fn adopt_rows(&mut self, image: &DeclarationIndex) {
+        for (path, row) in &image.rows {
+            self.replace_row(path, Some(row.clone()));
+        }
+    }
+    /// List `file`'s items, which an image's rows already describe: a source
+    /// of an image package parsed on demand.
+    pub(crate) fn place_file(
+        &mut self,
+        file: FileId,
+        listed: Vec<Arc<ItemSyntax>>,
+        sources: &SourceMap,
+    ) {
+        self.set_file(file, listed, sources);
+    }
+    /// `path`'s declaration sites, in occurrence order.
+    pub(crate) fn sites(&self, path: &DefPath) -> &[DeclarationSite] {
+        self.rows.get(path).map_or(&[], |row| &row.sites)
+    }
+    /// The paths with rows.
+    pub(crate) fn paths(&self) -> impl Iterator<Item = &DefPath> {
+        self.rows.keys()
     }
     /// Index every item afresh, except generated instances.
     pub(crate) fn rebuild(
@@ -289,13 +397,7 @@ impl DeclarationIndex {
                 candidates.iter().map(|c| header_hash(sources, c)).collect();
             let mut parts = vec![(candidates.len() as u64).to_le_bytes().to_vec()];
             for (candidate, header) in candidates.iter().zip(headers.iter()) {
-                parts.push(
-                    place(sources, candidate)
-                        .1
-                        .to_string_lossy()
-                        .as_bytes()
-                        .to_vec(),
-                );
+                parts.push(logical(sources, candidate));
                 parts.push(header.0.to_vec());
             }
             let kind = match &first.kind {
@@ -338,6 +440,9 @@ impl DeclarationIndex {
                 )),
             }
         });
+        self.replace_row(path, row);
+    }
+    fn replace_row(&mut self, path: &DefPath, row: Option<Row>) {
         let old = match &row {
             Some(row) => self.rows.insert(path.clone(), row.clone()),
             None => self.rows.remove(path),

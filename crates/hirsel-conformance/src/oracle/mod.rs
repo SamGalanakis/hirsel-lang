@@ -12,7 +12,7 @@ pub mod o5;
 pub mod switches;
 
 use hirsel_driver::native::{Backend, OptLevel, Options, Partition, TargetSpec};
-use hirsel_engine::{CheckCompletion, Precheck, Prechecks, ToolError};
+use hirsel_engine::{CheckCompletion, StdImage, StdImages, ToolError};
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
@@ -145,30 +145,29 @@ impl std::str::FromStr for Limits {
     }
 }
 
-/// A cold run's prechecks: only the toolchain's std precheck (the future std
-/// image); nothing else checked is shared between runs.
-pub fn fresh_prechecks() -> Prechecks {
-    static PRECHECKS: std::sync::OnceLock<Vec<Arc<Precheck>>> = std::sync::OnceLock::new();
-    let prechecks = PRECHECKS.get_or_init(|| {
-        let path = std::env::var_os("HIRSEL_PRECHECK")
+/// A cold run's images: only the toolchain's std image; nothing else checked
+/// is shared between runs.
+pub fn fresh_images() -> StdImages {
+    static IMAGES: std::sync::OnceLock<Vec<Arc<StdImage>>> = std::sync::OnceLock::new();
+    let images = IMAGES.get_or_init(|| {
+        let path = std::env::var_os("HIRSEL_IMAGE")
             .map(PathBuf::from)
             .or_else(|| {
                 std::env::current_exe()
                     .ok()
-                    .map(|exe| exe.with_file_name("hirsel-std.precheck"))
+                    .map(|exe| exe.with_file_name("hirsel-std.image"))
             });
-        path.and_then(|path| Precheck::read(&path).ok())
-            .map(Arc::new)
+        path.and_then(|path| StdImage::open(&path).ok())
             .into_iter()
             .collect()
     });
-    Prechecks::of(prechecks.clone())
+    StdImages::of(images.clone())
 }
 
 /// Compile `program` under `config` with `cache`, as `hirsel check --json`
 /// renders it, then export the entry's TIR and, with `native`, its Ready
 /// receipts and objects. Refuses before compiling when a switch is missing.
-pub fn produce(program: &Path, config: &Config, cache: &Prechecks) -> Result<Artifacts, Switch> {
+pub fn produce(program: &Path, config: &Config, cache: &StdImages) -> Result<Artifacts, Switch> {
     switches::missing(config.switches())?;
     // Each missing switch's use site: the lane that lands it applies it here.
     Ok(hirsel_engine::with_compiler_stack(|| {
@@ -176,9 +175,9 @@ pub fn produce(program: &Path, config: &Config, cache: &Prechecks) -> Result<Art
     }))
 }
 
-fn artifacts(path: &Path, config: &Config, cache: &Prechecks) -> Artifacts {
+fn artifacts(path: &Path, config: &Config, cache: &StdImages) -> Artifacts {
     let mut out = Artifacts::new();
-    let mut program = match hirsel_driver::load_program_source_with_prechecks(path, None, cache) {
+    let mut program = match hirsel_driver::load_program_source_with_images(path, None, cache) {
         Ok(program) => program,
         Err(error) => {
             out.insert("diagnostics".into(), tool_error(&error).into_bytes());

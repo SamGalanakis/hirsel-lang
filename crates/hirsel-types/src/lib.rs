@@ -492,7 +492,7 @@ pub enum Uses {
     Only(AuthoritySummary),
 }
 /// Scope lifetime of library-declared capabilities (MODE-6, CAP-1).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum CapabilityKind {
     Global,
     Scoped,
@@ -533,14 +533,14 @@ pub struct ForeignContract {
     pub aliasing_contract: String,
 }
 /// A safe wrapper's trusted kind and model (PROG-4).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct ForeignWrapper {
     pub kind: WrapperKind,
     /// Its results and effects are a function of its arguments, so replay
     /// may run it again.
     pub deterministic: bool,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum WrapperKind {
     /// The result depends only on the arguments.
     Pure,
@@ -650,7 +650,7 @@ pub fn state_promises_satisfy(actual: &[StatePromise], expected: &[StatePromise]
     })
 }
 /// Explicit native storage promises (MEM-7/12), separate from SER-2 wire schemas.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Default)]
 pub struct Layout {
     pub c: bool,
     pub packed: bool,
@@ -659,7 +659,7 @@ pub struct Layout {
     pub flat: bool,
 }
 /// Public type declaration signature, including opaque guarantees and destruction (GEN-1, DROP-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct TypeDefinition {
     pub loop_source: Option<LoopSourceDeclaration>,
     /// `@format(function)`: the function an f-string hole of this type calls (SEM-3).
@@ -694,14 +694,14 @@ pub struct TypeDefinition {
 /// A checked opaque type's serialized form: its own representation, published as its
 /// wire contract, and `fn(value: T) -> bool uses {}` in its module, called on every
 /// decoded occurrence before the value is exposed (SER-1).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct SerializableCheck {
     pub function: DefPath,
     /// The opaque's representation, indexing the signature's types.
     pub representation: TypeId,
 }
 /// Every definition exposes one signature category (LANG-6).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum SignatureKind {
     Function(FunctionType),
     Type(TypeDefinition),
@@ -740,7 +740,7 @@ pub(crate) use test_api::*;
 /// Self-contained cross-query signature: its TypeIds are rows of the session
 /// interner, which every phase shares, so reading one imports nothing (LANG-6).
 /// Fingerprints are of canonical semantic encoding, never Rust Debug or ids (PROG-5).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Signature {
     pub metadata: SignatureMetadata,
     pub definition: DefId,

@@ -114,13 +114,14 @@ pub struct LoadedProgram {
     pub primary: FileId,
     /// The selected packages marked `unsafe ffi`, in package order (PROG-4).
     pub unsafe_ffi: Vec<UnsafeFfiPackage>,
-    /// Why a dependency package is checked from source rather than prechecked,
-    /// for `--verbose`; a precheck changes only how long checking takes.
-    pub precheck_notes: Vec<String>,
+    /// Why a dependency package is checked from source rather than read from
+    /// its std image, for `--verbose`; an image changes only how long checking
+    /// takes.
+    pub image_notes: Vec<String>,
     packages: Vec<DependencyPackage>,
     identity: ContentHash,
 }
-/// A selected dependency package: its checked-input revision (the precheck
+/// A selected dependency package: its checked-input revision (the image
 /// key's input), its closure and its files.
 struct DependencyPackage {
     package: PackageId,
@@ -149,8 +150,8 @@ impl LoadedProgram {
         let mut diagnostics = Vec::new();
         let mut completion = CheckCompletion::Complete;
         for (file, context) in &self.files {
-            // A prechecked package checked complete and clean (`Precheck`).
-            if self.engine.prechecked(&context.package) {
+            // An image package checked complete and clean (`StdImage`).
+            if self.engine.imaged(&context.package) {
                 continue;
             }
             match crate::tools::association_diagnostics(&mut self.engine, *file, context) {
@@ -177,7 +178,7 @@ impl LoadedProgram {
             }
         };
         for (file, context) in &self.files {
-            if self.engine.prechecked(&context.package) {
+            if self.engine.imaged(&context.package) {
                 continue;
             }
             let parallel =
@@ -264,42 +265,41 @@ impl LoadedProgram {
         let entry = self.entry.clone();
         self.engine.unsafe_reach(&entry).map_err(|e| self.error(e))
     }
-    /// Write the precheck of `package`, a dependency of this program, which must
-    /// check complete with no diagnostics at all (`Precheck`), to `out`. Each
+    /// The std image of `package`, a dependency of this program, which must
+    /// check complete with no diagnostics at all (`StdImage`). Each
     /// definition's record is computed as soon as its source checks and goes
-    /// straight to `spill`, and the source's checked bodies are then released,
-    /// so a precheck holds one source's products at a time, not the package's.
-    pub fn precheck(
+    /// to `spill`, and the source's checked bodies are then released, so the
+    /// build holds one source's products at a time, not the package's.
+    pub fn image(
         &mut self,
         package: &PackageId,
-        out: &mut impl std::io::Write,
-        spill: &mut (impl std::io::Read + std::io::Write + std::io::Seek),
-    ) -> Result<(), ToolError> {
+        spill: std::fs::File,
+    ) -> Result<Vec<u8>, ToolError> {
         let name = format!("{}@{}", package.name, package.version);
         let revision = self.packages.iter().find(|p| &p.package == package);
         let key = revision
-            .map(|r| crate::Precheck::key(self.identity, r.key, self.engine.comptime_limits));
-        let mut writer = revision.map(|revision| {
+            .map(|r| crate::StdImage::key_of(self.identity, r.key, self.engine.comptime_limits));
+        let mut build = revision.map(|revision| {
             let files: Vec<_> = revision.files.iter().map(|(f, _)| *f).collect();
-            crate::queries::PrecheckWriter::new(
+            crate::queries::ImageBuild::new(
                 package.clone(),
                 revision.closure.clone(),
                 &files,
-                std::io::BufWriter::new(&mut *spill),
+                spill,
             )
         });
         let mut released = false;
         let output = self
-            .check_with(LoweringPolicy::Comptime, |engine, file| match &mut writer {
-                Some(writer) if writer.has_file(file) => {
+            .check_with(LoweringPolicy::Comptime, |engine, file| match &mut build {
+                Some(build) if build.has_file(file) => {
                     let paths = engine.file_definitions(file);
-                    engine.precheck_definitions(writer, paths)?;
+                    engine.image_definitions(build, paths)?;
                     // The first source's GEN-5 verdict checked every body of the
                     // program. The package's other bodies are checked again with
                     // their own sources rather than all held until then.
                     if !released {
                         released = true;
-                        engine.release_unwritten(writer);
+                        engine.release_unrecorded(build);
                     }
                     Ok(())
                 }
@@ -311,27 +311,22 @@ impl LoadedProgram {
         }
         if output.completion != CheckCompletion::Complete {
             return Err(ToolError::Runtime(format!(
-                "precheck: {name} does not check completely"
+                "image: {name} does not check completely"
             )));
         }
         if self.unsafe_ffi.iter().any(|p| &p.package == package) {
             return Err(ToolError::Runtime(format!(
-                "precheck: {name} is an unsafe ffi package"
+                "image: {name} is an unsafe ffi package"
             )));
         }
-        let (Some(writer), Some(key)) = (writer, key) else {
+        let (Some(build), Some(key)) = (build, key) else {
             return Err(ToolError::Runtime(format!(
-                "precheck: {name} is not a dependency"
+                "image: {name} is not a dependency"
             )));
         };
-        let head = self
-            .engine
-            .finish_precheck(writer, key)
-            .map_err(|error| self.error(error))?;
-        out.write_all(&head)?;
-        spill.rewind()?;
-        std::io::copy(spill, out)?;
-        Ok(())
+        self.engine
+            .finish_image(build, key)
+            .map_err(|error| self.error(error))
     }
     /// The reference interpreter calls no C: a program whose entry reaches an
     /// extern refuses before entry (PROG-4).
@@ -430,12 +425,12 @@ pub fn bundle_program(path: &Path, source: &str, dir: &Path) -> Result<bool, Too
     }
     Ok(true)
 }
-/// Load, adopting the matching `prechecks`.
-pub(crate) fn load_program_source_with_prechecks(
+/// Load, adopting the matching std `images`.
+pub(crate) fn load_program_source_with_images(
     compiler: &Compiler,
     path: &Path,
     replacement: Option<&str>,
-    prechecks: &Prechecks,
+    images: &StdImages,
     package_only: bool,
 ) -> Result<LoadedProgram, ToolError> {
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
@@ -465,7 +460,7 @@ pub(crate) fn load_program_source_with_prechecks(
                 entry: entry_path(&default_context()),
                 primary: file,
                 unsafe_ffi: vec![],
-                precheck_notes: vec![],
+                image_notes: vec![],
                 packages: vec![],
                 identity: compiler.identity(),
             });
@@ -476,7 +471,7 @@ pub(crate) fn load_program_source_with_prechecks(
             entry: entry_path(&default_context()),
             primary: file,
             unsafe_ffi: vec![],
-            precheck_notes: vec![],
+            image_notes: vec![],
             packages: vec![],
             identity: compiler.identity(),
         });
@@ -557,7 +552,7 @@ pub(crate) fn load_program_source_with_prechecks(
             ((*id).clone(), manifest_hash(&mut closure.iter()))
         })
         .collect();
-    let limits = hirsel_interp::Limits::default();
+    let limits = compiler.comptime_limits();
     let mut revisions: Vec<DependencyPackage> = dependencies
         .iter()
         .map(|id| DependencyPackage {
@@ -629,11 +624,72 @@ pub(crate) fn load_program_source_with_prechecks(
         entry,
         primary: primary.ok_or_else(|| invalid("missing primary source"))?,
         unsafe_ffi,
-        precheck_notes: vec![],
+        image_notes: vec![],
         packages: vec![],
         identity: compiler.identity(),
     };
+    // A dependency whose image matches is adopted before anything is parsed:
+    // the session's interner is built over the image's rows.
+    if let Some(toolchain) = images.get() {
+        for revision in &revisions {
+            let key = crate::StdImage::key_of(program.identity, revision.key, limits);
+            let candidates: Vec<_> = toolchain
+                .images
+                .iter()
+                .filter(|image| image.package() == &revision.package)
+                .collect();
+            let name = format!("{}@{}", revision.package.name, revision.package.version);
+            let mut selected = candidates
+                .iter()
+                .find(|image| image.key() == key)
+                .map(|image| (*image).clone());
+            // A toolchain owns its selected file; explicit image sets only
+            // supply values. Rebuild a stale file from source with images off,
+            // preserving an existing mapping until atomic replacement completes.
+            if selected.is_none()
+                && !candidates.is_empty()
+                && let Some(path) = &toolchain.path
+            {
+                if hirsel_image::Image::read_key(path).ok() != Some(key) {
+                    let _ = compiler.image_package(&graph.packages[&revision.package].path, path);
+                }
+                selected = crate::StdImage::open(path)
+                    .ok()
+                    .filter(|image| image.key() == key);
+            }
+            match selected {
+                Some(image)
+                    if graph.packages[&revision.package].unsafe_ffi.is_none()
+                        && !program.files.iter().any(|(_, c)| program.engine.imaged(&c.package)) =>
+                {
+                    let files = program
+                        .files
+                        .iter()
+                        .filter(|(_, c)| c.package == revision.package)
+                        .cloned()
+                        .collect();
+                    program.engine.adopt_image(image, files);
+                }
+                _ if !candidates.is_empty() => program.image_notes.push(format!(
+                    "the image for {name} was checked under another compiler or other sources; checking {name}"
+                )),
+                _ => {
+                    if let Some(missing) = &toolchain.missing {
+                        program.image_notes.push(format!("{missing}; checking {name}"));
+                    }
+                }
+            }
+        }
+    }
+    if crate::image::reporting_images() {
+        for note in &program.image_notes {
+            eprintln!("hirsel: {note}");
+        }
+    }
     for (file, context) in &program.files {
+        if program.engine.imaged(&context.package) {
+            continue;
+        }
         program
             .engine
             .parse_file(*file, context)
@@ -665,36 +721,6 @@ pub(crate) fn load_program_source_with_prechecks(
             .collect();
     }
     program.packages = revisions;
-    if let Some(toolchain) = prechecks.get() {
-        for revision in &program.packages {
-            let key = crate::Precheck::key(program.identity, revision.key, limits);
-            let candidates: Vec<_> = toolchain
-                .prechecks
-                .iter()
-                .filter(|s| s.package() == &revision.package)
-                .collect();
-            let name = format!("{}@{}", revision.package.name, revision.package.version);
-            match candidates.iter().find(|s| s.matches(key)) {
-                Some(precheck) if graph.packages[&revision.package].unsafe_ffi.is_none() => {
-                    let files = revision.files.iter().map(|(f, _)| *f).collect();
-                    program.engine.adopt_precheck((*precheck).clone(), files);
-                }
-                _ if !candidates.is_empty() => program.precheck_notes.push(format!(
-                    "the precheck for {name} was checked under another compiler or other sources; checking {name}"
-                )),
-                _ => {
-                    if let Some(missing) = &toolchain.missing {
-                        program.precheck_notes.push(format!("{missing}; checking {name}"));
-                    }
-                }
-            }
-        }
-    }
-    if crate::prechecks::reporting_prechecks() {
-        for note in &program.precheck_notes {
-            eprintln!("hirsel: {note}");
-        }
-    }
     Ok(program)
 }
 

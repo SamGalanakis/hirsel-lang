@@ -503,7 +503,7 @@ impl LoadedProgram {
                     .len()
             };
             let token_count: usize = reached.iter().map(|p| declarations[p].tokens).sum();
-            let prechecked = program.engine.prechecked(&id);
+            let prechecked = program.engine.imaged(&id);
             let exposure: Vec<_> = exposures
                 .iter()
                 .filter(|(p, _)| belongs(p))

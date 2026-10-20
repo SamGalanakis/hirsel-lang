@@ -54,7 +54,9 @@ fn directory(bytes: &[u8]) -> Result<Directory, String> {
     }
     let count = u32_at(bytes, 12).ok_or("truncated image header")? as usize;
     let key = ContentHash(
-        bytes[16..HEADER]
+        bytes
+            .get(16..HEADER)
+            .ok_or("truncated image header")?
             .try_into()
             .map_err(|_| "truncated image header")?,
     );

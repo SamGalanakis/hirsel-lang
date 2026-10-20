@@ -40,10 +40,15 @@ impl QueryEngine {
     }
 
     fn source_constant(&self, path: &DefPath) -> bool {
-        self.items
-            .get(path)
-            .and_then(|i| i.first())
-            .is_some_and(|item| matches!(item.item.kind, ItemKind::Const { .. }))
+        match self.items.get(path).and_then(|i| i.first()) {
+            Some(item) => matches!(item.item.kind, ItemKind::Const { .. }),
+            None => self.image_signature(path).is_some_and(|signature| {
+                matches!(
+                    signature.output.value.kind,
+                    hirsel_types::SignatureKind::Const { .. }
+                )
+            }),
+        }
     }
 
     /// Whether every body a file check under `policy` lowers is lowered.
@@ -69,6 +74,9 @@ impl QueryEngine {
 
     /// Every top-level declaration of an indexed file, in source order.
     pub(crate) fn file_definitions(&self, file: FileId) -> Vec<DefPath> {
+        if let Some(definitions) = self.image_file_definitions(file) {
+            return definitions;
+        }
         let Some((_, _, Ok(parsed))) = self.parsed.get(&file) else {
             return vec![];
         };

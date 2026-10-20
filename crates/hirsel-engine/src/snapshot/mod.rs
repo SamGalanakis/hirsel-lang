@@ -15,8 +15,8 @@ use std::sync::Arc;
 mod declarations;
 mod provider;
 mod views;
-pub(crate) use declarations::header_hash;
 pub use declarations::{DeclarationIndex, Declarations, ModuleInputs};
+pub(crate) use declarations::{RowImage, header_hash, logical};
 pub use provider::FrozenProvider;
 
 pub use views::{PackageViews, View, ViewTable};
@@ -227,8 +227,7 @@ impl QueryEngine {
             .collect();
         let mut private = vec![];
         let mut complete = true;
-        let paths: Vec<_> = self.items.keys().cloned().collect();
-        for path in paths {
+        for path in self.source_paths() {
             let d = DefId::intern(&path);
             let signature = self.signature(d);
             if let Ok(public) = &signature {
@@ -258,8 +257,8 @@ impl QueryEngine {
             registry: self.registry.clone(),
             builtins: self.builtins.keys().map(DefId::intern).collect(),
             candidates: self
-                .items
-                .keys()
+                .source_paths()
+                .iter()
                 .filter_map(|path| Some((DefId::intern(path), self.declarations.candidates(path)?)))
                 .collect(),
         };

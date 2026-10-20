@@ -7,7 +7,7 @@ compares user-mode instruction counts with a stored baseline, and runs only when
 invoked by hand.
 
 ```sh
-# The release CLI bundle: hirsel plus its sibling hirsel-std.precheck.
+# The release CLI bundle: hirsel plus its sibling hirsel-std.image.
 .buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-toolchain --show-output
 tools/compiler-bench/run --toolchain <bundle> --output results.json            # whole suite
 tools/compiler-bench/run --toolchain <bundle> --groups examples --modes check --output r.json
@@ -44,7 +44,7 @@ parts of that report:
   Phases overlap the intervals, so they do not add up.
 
 It also keeps the report's counts, such as definitions, units and V runs.
-`hirsel precheck` takes no `--timings`, so the std cell has wall time, CPU time
+`hirsel image` takes no `--timings`, so the std cell has wall time, CPU time
 and RSS plus perf counters. When a toolchain's usage shows no `--timings`, as before that
 report existed, every cell records wall time, CPU time and RSS plus perf counters.
 Peak RSS always comes from `/usr/bin/time`, never from `--mem-usage`, because
@@ -57,7 +57,7 @@ measuring held memory walks the allocator and slows the run.
 | `examples` (`pairs`) | hello, todo-api, kvstore, logq, csvjson, mdtoc, bench-lite, each with its Rust port | real programs with std: JSON with derive, HTTP, tasks, channels, mutexes, files, CSV, base64, SHA-256, NFC |
 | `conformance` | 14 accepted programs, one per rule family (`corpus.CONFORMANCE`) | small-program fixed cost across features |
 | `tour` | every runnable program `docs/tour.md` links | the documented feature tour |
-| `std` | `hirsel precheck stdlib/std@1/hirsel.json` | std checked whole, from source |
+| `std` | `hirsel image stdlib/std@1/hirsel.json` | std checked whole, from source, into its image |
 | `stress` (`pairs`) | nest 8/16/32, instances 32/128, wide 2000, long 2000, arms 200, nested-match 16/32, table 2000, derive 64, closures 200, each with a Rust twin | known cliffs: nested generic depth, many generic instances, many definitions, long bodies, wide and deep matches, big literals, comptime derive, closures |
 | `scale` (`pairs`) | synthetic 3k, 10k, 30k, 50k, 100k lines | size scaling: copies of the six examples, one module each, all reachable from `main` |
 | `edit` | the 10k synthetic program after one edit | the edit loop: a body edit, a private signature edit and a public signature edit |
@@ -81,7 +81,7 @@ the pair measures compile time for the same program shape.
 | `clif` | `hirsel build --debug --backend cranelift` | `cargo build` (debug) |
 | `llvm-o0` | `hirsel build --debug` | `cargo build` (debug) |
 | `llvm-o2` | `hirsel build` | — |
-| `precheck` | `hirsel precheck` (std only) | — |
+| `image` | `hirsel image` (std only) | — |
 | `edit-*` | `hirsel check` after the edit | `cargo check` after the edit |
 
 The examples run all four Hirsel modes; stress and scale programs run `check`
@@ -94,11 +94,11 @@ Hirsel executes more user instructions. Wall and CPU times are descriptive only.
 
 Each cell states its cache in its `cache` field.
 
-- **Hirsel**: every run is a fresh process. It reads the std precheck and keeps
+- **Hirsel**: every run is a fresh process. It maps the std image and keeps
   nothing else between runs, because the query cache is process-local. So a
   cold run and a warm run are the same command.
 - **Rust, cold**: the dependencies are built beforehand, as Hirsel's std is
-  prechecked. Before each timed run, `cargo clean -p` removes the package's own
+  imaged. Before each timed run, `cargo clean -p` removes the package's own
   artifacts and incremental state.
 - **Rust, warm** (`edit-*`): the edit runs after an untimed `cargo check` of the
   unedited copy, keeping Cargo's incremental cache.
@@ -139,7 +139,7 @@ The following interval and phase names remain documented for attribution:
 
 | interval | driver step |
 |---|---|
-| `image open` | reading and decoding the std precheck |
+| `image open` | mapping the std image and decoding its eager tables |
 | `S0` | loading the package graph and sources, parsing, publishing std's declarations, the program check's own steps |
 | `parallel` | checking each file's definitions and lowering the reachable closure (resolve, check, modes, lowering, V) |
 | `S1` | reserved; 0 until the driver step exists |

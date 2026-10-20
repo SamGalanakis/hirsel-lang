@@ -26,7 +26,7 @@ holds a file offset, so no cached signature, resolution, body, mode result,
 TIR or diagnostic is rewritten after an edit: inserting or removing other items,
 or moving an item to another file, leaves every memo of the item in place.
 Items removed from one file wait in a detached pool until the next parse, so a
-cross-file move keeps the same syntax. Package images, prechecked records and
+cross-file move keeps the same syntax. Package images, imaged records and
 artifacts carry anchors as (source ordinal, base) and are placed on load, never
 rebased.
 
@@ -62,7 +62,7 @@ report the same diagnostics; the conformance harness checks each corpus file
 under both and requires them equal. `Verify` is the session's one V switch:
 `Compiler::with_verify` sets it, and `QueryEngine::run_v` is the only place V
 runs or is skipped. Sessions without V use their own shared package cache, and
-`precheck_package` refuses them.
+`image_package` refuses them.
 
 `QueryEngine::semantic_program_revision(entry)` produces the shared run-config
 `ProgramRevision` for interpreter, heap and native launch. It follows checked
@@ -86,7 +86,7 @@ executes must be in the program its identity names.
 its LANG-6 definition hash, and each definition with TIR its call sites with
 their callees' hashes (`definition_hash`, `package_definition_hashes` and
 `hirsel hash` read it). A definition with TIR hashes its signature and TIR, a
-source or prechecked type its owner view, and a registry operation, extern,
+source or imaged type its owner view, and a registry operation, extern,
 signature fragment or generic generated declaration its path, signature,
 semantic tokens and reads. It is a query over existing TIR; nothing is cached
 across calls. `definition_groups(roots)` returns the same closure's recursive
@@ -425,25 +425,21 @@ padded to the declaration's lines; the semantic program and lowering repeat the
 walk until no instance is new. At most `MAX_GENERATED_INSTANCES` (256) per
 declaration, then CT-1. Re-indexing a declaration's source retires its instances.
 
-A *precheck* (`queries/precheck.rs`) is a dependency package checked once, at
-toolchain build time, instead of by every program: `LoadedProgram::precheck`
-writes it after a complete check with no diagnostics, refusing a package whose
-queries read outside its closure. It holds, per definition, the semantic-revision
-node and the lowered, validated TIR (spans by manifest ordinal, TypeIds given
-fresh provenance on decode), completed native source audit, compile-time
-substitutions and evaluated constant with its execution reads, decoded on first
-use. Native export reads these audit products instead of repeating H and modes;
-constant queries retain their original execution dependencies. Lowering replays
-the execution reads it adds to enclosing frames. Its key is the compiler
-identity, the package's checked-input revision and the compile-time limits. Loading
-adopts `Prechecks::toolchain()` (the toolchain's `$HIRSEL_PRECHECK` or
-`hirsel-std.precheck` beside the executable) by default, `Prechecks::of` an
-explicit set, and `Prechecks::none()` checks every package from source. With a precheck adopted, `check` skips the
-package's files, GEN-5's program graph covers only the other bodies (a
-prechecked package reaches nothing outside its closure, so it closes no cycle
-through them), `lower_to_tir`, `semantic_program`, source audits and constant
-evaluation take its products, and other queries still compute from source, so
-diagnostics, revisions and replay identity are unchanged. Re-indexing one of its files drops the precheck.
+The std image (`image.rs`, `queries/image.rs`) is a dependency package checked
+once at toolchain build time. `LoadedProgram::image` refuses diagnostics and
+queries that read outside the package's closure. The mapped file holds declaration
+rows, normalized signatures and private views, canonical type rows, and lazy
+per-definition semantic nodes, validated TIR, audits, constants and execution reads.
+`StdImage::open` eagerly decodes the declaration index and type base; `OnceLock`
+slots share each decoded record across sessions without a decode-map mutex.
+`StdImages::toolchain()` selects `$HIRSEL_IMAGE` or the executable's sibling
+`hirsel-std.image`; `StdImages::at` selects a replaceable file, `StdImages::of`
+supplies explicit immutable images, and `StdImages::none()` checks from source.
+The compiler identity, sources, closure manifests, registry revision and compile-time
+limits key the image. Stale selected files are rebuilt atomically. Syntax is
+materialized only when needed; editing an imaged source releases the image and
+resumes normal invalidation. The choice changes compilation work, preserving
+diagnostics, TIR and semantic revisions.
 
 The single-threaded engine lives on a compiler thread. Use
 `with_compiler_stack(|| { ... })` to construct the engine and keep its complete
@@ -682,7 +678,7 @@ A request at stack length n fails at its own site when n ≥ L =
 computed or reused, so the verdict and site equal a cache-free serial
 evaluation. Limit failures are operational and never cached.
 
-Dependency packages are checked in each engine unless a precheck covers them;
+Dependency packages are checked in each engine unless a std image covers them;
 cross-program reuse of checked results goes through the result store
 (`store.rs`: `none@1`, `mem@1`, `dir@1`, `sim@1`).
 
@@ -782,7 +778,7 @@ policy; test discovery selects ordinary functions after checking the package.
 `Compiler::load_package_declarations` loads the validated manifest graph for
 signature tools, including libraries without an entry. It parses/indexes source
 and resolves header paths through the selected dependency aliases and PROG-2
-access rules, without checking, lowering or evaluating bodies or loading prechecks.
+access rules, without checking, lowering or evaluating bodies or loading std images.
 
 Size-dependent inline comptime expressions publish hidden size-generic constant
 signatures. Generic TIR reads those constants with lexical size actuals; each

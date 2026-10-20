@@ -8,6 +8,15 @@ pub(crate) struct OwnerRecord {
 }
 pub use hirsel_tir::representation::RepresentationRecord;
 impl QueryEngine {
+    /// `path`'s private shape as its signature's normalization recorded it,
+    /// here or in the std image.
+    pub(crate) fn owner_record(&self, path: &DefPath) -> Option<OwnerRecord> {
+        let state = self.adapters.compiler_state.as_ref()?;
+        if let Some(record) = state.borrow().representations.get(path) {
+            return Some(record.clone());
+        }
+        self.image_signature(path)?.owner.clone()
+    }
     /// A body-local view, never published by item_signature or the public
     /// provider. PROG-2's privacy boundary is the exact package (version included).
     /// Reuse the shape from normalization; do not normalize a second signature.
@@ -20,6 +29,12 @@ impl QueryEngine {
             || public.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque
         {
             return Ok((public, None));
+        }
+        let path = public.definition.path();
+        if let Some(image) = self.image_signature(path)
+            && std::sync::Arc::ptr_eq(&image.output.value, &public)
+        {
+            return Ok((image.private.clone(), self.implementation_hash(path)));
         }
         let Some(state) = &self.adapters.compiler_state else {
             return Ok((public, None));
@@ -56,15 +71,13 @@ impl QueryEngine {
             }));
         }
         let public = self.item_signature(definition)?.value;
-        let Some(state) = &self.adapters.compiler_state else {
-            return Err(QueryError::NotImplemented);
-        };
-        let Some(record) = state.borrow().representations.get(definition).cloned() else {
+        let Some(record) = self.owner_record(definition) else {
             // Source-less capabilities/extern layouts need an explicit external record.
             return Err(QueryError::NotImplemented);
         };
-        let source = self.definition_items(definition)?;
-        if source.len() != 1 || source[0].text_hash != record.text_hash {
+        if self.declarations.sites(definition).len() != 1
+            || self.implementation_hash(definition) != Some(record.text_hash)
+        {
             return Err(QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "owner representation".into(),
                 message: "stale private representation".into(),

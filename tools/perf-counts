@@ -257,7 +257,7 @@ def main():
     if args.bless:
         return bless()
     env = {key: value for key, value in os.environ.items() if key in (
-        'PATH', 'LLVM_SYS_211_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_PRECHECK', 'HIRSEL_MEMORY_LIMIT',
+        'PATH', 'LLVM_SYS_211_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_IMAGE', 'HIRSEL_MEMORY_LIMIT',
         'HIRSEL_VALGRIND', 'VALGRIND_LIB', 'HIRSEL_VALGRIND_RUNTIME', 'HIRSEL_LINK_KIT', 'HIRSEL_GLIBC_FLOOR', 'LD_LIBRARY_PATH')}
     env.update(LC_ALL='C', HIRSEL_JOBS='1', RUST_TEST_THREADS='1')
     hirsel = ROOT / 'buck-out/tmp/cargo-bin-exe/gate-perf-counts/hirsel'

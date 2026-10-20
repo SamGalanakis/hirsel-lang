@@ -201,6 +201,11 @@ impl TypeInterner {
         })
     }
 
+    /// The immutable base this interner was built over, if any.
+    pub fn base(&self) -> Option<&Arc<TypeBase>> {
+        self.base.as_ref()
+    }
+
     fn shard(&self, hash: u64) -> &RwLock<HashMap<u64, Ids, IdHasher>> {
         &self.shards[(hash >> 58) as usize % SHARDS]
     }

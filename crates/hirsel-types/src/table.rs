@@ -196,6 +196,16 @@ impl TableBuilder {
             order: vec![],
         }
     }
+    /// A builder whose first positions are `base`'s rows in base order, so a
+    /// base built from its table gives those rows the ids `base` gives them
+    /// and values naming them stay valid over either base.
+    pub fn over(types: Arc<TypeInterner>, base: &TypeBase) -> Self {
+        let mut builder = Self::new(types);
+        for position in 0..base.len() as u32 {
+            builder.position(TypeBase::id(position));
+        }
+        builder
+    }
     fn position(&mut self, id: TypeId) -> u32 {
         if !self.types.contains(id) {
             return MISSING;
@@ -267,6 +277,12 @@ impl TypeTable {
 /// (`TypeTable::into_base`) in a base of `len` rows.
 pub fn with_base_decoding<R>(len: usize, f: impl FnOnce() -> R) -> R {
     scoped(Scope::Base(len as u32), f)
+}
+
+/// Serialize or deserialize in `f` with each `TypeId` written as the id it
+/// is: a form only the session that wrote it reads back (a spill file).
+pub fn with_session_ids<R>(f: impl FnOnce() -> R) -> R {
+    scoped(Scope::Raw, f)
 }
 
 /// How `TypeId` serializes on this thread: as a table position.

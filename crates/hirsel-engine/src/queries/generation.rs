@@ -719,10 +719,12 @@ fn without_uniqueness(tree: &mut hirsel_syntax::SyntaxTree, ty: TypeExprId) {
 impl QueryEngine {
     /// Whether `path` is a generic generated declaration (CT-5).
     pub(crate) fn instance_bodied(&self, path: &DefPath) -> bool {
-        self.items
-            .get(path)
-            .and_then(|items| items.first())
-            .is_some_and(|s| instance_bodied(s))
+        match self.items.get(path) {
+            Some(items) => items.first().is_some_and(|s| instance_bodied(s)),
+            None => self
+                .image_of(path)
+                .is_some_and(|image| image.generated(DefId::intern(path))),
+        }
     }
 
     /// check_query for a generic generated declaration: its header alone, as a
@@ -817,6 +819,7 @@ impl QueryEngine {
         {
             return Ok(instance.definition.path().clone());
         }
+        self.materialize(declaration)?;
         let snapshot = self.snapshot(declaration)?;
         let source = &snapshot.item;
         let ItemKind::Function {
@@ -1007,7 +1010,11 @@ impl QueryEngine {
         let any = self
             .items
             .iter()
-            .any(|(_, items)| items.first().is_some_and(|s| instance_bodied(s)));
+            .any(|(_, items)| items.first().is_some_and(|s| instance_bodied(s)))
+            || self
+                .image
+                .as_ref()
+                .is_some_and(|adopted| adopted.image.generates());
         let mut selected = BTreeSet::new();
         if !any {
             return Ok(selected);
@@ -1042,7 +1049,7 @@ impl QueryEngine {
             }
             if !self.items.contains_key(&path)
                 || self.instance_bodied(&path)
-                || self.prechecked(&path.0.package)
+                || self.imaged(&path.0.package)
             {
                 continue;
             }
@@ -1063,7 +1070,13 @@ impl QueryEngine {
                 })
                 .collect();
             for (callee, binder, arguments, site) in calls {
-                if !self.items.contains_key(&callee) {
+                // An image package with no generated declaration selects no
+                // instance through its own calls.
+                if !self.declared(&callee)
+                    || self
+                        .image_of(&callee)
+                        .is_some_and(|image| !image.generates())
+                {
                     continue;
                 }
                 let actuals =
@@ -1107,6 +1120,7 @@ impl QueryEngine {
         let actuals = hirsel_types::Actuals {
             arguments: arguments.to_vec(),
         };
+        self.materialize(path)?;
         let site = self.snapshot(path).map(|s| s.item.name_span)?;
         self.generated_instance(path, &actuals, site).map(Some)
     }

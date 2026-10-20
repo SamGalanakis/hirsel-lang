@@ -13,9 +13,8 @@ pub(crate) use memos::{Entry, Observed, Table};
 mod program_revision;
 pub use program_revision::ForeignUse;
 pub(crate) use program_revision::SemanticProgram;
-mod precheck;
-pub use precheck::Precheck;
-pub(crate) use precheck::PrecheckWriter;
+mod image;
+pub(crate) use image::ImageBuild;
 mod safety;
 pub use safety::{Escape, UnsafeReach};
 mod type_groups;
@@ -180,8 +179,8 @@ pub struct QueryEngine {
     pub(crate) memo: Arc<hirsel_types::TypeMemo>,
     signature_stack: Vec<DefPath>,
     recomputes: BTreeMap<(DefPath, QueryKind), usize>,
-    /// Dependency packages whose checked products come from a precheck.
-    prechecks: BTreeMap<hirsel_syntax::PackageId, precheck::AdoptedPrecheck>,
+    /// The std image whose package's checked products this engine reads.
+    image: Option<image::AdoptedImage>,
     pub unavailable: Option<QueryKind>,
     pub last_phase: Option<QueryKind>,
     /// Interpretation refuses to enter a definition outside its entry's
@@ -219,7 +218,7 @@ impl Drop for QueryEngine {
         released("engine: staged values", take(&mut self.staged_values));
         released("engine: generated", take(&mut self.generated));
         released("engine: recomputes", take(&mut self.recomputes));
-        released("engine: prechecks", take(&mut self.prechecks));
+        released("engine: image", take(&mut self.image));
         if let Some(state) = self.adapters.compiler_state.take() {
             if let Ok(mut state) = state.try_borrow_mut() {
                 released(
@@ -265,7 +264,7 @@ impl QueryEngine {
 impl QueryEngine {
     /// Every indexed source definition.
     pub(crate) fn item_paths(&self) -> Vec<DefPath> {
-        self.items.keys().cloned().collect()
+        self.source_paths()
     }
     /// The source definitions a native export selects: the semantic closure
     /// (`semantic_program`, the closure check-time lowering and the program
@@ -286,7 +285,7 @@ impl QueryEngine {
         roots: impl IntoIterator<Item = DefPath>,
     ) -> Result<BTreeSet<DefPath>, QueryError> {
         let mut selected = self.semantic_program(roots)?.definitions;
-        selected.retain(|path| self.items.contains_key(path));
+        selected.retain(|path| self.declared(path));
         // CT-3: a non-generic compile-time-only function never runs: no
         // run-time code can hold the TypeShape or Body its signature mentions.
         let mut compile_time = vec![];
@@ -416,7 +415,7 @@ impl QueryEngine {
             memo: Arc::new(hirsel_types::TypeMemo::new()),
             signature_stack: vec![],
             recomputes: BTreeMap::new(),
-            prechecks: BTreeMap::new(),
+            image: None,
             unavailable: None,
             last_phase: None,
             closure_assertions: cfg!(debug_assertions),
@@ -504,7 +503,12 @@ impl QueryEngine {
     /// The own content a query of `kind` keys on: the definition's headers
     /// (signatures) or its first item's text (every body query), with the
     /// package's closure manifest. Header hashes are taken once per index.
-    fn key_text(&self, definition: &DefPath, kind: QueryKind) -> Result<ContentHash, QueryError> {
+    fn key_text(
+        &mut self,
+        definition: &DefPath,
+        kind: QueryKind,
+    ) -> Result<ContentHash, QueryError> {
+        self.materialize(definition)?;
         let snapshot = self.snapshot(definition)?;
         let text = if kind == QueryKind::Signature {
             match self.inputs.get(&DefId::intern(definition)) {
@@ -544,6 +548,9 @@ impl QueryEngine {
     ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {
         if let Some(constant) = self.staged_constants.get(definition) {
             return Ok(Arc::new(output(constant.signature.clone())));
+        }
+        if let Some(signature) = self.image_signature(definition) {
+            return Ok(signature.output.clone());
         }
         if !self.items.contains_key(definition) {
             if let Some(signature) = self.registry.get(definition) {
@@ -728,7 +735,7 @@ impl QueryEngine {
     /// items this snapshot dropped stay adoptable until the next index, for a
     /// definition moving to another file.
     fn index(&mut self, file: &mut SyntaxFile, context: &FileContext) -> Result<(), QueryError> {
-        self.drop_precheck(&context.package);
+        self.release_image(&context.package)?;
         self.comptime_runtime = None;
         let source_path = self.sources.file(file.file).unwrap().path.clone();
         // Every snapshot of this source, each at its own FileId.
@@ -1008,6 +1015,9 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Vec<SignatureDependency>, QueryError> {
+        if let Some(signature) = self.image_signature(definition) {
+            return Ok(signature.covered.clone());
+        }
         let output = self.signature_output(definition)?;
         Ok(match self.signatures.get(&DefId::intern(definition)) {
             Some(entry) if self.items.contains_key(definition) => entry.covered.clone(),
@@ -1141,6 +1151,7 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<TypedBody>>, QueryError> {
+        self.materialize(definition)?;
         let snapshot = self.snapshot(definition)?;
         if let Some(body) = generation::generator(&snapshot) {
             return self.generated_check_query(definition, snapshot, body);
@@ -1211,12 +1222,12 @@ impl QueryEngine {
         &mut self,
     ) -> Result<Vec<(DefPath, Arc<QueryOutput<TypedBody>>)>, QueryError> {
         let mut bodies = vec![];
-        // A prechecked package reaches no definition outside its closure, so it closes no
-        // instantiation cycle through one, and its own verdict is in its precheck.
+        // An image package reaches no definition outside its closure, so it closes no
+        // instantiation cycle through one, and its own verdict is in its image.
         for path in self
             .items
             .keys()
-            .filter(|path| !self.prechecked(&path.0.package))
+            .filter(|path| !self.imaged(&path.0.package))
             .cloned()
             .collect::<Vec<_>>()
         {
@@ -1265,7 +1276,7 @@ impl QueryEngine {
             .signatures()
             .map(|s| (s.clone(), ContentHash::default()))
             .collect();
-        for path in self.items.keys().cloned().collect::<Vec<_>>() {
+        for path in self.source_paths() {
             let public = self.item_signature(&path)?.value;
             views.push((
                 self.body_signature(&path.0.package, public)?.0,
@@ -1286,7 +1297,7 @@ impl QueryEngine {
         };
         let library: Vec<_> = self.registry.signatures().cloned().collect();
         let mut signatures: Vec<_> = library.iter().cloned().collect();
-        for path in self.items.keys().cloned().collect::<Vec<_>>() {
+        for path in self.source_paths() {
             signatures.push(self.item_signature(&path)?.value);
         }
         for signature in signatures {
@@ -1345,8 +1356,8 @@ impl QueryEngine {
                 (s.clone(), digest)
             })
             .collect();
-        for path in self.items.keys() {
-            match snapshot.representation(hirsel_syntax::DefId::intern(path)) {
+        for path in self.source_paths() {
+            match snapshot.representation(hirsel_syntax::DefId::intern(&path)) {
                 Some(Ok((view, digest))) => views.push((view.clone(), digest.0)),
                 Some(Err(error)) => return Err(error.clone()),
                 None => {}
@@ -1368,7 +1379,7 @@ impl QueryEngine {
         }
         let view = match self.registry.get(d) {
             Some(signature) => Ok(signature.clone()),
-            None if self.items.contains_key(path) => self
+            None if self.declared(path) => self
                 .item_signature(path)
                 .and_then(|public| self.body_signature(&path.0.package, public.value))
                 .map(|(view, _)| view),
@@ -1415,7 +1426,7 @@ impl QueryEngine {
                 })
                 .unwrap_or(0);
             let finalizer = match &t.drop {
-                Some(drop) if self.items.contains_key(drop) => {
+                Some(drop) if self.declared(drop) => {
                     let entry = if eager {
                         self.lower_to_tir(drop)?.value.entry
                     } else {
@@ -1474,17 +1485,16 @@ impl QueryEngine {
         self.parse_file(file, context).map(|_| ())
     }
 }
-impl DefinitionQueries for QueryEngine {
-    fn parse_file(
+impl QueryEngine {
+    /// Lex and parse `file` under `context`, with the diagnostics std's
+    /// shared module heads add; indexing is the caller's.
+    fn parse_syntax(
         &mut self,
         file: FileId,
         context: &FileContext,
     ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
-        let package_environment = self.package_environment(&context.package);
-        if let Some((old_context, environment, result)) = self.parsed.get(&file) {
-            if old_context == context && environment == &package_environment {
-                return result.clone();
-            }
+        if self.package_manifests.contains_key(&context.package) {
+            timings::count(Count::DependencyParses);
         }
         let _timing = timings::phase(Phase::Parse);
         let Some(lexer) = self.adapters.lexer.clone() else {
@@ -1493,32 +1503,13 @@ impl DefinitionQueries for QueryEngine {
         self.last_phase = Some(QueryKind::Lex);
         let tokens = lexer.lex(file, &self.sources)?;
         if has_errors(&tokens.diagnostics) {
-            let result = Err(QueryError::Diagnostics(tokens.diagnostics));
-            self.parsed.insert(
-                file,
-                (context.clone(), package_environment.clone(), result.clone()),
-            );
-            return result;
+            return Err(QueryError::Diagnostics(tokens.diagnostics));
         }
         let Some(parser) = self.adapters.parser.clone() else {
             return self.missing(QueryKind::Parse);
         };
         self.last_phase = Some(QueryKind::Parse);
-        let mut output = match parser.parse(file, tokens.value, context, &mut self.sources) {
-            Ok(output) => output,
-            Err(error) => {
-                // This fixed implementation limit is deterministic for an exact
-                // source snapshot. Retain only its failure, never partial syntax.
-                if matches!(&error, QueryError::Operational(failure) if failure.operation == "parser-tooling-limit")
-                {
-                    self.parsed.insert(
-                        file,
-                        (context.clone(), package_environment, Err(error.clone())),
-                    );
-                }
-                return Err(error);
-            }
-        };
+        let mut output = parser.parse(file, tokens.value, context, &mut self.sources)?;
         let mut diagnostics = tokens.diagnostics;
         diagnostics.append(&mut output.diagnostics);
         if context.package.name_is("std") {
@@ -1539,6 +1530,40 @@ impl DefinitionQueries for QueryEngine {
             }
         }
         output.diagnostics = diagnostics;
+        Ok(output)
+    }
+}
+impl DefinitionQueries for QueryEngine {
+    fn parse_file(
+        &mut self,
+        file: FileId,
+        context: &FileContext,
+    ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
+        // An unedited source of the adopted image keeps the image.
+        self.materialize_source(file)?;
+        let package_environment = self.package_environment(&context.package);
+        if let Some((old_context, environment, result)) = self.parsed.get(&file) {
+            if old_context == context && environment == &package_environment {
+                return result.clone();
+            }
+        }
+        let mut output = match self.parse_syntax(file, context) {
+            Ok(output) => output,
+            Err(error) => {
+                // A lexing failure, and this fixed implementation limit, are
+                // deterministic for an exact source snapshot. Retain only the
+                // failure, never partial syntax.
+                if matches!(&error, QueryError::Diagnostics(_))
+                    || matches!(&error, QueryError::Operational(failure) if failure.operation == "parser-tooling-limit")
+                {
+                    self.parsed.insert(
+                        file,
+                        (context.clone(), package_environment, Err(error.clone())),
+                    );
+                }
+                return Err(error);
+            }
+        };
         let result = if has_errors(&output.diagnostics) {
             Err(QueryError::Diagnostics(output.diagnostics.clone()))
         } else {
@@ -1568,7 +1593,7 @@ impl DefinitionQueries for QueryEngine {
         definition: &DefPath,
     ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
         self.prepare_materialization_environment();
-        if let Some(prechecked) = self.prechecked_lowering(definition)? {
+        if let Some(prechecked) = self.image_lowering(definition) {
             if crate::comptime::has_staged_reads(&prechecked.value) {
                 let body = self.mode_query(definition)?;
                 self.register_staged(&body.value)?;
@@ -1670,7 +1695,7 @@ impl SignatureProvider for QueryEngine {
                     return Err(QueryError::NotImplemented);
                 }
                 let definition = lookup_path(context, path).ok_or(QueryError::NotImplemented)?;
-                if self.items.contains_key(&definition) || self.builtins.contains_key(&definition) {
+                if self.declared(&definition) || self.builtins.contains_key(&definition) {
                     Ok(definition)
                 } else {
                     self.registry
@@ -1699,16 +1724,31 @@ impl TirProvider for QueryEngine {
     fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
         // #63: dependency-first; ties use source file path and declaration position.
         let mut declarations: Vec<_> = self
-            .items
-            .iter()
-            .filter_map(|(path, items)| {
-                let item = items.first()?;
-                matches!(item.item.kind, ItemKind::Const { .. }).then(|| {
-                    let site = self.sources.resolve(item.item.name_span);
+            .source_paths()
+            .into_iter()
+            .filter_map(|path| {
+                let (constant, name) = match self.items.get(&path) {
+                    Some(items) => {
+                        let item = items.first()?;
+                        (
+                            matches!(item.item.kind, ItemKind::Const { .. }),
+                            item.item.name_span,
+                        )
+                    }
+                    None => (
+                        matches!(
+                            self.image_signature(&path)?.output.value.kind,
+                            hirsel_types::SignatureKind::Const { .. }
+                        ),
+                        self.declarations.sites(&path).first()?.name_span,
+                    ),
+                };
+                constant.then(|| {
+                    let site = self.sources.resolve(name);
                     (
                         self.sources.file(site.file).unwrap().path.clone(),
                         site.start,
-                        path.clone(),
+                        path,
                     )
                 })
             })

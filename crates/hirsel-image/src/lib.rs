@@ -49,7 +49,7 @@ mod read;
 mod write;
 
 pub use read::Image;
-pub use write::{Encode, ImageWriter, Written, write_atomically};
+pub use write::{Encode, ImageWriter, Written, encode_value, write_atomically};
 
 /// The first byte of every image.
 pub const MAGIC: [u8; 8] = *b"HIRSIMG1";

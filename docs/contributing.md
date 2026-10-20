@@ -46,20 +46,20 @@ threads) to 4. Export them explicitly when a wrapper might override them:
 export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 ```
 
-## Compiler prechecks
+## Compiler std images
 
-Buck2 test targets that run std programs get `HIRSEL_PRECHECK` from
-`//:hirsel-std-precheck`, which rebuilds whenever std or the compiler changes.
-The precheck compiler and
+Buck2 test targets that run std programs get `HIRSEL_IMAGE` from
+`//:hirsel-std-image`, which rebuilds whenever std or the compiler changes.
+The std image compiler and
 Buck2 test tools share the optimized `//tools/buck2:checked` profile, with
 debug assertions and integer overflow checks enabled.
 
-`hirsel precheck` writes each source's records as soon as that source checks,
+`hirsel image` writes each source's records as soon as that source checks,
 streaming them through a scratch file, and then releases the source's checked
 bodies, so its peak memory follows the largest definition rather than the size
-of std. `//:hirsel-std-precheck` runs under `HIRSEL_MEMORY_LIMIT=2G`
-(`PRECHECK_MEMORY_LIMIT` in `tools/buck2/defs.bzl`); std needed 1850 to 1950
-MiB of it on 2026-10-20. A precheck that reaches the bound is a memory
+of std. `//:hirsel-std-image` runs under `HIRSEL_MEMORY_LIMIT=2G`
+(`IMAGE_MEMORY_LIMIT` in `tools/buck2/defs.bzl`); the mmap image writer needed 923
+MiB of it on 2026-10-21. A std image that reaches the bound is a memory
 regression to find, not a bound to raise.
 
 ## Cargo
@@ -256,7 +256,7 @@ straight to main. Remove the row when fixing the failure.
 `tools/land` (in the background with a log, never under `timeout`) fetches,
 rebases the worktree's commits onto origin/main, regenerates the build files
 when stale (`sync.py --if-stale`), builds the workspace without the std
-precheck (a test that takes minutes), runs Clippy and checks formatting, all
+std image (a test that takes minutes), runs Clippy and checks formatting, all
 through Buck2 at pool priority 75, above focused tests at 50
 (`tools/buck2/platforms.bzl`), and pushes. A push rejected because main moved
 goes back to the rebase; a red check refuses the push and prints its first

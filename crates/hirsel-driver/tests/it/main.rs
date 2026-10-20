@@ -38,6 +38,9 @@ mod growth_ir;
 mod header_diagnostics;
 mod host_io;
 mod id_salt;
+mod image;
+#[path = "../support/image_fixture.rs"]
+mod image_fixture;
 mod incremental_positions;
 mod invalidation;
 mod ir_size;
@@ -54,9 +57,6 @@ mod origins;
 mod packages;
 mod packed_walk;
 mod pipeline;
-mod precheck;
-#[path = "../support/precheck_fixture.rs"]
-mod precheck_fixture;
 mod program_revision;
 mod proof_export;
 mod proof_limits;

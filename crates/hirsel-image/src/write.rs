@@ -57,6 +57,8 @@ pub struct Written {
 
 impl ImageWriter {
     /// An image keyed by `key`, whose values' `TypeId`s are rows of `types`.
+    /// The image's base begins with the rows of `types`' own base, in its
+    /// order, so ids naming them mean the same over either base.
     pub fn new(key: ContentHash, types: Arc<TypeInterner>) -> Self {
         Self {
             key,
@@ -92,7 +94,10 @@ impl ImageWriter {
         let mut tables = Tables {
             symbols: Numbering::default(),
             defs: Numbering::default(),
-            types: TableBuilder::new(self.types.clone()),
+            types: match self.types.base() {
+                Some(base) => TableBuilder::over(self.types.clone(), base),
+                None => TableBuilder::new(self.types.clone()),
+            },
             anchors: anchor_numbers(&self.anchors),
         };
         let mut keys: Vec<DefId> = self
@@ -342,16 +347,25 @@ fn assemble(key: ContentHash, sections: &[(u32, u32, Vec<u8>)]) -> Result<Vec<u8
 /// rename, so a reader (or a mapping) sees the old image or the new one whole.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let directory = path.parent().unwrap_or(Path::new("."));
     let name = path
         .file_name()
         .ok_or_else(|| std::io::Error::other("an image path names a file"))?;
     let temporary = directory.join(format!(
-        ".{}.{}.tmp",
+        ".{}.{}.{}.tmp",
         name.to_string_lossy(),
-        std::process::id()
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
     ));
-    let mut file = std::fs::File::create(&temporary)?;
+    // As tempfile's Unix create_named does, reserve the name exclusively.
+    // Concurrent rebuilds must never truncate a temporary file another writer
+    // may already have renamed into an image that readers have mapped.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
     if let Err(e) = written.and_then(|()| std::fs::rename(&temporary, path)) {
         let _ = std::fs::remove_file(&temporary);

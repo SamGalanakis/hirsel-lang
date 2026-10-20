@@ -36,11 +36,11 @@ CONFIG = ['-c', 'hirsel.clippy=true', '-c', 'hirsel.priority=75']
 ENV = {'HIRSEL_BUCK2_CONFIG': ' '.join(CONFIG), 'GIT_EDITOR': 'true',
        'HIRSEL_VALIDATE_STAGES': '1'}
 # The workspace without tests, Clippy twins, campaign targets, the two-host
-# link build (it holds a host-wide lock) and the std precheck (a test that
+# link build (it holds a host-wide lock) and the std image (a check that
 # takes minutes).
 BUILD_SET = ('root//: - kind("_rust_test", root//:) - attrregexfilter(name, "-clippy$", root//:)'
              ' - attrfilter(labels, gate, root//:) - kind("_link_hosts_local", root//:)'
-             ' - rdeps(root//:, kind("_hirsel_precheck", root//:))')
+             ' - rdeps(root//:, kind("_hirsel_image", root//:))')
 ATTEMPTS = 10
 # After this many lost races on clean rebases, push without rebuilding: the change passed every
 # check, and the next landing's build checks main with it, so a bad combination surfaces at once.

@@ -7,7 +7,7 @@
 //! - `resident`: one `Session` across the edit (TODO until it exists).
 //! - `disk`: two processes sharing a `dir@1` store (TODO until it exists).
 use super::{
-    Artifacts, Config, Report, Switch, Verdict, difference, edits::Scenario, fresh_prechecks,
+    Artifacts, Config, Report, Switch, Verdict, difference, edits::Scenario, fresh_images,
     o1::produce_in_child, produce, switches,
 };
 use std::path::Path;
@@ -35,7 +35,7 @@ fn one(
     let (before, after) = (&scenario.config_before, &scenario.config_after);
     scenario.write(&tree, root, false)?;
     let entry = scenario.entry(&tree);
-    let mem = fresh_prechecks();
+    let mem = fresh_images();
     let warmed = produce(&entry, before, &mem);
     let disk = base.join("store");
     let disk_before = Config {
@@ -49,7 +49,7 @@ fn one(
                 .map_err(Verdict::Fail)
         });
     scenario.write(&tree, root, true)?;
-    let cold = match produce(&entry, after, &fresh_prechecks()) {
+    let cold = match produce(&entry, after, &fresh_images()) {
         Ok(cold) => cold,
         Err(switch) => {
             for mode in ["mem", "resident", "disk"] {

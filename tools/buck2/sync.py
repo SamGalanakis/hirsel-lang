@@ -188,10 +188,10 @@ TEST_DATA = {
 NATIVE_TESTS = {"hirsel-cranelift", "hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-llvm", "hirsel-pipeline-tests", "hirsel-rc", "hirsel-rt"}
 RUNTIME_ARCHIVES = "//:hirsel-rt-archives"
 
-# The std precheck (docs/building.md, "The std precheck"): checked once by the built CLI,
-# then loaded by the tests and campaigns that run std programs (HIRSEL_PRECHECK).
-PRECHECK = "//:hirsel-std-precheck"
-PRECHECKED_TESTS = {"hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-pipeline-tests"}
+# The std image (docs/building.md, "The std image"): written once by the built CLI,
+# then loaded by the tests and campaigns that run std programs (HIRSEL_IMAGE).
+IMAGE = "//:hirsel-std-image"
+IMAGED_TESTS = {"hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-pipeline-tests"}
 
 # Cases that call full_matrix (44 configurations) for toolchain or configuration
 # discovery, and the drift checks of what only tools/land writes: every run
@@ -810,7 +810,7 @@ def first_party(meta: dict) -> str:
     unguarded = []
     out = [
         HEADER,
-        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_precheck", "hirsel_test", "hirsel_toolchain_bundle")\n',
+        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_image", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_test", "hirsel_toolchain_bundle")\n',
         'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
     ]
 
@@ -836,7 +836,7 @@ def first_party(meta: dict) -> str:
 
         def test_attrs(binary: str, src: pathlib.Path) -> dict:
             return dict(data=test_data(binary, name, package_dir, src), runtime_archives=runtime_archives,
-                        precheck=PRECHECK if name in PRECHECKED_TESTS else None,
+                        image=IMAGE if name in IMAGED_TESTS else None,
                         seeded=seeded(target_dir(package_dir, src), src) or None, skips=FULL_GATE_SKIPS.get(binary))
 
         lib = next((t for t in package["targets"] if set(t["kind"]) & {"lib", "rlib", "staticlib"}), None)
@@ -916,9 +916,9 @@ def first_party(meta: dict) -> str:
     if unguarded:
         raise SystemExit("these binary and test roots do not install the memory guard; add "
                          "`hirsel_guard::install!();` (`#[cfg(test)]` in a library): " + ", ".join(unguarded))
-    out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", precheck=PRECHECK, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
+    out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", image=IMAGE, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
     for gate in GATE_TESTS:
-        out.append("\n" + call("hirsel_command_test", **gate, precheck=PRECHECK, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
+        out.append("\n" + call("hirsel_command_test", **gate, image=IMAGE, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
     for index, family in enumerate(("match_try_fields", "record_fields", "nested_loops_try", "closure_captures", "if_chain", "deep_nesting"), 1):
         name = f"gate-checker-scaling-shard-{index}"
         # Cachegrind Ir under the pinned Valgrind (a native tool input), as gate-perf-counts.
@@ -930,16 +930,16 @@ def first_party(meta: dict) -> str:
                             crate_root="tools/tests/test_tool_profile.rs", srcs=["tools/tests/test_tool_profile.rs"],
                             features=[], deps=[], manifest_dir=".", package_name="test-tool-profile",
                             version="0.1.0", edition="2024"))
-    out.append("\n" + call("hirsel_precheck", name="hirsel-std-precheck", hirsel="//:hirsel-cli-bin-hirsel",
+    out.append("\n" + call("hirsel_image", name="hirsel-std-image", hirsel="//:hirsel-cli-bin-hirsel",
                             manifest="stdlib/std@1/hirsel.json", srcs=Raw('glob(["stdlib/std@1/**"])'),
                             visibility=["PUBLIC"]))
     out.append("\n" + call("hirsel_toolchain_bundle", name="hirsel-toolchain", hirsel="//:hirsel-cli-bin-hirsel",
-                            precheck=PRECHECK, visibility=["PUBLIC"]))
+                            image=IMAGE, visibility=["PUBLIC"]))
     out.append("\n" + call("hirsel_link_hosts_test", name="gate-link-hosts", listing="native-tests/link/hosts.txt",
                             data=Raw(f"glob({starlark(['native-tests/link/**', 'examples/todo-api/**', 'examples/wordscan/**', 'examples/common.hir', 'stdlib/std@1/**'], 4)})")))
     out.append("\n" + call("hirsel_script_test", name="gate-perf-counts", script="tools/perf-counts",
                             full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
-                            precheck=PRECHECK, runtime_archives=RUNTIME_ARCHIVES,
+                            image=IMAGE, runtime_archives=RUNTIME_ARCHIVES,
                             data=Raw(f"glob({starlark(['bench/native/programs/**', 'bench/native/inputs/**', 'bench/native/manifest.json', 'bench/micro/**', 'examples/hello-web/**', 'examples/todo-api/**', 'examples/common.hir', 'stdlib/**', 'tools/perf-counts.tsv'], 4)})")))
     # summerwind/h2spec v2.6.0, the latest release (tools/h2spec/run).
     out.append("\n" + call("http_file", name="h2spec-release",
@@ -947,7 +947,7 @@ def first_party(meta: dict) -> str:
                             sha256="157ee0de702e01ad40e752dbf074b366027e550c8e7504f9450da2809e279318",
                             size_bytes=5207004))
     out.append("\n" + call("hirsel_script_test", name="gate-h2spec", script="tools/h2spec/run", full=False, production=True,
-                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, precheck=PRECHECK,
+                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, image=IMAGE,
                             runtime_archives=RUNTIME_ARCHIVES, files_env={"H2SPEC_ARCHIVE": ":h2spec-release"},
                             data=Raw(f"glob({starlark(['tools/h2spec/**', 'stdlib/std@1/**'], 4)})")))
     for name, script, data, archives in (

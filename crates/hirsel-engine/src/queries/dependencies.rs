@@ -52,8 +52,10 @@ impl QueryEngine {
         }
     }
     pub(crate) fn implementation_hash(&self, path: &DefPath) -> Option<ContentHash> {
-        let snapshot = self.items.get(path)?.first()?;
-        Some(snapshot.text_hash)
+        match self.items.get(path) {
+            Some(items) => Some(items.first()?.text_hash),
+            None => Some(self.image_inputs(path)?.body),
+        }
     }
     /// Every open evaluation frame read these views by reflecting or
     /// serializing them, each with the digest it saw.
@@ -99,7 +101,7 @@ impl QueryEngine {
     /// Whether `path` is a definition a reader can look up: indexed, staged
     /// or built in.
     pub(crate) fn names_definition(&self, path: &DefPath) -> bool {
-        self.items.contains_key(path)
+        self.declared(path)
             || self.staged_constants.contains_key(path)
             || self.registry.get(DefId::intern(path)).is_some()
             || self.builtins.contains_key(path)

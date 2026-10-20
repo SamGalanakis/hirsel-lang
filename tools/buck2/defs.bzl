@@ -196,13 +196,13 @@ def native_tool_inputs():
         for name in ["arm", "qemu", "valgrind", "kit", "glibc_floor"]
     }
 
-def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, precheck = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
+def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, image = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
     """A libtest harness (`rustc --test`) and the test that runs it.
 
     `bin_exes` are the package's binaries, as Cargo's CARGO_BIN_EXE_<name>.
     `data` are the files the test reads at run time; `runtime_archives` the
-    native runtime archives it links programs with; `precheck` the std precheck its
-    programs load (HIRSEL_PRECHECK). `shards` splits
+    native runtime archives it links programs with; `image` the std image its
+    programs load (HIRSEL_IMAGE). `shards` splits
     the cases over that many test targets `<name>-shard-<i>`, run in parallel,
     balanced by the measured seconds per case in the `costs` table.
     `seeded` binaries draw random cases and run under `TEST_SEED`.
@@ -233,7 +233,7 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
         bin_exes = bin_exes,
         bin_exe_dir = bin_exe_dir,
         runtime_archives = runtime_archives,
-        precheck = precheck,
+        image = image,
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         cwd = manifest_dir,
@@ -311,10 +311,10 @@ def _rust_test_impl(ctx):
         archives = ctx.attrs.runtime_archives[DefaultInfo].default_outputs[0]
         inputs.append(archives)
         env["HIRSEL_RUNTIME_ARCHIVES"] = cmd_args(archives)
-    if ctx.attrs.precheck:
-        precheck = ctx.attrs.precheck[DefaultInfo].default_outputs[0]
-        inputs.append(precheck)
-        env["HIRSEL_PRECHECK"] = cmd_args(precheck)
+    if ctx.attrs.image:
+        image = ctx.attrs.image[DefaultInfo].default_outputs[0]
+        inputs.append(image)
+        env["HIRSEL_IMAGE"] = cmd_args(image)
     if ctx.attrs.native_selection:
         selection = ctx.attrs.native_selection[DefaultInfo].default_outputs[0]
         inputs.append(selection)
@@ -360,7 +360,7 @@ _rust_test = rule(
         # A pool run's `[cpu, memory_kb, cpu_class]`, for its executor (platforms.bzl).
         "request": attrs.list(attrs.string(), default = []),
         "runtime_archives": attrs.option(attrs.dep(), default = None),
-        "precheck": attrs.option(attrs.dep(), default = None),
+        "image": attrs.option(attrs.dep(), default = None),
         "seed": attrs.string(default = ""),
         "shard_index": attrs.int(default = 0),
         "shards": attrs.int(default = 0),
@@ -389,7 +389,7 @@ def selected_paths(key, index):
         return None
     return slices[index - 1].split("|")
 
-def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, precheck = None, full = False, native_selection = None, changed_native = False, selected = None, measured_as = None):
+def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, image = None, full = False, native_selection = None, changed_native = False, selected = None, measured_as = None):
     """A gate stage as a test: `binary args...` run from its package directory `cwd`.
 
     On the pool its result is cached by its inputs, so an unchanged corpus and
@@ -422,7 +422,7 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
             slices = ["__no_changed_native_programs__"]
         for index, part in enumerate(slices):
             shard_name = name if len(slices) == 1 else name + "-shard-" + str(index + 1)
-            _native_changed_test(shard_name, binary, args, data, cwd, runtime_archives, precheck,
+            _native_changed_test(shard_name, binary, args, data, cwd, runtime_archives, image,
                                  native_selection, measured_as or name, part.split("|"))
         return
     _rust_test(
@@ -434,7 +434,7 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives,
-        precheck = precheck,
+        image = image,
         labels = ["gate"],
         exec_compatible_with = _test_platform(measured_as or _stage(name)),
         pool = not TESTS_ON_HOST,
@@ -445,7 +445,7 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         visibility = ["PUBLIC"],
     )
 
-def _native_changed_test(name, binary, args, data, cwd, runtime_archives, precheck, native_selection, measured_as, filters):
+def _native_changed_test(name, binary, args, data, cwd, runtime_archives, image, native_selection, measured_as, filters):
     _rust_test(
         name = name,
         harness = binary,
@@ -455,7 +455,7 @@ def _native_changed_test(name, binary, args, data, cwd, runtime_archives, preche
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives,
-        precheck = precheck,
+        image = image,
         labels = ["gate"],
         exec_compatible_with = _test_platform(measured_as),
         pool = not TESTS_ON_HOST,
@@ -470,7 +470,7 @@ def _script_binary_impl(ctx):
 
 _script_binary = rule(impl = _script_binary_impl, attrs = {"script": attrs.source()})
 
-def hirsel_script_test(name, script, data, runtime_archives = None, full = True, args = [], bin_exes = {}, precheck = None, production = False, files_env = {}):
+def hirsel_script_test(name, script, data, runtime_archives = None, full = True, args = [], bin_exes = {}, image = None, production = False, files_env = {}):
     """A script harness with the same hermetic inputs as native Rust tests.
     `files_env` names further input files as environment variables."""
     if full and not FULL_GATE:
@@ -480,7 +480,7 @@ def hirsel_script_test(name, script, data, runtime_archives = None, full = True,
     _rust_test(
         name = name, harness = ":" + binary, args = args, data = data, cwd = ".",
         bin_exes = {} if production else bin_exes, release_bin_exes = bin_exes if production else {},
-        bin_exe_dir = BIN_EXE_DIR + "/" + name, precheck = precheck, files_env = files_env,
+        bin_exe_dir = BIN_EXE_DIR + "/" + name, image = image, files_env = files_env,
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives, labels = ["gate"],
@@ -502,7 +502,7 @@ def _link_hosts_local_impl(ctx):
         "LLVM_SYS_211_PREFIX": cmd_args(tools["llvm"]),
         "HIRSEL_LINK_KIT": cmd_args(tools["kit"]),
         "HIRSEL_RUNTIME_ARCHIVES": cmd_args(tools["archives"]),
-        "HIRSEL_PRECHECK": cmd_args(tools["precheck"]),
+        "HIRSEL_IMAGE": cmd_args(tools["image"]),
         "HIRSEL_QEMU_AARCH64": cmd_args(tools["qemu"], "/qemu-aarch64", delimiter = ""),
         "HIRSEL_AARCH64_SYSROOT": cmd_args(tools["arm"], "/aarch64-none-linux-gnu/libc", delimiter = ""),
     }
@@ -533,7 +533,7 @@ def hirsel_link_hosts_test(name, listing, data):
             "qemu": "root//tools/buck2/native-toolchain:qemu",
             "arm": "root//tools/buck2/native-toolchain:arm",
             "archives": "//:hirsel-rt-archives",
-            "precheck": "//:hirsel-std-precheck",
+            "image": "//:hirsel-std-image",
         },
         exec_compatible_with = ["root//tools/buck2:host"], visibility = ["PUBLIC"],
     )
@@ -549,31 +549,30 @@ def hirsel_link_hosts_test(name, listing, data):
         data = data + [listing], cwd = ".",
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs(), runtime_archives = "//:hirsel-rt-archives",
-        precheck = "//:hirsel-std-precheck", labels = ["gate"],
+        image = "//:hirsel-std-image", labels = ["gate"],
         exec_compatible_with = _test_platform(name), pool = not TESTS_ON_HOST,
         request = _request(name),
         visibility = ["PUBLIC"],
     )
 
-# The std precheck's memory bound, a regression guard (docs/building.md, "The
-# std precheck"). The precheck writes each source's records as soon as it
-# checks and then releases its bodies, so its peak follows the largest
-# definition rather than std's size. Measured as this data limit on 2026-10-20:
-# 1850-1950 MiB for std's 142 sources and 1900-1950 MiB with 16 more crypto
-# sources, about 700 MiB of it one definition's V flow state. A precheck that
-# reaches it is a regression to find, not a bound to raise.
-PRECHECK_MEMORY_LIMIT = "2G"
+# The std image's memory bound, a regression guard (docs/building.md, "The std
+# image"). The writer spills each definition's record as soon as its source is
+# checked and then releases its bodies, so its peak follows the largest
+# definition rather than std's size. Measured on 2026-10-21: 923 MiB peak for
+# std's sources under tools/capped. An image write that reaches it is a
+# regression to find, not a bound to raise.
+IMAGE_MEMORY_LIMIT = "2G"
 
-def _precheck_impl(ctx):
+def _image_impl(ctx):
     # The package's sources at their repository paths, as its manifest names them.
     tree = ctx.actions.symlinked_dir("package", {f.short_path: f for f in ctx.attrs.srcs})
-    precheck = ctx.actions.declare_output(ctx.label.name + ".precheck")
+    image = ctx.actions.declare_output(ctx.label.name + ".image")
     scratch = ctx.actions.declare_output("scratch", dir = True)
     script = ctx.actions.write(
-        "precheck.sh",
+        "image.sh",
         [
             "set -eu",
-            'mkdir -p "$3"; TMPDIR="$(cd "$3" && pwd)" "$1" precheck "$2" -o "$4"',
+            'mkdir -p "$3"; TMPDIR="$(cd "$3" && pwd)" "$1" image "$2" -o "$4"',
         ],
     )
     ctx.actions.run(
@@ -583,18 +582,18 @@ def _precheck_impl(ctx):
             ctx.attrs.hirsel[RunInfo],
             cmd_args(tree, format = "{}/" + ctx.attrs.manifest),
             scratch.as_output(),
-            precheck.as_output(),
+            image.as_output(),
             hidden = ctx.attrs._llvm_libraries[DefaultInfo].default_outputs,
         ),
-        env = {"HIRSEL_MEMORY_LIMIT": PRECHECK_MEMORY_LIMIT},
-        category = "precheck",
+        env = {"HIRSEL_MEMORY_LIMIT": IMAGE_MEMORY_LIMIT},
+        category = "image",
     )
-    return [DefaultInfo(default_output = precheck)]
+    return [DefaultInfo(default_output = image)]
 
-# `hirsel precheck <manifest>`: the package checked once, for every test and tool
-# run that selects it (docs/building.md, "The std precheck").
-_hirsel_precheck = rule(
-    impl = _precheck_impl,
+# `hirsel image <manifest>`: the package checked once into an image, for every
+# test and tool run that selects it (docs/building.md, "The std image").
+_hirsel_image = rule(
+    impl = _image_impl,
     attrs = {
         "hirsel": attrs.exec_dep(providers = [RunInfo]),
         "manifest": attrs.string(),
@@ -603,20 +602,20 @@ _hirsel_precheck = rule(
     },
 )
 
-def hirsel_precheck(name, hirsel, **kwargs):
+def hirsel_image(name, hirsel, **kwargs):
     # exec_dep otherwise loses the caller's profile on the pool platform.
     # Pin the executable to the same configuration as the test harnesses and
-    # CARGO_BIN_EXE tools, independent of the precheck action's reservation.
+    # CARGO_BIN_EXE tools, independent of the image action's reservation.
     compiler = name + "-compiler"
     native.configured_alias(name = compiler, actual = hirsel, platform = "root//tools/buck2:checked")
-    _hirsel_precheck(name = name, hirsel = ":" + compiler, **kwargs)
+    _hirsel_image(name = name, hirsel = ":" + compiler, **kwargs)
 
 def _toolchain_bundle_impl(ctx):
     # Copy the executable: a symlink would make current_exe resolve outside the
-    # bundle, away from the sibling precheck it discovers automatically.
+    # bundle, away from the sibling image it discovers automatically.
     bundle = ctx.actions.copied_dir("hirsel-toolchain", {
         "hirsel": ctx.attrs.hirsel[DefaultInfo].default_outputs[0],
-        "hirsel-std.precheck": ctx.attrs.precheck[DefaultInfo].default_outputs[0],
+        "hirsel-std.image": ctx.attrs.image[DefaultInfo].default_outputs[0],
     })
     return [
         DefaultInfo(default_output = bundle),
@@ -627,7 +626,7 @@ hirsel_toolchain_bundle = rule(
     impl = _toolchain_bundle_impl,
     attrs = {
         "hirsel": attrs.dep(),
-        "precheck": attrs.dep(),
+        "image": attrs.dep(),
     },
 )
 

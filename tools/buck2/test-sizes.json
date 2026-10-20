@@ -1016,7 +1016,7 @@
       1792487136
     ]
   },
-  "hirsel-driver-test-it-precheck": {
+  "hirsel-driver-test-it-image": {
     "cpu_class": "",
     "cpu_count": 1,
     "mean_wall_seconds": 376.1,

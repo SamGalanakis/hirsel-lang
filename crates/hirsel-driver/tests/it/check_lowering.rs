@@ -20,8 +20,7 @@ fn lowered(source: &str, lowering: LoweringPolicy) -> BTreeSet<String> {
     let path: PathBuf = dir.join("main.hir");
     std::fs::write(&path, source).unwrap();
     let names = with_compiler_stack(|| {
-        let mut program =
-            load_program_source_with_prechecks(&path, None, &Prechecks::none()).unwrap();
+        let mut program = load_program_source_with_images(&path, None, &StdImages::none()).unwrap();
         let output = program.check(lowering).unwrap();
         assert_eq!(output.completion, CheckCompletion::Complete);
         assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);

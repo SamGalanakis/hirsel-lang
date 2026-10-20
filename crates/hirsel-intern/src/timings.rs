@@ -147,6 +147,9 @@ pub enum Count {
     ObjectMisses,
     /// Bodies lowered to TIR; in `check`, the bodies lowered at check time.
     Lowered,
+    /// Dependency package sources parsed; none for a package a std image holds
+    /// until a query needs its syntax.
+    DependencyParses,
     /// Per-definition queries computed rather than reused.
     Recomputes,
     /// Memos invalidated by a changed signature read.
@@ -183,7 +186,7 @@ pub enum Count {
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 24] = [
+    pub const ALL: [Count; 25] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -192,6 +195,7 @@ impl Count {
         Count::ObjectHits,
         Count::ObjectMisses,
         Count::Lowered,
+        Count::DependencyParses,
         Count::Recomputes,
         Count::InvalidatedSignature,
         Count::InvalidatedFailedSignature,
@@ -220,6 +224,7 @@ impl Count {
             Count::ObjectHits => "object hits",
             Count::ObjectMisses => "object misses",
             Count::Lowered => "lowered",
+            Count::DependencyParses => "dependency parses",
             Count::Recomputes => "recomputes",
             Count::InvalidatedSignature => "invalidated by signature",
             Count::InvalidatedFailedSignature => "invalidated by failed signature",

@@ -124,7 +124,7 @@ impl QueryEngine {
         path: &DefPath,
     ) -> Result<EvaluatedConstant, QueryError> {
         self.prepare_materialization_environment();
-        if let Some(value) = self.prechecked_constant(path)? {
+        if let Some(value) = self.image_constant(path) {
             return Ok(value);
         }
         if self.s1.is_empty() {
@@ -146,7 +146,7 @@ impl QueryEngine {
         path: &DefPath,
         reference: Span,
     ) -> Result<EvaluatedConstant, QueryError> {
-        if let Some(value) = self.prechecked_constant(path)? {
+        if let Some(value) = self.image_constant(path) {
             self.depth_admit(&value.depth, reference)?;
             self.merge_execution(&value.executed);
             self.depth_requested(&value.depth, reference);
@@ -1130,12 +1130,12 @@ impl QueryEngine {
                 let (callee, binder, mut actuals) = match call.target_frame {
                     None => {
                         let callee = call.callee.path().clone();
-                        if self.definition_items(&callee).is_err() {
+                        if !self.declared(&callee) {
                             continue;
                         }
-                        // A precheck is closed over its own package graph. Without
+                        // An image is closed over its own package graph. Without
                         // staged declarations there, its calls need no new walk.
-                        if self.prechecked(&callee.0.package)
+                        if self.imaged(&callee.0.package)
                             && !self
                                 .staged_constants
                                 .values()

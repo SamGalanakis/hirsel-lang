@@ -308,7 +308,7 @@ fn damaged_images_are_refused_not_trusted() {
     let mut version = bytes.clone();
     version[8] ^= 1;
     assert!(Image::from_bytes(version).is_err());
-    for cut in [10, HEADER + 3, bytes.len() / 2, bytes.len() - 1] {
+    for cut in (0..HEADER + 3).chain([bytes.len() / 2, bytes.len() - 1]) {
         assert!(
             Image::from_bytes(bytes[..cut].to_vec()).is_err(),
             "cut at {cut}"
@@ -340,4 +340,52 @@ fn an_image_file_is_mapped_and_replaced_whole() {
         1,
         "no temporary file is left"
     );
+}
+
+#[test]
+fn concurrent_image_replacements_publish_only_complete_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("hirsel-std.image");
+    let start = std::sync::Barrier::new(8);
+    std::thread::scope(|scope| {
+        for byte in 0..8u8 {
+            let (file, start) = (&file, &start);
+            scope.spawn(move || {
+                let bytes = vec![byte; 64 * 1024];
+                start.wait();
+                write_atomically(file, &bytes).unwrap();
+            });
+        }
+    });
+    let bytes = std::fs::read(&file).unwrap();
+    assert_eq!(bytes.len(), 64 * 1024);
+    assert!(bytes.iter().all(|byte| *byte == bytes[0]));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn an_image_over_a_based_interner_keeps_the_base_rows_and_their_ids() {
+    let f = fixture(false);
+    let core = encode_table(&f.types, &f.index.types).0.into_base();
+    let types = TypeInterner::new(Some(core.clone()));
+    let shared = TypeBase::from_table(&encode_table(&f.types, &f.index.types).0).1;
+    let u8 = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U8)));
+    let added = types.intern(Type::with_kind(TypeKind::Tuple(vec![shared[0], u8].into())));
+    let d = f.values[0].0;
+    let value = Value {
+        types: vec![added, shared[1]],
+        names: vec![],
+        defs: vec![],
+        span: None,
+        text: String::new(),
+    };
+    let mut writer = ImageWriter::new(key(), types.clone());
+    writer.entry(RECORDS, d, Box::new(value.clone()));
+    let image = Image::from_bytes(writer.finish().unwrap().bytes).unwrap();
+    assert!(image.base().len() > core.len());
+    let read: Value = image.entry(RECORDS, d).unwrap().unwrap();
+    // A base row keeps its id; a row beyond the base is a new base row.
+    assert_eq!(read.types[1], shared[1]);
+    let session = TypeInterner::new(Some(image.base()));
+    assert_eq!(canonical(&session, &read), canonical(&types, &value));
 }

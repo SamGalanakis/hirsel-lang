@@ -351,10 +351,10 @@ pub fn value() -> u64 { failure.check(false, Arithmetic()); 0u64 }
             // Hosts have independent compiler sessions; neither build may
             // adopt source products from the other root's package cache.
             // Lane pkgcache-comptime owns generated token sources on cache adoption.
-            let mut loaded = hirsel_driver::load_program_source_with_prechecks(
+            let mut loaded = hirsel_driver::load_program_source_with_images(
                 &tree.join("app/hirsel.json"),
                 None,
-                &hirsel_engine::Prechecks::none(),
+                &hirsel_engine::StdImages::none(),
             )
             .unwrap();
             loaded.check_for_execution().unwrap();

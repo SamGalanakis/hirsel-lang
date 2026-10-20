@@ -4,7 +4,7 @@ use hirsel_syntax::StmtId;
 
 /// Published borrowed-loop association. Operations retain their own lexical
 /// generic binders; specialization checks them against the actual receiver.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct LoopSourceDeclaration {
     pub open: DefPath,
     pub next: DefPath,

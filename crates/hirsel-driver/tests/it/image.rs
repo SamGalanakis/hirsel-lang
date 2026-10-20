@@ -1,13 +1,11 @@
-//! Prechecked packages (docs/building.md, "The std precheck") change only how long checking
-//! takes: prechecked products equal freshly checked ones, and a precheck is used only for
+//! Imaged packages (docs/building.md, "The std image") change only how long checking
+//! takes: an image's products equal freshly checked ones, and an image is used only for
 //! the exact compiler and sources it was checked under.
-use crate::precheck_fixture::*;
+use crate::image_fixture::*;
 use hirsel_driver::*;
 use hirsel_engine::*;
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use hirsel_syntax::DefId;
+use std::{path::PathBuf, sync::Arc};
 
 impl Fixture {
     fn library(&self, source: &str) -> PathBuf {
@@ -58,27 +56,23 @@ fn placed(sources: &hirsel_span::SourceMap, text: String) -> String {
     out + rest
 }
 
-/// Every prechecked std definition lowers to the same TIR and has the same revision
+/// Every std definition in the image lowers to the same TIR and has the same revision
 /// node as in a fresh check, in a program that places std's sources at other
-/// FileIds than the program the precheck was checked in.
+/// FileIds than the program the image was written in.
 #[test]
-fn prechecked_std_products_equal_fresh_ones() {
+fn imaged_std_products_equal_fresh_ones() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        // Buck2 checks std once for all tests. Cargo users build the same artifact
-        // with the documented `hirsel precheck` command and set HIRSEL_PRECHECK.
-        let path = std::env::var_os("HIRSEL_PRECHECK")
-            .expect("set HIRSEL_PRECHECK to the toolchain's std precheck");
-        let precheck = Arc::new(Precheck::read(Path::new(&path)).unwrap());
+        let image = std_image();
         // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut prechecked = load(&client, &Prechecks::of(vec![precheck.clone()]));
+        let mut imaged = load(&client, &StdImages::of(vec![image.clone()]));
         assert!(
-            prechecked.engine.prechecked(&package("std")),
+            imaged.engine.imaged(&package("std")),
             "{:?}",
-            prechecked.precheck_notes
+            imaged.image_notes
         );
-        let mut reference = load(&client, &Prechecks::none());
+        let mut reference = load(&client, &StdImages::none());
         let checked = |p: &mut LoadedProgram| {
             let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
             let rendered: Vec<_> = output
@@ -88,32 +82,32 @@ fn prechecked_std_products_equal_fresh_ones() {
                 .collect();
             (output.completion, rendered)
         };
-        assert_eq!(checked(&mut prechecked), checked(&mut reference));
-        let entry = prechecked.entry.clone();
+        assert_eq!(checked(&mut imaged), checked(&mut reference));
+        let entry = imaged.entry.clone();
         assert_eq!(
-            prechecked.engine.semantic_program_revision(&entry).unwrap(),
+            imaged.engine.semantic_program_revision(&entry).unwrap(),
             reference.engine.semantic_program_revision(&entry).unwrap()
         );
         let mut lowered = 0;
-        for path in precheck.definitions() {
+        for path in image.definitions().into_iter().map(DefId::path) {
             assert_eq!(
-                prechecked.engine.semantic_program_revision(path).unwrap(),
+                imaged.engine.semantic_program_revision(path).unwrap(),
                 reference.engine.semantic_program_revision(path).unwrap(),
                 "{path}"
             );
             let Ok(expected) = reference.engine.lower_to_tir(path) else {
                 continue;
             };
-            let actual = prechecked.engine.lower_to_tir(path).unwrap();
+            let actual = imaged.engine.lower_to_tir(path).unwrap();
             assert_eq!(
-                prechecked.engine.source_audit(path).unwrap(),
+                imaged.engine.source_audit(path).unwrap(),
                 reference.engine.source_audit(path).unwrap(),
                 "{path}"
             );
             // Anchors are process-unique, so each is named by its placement;
             // TypeId's Debug omits provenance.
             // Each session interns its own rows: compare them by content.
-            let (types, value) = (prechecked.engine.types().clone(), &actual.value);
+            let (types, value) = (imaged.engine.types().clone(), &actual.value);
             let actual_text = canonical_ids(
                 &types,
                 || serde_json::to_vec(value.as_ref()).unwrap(),
@@ -126,7 +120,7 @@ fn prechecked_std_products_equal_fresh_ones() {
                 format!("{value:?}"),
             );
             assert_eq!(
-                placed(&prechecked.engine.sources, actual_text),
+                placed(&imaged.engine.sources, actual_text),
                 placed(&reference.engine.sources, expected_text),
                 "{path}"
             );
@@ -134,7 +128,7 @@ fn prechecked_std_products_equal_fresh_ones() {
             lowered += 1;
         }
         assert!(lowered > 100, "{lowered}");
-        let actual = prechecked.engine.export_native_input().unwrap();
+        let actual = imaged.engine.export_native_input().unwrap();
         let expected = reference.engine.export_native_input().unwrap();
         assert_eq!(actual.audits, expected.audits);
         assert_eq!(
@@ -161,11 +155,11 @@ fn prechecked_std_products_equal_fresh_ones() {
                 format!("{:?}", expected.constants)
             )
         );
-        prechecked.engine.import_native_input(actual).unwrap();
-        for path in precheck.definitions() {
+        imaged.engine.import_native_input(actual).unwrap();
+        for path in image.definitions().into_iter().map(DefId::path) {
             for phase in [QueryKind::Check, QueryKind::Modes] {
                 assert_eq!(
-                    prechecked.engine.recompute_count(path, phase),
+                    imaged.engine.recompute_count(path, phase),
                     0,
                     "{path}: {phase:?}"
                 );
@@ -184,71 +178,116 @@ const CLIENT: &str = "pub fn main() -> Result[(), ()] {
 }
 ";
 
-fn library_precheck(f: &Fixture, source: &str) -> Result<Arc<Precheck>, ToolError> {
+fn library_image(f: &Fixture, source: &str) -> Result<Arc<StdImage>, ToolError> {
     let manifest = f.library(source);
-    let program = f.program("prechecker", CLIENT, &manifest, "lib");
-    let bytes = precheck(&mut load(&program, &Prechecks::none()), "lib")?;
-    Ok(Arc::new(Precheck::decode(bytes).unwrap()))
+    let program = f.program("imager", CLIENT, &manifest, "lib");
+    let bytes = image(f, &mut load(&program, &StdImages::none()), "lib")?;
+    Ok(StdImage::from_bytes(bytes).unwrap())
 }
 
-/// `program`'s precheck of the dependency `name`, written to memory.
-fn precheck(program: &mut LoadedProgram, name: &str) -> Result<Vec<u8>, ToolError> {
-    let mut bytes = vec![];
-    program.precheck(
-        &package(name),
-        &mut bytes,
-        &mut std::io::Cursor::new(vec![]),
-    )?;
-    Ok(bytes)
+/// `program`'s image of the dependency `name`, written to memory.
+fn image(f: &Fixture, program: &mut LoadedProgram, name: &str) -> Result<Vec<u8>, ToolError> {
+    let spill = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(f.0.join("image.records"))
+        .unwrap();
+    program.image(&package(name), spill)
 }
 
 #[test]
-fn a_precheck_serves_only_the_compiler_and_sources_it_was_checked_under() {
+fn an_image_serves_only_the_compiler_and_sources_it_was_checked_under() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        let precheck = library_precheck(&f, LIBRARY).unwrap();
+        let image = library_image(&f, LIBRARY).unwrap();
         let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
-        let cache = Prechecks::of(vec![precheck.clone()]);
-        let mut program = load(&client, &cache);
-        assert!(program.engine.prechecked(&package("lib")));
-        assert!(program.precheck_notes.is_empty());
+        let images = StdImages::of(vec![image.clone()]);
+        let mut program = load(&client, &images);
+        assert!(program.engine.imaged(&package("lib")));
+        assert!(program.image_notes.is_empty());
         program.check_for_execution().unwrap();
 
         // Another compiler identity.
         let other = Compiler::new(FrontPhases::shared, [7; 32]);
         let program = other
-            .load_program_source_with_prechecks(&client, None, &cache)
+            .load_program_source_with_images(&client, None, &images)
             .unwrap();
-        assert!(!program.engine.prechecked(&package("lib")));
-        assert_eq!(
-            program.precheck_notes.len(),
-            1,
-            "{:?}",
-            program.precheck_notes
-        );
+        assert!(!program.engine.imaged(&package("lib")));
+        assert_eq!(program.image_notes.len(), 1, "{:?}", program.image_notes);
 
         // Other sources: a comment changes the package's checked input.
         f.library(&format!("{LIBRARY}// edited\n"));
-        let mut program = load(&client, &cache);
-        assert!(!program.engine.prechecked(&package("lib")));
-        assert_eq!(
-            program.precheck_notes.len(),
-            1,
-            "{:?}",
-            program.precheck_notes
-        );
+        let mut program = load(&client, &images);
+        assert!(!program.engine.imaged(&package("lib")));
+        assert_eq!(program.image_notes.len(), 1, "{:?}", program.image_notes);
         program.check_for_execution().unwrap();
     });
 }
 
 #[test]
-fn editing_a_prechecked_source_in_a_session_ends_its_precheck() {
+fn a_file_image_rebuilds_for_sources_compiler_and_limits_and_reuses_unchanged() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        let precheck = library_precheck(&f, LIBRARY).unwrap();
+        let manifest = f.library(LIBRARY);
+        let client = f.program("client", CLIENT, &manifest, "lib");
+        let path = f.0.join("lib.image");
+        COMPILER.image_package(&manifest, &path).unwrap();
+        let images = StdImages::at(&path);
+        let check = |compiler: Compiler| {
+            let mut program = compiler
+                .load_program_source_with_images(&client, None, &images)
+                .unwrap();
+            assert!(
+                program.engine.imaged(&package("lib")),
+                "{:?}",
+                program.image_notes
+            );
+            assert!(
+                program
+                    .check(LoweringPolicy::Reachable)
+                    .unwrap()
+                    .diagnostics
+                    .is_empty()
+            );
+            StdImage::open(&path).unwrap().key()
+        };
+        let original = std::fs::read(&path).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let key = check(COMPILER);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified
+        );
+        f.library(&format!("{LIBRARY}// edited\n"));
+        let edited = check(COMPILER);
+        assert_ne!(edited, key);
+        let other = Compiler::new(FrontPhases::shared, [7; 32]);
+        let compiler = check(other);
+        assert_ne!(compiler, edited);
+        let steps = check(other.with_comptime_limits(hirsel_interp::Limits {
+            steps: Some(999_999),
+            call_depth: 256,
+        }));
+        assert_ne!(steps, compiler);
+        let depth = check(other.with_comptime_limits(hirsel_interp::Limits {
+            steps: Some(999_999),
+            call_depth: 128,
+        }));
+        assert_ne!(depth, steps);
+    });
+}
+
+#[test]
+fn editing_an_imaged_source_in_a_session_ends_its_image() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let image = library_image(&f, LIBRARY).unwrap();
         let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
-        let mut program = load(&client, &Prechecks::of(vec![precheck]));
-        assert!(program.engine.prechecked(&package("lib")));
+        let mut program = load(&client, &StdImages::of(vec![image]));
+        assert!(program.engine.imaged(&package("lib")));
         let (file, context) = program
             .files
             .iter()
@@ -259,23 +298,43 @@ fn editing_a_prechecked_source_in_a_session_ends_its_precheck() {
         let edited = LIBRARY.replace("x + 1", "x + 2");
         let file = program.engine.sources.add(&path, edited).unwrap();
         program.engine.parse_file(file, &context).unwrap();
-        assert!(!program.engine.prechecked(&package("lib")));
+        assert!(!program.engine.imaged(&package("lib")));
         // The edited body is checked and run from source.
-        assert!(program.check_for_execution().is_ok());
+        let warm = program.check(LoweringPolicy::Reachable).unwrap();
+        f.library(&LIBRARY.replace("x + 1", "x + 2"));
+        let mut cold = load(&client, &StdImages::none());
+        let fresh = cold.check(LoweringPolicy::Reachable).unwrap();
+        assert_eq!(warm.completion, fresh.completion);
+        assert_eq!(
+            warm.diagnostics
+                .iter()
+                .map(|d| d.render_human(&warm.sources))
+                .collect::<Vec<_>>(),
+            fresh
+                .diagnostics
+                .iter()
+                .map(|d| d.render_human(&fresh.sources))
+                .collect::<Vec<_>>()
+        );
+        let entry = program.entry.clone();
+        assert_eq!(
+            program.engine.semantic_program_revision(&entry).unwrap(),
+            cold.engine.semantic_program_revision(&entry).unwrap()
+        );
     });
 }
 
-/// The cache must retain the source evidence and compile-time substitutions, not
+/// The image must retain the source evidence and compile-time substitutions, not
 /// just a completion bit. Fresh import is the accepted control for both forgeries.
 #[test]
-fn prechecked_native_products_equal_fresh_and_reject_forged_audits() {
+fn imaged_native_products_equal_fresh_and_reject_forged_audits() {
     with_compiler_stack(|| {
         let f = Fixture::new();
         let source = "const BASE: u64 = comptime 1\n@noalloc\npub fn value(x: u64) -> u64 {\n  x + comptime BASE\n}\n";
-        let precheck = library_precheck(&f, source).unwrap();
+        let image = library_image(&f, source).unwrap();
         let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
-        let mut cached = load(&client, &Prechecks::of(vec![precheck.clone()]));
-        let mut fresh = load(&client, &Prechecks::none());
+        let mut cached = load(&client, &StdImages::of(vec![image.clone()]));
+        let mut fresh = load(&client, &StdImages::none());
         cached.check_for_execution().unwrap();
         fresh.check_for_execution().unwrap();
         let actual = cached.engine.export_native_input().unwrap();
@@ -305,7 +364,7 @@ fn prechecked_native_products_equal_fresh_and_reject_forged_audits() {
                 format!("{:?}", expected.constants)
             )
         );
-        for path in precheck.definitions() {
+        for path in image.definitions().into_iter().map(DefId::path) {
             for phase in [QueryKind::Check, QueryKind::Modes] {
                 assert_eq!(
                     cached.engine.recompute_count(path, phase),
@@ -346,7 +405,7 @@ fn prechecked_native_products_equal_fresh_and_reject_forged_audits() {
             .add(&path, source.replace("comptime 1", "comptime 2"))
             .unwrap();
         cached.engine.parse_file(file, &context).unwrap();
-        assert!(!cached.engine.prechecked(&package("lib")));
+        assert!(!cached.engine.imaged(&package("lib")));
         cached.check_for_execution().unwrap();
         let edited = cached.engine.export_native_input().unwrap();
         assert_ne!(
@@ -360,31 +419,89 @@ fn prechecked_native_products_equal_fresh_and_reject_forged_audits() {
     });
 }
 
-/// A precheck is written only for a package that checks clean; its accepted twin is
-/// `a_precheck_serves_only_the_compiler_and_sources_it_was_checked_under`.
+/// An image is written only for a package that checks clean; its accepted twin is
+/// `an_image_serves_only_the_compiler_and_sources_it_was_checked_under`.
 #[test]
-fn a_package_with_diagnostics_is_never_prechecked() {
+fn a_package_with_diagnostics_is_never_imaged() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        let rejected = library_precheck(&f, "pub fn value(x: u64) -> u64 {\n  x + true\n}\n");
+        let rejected = library_image(&f, "pub fn value(x: u64) -> u64 {\n  x + true\n}\n");
         assert!(rejected.is_err());
     });
 }
 
+/// Exercise the compiler's products, including source anchors, core rows and
+/// query read sets, rather than only the image container's synthetic values.
 #[test]
-fn prechecked_generic_comptime_materializes_selected_client_sizes() {
+fn compiler_image_bytes_ignore_id_salts() {
+    let bytes = || {
+        with_compiler_stack(|| {
+            let f = Fixture::new();
+            let manifest = f.library(LIBRARY);
+            let client = f.program("imager", CLIENT, &manifest, "lib");
+            let mut program = load(&client, &StdImages::none());
+            let bytes = image(&f, &mut program, "lib").unwrap();
+            format!(
+                "{} {:?}",
+                bytes.len(),
+                hirsel_syntax::ContentHash::of_bytes(&bytes)
+            )
+        })
+    };
+    let Some(runs) = hirsel_intern::under_salts(
+        "image::compiler_image_bytes_ignore_id_salts",
+        &[1, 2, 0x5eed],
+        bytes,
+    ) else {
+        return;
+    };
+    assert!(runs.iter().all(|run| run == &runs[0]), "{runs:#?}");
+    assert_eq!(runs[0], bytes());
+}
+
+/// Loading policy must preserve diagnostic selection and placement, including
+/// rejection at a call into an imaged signature and its accepted control.
+#[test]
+fn image_diagnostics_equal_source_for_rejected_and_accepted_clients() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let image = library_image(&f, LIBRARY).unwrap();
+        let images = StdImages::of(vec![image]);
+        for (source, rejected) in [
+            (CLIENT.replace("lib.value(1)", "lib.value(true)"), true),
+            (CLIENT.into(), false),
+        ] {
+            let client = f.program("client", &source, &f.0.join("lib.json"), "lib");
+            let check = |images: &StdImages| {
+                let mut program = load(&client, images);
+                let output = program.check(LoweringPolicy::Comptime).unwrap();
+                let diagnostics: Vec<_> = output
+                    .diagnostics
+                    .iter()
+                    .map(|d| d.render_human(&output.sources))
+                    .collect();
+                assert_eq!(!diagnostics.is_empty(), rejected);
+                (output.completion, diagnostics)
+            };
+            assert_eq!(check(&images), check(&StdImages::none()));
+        }
+    });
+}
+
+#[test]
+fn imaged_generic_comptime_materializes_selected_client_sizes() {
     with_compiler_stack(|| {
         let f = Fixture::new();
         let source = "pub fn value[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime (n*n)}\n";
         let client = "pub fn main()->Result[(),()]{let a:Inline[u8,2]=[1,2];let b:Inline[u8,3]=[1,2,3];failure.check(lib.value(a)==4u64,Arithmetic());failure.check(lib.value(b)==9u64,Arithmetic());Ok(())}\n";
         let library = f.library(source);
-        let prechecker = f.program("prechecker", client, &library, "lib");
-        let bytes = precheck(&mut load(&prechecker, &Prechecks::none()), "lib").unwrap();
-        let precheck = Arc::new(Precheck::decode(bytes).unwrap());
+        let imager = f.program("imager", client, &library, "lib");
+        let bytes = image(&f, &mut load(&imager, &StdImages::none()), "lib").unwrap();
+        let image = StdImage::from_bytes(bytes).unwrap();
         let client = f.program("client", client, &library, "lib");
-        let mut cached = load(&client, &Prechecks::of(vec![precheck]));
-        let mut fresh = load(&client, &Prechecks::none());
-        assert!(cached.engine.prechecked(&package("lib")));
+        let mut cached = load(&client, &StdImages::of(vec![image]));
+        let mut fresh = load(&client, &StdImages::none());
+        assert!(cached.engine.imaged(&package("lib")));
         cached.check_for_execution().unwrap();
         fresh.check_for_execution().unwrap();
         let actual = cached.engine.export_native_input().unwrap();

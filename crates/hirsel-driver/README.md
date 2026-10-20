@@ -11,8 +11,8 @@ Source launch boundaries flush stdout before writing the interpreter's PROG-3 re
 
 `COMPILER` carries the compiler identity `build.rs` computes: a digest of the
 sources and manifests of this crate and of every workspace crate it depends on,
-with Cargo.lock and the toolchain pin. Prechecks are keyed by it, so any edit to
-the compiler retires every precheck written before it.
+with Cargo.lock and the toolchain pin. Std images are keyed by it, so any edit to
+the compiler retires every std image written before it.
 
 This crate exports only that wiring. Callers import queries, sessions and their
 data from hirsel-engine directly, so each caller's dependency on the backends

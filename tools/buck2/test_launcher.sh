@@ -75,9 +75,9 @@ if [ -n "${HIRSEL_RUNTIME_ARCHIVES:-}" ]; then
   HIRSEL_RUNTIME_ARCHIVES="$(cd "$HIRSEL_RUNTIME_ARCHIVES" && pwd)"
   export HIRSEL_RUNTIME_ARCHIVES
 fi
-if [ -n "${HIRSEL_PRECHECK:-}" ]; then
-  HIRSEL_PRECHECK="$(realpath "$HIRSEL_PRECHECK")"
-  export HIRSEL_PRECHECK
+if [ -n "${HIRSEL_IMAGE:-}" ]; then
+  HIRSEL_IMAGE="$(realpath "$HIRSEL_IMAGE")"
+  export HIRSEL_IMAGE
 fi
 if [ -n "${HIRSEL_NATIVE_SELECTION:-}" ]; then
   HIRSEL_NATIVE_SELECTION="$(realpath "$HIRSEL_NATIVE_SELECTION")"

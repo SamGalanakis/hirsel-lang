@@ -40,9 +40,9 @@ pub use snapshot::{
 mod adapters;
 mod facts;
 pub use adapters::*;
+pub mod image;
 mod package;
-mod prechecks;
-pub use prechecks::{Prechecks, release_shared_caches, report_prechecks};
+pub use image::{ImageRecord, StdImage, StdImages, release_shared_caches, report_images};
 mod policy;
 pub use policy::{LoweringPolicy, Verify, free_sessions};
 mod admission;

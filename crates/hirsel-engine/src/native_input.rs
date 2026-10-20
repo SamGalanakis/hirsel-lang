@@ -147,7 +147,7 @@ impl QueryEngine {
                 let products = self.source_audit_products(&path)?;
                 audits.insert(path.clone(), products.audit);
                 materialized.insert(path.clone(), products.materialized);
-            } else if !self.prechecked(&path.0.package) {
+            } else if !self.imaged(&path.0.package) {
                 let analyzed = self.mode_definition(&path)?;
                 if crate::queries::has_errors(&analyzed.diagnostics) {
                     return Err(QueryError::Diagnostics(analyzed.diagnostics));

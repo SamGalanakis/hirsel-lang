@@ -861,7 +861,7 @@ pub struct FunctionSyntax {
     pub contracts: Vec<ContractSyntax>,
 }
 /// Private/public/opaque visibility is package-based (PROG-2).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Visibility {
     Private,
     Public,

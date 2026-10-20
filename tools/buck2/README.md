@@ -153,7 +153,7 @@ size); switching deferred writes had invalidated the copied old database.
 Thus this measures the initial migration cleanup, not steady-state tracked
 TTL eviction. The policy also passed a configured-policy dry run. A zero-TTL
 adaptive dry run found zero stale paths and retained all 544 active/recent
-artifacts. All three current CLI, precheck and library output checksums stayed
+artifacts. All three current CLI, std image and library output checksums stayed
 identical. The incremental build and test then used zero build actions; the
 unit test passed before and after (one test each). After restarting the daemon
 with the committed policy, the same build hit 604 cached actions, with zero
@@ -165,7 +165,7 @@ The copied runtime archives accounted for about 8.16 GiB and toolchain bundles
 
 ```sh
 export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
-.buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-toolchain --show-output # CLI and sibling std precheck
+.buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-toolchain --show-output # CLI and sibling std image
 .buck2/bin/buck2 build //:                        # every first-party target, dev profile, on the pool
 .buck2/bin/buck2 test //...                       # every test
 .buck2/bin/buck2 test //:hirsel-lir-unittest //:hirsel-lir-test-it \
@@ -279,7 +279,7 @@ small input read through an explicit `fixtures` directory grant, and must
 print the committed checksum. Runtime input prevents compile-time folding of
 the workload. Native counts cover fixture loading, the original workload,
 checksum, complete teardown and stdout. Both builds and diagnostic compiler
-checks use the production release compiler and the pinned std precheck,
+checks use the production release compiler and the pinned std image,
 with one compiler worker. Cache simulation is disabled: only `Ir` is counted,
 so host cache geometry and wall time cannot change the verdict.
 
@@ -458,7 +458,7 @@ them into a shared directory.
   includes `CARGO_BIN_EXE` subprocesses, conformance, agreement and native
   compiler runners. Their runtime archives retain the production release
   profile. Proc macros and build scripts retain their canonical dev profile.
-  The std precheck pins its exec dependency to this same checked configuration:
+  The std image pins its exec dependency to this same checked configuration:
   an ordinary `exec_dep` inherits the execution platform's configuration, which
   has no Rust profile, and would fall back to dev even under a release caller.
   Checked compiles use the dev compile requests and codegen policy, preserving

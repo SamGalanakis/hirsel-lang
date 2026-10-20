@@ -499,11 +499,11 @@ each). On a drive without power-loss protection a barrier commonly takes millise
 expect seconds for the same program. Requests that park (network, process, stdin and timer
 waits) share barriers through group commit.
 
-## The std precheck
+## The std image
 
 std is part of the toolchain, so it is checked once, when the toolchain is built,
-rather than by every program that uses it. `hirsel precheck` checks a package
-completely, as the only dependency of an empty program, and writes its *precheck*:
+rather than by every program that uses it. `hirsel image` checks a package
+completely, as the only dependency of an empty program, and writes its *std image*:
 each definition's lowered, validated TIR, semantic-revision node and completed
 native source audit, with compile-time substitutions and constant values. Native
 builds reuse these products without repeating H and modes for std.
@@ -515,29 +515,31 @@ bundle="$(.buck2/bin/buck2 build --target-platforms //tools/buck2:release \
   //:hirsel-toolchain --show-full-simple-output)"
 install -d "$HOME/.local/bin"
 install -m 755 "$bundle/hirsel" "$HOME/.local/bin/hirsel"
-install -m 644 "$bundle/hirsel-std.precheck" "$HOME/.local/bin/hirsel-std.precheck"
+install -m 644 "$bundle/hirsel-std.image" "$HOME/.local/bin/hirsel-std.image"
 ```
 
 `//:hirsel-toolchain` produces a directory containing both files. Its executable
-finds its sibling precheck immediately, including after installation. Plain
+finds its sibling std image immediately, including after installation. Plain
 `cargo build` users create that sibling with one command from the repository root
 (use `target/release/hirsel` after `cargo build --release`):
 
 ```sh
-tools/capped target/debug/hirsel precheck stdlib/std@1/hirsel.json -o target/debug/hirsel-std.precheck
+tools/capped target/debug/hirsel image stdlib/std@1/hirsel.json -o target/debug/hirsel-std.image
 ```
 
-`hirsel` loads `$HIRSEL_PRECHECK`, or else `hirsel-std.precheck` beside its own
-executable. A program whose std matches the precheck skips checking std: with a
-release CLI, a hello world that uses std reaches `main` in about 0.5 s instead of
-4 s. A precheck is keyed by the compiler's identity (a digest of the sources of
-every crate the compiler is built from, `crates/hirsel-driver/build.rs`), std's
-sources and manifest, and the compile-time limits. Any difference means it is
-not used and std is checked from source as before, so a stale precheck only costs
-time; rebuild it after rebuilding `hirsel` or editing std. `--verbose` (any
-command) says on stderr why a dependency was checked from source. `hirsel
-precheck` refuses a package with any diagnostic. Diagnostics, semantic program
-revisions and replay identity are the same with and without a precheck.
+`hirsel` maps `$HIRSEL_IMAGE`, or else `hirsel-std.image` beside its own
+executable. A matching image supplies std's declaration index, normalized
+signatures and private views without parsing std. Its canonical type rows are
+shared by sessions; per-definition TIR, semantic nodes, audits and constants
+are decoded only when requested. A diagnostic or compile-time operation that
+needs syntax parses the corresponding source on demand.
+
+The image key binds the compiler identity, std's source contents and closure
+manifests, the core registry revision and compile-time limits. A stale host-selected
+image is rebuilt from source and replaced atomically. If rebuilding fails or the
+image is absent, the normal source check supplies the result; `--verbose` explains
+fallbacks. `hirsel image` refuses any diagnostic. Diagnostics, semantic program
+revisions and replay identity agree with checking from source.
 
 ## Compile timings
 
@@ -559,7 +561,7 @@ The report keeps three measures apart (`hirsel_intern::timings`):
   time they cover; `(untimed)` is the rest of the command's wall time (CLI
   startup, and the program's own execution under `run` and `test`). Only
   intervals add up. Today's driver maps onto them as follows:
-  - `image open`: reading and decoding the std precheck;
+  - `image open`: reading and decoding the std image;
   - `S0`: loading the package graph and sources, parsing, publishing std's
     declarations into the session, and the program check's own steps;
   - `parallel`: checking each source file's definitions and lowering the
@@ -611,7 +613,7 @@ Every interval, phase and count appears, in that order, including those still
 0. `crates/hirsel-cli/tests/cli/timings.rs` checks the schema.
 
 `--mem-usage` prints the process's peak RSS and the heap bytes held at the end
-of the command, largest first: the decoded std precheck (`precheck`), each
+of the command, largest first: the decoded std image (`std image`), each
 table of the session's query engine as it is dropped (`engine: ...`), then the
 shared package cache (std's image) and V's retained signature inputs. A table
 still shared with the package cache frees nothing when the engine drops, so
