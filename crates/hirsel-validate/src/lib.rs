@@ -22,10 +22,10 @@ use hirsel_intern::work::{self, Counter};
 use hirsel_syntax::{DefId, DefPath};
 use hirsel_tir::*;
 use hirsel_types::{
-    Destination, GenericArgument, QueryError, Signature, TypeId, TypeInterner, TypeKind, TypeStore,
+    Destination, GenericArgument, QueryError, Signature, TypeId, TypeInterner, TypeKind, TypeMemo,
     UseKind,
 };
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 mod cleanup_proof;
 mod declaration;
@@ -191,16 +191,22 @@ fn signature_error(
 ) -> Option<Violation> {
     work::count(Counter::ValidateSignatureRows);
     let path = d.path();
+    // A view's verdict is its own: it shares no memo with a body or with I.
+    let memo = TypeMemo::new();
     if d != signature.definition
-        || !typing::signature_valid(signature)
-        || !carrier_rows_valid(&signature.types, signatures)
-        || !declaration::valid(signature, signatures)
-        || !protocol::declaration(signature, signatures)
-        || !protocol::selectors(signature, signatures)
+        || !typing::signature_valid(t, signature)
+        || !carrier_rows_valid(
+            t,
+            &hirsel_types::closure(t, hirsel_types::signature_types(t, signature)),
+            signatures,
+        )
+        || !declaration::valid(t, signature, signatures)
+        || !protocol::declaration(t, &memo, signature, signatures)
+        || !protocol::selectors(t, &memo, signature, signatures)
     {
         return Some(invalid_signature(path));
     }
-    match serialization::declaration(signature, signatures) {
+    match serialization::declaration(t, &memo, signature, signatures) {
         Ok(true) => None,
         Ok(false) => Some(invalid_signature(path)),
         Err(_) => Some(Violation {
@@ -213,13 +219,19 @@ fn signature_error(
         }),
     }
 }
-fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader<'_>) -> Validation {
-    let mut errors = validate_structure(definition);
+fn validate_input(
+    definition: &Definition,
+    t: &TypeInterner,
+    signatures: &Reader<'_>,
+) -> Validation {
+    // V's own structural memo: it shares no memo or verdict with inference.
+    let memo = TypeMemo::new();
+    let mut errors = validate_structure(definition, t);
     if !errors.is_empty() {
         return Validation { violations: errors };
     }
-    if !graph_valid(&definition.types) || !carrier_rows_valid(&definition.types, signatures) || definition.types.iter().any(|(_, t)| {
-        t.allocation_target.is_some() && !matches!(&t.kind, TypeKind::Named { definition, .. } if signatures.get(definition).is_some_and(|s| t.is_heap_target(&s.metadata.roles)))
+    if !graph_valid(t, &definition.types) || !carrier_rows_valid(t, &definition.types, signatures) || definition.types.iter().map(|&id| t.row(id)).any(|t| {
+        t.allocation_target.is_some() && !matches!(&t.kind, TypeKind::Named { definition, .. } if signatures.get(*definition).is_some_and(|s| t.is_heap_target(&s.metadata.roles)))
     }) {
         errors.push(Violation { body: None, block: None, instruction: None, kind: ViolationKind::InvalidTypeGraph });
     }
@@ -231,7 +243,7 @@ fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader
     // Contracts inside ordinary nested closures cannot inherit the enclosing declaration.
     let mut caller_bodies = Vec::new();
     if signatures
-        .get(&definition.path)
+        .get(definition.path)
         .is_some_and(|s| s.metadata.track_caller)
     {
         caller_bodies.push(definition.entry);
@@ -267,12 +279,12 @@ fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader
             },
         });
     }
-    errors.extend(protocol::receipts(definition, signatures));
-    errors.extend(protocol::unproved_promises(definition, signatures));
+    errors.extend(protocol::receipts(t, &memo, definition, signatures));
+    errors.extend(protocol::unproved_promises(t, definition, signatures));
     if !errors.is_empty() {
         return Validation { violations: errors };
     }
-    let Some(declarations) = typing::declaration_tables(definition, signatures) else {
+    let Some(declarations) = typing::declaration_tables(t, definition, signatures) else {
         return Validation {
             violations: vec![Violation {
                 body: None,
@@ -295,11 +307,13 @@ fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader
             }
         }
     }
-    let scratch = scratch::Scratch::new(&definition.types, definition.bodies.len());
+    let scratch = scratch::Scratch::new(definition.bodies.len());
     for (index, body) in definition.bodies.iter().enumerate() {
         let mut checker = Checker {
             definition,
             body,
+            t,
+            memo: &memo,
             signatures,
             declarations: &declarations,
             scratch: &scratch,
@@ -318,14 +332,14 @@ fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader
         let mut witnessed = BTreeSet::new();
         for tail in &body.tail_sites {
             let property = |ty, counted| {
-                let mut lookup = |p: &DefPath| {
+                let mut lookup = |d: DefId| {
                     Ok::<_, hirsel_types::QueryError>(
-                        signatures.get(p).cloned().map(std::sync::Arc::new),
+                        signatures.get(d).cloned().map(std::sync::Arc::new),
                     )
                 };
                 if counted {
                     hirsel_types::structural_equality(
-                        &definition.types,
+                        t,
                         ty,
                         hirsel_types::Bound::Data,
                         &declarations[index],
@@ -334,7 +348,7 @@ fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader
                     .unwrap_or_else(|error| checker.proof_failure(error, false))
                 } else {
                     hirsel_types::structural_property(
-                        &definition.types,
+                        t,
                         ty,
                         hirsel_types::StructuralProperty::Plain,
                         &declarations[index],
@@ -344,7 +358,13 @@ fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader
                 }
             };
             if !witnessed.insert(tail.call_block.0)
-                || !crate::tail::verify_self_tail(definition, BodyId(index as u32), tail, &property)
+                || !crate::tail::verify_self_tail(
+                    t,
+                    definition,
+                    BodyId(index as u32),
+                    tail,
+                    &property,
+                )
             {
                 checker.error(ViolationKind::WrongKind {
                     entity: "tail witness",
@@ -376,6 +396,8 @@ fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader
         let mut checker = Checker {
             definition,
             body,
+            t,
+            memo: &memo,
             signatures,
             declarations: &declarations,
             scratch: &scratch,
@@ -413,6 +435,8 @@ fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader
         let mut checker = Checker {
             definition,
             body,
+            t,
+            memo: &memo,
             signatures,
             declarations: &declarations,
             scratch: &scratch,
@@ -431,10 +455,12 @@ fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader
         if let Some(captures) = environments.get(&(index as u32)) {
             checker.flow(captures, true);
             if index as u32 == definition.entry.0 {
-                for parameter in unique_promises(signatures.get(&definition.path), signatures) {
+                for parameter in unique_promises(t, signatures.get(definition.path), signatures) {
                     let mut proof = Checker {
                         definition,
                         body,
+                        t,
+                        memo: &memo,
                         signatures,
                         declarations: &declarations,
                         scratch: &scratch,
@@ -466,6 +492,7 @@ fn validate_input(definition: &Definition, t: &TypeInterner, signatures: &Reader
 
 /// Explicit and SEM-3-implied `@preserves_unique` selections (MODE-2).
 fn unique_promises(
+    t: &TypeInterner,
     signature: Option<&Signature>,
     signatures: &Reader<'_>,
 ) -> Vec<hirsel_types::ParamId> {
@@ -484,7 +511,7 @@ fn unique_promises(
             _ => None,
         })
         .collect();
-    if signature.is_some_and(|s| format_association(s, signatures))
+    if signature.is_some_and(|s| format_association(t, s, signatures))
         && !promised.contains(&hirsel_types::ParamId(1))
     {
         promised.push(hirsel_types::ParamId(1));
@@ -494,7 +521,7 @@ fn unique_promises(
 
 /// Reconstruct SEM-3's implied promise from declaration snapshots, independent
 /// of source annotations and of the producer's ownership decisions.
-fn format_association(signature: &Signature, signatures: &Reader<'_>) -> bool {
+fn format_association(t: &TypeInterner, signature: &Signature, signatures: &Reader<'_>) -> bool {
     let hirsel_types::SignatureKind::Function(f) = &signature.kind else {
         return false;
     };
@@ -504,14 +531,12 @@ fn format_association(signature: &Signature, signatures: &Reader<'_>) -> bool {
     let Some(receiver) = f.parameters.first() else {
         return false;
     };
-    let Some(TypeKind::Named { definition, .. }) =
-        signature.types.get(receiver.ty).map(|r| &r.kind)
-    else {
+    let Some(TypeKind::Named { definition, .. }) = t.get(receiver.ty).map(|r| &r.kind) else {
         return false;
     };
-    signatures.get(definition).is_some_and(|s| {
+    signatures.get(*definition).is_some_and(|s| {
         matches!(&s.kind, hirsel_types::SignatureKind::Type(t)
-            if t.format.as_ref() == Some(&signature.definition))
+            if t.format.as_ref() == Some(signature.definition.path()))
     })
 }
 
@@ -536,9 +561,14 @@ struct Site {
 struct Checker<'a> {
     definition: &'a Definition,
     body: &'a Body,
+    /// The session interner: the definition's rows, signature rows and V's
+    /// own temporaries.
+    t: &'a TypeInterner,
+    /// V's structural memo, never inference's (design §1a).
+    memo: &'a TypeMemo,
     signatures: &'a Reader<'a>,
     declarations: &'a [hirsel_types::GenericDeclarations],
-    scratch: &'a scratch::Scratch<'a>,
+    scratch: &'a scratch::Scratch,
     contract: bool,
     site: Site,
     errors: Vec<Violation>,
@@ -566,8 +596,21 @@ impl<'a> Checker<'a> {
         }
         fallback
     }
-    fn working_store(&self) -> scratch::Region<'a> {
-        self.scratch.store()
+    /// Run `f` with a contextual memo over `generics` whose lookups are V's
+    /// own recorded signature reads.
+    fn context<R>(
+        &self,
+        generics: &hirsel_types::GenericDeclarations,
+        f: impl FnOnce(&mut hirsel_types::ContextMemo<'_>) -> R,
+    ) -> R {
+        let mut lookup = |d: DefId| {
+            Ok::<_, QueryError>(self.signatures.get(d).cloned().map(std::sync::Arc::new))
+        };
+        f(&mut hirsel_types::ContextMemo::new(
+            self.t,
+            generics,
+            &mut lookup,
+        ))
     }
     /// The lifetime sources of a body row's relation: every reach except its
     /// arena places, which are where its blocks live (PROV-4).
@@ -606,7 +649,7 @@ impl<'a> Checker<'a> {
     /// except the callable's own Arena parameters (PROV-4).
     fn signature_lifetime(
         &self,
-        store: &TypeStore,
+        store: &TypeInterner,
         function: &hirsel_types::FunctionType,
         relation: &hirsel_types::Relation,
     ) -> hirsel_types::Relation {
@@ -622,7 +665,7 @@ impl<'a> Checker<'a> {
     fn arena_type(&self, ty: TypeId) -> bool {
         self.signatures
             .first_heap()
-            .is_some_and(|h| hirsel_types::is_arena_type(&self.definition.types, ty, &h.arena))
+            .is_some_and(|h| hirsel_types::is_arena_type(self.t, ty, &h.arena))
     }
     /// Whether a relation place is an Arena binding (PROV-4): a parameter or a
     /// bound place, typed with the registry's Arena, of this body or of the
@@ -639,8 +682,8 @@ impl<'a> Checker<'a> {
         let arena = |body: &Body, local: LocalId| {
             body.locals
                 .get(local.0 as usize)
-                .and_then(|l| self.definition.types.get(l.ty))
-                .is_some_and(|t| matches!(&t.kind, TypeKind::Named { definition, .. } if *definition == heap.arena))
+                .and_then(|l| self.t.get(l.ty))
+                .is_some_and(|t| matches!(&t.kind, TypeKind::Named { definition, .. } if *definition.path() == heap.arena))
         };
         std::iter::once(self.body)
             .chain(&self.definition.bodies)
@@ -681,40 +724,38 @@ impl<'a> Checker<'a> {
     }
 }
 
-fn owned_type(store: &TypeStore, id: TypeId) -> bool {
-    store.id(id.index()) == Some(id)
-}
-
 /// Only an erased carrier declaration gives a nominal row erased evidence (CAP-2).
-fn carrier_rows_valid(store: &TypeStore, signatures: &Reader<'_>) -> bool {
-    store.iter().all(|(_, row)| match (&row.kind, &row.erased_captures) {
+fn carrier_rows_valid(t: &TypeInterner, rows: &[TypeId], signatures: &Reader<'_>) -> bool {
+    rows.iter().all(|&id| match (&t.row(id).kind, &t.row(id).erased_captures) {
         (TypeKind::Named { definition, .. }, Some(_)) => signatures
-            .get(definition)
+            .get(*definition)
             .is_some_and(|s| matches!(&s.kind, hirsel_types::SignatureKind::Type(d) if d.captures.is_some())),
         _ => true,
     })
 }
-// Check provenance before shared helpers (TypeStore::get asserts on foreign IDs).
-// Iterative DFS also bounds recursion before invoking recursive shared importers.
-fn graph_valid(store: &TypeStore) -> bool {
-    let mut colour = vec![0; store.len()];
-    for (root, _) in store.iter() {
+/// V's own walk of a closure table: every row and edge is in the table (the
+/// caller checked membership), and the graph is acyclic with no recovery row.
+/// Iterative DFS also bounds recursion before invoking recursive shared helpers.
+fn graph_valid(t: &TypeInterner, rows: &[TypeId]) -> bool {
+    let members: std::collections::HashSet<TypeId> = rows.iter().copied().collect();
+    let mut colour = std::collections::HashMap::<TypeId, u8>::new();
+    for &root in rows {
         let mut stack = vec![(root, false)];
         while let Some((id, leaving)) = stack.pop() {
-            if !owned_type(store, id) {
+            if !members.contains(&id) || !t.contains(id) {
                 return false;
             }
             if leaving {
-                colour[id.index()] = 2;
+                colour.insert(id, 2);
                 continue;
             }
-            match colour[id.index()] {
-                1 => return false,
-                2 => continue,
+            match colour.get(&id) {
+                Some(1) => return false,
+                Some(2) => continue,
                 _ => (),
             }
-            colour[id.index()] = 1;
-            let row = store.get(id).unwrap();
+            colour.insert(id, 1);
+            let row = t.row(id);
             // A nominal row's evidence is checked against its declaration by
             // `carrier_rows_valid`.
             if row.erased_captures.is_some()
@@ -770,7 +811,16 @@ fn graph_valid(store: &TypeStore) -> bool {
 /// scopes, but makes no signature, reachability, type or ownership claim. The
 /// strict API remains the lowering/publication oracle. One terminator is encoded
 /// by Block's type, rather than counted by this function.
-pub fn validate_structure(definition: &Definition) -> Vec<Violation> {
+pub fn validate_structure(definition: &Definition, t: &TypeInterner) -> Vec<Violation> {
+    // TypeIds carry no provenance: a row belongs to this definition exactly
+    // when its closure table lists it.
+    let members: std::collections::HashSet<TypeId> = definition
+        .types
+        .iter()
+        .copied()
+        .filter(|&id| t.contains(id))
+        .collect();
+    let owned_type = |id: TypeId| members.contains(&id);
     let mut errors = Vec::new();
     let mut add = |body: Option<BodyId>, block: Option<BlockId>, instruction: Option<u32>, kind| {
         let v = Violation {
@@ -1233,16 +1283,20 @@ pub fn validate_structure(definition: &Definition) -> Vec<Violation> {
                 add(bid, block, inst, ViolationKind::InvalidId { arena, index });
             }
         }
-        for t in type_roots {
-            if !owned_type(&definition.types, t) {
-                add(bid, None, None, ViolationKind::InvalidType(t));
+        for ty in type_roots {
+            if !owned_type(ty) {
+                add(bid, None, None, ViolationKind::InvalidType(ty));
             }
         }
     }
-    // Check shared graph edges once; each body's root IDs were checked above.
-    for (_, row) in definition.types.iter() {
-        for edge in row.kind.graph_edges() {
-            if !owned_type(&definition.types, edge.ty) {
+    // Check the table's graph edges once; each body's root IDs were checked above.
+    for &id in definition.types.iter() {
+        if !owned_type(id) {
+            add(None, None, None, ViolationKind::InvalidType(id));
+            continue;
+        }
+        for edge in t.row(id).kind.graph_edges() {
+            if !owned_type(edge.ty) {
                 add(None, None, None, ViolationKind::InvalidType(edge.ty));
             }
         }
@@ -1264,7 +1318,7 @@ mod support;
 
 /// A row whose copy is an independent global handle: a `Shared[T]` root
 /// (MEM-11) or a run-owned `Mutex` or `Atomic` table entry (MODE-4).
-pub(crate) fn handle_root(store: &TypeStore, ty: TypeId) -> bool {
+pub(crate) fn handle_root(store: &TypeInterner, ty: TypeId) -> bool {
     matches!(
         store.get(ty).map(|row| &row.kind),
         Some(TypeKind::Builtin {

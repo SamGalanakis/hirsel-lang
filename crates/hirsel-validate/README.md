@@ -73,11 +73,11 @@ resulting leaked slot, are retained.
 
 | Check | Violations |
 |---|---|
-| Definition/body/place/local/scope/rvalue/cleanup/loan references and type provenance; capture storage only in closure bodies | `InvalidId`, `InvalidType`, `Duplicate`, `WrongKind`, `ScopeCycle` |
+| Definition/body/place/local/scope/rvalue/cleanup/loan references and type-table membership; capture storage only in closure bodies | `InvalidId`, `InvalidType`, `Duplicate`, `WrongKind`, `ScopeCycle` |
 | Type graph integrity, builtin type/size argument arity, recovery rows and cycles | `InvalidTypeGraph`, `InvalidSignature` |
 | CFG reachability, closure/contract body roots and dangling rvalues | `UnreachableBlock`, `UnreferencedBody`, `UnreferencedRvalue`, `ReachableUnreachable` |
 | Every constant, assignment, snapshot, unary/binary operator, construction, closure, shape, condition, return and call | `TypeMismatch`, `InvalidOperator`, `InvalidConstructor`, `InvalidProjection`, `Arity`, `MissingSignature` |
-| Call/constructor ordinals, generic kind/arity, independent type stores | `Duplicate`, `InvalidId`, `TypeMismatch`; calls use shared `import_type`/`substitute_type` and `semantic_equal` |
+| Call/constructor ordinals, generic kind/arity | `Duplicate`, `InvalidId`, `TypeMismatch`; calls instantiate through V's own `TypeMemo` and compare with the interner's `semantic_eq` |
 | Variant/bool CFG switches | `MatchCoverage`; unique in-range arms plus an explicit default cover remaining cases, or every case must have an arm before an `Unreachable` default |
 | Definite initialization, fields/partial moves, replacements and borrowed storage | `ReadBeforeInit`, `UseAfterMove`, `DoubleMove`, `WriteToLive`, `BorrowedMove`, `InvalidUse` |
 | Loan lifetime, derived borrowed temporaries/captures, source access, mutable exclusivity and aliased mutable call arguments | `MissingLoan`, `LoanConflict`, `LoanOutlivesSource`, `InactiveLoan`, `ExpiredLoan`, `LiveLoanAtExit`, `AliasedArguments` |
@@ -110,8 +110,10 @@ belong in cleanup while preparing a later argument, and must be absent from the 
 callee entry. Listed conditional drops of proven-dead storage are legal skips. Return extracts its operand before cleanup. Cleanup continues in
 listed order; validation never invokes a destructor.
 
-Limits: raw in-range arena IDs from another owner cannot be identified; TypeIds
-are the exception because their provenance is checked before the shared accessor.
+Limits: raw in-range arena IDs from another owner cannot be identified. TypeIds
+carry no provenance: a row belongs to a definition exactly when its closure table
+(`Definition.types`) lists it, and every body root and table edge is checked
+against that table before any shared helper reads a row.
 TIR cannot prove omitted source effects or preservation of the source's original
 evaluation order; lowering tests own that obligation. The structural type walk uses an explicit DFS stack and colors;
 acyclic graphs have no separate depth limit, while recovery/cyclic graphs fail
@@ -412,14 +414,15 @@ the parent's counted owned graph. Plain bits and Shared boundaries preserve that
 evidence; an aliased counted replacement cannot establish a unique whole read.
 Independent fixtures cover all three, separately from permanent storage modes.
 
-Independent validation uses reusable private working type stores for graph
-transport, receiving relations and flow mode proofs. Each operation owns a
-marked region; leaving it truncates temporary rows and returns capacity for the
-next operation. Nested operations obtain another region instead of copying an
-active store. No working rows are assigned back into published IR. Scoped
-parameter authority inputs are derived once per body and receiving relations
-append directly into the caller's region. The copied-row scaling regression
-validates many real copy assignments against an owner-size work bound.
+V runs on the session `TypeInterner`: the definition's rows, signature rows and
+V's own temporaries (graph transport, receiving relations, flow mode proofs) are
+interned rows, so nothing is imported or copied. Substitution and instantiation
+go through a `TypeMemo` that V owns (one per `validate` call and per signature
+verdict); contextual proofs and directional compatibility through a
+`ContextMemo` over V's recorded signature reads. V shares no memo or verdict with
+inference. The graph check walks the definition's closure table, not the
+interner. No working row is assigned back into published IR. Scoped parameter
+authority inputs are derived once per body.
 
 `Body.tail_sites` is additive normalization input, transported from
 `CheckedBody.tails`. Validation independently checks self identity, exact result

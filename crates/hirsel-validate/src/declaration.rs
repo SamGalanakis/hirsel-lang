@@ -6,7 +6,7 @@ use hirsel_type_analysis::cleanup::{
 };
 use hirsel_types::*;
 
-pub(super) fn valid(s: &Signature, signatures: &Reader<'_>) -> bool {
+pub(super) fn valid(t: &TypeInterner, s: &Signature, signatures: &Reader<'_>) -> bool {
     if s.metadata.track_caller
         && !matches!(&s.kind, SignatureKind::Function(f) if f.foreign.is_none())
     {
@@ -25,7 +25,7 @@ pub(super) fn valid(s: &Signature, signatures: &Reader<'_>) -> bool {
     if d.capability.is_some()
         && (d.authority
             != AuthoritySummary::Known(
-                vec![AuthorityTerm::Capability(s.definition.clone())].into(),
+                vec![AuthorityTerm::Capability(s.definition.path().clone())].into(),
             )
             || d.serializable
             || d.bounds.iter().any(|b| {
@@ -61,19 +61,11 @@ pub(super) fn valid(s: &Signature, signatures: &Reader<'_>) -> bool {
     }
     let declarations = GenericDeclarations::signature(&d.generics);
     if d.capability == Some(CapabilityKind::Global)
-        && !global_representation(&s.types, root, &s.metadata.roles, &declarations, signatures)
+        && !global_representation(t, root, &s.metadata.roles, &declarations, signatures)
     {
         return false;
     }
-    if d.layout.flat
-        && !flat_storage(
-            &s.types,
-            root,
-            &declarations,
-            signatures,
-            &mut BTreeSet::new(),
-        )
-    {
+    if d.layout.flat && !flat_storage(t, root, &declarations, signatures, &mut HashSet::new()) {
         return false;
     }
     if s.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque && d.capability.is_none() {
@@ -81,7 +73,7 @@ pub(super) fn valid(s: &Signature, signatures: &Reader<'_>) -> bool {
     }
     // CAP-2/CLO-4: a carrier's selected fields are its per-value erased
     // evidence; only the remaining fields count against the declaration.
-    let roots: Vec<TypeId> = match (&d.captures, s.types.get(root).map(|row| &row.kind)) {
+    let roots: Vec<TypeId> = match (&d.captures, t.get(root).map(|row| &row.kind)) {
         (None, _) => vec![root],
         (Some(selected), Some(TypeKind::Record(parts))) if !d.distinct => {
             if selected.is_empty() || selected.iter().any(|field| *field as usize >= parts.len()) {
@@ -109,13 +101,13 @@ pub(super) fn valid(s: &Signature, signatures: &Reader<'_>) -> bool {
         let next = roots.iter().fold(AuthoritySummary::inert(), |held, root| {
             held.join(
                 structural_authority(
-                    &s.types,
+                    t,
                     *root,
                     &s.metadata.roles,
                     &declarations,
                     &mut |_, path| {
                         Ok::<_, QueryError>(path.and_then(|path| {
-                            if path == &s.definition {
+                            if path == s.definition {
                                 Some(std::sync::Arc::new(own.clone()))
                             } else {
                                 signatures.get(path).cloned().map(std::sync::Arc::new)
@@ -134,9 +126,8 @@ pub(super) fn valid(s: &Signature, signatures: &Reader<'_>) -> bool {
     if !authority.is_subset_of(d.implementation_authority.as_ref().unwrap_or(&d.authority)) {
         return false;
     }
-    let mut lookup = |path: &DefPath| {
-        Ok::<_, QueryError>(signatures.get(path).cloned().map(std::sync::Arc::new))
-    };
+    let mut lookup =
+        |path: DefId| Ok::<_, QueryError>(signatures.get(path).cloned().map(std::sync::Arc::new));
     d.bounds.iter().all(|bound| {
         if d.capability == Some(CapabilityKind::Scoped)
             && matches!(bound, Bound::Plain | Bound::Copyable | Bound::Sendable)
@@ -155,24 +146,16 @@ pub(super) fn valid(s: &Signature, signatures: &Reader<'_>) -> bool {
             Bound::Serializable => true, // Independently proved by serialization::declaration.
             Bound::Inert => d.authority == AuthoritySummary::inert() && d.captures.is_none(),
             Bound::Flat if d.layout.flat => true,
-            Bound::Flat => {
-                structural_flat(&s.types, root, &declarations, &mut lookup).unwrap_or(false)
-            }
+            Bound::Flat => structural_flat(t, root, &declarations, &mut lookup).unwrap_or(false),
             Bound::Plain if d.layout.flat => false,
             Bound::Sendable if d.layout.flat => true,
             Bound::Data | Bound::Key => {
-                structural_equality(&s.types, root, *bound, &declarations, &mut lookup)
-                    .unwrap_or(false)
+                structural_equality(t, root, *bound, &declarations, &mut lookup).unwrap_or(false)
             }
             Bound::NoallocDrop => {
                 (!d.resource || d.destructor_allocation == Allocation::NoAlloc)
-                    && cleanup(
-                        &s.types,
-                        root,
-                        &declarations,
-                        signatures,
-                        &mut BTreeSet::new(),
-                    ) == DropAllocation::NoAlloc
+                    && cleanup(t, root, &declarations, signatures, &mut HashSet::new())
+                        == DropAllocation::NoAlloc
             }
             Bound::Plain | Bound::Copyable | Bound::Sendable => {
                 let property = match bound {
@@ -180,15 +163,14 @@ pub(super) fn valid(s: &Signature, signatures: &Reader<'_>) -> bool {
                     Bound::Copyable => StructuralProperty::Copyable,
                     _ => StructuralProperty::Sendable,
                 };
-                structural_property(&s.types, root, property, &declarations, &mut lookup)
-                    .unwrap_or(false)
+                structural_property(t, root, property, &declarations, &mut lookup).unwrap_or(false)
             }
         }
     })
 }
 
 fn global_representation(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     roles: &NominalRoles,
     generics: &GenericDeclarations,
@@ -209,7 +191,7 @@ fn global_representation(
         return false;
     }
     let mut pending = vec![root];
-    let mut seen = BTreeSet::new();
+    let mut seen = HashSet::new();
     while let Some(id) = pending.pop() {
         if !seen.insert(id) {
             continue;
@@ -243,11 +225,11 @@ fn global_representation(
 }
 
 fn flat_storage(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
     signatures: &Reader<'_>,
-    active: &mut BTreeSet<TypeId>,
+    active: &mut HashSet<TypeId>,
 ) -> bool {
     if !active.insert(root) {
         return false;
@@ -274,7 +256,7 @@ fn flat_storage(
         } => {
             // MEM-12: "no capability/function/handle/resource". Plain is
             // insufficient; prove the actual nominal layout and its arguments.
-            matches!(signatures.get(definition).map(|s| &s.kind), Some(SignatureKind::Type(d)) if d.capability.is_none() && !d.resource)
+            matches!(signatures.get(*definition).map(|s| &s.kind), Some(SignatureKind::Type(d)) if d.capability.is_none() && !d.resource)
                 && arguments.iter().all(|a| match a {
                     GenericArgument::Type(t) => {
                         flat_storage(store, *t, generics, signatures, active)
@@ -304,11 +286,11 @@ fn flat_storage(
 }
 
 fn cleanup(
-    store: &TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     generics: &GenericDeclarations,
     signatures: &Reader<'_>,
-    active: &mut BTreeSet<TypeId>,
+    active: &mut HashSet<TypeId>,
 ) -> DropAllocation {
     if !active.insert(root) {
         return DropAllocation::NoAlloc;
@@ -323,7 +305,7 @@ fn cleanup(
             let SignatureKind::Type(d) = &s.kind else {
                 return DropAllocation::MayAllocate;
             };
-            declared_cleanup(d, &s.types, arguments, |t| {
+            declared_cleanup(d, store, arguments, |t| {
                 cleanup(store, t, generics, signatures, active)
             })
         }

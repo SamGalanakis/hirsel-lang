@@ -280,7 +280,7 @@ struct Model {
     origin_paths: BTreeSet<Vec<hirsel_types::FieldId>>,
     /// The origin paths each place type admits (`admits_path`). A partition
     /// keeps no path its value has no field for, since no typed place reads it.
-    typed_origin_paths: BTreeMap<TypeId, Vec<Vec<hirsel_types::FieldId>>>,
+    typed_origin_paths: HashMap<TypeId, Vec<Vec<hirsel_types::FieldId>>>,
     /// The parameter root a `@preserves_unique` re-proof hands back (MODE-2).
     unique_proof: Option<usize>,
     /// The failure edge being checked is a release's that runs no user code
@@ -294,7 +294,7 @@ struct Model {
 /// a generic, builtin, function or opaque type admits every path.
 fn admits_path(
     signatures: &Reader<'_>,
-    types: &TypeStore,
+    types: &TypeInterner,
     ty: TypeId,
     path: &[hirsel_types::FieldId],
 ) -> bool {
@@ -318,14 +318,13 @@ fn admits_path(
         }),
         // Arguments enter the representation as its parameters, which admit
         // every path, so no substitution is needed.
-        Some(TypeKind::Named { definition, .. }) => match signatures.get(definition) {
+        Some(TypeKind::Named { definition, .. }) => match signatures.get(*definition) {
             Some(Signature {
                 kind: SignatureKind::Type(t),
-                types: declared,
                 ..
             }) => t
                 .representation
-                .is_none_or(|rep| admits_path(signatures, declared, rep, path)),
+                .is_none_or(|rep| admits_path(signatures, types, rep, path)),
             _ => true,
         },
         _ => true,
@@ -455,7 +454,7 @@ impl Model {
         let function = if checker.site.body == checker.definition.entry {
             checker
                 .signatures
-                .get(&checker.definition.path)
+                .get(checker.definition.path)
                 .and_then(|s| {
                     if let SignatureKind::Function(f) = &s.kind {
                         Some(f)
@@ -464,10 +463,12 @@ impl Model {
                     }
                 })
         } else {
-            let inputs = checker.scratch.definition_inputs(checker.definition);
+            let inputs = checker
+                .scratch
+                .definition_inputs(checker.t, checker.definition);
             inputs.producers[checker.site.body.0 as usize]
                 .first_function
-                .and_then(|ty| match &checker.definition.types.get(ty)?.kind {
+                .and_then(|ty| match &checker.t.get(ty)?.kind {
                     TypeKind::Function(function) => Some(function),
                     _ => None,
                 })
@@ -490,7 +491,7 @@ impl Model {
         if checker.site.body == checker.definition.entry
             && checker
                 .signatures
-                .get(&checker.definition.path)
+                .get(checker.definition.path)
                 .is_some_and(|s| matches!(&s.kind, SignatureKind::Type(t) if t.resource))
         {
             // DROP-3: finalization borrows self; its fields are released by the
@@ -502,9 +503,11 @@ impl Model {
         let release: Vec<_> = body
             .locals
             .iter()
-            .map(|l| needs_release(checker, l.ty, &checker.definition.types))
+            .map(|l| needs_release(checker, l.ty, checker.t))
             .collect();
-        let inputs = checker.scratch.definition_inputs(checker.definition);
+        let inputs = checker
+            .scratch
+            .definition_inputs(checker.t, checker.definition);
         for &(owner, value) in &inputs.producers[checker.site.body.0 as usize].captures {
             work::count(Counter::ValidateDefinitionInputRows);
             let Rvalue::Closure { captures, .. } =
@@ -527,8 +530,8 @@ impl Model {
         // observed place. Keep that direct sibling distinct instead of
         // summarizing it at the parent and poisoning the observed child.
         // Only typed places contribute children: no recursive path closure.
-        let mut children = BTreeMap::new();
-        let mut store = checker.working_store();
+        let mut children = HashMap::new();
+        let store = checker.t;
         for place in &body.places {
             if place.projection.is_empty() {
                 continue; // Constructor field keys already distinguish roots.
@@ -536,9 +539,10 @@ impl Model {
             let keys = children.entry(place.ty).or_insert_with(|| {
                 use super::flow_origins::EnvironmentField as F;
                 let layout = expand_representation(
-                    &mut store,
+                    store,
+                    checker.memo,
                     place.ty,
-                    &mut |_, path, arguments| {
+                    &mut |_, path, arguments: &[GenericArgument]| {
                         Ok(checker.signatures.get(path).cloned().map(|signature| {
                             (
                                 std::sync::Arc::new(signature),
@@ -605,15 +609,7 @@ impl Model {
         let result_reads = result_read_sites(body);
         let result_shareable = checker.result_permissions();
         let selected_sources = match checker
-            .lifetime(
-                &checker
-                    .definition
-                    .types
-                    .get(body.result)
-                    .unwrap()
-                    .modes
-                    .relation,
-            )
+            .lifetime(&checker.t.get(body.result).unwrap().modes.relation)
             .named_parameters()
         {
             Some(parameters) => parameters
@@ -775,30 +771,23 @@ impl Model {
                 origin_paths.insert(path);
             }
         }
-        let mut typed_origin_paths = BTreeMap::new();
+        let mut typed_origin_paths = HashMap::new();
         for place in body.places.iter().chain(&places) {
             typed_origin_paths.entry(place.ty).or_insert_with(|| {
                 origin_paths
                     .iter()
-                    .filter(|path| {
-                        admits_path(
-                            checker.signatures,
-                            &checker.definition.types,
-                            place.ty,
-                            path,
-                        )
-                    })
+                    .filter(|path| admits_path(checker.signatures, checker.t, place.ty, path))
                     .cloned()
                     .collect()
             });
         }
-        let mut authorities = BTreeMap::new();
+        let mut authorities = HashMap::new();
         let inert = places
             .iter()
             .map(|place| {
                 *authorities.entry(place.ty).or_insert_with(|| {
                     checker.authority_with_generics(
-                        &checker.definition.types,
+                        checker.t,
                         place.ty,
                         &checker.generic_declarations(),
                     ) == hirsel_types::AuthoritySummary::inert()
@@ -807,11 +796,11 @@ impl Model {
             .collect();
         let noalloc_drop_checks = if checker.noalloc_body() {
             let declarations = checker.generic_declarations();
-            let mut effects = BTreeMap::new();
+            let mut effects = HashMap::new();
             body.locals.iter().any(|local| {
                 *effects.entry(local.ty).or_insert_with(|| {
                     !checker.bound(
-                        &checker.definition.types,
+                        checker.t,
                         local.ty,
                         hirsel_types::Bound::NoallocDrop,
                         &declarations,
@@ -824,11 +813,11 @@ impl Model {
         // Successive destructuring can consume a complete typed payload path
         // through several temporary roots. Retain that path, rather than only
         // the longest projection on one root. Callable headers are not payload.
-        let mut function_depths = BTreeMap::new();
+        let mut function_depths = HashMap::new();
         for local in &body.locals {
             let mut pending = vec![(local.ty, false)];
             while let Some((id, leaving)) = pending.pop() {
-                let row = checker.definition.types.get(id).unwrap();
+                let row = checker.t.get(id).unwrap();
                 if leaving {
                     let depth = row
                         .kind
@@ -875,19 +864,14 @@ impl Model {
             .collect();
         let mut header_names = BTreeSet::new();
         for local in &body.locals {
-            let _ = hirsel_types::visit_type_origins(
-                &checker.definition.types,
-                local.ty,
-                |origin, depth| {
-                    if (depth > 0
-                        || local.storage == Storage::Capture && checker.arena_place(origin))
-                        && declarations.contains(&origin.root)
-                    {
-                        header_names.insert(origin.root.clone());
-                    }
-                    Ok(())
-                },
-            );
+            let _ = hirsel_types::visit_type_origins(checker.t, local.ty, |origin, depth| {
+                if (depth > 0 || local.storage == Storage::Capture && checker.arena_place(origin))
+                    && declarations.contains(&origin.root)
+                {
+                    header_names.insert(origin.root.clone());
+                }
+                Ok(())
+            });
         }
         Self {
             header_names,
@@ -1084,7 +1068,7 @@ impl Model {
     fn initial(
         &self,
         body: &Body,
-        types: &TypeStore,
+        types: &TypeInterner,
         origin_types: &super::origin_types::Types,
         lifetime_global: &dyn Fn(TypeId) -> bool,
         arena: &dyn Fn(&Origin) -> bool,
@@ -1434,7 +1418,7 @@ fn result_read_sites(body: &Body) -> BTreeSet<(u32, Option<u32>)> {
 fn structural_property(
     c: &Checker<'_>,
     root: TypeId,
-    source: &TypeStore,
+    source: &TypeInterner,
     bound: hirsel_types::Bound,
 ) -> bool {
     let property = match bound {
@@ -1456,11 +1440,11 @@ fn structural_property(
     .unwrap_or_else(|error| c.proof_failure(error, false))
 }
 
-pub(super) fn needs_release(c: &Checker<'_>, t: TypeId, store: &TypeStore) -> bool {
+pub(super) fn needs_release(c: &Checker<'_>, t: TypeId, store: &TypeInterner) -> bool {
     !structural_property(c, t, store, hirsel_types::Bound::Plain)
 }
 
-fn copyable(c: &Checker<'_>, t: TypeId, store: &TypeStore) -> bool {
+fn copyable(c: &Checker<'_>, t: TypeId, store: &TypeInterner) -> bool {
     structural_property(c, t, store, hirsel_types::Bound::Copyable)
 }
 
@@ -1468,7 +1452,7 @@ impl Checker<'_> {
     /// User-visible destruction (DROP-1/2): a value that may contain a
     /// resource, which is noncopyable, or a once callable.
     fn destroyed(&self, t: TypeId) -> bool {
-        let store = &self.definition.types;
+        let store = self.t;
         !copyable(self, t, store)
             || store.get(t).unwrap().modes.multiplicity == hirsel_types::Multiplicity::Once
     }
@@ -1495,12 +1479,12 @@ impl Checker<'_> {
         // Dead-edge audits never contaminate executable predecessor joins.
         let mut incoming = vec![[None, None]; self.body.blocks.len()];
         let lifetime_global = |ty: TypeId| {
-            self.lifetime(&self.definition.types.get(ty).unwrap().modes.relation)
+            self.lifetime(&self.t.get(ty).unwrap().modes.relation)
                 .is_global()
         };
         let mut initial = model.initial(
             self.body,
-            &self.definition.types,
+            self.t,
             &self.scratch.origin_types[self.site.body.0 as usize],
             &lifetime_global,
             &|o| self.arena_place(o),
@@ -1513,7 +1497,7 @@ impl Checker<'_> {
                 continue;
             }
             let proof = hirsel_types::content_sendability(
-                &self.definition.types,
+                self.t,
                 local.ty,
                 &self.generic_declarations(),
                 &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
@@ -1611,8 +1595,8 @@ impl Checker<'_> {
             otherwise,
         } = terminator
         {
-            let mut store = self.working_store();
-            let count = match self.layout(&mut store, self.place_type(value.place)) {
+            let store = self.t;
+            let count = match self.layout(store, self.place_type(value.place)) {
                 Some(TypeKind::Variant(vs)) => Some(vs.len()),
                 Some(TypeKind::Primitive(Primitive::Bool)) => Some(2),
                 _ => None,
@@ -1679,7 +1663,7 @@ impl Checker<'_> {
             else {
                 continue;
             };
-            let (source, function, actuals, roles) = match callee {
+            let (function, actuals, roles) = match callee {
                 Callee::Definition { path, arguments } => {
                     let Some(signature) = self.signatures.get(path) else {
                         continue;
@@ -1687,12 +1671,7 @@ impl Checker<'_> {
                     let SignatureKind::Function(function) = &signature.kind else {
                         continue;
                     };
-                    (
-                        &signature.types,
-                        function,
-                        arguments,
-                        signature.metadata.roles.clone(),
-                    )
+                    (function, arguments, signature.metadata.roles.clone())
                 }
                 Callee::Indirect {
                     forward_caller: _,
@@ -1700,23 +1679,17 @@ impl Checker<'_> {
                     arguments,
                 } => {
                     let TypeKind::Function(function) = &self
-                        .definition
-                        .types
+                        .t
                         .get(nested.places[value.place.0 as usize].ty)
                         .unwrap()
                         .kind
                     else {
                         continue;
                     };
-                    (
-                        &self.definition.types,
-                        function,
-                        arguments,
-                        hirsel_types::NominalRoles::default(),
-                    )
+                    (function, arguments, hirsel_types::NominalRoles::default())
                 }
             };
-            let mut store = self.working_store();
+            let store = self.t;
             for argument in arguments {
                 let place = &nested.places[argument.value.place.0 as usize];
                 let Some(ordinal) = captures
@@ -1726,10 +1699,10 @@ impl Checker<'_> {
                     continue;
                 };
                 let Ok(Some(expected)) = hirsel_types::generic_crossing_parameter(
-                    source,
+                    store,
+                    self.memo,
                     function,
                     argument.parameter.0 as usize,
-                    &mut store,
                     actuals,
                     &roles,
                 ) else {
@@ -2169,25 +2142,25 @@ impl Checker<'_> {
             return;
         }
         let index = model.mapping[place.0 as usize];
-        let mut store = self.working_store();
+        let store = self.t;
         let body = self.body;
         let root = self.body.locals[access.root.0 as usize].ty;
         // A declaration-owned Local physical row stays valid when its current
         // contents prove Global. A stronger Global occurrence needs that proof.
         let root = if self
-            .lifetime(&self.definition.types.get(access.ty).unwrap().modes.relation)
+            .lifetime(&self.t.get(access.ty).unwrap().modes.relation)
             .is_global()
             && self.content_proof(Some(state), place).deep
             && store.get(root).unwrap().modes.relation.has_environment()
         {
             let mut row = store.get(root).unwrap().clone();
             row.modes.relation = self.placement(&row.modes.relation);
-            let root = store.push(row);
-            self.derive_sendability(&mut store, root)
+            let root = store.intern(row);
+            self.derive_sendability(store, root)
         } else {
             root
         };
-        let expected = self.projection_type_at(&mut store, access, root, |depth, field| {
+        let expected = self.projection_type_at(store, access, root, |depth, field| {
             let mut sibling = access.clone();
             sibling.projection.truncate(depth);
             sibling.projection.push(Projection::Field(field.0));
@@ -2203,30 +2176,29 @@ impl Checker<'_> {
         let mut proof = state.origins.bindings.clone();
         proof.extend(state.origins.proofs[index].clone());
         let expected = expected.and_then(|ty| {
-            super::flow_origins::canonical(&mut store, ty, &proof, &|o| self.arena_place(o)).ok()
+            super::flow_origins::canonical(store, ty, &proof, &|o| self.arena_place(o)).ok()
         });
         let actual =
-            super::flow_origins::canonical(&mut store, access.ty, &proof, &|o| self.arena_place(o))
-                .ok();
+            super::flow_origins::canonical(store, access.ty, &proof, &|o| self.arena_place(o)).ok();
         let expected = expected.map(|root| {
-            hirsel_types::canonical_plain_type(&mut store, root, &mut |path| {
+            hirsel_types::canonical_plain_type(store, root, &mut |path| {
                 Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
             })
             .unwrap_or(root)
         });
         let actual = actual.map(|root| {
             let physical = store.get(root).unwrap().modes.clone();
-            let root = hirsel_types::canonical_plain_type(&mut store, root, &mut |path| {
+            let root = hirsel_types::canonical_plain_type(store, root, &mut |path| {
                 Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
             })
             .unwrap_or(root);
             let mut row = store.get(root).unwrap().clone();
             row.modes.relation = physical.relation;
             row.modes.uniqueness = physical.uniqueness;
-            store.push(row)
+            store.intern(row)
         });
         let actual = actual.zip(expected).map(|(actual, expected)| {
-            let actual = self.comparison_evidence(&mut store, expected, actual);
+            let actual = self.comparison_evidence(store, expected, actual);
             let mut row = store.get(actual).unwrap().clone();
             if !matches!(
                 row.kind,
@@ -2238,22 +2210,21 @@ impl Checker<'_> {
             ) {
                 row.modes.sendability = store.get(expected).unwrap().modes.sendability.clone();
             }
-            store.push(row)
+            store.intern(row)
         });
-        if !matches!((expected, actual), (Some(a), Some(b)) if hirsel_types::semantic_equal(&store, a, &store, b).unwrap_or(false))
-        {
+        if !matches!((expected, actual), (Some(a), Some(b)) if self.t.semantic_eq(a, b)) {
             self.flow_error(report, ViolationKind::InvalidProjection(place));
             return;
         }
         let proof = super::flow_origins::remember(
-            &self.definition.types,
+            self.t,
             &self.scratch.origin_types[self.site.body.0 as usize],
             access.ty,
             &proof,
             &|o| self.arena_place(o),
         );
         let retained = super::flow_origins::retained(
-            &self.definition.types,
+            self.t,
             &self.scratch.origin_types[self.site.body.0 as usize],
             access.ty,
             &proof,
@@ -2499,7 +2470,7 @@ impl Checker<'_> {
     ) {
         let index = model.mapping[place.0 as usize];
         let retained = super::flow_origins::retained(
-            &self.definition.types,
+            self.t,
             &self.scratch.origin_types[self.site.body.0 as usize],
             self.place_type(place),
             &proof,
@@ -2534,8 +2505,7 @@ impl Checker<'_> {
                         && self
                             .lifetime(
                                 &self
-                                    .definition
-                                    .types
+                                    .t
                                     .get(self.body.locals[root].ty)
                                     .unwrap()
                                     .modes
@@ -2549,8 +2519,8 @@ impl Checker<'_> {
             current_sendable: arguments
                 .iter()
                 .filter(|a| {
-                    let mut store = self.working_store();
-                    let ty = self.transferred_type(state, &a.value, &mut store);
+                    let store = self.t;
+                    let ty = self.transferred_type(state, &a.value, store);
                     store.get(ty).unwrap().modes.sendability == hirsel_types::Sendability::Sendable
                 })
                 .map(|a| a.value.place.0)
@@ -2569,11 +2539,7 @@ impl Checker<'_> {
                 .filter(|a| {
                     let root = self.body.places[a.value.place.0 as usize].root.0 as usize;
                     (state.shared[root] || a.value.usage == UseKind::Copy)
-                        && needs_release(
-                            self,
-                            self.place_type(a.value.place),
-                            &self.definition.types,
-                        )
+                        && needs_release(self, self.place_type(a.value.place), self.t)
                         && !(a.value.usage == UseKind::Copy && self.flat_value(a.value.place))
                 })
                 .map(|a| a.value.place.0)
@@ -2602,9 +2568,9 @@ impl Checker<'_> {
                     fields: vec![].into(),
                 }
             };
-            let mut types = self.working_store();
+            let types = self.t;
             let brand = super::flow_origins::canonical(
-                &mut types,
+                types,
                 self.place_type(argument.value.place),
                 &state.origins.proofs[model.mapping[argument.value.place.0 as usize]],
                 &|o| self.arena_place(o),
@@ -2619,8 +2585,7 @@ impl Checker<'_> {
                     identity: identity.clone(),
                     relation: {
                         let relation = &self
-                            .definition
-                            .types
+                            .t
                             .get(self.place_type(argument.value.place))
                             .unwrap()
                             .modes
@@ -2824,18 +2789,18 @@ impl Checker<'_> {
     /// dropped, and the slot inherits the ended brand for every later use.
     fn inactive_variant_payload(&mut self, place: PlaceId) -> bool {
         let ty = self.place_type(place);
-        let row = self.definition.types.get(ty).unwrap();
+        let row = self.t.get(ty).unwrap();
         row.brand.alternatives.is_empty()
             && row.modes.relation.is_global()
             && matches!(row.kind, TypeKind::Named { .. })
             && {
-                let mut store = self.working_store();
-                self.brandless_variant_operand(&mut store, place, ty)
+                let store = self.t;
+                self.brandless_variant_operand(store, place, ty)
             }
     }
 
     fn inactive_callable_result(&mut self, place: PlaceId) -> bool {
-        let row = self.definition.types.get(self.place_type(place)).unwrap();
+        let row = self.t.get(self.place_type(place)).unwrap();
         let TypeKind::Function(function) = &row.kind else {
             return false;
         };
@@ -2843,7 +2808,7 @@ impl Checker<'_> {
             return false;
         }
         let result = function.result;
-        let row = self.definition.types.get(result).unwrap();
+        let row = self.t.get(result).unwrap();
         if !row.brand.alternatives.is_empty()
             || !row.modes.relation.is_global()
             || !matches!(row.kind, TypeKind::Named { .. })
@@ -2853,13 +2818,13 @@ impl Checker<'_> {
         let Some(callees) = self.local_callable_bodies(self.site.body, place) else {
             return false;
         };
-        let mut store = self.working_store();
+        let store = self.t;
         for callee in callees {
             let body = &self.definition.bodies[callee.0 as usize];
             let mut returns = false;
             for block in &body.blocks {
                 if let Terminator::Return { value, .. } = &block.terminator {
-                    if !self.brandless_variant_from(&mut store, callee, value.place, result) {
+                    if !self.brandless_variant_from(store, callee, value.place, result) {
                         return false;
                     }
                     returns = true;
@@ -2897,7 +2862,7 @@ impl Checker<'_> {
         if self.contract
             && (operand.usage == UseKind::Mut
                 || operand.usage == UseKind::Take
-                    && needs_release(self, self.place_type(place), &self.definition.types))
+                    && needs_release(self, self.place_type(place), self.t))
         {
             let mut read = operand.clone();
             read.usage = UseKind::Borrow;
@@ -2950,7 +2915,7 @@ impl Checker<'_> {
         match operand.usage {
             UseKind::Take => {
                 self.access_loans(model, state, place, false, report);
-                if needs_release(self, self.place_type(place), &self.definition.types)
+                if needs_release(self, self.place_type(place), self.t)
                     && (model.borrowed[root]
                         || state.ownership_conflicts[root]
                         || (!state.must[root].has(MustFacts::OWNED)
@@ -2964,7 +2929,7 @@ impl Checker<'_> {
                 // The mutable calling convention copies inline bits when a plain
                 // value is returned; the caller's storage remains initialized.
                 if !model.mutable_parameters[root]
-                    || needs_release(self, self.place_type(place), &self.definition.types)
+                    || needs_release(self, self.place_type(place), self.t)
                 {
                     self.clear(model, state, place, MOVED);
                 }
@@ -2990,7 +2955,7 @@ impl Checker<'_> {
                 let permissions =
                     self.access_loans(model, state, place, operand.usage == UseKind::Mut, report);
                 let active = derived || !permissions.is_empty();
-                if (needs_release(self, self.place_type(place), &self.definition.types)
+                if (needs_release(self, self.place_type(place), self.t)
                     || operand.usage == UseKind::Mut)
                     && !implicit
                     && !active
@@ -3009,13 +2974,13 @@ impl Checker<'_> {
             }
             UseKind::Copy => {
                 if !deep_copy
-                    && needs_release(self, self.place_type(place), &self.definition.types)
+                    && needs_release(self, self.place_type(place), self.t)
                     && !self.flat_value(place)
                 {
                     self.mark_shared(model, state, operand);
                 }
                 let permissions = self.access_loans(model, state, place, false, report);
-                if !copyable(self, self.place_type(place), &self.definition.types)
+                if !copyable(self, self.place_type(place), self.t)
                     && !self.result_read_permission(model, state, operand)
                 {
                     self.flow_error(report, ViolationKind::InvalidUse(place));
@@ -3044,29 +3009,26 @@ impl Checker<'_> {
             .filter(|(_, place)| {
                 place.root == access.root
                     && place.projection.starts_with(&access.projection)
-                    && matches!(
-                        self.definition.types.get(place.ty).unwrap().kind,
-                        TypeKind::Function(_)
-                    )
+                    && matches!(self.t.get(place.ty).unwrap().kind, TypeKind::Function(_))
             })
             .filter_map(|(index, place)| {
-                let mut types = self.working_store();
+                let types = self.t;
                 let actual = self.transferred_type(
                     state,
                     &Operand {
                         place: PlaceId(index as u32),
                         usage: UseKind::Borrow,
                     },
-                    &mut types,
+                    types,
                 );
                 (types.get(actual).unwrap().modes.sendability == Sendability::Sendable)
                     .then(|| crossing::path(&place.projection))
             })
             .collect();
-        let mut store = self.working_store();
+        let store = self.t;
         let mut referent = operand.clone();
         referent.usage = UseKind::Borrow;
-        let current = self.transferred_type(state, &referent, &mut store);
+        let current = self.transferred_type(state, &referent, store);
         let independent = hirsel_types::sendability_after_sharing(
             &store,
             current,
@@ -3131,7 +3093,7 @@ impl Checker<'_> {
         !sources.is_empty()
             && sources.is_subset(&model.selected_sources)
             && self.bound(
-                &self.definition.types,
+                self.t,
                 self.place_type(operand.place),
                 hirsel_types::Bound::Copyable,
                 &self
@@ -3141,10 +3103,10 @@ impl Checker<'_> {
     }
     fn result_permissions(&self) -> BTreeSet<hirsel_types::TypeParameterRef> {
         if self.site.body == self.definition.entry {
-            if let Some(signature) = self.signatures.get(&self.definition.path) {
+            if let Some(signature) = self.signatures.get(self.definition.path) {
                 if let SignatureKind::Function(f) = &signature.kind {
                     return hirsel_types::local_result_permissions(
-                        &signature.types,
+                        self.t,
                         f,
                         self.body.parameter_scope,
                     );
@@ -3157,14 +3119,13 @@ impl Checker<'_> {
                     if matches!(body.rvalues[value.0 as usize], Rvalue::Closure { body: child, .. } if child == self.site.body)
                     {
                         if let TypeKind::Function(f) = &self
-                            .definition
-                            .types
+                            .t
                             .get(body.places[destination.0 as usize].ty)
                             .unwrap()
                             .kind
                         {
                             return hirsel_types::local_result_permissions(
-                                &self.definition.types,
+                                self.t,
                                 f,
                                 self.body.parameter_scope,
                             );
@@ -3198,11 +3159,7 @@ impl Checker<'_> {
         // A copy is an owned share, except of a scoped function value, whose
         // environment still borrows its captures (CLO-1). A global function
         // value owns its captures (CLO-4) and is shared like any counted value.
-        let ty = self
-            .definition
-            .types
-            .get(self.place_type(operand.place))
-            .unwrap();
+        let ty = self.t.get(self.place_type(operand.place)).unwrap();
         if operand.usage == UseKind::Copy
             && !(matches!(ty.kind, TypeKind::Function(_))
                 && !self.lifetime(&ty.modes.relation).is_global())
@@ -3213,7 +3170,7 @@ impl Checker<'_> {
         // as `sources` judges: an error payload `?` takes from a borrowed
         // Result is independent of the Result's bound.
         if operand.usage == UseKind::Take
-            && !needs_release(self, self.place_type(operand.place), &self.definition.types)
+            && !needs_release(self, self.place_type(operand.place), self.t)
         {
             content = loan_content::Content::default();
         }
@@ -3298,14 +3255,14 @@ impl Checker<'_> {
     }
     fn sources(&self, model: &Model, state: &State, operand: &Operand) -> BTreeSet<usize> {
         let ty_id = self.place_type(operand.place);
-        let ty = self.definition.types.get(ty_id).unwrap();
+        let ty = self.t.get(ty_id).unwrap();
         // MEM-12 copies a flat value's pointer-free bytes into independent
         // storage. Prove flatness in this value's declaring generic namespace;
         // a Local value still retains its placement dependencies.
         if operand.usage == UseKind::Copy
             && self.lifetime(&ty.modes.relation).is_global()
             && self.bound(
-                &self.definition.types,
+                self.t,
                 ty_id,
                 hirsel_types::Bound::Flat,
                 &self.generic_declarations(),
@@ -3316,12 +3273,12 @@ impl Checker<'_> {
         // MEM-11, CONC-2: a copied Shared root acquires its own atomic count on
         // an immutable root that is never region-placed, and a copied Mutex or
         // Atomic its own count on a run-owned cell, also inside an aggregate.
-        if operand.usage == UseKind::Copy && self.copy_detaches(&self.definition.types, ty_id) {
+        if operand.usage == UseKind::Copy && self.copy_detaches(self.t, ty_id) {
             return BTreeSet::new();
         }
         // Plain bits have no region dependency (MODE-1). A claimed Global row
         // otherwise cannot erase a borrowed view retained in storage or fields.
-        if !needs_release(self, self.place_type(operand.place), &self.definition.types) {
+        if !needs_release(self, self.place_type(operand.place), self.t) {
             return BTreeSet::new();
         }
         let index = model.mapping[operand.place.0 as usize];
@@ -3341,11 +3298,7 @@ impl Checker<'_> {
                 if !seen.insert(source) {
                     continue;
                 }
-                let source_ty = self
-                    .definition
-                    .types
-                    .get(self.body.locals[source].ty)
-                    .unwrap();
+                let source_ty = self.t.get(self.body.locals[source].ty).unwrap();
                 if !source_ty.modes.relation.is_global() {
                     global = false;
                     break;
@@ -3391,19 +3344,14 @@ impl Checker<'_> {
                 let SignatureKind::Function(f) = &signature.kind else {
                     return None;
                 };
-                (&signature.types, f)
+                (self.t, f)
             }
             Callee::Indirect { value: o, .. } => {
-                let TypeKind::Function(f) = &self
-                    .definition
-                    .types
-                    .get(self.place_type(o.place))
-                    .unwrap()
-                    .kind
+                let TypeKind::Function(f) = &self.t.get(self.place_type(o.place)).unwrap().kind
                 else {
                     return None;
                 };
-                (&self.definition.types, f)
+                (self.t, f)
             }
         };
         Some(self.signature_lifetime(store, f, &store.get(f.result).unwrap().modes.relation))
@@ -3590,7 +3538,7 @@ impl Checker<'_> {
             model.mapping[place.0 as usize],
             false,
         )];
-        let mut store = self.working_store();
+        let store = self.t;
         let generics = self.generic_declarations();
         let mut nominals = hirsel_types::NominalExpansions::default();
         while let Some((ty, path, inherited, exit)) = pending.pop() {
@@ -3611,21 +3559,21 @@ impl Checker<'_> {
             // Resource finalizers run before their still-owned fields. A moved
             // child never erases the enclosing resource's destructor promise.
             if let TypeKind::Named { definition, .. } = &store.get(ty).unwrap().kind {
-                if self.signatures.get(definition).is_some_and(|signature| matches!(&signature.kind,
+                if self.signatures.get(*definition).is_some_and(|signature| matches!(&signature.kind,
                     SignatureKind::Type(declaration) if declaration.resource && state.defused[index] != 2 && declaration.destructor_allocation != hirsel_types::Allocation::NoAlloc)) {
                     return true;
                 }
             }
             if matches!(store.get(ty).unwrap().kind, TypeKind::Named { .. }) {
                 if !nominals
-                    .enter(ty, index, |_| &store)
+                    .enter(ty, index, store)
                     .unwrap_or_else(|error| self.proof_failure(error, false))
                 {
                     continue;
                 }
                 pending.push((ty, path.clone(), index, true));
             }
-            let fields: Vec<_> = match self.layout(&mut store, ty) {
+            let fields: Vec<_> = match self.layout(store, ty) {
                 Some(TypeKind::Record(fields)) => fields.iter().map(|field| field.ty).collect(),
                 Some(TypeKind::Tuple(fields)) => fields.to_vec(),
                 Some(TypeKind::Box(child)) => vec![child],
@@ -3694,7 +3642,7 @@ impl Checker<'_> {
             let root = model.places[index].root.0 as usize;
             if (!state.must[root].has(MustFacts::OWNED) || state.ownership_conflicts[root])
                 && !model.mutable_parameters[root]
-                && needs_release(self, self.place_type(place), &self.definition.types)
+                && needs_release(self, self.place_type(place), self.t)
             {
                 self.flow_error(report, ViolationKind::BorrowedMove(place));
             }
@@ -3782,8 +3730,7 @@ impl Checker<'_> {
                 CleanupAction::Drop { place, if_live } => {
                     let p = &self.body.places[place.0 as usize];
                     let index = model.mapping[place.0 as usize];
-                    if !p.projection.is_empty() && needs_release(self, p.ty, &self.definition.types)
-                    {
+                    if !p.projection.is_empty() && needs_release(self, p.ty, self.t) {
                         if p.projection
                             .iter()
                             .any(|p| matches!(p, Projection::Index(_)))
@@ -3925,10 +3872,10 @@ impl Checker<'_> {
         }
         // Derive the old content from root storage and declaration projections;
         // the producer's localized access row is not the storage contract.
-        let mut store = self.working_store();
+        let store = self.t;
         let access = self.body.places[destination.0 as usize].clone();
         let body = self.body;
-        let content = self.projection_type(&mut store, &access, |depth, field| {
+        let content = self.projection_type(store, &access, |depth, field| {
             let mut sibling = access.clone();
             sibling.projection.truncate(depth);
             sibling.projection.push(Projection::Field(field.0));
@@ -3951,8 +3898,7 @@ impl Checker<'_> {
             && self
                 .lifetime(
                     &self
-                        .definition
-                        .types
+                        .t
                         .get(self.body.locals[root].ty)
                         .unwrap()
                         .modes
@@ -3963,8 +3909,7 @@ impl Checker<'_> {
         // it (S2), so its displaced content may be local to those places.
         let related_receiver = model.mutable_parameters[root]
             && self
-                .definition
-                .types
+                .t
                 .get(self.body.locals[root].ty)
                 .unwrap()
                 .modes
@@ -3977,7 +3922,7 @@ impl Checker<'_> {
                 return ty;
             }
             hirsel_types::storage_content_type(
-                &mut store,
+                store,
                 ty,
                 &self.generic_declarations(),
                 &mut |path| {
@@ -3991,10 +3936,10 @@ impl Checker<'_> {
         let mut proof = state.origins.bindings.clone();
         proof.extend(state.origins.proofs[target].clone());
         let content = content.and_then(|ty| {
-            super::flow_origins::canonical(&mut store, ty, &proof, &|o| self.arena_place(o)).ok()
+            super::flow_origins::canonical(store, ty, &proof, &|o| self.arena_place(o)).ok()
         });
         let displaced_type =
-            super::flow_origins::canonical(&mut store, self.place_type(displaced), &proof, &|o| {
+            super::flow_origins::canonical(store, self.place_type(displaced), &proof, &|o| {
                 self.arena_place(o)
             })
             .ok();
@@ -4002,13 +3947,13 @@ impl Checker<'_> {
         // its storage declaration. The displaced row may retain weaker evidence,
         // but must preserve its receiving lifetime and retained brands.
         // Both sides as this frame sees them (S2).
-        let frame = |store: &mut TypeStore, ty: TypeId| {
+        let frame = |store: &TypeInterner, ty: TypeId| {
             let mut row = store.get(ty).unwrap().clone();
             row.modes.relation = self.frame_relation(&row.modes.relation);
-            store.push(row)
+            store.intern(row)
         };
-        let content = content.map(|ty| frame(&mut store, ty));
-        let displaced_type = displaced_type.map(|ty| frame(&mut store, ty));
+        let content = content.map(|ty| frame(store, ty));
+        let displaced_type = displaced_type.map(|ty| frame(store, ty));
         let displaced_comparison = displaced_type.map(|actual| {
             let Some(expected) = content else {
                 return actual;
@@ -4024,12 +3969,12 @@ impl Checker<'_> {
                         place: destination,
                         usage: UseKind::Borrow,
                     },
-                    &mut store,
+                    store,
                 );
                 if store.get(old).unwrap().modes.sendability == hirsel_types::Sendability::Sendable
                 {
                     row.modes.sendability = store.get(expected).unwrap().modes.sendability.clone();
-                    return store.push(row);
+                    return store.intern(row);
                 }
             }
             actual
@@ -4038,8 +3983,8 @@ impl Checker<'_> {
         if (local_receiver || related_receiver || self.lifetime(&store.get(actual).unwrap().modes.relation).is_global())
             && store.get(actual).unwrap().brand == store.get(expected).unwrap().brand
             && {
-                let (expected, actual) = super::typing::matching_crossing_contracts(&mut store, expected, actual, &mut BTreeMap::new());
-                self.compatible(&mut store, actual, expected, hirsel_types::TypeRelation::Value)
+                let (expected, actual) = super::typing::matching_crossing_contracts(store, expected, actual, &mut HashMap::new());
+                self.compatible(store, actual, expected, hirsel_types::TypeRelation::Value)
             })
         {
             self.flow_error(
@@ -4061,15 +4006,15 @@ impl Checker<'_> {
                 },
             );
         }
-        let incoming_type = self.transferred_type(state, value, &mut store);
+        let incoming_type = self.transferred_type(state, value, store);
         let value_type = super::flow_origins::canonical(
-            &mut store,
+            store,
             incoming_type,
             &state.origins.proofs[source],
             &|o| self.arena_place(o),
         )
         .ok();
-        if !matches!((content, value_type), (Some(expected), Some(actual)) if self.received_type(&mut store, expected, actual, value.usage))
+        if !matches!((content, value_type), (Some(expected), Some(actual)) if self.received_type(store, expected, actual, value.usage))
         {
             self.flow_error(
                 report,
@@ -4084,7 +4029,7 @@ impl Checker<'_> {
         let owned = value.usage == UseKind::Copy
             || value.usage == UseKind::Take
                 && (state.must[model.places[source].root.0 as usize].has(MustFacts::OWNED)
-                    || !needs_release(self, self.place_type(value.place), &self.definition.types));
+                    || !needs_release(self, self.place_type(value.place), self.t));
         let new_loans = self.operand_loans(model, state, value);
         let old_loans = self.installed_loans(state, destination);
         let new_shares = self.operand_shares(state, value);
@@ -4098,8 +4043,7 @@ impl Checker<'_> {
                     || !self
                         .lifetime(
                             &self
-                                .definition
-                                .types
+                                .t
                                 .get(self.place_type(value.place))
                                 .unwrap()
                                 .modes
@@ -4145,8 +4089,8 @@ impl Checker<'_> {
             && new_environment.retained().is_empty();
         let old_global = state.must[root].has(MustFacts::GLOBAL);
         let old_sendable = state.must[root].has(MustFacts::SENDABLE);
-        let mut content = self.working_store();
-        let transferred = self.transferred_type(state, value, &mut content);
+        let content = self.t;
+        let transferred = self.transferred_type(state, value, content);
         let new_sendable = content.get(transferred).unwrap().modes.sendability
             == hirsel_types::Sendability::Sendable;
         let new_crossing = self.operand_crossing_parts(state, value);
@@ -4271,14 +4215,14 @@ impl Checker<'_> {
         for index in model.parts(place) {
             let ty = model.places[index].ty;
             let proof = super::flow_origins::remember(
-                &self.definition.types,
+                self.t,
                 &self.scratch.origin_types[self.site.body.0 as usize],
                 ty,
                 &names,
                 &|origin| self.arena_place(origin),
             );
             let retained = super::flow_origins::retained(
-                &self.definition.types,
+                self.t,
                 &self.scratch.origin_types[self.site.body.0 as usize],
                 ty,
                 &proof,
@@ -4309,14 +4253,14 @@ impl Checker<'_> {
                     _ => None,
                 })
             }
-            Callee::Indirect { value, .. } => self
-                .definition
-                .types
-                .get(self.place_type(value.place))
-                .and_then(|row| match &row.kind {
-                    TypeKind::Function(f) => Some(f),
-                    _ => None,
-                }),
+            Callee::Indirect { value, .. } => {
+                self.t
+                    .get(self.place_type(value.place))
+                    .and_then(|row| match &row.kind {
+                        TypeKind::Function(f) => Some(f),
+                        _ => None,
+                    })
+            }
         };
         function.is_some_and(|f| {
             f.state_promises.iter().any(|p| {
@@ -4341,7 +4285,7 @@ impl Checker<'_> {
                 && (f.state_promises.iter().any(|p| {
                     p.selector.parameter == ParameterRef::bound(ordinal) && p.preserve_unique
                 }) || ordinal == hirsel_types::ParamId(1)
-                    && super::format_association(signature, self.signatures))
+                    && super::format_association(self.t, signature, self.signatures))
         })
     }
     /// MODE-2: a direct generic call whose result holds only values of type
@@ -4363,14 +4307,13 @@ impl Checker<'_> {
             return false;
         };
         let mut lookup =
-            |path: &DefPath| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new));
+            |path: DefId| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new));
         // A bodyless core declaration has no checked body.
         let checked = !path.package_is("core", "1");
-        let Some(inputs) = parametric_inputs(&signature.types, function, checked, &mut lookup)
-        else {
+        let Some(inputs) = parametric_inputs(self.t, function, checked, &mut lookup) else {
             return false;
         };
-        let types = &self.definition.types;
+        let types = self.t;
         arguments.iter().all(|a| {
             let ty = self.place_type(a.value.place);
             match inputs.get(a.parameter.0 as usize) {
@@ -4386,7 +4329,7 @@ impl Checker<'_> {
                         types,
                         f.result,
                         &self.generic_declarations(),
-                        &mut |path: &DefPath| {
+                        &mut |path: DefId| {
                             Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
                         },
                     ))
@@ -4410,7 +4353,7 @@ impl Checker<'_> {
     }
     /// The roots whose borrow-only shares an operand's counted content may hold.
     fn operand_shares(&self, state: &State, operand: &Operand) -> BTreeSet<usize> {
-        if !needs_release(self, self.place_type(operand.place), &self.definition.types) {
+        if !needs_release(self, self.place_type(operand.place), self.t) {
             return BTreeSet::new();
         }
         state.borrowed_shares[self.body.places[operand.place.0 as usize].root.0 as usize].clone()
@@ -4472,14 +4415,13 @@ impl Checker<'_> {
             let promised = match model.unique_proof {
                 Some(selected) => selected == root,
                 None => {
-                    self.definition.types.get(ty).unwrap().modes.uniqueness
-                        == hirsel_types::Uniqueness::Unique
+                    self.t.get(ty).unwrap().modes.uniqueness == hirsel_types::Uniqueness::Unique
                 }
             };
             if promised
                 && !model.releasing.get()
-                && needs_release(self, ty, &self.definition.types)
-                && !super::handle_root(&self.definition.types, ty)
+                && needs_release(self, ty, self.t)
+                && !super::handle_root(self.t, ty)
                 && (state.shared[root]
                     && !(state.borrow_only[root]
                         && !model.returning_shares.borrow().contains(&root))
@@ -4502,10 +4444,9 @@ impl Checker<'_> {
                 }
             }
             self.storage_dependencies(model, state, place, report);
-            let store = self.definition.types.clone();
             self.nested_crossing_receipt(
                 state,
-                &store,
+                self.t,
                 self.place_type(place),
                 &Operand {
                     place,
@@ -4513,16 +4454,16 @@ impl Checker<'_> {
                 },
                 report,
             );
-            let row = self.definition.types.get(self.place_type(place)).unwrap();
+            let row = self.t.get(self.place_type(place)).unwrap();
             if hirsel_types::crossing_requirement(row) == hirsel_types::Sendability::Sendable {
-                let mut store = self.working_store();
+                let store = self.t;
                 let actual = self.transferred_type(
                     state,
                     &Operand {
                         place,
                         usage: UseKind::Mut,
                     },
-                    &mut store,
+                    store,
                 );
                 if store.get(actual).unwrap().modes.sendability
                     != hirsel_types::Sendability::Sendable
@@ -4752,7 +4693,7 @@ impl Checker<'_> {
                                 && !access.projection.is_empty()
                             {
                                 let proof = super::flow_origins::remember(
-                                    &self.definition.types,
+                                    self.t,
                                     &self.scratch.origin_types[self.site.body.0 as usize],
                                     access.ty,
                                     &names,
@@ -4764,7 +4705,7 @@ impl Checker<'_> {
                                         .or_insert(values);
                                 }
                                 let retained = super::flow_origins::retained(
-                                    &self.definition.types,
+                                    self.t,
                                     &self.scratch.origin_types[self.site.body.0 as usize],
                                     access.ty,
                                     &state.origins.proofs[projected],
@@ -4786,20 +4727,14 @@ impl Checker<'_> {
                     self.conflict(model, state, *place, false, false, report);
                     let index = model.mapping[place.0 as usize];
                     let root = model.places[index].root.0 as usize;
-                    let owner = match &self
-                        .definition
-                        .types
-                        .get(self.place_type(*place))
-                        .unwrap()
-                        .kind
-                    {
+                    let owner = match &self.t.get(self.place_type(*place)).unwrap().kind {
                         TypeKind::Named { definition, .. } => Some(definition),
                         _ => None,
                     };
                     let valid = owner.is_some_and(|owner| {
-                        owner.0.package == self.definition.path.0.package
-                            && owner.0.modules == self.definition.path.0.modules
-                            && self.signatures.get(owner).is_some_and(|signature| matches!(
+                        owner.path().0.package == self.definition.path.path().0.package
+                            && owner.path().0.modules == self.definition.path.path().0.modules
+                            && self.signatures.get(*owner).is_some_and(|signature| matches!(
                                 &signature.kind, SignatureKind::Type(td) if td.resource && td.drop.is_some()
                             ))
                     });
@@ -4819,7 +4754,7 @@ impl Checker<'_> {
                     self.end_origin(model, state, *place);
                 }
                 InstructionKind::StorageDead { place, if_live } => {
-                    if needs_release(self, self.place_type(*place), &self.definition.types) {
+                    if needs_release(self, self.place_type(*place), self.t) {
                         self.flow_error(report, ViolationKind::InvalidUse(*place));
                     } else {
                         self.drop_place(model, state, *place, *if_live, report, true);
@@ -5076,7 +5011,7 @@ impl Checker<'_> {
                         _ => BTreeSet::new(),
                     };
                     let mut origin_proof = super::flow_origins::remember(
-                        &self.definition.types,
+                        self.t,
                         &self.scratch.origin_types[self.site.body.0 as usize],
                         self.place_type(*destination),
                         &state.origins.bindings,
@@ -5225,11 +5160,7 @@ impl Checker<'_> {
                         }
                     ) && environment.retained().is_empty()
                         && !matches!(
-                            self.definition
-                                .types
-                                .get(self.place_type(*destination))
-                                .unwrap()
-                                .kind,
+                            self.t.get(self.place_type(*destination)).unwrap().kind,
                             TypeKind::Function(_) | TypeKind::Parameter(_)
                         )
                     {
@@ -5240,13 +5171,7 @@ impl Checker<'_> {
                     // MODE-1/OWN-8: owned plain results copy bits, so their
                     // lifetime is independent of the operand's access loan.
                     // Explicit Borrow/Mut views still retain that dependency.
-                    if owned
-                        && !needs_release(
-                            self,
-                            self.place_type(*destination),
-                            &self.definition.types,
-                        )
-                    {
+                    if owned && !needs_release(self, self.place_type(*destination), self.t) {
                         dependencies.clear();
                         content_loans = loan_content::Content::default();
                         sources.clear();
@@ -5255,8 +5180,7 @@ impl Checker<'_> {
                     let global_storage = self
                         .lifetime(
                             &self
-                                .definition
-                                .types
+                                .t
                                 .get(self.place_type(*destination))
                                 .unwrap()
                                 .modes
@@ -5267,8 +5191,7 @@ impl Checker<'_> {
                             && self
                                 .lifetime(
                                     &self
-                                        .definition
-                                        .types
+                                        .t
                                         .get(self.body.locals[access.root.0 as usize].ty)
                                         .unwrap()
                                         .modes
@@ -5340,18 +5263,18 @@ impl Checker<'_> {
                     let root = self.body.places[destination.0 as usize].root.0 as usize;
                     if model.mutable_parameters[root] {
                         if let Rvalue::Use(operand) = rvalue {
-                            if !hirsel_types::compatible_storage_type(
-                                &self.definition.types,
-                                self.place_type(*destination),
-                                self.place_type(operand.place),
-                                &self.generic_declarations(),
-                                &mut |path| {
-                                    Ok::<_, hirsel_types::QueryError>(
-                                        self.signatures.get(path).cloned().map(std::sync::Arc::new),
-                                    )
-                                },
-                            )
-                            .unwrap_or_else(|error| self.proof_failure(error, false))
+                            let generics = self.generic_declarations();
+                            let mut lookup = |path: DefId| {
+                                Ok::<_, hirsel_types::QueryError>(
+                                    self.signatures.get(path).cloned().map(std::sync::Arc::new),
+                                )
+                            };
+                            if !hirsel_types::ContextMemo::new(self.t, &generics, &mut lookup)
+                                .storage(
+                                    self.place_type(*destination),
+                                    self.place_type(operand.place),
+                                )
+                                .unwrap_or_else(|error| self.proof_failure(error, false))
                             {
                                 self.flow_error(
                                     report,
@@ -5385,8 +5308,8 @@ impl Checker<'_> {
                     let environment = self.environment(model, state, value.place);
                     let proof = state.origins.proofs[source].clone();
                     let expired = state.origins.expired[source].clone();
-                    let mut transfer_store = self.working_store();
-                    let transferred = self.transferred_type(state, value, &mut transfer_store);
+                    let transfer_store = self.t;
+                    let transferred = self.transferred_type(state, value, transfer_store);
                     let sendable = transfer_store.get(transferred).unwrap().modes.sendability
                         == Sendability::Sendable;
                     let crossing = self.operand_crossing_parts(state, value);
@@ -5480,8 +5403,7 @@ impl Checker<'_> {
                         self.flow_error(report, ViolationKind::InvalidUse(*place));
                     }
                     let live = state.places[model.mapping[place.0 as usize]] & LIVE != 0;
-                    let may_fail = live
-                        && needs_release(self, self.place_type(*place), &self.definition.types);
+                    let may_fail = live && needs_release(self, self.place_type(*place), self.t);
                     // MODE-2: a release that runs user code may fail while a
                     // hand-back is weakened; a copyable one runs none (DROP-1).
                     let silent = !(live && self.destroyed(self.place_type(*place)));
@@ -5493,10 +5415,12 @@ impl Checker<'_> {
                 InstructionKind::RunCleanup(id) => {
                     // An empty/dead cleanup can never enter its emergency edge.
                     // Still validate the ownership snapshot independently.
-                    let may_fail = self.body.cleanup_actions(*id).any(|action| matches!(action,
+                    let may_fail = self.body.cleanup_actions(*id).any(|action| {
+                        matches!(action,
                         CleanupAction::Drop { place, .. }
                             if state.places[model.mapping[place.0 as usize]] & LIVE != 0
-                                && needs_release(self, self.place_type(*place), &self.definition.types)));
+                                && needs_release(self, self.place_type(*place), self.t))
+                    });
                     let silent = !self.body.cleanup_actions(*id).any(|action| {
                         matches!(action,
                         CleanupAction::Drop { place, .. }
@@ -5562,10 +5486,10 @@ impl Checker<'_> {
                                 else {
                                     return false;
                                 };
-                                (&signature.types, function)
+                                (self.t, function)
                             }
                             Callee::Indirect { value, .. } => {
-                                let types = &self.definition.types;
+                                let types = self.t;
                                 let hirsel_types::TypeKind::Function(function) =
                                     &types.get(self.place_type(value.place)).unwrap().kind
                                 else {
@@ -5583,7 +5507,7 @@ impl Checker<'_> {
                             return true;
                         }
                         let mut pending = vec![parameter.ty];
-                        let mut seen = BTreeSet::new();
+                        let mut seen = HashSet::new();
                         while let Some(ty) = pending.pop() {
                             if !seen.insert(ty) {
                                 continue;
@@ -5679,11 +5603,7 @@ impl Checker<'_> {
                     .collect();
                 for value in callbacks {
                     if matches!(
-                        self.definition
-                            .types
-                            .get(self.place_type(value.place))
-                            .unwrap()
-                            .kind,
+                        self.t.get(self.place_type(value.place)).unwrap().kind,
                         TypeKind::Function(_)
                     ) || !self
                         .environment(model, state, value.place)
@@ -5724,7 +5644,7 @@ impl Checker<'_> {
                         self.result_arguments(callee, arguments);
                     let mut returned_environment = super::flow_origins::Environment::default();
                     if !self.bound(
-                        &self.definition.types,
+                        self.t,
                         self.place_type(destination),
                         hirsel_types::Bound::Plain,
                         &self.generic_declarations(),
@@ -5735,11 +5655,7 @@ impl Checker<'_> {
                                 returned_environment.require_crossing(PlaceId(place), path);
                             }
                             if matches!(
-                                self.definition
-                                    .types
-                                    .get(self.place_type(destination))
-                                    .unwrap()
-                                    .kind,
+                                self.t.get(self.place_type(destination)).unwrap().kind,
                                 TypeKind::Function(_)
                             ) {
                                 for place in environment.sharing() {
@@ -5762,13 +5678,7 @@ impl Checker<'_> {
                             !(self.content_proof(Some(state), o.place).deep
                                 && self.current_content_global(state, o))
                                 || (self.placed(
-                                    &self
-                                        .definition
-                                        .types
-                                        .get(self.place_type(o.place))
-                                        .unwrap()
-                                        .modes
-                                        .relation,
+                                    &self.t.get(self.place_type(o.place)).unwrap().modes.relation,
                                 ) && !model.temporary
                                     [self.body.places[o.place.0 as usize].root.0 as usize])
                         })
@@ -5777,11 +5687,7 @@ impl Checker<'_> {
                         .iter()
                         .flat_map(|(o, _)| self.sources(model, state, o))
                         .collect();
-                    let result_row = self
-                        .definition
-                        .types
-                        .get(self.place_type(destination))
-                        .unwrap();
+                    let result_row = self.t.get(self.place_type(destination)).unwrap();
                     let shared_result = matches!(
                         result_row.kind,
                         TypeKind::Builtin {
@@ -5790,7 +5696,7 @@ impl Checker<'_> {
                         }
                     );
                     if !shared_result
-                        && needs_release(self, self.place_type(destination), &self.definition.types)
+                        && needs_release(self, self.place_type(destination), self.t)
                         && !self.flat_value(destination)
                     {
                         // MODE-2 (#80): a counted result of calling a closure may
@@ -5833,7 +5739,7 @@ impl Checker<'_> {
                         }
                     }
                     let composed_result = self.bound(
-                        &self.definition.types,
+                        self.t,
                         self.place_type(destination),
                         hirsel_types::Bound::Data,
                         &self.generic_declarations(),
@@ -5883,15 +5789,8 @@ impl Checker<'_> {
                     let retained = ledger && !self.callee_unretained(callee, a.parameter);
                     borrowed && !retained
                         || a.value.usage == UseKind::Mut && !ledger
-                        || !needs_release(
-                            self,
-                            self.place_type(a.value.place),
-                            &self.definition.types,
-                        )
-                        || super::handle_root(
-                            &self.definition.types,
-                            self.place_type(a.value.place),
-                        )
+                        || !needs_release(self, self.place_type(a.value.place), self.t)
+                        || super::handle_root(self.t, self.place_type(a.value.place))
                         || !borrowed && self.operand_unique(state, &a.value)
                 });
                 let parametric = self.parametric_unique(state, callee, arguments);
@@ -5925,12 +5824,11 @@ impl Checker<'_> {
                 let mut mutated = Vec::new();
                 for argument in arguments {
                     let place = argument.value.place;
-                    let row = self.definition.types.get(self.place_type(place)).unwrap();
+                    let row = self.t.get(self.place_type(place)).unwrap();
                     if argument.value.usage == UseKind::Mut
                         && !self.callee_preserves_state(callee, argument.parameter, false)
                     {
-                        let receipts =
-                            self.crossing_receipts(&self.definition.types, self.place_type(place));
+                        let receipts = self.crossing_receipts(self.t, self.place_type(place));
                         let access = &self.body.places[place.0 as usize];
                         let prefix = crossing::path(&access.projection);
                         let mut parts = crossing::Parts::default();
@@ -5951,7 +5849,7 @@ impl Checker<'_> {
                             hirsel_types::crossing_requirement(row)
                                 == hirsel_types::Sendability::Sendable
                                 || self.bound(
-                                    &self.definition.types,
+                                    self.t,
                                     self.place_type(place),
                                     hirsel_types::Bound::Plain,
                                     &self.generic_declarations(),
@@ -6086,8 +5984,7 @@ impl Checker<'_> {
                     promised
                         || parametric
                         || self
-                            .definition
-                            .types
+                            .t
                             .get(self.place_type(destination))
                             .unwrap()
                             .modes
@@ -6099,8 +5996,7 @@ impl Checker<'_> {
                     destination,
                     self.lifetime(
                         &self
-                            .definition
-                            .types
+                            .t
                             .get(self.place_type(destination))
                             .unwrap()
                             .modes
@@ -6111,8 +6007,7 @@ impl Checker<'_> {
                 self.set_current_sendable(
                     state,
                     destination,
-                    self.definition
-                        .types
+                    self.t
                         .get(self.place_type(destination))
                         .unwrap()
                         .modes
@@ -6124,8 +6019,7 @@ impl Checker<'_> {
                 self.install_tags(model, state, destination, tags::Parts::new());
                 let locality = self.lifetime(
                     &self
-                        .definition
-                        .types
+                        .t
                         .get(self.place_type(destination))
                         .unwrap()
                         .modes
@@ -6147,7 +6041,7 @@ impl Checker<'_> {
                 self.set_sources(model, state, destination, sources);
                 self.set_borrowed_shares(state, destination, borrowed, true);
                 let result_origins = super::flow_origins::remember(
-                    &self.definition.types,
+                    self.t,
                     &self.scratch.origin_types[self.site.body.0 as usize],
                     self.place_type(destination),
                     &state.origins.bindings,
@@ -6161,8 +6055,8 @@ impl Checker<'_> {
                 if model
                     .unique_proof
                     .is_some_and(|root| !model.mutable_parameters[root])
-                    && needs_release(self, self.place_type(value.place), &self.definition.types)
-                    && !super::handle_root(&self.definition.types, self.place_type(value.place))
+                    && needs_release(self, self.place_type(value.place), self.t)
+                    && !super::handle_root(self.t, self.place_type(value.place))
                     && !self.operand_unique(state, value)
                 {
                     self.flow_error(
@@ -6173,16 +6067,15 @@ impl Checker<'_> {
                     );
                 }
                 if !state.audit {
-                    let mut types = self.working_store();
-                    let actual = self.transferred_type(state, value, &mut types);
+                    let types = self.t;
+                    let actual = self.transferred_type(state, value, types);
                     self.returned.insert(
                         self.site.block.unwrap().0,
                         types.get(actual).unwrap().clone(),
                     );
                 }
-                let result_store = self.definition.types.clone();
-                self.nested_crossing_receipt(state, &result_store, self.body.result, value, report);
-                let result = self.definition.types.get(self.body.result).unwrap();
+                self.nested_crossing_receipt(state, self.t, self.body.result, value, report);
+                let result = self.t.get(self.body.result).unwrap();
                 let result_lifetime = self.lifetime(&result.modes.relation);
                 let named: Option<BTreeSet<_>> = match result_lifetime.named_parameters() {
                     // An environment-local body row is a closure's or function
@@ -6230,14 +6123,14 @@ impl Checker<'_> {
                 {
                     self.flow_error(report, ViolationKind::InvalidResultSource(value.place));
                 }
-                if needs_release(self, self.place_type(value.place), &self.definition.types)
+                if needs_release(self, self.place_type(value.place), self.t)
                     && matches!(value.usage, UseKind::Borrow | UseKind::Mut)
                 {
                     self.flow_error(report, ViolationKind::BorrowedMove(value.place));
                 }
                 let returned_origin = model.mapping[value.place.0 as usize];
                 if super::flow_origins::canonical(
-                    &mut self.working_store(),
+                    &mut self.t,
                     self.place_type(value.place),
                     &state.origins.proofs[returned_origin],
                     &|o| self.arena_place(o),
@@ -6256,7 +6149,7 @@ impl Checker<'_> {
                     && state.must[value_root].has(MustFacts::OWNED)
                     && !state.ownership_conflicts[value_root]
                     && self.bound(
-                        &self.definition.types,
+                        self.t,
                         self.place_type(value.place),
                         hirsel_types::Bound::Data,
                         &self.generic_declarations(),
@@ -6292,15 +6185,9 @@ impl Checker<'_> {
                         !(matches!(
                             self.body.locals[root].storage,
                             Storage::Local | Storage::Temporary
-                        ) && self.placed(
-                            &self
-                                .definition
-                                .types
-                                .get(self.place_type(source))
-                                .unwrap()
-                                .modes
-                                .relation,
-                        ) && !self.taken_storage(model, source)
+                        ) && self
+                            .placed(&self.t.get(self.place_type(source)).unwrap().modes.relation)
+                            && !self.taken_storage(model, source)
                             && self.current_content_global(
                                 state,
                                 &Operand {
@@ -6379,8 +6266,7 @@ impl Checker<'_> {
                     // A taken parameter whose content is global and unplaced
                     // is its own share, as the source checker judges it.
                     let relation = &self
-                        .definition
-                        .types
+                        .t
                         .get(self.body.locals[root.0 as usize].ty)
                         .unwrap()
                         .modes
@@ -6713,9 +6599,9 @@ mod header_name_tests {
                 &|o| checker.arena_place(o),
                 &[],
             );
-            let mut store = checker.working_store();
+            let store = checker.t;
             let canonical =
-                super::flow_origins::canonical(&mut store, root, &state.origins.bindings, &|o| {
+                super::flow_origins::canonical(store, root, &state.origins.bindings, &|o| {
                     checker.arena_place(o)
                 });
             assert_eq!(
@@ -6724,7 +6610,7 @@ mod header_name_tests {
                 "header={header}, ordinal={ordinal}: {canonical:?}"
             );
             if let Ok(canonical) = canonical {
-                assert!(semantic_equal(&store, root, &store, canonical).unwrap());
+                assert!(t.semantic_eq(root, canonical));
             }
         }
     }
@@ -6807,9 +6693,9 @@ mod header_name_tests {
                 &|o| checker.arena_place(o),
                 &[super::super::flow_origins::CapturedOrigin::default()],
             );
-            let mut store = checker.working_store();
+            let store = checker.t;
             let canonical =
-                super::flow_origins::canonical(&mut store, root, &state.origins.bindings, &|o| {
+                super::flow_origins::canonical(store, root, &state.origins.bindings, &|o| {
                     checker.arena_place(o)
                 });
             assert_eq!(
@@ -6821,7 +6707,7 @@ mod header_name_tests {
             assert!(!state.must[1].has(MustFacts::GLOBAL));
             assert!(state.origins.proofs[model.roots[1]].is_empty());
             if let Ok(canonical) = canonical {
-                assert!(semantic_equal(&store, root, &store, canonical).unwrap());
+                assert!(t.semantic_eq(root, canonical));
             }
         }
     }

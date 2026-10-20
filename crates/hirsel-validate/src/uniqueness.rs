@@ -1,17 +1,17 @@
 //! Sharing ends uniqueness until storage receives a fresh whole value.
 use super::*;
-use hirsel_types::{Sendability, TypeId, TypeKind, TypeStore, Uniqueness};
+use hirsel_types::{Sendability, TypeId, TypeInterner, TypeKind, Uniqueness};
 
 impl Checker<'_> {
     pub(crate) fn flat_value(&self, place: PlaceId) -> bool {
         self.bound(
-            &self.definition.types,
+            self.t,
             self.place_type(place),
             hirsel_types::Bound::Flat,
             &self.generic_declarations(),
         )
     }
-    pub(crate) fn copied_type(&self, store: &mut TypeStore, value: &Operand, ty: TypeId) -> TypeId {
+    pub(crate) fn copied_type(&self, store: &TypeInterner, value: &Operand, ty: TypeId) -> TypeId {
         if value.usage != UseKind::Copy {
             return ty;
         }
@@ -21,7 +21,7 @@ impl Checker<'_> {
             // value, never region-placed: it is global.
             let mut row = store.get(ty).unwrap().clone();
             row.modes.relation = self.placement(&row.modes.relation);
-            let root = store.push(row.clone());
+            let root = store.intern(row.clone());
             row.modes.sendability = hirsel_types::structural_sendability(
                 store,
                 root,
@@ -35,14 +35,14 @@ impl Checker<'_> {
             .unwrap_or_else(|error| {
                 self.proof_failure(error, hirsel_types::Sendability::NotSendable)
             });
-            return store.push(row);
+            return store.intern(row);
         }
         if !self.flat_value(value.place) {
             return ty;
         }
         let mut row = store.get(ty).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
-        let root = store.push(row.clone());
+        let root = store.intern(row.clone());
         row.modes.sendability = hirsel_types::content_sendability(
             store,
             root,
@@ -54,11 +54,11 @@ impl Checker<'_> {
             },
         )
         .unwrap_or_else(|error| self.proof_failure(error, hirsel_types::Sendability::NotSendable));
-        store.push(row)
+        store.intern(row)
     }
     pub(crate) fn weakened_type(
         &self,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         ty: TypeId,
         generics: &hirsel_types::GenericDeclarations,
     ) -> TypeId {
@@ -67,7 +67,7 @@ impl Checker<'_> {
         if !erased_environment(&row.kind) {
             row.modes.sendability = Sendability::NotSendable;
         }
-        let root = store.push(row.clone());
+        let root = store.intern(row.clone());
         row.modes.sendability =
             hirsel_types::sendability_after_sharing(store, root, generics, &mut |p| {
                 Ok::<_, hirsel_types::QueryError>(
@@ -77,13 +77,13 @@ impl Checker<'_> {
             .unwrap_or_else(|error| {
                 self.proof_failure(error, hirsel_types::Sendability::NotSendable)
             });
-        store.push(row)
+        store.intern(row)
     }
     pub(super) fn transferred_type(
         &self,
         state: &State,
         value: &Operand,
-        store: &mut TypeStore,
+        store: &TypeInterner,
     ) -> TypeId {
         let root = self.body.places[value.place.0 as usize].root.0 as usize;
         let ty = self.place_type(value.place);
@@ -123,7 +123,7 @@ impl Checker<'_> {
             if state.must[root].has(MustFacts::SENDABLE) {
                 proof.modes.sendability = Sendability::Sendable;
             } else {
-                let part = store.push(proof);
+                let part = store.intern(proof);
                 let unique = self.unique_type(store, part);
                 proof = store.get(unique).unwrap().clone();
             }
@@ -151,7 +151,7 @@ impl Checker<'_> {
                 };
             }
         }
-        let ty = store.push(row);
+        let ty = store.intern(row);
         let ty = if self.global_operand(state, value)
             && store.get(ty).unwrap().modes.relation.has_environment()
         {
@@ -165,7 +165,7 @@ impl Checker<'_> {
                 row.modes.sendability = Sendability::Sendable;
             }
 
-            let root = store.push(row);
+            let root = store.intern(row);
             self.derive_sendability(store, root)
         } else {
             ty
@@ -179,7 +179,7 @@ impl Checker<'_> {
             if state.must[root].has(MustFacts::SENDABLE) {
                 let mut row = store.get(unique).unwrap().clone();
                 row.modes.sendability = Sendability::Sendable;
-                return store.push(row);
+                return store.intern(row);
             }
             return unique;
         }
@@ -188,7 +188,7 @@ impl Checker<'_> {
             .is_empty();
         if (state.shared[root] && (!projected || part_proof != Some(true))
             || value.usage == UseKind::Copy)
-            && needs_release(self, ty, &self.definition.types)
+            && needs_release(self, ty, self.t)
         {
             let weakened = self.weakened_type(store, ty, &self.generic_declarations());
             if !projected
@@ -197,7 +197,7 @@ impl Checker<'_> {
             {
                 let mut row = store.get(weakened).unwrap().clone();
                 row.modes.sendability = Sendability::Sendable;
-                store.push(row)
+                store.intern(row)
             } else {
                 weakened
             }
@@ -206,11 +206,11 @@ impl Checker<'_> {
             if access.projection.is_empty() && state.must[root].has(MustFacts::SENDABLE) {
                 let mut row = store.get(ty).unwrap().clone();
                 row.modes.sendability = Sendability::Sendable;
-                store.push(row)
+                store.intern(row)
             } else if projected && !self.operand_unique(state, value) {
                 let mut row = store.get(ty).unwrap().clone();
                 row.modes.uniqueness = Uniqueness::Aliased;
-                store.push(row)
+                store.intern(row)
             } else {
                 ty
             }
@@ -223,7 +223,7 @@ impl Checker<'_> {
         rvalue: &Rvalue,
     ) -> bool {
         let declared = self.place_type(destination);
-        let mut store = self.working_store();
+        let store = self.t;
         if !self
             .placement(&store.get(declared).unwrap().modes.relation)
             .is_global()
@@ -232,7 +232,7 @@ impl Checker<'_> {
         }
         match rvalue {
             Rvalue::Use(value) => {
-                let ty = self.transferred_type(state, value, &mut store);
+                let ty = self.transferred_type(state, value, store);
                 store.get(ty).unwrap().modes.sendability == Sendability::Sendable
                     || self.bound(
                         &store,
@@ -246,14 +246,13 @@ impl Checker<'_> {
             | Rvalue::Shape(_)
             | Rvalue::FunctionReference { .. } => true,
             Rvalue::Construct { fields, .. } => fields.iter().all(|field| {
-                let ty = self.transferred_type(state, &field.value, &mut store);
+                let ty = self.transferred_type(state, &field.value, store);
                 store.get(ty).unwrap().modes.sendability == Sendability::Sendable
             }),
             Rvalue::Closure { captures, .. } => captures.iter().all(|capture| {
-                let ty = self.transferred_type(state, capture, &mut store);
-                let mut lookup = |path: &hirsel_syntax::DefPath| {
-                    Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
-                };
+                let ty = self.transferred_type(state, capture, store);
+                let mut lookup =
+                    |path: DefId| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new));
                 let proof = if capture.usage == UseKind::Copy {
                     hirsel_types::sendability_after_sharing(
                         &store,
@@ -276,29 +275,29 @@ impl Checker<'_> {
                 op: hirsel_syntax::UnaryOp::Unique,
                 value,
             } => {
-                let incoming = self.transferred_type(state, value, &mut store);
+                let incoming = self.transferred_type(state, value, store);
                 let mut row = store.get(incoming).unwrap().clone();
                 row.modes.relation = self.placement(&row.modes.relation);
-                let incoming = store.push(row);
-                let ty = self.unique_type(&mut store, incoming);
+                let incoming = store.intern(row);
+                let ty = self.unique_type(store, incoming);
                 store.get(ty).unwrap().modes.sendability == Sendability::Sendable
             }
             Rvalue::Unary {
                 op: hirsel_syntax::UnaryOp::Box,
                 value,
             } => {
-                let ty = self.transferred_type(state, value, &mut store);
+                let ty = self.transferred_type(state, value, store);
                 store.get(ty).unwrap().modes.sendability == Sendability::Sendable
             }
             _ => {
-                let ty = self.derive_sendability(&mut store, declared);
+                let ty = self.derive_sendability(store, declared);
                 store.get(ty).unwrap().modes.sendability == Sendability::Sendable
             }
         }
     }
     pub(super) fn crossing_receipts(
         &self,
-        store: &TypeStore,
+        store: &TypeInterner,
         root: TypeId,
     ) -> Vec<(Vec<crossing::Part>, bool)> {
         hirsel_types::owned_crossing_receipts(
@@ -325,35 +324,24 @@ impl Checker<'_> {
         })
         .collect()
     }
-    fn has_crossing_receipt(&self, store: &TypeStore, root: TypeId) -> bool {
+    fn has_crossing_receipt(&self, store: &TypeInterner, root: TypeId) -> bool {
         // A graph with no written owned requirement owes no part receipt.
         // Inspect declarations before expanding recursive generic instances.
-        let mut pending = vec![(None, root)];
-        let mut seen = BTreeSet::new();
-        while let Some((definition, id)) = pending.pop() {
-            if !seen.insert((definition.clone(), id)) {
+        let mut pending = vec![root];
+        let mut seen = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
                 continue;
             }
-            let types = definition
-                .as_ref()
-                .and_then(|path| self.signatures.get(path))
-                .map_or(store, |s| &s.types);
-            let Some(row) = types.get(id) else { continue };
+            let Some(row) = store.get(id) else { continue };
             if row.sendability_requirement == hirsel_types::SendabilityRequirement::Sendable {
                 return true;
             }
-            pending.extend(
-                row.kind
-                    .value_parts()
-                    .into_iter()
-                    .map(|id| (definition.clone(), id)),
-            );
+            pending.extend(row.kind.value_parts());
             if let TypeKind::Named { definition, .. } = &row.kind {
-                if let Some(signature) = self.signatures.get(definition) {
+                if let Some(signature) = self.signatures.get(*definition) {
                     if let hirsel_types::SignatureKind::Type(declaration) = &signature.kind {
-                        if let Some(representation) = declaration.representation {
-                            pending.push((Some(definition.clone()), representation));
-                        }
+                        pending.extend(declaration.representation);
                     }
                 }
             }
@@ -363,7 +351,7 @@ impl Checker<'_> {
     pub(super) fn nested_crossing_receipt(
         &mut self,
         state: &State,
-        store: &TypeStore,
+        store: &TypeInterner,
         root: TypeId,
         value: &Operand,
         report: bool,
@@ -392,7 +380,7 @@ impl Checker<'_> {
         values: &[CallArgument],
         report: bool,
     ) {
-        let (source, function, arguments, roles) = match callee {
+        let (function, arguments, roles) = match callee {
             Callee::Definition { path, arguments } => {
                 let Some(signature) = self.signatures.get(path).cloned() else {
                     return;
@@ -400,47 +388,33 @@ impl Checker<'_> {
                 let SignatureKind::Function(function) = signature.kind else {
                     return;
                 };
-                (
-                    signature.types,
-                    function,
-                    arguments,
-                    signature.metadata.roles,
-                )
+                (function, arguments, signature.metadata.roles)
             }
             Callee::Indirect {
                 forward_caller: _,
                 value,
                 arguments,
             } => {
-                let source = self.definition.types.clone();
-                let TypeKind::Function(function) = source
-                    .get(self.place_type(value.place))
-                    .unwrap()
-                    .kind
-                    .clone()
+                let TypeKind::Function(function) =
+                    self.t.row(self.place_type(value.place)).kind.clone()
                 else {
                     return;
                 };
-                (
-                    source,
-                    function,
-                    arguments,
-                    hirsel_types::NominalRoles::default(),
-                )
+                (function, arguments, hirsel_types::NominalRoles::default())
             }
         };
-        let mut store = self.working_store();
+        let store = self.t;
         for value in values {
             let root = hirsel_types::generic_crossing_parameter(
-                &source,
+                store,
+                self.memo,
                 &function,
                 value.parameter.0 as usize,
-                &mut store,
                 arguments,
                 &roles,
             );
             if let Ok(Some(root)) = root {
-                self.nested_crossing_receipt(state, &store, root, &value.value, report);
+                self.nested_crossing_receipt(state, store, root, &value.value, report);
             }
         }
     }
@@ -448,15 +422,15 @@ impl Checker<'_> {
         let access = &self.body.places[value.place.0 as usize];
         let mut parts = state.crossing_parts[access.root.0 as usize]
             .project(&crossing::path(&access.projection));
-        let mut store = self.working_store();
-        let transferred = self.transferred_type(state, value, &mut store);
+        let store = self.t;
+        let transferred = self.transferred_type(state, value, store);
         let evidence = &store.get(transferred).unwrap().modes.sendability;
         if *evidence == Sendability::Sendable {
             parts.set(&[], true);
         } else if value.usage == UseKind::Copy {
             let mut referent = value.clone();
             referent.usage = UseKind::Borrow;
-            let current = self.transferred_type(state, &referent, &mut store);
+            let current = self.transferred_type(state, &referent, store);
             if store.get(current).unwrap().modes.sendability == Sendability::Sendable {
                 parts.set(&[], true);
             }
@@ -475,12 +449,12 @@ impl Checker<'_> {
     /// requirement alone never supplies the proof.
     pub(super) fn share_crossing_parts(&self, parts: &mut crossing::Parts, place: PlaceId) {
         let ty = self.place_type(place);
-        if !self.has_crossing_receipt(&self.definition.types, ty) {
+        if !self.has_crossing_receipt(self.t, ty) {
             parts.set(&[], false);
             return;
         }
         let stable: Vec<_> = self
-            .crossing_receipts(&self.definition.types, ty)
+            .crossing_receipts(self.t, ty)
             .into_iter()
             .filter(|(path, stable)| {
                 if parts.get(path) != Some(true) {
@@ -491,7 +465,7 @@ impl Checker<'_> {
                 }
                 let mut id = ty;
                 for part in path {
-                    let row = self.definition.types.get(id).unwrap();
+                    let row = self.t.get(id).unwrap();
                     let next = match (part, &row.kind) {
                         (crossing::Part::Field(0), TypeKind::Box(inner)) => Some(*inner),
                         (crossing::Part::Field(n), TypeKind::Tuple(parts)) => {
@@ -522,10 +496,7 @@ impl Checker<'_> {
                     let Some(next) = next else { return false };
                     id = next;
                 }
-                matches!(
-                    self.definition.types.get(id).unwrap().kind,
-                    TypeKind::Function(_)
-                )
+                matches!(self.t.get(id).unwrap().kind, TypeKind::Function(_))
             })
             .map(|(path, _)| path)
             .collect();
@@ -618,13 +589,13 @@ impl Checker<'_> {
         value: &Operand,
         report: bool,
     ) {
-        let mut store = self.working_store();
-        self.mode_transfer_in(state, &mut store, destination, value, false, report);
+        let store = self.t;
+        self.mode_transfer_in(state, store, destination, value, false, report);
     }
     fn mode_transfer_in(
         &mut self,
         state: &State,
-        store: &mut TypeStore,
+        store: &TypeInterner,
         destination: TypeId,
         value: &Operand,
         borrowed_capture: bool,
@@ -667,7 +638,7 @@ impl Checker<'_> {
             row.modes.relation = self
                 .placement(&row.modes.relation)
                 .union(&self.lifetime(&receiving.modes.relation));
-            actual = store.push(row);
+            actual = store.intern(row);
         }
         let returned = self.site.instruction.is_none()
             && self.site.block.is_some_and(|b| {
@@ -737,16 +708,14 @@ impl Checker<'_> {
                 fields,
                 ..
             } => {
-                let mut store = self.working_store();
-                if let Some(parts) =
-                    self.constructor_layout(&mut store, ty, constructor, fields.len())
-                {
+                let store = self.t;
+                if let Some(parts) = self.constructor_layout(store, ty, constructor, fields.len()) {
                     for field in fields {
                         if let Some(expected) = parts.get(field.field as usize).copied() {
                             if store.get(expected).unwrap().sendability_requirement
                                 == hirsel_types::SendabilityRequirement::Sendable
                             {
-                                let actual = self.transferred_type(state, &field.value, &mut store);
+                                let actual = self.transferred_type(state, &field.value, store);
                                 if store.get(actual).unwrap().modes.sendability
                                     != Sendability::Sendable
                                 {
@@ -771,13 +740,13 @@ impl Checker<'_> {
             }
             _ => (),
         }
-        let row = self.definition.types.get(ty).unwrap();
+        let row = self.t.get(ty).unwrap();
         if let (Sendability::DependsOn(promised), Rvalue::Use(value)) =
             (&row.modes.sendability, rvalue)
             && erased_environment(&row.kind)
         {
-            let mut store = self.working_store();
-            let actual = self.transferred_type(state, value, &mut store);
+            let store = self.t;
+            let actual = self.transferred_type(state, value, store);
             let evidence = store.get(actual).unwrap().modes.sendability.clone();
             let justified = match &evidence {
                 Sendability::Sendable => match &store.get(actual).unwrap().kind {
@@ -819,7 +788,7 @@ impl Checker<'_> {
                 .filter(|local| local.storage == Storage::Capture)
                 .map(|local| local.ty)
                 .collect();
-            let child_types = self.definition.types.clone();
+            let child_types = self.t;
             let specialised = self.environment_specialised(ty, *body, captures);
             for (root, value) in receiving.into_iter().zip(captures) {
                 if specialised && self.current_content_source(value) {
@@ -832,18 +801,19 @@ impl Checker<'_> {
                         );
                     }
                 }
-                let mut store = self.working_store();
-                if let Ok(expected) = hirsel_types::import_type(&child_types, root, &mut store) {
+                let store = self.t;
+                {
+                    let expected = root;
                     // A taken whole slot's capture row may claim sendability
                     // its storage row lacks; only current content proves it.
                     let claimed = store.get(expected).unwrap();
-                    let stored = self.definition.types.get(self.place_type(value.place));
+                    let stored = self.t.get(self.place_type(value.place));
                     if value.usage == UseKind::Take
                         && claimed.modes.sendability == Sendability::Sendable
                         && !erased_environment(&claimed.kind)
                         && stored.unwrap().modes.sendability != Sendability::Sendable
                     {
-                        let current = self.transferred_type(state, value, &mut store);
+                        let current = self.transferred_type(state, value, store);
                         if store.get(current).unwrap().modes.sendability != Sendability::Sendable {
                             self.flow_error(
                                 report,
@@ -855,7 +825,7 @@ impl Checker<'_> {
                     }
                     self.mode_transfer_in(
                         state,
-                        &mut store,
+                        store,
                         expected,
                         value,
                         matches!(value.usage, UseKind::Borrow | UseKind::Mut),
@@ -867,8 +837,7 @@ impl Checker<'_> {
         match rvalue {
             Rvalue::Use(value) => self.mode_transfer(state, ty, value, report),
             Rvalue::Construct { .. } | Rvalue::Closure { .. }
-                if self.definition.types.get(ty).unwrap().modes.uniqueness
-                    == Uniqueness::Unique =>
+                if self.t.get(ty).unwrap().modes.uniqueness == Uniqueness::Unique =>
             {
                 let values: Vec<_> = match rvalue {
                     Rvalue::Construct { fields, .. } => fields.iter().map(|f| &f.value).collect(),
@@ -876,13 +845,12 @@ impl Checker<'_> {
                     _ => unreachable!(),
                 };
                 for value in values {
-                    let mut store = self.working_store();
-                    let actual = self.transferred_type(state, value, &mut store);
-                    let counted =
-                        needs_release(self, self.place_type(value.place), &self.definition.types);
+                    let store = self.t;
+                    let actual = self.transferred_type(state, value, store);
+                    let counted = needs_release(self, self.place_type(value.place), self.t);
                     let shared = counted
                         && matches!(
-                            self.layout(&mut store, self.place_type(value.place)),
+                            self.layout(store, self.place_type(value.place)),
                             Some(TypeKind::Builtin {
                                 kind: hirsel_types::BuiltinType::Shared,
                                 ..
@@ -907,10 +875,10 @@ impl Checker<'_> {
             _ => (),
         }
     }
-    pub(crate) fn unique_type(&self, store: &mut TypeStore, ty: TypeId) -> TypeId {
+    pub(crate) fn unique_type(&self, store: &TypeInterner, ty: TypeId) -> TypeId {
         let mut row = store.get(ty).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
-        let root = store.push(row);
+        let root = store.intern(row);
         let mut row = store.get(root).unwrap().clone();
         row.modes.sendability = hirsel_types::structural_sendability(
             store,
@@ -923,7 +891,7 @@ impl Checker<'_> {
             },
         )
         .unwrap_or_else(|error| self.proof_failure(error, hirsel_types::Sendability::NotSendable));
-        store.push(row)
+        store.intern(row)
     }
     pub(super) fn operand_fresh_receipt(&self, state: &State, value: &Operand) -> bool {
         let place = &self.body.places[value.place.0 as usize];
@@ -953,7 +921,7 @@ impl Checker<'_> {
         }
     }
     pub(super) fn operand_unique(&self, state: &State, value: &Operand) -> bool {
-        if !needs_release(self, self.place_type(value.place), &self.definition.types) {
+        if !needs_release(self, self.place_type(value.place), self.t) {
             return false;
         }
         if value.usage == UseKind::Copy {
@@ -971,16 +939,9 @@ impl Checker<'_> {
                 && (state.current_unique[root]
                     || state.must[root].has(MustFacts::OWNED)
                         && state.must[root].has(MustFacts::FRESH_RECEIPT)
-                        && self
-                            .definition
-                            .types
-                            .get(place.ty)
-                            .unwrap()
-                            .modes
-                            .uniqueness
-                            == Uniqueness::Unique)
+                        && self.t.get(place.ty).unwrap().modes.uniqueness == Uniqueness::Unique)
                 && !matches!(
-                    self.definition.types.get(place.ty).unwrap().kind,
+                    self.t.get(place.ty).unwrap().kind,
                     TypeKind::Builtin {
                         kind: hirsel_types::BuiltinType::Shared,
                         ..
@@ -990,8 +951,7 @@ impl Checker<'_> {
         !state.shared[root]
             && (state.current_unique[root]
                 || self
-                    .definition
-                    .types
+                    .t
                     .get(self.place_type(value.place))
                     .unwrap()
                     .modes
@@ -1001,7 +961,7 @@ impl Checker<'_> {
     pub(super) fn rvalue_unique(&self, state: &State, value: &Rvalue) -> bool {
         match value {
             Rvalue::Constant(_) | Rvalue::Size(_) | Rvalue::Shape(_) | Rvalue::FunctionReference { .. } => true,
-            Rvalue::ReadConstant { definition, .. } => self.signatures.get(definition).is_some_and(|s| matches!(s.kind, SignatureKind::Const { ty: ty, .. } if self.bound(&s.types, ty, hirsel_types::Bound::Plain, &hirsel_types::GenericDeclarations::default()) || self.bound(&s.types, ty, hirsel_types::Bound::Flat, &hirsel_types::GenericDeclarations::default()) || matches!(s.types.get(ty).unwrap().kind, TypeKind::Builtin { kind: hirsel_types::BuiltinType::Shared, .. }))),
+            Rvalue::ReadConstant { definition, .. } => self.signatures.get(definition).is_some_and(|s| matches!(s.kind, SignatureKind::Const { ty: ty, .. } if self.bound(self.t, ty, hirsel_types::Bound::Plain, &hirsel_types::GenericDeclarations::default()) || self.bound(self.t, ty, hirsel_types::Bound::Flat, &hirsel_types::GenericDeclarations::default()) || matches!(&self.t.get(ty).unwrap().kind, TypeKind::Builtin { kind: hirsel_types::BuiltinType::Shared, .. }))),
             Rvalue::Use(value) => {
                 self.operand_unique(state, value)
             }
@@ -1014,11 +974,11 @@ impl Checker<'_> {
                 value,
             } => self.operand_unique(state, value),
             Rvalue::Construct { fields, .. } => fields.iter().all(|f| {
-                !needs_release(self, self.place_type(f.value.place), &self.definition.types)
+                !needs_release(self, self.place_type(f.value.place), self.t)
                     || self.operand_unique(state, &f.value)
             }),
             Rvalue::Closure { captures, .. } => captures.iter().all(|v| {
-                !needs_release(self, self.place_type(v.place), &self.definition.types)
+                !needs_release(self, self.place_type(v.place), self.t)
                     || v.usage == UseKind::Take && self.operand_unique(state, v)
                     || v.usage == UseKind::Copy && self.flat_value(v.place)
             }),
@@ -1029,9 +989,9 @@ impl Checker<'_> {
         let place = &self.body.places[destination.0 as usize];
         if place.projection.is_empty() {
             state.current_unique[place.root.0 as usize] = unique;
-        } else if needs_release(self, place.ty, &self.definition.types)
+        } else if needs_release(self, place.ty, self.t)
             && !matches!(
-                self.definition.types.get(place.ty).unwrap().kind,
+                self.t.get(place.ty).unwrap().kind,
                 hirsel_types::TypeKind::Builtin {
                     kind: hirsel_types::BuiltinType::Shared,
                     ..
@@ -1056,8 +1016,8 @@ impl Checker<'_> {
         parameter: hirsel_types::ParamId,
     ) -> bool {
         match callee {
-            Callee::Definition { path, .. } => self.signatures.get(path).is_some_and(|s| matches!(&s.kind, SignatureKind::Function(f) if f.parameters.get(parameter.0 as usize).is_some_and(|p| s.types.get(p.ty).unwrap().modes.uniqueness == Uniqueness::Unique))),
-            Callee::Indirect { value, .. } => matches!(&self.definition.types.get(self.place_type(value.place)).unwrap().kind, TypeKind::Function(f) if f.parameters.get(parameter.0 as usize).is_some_and(|p| self.definition.types.get(p.ty).unwrap().modes.uniqueness == Uniqueness::Unique)),
+            Callee::Definition { path, .. } => self.signatures.get(path).is_some_and(|s| matches!(&s.kind, SignatureKind::Function(f) if f.parameters.get(parameter.0 as usize).is_some_and(|p| self.t.get(p.ty).unwrap().modes.uniqueness == Uniqueness::Unique))),
+            Callee::Indirect { value, .. } => matches!(&self.t.get(self.place_type(value.place)).unwrap().kind, TypeKind::Function(f) if f.parameters.get(parameter.0 as usize).is_some_and(|p| self.t.get(p.ty).unwrap().modes.uniqueness == Uniqueness::Unique)),
         }
     }
 }

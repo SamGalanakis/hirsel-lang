@@ -5,7 +5,7 @@
 use super::*;
 use hirsel_types::{
     AuthoritySummary, CanonicalSpelling, GenericBinder, GenericParameter, SignatureKind,
-    SignatureRef, Substitution, TypeStore,
+    SignatureRef, Substitution, TypeMemo,
 };
 
 /// An instance table that does not describe the program's definitions.
@@ -37,30 +37,40 @@ pub enum InstanceViolation {
 }
 
 pub fn validate_instance_bodies(
+    t: &TypeInterner,
     bodies: &InstanceBodies,
     signatures: &BTreeMap<DefPath, SignatureRef>,
     definitions: &BTreeMap<DefPath, DefinitionRef>,
 ) -> Vec<InstanceViolation> {
+    // V's own structural memo, as for a definition.
+    let memo = TypeMemo::new();
     let mut violations = vec![];
     for declaration in &bodies.declarations {
-        let generic = signatures.get(declaration).is_some_and(
+        let path = declaration.path();
+        let generic = signatures.get(path).is_some_and(
             |s| matches!(&s.kind, SignatureKind::Function(f) if !f.generics.is_empty()),
         );
-        if !generic || definitions.contains_key(declaration) {
-            violations.push(InstanceViolation::Declaration(declaration.clone()));
+        if !generic || definitions.contains_key(path) {
+            violations.push(InstanceViolation::Declaration(path.clone()));
         }
     }
     for (declaration, rows) in &bodies.instances {
+        let path = declaration.path();
         let Some(SignatureKind::Function(header)) = signatures
-            .get(declaration)
+            .get(path)
             .filter(|_| bodies.declarations.contains(declaration))
             .map(|s| &s.kind)
         else {
-            violations.push(InstanceViolation::Declaration(declaration.clone()));
+            violations.push(InstanceViolation::Declaration(path.clone()));
             continue;
         };
-        let declared = &signatures[declaration].types;
-        for (key, row) in rows {
+        // Rows are reported in the order of their keys' spellings.
+        let mut rows: Vec<_> = rows
+            .iter()
+            .map(|(key, row)| (spelled(*key), key, row))
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        for (spelled, key, row) in rows {
             let fits = row.arguments.len() == header.generics.len()
                 && row
                     .arguments
@@ -73,28 +83,28 @@ pub fn validate_instance_bodies(
                                 | (GenericArgument::Size(_), GenericParameter::Size { .. })
                         )
                     })
-                && InstanceBodies::key(&row.types, &row.arguments).as_ref() == Some(key);
+                && InstanceBodies::key(t, &row.arguments).as_ref() == Some(key);
             if !fits {
                 violations.push(InstanceViolation::Arguments {
-                    declaration: declaration.clone(),
-                    key: key.clone(),
+                    declaration: path.clone(),
+                    key: spelled,
                 });
                 continue;
             }
             let instance = signatures
-                .get(&row.definition)
-                .filter(|_| definitions.contains_key(&row.definition));
+                .get(row.definition.path())
+                .filter(|_| definitions.contains_key(row.definition.path()));
             let Some(instance) = instance else {
                 violations.push(InstanceViolation::MissingInstance {
-                    declaration: declaration.clone(),
-                    key: key.clone(),
+                    declaration: path.clone(),
+                    key: spelled,
                 });
                 continue;
             };
-            if !same_header(declared, header, &row.types, &row.arguments, instance) {
+            if !same_header(t, &memo, header, &row.arguments, instance) {
                 violations.push(InstanceViolation::Header {
-                    declaration: declaration.clone(),
-                    key: key.clone(),
+                    declaration: path.clone(),
+                    key: spelled,
                 });
             }
         }
@@ -122,12 +132,12 @@ pub fn validate_instance_bodies(
             }
         }
         for (path, arguments) in uses {
-            if bodies.declarations.contains(path)
-                && InstanceBodies::key(&definition.types, arguments).is_some()
-                && !matches!(
-                    bodies.resolve(path, &definition.types, arguments),
-                    Ok(Some(_))
-                )
+            let Some(declaration) = DefId::get(path) else {
+                continue;
+            };
+            if bodies.declarations.contains(&declaration)
+                && InstanceBodies::key(t, arguments).is_some()
+                && !matches!(bodies.resolve(declaration, t, arguments), Ok(Some(_)))
             {
                 violations.push(InstanceViolation::Unselected {
                     owner: owner.clone(),
@@ -139,14 +149,17 @@ pub fn validate_instance_bodies(
     violations
 }
 
+fn spelled(key: hirsel_types::GeneratedActualKey) -> Vec<String> {
+    key.spellings().into_iter().map(str::to_owned).collect()
+}
+
 /// Whether `instance` is a monomorphic function whose passing modes, parameter
 /// and result types (by canonical spelling, CT-3, and root uniqueness) and
-/// `uses` are `header`'s with its generics replaced by `arguments`, rows of
-/// `types`.
+/// `uses` are `header`'s with its generics replaced by `arguments`.
 fn same_header(
-    declared: &TypeStore,
+    t: &TypeInterner,
+    memo: &TypeMemo,
     header: &hirsel_types::FunctionType,
-    types: &TypeStore,
     arguments: &[GenericArgument],
     instance: &Signature,
 ) -> bool {
@@ -159,28 +172,15 @@ fn same_header(
     {
         return false;
     }
-    let mut scratch = TypeStore::default();
-    let Ok(imported) = arguments
-        .iter()
-        .map(|a| match a {
-            GenericArgument::Type(t) => {
-                hirsel_types::import_type(types, *t, &mut scratch).map(GenericArgument::Type)
-            }
-            size => Ok(size.clone()),
-        })
-        .collect::<Result<Vec<_>, _>>()
-    else {
-        return false;
-    };
-    let authorities = vec![AuthoritySummary::Unknown; imported.len()];
-    let mut instantiated = |ty| {
-        hirsel_types::substitute_type(
-            declared,
+    let authorities = vec![AuthoritySummary::Unknown; arguments.len()];
+    let instantiated = |ty| {
+        hirsel_types::substitute(
+            t,
+            memo,
             ty,
-            &mut scratch,
-            Substitution {
+            &Substitution {
                 binder: Some(GenericBinder::Bound(0)),
-                arguments: &imported,
+                arguments,
                 authorities: &authorities,
                 ..Default::default()
             },
@@ -200,9 +200,8 @@ fn same_header(
     // position and content (MODE-7), so the instance's rows make the defaults
     // of the closed type; identity and written uniqueness must agree.
     let same = |a: TypeId, b: TypeId| {
-        CanonicalSpelling::closed(&scratch, a) == CanonicalSpelling::closed(&instance.types, b)
-            && scratch.get(a).map(|r| r.modes.uniqueness)
-                == instance.types.get(b).map(|r| r.modes.uniqueness)
+        CanonicalSpelling::closed(t, a) == CanonicalSpelling::closed(t, b)
+            && t.get(a).map(|r| r.modes.uniqueness) == t.get(b).map(|r| r.modes.uniqueness)
     };
     expected
         .iter()

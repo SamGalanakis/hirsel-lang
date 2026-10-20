@@ -394,7 +394,7 @@ impl OriginProof for Indexed<OriginRoot, BTreeSet<Origin>> {
 /// Origins are brands and arena places (`arena`); a relation place that names
 /// a lending parameter is a lifetime, which `lifetimes` judges.
 pub(super) fn retained(
-    store: &TypeStore,
+    store: &TypeInterner,
     types: &super::origin_types::Types,
     ty: TypeId,
     proof: &impl OriginProof,
@@ -422,7 +422,7 @@ pub(super) fn retained(
 /// Canonicalize only origins supported by this value's retained proof. Bound
 /// references of nested callables remain declarations, never argument names.
 pub(super) fn canonical(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     ty: TypeId,
     proof: &impl OriginProof,
     arena: &dyn Fn(&Origin) -> bool,
@@ -517,7 +517,7 @@ impl CallOriginProof {
 /// Field selectors are resolved from the same independently derived storage
 /// partition as the whole operand, before removing the callee's binder.
 pub(super) fn sources(
-    store: &mut TypeStore,
+    store: &TypeInterner,
     root: TypeId,
     origins: &CallOriginProof,
     actuals: &BTreeMap<hirsel_types::ParameterRef, TypeId>,
@@ -552,7 +552,7 @@ pub(super) fn sources(
 }
 
 pub(super) fn remember(
-    store: &TypeStore,
+    store: &TypeInterner,
     types: &super::origin_types::Types,
     ty: TypeId,
     names: &impl OriginProof,

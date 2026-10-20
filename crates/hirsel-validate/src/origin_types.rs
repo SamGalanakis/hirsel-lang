@@ -1,6 +1,10 @@
 //! Per-body immutable type-origin queries. Proof identities remain flow facts.
-use hirsel_types::{GraphError, Origin, Reach, TypeId, TypeStore};
-use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
+use hirsel_types::{GraphError, Origin, Reach, TypeId, TypeInterner};
+use std::{
+    cell::RefCell,
+    collections::{BTreeSet, HashMap, HashSet},
+    rc::Rc,
+};
 
 #[derive(Clone)]
 struct Summary {
@@ -10,21 +14,20 @@ struct Summary {
 }
 #[derive(Default)]
 pub(super) struct Types {
-    // Each cache belongs to one body of one immutable definition TypeStore.
-    summaries: RefCell<Vec<Option<Summary>>>,
+    // Each cache belongs to one body; rows are immutable session rows.
+    summaries: RefCell<HashMap<TypeId, Summary>>,
     empty: Rc<[(Origin, u32, bool)]>,
 }
 impl Types {
-    fn summary(&self, store: &TypeStore, root: TypeId) -> Result<Summary, GraphError> {
+    fn summary(&self, store: &TypeInterner, root: TypeId) -> Result<Summary, GraphError> {
         let mut summaries = self.summaries.borrow_mut();
-        summaries.resize_with(store.len(), || None);
-        if let Some(summary) = summaries[root.index()].as_ref() {
+        if let Some(summary) = summaries.get(&root) {
             return Ok(summary.clone());
         }
         let mut pending = vec![(root, false)];
-        let mut active = BTreeSet::new();
+        let mut active = HashSet::new();
         while let Some((id, exit)) = pending.pop() {
-            if summaries[id.index()].is_some() {
+            if summaries.contains_key(&id) {
                 continue;
             }
             let row = store.get(id).ok_or(GraphError::MissingType(id))?;
@@ -45,21 +48,22 @@ impl Types {
                     }
                 }));
                 for edge in row.kind.graph_edges() {
-                    let child = summaries[edge.ty.index()].as_ref().unwrap();
+                    let child = &summaries[&edge.ty];
                     if child.may_hold_origin {
                         origins.extend(child.origins.iter().map(|(o, depth, place)| {
                             (o.clone(), depth + edge.role.parameter_binders(), *place)
                         }));
                     }
                 }
-                summaries[id.index()] = Some(Summary {
+                let summary = Summary {
                     may_hold_origin: !origins.is_empty(),
                     origins: if origins.is_empty() {
                         self.empty.clone()
                     } else {
                         origins.into_iter().collect::<Vec<_>>().into()
                     },
-                });
+                };
+                summaries.insert(id, summary);
                 active.remove(&id);
             } else {
                 if !active.insert(id) {
@@ -78,11 +82,11 @@ impl Types {
                 );
             }
         }
-        Ok(summaries[root.index()].as_ref().unwrap().clone())
+        Ok(summaries[&root].clone())
     }
     pub(super) fn visit(
         &self,
-        store: &TypeStore,
+        store: &TypeInterner,
         root: TypeId,
         arena: &dyn Fn(&Origin) -> bool,
         mut visit: impl FnMut(&Origin, u32) -> Result<(), GraphError>,
