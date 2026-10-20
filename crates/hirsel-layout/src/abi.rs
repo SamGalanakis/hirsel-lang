@@ -12,7 +12,7 @@ use hirsel_lir::abi_types::*;
 use hirsel_lir::layout::LayoutError;
 use hirsel_lir::layout_types::{LayoutId, ScalarKind};
 use hirsel_syntax::ContentHash;
-use hirsel_types::{BuiltinType, Multiplicity, Primitive, TypeId, TypeKind, TypeStore};
+use hirsel_types::{BuiltinType, Multiplicity, Primitive, TypeId, TypeInterner, TypeKind};
 
 /// How a parameter of one public type travels when not `mut`.
 enum Class {
@@ -25,18 +25,15 @@ enum Class {
 }
 
 impl<'o> LayoutBuilder<'o> {
-    /// The ABI of a declared callable type (a `Function` row of `store`) used
+    /// The ABI of a declared callable type (a `Function` row of `types`) used
     /// as `shape`. Memoized by the callable's public identity and shape.
     pub fn fn_abi(
         &mut self,
-        store: &TypeStore,
+        types: &TypeInterner,
         callable: TypeId,
         shape: CallableShape,
     ) -> Result<FnAbiId, LayoutError> {
-        if store.id(callable.index()) != Some(callable) {
-            return Err(LayoutError::MissingType);
-        }
-        let row = store.get(callable).ok_or(LayoutError::MissingType)?;
+        let row = types.get(callable).ok_or(LayoutError::MissingType)?;
         let function = match &row.kind {
             TypeKind::Function(function) => function,
             TypeKind::Parameter(_) => return Err(LayoutError::Incomplete),
@@ -61,17 +58,17 @@ impl<'o> LayoutBuilder<'o> {
         atom(&mut key, &(function.parameters.len() as u64).to_le_bytes());
         for parameter in function.parameters.iter() {
             atom(&mut key, passing_name(parameter.passing.into()).as_bytes());
-            self.public_identity(store, parameter.ty, &mut key)?;
+            self.public_identity(types, parameter.ty, &mut key)?;
         }
-        self.public_identity(store, function.result, &mut key)?;
-        let result_layout = self.layout(store, function.result)?;
+        self.public_identity(types, function.result, &mut key)?;
+        let result_layout = self.layout(types, function.result)?;
         let result_record = self.record(result_layout);
         let has_views = result_record
             .fields
             .iter()
             .any(|f| hirsel_lir::layout::field_is_borrowed(self.table(), result_record, f));
         let borrowed_parameters: Vec<_> = if has_views {
-            store
+            types
                 .get(function.result)
                 .ok_or(LayoutError::MissingType)?
                 .modes
@@ -99,12 +96,12 @@ impl<'o> LayoutBuilder<'o> {
         let mut parameters = Vec::new();
         for (ordinal, parameter) in function.parameters.iter().enumerate() {
             let convention = Passing::from(parameter.passing);
-            let layout = self.layout(store, parameter.ty)?;
+            let layout = self.layout(types, parameter.ty)?;
             // An arena token is one record-address word.
             let class = if self.record(layout).kind == hirsel_lir::layout_types::LayoutKind::Arena {
                 Class::Value(vec![ScalarKind::Pointer])
             } else {
-                self.class(store, parameter.ty)?
+                self.class(types, parameter.ty)?
             };
             let (passing, slots, extension) = match (convention, class) {
                 (Passing::Mut, _) => (
@@ -145,12 +142,12 @@ impl<'o> LayoutBuilder<'o> {
                 extension,
             });
         }
-        let result = if self.is_unit(store, function.result)? {
+        let result = if self.is_unit(types, function.result)? {
             None
         } else {
             Some(AbiResult {
                 borrowed_parameters,
-                layout: self.layout(store, function.result)?,
+                layout: self.layout(types, function.result)?,
                 slots: vec![pointer],
             })
         };
@@ -158,7 +155,7 @@ impl<'o> LayoutBuilder<'o> {
         // nominal Option does not acquire Hirsel's conservative block destination.
         let destination = shape != CallableShape::Foreign
             && result.is_some()
-            && self.may_hold_blocks(store, function.result, 0)?;
+            && self.may_hold_blocks(types, function.result, 0)?;
         let abi = FnAbi {
             key: FnAbiKey {
                 callable: callable_key,
@@ -179,7 +176,7 @@ impl<'o> LayoutBuilder<'o> {
             result,
             result_arena: None,
             diverges: matches!(
-                store.get(function.result).map(|row| &row.kind),
+                types.get(function.result).map(|row| &row.kind),
                 Some(TypeKind::Primitive(Primitive::Never))
             ),
             parameters,
@@ -313,8 +310,8 @@ impl<'o> LayoutBuilder<'o> {
     }
 
     /// The passing class of a parameter type, from its public structure only.
-    fn class(&self, store: &TypeStore, ty: TypeId) -> Result<Class, LayoutError> {
-        let row = store.get(ty).ok_or(LayoutError::MissingType)?;
+    fn class(&self, types: &TypeInterner, ty: TypeId) -> Result<Class, LayoutError> {
+        let row = types.get(ty).ok_or(LayoutError::MissingType)?;
         Ok(match &row.kind {
             TypeKind::Primitive(Primitive::String | Primitive::Bytes) => {
                 Class::Value(vec![ScalarKind::Pointer, ScalarKind::U64, ScalarKind::U64])
@@ -337,9 +334,9 @@ impl<'o> LayoutBuilder<'o> {
                 _ => Class::Aggregate,
             },
             TypeKind::Named { definition, .. }
-                if definition.package_is("core", "1")
-                    && definition.0.modules.is_empty()
-                    && matches!(definition.0.name.as_str(), "ScalarView" | "PositionView") =>
+                if definition.path().package_is("core", "1")
+                    && definition.path().0.modules.is_empty()
+                    && matches!(definition.path().0.name.as_str(), "ScalarView" | "PositionView") =>
             {
                 Class::Value(vec![ScalarKind::Pointer, ScalarKind::U64, ScalarKind::U64])
             }
@@ -355,8 +352,8 @@ impl<'o> LayoutBuilder<'o> {
         })
     }
 
-    fn is_unit(&self, store: &TypeStore, ty: TypeId) -> Result<bool, LayoutError> {
-        let row = store.get(ty).ok_or(LayoutError::MissingType)?;
+    fn is_unit(&self, types: &TypeInterner, ty: TypeId) -> Result<bool, LayoutError> {
+        let row = types.get(ty).ok_or(LayoutError::MissingType)?;
         Ok(match &row.kind {
             TypeKind::Tuple(items) => items.is_empty(),
             TypeKind::Primitive(Primitive::Never) => true,
@@ -368,17 +365,17 @@ impl<'o> LayoutBuilder<'o> {
     /// supplies an allocation destination. Nominals are opaque: they may.
     fn may_hold_blocks(
         &self,
-        store: &TypeStore,
+        types: &TypeInterner,
         ty: TypeId,
         depth: u32,
     ) -> Result<bool, LayoutError> {
         if depth > hirsel_lir::layout::MAX_DEPTH {
             return Err(LayoutError::InstanceLimit);
         }
-        let row = store.get(ty).ok_or(LayoutError::MissingType)?;
+        let row = types.get(ty).ok_or(LayoutError::MissingType)?;
         let any = |items: &mut dyn Iterator<Item = TypeId>| -> Result<bool, LayoutError> {
             for item in items {
-                if self.may_hold_blocks(store, item, depth + 1)? {
+                if self.may_hold_blocks(types, item, depth + 1)? {
                     return Ok(true);
                 }
             }
@@ -401,7 +398,7 @@ impl<'o> LayoutBuilder<'o> {
                 arguments,
             } => match arguments.first() {
                 Some(hirsel_types::GenericArgument::Type(element)) => {
-                    self.may_hold_blocks(store, *element, depth + 1)?
+                    self.may_hold_blocks(types, *element, depth + 1)?
                 }
                 _ => true,
             },

@@ -739,6 +739,7 @@ dependencies = [
  "hirsel-codec",
  "hirsel-core-contract",
  "hirsel-guard",
+ "hirsel-intern",
  "hirsel-lir",
  "hirsel-syntax",
  "hirsel-tir",

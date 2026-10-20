@@ -13,11 +13,11 @@
 use hirsel_core_contract::Passing;
 use hirsel_lir::layout_types::*;
 use hirsel_lir::runtime_abi::{HEADER_SIZE, HEADER_V2};
-use hirsel_syntax::{ContentHash, DefPath};
+use hirsel_syntax::{ContentHash, DefId, DefPath};
 use hirsel_tir::RepresentationRecord;
 use hirsel_types::{
     BinderRef, BuiltinType, GenericArgument, GenericParameter, Layout, Multiplicity, Primitive,
-    Size, SizeParameterRef, TypeId, TypeKind, TypeStore,
+    Size, SizeParameterRef, TypeId, TypeInterner, TypeKind,
 };
 use std::collections::{BTreeMap, HashMap};
 
@@ -73,7 +73,7 @@ pub enum Container {
 /// Every representation record layout derivation may read.
 #[derive(Clone, Debug, Default)]
 pub struct Owners {
-    pub nominals: BTreeMap<DefPath, OwnerRepresentation>,
+    pub nominals: BTreeMap<DefId, OwnerRepresentation>,
     /// Map, Set, SortedMap and Slots are counted blocks whose payload is the
     /// owner's private shape; SlotId is that shape inline.
     pub containers: BTreeMap<Container, RepresentationRecord>,
@@ -83,9 +83,8 @@ pub struct Owners {
 #[derive(Clone, Copy, Debug)]
 pub struct EnvironmentShape<'s> {
     /// The closure body: its definition and TIR body ordinal.
-    pub definition: &'s DefPath,
+    pub definition: DefId,
     pub body: u32,
-    pub store: &'s TypeStore,
     /// Captures in declaration order. Take captures are owned inline values;
     /// Borrow captures are the borrowed views themselves, their holders
     /// scanned as uncounted and never dropped; Mut captures are addresses.
@@ -96,16 +95,16 @@ pub struct EnvironmentShape<'s> {
     pub movable: &'s [u32],
 }
 
-/// One generic frame: the store a type row lives in, and the actuals its
-/// depth-zero parameters resolve to, which live in frame `parent`.
+/// One generic frame: the actuals its depth-zero parameters resolve to,
+/// which are read in frame `parent`.
 #[derive(Clone, Copy)]
 struct Frame<'s> {
-    store: &'s TypeStore,
     actuals: &'s [GenericArgument],
     parent: usize,
 }
 
 struct Walk<'s> {
+    types: &'s TypeInterner,
     frames: Vec<Frame<'s>>,
     /// Block payloads reserved during this derivation and derived once the
     /// inline layouts they read are complete (a `List[Tree]` inside `Tree`).
@@ -147,10 +146,10 @@ enum Pending<'s> {
 }
 
 impl<'s> Walk<'s> {
-    fn new(store: &'s TypeStore) -> Self {
+    fn new(types: &'s TypeInterner) -> Self {
         Self {
+            types,
             frames: vec![Frame {
-                store,
                 actuals: &[],
                 parent: 0,
             }],
@@ -158,18 +157,13 @@ impl<'s> Walk<'s> {
             deferred: BTreeMap::new(),
         }
     }
-    fn row(&self, ty: TypeId, f: usize) -> Result<&'s hirsel_types::Type, LayoutError> {
-        let store = self.frames[f].store;
-        // Compare row identity first: `TypeStore::get` asserts on foreign IDs.
-        if store.id(ty.index()) != Some(ty) {
-            return Err(LayoutError::MissingType);
-        }
-        store.get(ty).ok_or(LayoutError::MissingType)
+    fn row(&self, ty: TypeId) -> Result<&'s hirsel_types::Type, LayoutError> {
+        self.types.get(ty).ok_or(LayoutError::MissingType)
     }
     /// Follow parameters to the actual they denote, across frames.
     fn resolve(&self, mut ty: TypeId, mut f: usize) -> Result<(TypeId, usize), LayoutError> {
         for _ in 0..=self.frames.len() {
-            let TypeKind::Parameter(reference) = &self.row(ty, f)?.kind else {
+            let TypeKind::Parameter(reference) = &self.row(ty)?.kind else {
                 return Ok((ty, f));
             };
             let BinderRef::Bound {
@@ -406,9 +400,9 @@ impl<'o> LayoutBuilder<'o> {
     }
 
     /// The in-memory layout of a complete type.
-    pub fn layout(&mut self, store: &TypeStore, ty: TypeId) -> Result<LayoutId, LayoutError> {
+    pub fn layout(&mut self, types: &TypeInterner, ty: TypeId) -> Result<LayoutId, LayoutError> {
         self.transaction(|b| {
-            let mut walk = Walk::new(store);
+            let mut walk = Walk::new(types);
             let id = b.memory(&mut walk, ty, 0, false)?;
             b.drain(&mut walk)?;
             Ok(id)
@@ -417,9 +411,9 @@ impl<'o> LayoutBuilder<'o> {
 
     /// The FlatFormatV0 byte extent of a flat-compatible type, as its
     /// out-of-line storage holds it (private native format).
-    pub fn flat(&mut self, store: &TypeStore, ty: TypeId) -> Result<LayoutId, LayoutError> {
+    pub fn flat(&mut self, types: &TypeInterner, ty: TypeId) -> Result<LayoutId, LayoutError> {
         self.transaction(|b| {
-            let mut walk = Walk::new(store);
+            let mut walk = Walk::new(types);
             let id = b.flat_body(&mut walk, ty, 0)?;
             b.drain(&mut walk)?;
             Ok(id)
@@ -463,9 +457,13 @@ impl<'o> LayoutBuilder<'o> {
     /// The environment record of a concrete closure or `Iter` state: captures
     /// in declaration order, its drop program its finalizer instance, and the
     /// captured size substitutions part of its key.
-    pub fn environment(&mut self, env: &EnvironmentShape<'_>) -> Result<LayoutId, LayoutError> {
+    pub fn environment(
+        &mut self,
+        types: &TypeInterner,
+        env: &EnvironmentShape<'_>,
+    ) -> Result<LayoutId, LayoutError> {
         self.transaction(|b| {
-            let mut walk = Walk::new(env.store);
+            let mut walk = Walk::new(types);
             let mut key = Encoder {
                 bytes: Vec::new(),
                 revisions: true,
@@ -481,7 +479,7 @@ impl<'o> LayoutBuilder<'o> {
                     hirsel_lir::ir::live_mask_word_limit(
                         &format!(
                             "closure {} body {} with {} movable captures",
-                            env.definition.0.name,
+                            env.definition.path().0.name,
                             env.body,
                             env.movable.len()
                         ),
@@ -498,7 +496,7 @@ impl<'o> LayoutBuilder<'o> {
             {
                 return invalid("invalid movable environment captures");
             }
-            key.path(env.definition);
+            key.path(env.definition.path());
             key.number(u64::from(env.body));
             key.number(env.sizes.len() as u64);
             env.sizes.iter().for_each(|&s| key.number(s));
@@ -1028,7 +1026,7 @@ impl<'o> LayoutBuilder<'o> {
             return Err(LayoutError::InstanceLimit);
         }
         let (ty, f) = walk.resolve(ty, f)?;
-        let row = walk.row(ty, f)?;
+        let row = walk.row(ty)?;
         let n = nesting + 1;
         match &row.kind {
             TypeKind::Primitive(p) => {
@@ -1062,7 +1060,7 @@ impl<'o> LayoutBuilder<'o> {
                     return Ok(());
                 }
                 e.tag("named");
-                e.path(definition);
+                e.path(definition.path());
                 if e.revisions {
                     match self.owners.nominals.get(definition) {
                         Some(OwnerRepresentation::Defined(record)) => {
@@ -1082,7 +1080,7 @@ impl<'o> LayoutBuilder<'o> {
                             e.atom(&[0, 4]);
                         }
                         Some(OwnerRepresentation::StringView) => unreachable!("handled above"),
-                        None => return Err(LayoutError::MissingOwner(describe(definition))),
+                        None => return Err(LayoutError::MissingOwner(describe(definition.path()))),
                     }
                 }
                 self.encode_arguments(walk, arguments, f, e, n)?;
@@ -1163,11 +1161,11 @@ impl<'o> LayoutBuilder<'o> {
     /// The public, revision-free identity of a type (ABI keys).
     pub(crate) fn public_identity(
         &self,
-        store: &TypeStore,
+        types: &TypeInterner,
         ty: TypeId,
         e: &mut Vec<u8>,
     ) -> Result<(), LayoutError> {
-        let walk = Walk::new(store);
+        let walk = Walk::new(types);
         let mut encoder = Encoder {
             bytes: std::mem::take(e),
             revisions: false,
@@ -1190,7 +1188,7 @@ impl<'o> LayoutBuilder<'o> {
         'o: 's,
     {
         let (key, ty, f) = self.memory_key(walk, ty, f)?;
-        let row = walk.row(ty, f)?;
+        let row = walk.row(ty)?;
         let deferred = self
             .memo
             .get(&key)
@@ -1224,7 +1222,7 @@ impl<'o> LayoutBuilder<'o> {
         result.map_err(|e| match e {
             LayoutError::InfiniteSize(s) if s.is_empty() => {
                 LayoutError::InfiniteSize(match &row.kind {
-                    TypeKind::Named { definition, .. } => describe(definition),
+                    TypeKind::Named { definition, .. } => describe(definition.path()),
                     _ => "a structural type".into(),
                 })
             }
@@ -1244,7 +1242,7 @@ impl<'o> LayoutBuilder<'o> {
     {
         let (resolved, frame) = walk.resolve(ty, f)?;
         let fixed_flat = if let TypeKind::Named { definition, .. } =
-            &walk.row(resolved, frame)?.kind
+            &walk.row(resolved)?.kind
             && self.flat_owner(definition)
         {
             let body = self.flat_body(walk, ty, f)?;
@@ -1283,7 +1281,7 @@ impl<'o> LayoutBuilder<'o> {
     where
         'o: 's,
     {
-        if let TypeKind::Box(inner) = walk.row(ty, f)?.kind {
+        if let TypeKind::Box(inner) = walk.row(ty)?.kind {
             let (payload_key, inner, inner_frame) = self.memory_key(walk, inner, f)?;
             let (payload, fresh) = self.reserve(&payload_key, true)?;
             let mut record = self.block_record(key, payload);
@@ -1341,7 +1339,7 @@ impl<'o> LayoutBuilder<'o> {
     where
         'o: 's,
     {
-        let row = walk.row(ty, f)?;
+        let row = walk.row(ty)?;
         match &row.kind {
             TypeKind::Primitive(Primitive::String | Primitive::Bytes) => {
                 let bytes = self.byte();
@@ -1403,7 +1401,7 @@ impl<'o> LayoutBuilder<'o> {
         }
     }
 
-    fn flat_owner(&self, definition: &DefPath) -> bool {
+    fn flat_owner(&self, definition: &DefId) -> bool {
         matches!(
             self.owners.nominals.get(definition),
             Some(OwnerRepresentation::Defined(record)) if record.layout_promises.flat
@@ -2229,7 +2227,7 @@ impl<'o> LayoutBuilder<'o> {
         'o: 's,
     {
         let (ty, f) = walk.resolve(ty, f)?;
-        match &walk.row(ty, f)?.kind {
+        match &walk.row(ty)?.kind {
             TypeKind::Variant(variants) => Ok((variant_fields(variants), f, false)),
             TypeKind::Named {
                 definition,
@@ -2239,7 +2237,7 @@ impl<'o> LayoutBuilder<'o> {
                     .owners
                     .nominals
                     .get(definition)
-                    .ok_or_else(|| LayoutError::MissingOwner(describe(definition)))?;
+                    .ok_or_else(|| LayoutError::MissingOwner(describe(definition.path())))?;
                 let OwnerRepresentation::Defined(record) = owner else {
                     return invalid("Packed of a handle or cursor type");
                 };
@@ -2250,7 +2248,7 @@ impl<'o> LayoutBuilder<'o> {
                     return unavailable(Some(47), "Packed of a variant with layout attributes");
                 }
                 let nf = self.enter(walk, record, arguments, f)?;
-                match &walk.row(record.private_shape, nf)?.kind {
+                match &walk.row(record.private_shape)?.kind {
                     TypeKind::Variant(variants) => Ok((variant_fields(variants), nf, true)),
                     _ => {
                         walk.frames.pop();
@@ -2289,7 +2287,6 @@ impl<'o> LayoutBuilder<'o> {
             ));
         }
         walk.frames.push(Frame {
-            store: &record.types,
             actuals: arguments,
             parent: f,
         });
@@ -2300,7 +2297,7 @@ impl<'o> LayoutBuilder<'o> {
         &mut self,
         walk: &mut Walk<'s>,
         key: &[u8],
-        definition: &DefPath,
+        definition: &DefId,
         arguments: &'s [GenericArgument],
         f: usize,
     ) -> Result<LayoutRecord, LayoutError>
@@ -2311,17 +2308,17 @@ impl<'o> LayoutBuilder<'o> {
         let owner = owners
             .nominals
             .get(definition)
-            .ok_or_else(|| LayoutError::MissingOwner(describe(definition)))?;
+            .ok_or_else(|| LayoutError::MissingOwner(describe(definition.path())))?;
         let record = match owner {
             OwnerRepresentation::Handle { revision, resource } => {
                 let mut handle = self.handle_record(key, *resource);
-                if !resource && definition.0.package.name_is("core") && definition.0.name == "Path"
+                if !resource && definition.path().0.package.name_is("core") && definition.path().0.name == "Path"
                 {
                     handle.kind = LayoutKind::Path;
                     handle.scan.clear();
                 }
                 // An arena token is a record address, never a run-context ID.
-                if !resource && definition.0.package.name_is("core") && definition.0.name == "Arena"
+                if !resource && definition.path().0.package.name_is("core") && definition.path().0.name == "Arena"
                 {
                     let (size, align) = self.pointer();
                     handle = self.blank(key, LayoutKind::Arena, SizeSpec::Fixed(size), align);
@@ -2421,7 +2418,7 @@ impl<'o> LayoutBuilder<'o> {
             // reaching here; an owner-supplied container shape is never flat.
             return invalid(format!("{name}: a flat container representation"));
         }
-        match &walk.row(shape, sf)?.kind {
+        match &walk.row(shape)?.kind {
             TypeKind::Record(fields) => {
                 if fields.iter().any(|field| field.growable) {
                     return invalid(format!("{name}: a growable field outside a flat owner"));
@@ -2488,7 +2485,7 @@ impl<'o> LayoutBuilder<'o> {
         owner: &str,
     ) -> Result<(), LayoutError> {
         let (ty, f) = walk.resolve(ty, f)?;
-        match &walk.row(ty, f)?.kind {
+        match &walk.row(ty)?.kind {
             TypeKind::Primitive(p) if primitive_scalar(*p).is_some() => Ok(()),
             TypeKind::Named { definition, .. } => match self.owners.nominals.get(definition) {
                 Some(OwnerRepresentation::Defined(record))
@@ -2500,7 +2497,7 @@ impl<'o> LayoutBuilder<'o> {
                     Some(6),
                     format!(
                         "{owner}: a @layout(c) field of non-C type {}",
-                        describe(definition)
+                        describe(definition.path())
                     ),
                 ),
             },
@@ -2608,10 +2605,10 @@ impl<'o> LayoutBuilder<'o> {
             BuiltinType::Simd => {
                 let element_ty = ty_at(0)?;
                 let lanes = size_at(walk, 1)?;
-                let (et, ef) = walk.resolve(element_ty, f)?;
+                let (et, _) = walk.resolve(element_ty, f)?;
                 // `simd.splat[A, n]` admits any scalar lane, bool included
                 // (v22 MEM-8); `simd.add` alone needs integer lanes.
-                let scalar = match &walk.row(et, ef)?.kind {
+                let scalar = match &walk.row(et)?.kind {
                     TypeKind::Primitive(p) => primitive_scalar(*p),
                     _ => None,
                 };
@@ -2742,8 +2739,8 @@ impl<'o> LayoutBuilder<'o> {
     }
 
     fn is_soa(&self, walk: &Walk<'_>, ty: TypeId, f: usize) -> Result<bool, LayoutError> {
-        let (ty, f) = walk.resolve(ty, f)?;
-        Ok(match &walk.row(ty, f)?.kind {
+        let (ty, _) = walk.resolve(ty, f)?;
+        Ok(match &walk.row(ty)?.kind {
             TypeKind::Named { definition, .. } => matches!(
                 self.owners.nominals.get(definition),
                 Some(OwnerRepresentation::Defined(record)) if record.layout_promises.soa
@@ -2774,7 +2771,7 @@ impl<'o> LayoutBuilder<'o> {
         key.tag("flat");
         self.encode(walk, ty, f, &mut key)?;
         let (resolved, rf) = walk.resolve(ty, f)?;
-        if let TypeKind::Primitive(p) = &walk.row(resolved, rf)?.kind
+        if let TypeKind::Primitive(p) = &walk.row(resolved)?.kind
             && primitive_scalar(*p).is_some()
         {
             // A fixed-width scalar is its own type's layout, so a place of a
@@ -2786,7 +2783,7 @@ impl<'o> LayoutBuilder<'o> {
         let body = self.memoized(key.bytes, false, |b, key| b.derive_flat(walk, ty, f, key))?;
         // A zero-size value has no packing differences. Keep its ordinary
         // layout so element reads retain their source type, including Unit.
-        let flat_nominal = matches!(&walk.row(ty, f)?.kind,
+        let flat_nominal = matches!(&walk.row(ty)?.kind,
             TypeKind::Named { definition, .. } if self.flat_owner(definition));
         if self.record(body).size == SizeSpec::Fixed(0) && !flat_nominal {
             self.memory(walk, ty, f, false)
@@ -2867,7 +2864,7 @@ impl<'o> LayoutBuilder<'o> {
     where
         'o: 's,
     {
-        match &walk.row(ty, f)?.kind {
+        match &walk.row(ty)?.kind {
             TypeKind::Primitive(Primitive::String | Primitive::Bytes) => {
                 let byte = self.byte();
                 Ok(self.prefixed(key, byte, FLAT_PREFIX))
@@ -2902,12 +2899,12 @@ impl<'o> LayoutBuilder<'o> {
                 let owners = self.owners;
                 let Some(OwnerRepresentation::Defined(record)) = owners.nominals.get(definition)
                 else {
-                    return invalid(format!("{} is not flat-compatible", describe(definition)));
+                    return invalid(format!("{} is not flat-compatible", describe(definition.path())));
                 };
                 if record.resource {
                     return invalid(format!(
                         "a resource ({}) is not flat-compatible",
-                        describe(definition)
+                        describe(definition.path())
                     ));
                 }
                 let p = &record.layout_promises;
@@ -2916,7 +2913,7 @@ impl<'o> LayoutBuilder<'o> {
                         Some(47),
                         format!(
                             "{}: a flat field with layout attributes",
-                            describe(definition)
+                            describe(definition.path())
                         ),
                     );
                 }
@@ -3036,9 +3033,9 @@ impl<'o> LayoutBuilder<'o> {
     }
 
     fn is_list(&self, walk: &Walk<'_>, ty: TypeId, f: usize) -> Result<bool, LayoutError> {
-        let (ty, f) = walk.resolve(ty, f)?;
+        let (ty, _) = walk.resolve(ty, f)?;
         Ok(matches!(
-            walk.row(ty, f)?.kind,
+            walk.row(ty)?.kind,
             TypeKind::Builtin {
                 kind: BuiltinType::List,
                 ..
