@@ -4,8 +4,11 @@ Hirsel builds no prover. It publishes three prover-neutral primitives that any c
 Lean projection, an SMT or Why3 verification-condition generator, a Dafny- or Verus-style
 tool, an AI proof agent) builds on out of process: stable **obligation ids**, **content
 hashes** that say when evidence is stale, and a canonical **TIR export** that the importer
-re-validates. This part fixes their shape and the rules every consumer obeys. Rule IDs are
-`PS-n`.
+re-validates. The same seam carries **pluggable analyses** (taint, units of measure,
+typestate, cost bounds, termination and the like): source annotations no checker reads, the
+export that carries them, and a findings sidecar for the results
+([PS-17](#ps-17-analysis-annotations) to [PS-19](#ps-19-analyses-never-decide)). This part
+fixes their shape and the rules every consumer obeys. Rule IDs are `PS-n`.
 
 Nothing here changes what compiles or what a program means
 ([not in Hirsel](index.md#not-in-hirsel), [FACT-3](contracts.md#fact-3-checking),
@@ -103,14 +106,15 @@ Evidence is current for an obligation exactly when its recorded `(ObligationId, 
 equals the export's. The export header names the `TIR_VERSION`, compiler version, spec hash
 and interface version that produced it; a consumer that pins a checker also records them.
 
-## The export: `hirsel.tir.export.v5`
+## The export: `hirsel.tir.export.v6`
 
 ### PS-8: Encoding
 
-Version 4 carries TIR version 6: size-generic constant signatures, constant-read size
+Version 6 carries TIR version 6 (size-generic constant signatures, constant-read size
 actuals, order-bearing empty SortedMap constructors, caller-attribution declaration
-metadata, the explicit tracked body set and indirect-call boundaries. Imports reject
-earlier formats.
+metadata, the explicit tracked body set and indirect-call boundaries) and adds the analysis
+annotations section ([PS-17](#ps-17-analysis-annotations)); the TIR wire form and every
+TIR digest are those of version 5. Imports reject earlier formats.
 
 The export is one canonical text in the S-expression form of the `hirsel-codec` crate: one
 spelling per value, so decode-then-encode is byte-identical and two runs of one build on one
@@ -132,7 +136,7 @@ iteration order, file id, type-id provenance, address or host path appears.
 
 ### PS-9: Contents
 
-- **Header:** the format `hirsel.tir.export.v5`, `TIR_VERSION`, compiler version, spec hash,
+- **Header:** the format `hirsel.tir.export.v6`, `TIR_VERSION`, compiler version, spec hash,
   interface version, and the launch entry with its semantic program revision when the
   program declares one.
 - **Definitions,** sorted by `DefPath`: path, location table, TIR, TIR digest, references
@@ -149,6 +153,10 @@ iteration order, file id, type-id provenance, address or host path appears.
 - **`skipped: [{name, reason}]`:** every definition in the closure whose TIR could not be
   exported. Mandatory, possibly empty; a consumer turns each entry into a located error,
   never into silence.
+- **Annotations,** sorted by `DefPath`, then source order: every analysis annotation of an
+  exported definition as `(Annotation path anchor name payload location)`
+  ([PS-17](#ps-17-analysis-annotations)), then `(AnnotationDigest #…)`:
+  `H("hirsel.analysis.annotations.v1", section text)`.
 - **A trailing `(ExportDigest #…)` node:** `H("hirsel.tir.export.digest.v1", export node text)`.
 
 Selection is every definition of the root package plus its semantic closure (the dependency
@@ -171,9 +179,13 @@ and field, or the validator violation's body, block and instruction), on:
   it covers, and the importer recomputes it from the exported signature and that list; an
   owner view is consistent exactly when it seals to its public signature. Then every
   dependency, reference and definition signature hash must name those fingerprints;
-- any IR validation violation of any definition, against the signature view of its package.
+- any IR validation violation of any definition, against the signature view of its package;
+- an annotations section that is not sorted by definition, names a definition without an
+  exported signature, anchors a parameter outside a function's parameters or a field or
+  payload on a definition that is not a type, spells a name that is not dotted, or whose
+  digest does not recompute.
 
-Import returns the definitions, signatures, tables and skip list. There is no in-process
+Import returns the definitions, signatures, tables, skip list and annotations. There is no in-process
 plugin API: consumers read the file.
 
 ## Rules for consumers
@@ -268,10 +280,80 @@ TIR to the consumer's logic, and any native evaluation (`native_decide`, `bv_dec
 solver-internal evaluation) are named trust items in whatever ledger a consumer keeps; none
 is implicit.
 
+## Pluggable analyses
+
+An analysis beyond the type system is optional in Bracha's sense: it has no effect on what
+a program means and no annotation is mandatory. It runs out of process over the export,
+like a prover, and reports what it finds; the core type system stays the only one the
+checker enforces.
+
+### PS-17: Analysis annotations
+
+`@analysis(name)` or `@analysis(name: payload)` states a fact for the analysis `name`
+(a dotted name such as `taint` or `acme.units`); the payload is any tokens with balanced
+`()`, `[]` and `{}`, and its meaning belongs to that analysis.
+
+```hirsel
+@analysis(acme.units: result = m/s)
+fn speed(@analysis(unit: m) d: u64, @analysis(unit: s) t: u64) -> u64 {
+  d / t
+}
+
+type Reading {
+  @analysis(unit: m) depth: u64,
+  @analysis(taint: secret) site: String,
+}
+```
+
+An annotation stands before an item (among its attributes), before a parameter of a function
+definition, before a record field or a distinct type's field, or before a variant payload.
+Anywhere else, including parameters of function types, closures and local functions, it is
+LANG-7. An item or site may carry several; source order is kept.
+
+The compiler parses, formats and exports annotations and reads them for nothing else. The
+export lists each one with its definition and anchor: `(Item)`, `(Parameter i)` (the TIR
+entry body's `parameters[i]`, the signature's parameter `i`), `(Field i)` (a record's field
+`i`, a distinct type's field 0) or `(Payload variant field)`, its name, its payload as the
+token spellings without trivia, and its location. Annotations of a dependency read from a
+precheck are not exported.
+
+### PS-18: Findings sidecar
+
+An analysis reports in a JSON sidecar
+`{"format": "hirsel.analysis.findings.v1", "export", "analyzer", "findings": [...]}`.
+`export` is the export digest the analysis read (`#` and 64 lowercase hex digits), so a
+finding is current exactly for that export: an analysis may follow data through any
+definition, so no narrower key is sound. `analyzer` is `tool@version`. Each finding has
+exactly `analysis` (the annotation name it reports on), `code` (the analysis's own),
+`severity` (`error`, `warning` or `note`), `definition` (a written `DefPath` in the export),
+`location` (`{module, line, column, end_line, end_column}` as in PS-8), `message` and
+`related` (a list of `{location, message}`). A missing or unknown field refuses the sidecar.
+Canonical text sorts keys and indents by two spaces.
+
+A finding is not an obligation: it has no PS-1 id or checksum, and neither PS-12 evidence
+nor PS-13 removal reads it.
+
+### PS-19: Analyses never decide
+
+Analysis annotations and findings never change what compiles or what a program means.
+Replacing any well-formed annotation with whitespace leaves every diagnostic, the semantic
+program revision, every definition hash, TIR digest, obligation id and checksum, and the
+program's interpreted and native runs the same; the export differs only in its annotations
+section. An item begins after its leading annotations, so a diagnostic over the whole item
+is placed as without them, and a recursive type group's key in its members' signatures is
+over the members' tokens, never their text. (Native objects identify each item's source
+text in their failure-site codes, so any byte of an item, a comment as much as an
+annotation, moves their bytes but not what they do.) No compiler path reads a findings
+sidecar, so a finding never rejects a program, admits one or licenses a check removal. The
+conformance oracle O5 checks this over the corpus by inserting an annotation at every site
+of each program and comparing it with its blanked twin.
+
 ## Consumers
 
 Consumers may project exported obligations to Lean, SMT or Why3, or drive an agent proof
-loop. Callee reasoning uses signature contracts; authority follows [PS-14](#ps-14-authority-is-opaque)
+loop. An analysis reads annotations from the same export (PS-14 hides which calls hold
+authority from no one, only their equations); `crates/hirsel-analysis-canary` keeps a taint
+and a units analysis as canaries of the seam. Callee reasoning uses signature contracts; authority follows [PS-14](#ps-14-authority-is-opaque)
 and evidence currency follows [PS-7](#ps-7-what-digests-bind). These consumer sketches are
 not part of the contract.
 

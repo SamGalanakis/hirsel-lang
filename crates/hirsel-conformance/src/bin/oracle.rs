@@ -1,4 +1,5 @@
-//! The compiler-architecture oracles O1–O4 (`hirsel_conformance::oracle`).
+//! The compiler-architecture oracles O1–O4 and annotation invariance O5
+//! (`hirsel_conformance::oracle`).
 
 hirsel_guard::install!();
 use hirsel_cli_args::{
@@ -7,7 +8,7 @@ use hirsel_cli_args::{
     parse_or_exit,
 };
 use hirsel_conformance::oracle::{
-    self, Config, Limits, Report, edits::Scenario, o1, o2, o3, o4, write_artifacts,
+    self, Config, Limits, Report, edits::Scenario, o1, o2, o3, o4, o5, write_artifacts,
 };
 use std::{
     env,
@@ -19,6 +20,7 @@ const USAGE: &str = "usage: oracle o1 [--path PREFIX]... [--limit N] [--jobs 1,2
        oracle o2 [--scenario NAME]... [COMMON]
        oracle o3 [--scenario NAME]... [COMMON]
        oracle o4 [--path PREFIX]... [--limit N] [COMMON]
+       oracle o5 [--path PREFIX]... [--limit N] [--native-programs N] [COMMON]
        oracle produce [--jobs N] [--salt S] [--store dir:PATH] [--verify-store] [--verify on|off] [--limits steps=N,depth=N] [--native] --out DIR PROGRAM
 COMMON: [--root REPO] [--shard I/N] [--work DIR] [--json] [--allow-todo]";
 
@@ -34,6 +36,7 @@ struct Options {
     jobs: Option<Vec<usize>>,
     salts: Option<Vec<Option<u64>>>,
     native: bool,
+    native_programs: usize,
     work: Option<PathBuf>,
     json: bool,
     allow_todo: bool,
@@ -57,7 +60,7 @@ fn main() -> ExitCode {
     let options = parse_or_exit(parse(&command, &mut args));
     match command.as_str() {
         "produce" => produce(options),
-        "o1" | "o2" | "o3" | "o4" => match campaign(&command, &options) {
+        "o1" | "o2" | "o3" | "o4" | "o5" => match campaign(&command, &options) {
             Ok(report) => {
                 if options.json {
                     println!("{}", report.json());
@@ -90,8 +93,8 @@ fn parse(command: &str, args: &mut Parser) -> Result<Options, hirsel_cli_args::l
             continue;
         }
         match (command, arg) {
-            ("o1" | "o4", Long("path")) => o.paths.push(args.value()?.string()?),
-            ("o1" | "o4", Long("limit")) => o.limit = Some(args.value()?.parse()?),
+            ("o1" | "o4" | "o5", Long("path")) => o.paths.push(args.value()?.string()?),
+            ("o1" | "o4" | "o5", Long("limit")) => o.limit = Some(args.value()?.parse()?),
             ("o1", Long("jobs")) => {
                 o.jobs = Some(
                     list(args.value()?.string()?)
@@ -116,9 +119,10 @@ fn parse(command: &str, args: &mut Parser) -> Result<Options, hirsel_cli_args::l
                 o.config.native = true;
             }
             ("o2" | "o3", Long("scenario")) => o.scenarios.push(args.value()?.string()?),
-            ("o1" | "o2" | "o3" | "o4", Long("work")) => o.work = Some(args.value()?.into()),
-            ("o1" | "o2" | "o3" | "o4", Long("json")) => o.json = true,
-            ("o1" | "o2" | "o3" | "o4", Long("allow-todo")) => o.allow_todo = true,
+            ("o5", Long("native-programs")) => o.native_programs = args.value()?.parse()?,
+            ("o1" | "o2" | "o3" | "o4" | "o5", Long("work")) => o.work = Some(args.value()?.into()),
+            ("o1" | "o2" | "o3" | "o4" | "o5", Long("json")) => o.json = true,
+            ("o1" | "o2" | "o3" | "o4" | "o5", Long("allow-todo")) => o.allow_todo = true,
             ("produce", Long("jobs")) => o.config.jobs = args.value()?.parse()?,
             ("produce", Long("salt")) => o.config.salt = Some(args.value()?.parse()?),
             ("produce", Long("store")) => {
@@ -205,10 +209,16 @@ fn campaign(command: &str, options: &Options) -> Result<Report, String> {
             }
             "o2" => o2::run(&exe, &root, &scenarios(&root, "o2", options)?, &work),
             "o3" => o3::run(&scenarios(&root, "o3", options)?),
-            _ => {
+            "o4" => {
                 let programs =
                     oracle::corpus(&root, &options.paths, options.common.shard, options.limit)?;
                 o4::run(&exe, &root, &programs, &work)
+            }
+            _ => {
+                let programs =
+                    oracle::corpus(&root, &options.paths, options.common.shard, options.limit)?;
+                let rules = hirsel_conformance::spec_rules(&root)?;
+                o5::run(&root, &rules, &programs, options.native_programs, &work)
             }
         })
     })();

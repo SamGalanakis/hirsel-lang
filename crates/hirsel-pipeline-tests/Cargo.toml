@@ -13,6 +13,7 @@ doctest = false
 
 [dev-dependencies]
 hirsel-guard = { path = "../hirsel-guard" }
+hirsel-analysis-canary = { path = "../hirsel-analysis-canary" }
 hirsel-layout = { path = "../hirsel-layout" }
 hirsel-codec = { path = "../hirsel-codec" }
 hirsel-code-store = { path = "../hirsel-code-store" }

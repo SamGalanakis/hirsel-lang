@@ -4569,6 +4569,9 @@ conformance/PROV/PROV-5-replace-brand-owner-ok.hir
 conformance/PROV/PROV-5-scope-deadline-same-clock-ok.hir
 conformance/PROV/PROV-5-scope-deadline-wrong-clock-bad.hir
 conformance/PROV/PROV-5-whole-record-replacement.hir
+conformance/PS/PS-17-analysis-annotations-run.hir
+conformance/PS/PS-17-analysis-closure-parameter-bad.hir
+conformance/PS/PS-17-analysis-closure-parameter-ok.hir
 conformance/SEM/SEM-1-bigint-convert-run.hir
 conformance/SEM/SEM-1-bigint-divide-zero-fail.hir
 conformance/SEM/SEM-1-bigint-divide-zero-run.hir

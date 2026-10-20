@@ -1,0 +1,14 @@
+// rule: PS-17
+// expect: accept
+// The definition's own parameter carries the annotation.
+fn apply(@analysis(unit: m) x: u64) -> u64 {
+  let f = fn(y: u64) -> u64 {
+    y + 1u64
+  }
+  f(x)
+}
+
+pub fn main() -> Result[(), ()] {
+  let n = apply(1u64)
+  Ok(())
+}

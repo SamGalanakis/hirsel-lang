@@ -45,7 +45,9 @@ These goals decide between designs. A rule that would break one of them is wrong
 
 **Layer 0** is what an agent writes without thinking: value semantics, signature modes,
 reference counting for long-lived values, compiler-chosen regions for scoped values, and
-capabilities. No annotations beyond signatures.
+capabilities. No annotations beyond signatures; an analysis annotation
+([PS-17](proof-seam.md#ps-17-analysis-annotations)) is optional and means nothing to the
+checker.
 
 **Layer 1** drops down for layout and lifetimes: `flat` types, `Packed` variants,
 generational slots, explicit arenas and regions, `Shared[T]`, `Inline[T, n]`, `@soa`,
@@ -81,7 +83,7 @@ Cost reports (where layer-0 code counts, copies or keeps checks) are tooling.
 | [Standard library](std-library.md): the `std@1` source package | |
 | [Diagnostics](diagnostics.md): order, owners, causes and primary sites | |
 | [Implementation](implementation.md): the reference interpreter, checked execution, the conformance corpus, native code | |
-| [The proof seam](proof-seam.md): obligation ids, content hashes, the TIR export | PS-1 to PS-16 |
+| [The proof seam](proof-seam.md): obligation ids, content hashes, the TIR export, pluggable analyses | PS-1 to PS-19 |
 
 For complete runnable examples, start with the [language tour](../tour.md).
 For task fan-out, actors, mutexes and scheduling tests, see the
@@ -160,7 +162,9 @@ function bodies are [CT-5](compile-time.md#ct-5-generation), and conditional let
   `let mut` names or borrowed parameters by escaping closures, borrowing counted data into
   child tasks, partially unique values (`aliased` fields), list handles, and facts over
   several record fields.
-- Proof obligations that decide acceptance: prover strength never changes what compiles.
+- Proof obligations or pluggable analyses that decide acceptance: prover strength and
+  analysis findings never change what compiles
+  ([PS-19](proof-seam.md#ps-19-analyses-never-decide)).
 - Fast-math, relaxed SIMD, build-mode or topology-dependent semantics, fallible implicit
   destructors, recoverable mutex poisoning, per-task heap budgets, and manual freeing of
   ordinary values outside `Unsafe`.

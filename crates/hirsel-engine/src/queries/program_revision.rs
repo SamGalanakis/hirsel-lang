@@ -143,7 +143,8 @@ impl QueryEngine {
                 return Err(QueryError::Diagnostics(analyzed.diagnostics.clone()));
             }
             let file = &analyzed.value.typed.file;
-            let item = &file.tree.items[analyzed.value.typed.item.0 as usize];
+            let id = analyzed.value.typed.item;
+            let item = &file.tree.items[id.0 as usize];
             content.extend(self.semantic_tokens(file, item)?);
             if generation::executable(file, analyzed.value.typed.item) {
                 let lowered = self.lower_to_tir(path)?;
@@ -249,18 +250,30 @@ impl QueryEngine {
         Ok(foreign)
     }
 
-    fn semantic_tokens(
+    pub(crate) fn semantic_tokens(
         &self,
         file: &SyntaxFile,
         item: &hirsel_syntax::Item,
     ) -> Result<Vec<Vec<u8>>, QueryError> {
         let mut content = vec![b"hirsel.semantic-source.v1".to_vec()];
         let mut newline = false;
+        let start = item.origin.tokens.start as usize;
         let tokens = file
             .tokens
-            .get(item.origin.tokens.start as usize..item.origin.tokens.end as usize)
+            .get(start..item.origin.tokens.end as usize)
             .ok_or_else(|| operational("invalid source token range"))?;
-        for token in tokens {
+        // PS-19: an analysis annotation is not program content. By token
+        // range: an adapted item (a FACT-2 predicate) shares its owner's tokens.
+        let annotations: Vec<_> = file
+            .tree
+            .analyses
+            .iter()
+            .map(|a| a.origin.tokens.start as usize..a.origin.tokens.end as usize)
+            .collect();
+        for (index, token) in tokens.iter().enumerate() {
+            if annotations.iter().any(|r| r.contains(&(start + index))) {
+                continue;
+            }
             let spelling = self
                 .sources
                 .slice(token.span)

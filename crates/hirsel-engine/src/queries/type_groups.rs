@@ -10,7 +10,7 @@ use hirsel_syntax::{TypeArgument, TypeBody, TypeExprId, TypeExprKind};
 use hirsel_types::{GroupStage, RecursiveGroup};
 
 /// A group's members in DefPath order, the owner included, and each member's
-/// `hirsel_graph::scc_keys` key over the members' paths and text.
+/// `hirsel_graph::scc_keys` key over the members' paths and semantic tokens.
 pub(super) struct TypeGroup {
     members: Vec<DefPath>,
     keys: BTreeMap<DefPath, ContentHash>,
@@ -58,15 +58,22 @@ impl Recorder<'_> {
             return None;
         }
         let inside: BTreeSet<usize> = component.iter().copied().collect();
-        let texts: BTreeMap<usize, ContentHash> = component
+        // Each member's semantic tokens, not its text: layout, comments and
+        // analysis annotations (PS-19) never move a member's signature.
+        let texts: BTreeMap<usize, Vec<Vec<u8>>> = component
             .iter()
             .map(|m| {
-                (
-                    *m,
-                    self.engine
-                        .implementation_hash(&nodes[*m])
-                        .unwrap_or_default(),
-                )
+                let tokens = self
+                    .engine
+                    .items
+                    .get(&nodes[*m])
+                    .and_then(|items| items.first())
+                    .and_then(|source| {
+                        let item = &source.file.tree.items[source.item.0 as usize];
+                        self.engine.semantic_tokens(&source.file, item).ok()
+                    })
+                    .unwrap_or_default();
+                (*m, tokens)
             })
             .collect();
         let keys = hirsel_graph::scc_keys(
@@ -80,7 +87,9 @@ impl Recorder<'_> {
             },
             |m, writer| {
                 writer.bytes(nodes[m].to_string().as_bytes());
-                writer.bytes(&texts[&m].0);
+                for token in &texts[&m] {
+                    writer.bytes(token);
+                }
             },
         );
         let mut members: Vec<DefPath> = component.iter().map(|m| nodes[*m].clone()).collect();

@@ -102,6 +102,92 @@ impl Parser<'_> {
             origin: self.origin(start),
         })
     }
+    fn at_analysis(&self) -> bool {
+        self.at("@") && self.text_at(1) == "analysis"
+    }
+    /// Every `@analysis(...)` at this position, for `site` of the current item (PS-17).
+    fn analyses(&mut self, site: AnalysisSite) -> Parsed<()> {
+        while self.at_analysis() {
+            let start = self.pos;
+            self.pos += 2;
+            self.expect("(", const { RuleId::of("LANG-1") })?;
+            let mut name = vec![self.name()?.as_str().to_owned()];
+            while self.at(".") && !self.newline() {
+                self.pos += 1;
+                name.push(self.name()?.as_str().to_owned());
+            }
+            let (mut payload, mut spaced) = (vec![], vec![]);
+            if self.eat(":") {
+                let mut open = vec![];
+                loop {
+                    let Some(token) = self.token(0) else {
+                        return self.fail(const { RuleId::of("LANG-1") }, "expected `)`");
+                    };
+                    let spelling = self.text_at(0).to_owned();
+                    match token.kind {
+                        TokenKind::Eof => {
+                            return self.fail(const { RuleId::of("LANG-1") }, "expected `)`");
+                        }
+                        TokenKind::Punct(Punct::RParen) if open.is_empty() => break,
+                        TokenKind::Punct(Punct::LParen | Punct::LBracket | Punct::LBrace) => {
+                            open.push(match token.kind {
+                                TokenKind::Punct(Punct::LParen) => ")",
+                                TokenKind::Punct(Punct::LBracket) => "]",
+                                _ => "}",
+                            });
+                        }
+                        TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace) => {
+                            if open.pop() != Some(spelling.as_str()) {
+                                return self.fail(
+                                    const { RuleId::of("LANG-7") },
+                                    "an analysis payload's brackets must balance",
+                                );
+                            }
+                        }
+                        TokenKind::Invalid | TokenKind::Format(_) => {
+                            return self.fail(
+                                const { RuleId::of("LANG-7") },
+                                "an analysis payload is plain tokens",
+                            );
+                        }
+                        _ => {}
+                    }
+                    let index = self.significant[self.pos];
+                    spaced.push(
+                        !payload.is_empty()
+                            && matches!(self.tokens[index - 1].kind, TokenKind::Trivia(_)),
+                    );
+                    payload.push(spelling);
+                    self.pos += 1;
+                }
+                if payload.is_empty() {
+                    return self.fail(
+                        const { RuleId::of("LANG-7") },
+                        "an analysis payload after `:` cannot be empty",
+                    );
+                }
+            }
+            self.expect(")", const { RuleId::of("LANG-1") })?;
+            self.analyses.push(AnalysisAnnotation {
+                item: ItemId(0),
+                site,
+                name: name.join("."),
+                payload,
+                spaced,
+                origin: self.origin(start),
+            });
+        }
+        Ok(())
+    }
+    pub(super) fn misplaced_analysis(&mut self) -> Parsed<()> {
+        if self.at_analysis() {
+            return self.fail(
+                const { RuleId::of("LANG-7") },
+                "an analysis annotation attaches only to a definition, a parameter of a function definition or a field",
+            );
+        }
+        Ok(())
+    }
     pub(super) fn generics(&mut self) -> Parsed<Vec<GenericParam>> {
         if !self.eat("[") {
             return Ok(vec![]);
@@ -159,9 +245,25 @@ impl Parser<'_> {
         Ok(Some(self.list("}", |p| p.path(false))?))
     }
     pub(super) fn header(&mut self, anonymous: bool, contracts: bool) -> Parsed<FunctionSyntax> {
+        self.annotated_header(anonymous, contracts, false)
+    }
+    /// A function header; a definition's parameters may carry analysis annotations (PS-17).
+    fn annotated_header(
+        &mut self,
+        anonymous: bool,
+        contracts: bool,
+        annotated: bool,
+    ) -> Parsed<FunctionSyntax> {
         let generics = if anonymous { vec![] } else { self.generics()? };
         self.expect("(", const { RuleId::of("LANG-1") })?;
-        let parameters = self.list(")", |p| p.parameter(anonymous))?;
+        let mut index = 0;
+        let parameters = self.list(")", |p| {
+            if annotated {
+                p.analyses(AnalysisSite::Parameter(index))?;
+                index += 1;
+            }
+            p.parameter(anonymous)
+        })?;
         let result = if (!anonymous || self.continuing()) && self.eat("->") {
             Some(self.ty()?)
         } else {
@@ -200,6 +302,7 @@ impl Parser<'_> {
         Ok(())
     }
     fn parameter(&mut self, anonymous: bool) -> Parsed<Parameter> {
+        self.misplaced_analysis()?;
         // Colon lookahead is bounded to the parameter head; never classify names by type lookup.
         if matches!(self.text_at(0), "mut" | "take") && self.text_at(1) == ":" {
             return self.fail(
@@ -247,9 +350,20 @@ impl Parser<'_> {
     }
     pub(super) fn item(&mut self, context: &FileContext) -> Parsed<Item> {
         let start = self.pos;
+        // PS-19: the item begins after its leading analysis annotations, so
+        // its span, text and every diagnostic over it are those of the item
+        // without them.
+        let mut begin = start;
         let mut attributes = vec![];
         while self.at("@") {
-            attributes.push(self.attribute()?);
+            if self.at_analysis() {
+                self.analyses(AnalysisSite::Item)?;
+                if attributes.is_empty() {
+                    begin = self.pos;
+                }
+            } else {
+                attributes.push(self.attribute()?);
+            }
         }
         let mut opaque_span = None;
         let visibility = if self.eat("pub") {
@@ -279,7 +393,7 @@ impl Parser<'_> {
             };
             self.expect("fn", const { RuleId::of("LANG-6") })?;
             let name = self.name()?;
-            let mut signature = self.header(false, true)?;
+            let mut signature = self.annotated_header(false, true, true)?;
             signature.attributes = attributes.clone();
             let body = if self.at("{") {
                 Some(self.block()?)
@@ -335,9 +449,17 @@ impl Parser<'_> {
             modules: context.modules.clone(),
             name: name.as_str().to_owned(),
         });
+        // The name follows every item-level annotation, whatever its payload spells.
+        let head = self
+            .analyses
+            .iter()
+            .filter(|a| a.site == AnalysisSite::Item)
+            .map(|a| a.origin.tokens.end as usize)
+            .max()
+            .unwrap_or(self.significant[start]);
         Ok(Item {
-            name_span: self.tokens[self.significant[start]
-                ..self.significant[self.pos.min(self.significant.len() - 1)]]
+            name_span: self.tokens
+                [head..self.significant[self.pos.min(self.significant.len() - 1)]]
                 .iter()
                 .skip_while(|t| {
                     !matches!(
@@ -347,9 +469,9 @@ impl Parser<'_> {
                 })
                 .find(|t| matches!(t.kind, TokenKind::Ident(s) if s == name))
                 .map(|t| t.span)
-                .unwrap_or(self.origin(start).span),
+                .unwrap_or(self.origin(begin).span),
 
-            origin: self.origin(start),
+            origin: self.origin(begin),
             owned_tokens: TokenRange::default(),
             name,
             definition,
@@ -427,7 +549,8 @@ impl Parser<'_> {
         let name = self.name()?;
         self.expect(":", const { RuleId::of("LANG-6") })?;
         let ty = self.part_type()?;
-        let growable = if record && self.eat("@") {
+        let growable = if record && self.at("@") && !self.at_analysis() {
+            self.pos += 1;
             self.expect("growable", const { RuleId::of("LANG-7") })?;
             true
         } else {
@@ -472,7 +595,9 @@ impl Parser<'_> {
         let body = if flavor == TypeFlavor::Distinct {
             self.expect("(", const { RuleId::of("LANG-7") })?;
             self.whitespace += 1;
-            let result = self.field(false);
+            let result = self
+                .analyses(AnalysisSite::Field(0))
+                .and_then(|()| self.field(false));
             self.whitespace -= 1;
             let field = result?;
             self.expect(")", const { RuleId::of("LANG-7") })?;
@@ -485,6 +610,7 @@ impl Parser<'_> {
         } else if self.eat("{") {
             let mut fields = vec![];
             while !self.eat("}") {
+                self.analyses(AnalysisSite::Field(fields.len() as u32))?;
                 fields.push(self.field(true)?);
                 self.entry_end("}")?;
             }
@@ -500,9 +626,9 @@ impl Parser<'_> {
                 && matches!(self.text_at(1), "(" | "|")
                 && (self.whitespace > 0 || !self.newline_at(self.pos + 1));
             if is_variant {
-                let mut variants = vec![self.variant()?];
+                let mut variants = vec![self.variant(0)?];
                 while self.continuing() && self.eat("|") {
-                    variants.push(self.variant()?);
+                    variants.push(self.variant(variants.len() as u32)?);
                 }
                 TypeBody::Variants(variants)
             } else {
@@ -561,10 +687,13 @@ impl Parser<'_> {
             },
         ))
     }
-    fn variant(&mut self) -> Parsed<VariantSyntax> {
+    fn variant(&mut self, variant: u32) -> Parsed<VariantSyntax> {
         let name = self.name()?;
         let fields = if self.continuing() && self.eat("(") {
+            let mut field = 0;
             self.list(")", |p| {
+                p.analyses(AnalysisSite::Payload { variant, field })?;
+                field += 1;
                 let label = if p.ident(0) && p.text_at(1) == ":" {
                     let name = p.name()?;
                     p.pos += 1;

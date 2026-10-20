@@ -7,6 +7,7 @@
 
 hirsel_guard::install!();
 
+mod analysis_canaries;
 mod check_audit_tests;
 mod check_lower_cursor_tests;
 mod check_lower_match_tests;

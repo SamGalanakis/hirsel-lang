@@ -58,14 +58,19 @@ pub(crate) fn merge(
         .filter(|(_, t)| !matches!(t.kind, TokenKind::Trivia(_) | TokenKind::Eof))
         .collect();
     // Recovery may omit entire declarations without producing an Error node.
+    // An item's leading analysis annotations precede its span (PS-19).
+    let within = |origin: Origin, index: usize| {
+        origin.tokens.start as usize <= index && index < origin.tokens.end as usize
+    };
     for &(index, t) in &original {
         if !matches!(t.kind, TokenKind::Punct(Punct::Semicolon))
             && !file.roots.iter().any(|id| {
-                file.tree.items.get(id.0 as usize).is_some_and(|item| {
-                    item.origin.tokens.start as usize <= index
-                        && index < item.origin.tokens.end as usize
-                })
+                file.tree
+                    .items
+                    .get(id.0 as usize)
+                    .is_some_and(|item| within(item.origin, index))
             })
+            && !file.tree.analyses.iter().any(|a| within(a.origin, index))
         {
             return None;
         }

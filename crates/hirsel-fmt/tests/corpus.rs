@@ -58,6 +58,9 @@ fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
     fn sig(s: &mut FunctionSyntax, origin: Origin) {
         attrs(&mut s.attributes, origin);
     }
+    for a in &mut tree.analyses {
+        a.origin = origin;
+    }
     for item in &mut tree.items {
         item.origin = origin;
         item.name_span = Span::default();
@@ -141,6 +144,11 @@ fn adversarial_comment_newline_and_projection_boundaries_roundtrip() {
         "fn main() { let Some(x) = a + (if c { a } else { b }) else { return } }",
         "fn main() { let Some(x) = (match c { _ => a }) else { return } }",
         "/// doc\nfn a() {} // end\n\n/// next\nfn b() {}\n// orphan",
+        // Leading analysis annotations precede the item's span (PS-19).
+        "/// doc\n@analysis(a) fn f() {}",
+        "@analysis(a)\nfn f(@analysis(u: m) x: u64) {}",
+        "fn g() {}\n\n// lead\n@analysis(a) // after\n@noalloc\nfn f() {}",
+        "// c\n@analysis(a)\n/// d\ntype R {\n  @analysis(u) x: u64,\n}",
     ] {
         let (original, sources, errors) = parse(source);
         assert!(!errors, "{source}");

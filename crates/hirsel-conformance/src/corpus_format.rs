@@ -108,7 +108,7 @@ fn order_closure_clauses(tokens: &mut Vec<Token>, syntax: &SyntaxFile) {
         tokens.splice(at..at, clause);
     }
 }
-fn parsed(engine: &mut QueryEngine, source: &str) -> Result<SyntaxFile, String> {
+pub(crate) fn parsed(engine: &mut QueryEngine, source: &str) -> Result<SyntaxFile, String> {
     let file = engine
         .sources
         .add("tree-proof.hir", source.into())
@@ -149,6 +149,9 @@ fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
         for attr in attrs {
             attr.origin = origin;
         }
+    }
+    for a in &mut tree.analyses {
+        a.origin = origin;
     }
     for item in &mut tree.items {
         item.origin = origin;

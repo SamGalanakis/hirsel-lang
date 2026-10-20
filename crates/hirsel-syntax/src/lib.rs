@@ -940,6 +940,32 @@ pub enum ItemKind {
         drop: Option<DropSyntax>,
     },
 }
+/// Where an analysis annotation attaches within its item (PS-17). Indexes
+/// follow declaration order: a function definition's parameters, a record's
+/// fields (a distinct type's field is field 0), a variant's payloads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum AnalysisSite {
+    Item,
+    Parameter(u32),
+    Field(u32),
+    Payload { variant: u32, field: u32 },
+}
+/// `@analysis(name: payload)` (PS-17): a fact owned by an out-of-process
+/// analysis. The compiler parses, formats and exports it and reads it for
+/// nothing else, so it lives beside the tree, never inside a declaration node
+/// (PS-19).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnalysisAnnotation {
+    pub item: ItemId,
+    pub site: AnalysisSite,
+    /// The analysis's dotted name, such as `taint` or `acme.units`.
+    pub name: String,
+    /// The payload's token spellings, without trivia.
+    pub payload: Vec<String>,
+    /// Whether trivia precedes each payload token, for the formatter.
+    pub spaced: Vec<bool>,
+    pub origin: Origin,
+}
 /// Item text hash covers owned trivia and exact text; identity is a manifest-qualified path (PROG-5).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Item {
@@ -990,6 +1016,8 @@ pub struct SyntaxTree {
     pub repeats: Vec<RepeatLiteral>,
     pub conditions: Vec<LetCondition>,
     pub groups: Vec<Group>,
+    /// Analysis annotations in source order (PS-17).
+    pub analyses: Vec<AnalysisAnnotation>,
 }
 /// The most ways one pattern may match through its or-patterns (LANG-13): the
 /// checker rejects more, so every later phase may enumerate them.

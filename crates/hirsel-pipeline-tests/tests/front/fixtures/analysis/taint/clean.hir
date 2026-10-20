@@ -1,0 +1,21 @@
+// The secret is checked, never written.
+fn emit(rt: Io, text: String) -> Result[(), ()] {
+  out.print(io.stdout(rt) ? grant_error, text) ? output_error
+  Ok(())
+}
+
+fn login(rt: Io, @analysis(taint: secret) password: String) -> Result[(), ()] {
+  let user = "sam\n"
+  emit(rt, user)
+}
+
+fn output_error[E](take e: E) {}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  login(rt, "hunter2\n")
+}

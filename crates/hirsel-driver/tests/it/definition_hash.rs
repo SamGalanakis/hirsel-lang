@@ -311,6 +311,19 @@ fn call_sites_record_each_callee_hash() {
     });
 }
 
+/// PS-19: an analysis annotation is not part of a definition's meaning.
+#[test]
+fn analysis_annotations_move_no_definition_hash() {
+    with_compiler_stack(|| {
+        use super::proof_export::{ANNOTATED, blanked};
+        let names = ["speed", "Point", "Shape", "Meters", "main"];
+        assert_eq!(
+            hashes(ANNOTATED, &names),
+            hashes(&blanked(ANNOTATED), &names)
+        );
+    });
+}
+
 #[test]
 fn a_recursive_type_group_hashes_its_meaning_not_its_text() {
     with_compiler_stack(|| {

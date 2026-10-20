@@ -12,6 +12,8 @@ pub(crate) struct Printer<'a> {
     repeats: std::collections::BTreeMap<ExprId, &'a RepeatLiteral>,
     /// Written `if let` by its match, and `while let` by its loop body block.
     conditions: std::collections::BTreeMap<ExprId, LetCondition>,
+    /// Analysis annotations by item and site, in source order (PS-17).
+    analyses: std::collections::BTreeMap<(ItemId, AnalysisSite), Vec<&'a AnalysisAnnotation>>,
 }
 impl<'a> Printer<'a> {
     pub fn new(file: &'a SyntaxFile, _sources: &SourceMap) -> Self {
@@ -36,11 +38,16 @@ impl<'a> Printer<'a> {
                 LetCondition::While { body, .. } => (body, *c),
             })
             .collect();
+        let mut analyses = std::collections::BTreeMap::<_, Vec<_>>::new();
+        for a in &file.tree.analyses {
+            analyses.entry((a.item, a.site)).or_default().push(a);
+        }
         Self {
             file,
             formats,
             repeats,
             conditions,
+            analyses,
         }
     }
     fn comment_group(&self, origin: Origin) -> bool {
@@ -177,6 +184,35 @@ impl<'a> Printer<'a> {
         }
         Some(cat(ds))
     }
+    /// `@analysis(name: payload)`: payload tokens keep adjacency, other trivia is one space.
+    fn analysis(&self, a: &AnalysisAnnotation) -> Doc {
+        let mut ds = vec![token("@"), token("analysis"), token("(")];
+        for (i, part) in a.name.split('.').enumerate() {
+            if i > 0 {
+                ds.push(token("."));
+            }
+            ds.push(token(part));
+        }
+        if !a.payload.is_empty() {
+            ds.extend([token(":"), Space]);
+            for (t, spaced) in a.payload.iter().zip(&a.spaced) {
+                if *spaced {
+                    ds.push(Space);
+                }
+                ds.push(token(t.as_str()));
+            }
+        }
+        ds.push(token(")"));
+        cat(ds)
+    }
+    /// The annotations at `site` of `item`, each followed by `separator`.
+    fn analyses(&self, item: Option<ItemId>, site: AnalysisSite, separator: Doc) -> Vec<Doc> {
+        item.and_then(|item| self.analyses.get(&(item, site)))
+            .into_iter()
+            .flatten()
+            .flat_map(|a| [self.analysis(a), separator.clone()])
+            .collect()
+    }
     fn attributes(&self, attrs: &[Attribute]) -> Printed {
         Some(join(
             attrs
@@ -237,14 +273,19 @@ impl<'a> Printer<'a> {
         ]))
     }
     fn header(&self, sig: &FunctionSyntax) -> Printed {
+        self.annotated_header(sig, None)
+    }
+    /// A header; `item` names the definition whose parameters carry annotations.
+    fn annotated_header(&self, sig: &FunctionSyntax, item: Option<ItemId>) -> Printed {
         let mut ds = vec![
             self.generics(&sig.generics)?,
             list(
                 "(",
                 sig.parameters
                     .iter()
-                    .map(|p| {
-                        let mut ds = Vec::new();
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let mut ds = self.analyses(item, AnalysisSite::Parameter(i as u32), Space);
                         if let Some(s) = p.label {
                             ds.extend([self.name(s)?, Space]);
                         }
@@ -298,7 +339,7 @@ impl<'a> Printer<'a> {
     }
     fn item(&self, id: ItemId) -> Printed {
         let item = self.file.tree.items.get(id.0 as usize)?;
-        let mut ds = Vec::new();
+        let mut ds = self.analyses(Some(id), AnalysisSite::Item, Line);
         for a in &item.attributes {
             ds.extend([self.attribute(a)?, Line]);
         }
@@ -331,7 +372,7 @@ impl<'a> Printer<'a> {
                     token("fn"),
                     Space,
                     self.name(item.name)?,
-                    self.header(signature)?,
+                    self.annotated_header(signature, Some(id))?,
                 ]);
                 if let Some(e) = body {
                     match self.file.tree.expressions.get(e.0 as usize)?.kind {
@@ -402,7 +443,10 @@ impl<'a> Printer<'a> {
                                 join(
                                     fields
                                         .iter()
-                                        .map(|f| self.field(f))
+                                        .enumerate()
+                                        .map(|(i, f)| {
+                                            self.field(f, Some(id), AnalysisSite::Field(i as u32))
+                                        })
                                         .collect::<Option<Vec<_>>>()?,
                                     cat([token(","), Line]),
                                 ),
@@ -419,15 +463,24 @@ impl<'a> Printer<'a> {
                             Space,
                             join(
                                 vs.iter()
-                                    .map(|v| {
+                                    .enumerate()
+                                    .map(|(variant, v)| {
                                         let mut ds = vec![self.name(v.name)?];
                                         if !v.fields.is_empty() || vs.len() == 1 {
                                             ds.push(list(
                                                 "(",
                                                 v.fields
                                                     .iter()
-                                                    .map(|(s, t)| {
-                                                        let mut ds = Vec::new();
+                                                    .enumerate()
+                                                    .map(|(field, (s, t))| {
+                                                        let mut ds = self.analyses(
+                                                            Some(id),
+                                                            AnalysisSite::Payload {
+                                                                variant: variant as u32,
+                                                                field: field as u32,
+                                                            },
+                                                            Space,
+                                                        );
                                                         if let Some(s) = s {
                                                             ds.extend([
                                                                 self.name(*s)?,
@@ -452,7 +505,11 @@ impl<'a> Printer<'a> {
                     }
                     TypeBody::Alias(t) => ds.extend([Space, token("="), Space, self.ty(*t)?]),
                     TypeBody::Distinct { field, fact } => {
-                        ds.extend([token("("), self.field(field)?, token(")")]);
+                        ds.extend([
+                            token("("),
+                            self.field(field, Some(id), AnalysisSite::Field(0))?,
+                            token(")"),
+                        ]);
                         if let Some(e) = fact {
                             ds.extend([Space, token("where"), Space, self.expr(*e, 0)?]);
                         }
@@ -477,8 +534,9 @@ impl<'a> Printer<'a> {
         }
         Some(cat(ds))
     }
-    fn field(&self, f: &FieldSyntax) -> Printed {
-        let mut ds = vec![self.name(f.name)?, token(":"), Space, self.ty(f.ty)?];
+    fn field(&self, f: &FieldSyntax, item: Option<ItemId>, site: AnalysisSite) -> Printed {
+        let mut ds = self.analyses(item, site, Space);
+        ds.extend([self.name(f.name)?, token(":"), Space, self.ty(f.ty)?]);
         if f.growable {
             ds.extend([Space, token("@"), Space, token("growable")]);
         }

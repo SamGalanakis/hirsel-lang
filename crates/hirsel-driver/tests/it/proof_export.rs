@@ -89,7 +89,7 @@ fn a_contracted_program_round_trips_with_its_obligation_table() {
         let (text, export) = exported(ADD);
         assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
         assert!(export.skipped.is_empty(), "{:?}", export.skipped);
-        assert!(text.starts_with("(Export\n  (Header \"hirsel.tir.export.v5\" 6"));
+        assert!(text.starts_with("(Export\n  (Header \"hirsel.tir.export.v6\" 6"));
         expect_file(
             include_str!("../fixtures/proof_seam/add.txt"),
             &(table(&export, "add") + &table(&export, "main")),
@@ -165,12 +165,12 @@ fn a_version_mismatch_is_refused_at_the_header() {
     with_compiler_stack(|| {
         let (text, _) = exported(ADD);
         let other = text.replacen(
-            "(Header \"hirsel.tir.export.v5\" 6",
-            "(Header \"hirsel.tir.export.v5\" 7",
+            "(Header \"hirsel.tir.export.v6\" 6",
+            "(Header \"hirsel.tir.export.v6\" 7",
             1,
         );
         assert_eq!(import(&other).unwrap_err().at, "header.tir_version");
-        let other = text.replacen("hirsel.tir.export.v5", "hirsel.tir.export.v0", 1);
+        let other = text.replacen("hirsel.tir.export.v6", "hirsel.tir.export.v0", 1);
         assert_eq!(import(&other).unwrap_err().at, "header.format");
         let engine = engine(ADD);
         let mut expected = engine.proof_environment();
@@ -646,5 +646,123 @@ fn a_recursive_type_group_round_trips_with_its_group_keys() {
                 .unwrap_or_else(|| panic!("no signature for {name}"));
             assert!(section.public.metadata.recursive_group.is_some(), "{name}");
         }
+    });
+}
+
+/// PS-17: annotations at every site kind, beside a blanked twin whose
+/// annotations are spaces of the same length.
+pub(crate) const ANNOTATED: &str = "@analysis(acme.units: result = m/s)\n\
+     fn speed(@analysis(unit: m) d: u64, @analysis(unit: s) t: u64) -> u64\n  requires t > 0u64 {\n  d / t\n}\n\
+     @analysis(taint)\ntype Point {\n  @analysis(unit: m) x: u64,\n  y: u64,\n}\n\
+     type Shape = Dot(@analysis(unit: [m, (s)]) u64) | Empty\n\
+     distinct type Meters(@analysis(unit: m) v: u64)\n\
+     pub fn main() -> Result[(), ()] {\n  let n = speed(10u64, 2u64)\n  Ok(())\n}\n";
+
+pub(crate) fn blanked(source: &str) -> String {
+    let mut out = source.to_string();
+    while let Some(start) = out.find("@analysis(") {
+        let mut depth = 0;
+        let end = start
+            + out[start..]
+                .char_indices()
+                .find(|&(_, c)| {
+                    depth += match c {
+                        '(' | '[' => 1,
+                        ')' | ']' => -1,
+                        _ => 0,
+                    };
+                    c == ')' && depth == 0
+                })
+                .unwrap()
+                .0;
+        out.replace_range(start..=end, &" ".repeat(end + 1 - start));
+    }
+    out
+}
+
+#[test]
+fn annotations_round_trip_at_every_site_and_move_no_other_digest() {
+    with_compiler_stack(|| {
+        use hirsel_proof_export::Anchor;
+        let (text, export) = exported(ANNOTATED);
+        assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
+        let written: Vec<_> = export
+            .annotations
+            .iter()
+            .map(|a| {
+                format!(
+                    "{} {:?} {} [{}] {}:{}",
+                    a.path.0.name,
+                    a.anchor,
+                    a.name,
+                    a.payload.join(" "),
+                    a.location.line,
+                    a.location.column
+                )
+            })
+            .collect();
+        assert_eq!(
+            written,
+            [
+                "Meters Field(0) unit [m] 12:22",
+                "Point Item taint [] 6:1",
+                "Point Field(0) unit [m] 8:3",
+                "Shape Payload { variant: 0, field: 0 } unit [[ m , ( s ) ]] 11:18",
+                "speed Item acme.units [result = m / s] 1:1",
+                "speed Parameter(0) unit [m] 2:10",
+                "speed Parameter(1) unit [s] 2:37",
+            ]
+        );
+        assert!(export.annotations.iter().any(|a| a.anchor == Anchor::Item));
+        let (plain_text, plain) = exported(&blanked(ANNOTATED));
+        assert!(plain.annotations.is_empty());
+        assert_ne!(plain.annotation_digest, export.annotation_digest);
+        assert_eq!(plain.header, export.header, "the program revision moved");
+        let fingerprints = |e: &Export| {
+            e.signatures
+                .iter()
+                .map(|s| (s.path.clone(), s.public.fingerprint))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(fingerprints(&plain), fingerprints(&export));
+        for (a, b) in plain.definitions.iter().zip(&export.definitions) {
+            assert_eq!(a.path, b.path);
+            assert_eq!(a.tir_digest, b.tir_digest, "{}", a.path);
+            assert_eq!(a.locations, b.locations, "{}", a.path);
+            assert_eq!(a.obligations, b.obligations, "{}", a.path);
+        }
+        // Without its annotations, the export is the blanked program's, byte for byte.
+        let mut input = export.to_input();
+        input.annotations.clear();
+        assert_eq!(hirsel_proof_export::export(&input), plain_text);
+    });
+}
+
+#[test]
+fn a_forged_or_unsorted_annotation_is_refused() {
+    with_compiler_stack(|| {
+        use hirsel_proof_export::Anchor;
+        let (_, export) = exported(ANNOTATED);
+        // A payload edit without the digest.
+        let text = hirsel_proof_export::export(&export.to_input());
+        let edited = text.replacen("\"acme.units\"", "\"acme.unit\"", 1);
+        let error = import(&edited).unwrap_err();
+        assert_eq!(error.at, "annotation_digest", "{error}");
+        // Recomputed digests leave only the section's own checks.
+        let refused = |edit: &dyn Fn(&mut Vec<hirsel_proof_export::Annotation>)| {
+            let mut input = export.to_input();
+            edit(&mut input.annotations);
+            import(&hirsel_proof_export::export(&input)).unwrap_err()
+        };
+        let error = refused(&|a| a.reverse());
+        assert_eq!(error.message, "annotations are not sorted by definition");
+        let error = refused(&|a| a[5].anchor = Anchor::Parameter(2));
+        assert!(error.message.contains("is not a site of"), "{error}");
+        let error = refused(&|a| a[1].anchor = Anchor::Parameter(0));
+        assert!(error.message.contains("is not a site of"), "{error}");
+        let error = refused(&|a| a[0].name = "9units".into());
+        assert!(error.message.contains("dotted analysis name"), "{error}");
+        let error = refused(&|a| a[0].path = named("nothing"));
+        assert!(error.message.contains("no exported signature"), "{error}");
     });
 }

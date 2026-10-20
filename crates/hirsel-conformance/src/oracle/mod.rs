@@ -1,6 +1,6 @@
 //! The compiler-architecture oracles (compiler-arch design §4): O1 jobs and salt
 //! invariance, O2 warm equals cold over scripted edits, O3 recompute counts and
-//! O4 the verified result store. Each runs against today's compiler where it can;
+//! O4 the verified result store; and O5, analysis annotation invariance (PS-19). Each runs against today's compiler where it can;
 //! a check that needs a switch the compiler lacks reports `Verdict::Todo` naming
 //! the switch and its lane (`switches`), never a pass.
 pub mod edits;
@@ -8,6 +8,7 @@ pub mod o1;
 pub mod o2;
 pub mod o3;
 pub mod o4;
+pub mod o5;
 pub mod switches;
 
 use hirsel_driver::native::{Backend, OptLevel, Options, Partition, TargetSpec};

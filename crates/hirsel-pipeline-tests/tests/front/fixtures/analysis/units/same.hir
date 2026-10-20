@@ -1,0 +1,14 @@
+// Metres add to metres; a quotient has no unit to check.
+fn total(@analysis(unit: m) a: u64, @analysis(unit: m) b: u64) -> u64 {
+  let sum = a + b
+  sum
+}
+
+fn speed(@analysis(unit: m) d: u64, @analysis(unit: s) t: u64) -> u64 {
+  d / t
+}
+
+pub fn main() -> Result[(), ()] {
+  let x = total(1u64, 2u64) + speed(4u64, 2u64)
+  Ok(())
+}

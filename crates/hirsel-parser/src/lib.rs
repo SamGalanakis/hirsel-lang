@@ -57,6 +57,7 @@ pub fn parse(
         heights: depth::Heights::default(),
         nesting_limit: None,
         formats: 0,
+        analyses: vec![],
     };
     let mut roots = vec![];
     while !parser.eof() && parser.nesting_limit.is_none() {
@@ -64,9 +65,15 @@ pub fn parse(
             continue;
         }
         let start = parser.pos;
+        parser.analyses.clear();
         if let Ok(item) = parser.item(context) {
-            roots.push(ItemId(parser.tree.items.len() as u32));
+            let id = ItemId(parser.tree.items.len() as u32);
+            roots.push(id);
             parser.tree.items.push(item);
+            for mut annotation in parser.analyses.drain(..) {
+                annotation.item = id;
+                parser.tree.analyses.push(annotation);
+            }
             if parser.end(false).is_err() {
                 parser.recover_item(start);
             }
@@ -108,6 +115,8 @@ struct Parser<'a> {
     nesting_limit: Option<Span>,
     /// How many f-strings enclose the current position (SEM-3).
     formats: usize,
+    /// The current item's analysis annotations, attached once it has an id (PS-17).
+    analyses: Vec<AnalysisAnnotation>,
 }
 
 impl Parser<'_> {

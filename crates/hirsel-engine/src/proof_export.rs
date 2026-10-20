@@ -3,11 +3,11 @@
 //! sites; `hirsel-proof-export` builds, encodes, digests and imports.
 use crate::*;
 use hirsel_proof_export::{
-    Environment, Export, ExportInput, Header, ImportError, Location, Locator, SignatureSection,
-    Skipped,
+    Anchor, Annotation, Environment, Export, ExportInput, Header, ImportError, Location, Locator,
+    SignatureSection, Skipped,
 };
 use hirsel_syntax::ContentHash;
-use hirsel_syntax::{ItemKind, TypeBody};
+use hirsel_syntax::{AnalysisSite, ItemKind, TypeBody};
 use hirsel_types::SignatureKind;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -66,6 +66,8 @@ impl QueryEngine {
         let mut skipped = vec![];
         let mut modules = BTreeMap::new();
         let mut executable = BTreeSet::new();
+        // PS-17: each definition's annotations in source order, located below.
+        let mut annotated = vec![];
         for path in &program.definitions {
             let signature = self.item_signature(path)?;
             let (owner_view, _) = self.body_signature(&path.0.package, signature.value.clone())?;
@@ -94,6 +96,17 @@ impl QueryEngine {
             };
             for (file, item) in items {
                 modules.insert(file.file, module_identity(path));
+                for a in file.tree.analyses.iter().filter(|a| a.item == item) {
+                    let anchor = match a.site {
+                        AnalysisSite::Item => Anchor::Item,
+                        AnalysisSite::Parameter(i) => Anchor::Parameter(i),
+                        AnalysisSite::Field(i) => Anchor::Field(i),
+                        AnalysisSite::Payload { variant, field } => {
+                            Anchor::Payload { variant, field }
+                        }
+                    };
+                    annotated.push((path.clone(), anchor, a.clone()));
+                }
                 match &file.tree.items[item.0 as usize].kind {
                     _ if crate::queries::generation::executable(&file, item) => {
                         executable.insert(path.clone());
@@ -177,6 +190,16 @@ impl QueryEngine {
                 _ => Location::unknown(),
             }
         });
+        let annotations = annotated
+            .into_iter()
+            .map(|(path, anchor, a)| Annotation {
+                path,
+                anchor,
+                name: a.name,
+                payload: a.payload,
+                location: locator(a.origin.span),
+            })
+            .collect();
         Ok(ExportInput {
             header: Header {
                 format: hirsel_proof_export::FORMAT.into(),
@@ -189,11 +212,12 @@ impl QueryEngine {
             signatures,
             constants,
             skipped,
+            annotations,
             locator,
         })
     }
 
-    /// `hirsel.tir.export.v5` text of the entry's closure.
+    /// `hirsel.tir.export.v6` text of the entry's closure.
     pub fn export_tir(&mut self, entry: &DefPath) -> Result<String, QueryError> {
         Ok(hirsel_proof_export::export(
             &self.proof_export_input(entry)?,

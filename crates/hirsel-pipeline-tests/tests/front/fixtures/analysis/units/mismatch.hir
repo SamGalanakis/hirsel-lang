@@ -1,0 +1,10 @@
+// Metres plus seconds.
+fn wrong(@analysis(unit: m) d: u64, @analysis(unit: s) t: u64) -> u64 {
+  let elapsed = t
+  d + elapsed
+}
+
+pub fn main() -> Result[(), ()] {
+  let x = wrong(4u64, 2u64)
+  Ok(())
+}

@@ -6,7 +6,7 @@ The prover-neutral proof seam (rules PS-1..PS-16):
   (`obligations.rs`);
 - the per-definition TIR digest (`hirsel.tir.digest.v1`) and the obligation
   checksum over it and the referenced signature fingerprints;
-- the canonical `hirsel.tir.export.v5` text (`wire.rs` encodes every TIR,
+- the canonical `hirsel.tir.export.v6` text (`wire.rs` encodes every TIR,
   type-graph and signature type under the export context, including a recursive
   type group member's `recursive_group` key) and its importer,
   which re-derives every signature fingerprint (one derivation for every

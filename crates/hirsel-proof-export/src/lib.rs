@@ -1,6 +1,6 @@
 //! The prover-neutral proof seam: stable obligation ids,
 //! per-definition TIR digests and obligation checksums, and the canonical
-//! `hirsel.tir.export.v5` text that consumers read out of process. Import
+//! `hirsel.tir.export.v6` text that consumers read out of process. Import
 //! decodes, re-derives every signature fingerprint, recomputes every digest
 //! and table, and re-validates each definition with V; any difference is a
 //! located refusal.
@@ -8,11 +8,14 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+mod annotations;
 mod content;
+pub mod findings;
 mod obligations;
 pub mod sidecar;
 pub mod wire;
 
+pub use annotations::{ANNOTATION_DIGEST_DOMAIN, Anchor, Annotation, annotation_digest};
 pub use content::{
     CallSite, CallSiteKind, ContentReference, DEFINITION_HASH_DOMAIN, DefinitionContent,
     DefinitionGroup, call_sites, content_references, definition_groups, definition_hashes,
@@ -35,7 +38,7 @@ use std::fmt;
 use std::rc::Rc;
 
 /// PS-8 format; bumped on TIR_VERSION or a ruled change, never on LIR churn.
-pub const FORMAT: &str = "hirsel.tir.export.v5";
+pub const FORMAT: &str = "hirsel.tir.export.v6";
 /// PS-5.
 pub const TIR_DIGEST_DOMAIN: &str = "hirsel.tir.digest.v1";
 /// PS-6.
@@ -145,6 +148,9 @@ pub struct Export {
     pub signatures: Vec<SignatureSection>,
     pub constants: Vec<ConstantSection>,
     pub skipped: Vec<Skipped>,
+    /// PS-17, sorted by definition, then source order.
+    pub annotations: Vec<Annotation>,
+    pub annotation_digest: ContentHash,
 }
 
 /// What a producer hands to [`export`].
@@ -154,6 +160,7 @@ pub struct ExportInput {
     pub signatures: BTreeMap<DefPath, SignatureSection>,
     pub constants: BTreeMap<DefPath, Materialized>,
     pub skipped: Vec<Skipped>,
+    pub annotations: Vec<Annotation>,
     pub locator: Locator,
 }
 
@@ -169,7 +176,7 @@ impl fmt::Display for ImportError {
         write!(f, "{}: {}", self.at, self.message)
     }
 }
-fn refuse(at: impl Into<String>, message: impl Into<String>) -> ImportError {
+pub(crate) fn refuse(at: impl Into<String>, message: impl Into<String>) -> ImportError {
     ImportError {
         at: at.into(),
         message: message.into(),
@@ -304,7 +311,9 @@ snapshot_struct!(Export {
     definitions,
     signatures,
     constants,
-    skipped
+    skipped,
+    annotations,
+    annotation_digest
 } in Cx);
 
 /// PS-5: the definition's TIR text under its own tables, the signature
@@ -436,6 +445,8 @@ pub fn build(input: &ExportInput) -> Export {
             })
             .collect(),
         skipped,
+        annotations: input.annotations.clone(),
+        annotation_digest: annotation_digest(&input.annotations),
     }
 }
 
@@ -467,6 +478,11 @@ pub fn export(input: &ExportInput) -> String {
 }
 
 impl Export {
+    /// The digest of the trailing `(ExportDigest …)` node (PS-9).
+    pub fn digest(&self) -> ContentHash {
+        let body = encode_body(self, &self.locator());
+        ContentHash::of_parts(EXPORT_DIGEST_DOMAIN, [body.as_bytes()])
+    }
     /// A locator over the imported location tables (see [`Export`]).
     pub fn locator(&self) -> Locator {
         let tables: Vec<Vec<Location>> = self
@@ -502,6 +518,7 @@ impl Export {
                 .map(|c| (c.path.clone(), c.value.clone()))
                 .collect(),
             skipped: self.skipped.clone(),
+            annotations: self.annotations.clone(),
             locator: self.locator(),
         }
     }
@@ -544,6 +561,16 @@ impl Export {
 fn located(text: &str, error: DecodeError) -> ImportError {
     let (line, column) = line_column(text, error.offset);
     refuse(format!("{line}:{column}"), error.message)
+}
+
+/// The export's header alone, for a consumer that pins the producing
+/// compiler before importing (PS-7): `import(text, &header.environment)`.
+pub fn read_header(text: &str) -> Result<Header, ImportError> {
+    let unlocated: Locator = Rc::new(|_| Location::unknown());
+    let mut r = Reader::with_context(text, Cx::new(unlocated));
+    r.open("Export")
+        .and_then(|()| Header::read(&mut r))
+        .map_err(|e| located(text, e))
 }
 
 /// PS-10: decode, check versions, re-derive every fingerprint and check its
@@ -617,6 +644,7 @@ pub fn import(text: &str, expected: &Environment) -> Result<Export, ImportError>
             ));
         }
     }
+    annotations::verify(&export)?;
     validate(&export)?;
     let body = encode_body(&export, &locator);
     if body != text[..body_end] {

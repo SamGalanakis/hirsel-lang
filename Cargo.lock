@@ -416,6 +416,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hirsel-analysis-canary"
+version = "0.1.0"
+dependencies = [
+ "hirsel-guard",
+ "hirsel-proof-export",
+ "hirsel-span",
+ "hirsel-syntax",
+ "hirsel-tir",
+ "hirsel-types",
+]
+
+[[package]]
 name = "hirsel-check"
 version = "0.1.0"
 dependencies = [
@@ -499,6 +511,7 @@ dependencies = [
  "hirsel-driver",
  "hirsel-engine",
  "hirsel-guard",
+ "hirsel-proof-export",
  "hirsel-run-config",
  "hirsel-span",
  "hirsel-syntax",
@@ -816,6 +829,7 @@ dependencies = [
 name = "hirsel-pipeline-tests"
 version = "0.1.0"
 dependencies = [
+ "hirsel-analysis-canary",
  "hirsel-code-store",
  "hirsel-codec",
  "hirsel-core-contract",
@@ -858,6 +872,7 @@ dependencies = [
  "hirsel-tir",
  "hirsel-types",
  "hirsel-validate",
+ "serde_json",
 ]
 
 [[package]]

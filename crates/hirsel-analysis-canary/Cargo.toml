@@ -1,0 +1,26 @@
+[package]
+name = "hirsel-analysis-canary"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Two toy out-of-process analyses over the TIR export (PS-17..PS-19). They
+# link only the export's importer and the data crates it decodes into.
+[dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
+hirsel-proof-export = { path = "../hirsel-proof-export" }
+hirsel-span = { path = "../hirsel-span" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-tir = { path = "../hirsel-tir" }
+hirsel-types = { path = "../hirsel-types" }
+
+[[bin]]
+name = "taint"
+path = "src/bin/taint.rs"
+test = false
+
+[[bin]]
+name = "units"
+path = "src/bin/units.rs"
+test = false

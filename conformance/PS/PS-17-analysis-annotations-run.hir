@@ -1,0 +1,41 @@
+// rule: PS-17
+// expect: run
+// stdout: 6
+// Analysis annotations at every site they may stand; the program means what
+// it means without them (PS-19).
+@analysis(acme.units: result = m/s)
+@noalloc
+fn speed(@analysis(unit: m) d: u64, @analysis(unit: s) t: u64) -> u64 {
+  d / t
+}
+
+@analysis(taint)
+type Reading {
+  @analysis(unit: m) depth: u64,
+  @analysis(taint: secret) site: String,
+}
+
+type Shape = Dot(@analysis(unit: [m, (s)]) u64) | Empty
+
+distinct type Meters(@analysis(unit: m) v: u64)
+
+fn output_error[E](take e: E) {}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let r = Reading(depth: speed(12u64, 2u64), site: "lake")
+  let Meters(m) = Meters(r.depth)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if m == 6u64 {
+      "6\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}

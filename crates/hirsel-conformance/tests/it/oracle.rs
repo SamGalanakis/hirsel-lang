@@ -1,7 +1,7 @@
 //! The O1–O4 harnesses on today's compiler: every check either passes or names
 //! a switch the compiler lacks, and each comparison fails on a planted difference.
 use hirsel_conformance::oracle::{
-    self, Artifacts, Report, SCENARIOS, Verdict, edits::Scenario, o2, o3, o4, switches::Switch,
+    self, Artifacts, Report, SCENARIOS, Verdict, edits::Scenario, o2, o3, o4, o5, switches::Switch,
 };
 use std::{
     path::{Path, PathBuf},
@@ -217,4 +217,136 @@ fn scenarios_refuse_ambiguous_or_empty_edits() {
     let scenario = parse(&format!("{base}--- main.hir\n+++ lib.hir\nfn c() {{}}\n")).unwrap();
     assert_eq!(scenario.after.keys().collect::<Vec<_>>(), ["lib.hir"]);
     assert_eq!(scenario.before["main.hir"], "fn a() {}\nfn a() {}\n");
+}
+
+/// Programs where an annotation once leaked into meaning: a diagnostic over a
+/// whole item, a FACT-2 predicate's revision, a recursive type group's key,
+/// generated code and instances (CT-5), an export its import refuses, and a
+/// program that already holds annotations.
+const O5_PINNED: [&str; 7] = [
+    "conformance/CAP/CAP-2-erased-carrier-inert-bound-bad.hir",
+    "conformance/CAP/CAP-2-erased-carrier-inert-bound-ok.hir",
+    "conformance/CT/CT-5-generic-declaration-bad.hir",
+    "conformance/CT/CT-5-instance-cap-ok.hir",
+    "conformance/FACT/FACT-2-percent-boundary.hir",
+    "conformance/GEN/GEN-1-noalloc-drop-mutual-group-ok.hir",
+    "conformance/PS/PS-17-analysis-annotations-run.hir",
+];
+
+/// About one corpus program in sixty-four, chosen by a seeded hash of its path, so
+/// adding a program never reshuffles the others, and every pinned program.
+fn o5_sampled(path: &Path) -> bool {
+    let relative = path.strip_prefix(root()).unwrap_or(path);
+    if O5_PINNED.iter().any(|p| relative == Path::new(p)) {
+        return true;
+    }
+    let hash = hirsel_syntax::ContentHash::of_parts(
+        "hirsel.test.sample",
+        [
+            b"hirsel.o5.sample.v1".as_slice(),
+            relative.to_string_lossy().as_bytes(),
+        ],
+    );
+    hash.0[0].is_multiple_of(64)
+}
+
+/// PS-19 per push: a probe at every annotation site of each sampled program
+/// changes no diagnostic, hash, export section but its own, interpreted run
+/// or, for two running programs, native run. `oracle o5` runs the whole corpus.
+#[test]
+fn o5_annotations_change_nothing_over_a_corpus_sample() {
+    let work = work("o5");
+    let rules = hirsel_conformance::spec_rules(&root()).unwrap();
+    let programs: Vec<_> = oracle::corpus(&root(), &["conformance".into()], None, None)
+        .unwrap()
+        .into_iter()
+        .filter(|p| o5_sampled(p))
+        .collect();
+    let report = o5::run(&root(), &rules, &programs, 2, &work);
+    holds(&report);
+    let passed = report.count(|v| *v == Verdict::Pass);
+    assert!(passed >= 60, "{passed} programs\n{}", report.text());
+    let native = report
+        .checks
+        .iter()
+        .filter(|c| c.name.contains("native"))
+        .count();
+    assert_eq!(native, 2, "{}", report.text());
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+const SITES: &str = "// rule: PS-17\n// expect: run\n\
+    fn f[T](x: u64, mut ys: List[T],) -> u64 { x }\n\
+    type R { a: u64, b: fn(u64) -> u64 }\n\
+    type V = A(u64, (u8, u8)) | B | C(x: u64)\n\
+    distinct type D(v: u64)\n\
+    pub fn main() -> Result[(), ()] {\n  Ok(())\n}\n";
+
+#[test]
+fn o5_probes_every_site_kind() {
+    let probed = o5::probe(SITES).unwrap();
+    let p = |n: usize| format!("@analysis(o5.probe: {n} [site]) ");
+    let expected = format!(
+        "// rule: PS-17\n// expect: run\n\
+         {}fn f[T]({}x: u64, {}mut ys: List[T],) -> u64 {{ x }}\n\
+         {}type R {{ {}a: u64, {}b: fn(u64) -> u64 }}\n\
+         {}type V = A({}u64, {}(u8, u8)) | B | C({}x: u64)\n\
+         {}distinct type D({}v: u64)\n\
+         {}pub fn main() -> Result[(), ()] {{\n  Ok(())\n}}\n",
+        p(0),
+        p(1),
+        p(2),
+        p(3),
+        p(4),
+        p(5),
+        p(6),
+        p(7),
+        p(8),
+        p(9),
+        p(10),
+        p(11),
+        p(12)
+    );
+    assert_eq!(probed.annotated, expected);
+    assert_eq!(probed.sites, 13);
+    assert_eq!(probed.blanked.len(), probed.annotated.len());
+    let squeezed = |s: &str| s.split_whitespace().collect::<String>();
+    assert_eq!(squeezed(&probed.blanked), squeezed(SITES));
+}
+
+/// The comparison is not vacuous: a twin that differs in meaning fails.
+#[test]
+fn o5_fails_when_the_twin_differs_in_meaning() {
+    let work = work("o5-planted");
+    let source = "// rule: PS-17\n// expect: run\n\
+        fn twice(x: u64) -> u64 { x * 2u64 }\n\
+        pub fn main() -> Result[(), ()] {\n  let n = twice(3u64)\n  Ok(())\n}\n";
+    let probed = o5::probe(source).unwrap();
+    let expect = hirsel_conformance::Expect::Run {
+        stdout: String::new(),
+        exit: 0,
+    };
+    let path = work.join("planted.hir");
+    let same = o5::compare(
+        &path,
+        &expect,
+        &probed.annotated,
+        &probed.blanked,
+        probed.sites,
+        false,
+    );
+    assert_eq!(same, Verdict::Pass);
+    let planted = probed.blanked.replace("2u64", "3u64");
+    match o5::compare(
+        &path,
+        &expect,
+        &probed.annotated,
+        &planted,
+        probed.sites,
+        false,
+    ) {
+        Verdict::Fail(why) => assert!(why.starts_with("annotations changed"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&work);
 }

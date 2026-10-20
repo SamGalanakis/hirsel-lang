@@ -269,7 +269,7 @@ type-path    = [ package-head ], name, { ("/" | "."), member } ; (* PROG-1 *)
 brand-path   = [ "." ], value-path ;                     (* PROV-1/5 *)
 file         = { NL | item, END }, EOF ;                 (* LANG-6, PROG-1 *)
 visibility   = "pub", [ "opaque" ] ;                     (* PROG-2 *)
-item         = { attribute }, [ visibility ],
+item         = { attribute | analysis }, [ visibility ],
                ( function | const-def | type-def ) ;     (* LANG-6, PROG-2 *)
 attribute    = "@", ( "test" | "noalloc" | "soa" | "packed" | "blocking" | "incomplete" | "serializable"
              | "layout", "(", "c", ")"
@@ -278,6 +278,9 @@ attribute    = "@", ( "test" | "noalloc" | "soa" | "packed" | "blocking" | "inco
              | "loop_source", "(", value-path, ",", value-path, ")"
              | "format", "(", value-path, ")"
              | state-attribute ) ;      (* LANG-9, MEM-5/7, CONC-2, MODE-6, CAP-5, SER-1, SEM-3/4, CLO-2 *)
+analysis     = "@", "analysis", "(", name, { ".", name },
+               [ ":", payload-token, { payload-token } ], ")" ; (* PS-17 *)
+payload-token = any token but an unbalanced "(", ")", "[", "]", "{" or "}" ; (* PS-17 *)
 state-attribute = ("advance_only" | "preserves_captures" | "preserves_unique" | "captures"),
                   "(", nonempty(value-path), ")" ; (* CLO-2; on a type, `captures` names fields: CAP-2, CLO-4 *)
 type-state-attribute = ("advance_only" | "preserves_captures" | "captures"),
@@ -286,7 +289,7 @@ function     = [ "extern", string ], "fn", name, fn-header,
                [ block | "=", "comptime", expression ] ; (* LANG-6/10, PROG-4, CT-1 *)
 fn-header    = [ generics ], "(", list(parameter), ")",
                [ "->", type ], [ uses ], { contract } ;  (* LANG-6/12, FACT-1, CLO-4 *)
-parameter    = [ name ], [ passing ], name, ":", type ;  (* LANG-12, OWN-1/2/3 *)
+parameter    = { analysis }, [ name ], [ passing ], name, ":", type ; (* LANG-12, OWN-1/2/3, PS-17 *)
 passing      = "take" | "mut" ;                          (* OWN-1/2/3 *)
 const-def    = "const", name, ":", type, "=", expression ; (* LANG-6, CT-1 *)
 generics     = "[", nonempty(generic), "]" ;             (* LANG-7, GEN-1 *)
@@ -299,19 +302,24 @@ contract     = ( "requires" | "ensures" ), expression ;  (* FACT-1 *)
 type-def     = [ "flat" | "resource" ], "type", name, [ generics ],
                [ ":", type-bounds ], [ uses ],
                ( record-fields | "=", type-rhs | opaque-end ), [ drop-def ]
-             | "distinct", "type", name, [ generics ], "(", name, ":", part-type, ")",
+             | "distinct", "type", name, [ generics ], "(", { analysis }, name, ":", part-type, ")",
                [ "where", expression ] ;  (* LANG-7, GEN-1, CAP-5, SER-1, MEM-12, DROP-2, FACT-2 *)
 type-bounds  = bounds | "(", ")" ;                       (* LANG-6, GEN-1, PROG-2 *)
-record-fields= "{", [ field, { entry-sep, field }, [ entry-sep ] ], "}" ; (* LANG-7/12 *)
+record-fields= "{", [ { analysis }, field, { entry-sep, { analysis }, field }, [ entry-sep ] ], "}" ; (* LANG-7/12, PS-17 *)
 field        = name, ":", part-type, [ "@", "growable" ] ; (* LANG-12, PROV-5, MEM-12 *)
 type-rhs     = variant, "|", variant, { "|", variant }
              | name, "(", list(payload), ")"
              | type ;                                    (* LANG-7 *)
 variant      = name, [ "(", list(payload), ")" ] ;       (* LANG-7/12 *)
-payload      = [ name, ":" ], part-type ;                (* LANG-12 *)
+payload      = { analysis }, [ name, ":" ], part-type ; (* LANG-12, PS-17 *)
 opaque-end   = empty ;                                   (* PROG-2 *)
 drop-def     = [ "@", "noalloc" ], "drop", "(", name, ")", block ; (* DROP-2/3 *)
 ```
+
+An `analysis` annotation ([PS-17](proof-seam.md#ps-17-analysis-annotations)) is
+meaning-free: it is allowed before a parameter only in a top-level function definition, and
+nowhere but the positions above. `analysis` is the one attribute name an analysis outside
+the compiler owns.
 
 Only an opaque declaration can use `opaque-end`. `drop` requires `resource` and belongs to
 that item, including when it starts the next line with `@noalloc`.

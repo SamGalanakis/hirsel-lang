@@ -2,6 +2,7 @@
 
 hirsel_guard::install!();
 
+mod analyses;
 mod closures;
 mod depth;
 mod diagnostics;
