@@ -387,3 +387,12 @@ pub fn assert_child_aborts(test: &str, needle: &str) {
 }
 
 pub const UNUSED: u32 = WHOLE_VALUE;
+
+/// Hand a host adapter what a compiled program's entries hand it before their requests:
+/// the TLS engine and the host network and process providers. For tests that issue
+/// requests to an adapter directly.
+pub fn host(io: &mut impl hirsel_rt::io::Adapter) {
+    io.tls(hirsel_rt::net_tls::engine());
+    io.net(hirsel_rt::net_host::provider);
+    io.process(hirsel_rt::process::host);
+}

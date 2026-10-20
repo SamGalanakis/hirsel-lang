@@ -346,7 +346,8 @@ pub trait NetProvider {
 }
 
 /// A world with no network: every admitted operation is a tool refusal. SimIo uses it
-/// between events; launches without a host network never reach it after policy.
+/// between events, and RealIo before a net entry handed it the host provider; launches
+/// without a host network never reach it after policy.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct NoNet;
 impl NetProvider for NoNet {

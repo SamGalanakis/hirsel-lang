@@ -92,6 +92,26 @@ pub struct HostRun<'a> {
     pub deadline: Option<u64>,
 }
 
+/// The host process provider: every host process effect and a run's streaming children.
+/// Only the entries that start a process (`proc.run`, `proc.pipeline`, `proc.spawn`,
+/// `proc.spawn_pipeline`) hand its constructor, [`host`], to the adapter
+/// (`Adapter::process`), so a program that starts none links no process spawning.
+pub trait ProcessHost {
+    /// Perform one checked call. `cwd` resolves a Dir handle to its pinned directory
+    /// descriptor; `readiness` is the cooperative scheduler's, if any.
+    fn call(
+        &mut self,
+        call: HostCall<'_>,
+        cwd: &dyn Fn(u64) -> Option<std::os::fd::RawFd>,
+        readiness: Option<&crate::readiness::Readiness>,
+    ) -> Result<Completion, crate::io::AdapterError>;
+}
+
+/// A new host process provider, with no children.
+pub fn host() -> Box<dyn ProcessHost> {
+    Box::new(crate::host_child::HostChildren::default())
+}
+
 /// What a host provider performs after every check passed. Its answer is the completion
 /// the request returns, which the policy validates: in replay, the recorded one.
 pub enum HostCall<'a> {
@@ -1612,6 +1632,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
     max_output: u64,
     deadline: *const u8,
 ) -> u8 {
+    unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     let request = Request::ProcessRun {
         process: unsafe { process.read() },
         command: unsafe { command(ctx, cmd) },
@@ -1678,6 +1699,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_pipeline(
     max_output: u64,
     deadline: *const u8,
 ) -> u8 {
+    unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     let request = Request::ProcessPipeline {
         process: unsafe { process.read() },
         stages: unsafe { list(stages, COMMAND_SIZE, |at| command(ctx, at)) },
@@ -1842,6 +1864,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn(
     process: *const u64,
     cmd: *const u8,
 ) -> u8 {
+    unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     let request = Request::ProcessSpawn {
         process: unsafe { process.read() },
         command: unsafe { command(ctx, cmd) },
@@ -2034,6 +2057,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn_pipeline(
     stages: *mut crate::Header,
     max_stderr: u64,
 ) -> u8 {
+    unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     let request = Request::ProcessSpawnPipeline {
         process: unsafe { process.read() },
         stages: unsafe { list(stages, COMMAND_SIZE, |at| command(ctx, at)) },

@@ -26,6 +26,19 @@ pub(crate) const READ_CHUNK: u64 = 64 * 1024;
 /// Zig `ListenOptions.kernel_backlog`.
 const BACKLOG: libc::c_int = 128;
 
+/// A host network provider's constructor: cooperative when the run has a scheduler's
+/// readiness, otherwise blocking.
+pub type Provider = fn(Option<&crate::readiness::Readiness>) -> Box<dyn NetProvider>;
+
+/// The host network provider (`Adapter::net`): only the entries that open host network
+/// state name it, so a program that opens none links no sockets or resolver.
+pub fn provider(readiness: Option<&crate::readiness::Readiness>) -> Box<dyn NetProvider> {
+    match readiness {
+        Some(readiness) => Box::new(CooperativeNet::new(readiness.clone())),
+        None => Box::new(HostNet::new()),
+    }
+}
+
 /// Open sockets keyed by their tape-local handle.
 #[derive(Debug, Default)]
 pub struct HostNet {

@@ -203,10 +203,8 @@ fn exit_status(status: std::process::ExitStatus) -> Option<ExitStatus> {
     }
 }
 
-impl HostChildren {
-    /// Perform one checked call. `cwd` resolves a Dir handle to its pinned directory
-    /// descriptor; `readiness` is the cooperative scheduler's, if any.
-    pub(crate) fn call(
+impl crate::process::ProcessHost for HostChildren {
+    fn call(
         &mut self,
         call: HostCall<'_>,
         cwd: &dyn Fn(u64) -> Option<RawFd>,
@@ -277,6 +275,9 @@ impl HostChildren {
             }
         })
     }
+}
+
+impl HostChildren {
     /// A run or pipeline: under cooperative admission it parks its task instead of
     /// blocking the thread, and a cancellation kills its children.
     fn run(

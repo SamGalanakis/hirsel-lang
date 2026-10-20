@@ -214,7 +214,7 @@ fn server_handshake_records_plaintext_and_the_chain_digest_and_replays_without_a
     let key = PrivateKeyDer::from_pem_slice(KEY).unwrap();
     for tls12 in [false, true] {
         let mut real = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-        real.tls(hirsel_rt::net_tls::engine());
+        crate::support::host(&mut real);
         real.set_net_rules(rules());
         let mut peer = None;
         let anonymous = serve(&mut real, single(KEY), |port| {
@@ -242,7 +242,7 @@ fn server_handshake_records_plaintext_and_the_chain_digest_and_replays_without_a
             Tree::new(Default::default()).unwrap(),
             hirsel_rt::launch::parse_tape(&text).unwrap(),
         );
-        sim.tls(hirsel_rt::net_tls::engine());
+        crate::support::host(&mut sim);
         sim.set_net_rules(rules());
         serve(&mut sim, single(KEY), |_| {});
         assert_eq!(sim.finish(), Ok(()));
@@ -252,7 +252,7 @@ fn server_handshake_records_plaintext_and_the_chain_digest_and_replays_without_a
 #[test]
 fn a_client_offering_no_shared_alpn_protocol_fails_the_server_handshake() {
     let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-    io.tls(hirsel_rt::net_tls::engine());
+    crate::support::host(&mut io);
     io.set_net_rules(rules());
     let mut peer = None;
     let (net, stream, done) = accept(&mut io, single(KEY), |port| {
@@ -284,7 +284,7 @@ fn a_client_offering_no_shared_alpn_protocol_fails_the_server_handshake() {
 fn an_invalid_identity_is_invalid_input_and_never_starts_tls() {
     for key in [OTHER_KEY, b"".as_slice(), CHAIN] {
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-        io.tls(hirsel_rt::net_tls::engine());
+        crate::support::host(&mut io);
         io.set_net_rules(rules());
         let mut socket = None;
         let (_, _, done) = accept(&mut io, single(key), |port| {
@@ -337,7 +337,7 @@ fn der(pem: &[u8]) -> Vec<u8> {
 #[test]
 fn a_required_client_certificate_is_verified_returned_by_tls_peer_and_replayed() {
     let mut real = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-    real.tls(hirsel_rt::net_tls::engine());
+    crate::support::host(&mut real);
     real.set_net_rules(rules());
     let server = || (vec![(CHAIN, KEY)], ClientAuth::Require(CLIENT_CA));
     let mut peer = None;
@@ -361,7 +361,7 @@ fn a_required_client_certificate_is_verified_returned_by_tls_peer_and_replayed()
         Tree::new(Default::default()).unwrap(),
         hirsel_rt::launch::parse_tape(&text).unwrap(),
     );
-    sim.tls(hirsel_rt::net_tls::engine());
+    crate::support::host(&mut sim);
     sim.set_net_rules(rules());
     assert_eq!(serve(&mut sim, server(), |_| {}), Some(der(CLIENT)));
     assert_eq!(sim.finish(), Ok(()));
@@ -387,7 +387,7 @@ fn a_missing_or_untrusted_client_certificate_is_refused() {
         ),
     ] {
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-        io.tls(hirsel_rt::net_tls::engine());
+        crate::support::host(&mut io);
         io.set_net_rules(rules());
         let mut peer = None;
         let (net, stream, done) = accept(&mut io, (vec![(CHAIN, KEY)], clients), |port| {
@@ -420,7 +420,7 @@ fn a_requested_certificate_is_optional_and_anonymous_servers_never_see_one() {
         (ClientAuth::Anonymous, Some((CLIENT, CLIENT_KEY))),
     ] {
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-        io.tls(hirsel_rt::net_tls::engine());
+        crate::support::host(&mut io);
         io.set_net_rules(rules());
         let mut peer = None;
         let chain = serve(&mut io, (vec![(CHAIN, KEY)], clients), |port| {
@@ -447,7 +447,7 @@ fn sni_selects_the_identity_naming_it_and_otherwise_the_first() {
     ] {
         for order in [vec![ALPHA, BETA], vec![BETA, ALPHA]] {
             let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-            io.tls(hirsel_rt::net_tls::engine());
+            crate::support::host(&mut io);
             io.set_net_rules(rules());
             let first = order[0];
             let identities = if name == "localhost" {
@@ -479,7 +479,7 @@ fn an_empty_identity_list_or_trust_set_is_invalid_input() {
         (vec![(CHAIN, KEY)], ClientAuth::Request(KEY)),
     ] {
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-        io.tls(hirsel_rt::net_tls::engine());
+        crate::support::host(&mut io);
         io.set_net_rules(rules());
         let mut socket = None;
         let (_, _, done) = accept(&mut io, server, |port| {
@@ -521,7 +521,7 @@ fn connect_as_presents_the_client_identity_to_a_requiring_server() {
             tls.conn.peer_certificates().map(|chain| chain[0].to_vec())
         });
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-        io.tls(hirsel_rt::net_tls::engine());
+        crate::support::host(&mut io);
         io.set_net_rules(
             [NetRule {
                 address: "127.0.0.1".into(),

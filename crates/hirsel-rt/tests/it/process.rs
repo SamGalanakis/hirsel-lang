@@ -48,6 +48,7 @@ fn grant(rules: &[(&str, &[&str])]) -> hirsel_run_config::ProcessGrant {
 fn host(rules: &[(&str, &[&str])]) -> (Disposable, RealIo, u64) {
     let temp = Disposable::new();
     let mut io = RealIo::grant(&temp.0).unwrap();
+    crate::support::host(&mut io);
     io.set_process_grant(&grant(rules));
     io.clock_grants(true, false);
     let Ok(Completion::Handle(Ok(proc))) = io.call(Request::Process { io: 1 }) else {
@@ -313,6 +314,7 @@ fn checks_precede_every_effect_and_spawn_failures_are_typed() {
     assert!(!marker.exists());
     // Without a projection there is no Proc at all.
     let mut denied = RealIo::grant(&temp.0).unwrap();
+    crate::support::host(&mut denied);
     denied.set_projections(Default::default());
     assert_eq!(
         denied.call(Request::Process { io: 1 }),
@@ -332,6 +334,7 @@ fn host_runs_record_and_replay_without_spawning() {
     assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
     let replay = |tape: Vec<Event>| {
         let mut sim = SimIo::new(Tree::default(), tape.clone());
+        crate::support::host(&mut sim);
         sim.set_process_grant(&grant(&[("/bin/echo", &[]), ("/bin/false", &[])]));
         tape.iter()
             .map(|event| sim.call(event.request.clone()))
@@ -524,6 +527,7 @@ fn host_pipelines_record_and_replay_without_spawning() {
     assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
     let replay = |tape: Vec<Event>| {
         let mut sim = SimIo::new(Tree::default(), tape.clone());
+        crate::support::host(&mut sim);
         sim.set_process_grant(&grant(rules));
         tape.iter()
             .map(|event| sim.call(event.request.clone()))
@@ -567,6 +571,7 @@ fn scripted_worlds_serve_matching_entries_in_order() {
     ];
     let temp = Disposable::new();
     let mut io = RealIo::grant(&temp.0).unwrap();
+    crate::support::host(&mut io);
     io.test_context(0);
     let Ok(Completion::Handle(Ok(p))) = io.call(Request::TestProcess {
         test: 1,
@@ -705,6 +710,7 @@ fn timeouts_record_and_replay_only_under_a_deadline() {
     assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
     let replay = |tape: &[Event]| {
         let mut sim = SimIo::new(Tree::default(), tape.to_vec());
+        crate::support::host(&mut sim);
         sim.set_process_grant(&grant(&[("/bin/sleep", &[])]));
         sim.clock_grants(true, false);
         tape.iter()
@@ -1063,6 +1069,7 @@ fn children_record_and_replay_without_spawning() {
     assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
     let replay = |tape: Vec<Event>| {
         let mut sim = SimIo::new(Tree::default(), tape.clone());
+        crate::support::host(&mut sim);
         sim.set_process_grant(&grant(&[("/bin/cat", &[])]));
         tape.iter()
             .map(|event| sim.call(event.request.clone()))
@@ -1193,6 +1200,7 @@ fn scripted_children_play_steps_wait_at_an_expect_and_fail_a_contradiction() {
     };
     let temp = Disposable::new();
     let mut io = RealIo::grant(&temp.0).unwrap();
+    crate::support::host(&mut io);
     io.test_context(0);
     let Ok(Completion::Handle(Ok(p))) = io.call(Request::TestProcess {
         test: 1,
@@ -1705,6 +1713,7 @@ fn groups_record_and_replay_without_spawning() {
     assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
     let replay = |tape: Vec<Event>| {
         let mut sim = SimIo::new(Tree::default(), tape.clone());
+        crate::support::host(&mut sim);
         sim.set_process_grant(&grant(&[(SH, &[]), ("/bin/cat", &[])]));
         tape.iter()
             .map(|event| sim.call(event.request.clone()))

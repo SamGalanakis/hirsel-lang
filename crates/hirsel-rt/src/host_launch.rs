@@ -3,7 +3,7 @@
 use crate::launch::{RecordedRun, Recording, RecordingWriter};
 use crate::{
     host_paths::PinnedDirectory, host_stdin::CooperativeStdin, io_real::RealIo, io_sim::SimIo,
-    net::NetRule, net_host::CooperativeNet, readiness::Readiness,
+    net::NetRule, readiness::Readiness,
 };
 use hirsel_run_config::{AdmittedRun, HostAuthority, RevocationEvidence, RunRefusal, ValidatedRun};
 use std::{fs::File, path::Path};
@@ -271,8 +271,8 @@ impl HostAuthority for HostGrants {
             }
         }
         if let Some(readiness) = &readiness {
+            // The net entries build the cooperative host provider on this readiness.
             io.set_cooperative(readiness.clone());
-            io.set_net_provider(CooperativeNet::new(readiness.clone()));
         }
         if let Some(provider) = run.random_provider() {
             io.set_random(provider, run.config().random_seed());

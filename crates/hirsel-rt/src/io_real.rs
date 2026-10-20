@@ -21,13 +21,16 @@ pub struct RealIo {
     /// The recording level's gate: every request and event passes through it.
     journal: crate::journal::Journaled,
     retain_history: bool,
-    net: Box<dyn NetProvider>,
+    /// The host network provider, once a net entry handed its constructor over
+    /// (`Adapter::net`); without it a host network request is a tool refusal.
+    net: Option<Box<dyn NetProvider>>,
     /// Cooperative admission: the readiness its providers park on and the waits it records.
     cooperative: Option<(crate::readiness::Readiness, crate::readiness::WaitLog)>,
     /// Test clocks use the same timer heap, with an independent virtual origin.
     test_clock: Option<crate::readiness::Readiness>,
-    /// The host process provider's streaming children.
-    children: crate::host_child::HostChildren,
+    /// The host process provider, once a process entry handed its constructor over
+    /// (`Adapter::process`); without it a host process call is a tool refusal.
+    children: Option<Box<dyn crate::process::ProcessHost>>,
 }
 enum Input {
     Blocking(Box<dyn Read>),
@@ -84,7 +87,7 @@ impl RealIo {
     }
     /// Replace the host network provider, e.g. to count provider calls in tests.
     pub fn set_net_provider(&mut self, provider: impl NetProvider + 'static) {
-        self.net = Box::new(provider);
+        self.net = Some(Box::new(provider));
     }
     /// Admission supplies the configured projections; recordings cannot widen them.
     pub fn set_projections(&mut self, projections: std::collections::BTreeSet<String>) {
@@ -154,10 +157,10 @@ impl RealIo {
             stderr: Box::new(std::io::sink()),
             journal: Default::default(),
             retain_history: true,
-            net: Box::new(crate::net_host::HostNet::new()),
+            net: None,
             cooperative: None,
             test_clock: None,
-            children: Default::default(),
+            children: None,
         })
     }
     /// Borrow the original admitted pins for every recorder check, without reopening paths.
@@ -466,9 +469,19 @@ impl Adapter for RealIo {
     fn tls(&mut self, engine: &'static dyn crate::net_tls::TlsEngine) {
         self.state.tls = crate::net_tls::Engine(Some(engine));
     }
+    fn net(&mut self, host: crate::net_host::Provider) {
+        if self.net.is_none() {
+            self.net = Some(host(self.cooperative.as_ref().map(|(r, _)| r)));
+        }
+    }
+    fn process(&mut self, host: fn() -> Box<dyn crate::process::ProcessHost>) {
+        self.children.get_or_insert_with(host);
+    }
     fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.state.remember_tls_roots(stream, pem);
-        self.net.tls_roots(pem);
+        if let Some(net) = &mut self.net {
+            net.tls_roots(pem);
+        }
     }
     fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
         self.state.remember_tls_identity(stream, chain, key);
@@ -763,12 +776,22 @@ impl RealIo {
                 let cooperative = self.cooperative.as_ref().map(|(readiness, _)| readiness);
                 let children = &mut self.children;
                 let cwd = |d: u64| directories.get(&d).map(|pin| pin.as_raw_fd());
-                self.state
-                    .execute_process(&mut |call| children.call(call, &cwd, cooperative), &request)
+                self.state.execute_process(
+                    &mut |call| match children {
+                        Some(host) => host.call(call, &cwd, cooperative),
+                        None => Err(AdapterError::InvalidCompletion),
+                    },
+                    &request,
+                )
             }
-            _ => self
-                .state
-                .execute(&mut self.disk, &mut *self.net, &request, fault.as_ref()),
+            _ => {
+                let net: &mut dyn NetProvider = match &mut self.net {
+                    Some(net) => &mut **net,
+                    None => &mut crate::net::NoNet,
+                };
+                self.state
+                    .execute(&mut self.disk, net, &request, fault.as_ref())
+            }
         };
         if matches!(
             request,

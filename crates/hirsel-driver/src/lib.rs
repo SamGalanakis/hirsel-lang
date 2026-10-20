@@ -459,6 +459,10 @@ pub(crate) fn bind_host_run(
                 .admit(&mut host, admission_time()?)
                 .map_err(ToolError::Launch)?;
             let mut io = host.into_io();
+            // The interpreter reaches every operation, so it takes the host network and
+            // process providers at once, as a compiled program's entries hand them over.
+            hirsel_rt::io::Adapter::net(&mut io, hirsel_rt::net_host::provider);
+            hirsel_rt::io::Adapter::process(&mut io, hirsel_rt::process::host);
             hirsel_rt::host_launch::journal(&mut io, &admitted, record, &[])
                 .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
             Ok(HostRun::Live { admitted, io })

@@ -1883,6 +1883,13 @@ pub trait Adapter {
     /// The TLS engine, which every TLS entry hands over before its material and its request:
     /// only programs that reach TLS link it (`net_tls`).
     fn tls(&mut self, _engine: &'static dyn crate::net_tls::TlsEngine) {}
+    /// The host network provider's constructor, which every entry that opens host network
+    /// state (a connect, resolve, listen or bind) hands over before its request: only
+    /// programs that reach the network link it (`net_host::provider`).
+    fn net(&mut self, _host: crate::net_host::Provider) {}
+    /// The host process provider's constructor, which every entry that starts a process
+    /// hands over before its request (`process::host`).
+    fn process(&mut self, _host: fn() -> Box<dyn crate::process::ProcessHost>) {}
     /// Supply the next handshake's PEM material without adding it to the tape.
     /// Replay and scripted worlds use only the digest in TlsConnect.
     fn tls_roots(&mut self, _stream: u64, _pem: &[u8]) {}
@@ -1990,6 +1997,12 @@ pub struct Binding {
 impl Binding {
     pub(crate) fn tls(&mut self, engine: &'static dyn crate::net_tls::TlsEngine) {
         self.adapter.tls(engine);
+    }
+    pub(crate) fn net(&mut self, host: crate::net_host::Provider) {
+        self.adapter.net(host);
+    }
+    pub(crate) fn process(&mut self, host: fn() -> Box<dyn crate::process::ProcessHost>) {
+        self.adapter.process(host);
     }
     pub(crate) fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.adapter.tls_roots(stream, pem);

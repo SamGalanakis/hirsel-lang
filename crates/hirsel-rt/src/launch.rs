@@ -99,6 +99,12 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn tls(&mut self, engine: &'static dyn crate::net_tls::TlsEngine) {
         self.0.borrow_mut().tls(engine);
     }
+    fn net(&mut self, host: crate::net_host::Provider) {
+        self.0.borrow_mut().net(host);
+    }
+    fn process(&mut self, host: fn() -> Box<dyn crate::process::ProcessHost>) {
+        self.0.borrow_mut().process(host);
+    }
     fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.0.borrow_mut().tls_roots(stream, pem);
     }

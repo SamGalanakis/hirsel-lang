@@ -32,11 +32,15 @@ FLOOR = (2, 28, 0)
 # inclusion names. Pre-2.34 floors also have pthread, dl, rt and util.
 LIBRARIES = [("m", 6), ("c", 6), ("ld", 2), ("resolv", 2), ("pthread", 0), ("dl", 2), ("rt", 1), ("util", 1)]
 # The order a link names the stubs, which is the dynamic loader's search order:
-# the add-on libraries, then libc, then the loader last, as glibc's own `libc.so`
-# script and a `-lpthread -lm ... -lc` driver line put them. The loader also
-# exports `malloc`, `realloc` and `free` (its minimal startup allocator), so a
-# loader listed before libc would bind them there.
-LINK_ORDER = ["m", "pthread", "dl", "rt", "util", "resolv", "c", "ld"]
+# libc first, so a symbol libc and an add-on both define (read, write, close,
+# clock_gettime, ...) binds to libc as on glibc 2.34 and later, where they are one
+# library: an add-on is NEEDED only for what libc lacks at the floor (pthread_create,
+# dladdr), librt not at all, and each load-time lookup ends at libc instead of
+# walking the add-ons first (print-0 start: 48K fewer loader instructions). The
+# add-ons' copies are the same cancellation-point wrappers, and Hirsel never cancels
+# a thread. The loader also exports `malloc`, `realloc` and `free` (its minimal
+# startup allocator), so it stays last.
+LINK_ORDER = ["c", "m", "pthread", "dl", "rt", "util", "resolv", "ld"]
 
 TARGETS = {
     "x86_64-unknown-linux-gnu": {

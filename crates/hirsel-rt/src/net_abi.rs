@@ -305,6 +305,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_connect(
     port: u16,
     timeout: *const NetTimeoutAbi,
 ) -> u8 {
+    unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::Connect {
         net: unsafe { n.read() },
         host: unsafe { text(owner, start, len) },
@@ -330,6 +331,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_connect_addr(
     addr: *const SocketAddrAbi,
     timeout: *const NetTimeoutAbi,
 ) -> u8 {
+    unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::ConnectAddr {
         net: unsafe { n.read() },
         addr: unsafe { (*addr).get() },
@@ -358,6 +360,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_resolve(
     len: u64,
     port: u16,
 ) -> u8 {
+    unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::Resolve {
         net: unsafe { n.read() },
         host: unsafe { text(owner, start, len) },
@@ -631,6 +634,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_listen(
     n: *const u64,
     addr: *const SocketAddrAbi,
 ) -> u8 {
+    unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::Listen {
         net: unsafe { n.read() },
         addr: unsafe { (*addr).get() },
@@ -652,6 +656,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_unix_connect(
     n: *const u64,
     path: *const u64,
 ) -> u8 {
+    unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::UnixConnect {
         net: unsafe { n.read() },
         path: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { path.read() }),
@@ -674,6 +679,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_unix_listen(
     n: *const u64,
     path: *const u64,
 ) -> u8 {
+    unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::UnixListen {
         net: unsafe { n.read() },
         path: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { path.read() }),
@@ -765,6 +771,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_udp_bind(
     n: *const u64,
     addr: *const SocketAddrAbi,
 ) -> u8 {
+    unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::UdpBind {
         net: unsafe { n.read() },
         addr: unsafe { (*addr).get() },

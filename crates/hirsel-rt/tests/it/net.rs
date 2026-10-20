@@ -30,7 +30,7 @@ fn loopback(port: u16) -> SocketAddr {
 }
 fn real(rules: impl IntoIterator<Item = NetRule>) -> RealIo {
     let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-    io.tls(hirsel_rt::net_tls::engine());
+    crate::support::host(&mut io);
     io.set_net_rules(rules.into_iter().collect());
     io
 }
@@ -119,7 +119,7 @@ fn record_exchange() -> (BTreeSet<NetRule>, u16, Vec<Event>, Vec<Vec<u8>>) {
 
 fn replay(rules: &BTreeSet<NetRule>, tape: Vec<Event>) -> SimIo {
     let mut sim = SimIo::new(Tree::new(Default::default()).unwrap(), tape);
-    sim.tls(hirsel_rt::net_tls::engine());
+    crate::support::host(&mut sim);
     sim.set_net_rules(rules.clone());
     sim
 }
@@ -1443,7 +1443,7 @@ fn cooperative_unix_connect_parks_on_a_full_backlog_and_the_stale_probe_never_wa
 fn unix_paths_are_checked_before_grants_and_grants_before_any_effect() {
     let calls = Rc::new(Cell::new(0));
     let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
-    io.tls(hirsel_rt::net_tls::engine());
+    crate::support::host(&mut io);
     io.set_net_rules(BTreeSet::from([
         rule("/run/granted.sock", 0, NetOperation::UnixConnect),
         rule("127.0.0.1", 0, NetOperation::Listen),
