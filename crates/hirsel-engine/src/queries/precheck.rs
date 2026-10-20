@@ -185,6 +185,7 @@ pub(super) fn tir_spans(definition: &mut Definition, mut span: impl FnMut(&mut S
 impl QueryEngine {
     /// Use `precheck` for `package`, whose sources are `files` in manifest order.
     pub(crate) fn adopt_precheck(&mut self, precheck: Arc<Precheck>, files: Vec<FileId>) {
+        self.comptime_runtime = None;
         self.prechecks.insert(
             precheck.package.clone(),
             AdoptedPrecheck {

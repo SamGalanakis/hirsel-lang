@@ -136,12 +136,23 @@ impl Checker<'_, '_> {
             };
             if let SignatureKind::Type(t) = &s.kind {
                 if let Some(r) = t.representation {
+                    if let Some((_, known)) = self
+                        .representations
+                        .get(&definition)
+                        .and_then(|known| known.iter().find(|(a, _)| a[..] == arguments[..]))
+                    {
+                        return Ok((Some(definition), *known));
+                    }
                     let r = self.import(r, &s.types)?;
                     let r = if arguments.is_empty() {
                         r
                     } else {
                         self.substitute(r, &arguments)?
                     };
+                    self.representations
+                        .entry(definition.clone())
+                        .or_default()
+                        .push((arguments.to_vec(), r));
                     return Ok((Some(definition), r));
                 }
             }

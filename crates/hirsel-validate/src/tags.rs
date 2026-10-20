@@ -271,7 +271,7 @@ impl Checker<'_> {
     }
     pub(super) fn active_tag(&mut self, state: &State, place: PlaceId, report: bool) -> bool {
         let access = self.body.places[place.0 as usize].clone();
-        let mut store = self.definition.types.clone();
+        let mut store = self.working_store();
         let mut valid = true;
         for (depth, projection) in access.projection.iter().enumerate() {
             let Projection::VariantField { variant, .. } = projection else {
@@ -358,7 +358,7 @@ impl Checker<'_> {
         else {
             return true;
         };
-        let mut store = self.definition.types.clone();
+        let mut store = self.working_store();
         let count = match self.layout(&mut store, self.place_type(value.place)) {
             Some(TypeKind::Variant(variants)) => variants.len(),
             Some(TypeKind::Primitive(hirsel_types::Primitive::Bool)) => 2,

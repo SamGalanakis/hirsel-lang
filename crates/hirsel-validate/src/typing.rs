@@ -1760,7 +1760,7 @@ impl<'a> Checker<'a> {
     fn capture_type(&mut self, source: &TypeStore, root: TypeId, operand: &Operand) {
         let actual = self.place_type(operand.place);
         if matches!(operand.usage, UseKind::Borrow | UseKind::Mut) {
-            let mut store = self.definition.types.clone();
+            let mut store = self.working_store();
             if let Some(expected) = self.imported(source, root, &mut store, &[]) {
                 self.storage_value_type_in(
                     &mut store,

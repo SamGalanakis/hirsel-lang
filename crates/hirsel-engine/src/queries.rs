@@ -178,6 +178,14 @@ pub struct QueryEngine {
     validation_walk: Option<ValidationWalk>,
     cache_sequence: u64,
     source_revision: u64,
+    /// The runtime types compile-time evaluation runs with, built from every
+    /// item's signature. They change only with the items, their recorded
+    /// private representations or the manifest, so each evaluation reuses
+    /// them rather than reading every signature again (GAP 5).
+    comptime_runtime: Option<(
+        (usize, ContentHash),
+        Arc<hirsel_interp::aggregate::RuntimeTypes>,
+    )>,
     package_proofs: BTreeMap<hirsel_syntax::PackageId, package_snapshot::PackageProof>,
     package_publications: BTreeMap<hirsel_syntax::PackageId, package_snapshot::PackagePublication>,
     pub(crate) generic_verdict: Option<crate::generic_graph::Verdict>,
@@ -379,6 +387,7 @@ impl QueryEngine {
             validation_walk: None,
             cache_sequence: 0,
             source_revision: 0,
+            comptime_runtime: None,
             package_proofs: BTreeMap::new(),
             package_publications: BTreeMap::new(),
             generic_verdict: None,
@@ -714,6 +723,7 @@ impl QueryEngine {
     fn index(&mut self, file: &SyntaxFile, context: &FileContext) -> Result<(), QueryError> {
         self.drop_precheck(&context.package);
         self.source_revision += 1;
+        self.comptime_runtime = None;
         let source_path = &self.sources.file(file.file).unwrap().path;
         let from_source =
             |old: &ItemSnapshot| &self.sources.file(old.file.file).unwrap().path == source_path;
@@ -1292,8 +1302,27 @@ impl QueryEngine {
     }
     pub(crate) fn comptime_runtime_types(
         &mut self,
-    ) -> Result<hirsel_interp::aggregate::RuntimeTypes, QueryError> {
-        self.runtime_types_with_finalizers(false)
+    ) -> Result<Arc<hirsel_interp::aggregate::RuntimeTypes>, QueryError> {
+        let representations = self
+            .adapters
+            .compiler_state
+            .as_ref()
+            .map_or(0, |state| state.borrow().representations.len());
+        let key = (representations, self.manifest_revision());
+        if let Some((cached, runtime)) = &self.comptime_runtime {
+            if *cached == key {
+                return Ok(runtime.clone());
+            }
+        }
+        let runtime = Arc::new(self.runtime_types_with_finalizers(false)?);
+        // Building them may record a representation; key on the state after.
+        let representations = self
+            .adapters
+            .compiler_state
+            .as_ref()
+            .map_or(0, |state| state.borrow().representations.len());
+        self.comptime_runtime = Some(((representations, key.1), runtime.clone()));
+        Ok(runtime)
     }
     fn runtime_types_with_finalizers(
         &mut self,

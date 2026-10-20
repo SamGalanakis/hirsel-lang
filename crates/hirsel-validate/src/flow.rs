@@ -238,6 +238,9 @@ struct Model {
     selected_sources: BTreeSet<usize>,
     environment_paths: std::rc::Rc<BTreeSet<Vec<super::flow_origins::EnvironmentField>>>,
     origin_paths: BTreeSet<Vec<hirsel_types::FieldId>>,
+    /// The origin paths each place type admits (`admits_path`). A partition
+    /// keeps no path its value has no field for, since no typed place reads it.
+    typed_origin_paths: BTreeMap<TypeId, Vec<Vec<hirsel_types::FieldId>>>,
     /// The parameter root a `@preserves_unique` re-proof hands back (MODE-2).
     unique_proof: Option<usize>,
     /// The failure edge being checked is a release's that runs no user code
@@ -246,7 +249,52 @@ struct Model {
     /// While a return's cleanup runs, the roots whose shares it returns.
     returning_shares: std::cell::RefCell<BTreeSet<usize>>,
 }
+/// Whether a value of `ty` may have a part at `path`. Only a known layout
+/// can exclude one: a nominal type is read through its representation, and
+/// a generic, builtin, function or opaque type admits every path.
+fn admits_path(
+    signatures: &dyn SignatureLookup,
+    types: &TypeStore,
+    ty: TypeId,
+    path: &[hirsel_types::FieldId],
+) -> bool {
+    let Some((field, rest)) = path.split_first() else {
+        return true;
+    };
+    let field = field.0 as usize;
+    match types.get(ty).map(|row| &row.kind) {
+        Some(TypeKind::Primitive(_)) => false,
+        Some(TypeKind::Tuple(parts)) => parts
+            .get(field)
+            .is_some_and(|part| admits_path(signatures, types, *part, rest)),
+        Some(TypeKind::Record(fields)) => fields
+            .get(field)
+            .is_some_and(|part| admits_path(signatures, types, part.ty, rest)),
+        Some(TypeKind::Variant(variants)) => variants.iter().any(|variant| {
+            variant
+                .fields
+                .get(field)
+                .is_some_and(|(_, part)| admits_path(signatures, types, *part, rest))
+        }),
+        // Arguments enter the representation as its parameters, which admit
+        // every path, so no substitution is needed.
+        Some(TypeKind::Named { definition, .. }) => match signatures.get(definition) {
+            Some(Signature {
+                kind: SignatureKind::Type(t),
+                types: declared,
+                ..
+            }) => t
+                .representation
+                .is_none_or(|rep| admits_path(signatures, declared, rep, path)),
+            _ => true,
+        },
+        _ => true,
+    }
+}
 impl Model {
+    fn origin_paths_of(&self, ty: TypeId) -> &[Vec<hirsel_types::FieldId>] {
+        &self.typed_origin_paths[&ty]
+    }
     fn new(checker: &mut Checker<'_>) -> Self {
         let body = checker.body;
         let mut places: Vec<_> = body
@@ -684,6 +732,23 @@ impl Model {
                 origin_paths.insert(path);
             }
         }
+        let mut typed_origin_paths = BTreeMap::new();
+        for place in body.places.iter().chain(&places) {
+            typed_origin_paths.entry(place.ty).or_insert_with(|| {
+                origin_paths
+                    .iter()
+                    .filter(|path| {
+                        admits_path(
+                            checker.signatures,
+                            &checker.definition.types,
+                            place.ty,
+                            path,
+                        )
+                    })
+                    .cloned()
+                    .collect()
+            });
+        }
         let mut authorities = BTreeMap::new();
         let inert = places
             .iter()
@@ -806,6 +871,7 @@ impl Model {
             result_shareable,
             selected_sources,
             environment_paths,
+            typed_origin_paths,
             origin_paths,
             places,
             mapping,
@@ -1839,17 +1905,17 @@ impl Checker<'_> {
             })
             .collect();
         if let Some(fields) = &fields {
-            if let Some((prefix, identities)) = state.origins.parts
-                [model.roots[access.root.0 as usize]]
-                .iter()
-                .filter(|(prefix, _)| fields.starts_with(prefix))
-                .max_by_key(|(prefix, _)| prefix.len())
+            // The longest recorded prefix of the path partitions it.
+            let parts = &state.origins.parts[model.roots[access.root.0 as usize]];
+            if let Some((len, identities)) = (0..=fields.len())
+                .rev()
+                .find_map(|len| parts.get(&fields[..len]).map(|ids| (len, ids)))
             {
                 return identities
                     .iter()
                     .map(|origin| {
                         let mut origin = origin.clone();
-                        origin.fields.extend(&fields[prefix.len()..]);
+                        origin.fields.extend(&fields[len..]);
                         origin
                     })
                     .collect();
@@ -1914,7 +1980,7 @@ impl Checker<'_> {
         access: &Place,
     ) -> BTreeMap<Vec<hirsel_types::FieldId>, BTreeSet<Origin>> {
         model
-            .origin_paths
+            .origin_paths_of(access.ty)
             .iter()
             .map(|path| {
                 (
@@ -2005,7 +2071,7 @@ impl Checker<'_> {
             fields: vec![].into(),
         };
         let parts = model
-            .origin_paths
+            .origin_paths_of(model.places[root].ty)
             .iter()
             .map(|path| {
                 let identities = if path.starts_with(&written) || written.starts_with(path) {
@@ -2471,7 +2537,8 @@ impl Checker<'_> {
                 .collect(),
         };
         for argument in arguments {
-            for fields in &model.origin_paths {
+            let ty = self.body.places[argument.value.place.0 as usize].ty;
+            for fields in model.origin_paths_of(ty) {
                 origins.fields.insert(
                     (ParameterRef::bound(argument.parameter), fields.clone()),
                     Self::projected_identity(
@@ -4499,7 +4566,7 @@ impl Checker<'_> {
                             && state.origins.locations.contains_key(&origin.root)
                             && !state.origins.ended.contains_key(&origin.root)
                         {
-                            for path in &model.origin_paths {
+                            for path in model.origin_paths_of(model.places[index].ty) {
                                 let identities = state.origins.parts[index]
                                     .get(path)
                                     .cloned()
@@ -4723,7 +4790,7 @@ impl Checker<'_> {
                             }
                         }
                     }
-                    for local in locals {
+                    for &local in &locals {
                         let root = model.roots[local];
                         if state.places[root] & LIVE == 0 {
                             continue;
@@ -4745,6 +4812,28 @@ impl Checker<'_> {
                                 // A nonowning view loses storage without releasing its caller's value.
                                 self.conflict(model, state, place, true, true, report);
                                 self.clear(model, state, place, DEAD);
+                            }
+                        }
+                    }
+                    // An ended local's storage holds no value: forget the
+                    // origins its last value carried, so paths that ended
+                    // different locals agree on every one they did not use.
+                    for local in locals {
+                        for &part in &model.root_parts[local] {
+                            if state.places[part] & LIVE != 0 {
+                                continue;
+                            }
+                            if state.places[part] != DEAD {
+                                state.places[part] = DEAD;
+                            }
+                            if !state.origins.identities[part].is_empty() {
+                                state.origins.identities[part].clear();
+                            }
+                            if !state.origins.owners[part].is_empty() {
+                                state.origins.owners[part].clear();
+                            }
+                            if !state.origins.parts[part].is_empty() {
+                                state.origins.parts[part].clear();
                             }
                         }
                     }

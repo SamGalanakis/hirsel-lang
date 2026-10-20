@@ -86,6 +86,7 @@ fn check_inner(
         diagnostics: vec![],
         dependencies: BTreeMap::new(),
         snapshots: BTreeMap::new(),
+        representations: BTreeMap::new(),
         plans: Plans::default(),
         calls: vec![],
         formatters: BTreeMap::new(),
@@ -306,6 +307,10 @@ struct Checker<'a, 'p> {
     diagnostics: Vec<Diagnostic>,
     dependencies: BTreeMap<ast::DefPath, ast::ContentHash>,
     snapshots: BTreeMap<ast::DefPath, SignatureRef>,
+    /// Each instantiated representation imported so far. The store is
+    /// append-only, so a nominal type is expanded into it once rather than
+    /// once per projection of its fields (GAP 5).
+    representations: BTreeMap<ast::DefPath, Vec<(Vec<GenericArgument>, TypeId)>>,
     plans: Plans,
     calls: Vec<calls::PendingCall>,
     /// F-string callees (SEM-3) with their selected operation and the declared

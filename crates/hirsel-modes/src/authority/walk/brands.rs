@@ -1309,6 +1309,9 @@ impl Checker<'_> {
         Some(fields.to_vec())
     }
     pub(super) fn layout(&mut self, root: TypeId) -> Option<TypeKind> {
+        if let Some(kind) = self.layouts.get(&root) {
+            return Some(kind.clone());
+        }
         // Expansion appends to the body's store itself: a clone left behind
         // in the body would make the first append copy every row.
         let mut store = std::mem::take(&mut self.out.body.types);
@@ -1347,7 +1350,11 @@ impl Checker<'_> {
         });
         self.out.body.types = store;
         match result {
-            Ok(root) => self.out.body.types.get(root).map(|row| row.kind.clone()),
+            Ok(expanded) => {
+                let kind = self.out.body.types.get(expanded)?.kind.clone();
+                self.layouts.insert(root, kind.clone());
+                Some(kind)
+            }
             Err(RepresentationError {
                 failure: RepresentationFailure::Query(error),
                 ..

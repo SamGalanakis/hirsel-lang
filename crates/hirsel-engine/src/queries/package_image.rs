@@ -387,6 +387,7 @@ impl QueryEngine {
         self.generated = image.generated.clone();
         self.source_revision = image.source_revision;
         self.cache_sequence = image.cache_sequence;
+        self.comptime_runtime = None;
         self.items = Layered::shared(image.items.clone());
         self.parsed = Layered::shared(image.parsed.clone());
         self.syntax_keys = Layered::shared(image.syntax_keys.clone());

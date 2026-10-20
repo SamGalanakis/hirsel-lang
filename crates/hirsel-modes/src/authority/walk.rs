@@ -132,6 +132,10 @@ pub(super) struct Checker<'a> {
     /// The identity paths a brand or relation names, directly or under a
     /// projected prefix.
     branded_paths: BTreeSet<Vec<FieldId>>,
+    /// Layouts expanded so far into the append-only body store: expanding a
+    /// nominal type again only appends an equal copy of its representation,
+    /// once per field read of a wide record (GAP 5).
+    layouts: BTreeMap<TypeId, TypeKind>,
     expression_partitions: BTreeMap<ExprId, Identity>,
     /// The arena placement of each part a constructor received.
     part_holdings: BTreeMap<ExprId, BTreeMap<FieldId, Relation>>,
@@ -381,6 +385,7 @@ impl<'a> Checker<'a> {
             iteration_sources: BTreeMap::new(),
             identity_paths,
             branded_paths,
+            layouts: BTreeMap::new(),
             expression_partitions: BTreeMap::new(),
             part_holdings: BTreeMap::new(),
             carrier_places: BTreeMap::new(),

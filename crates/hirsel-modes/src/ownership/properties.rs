@@ -367,7 +367,13 @@ pub(super) struct ProjectionLifetime {
     pub counted_path: bool,
     pub declared: Modes,
 }
+/// Physical layouts expanded so far into one append-only store. Expanding a
+/// nominal type again would only push an equal copy of its representation,
+/// once per projection of every field, so a wide record grew the body's type
+/// rows with the square of its fields (GAP 5).
+type Layouts = BTreeMap<TypeId, TypeKind>;
 fn physical_layout(
+    layouts: &mut Layouts,
     store: &mut TypeStore,
     ty: TypeId,
     own: &Signature,
@@ -375,6 +381,9 @@ fn physical_layout(
     signatures: &mut Signatures,
     provider: &mut dyn SignatureProvider,
 ) -> Result<TypeKind, QueryError> {
+    if let Some(kind) = layouts.get(&ty) {
+        return Ok(kind.clone());
+    }
     let root = match expand_representation(
         store,
         ty,
@@ -400,7 +409,9 @@ fn physical_layout(
         }
         Err(error) => error.root,
     };
-    Ok(store.get(root).unwrap().kind.clone())
+    let kind = store.get(root).unwrap().kind.clone();
+    layouts.insert(ty, kind.clone());
+    Ok(kind)
 }
 
 /// Declared part rows before owner locality is applied. A projected pattern
@@ -425,6 +436,7 @@ pub(super) fn pattern_declarations(
         .map(|p| (p.pattern, p.ty))
         .collect();
     let mut result = BTreeMap::new();
+    let mut layouts = Layouts::new();
     while let Some((pattern, ty)) = pending.pop() {
         let row = &rows[&pattern];
         if let PatternDecisionKind::Or(alternatives) = &row.kind {
@@ -443,6 +455,7 @@ pub(super) fn pattern_declarations(
             inspected = part;
         }
         let kind = physical_layout(
+            &mut layouts,
             &mut body.types,
             inspected,
             own,
@@ -488,6 +501,7 @@ pub(super) fn projection_lifetimes(
         .map(|e| (e.expression, e.ty))
         .collect();
     let mut store = std::mem::take(&mut body.types);
+    let mut layouts = Layouts::new();
     let outcome = (|| {
         for place in &body.places {
             if place.projections.is_empty() {
@@ -526,6 +540,7 @@ pub(super) fn projection_lifetimes(
             let mut counted_path = false;
             for step in &place.projections {
                 let kind = physical_layout(
+                    &mut layouts,
                     &mut store,
                     ty,
                     own,
@@ -683,12 +698,14 @@ pub(super) fn field_loan_places(
     }
     let mut result = BTreeMap::new();
     let mut store = std::mem::take(&mut body.types);
+    let mut layouts = Layouts::new();
     let outcome = (|| {
         for (argument, path, mut ty) in requests {
             let mut found = true;
             let mut parts = vec![];
             for field in &path {
                 let kind = physical_layout(
+                    &mut layouts,
                     &mut store,
                     ty,
                     own,
@@ -763,6 +780,7 @@ mod limit_tests {
             let mut signatures = Signatures::default();
             assert_eq!(
                 physical_layout(
+                    &mut Layouts::new(),
                     &mut f.body.types,
                     root,
                     &f.signature,
