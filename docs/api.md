@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1380 exported definitions; 511 variants.
+1433 exported definitions; 512 variants.
 
 ## Types and roots
 
@@ -1631,6 +1631,68 @@ Variant of WaitError.
 - `type u8: copyable + data + inert + noalloc_drop + plain + sendable + key uses {}`
 
 
+## actor
+
+<a id="def-std_401_2factor_2fActor"></a>
+
+- `pub opaque resource type actor.Actor[M]: sendable uses {Tasks, M}`
+
+A mailbox handle. Duplicate it with `actor.dup`; the actor owns its state
+and processes messages in FIFO order on one task.
+
+References: [`core@1/Tasks`](#def-core_401_2fTasks)
+
+<a id="def-std_401_2factor_2fReply"></a>
+
+- `pub type actor.Reply[R] = Sender[R]`
+
+The sending half of a one-request reply channel.
+
+References: [`core@1/Sender`](#def-core_401_2fSender)
+
+<a id="def-std_401_2factor_2fcall"></a>
+
+- `pub fn actor.call[M: sendable, R: sendable]( tasks: Tasks, mut target: Actor[M], take make: once fn(take Reply[R]) -> M ) -> Result[R, ChannelError]`
+
+Send a request and wait for its reply. Waiting may observe cancellation;
+a closed mailbox or an abandoned reply returns `Closed`.
+
+References: [`core@1/ChannelError`](#def-core_401_2fChannelError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Tasks`](#def-core_401_2fTasks), [`std@1/actor/Actor`](#def-std_401_2factor_2fActor), [`std@1/actor/Reply`](#def-std_401_2factor_2fReply)
+
+<a id="def-std_401_2factor_2fcast"></a>
+
+- `pub fn actor.cast[M: sendable](tasks: Tasks, mut target: Actor[M], take message: M) -> Result[ (), (M, ChannelError) ]`
+
+Send without checking cancellation. A closed mailbox returns the message.
+
+References: [`core@1/ChannelError`](#def-core_401_2fChannelError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Tasks`](#def-core_401_2fTasks), [`std@1/actor/Actor`](#def-std_401_2factor_2fActor)
+
+<a id="def-std_401_2factor_2fdup"></a>
+
+- `pub fn actor.dup[M: sendable](tasks: Tasks, target: Actor[M]) -> Actor[M]`
+
+Acquire another mailbox handle; ordinary copies are forbidden.
+
+References: [`core@1/Tasks`](#def-core_401_2fTasks), [`std@1/actor/Actor`](#def-std_401_2factor_2fActor)
+
+<a id="def-std_401_2factor_2freply"></a>
+
+- `pub fn actor.reply[R: sendable](tasks: Tasks, take response: Reply[R], take value: R) -> Result[ (), (R, ChannelError) ]`
+
+Reply once, consuming the sending endpoint. A closed caller gets its value back.
+
+References: [`core@1/ChannelError`](#def-core_401_2fChannelError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Tasks`](#def-core_401_2fTasks), [`std@1/actor/Reply`](#def-std_401_2factor_2fReply)
+
+<a id="def-std_401_2factor_2fspawn"></a>
+
+- `pub fn actor.spawn[S, M: sendable]( s: Scope, tasks: Tasks, take initial: unique sendable S, take handle: sendable fn(mut unique S, take M) -> () ) -> Actor[M]`
+
+Start an actor in `s`. Closing every handle drains the mailbox and ends
+the task. Handlers may use capabilities, including I/O.
+
+References: [`core@1/Scope`](#def-core_401_2fScope), [`core@1/Tasks`](#def-core_401_2fTasks), [`std@1/actor/Actor`](#def-std_401_2factor_2fActor)
+
+
 ## adler32
 
 <a id="def-std_401_2fadler32_2fState"></a>
@@ -1674,6 +1736,34 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/adler32/State`](#de
 Extends the checksum with the bytes of a list builder from `start` on.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/adler32/State`](#def-std_401_2fadler32_2fState)
+
+
+## aead
+
+<a id="def-std_401_2faead_2fOpenError"></a>
+
+- `pub type aead.OpenError = AuthenticationFailed()`
+
+<a id="def-std_401_2faead_2fOpenError_23AuthenticationFailed"></a>
+
+- `AuthenticationFailed() -> aead.OpenError`
+
+Variant of aead.OpenError.
+
+
+## aes_gcm
+
+<a id="def-std_401_2faes_5fgcm_2fopen"></a>
+
+- `pub fn aes_gcm.open(key: Bytes, nonce: Bytes, sealed: Bytes, data: Bytes) -> Result[ unique Bytes, std@1/aead.OpenError ] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/aead/OpenError`](#def-std_401_2faead_2fOpenError)
+
+<a id="def-std_401_2faes_5fgcm_2fseal"></a>
+
+- `pub fn aes_gcm.seal(key: Bytes, nonce: Bytes, plaintext: Bytes, data: Bytes) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
 
 
 ## arena
@@ -2660,6 +2750,21 @@ width, preserving signed zero. Otherwise maps retain insertion order and
 decimal/exponent numbers use binary64. Integers remain exact in either mode.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`std@1/binary/DecodeError`](#def-std_401_2fbinary_2fDecodeError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+
+## chacha20poly1305
+
+<a id="def-std_401_2fchacha20poly1305_2fopen"></a>
+
+- `pub fn chacha20poly1305.open(key: Bytes, nonce: Bytes, sealed: Bytes, data: Bytes) -> Result[ unique Bytes, std@1/aead.OpenError ] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/aead/OpenError`](#def-std_401_2faead_2fOpenError)
+
+<a id="def-std_401_2fchacha20poly1305_2fseal"></a>
+
+- `pub fn chacha20poly1305.seal(key: Bytes, nonce: Bytes, plaintext: Bytes, data: Bytes) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
 
 
 ## channel
@@ -8364,6 +8469,178 @@ References: [`std@1/sha384/State`](#def-std_401_2fsha384_2fState)
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha384/State`](#def-std_401_2fsha384_2fState)
 
 
+## sha3_224
+
+<a id="def-std_401_2fsha3_5f224_2fState"></a>
+
+- `pub opaque type sha3_224.State: plain + inert uses {}`
+
+<a id="def-std_401_2fsha3_5f224_2fdigest"></a>
+
+- `@noalloc pub fn sha3_224.digest(data: Bytes) -> Inline[u8, 28] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fsha3_5f224_2fdigest_5fhex"></a>
+
+- `pub fn sha3_224.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fsha3_5f224_2ffinish"></a>
+
+- `@noalloc pub fn sha3_224.finish(take state: State) -> Inline[u8, 28] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha3_224/State`](#def-std_401_2fsha3_5f224_2fState)
+
+<a id="def-std_401_2fsha3_5f224_2fhash"></a>
+
+- `pub fn sha3_224.hash() -> std@1/digest.Hash[State, 28] uses {}`
+
+References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha3_224/State`](#def-std_401_2fsha3_5f224_2fState)
+
+<a id="def-std_401_2fsha3_5f224_2fnew"></a>
+
+- `@noalloc pub fn sha3_224.new() -> State uses {}`
+
+References: [`std@1/sha3_224/State`](#def-std_401_2fsha3_5f224_2fState)
+
+<a id="def-std_401_2fsha3_5f224_2fupdate"></a>
+
+- `@noalloc pub fn sha3_224.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha3_224/State`](#def-std_401_2fsha3_5f224_2fState)
+
+
+## sha3_256
+
+<a id="def-std_401_2fsha3_5f256_2fState"></a>
+
+- `pub opaque type sha3_256.State: plain + inert uses {}`
+
+<a id="def-std_401_2fsha3_5f256_2fdigest"></a>
+
+- `@noalloc pub fn sha3_256.digest(data: Bytes) -> Inline[u8, 32] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fsha3_5f256_2fdigest_5fhex"></a>
+
+- `pub fn sha3_256.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fsha3_5f256_2ffinish"></a>
+
+- `@noalloc pub fn sha3_256.finish(take state: State) -> Inline[u8, 32] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha3_256/State`](#def-std_401_2fsha3_5f256_2fState)
+
+<a id="def-std_401_2fsha3_5f256_2fhash"></a>
+
+- `pub fn sha3_256.hash() -> std@1/digest.Hash[State, 32] uses {}`
+
+References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha3_256/State`](#def-std_401_2fsha3_5f256_2fState)
+
+<a id="def-std_401_2fsha3_5f256_2fnew"></a>
+
+- `@noalloc pub fn sha3_256.new() -> State uses {}`
+
+References: [`std@1/sha3_256/State`](#def-std_401_2fsha3_5f256_2fState)
+
+<a id="def-std_401_2fsha3_5f256_2fupdate"></a>
+
+- `@noalloc pub fn sha3_256.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha3_256/State`](#def-std_401_2fsha3_5f256_2fState)
+
+
+## sha3_384
+
+<a id="def-std_401_2fsha3_5f384_2fState"></a>
+
+- `pub opaque type sha3_384.State: plain + inert uses {}`
+
+<a id="def-std_401_2fsha3_5f384_2fdigest"></a>
+
+- `@noalloc pub fn sha3_384.digest(data: Bytes) -> Inline[u8, 48] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fsha3_5f384_2fdigest_5fhex"></a>
+
+- `pub fn sha3_384.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fsha3_5f384_2ffinish"></a>
+
+- `@noalloc pub fn sha3_384.finish(take state: State) -> Inline[u8, 48] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha3_384/State`](#def-std_401_2fsha3_5f384_2fState)
+
+<a id="def-std_401_2fsha3_5f384_2fhash"></a>
+
+- `pub fn sha3_384.hash() -> std@1/digest.Hash[State, 48] uses {}`
+
+References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha3_384/State`](#def-std_401_2fsha3_5f384_2fState)
+
+<a id="def-std_401_2fsha3_5f384_2fnew"></a>
+
+- `@noalloc pub fn sha3_384.new() -> State uses {}`
+
+References: [`std@1/sha3_384/State`](#def-std_401_2fsha3_5f384_2fState)
+
+<a id="def-std_401_2fsha3_5f384_2fupdate"></a>
+
+- `@noalloc pub fn sha3_384.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha3_384/State`](#def-std_401_2fsha3_5f384_2fState)
+
+
+## sha3_512
+
+<a id="def-std_401_2fsha3_5f512_2fState"></a>
+
+- `pub opaque type sha3_512.State: plain + inert uses {}`
+
+<a id="def-std_401_2fsha3_5f512_2fdigest"></a>
+
+- `@noalloc pub fn sha3_512.digest(data: Bytes) -> Inline[u8, 64] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fsha3_5f512_2fdigest_5fhex"></a>
+
+- `pub fn sha3_512.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fsha3_5f512_2ffinish"></a>
+
+- `@noalloc pub fn sha3_512.finish(take state: State) -> Inline[u8, 64] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha3_512/State`](#def-std_401_2fsha3_5f512_2fState)
+
+<a id="def-std_401_2fsha3_5f512_2fhash"></a>
+
+- `pub fn sha3_512.hash() -> std@1/digest.Hash[State, 64] uses {}`
+
+References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha3_512/State`](#def-std_401_2fsha3_5f512_2fState)
+
+<a id="def-std_401_2fsha3_5f512_2fnew"></a>
+
+- `@noalloc pub fn sha3_512.new() -> State uses {}`
+
+References: [`std@1/sha3_512/State`](#def-std_401_2fsha3_5f512_2fState)
+
+<a id="def-std_401_2fsha3_5f512_2fupdate"></a>
+
+- `@noalloc pub fn sha3_512.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha3_512/State`](#def-std_401_2fsha3_5f512_2fState)
+
+
 ## sha512
 
 <a id="def-std_401_2fsha512_2fState"></a>
@@ -8448,6 +8725,68 @@ References: [`std@1/sha512_256/State`](#def-std_401_2fsha512_5f256_2fState)
 - `@noalloc pub fn sha512_256.update(mut state: State, data: Bytes) -> () uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha512_256/State`](#def-std_401_2fsha512_5f256_2fState)
+
+
+## shake128
+
+<a id="def-std_401_2fshake128_2fState"></a>
+
+- `pub opaque type shake128.State: plain + inert uses {}`
+
+<a id="def-std_401_2fshake128_2fdigest"></a>
+
+- `pub fn shake128.digest(data: Bytes, length: u64) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fshake128_2ffinish"></a>
+
+- `pub fn shake128.finish(take state: State, length: u64) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64), [`std@1/shake128/State`](#def-std_401_2fshake128_2fState)
+
+<a id="def-std_401_2fshake128_2fnew"></a>
+
+- `@noalloc pub fn shake128.new() -> State uses {}`
+
+References: [`std@1/shake128/State`](#def-std_401_2fshake128_2fState)
+
+<a id="def-std_401_2fshake128_2fupdate"></a>
+
+- `@noalloc pub fn shake128.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/shake128/State`](#def-std_401_2fshake128_2fState)
+
+
+## shake256
+
+<a id="def-std_401_2fshake256_2fState"></a>
+
+- `pub opaque type shake256.State: plain + inert uses {}`
+
+<a id="def-std_401_2fshake256_2fdigest"></a>
+
+- `pub fn shake256.digest(data: Bytes, length: u64) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fshake256_2ffinish"></a>
+
+- `pub fn shake256.finish(take state: State, length: u64) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64), [`std@1/shake256/State`](#def-std_401_2fshake256_2fState)
+
+<a id="def-std_401_2fshake256_2fnew"></a>
+
+- `@noalloc pub fn shake256.new() -> State uses {}`
+
+References: [`std@1/shake256/State`](#def-std_401_2fshake256_2fState)
+
+<a id="def-std_401_2fshake256_2fupdate"></a>
+
+- `@noalloc pub fn shake256.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/shake256/State`](#def-std_401_2fshake256_2fState)
 
 
 ## shared
@@ -9086,6 +9425,16 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_4
 <a id="def-core_401_2ftask_2fisolate"></a>
 
 - `fn task.isolate[R: sendable](tasks: Tasks, take body: once fn() -> R) -> Result[R, Failure]`
+
+<a id="def-std_401_2ftask_2fmap_5fall"></a>
+
+- `pub fn task.map_all[T: copyable + inert, U: copyable + inert, E: sendable]( tasks: Tasks, take items: List[T], grain: u64, take f: fn(T) -> Result[U, E] uses {} ) -> Result[List[U], E]`
+
+Map in a nested scope, one child per `grain` items, and return input order.
+`f` holds no authority. The first completed error cancels and joins the
+remaining children through `task.all`. Zero grain fails SEM-1.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Tasks`](#def-core_401_2fTasks), [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-core_401_2ftask_2fscope"></a>
 
@@ -10848,6 +11197,21 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_4
 - `pub fn x509.parse(der: Bytes) -> Result[Certificate, X509Error] uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/x509/Certificate`](#def-std_401_2fx509_2fCertificate), [`std@1/x509/X509Error`](#def-std_401_2fx509_2fX509Error)
+
+
+## xchacha20poly1305
+
+<a id="def-std_401_2fxchacha20poly1305_2fopen"></a>
+
+- `pub fn xchacha20poly1305.open(key: Bytes, nonce: Bytes, sealed: Bytes, data: Bytes) -> Result[ unique Bytes, std@1/aead.OpenError ] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/aead/OpenError`](#def-std_401_2faead_2fOpenError)
+
+<a id="def-std_401_2fxchacha20poly1305_2fseal"></a>
+
+- `pub fn xchacha20poly1305.seal(key: Bytes, nonce: Bytes, plaintext: Bytes, data: Bytes) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
 
 
 ## xxhash64
