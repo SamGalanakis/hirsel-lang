@@ -156,7 +156,7 @@ fn instantiate(
             match slot {
                 None => *slot = Some(GenericArgument::Type(right)),
                 Some(GenericArgument::Type(previous))
-                    if shape_equal(t, *previous, right).ok()? =>
+                    if t.shape_eq(*previous, right).ok()? =>
                 {
                     ()
                 }
@@ -200,7 +200,7 @@ fn instantiate(
                 }
                 pairs.push((a.result, b.result, depth + 1));
             }
-            _ if shape_equal(t, left, right).ok()? => (),
+            _ if t.shape_eq(left, right).ok()? => (),
             _ => return None,
         }
     }

@@ -2747,13 +2747,13 @@ impl<'a> Checker<'a> {
                 };
                 let matches = match (callback, entry) {
                     (Some(signature), _) => {
-                        hirsel_types::shape_equal(store, signature, derived).unwrap_or(false)
+                        store.shape_eq(signature, derived).unwrap_or(false)
                     }
                     (None, Some(signature)) => {
                         declared.foreign.is_none()
                             && declared.generics.is_empty()
                             && !declared.incomplete
-                            && hirsel_types::shape_equal(store, signature, derived).unwrap_or(false)
+                            && store.shape_eq(signature, derived).unwrap_or(false)
                     }
                     (None, None) => self.compatible(store, ty, derived, TypeRelation::Value),
                 };

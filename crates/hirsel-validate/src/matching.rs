@@ -325,7 +325,7 @@ impl Checker<'_> {
             && td.drop.is_none()
             && td
                 .representation
-                .is_some_and(|repr| hirsel_types::shape_equal(store, ty, repr).unwrap_or(false))
+                .is_some_and(|repr| store.shape_eq(ty, repr).unwrap_or(false))
     }
     fn pattern_owner(&self, store: &TypeInterner, ty: TypeId) -> Option<DefPath> {
         match &store.get(ty)?.kind {
