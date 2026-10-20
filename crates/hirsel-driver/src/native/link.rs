@@ -1991,6 +1991,13 @@ fn launch_impl(
         } => {
             if live.is_some() {
                 if let Some(path) = record {
+                    // Observer controls belong to the host launcher, outside the
+                    // admitted program environment and all replay inputs.
+                    for name in ["HIRSEL_TIMING", "HIRSEL_TIMING_CAPTURE_ID"] {
+                        if let Some(value) = std::env::var_os(name) {
+                            command.env(name, value);
+                        }
+                    }
                     command.arg("--hirsel-record").arg(absolute(path)?);
                 }
                 if let Some(path) = revocations {

@@ -327,7 +327,7 @@ fn diagnostic_timing_is_default_isolated_and_used_by_the_viewer() {
                 seen = Some(observations);
             }
             let sidecar = PathBuf::from(format!("{}.timing.json", tape.display()));
-            assert_eq!(sidecar.exists(), enabled);
+            assert_eq!(sidecar.exists(), enabled, "{backend:?}: {tape:?}");
             let view = fixture.0.join("view.json");
             let result = Command::new(env!("CARGO_BIN_EXE_hirsel"))
                 .arg("view")
