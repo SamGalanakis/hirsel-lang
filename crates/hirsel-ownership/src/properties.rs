@@ -461,7 +461,6 @@ fn physical_layout(
 pub(super) fn pattern_declarations(
     t: &TypeInterner,
     body: &mut CheckedBody,
-    own: &Signature,
     signatures: &mut Signatures,
 ) -> Result<BTreeMap<hirsel_syntax::PatternId, TypeId>, QueryError> {
     let rows: BTreeMap<_, _> = body
@@ -683,7 +682,6 @@ pub(super) struct FieldPlace {
 pub(super) fn field_loan_places(
     t: &TypeInterner,
     body: &mut CheckedBody,
-    own: &Signature,
     graphs: &[super::cfg::Graph],
     signatures: &mut Signatures,
     rows: &super::source_rows::SourceRows,
@@ -788,16 +786,20 @@ mod limit_tests {
                 );
             }
             let mut reads = vec![];
-            let mut signatures = Signatures::default();
+            let generics = f.body.resolution.generic_declarations.clone();
+            let reader = Reader::new(&mut f.provider, &f.signature);
+            let mut read = |d: DefId| reader.borrow_mut().read(d).map(Some);
+            let mut cached = |d: DefId| Ok(reader.borrow().cached(d));
+            let memo = ContextMemo::new(f.types, &generics, &mut read);
+            let cached_memo = ContextMemo::new(f.types, &generics, &mut cached);
+            let mut signatures = Signatures::new(&f.memo, &reader, memo, cached_memo);
             assert_eq!(
                 physical_layout(
                     &mut Layouts::new(),
-                    &mut f.body.types,
+                    f.types,
                     root,
-                    &f.signature,
                     &mut reads,
                     &mut signatures,
-                    &mut f.provider
                 )
                 .unwrap(),
                 TypeKind::Primitive(Primitive::U8)

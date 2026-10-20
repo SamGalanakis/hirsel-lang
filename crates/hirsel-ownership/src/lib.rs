@@ -104,10 +104,9 @@ pub fn check_ownership_with_clauses(
     )?;
     let projection_lifetimes =
         properties::projection_lifetimes(t, body, signature, &mut signatures)?;
-    let pattern_declarations =
-        properties::pattern_declarations(t, body, signature, &mut signatures)?;
+    let pattern_declarations = properties::pattern_declarations(t, body, &mut signatures)?;
     let field_loan_places =
-        properties::field_loan_places(t, body, signature, &graphs, &mut signatures, &rows)?;
+        properties::field_loan_places(t, body, &graphs, &mut signatures, &rows)?;
     // The rows the body's store held when main classified it: the tables'
     // rows and those the declaration-layout passes above derived.
     let derived = projection_lifetimes

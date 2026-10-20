@@ -132,9 +132,9 @@ mod tests {
     use super::*;
     #[test]
     fn replacement_order_and_current_type_index_follow_mutations() {
-        let mut store = TypeStore::default();
-        let a = store.push(Type::with_kind(TypeKind::Primitive(Primitive::U8)));
-        let b = store.push(store.get(a).unwrap().clone());
+        let t = crate::test_support::session();
+        let a = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U8)));
+        let b = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U16)));
         let row = |expression, ty| ClosureInfo {
             expression: ExprId(expression),
             ty,
