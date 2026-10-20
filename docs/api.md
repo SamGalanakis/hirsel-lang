@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1807 exported definitions; 702 variants.
+1909 exported definitions; 809 variants.
 
 ## Types and roots
 
@@ -67,6 +67,66 @@ Variant of Bounded.
 <a id="def-core_401_2fBytes"></a>
 
 - `type Bytes: copyable + data + inert + noalloc_drop + key uses {}`
+
+<a id="def-core_401_2fCallEnd"></a>
+
+- `type CallEnd: serializable uses {} = Returned(Bytes) | Failed(Bytes) | Faulted(Bytes) | NotRun(NotRunReason) | InDoubt(InDoubtReason) | Canceled(CancelCause)`
+
+<a id="def-core_401_2fCallEnd_23Canceled"></a>
+
+- `Canceled(CancelCause) -> CallEnd`
+
+Variant of CallEnd.
+
+<a id="def-core_401_2fCallEnd_23Failed"></a>
+
+- `Failed(Bytes) -> CallEnd`
+
+Variant of CallEnd.
+
+<a id="def-core_401_2fCallEnd_23Faulted"></a>
+
+- `Faulted(Bytes) -> CallEnd`
+
+Variant of CallEnd.
+
+<a id="def-core_401_2fCallEnd_23InDoubt"></a>
+
+- `InDoubt(InDoubtReason) -> CallEnd`
+
+Variant of CallEnd.
+
+<a id="def-core_401_2fCallEnd_23NotRun"></a>
+
+- `NotRun(NotRunReason) -> CallEnd`
+
+Variant of CallEnd.
+
+<a id="def-core_401_2fCallEnd_23Returned"></a>
+
+- `Returned(Bytes) -> CallEnd`
+
+Variant of CallEnd.
+
+<a id="def-core_401_2fCallForm"></a>
+
+- `type CallForm: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Compute() | Call()`
+
+<a id="def-core_401_2fCallForm_23Call"></a>
+
+- `Call() -> CallForm`
+
+Variant of CallForm.
+
+<a id="def-core_401_2fCallForm_23Compute"></a>
+
+- `Compute() -> CallForm`
+
+Variant of CallForm.
+
+<a id="def-core_401_2fCallRef"></a>
+
+- `type CallRef: serializable uses {} = { epoch: u64, position: u64, key: Bytes }`
 
 <a id="def-core_401_2fCancelCause"></a>
 
@@ -1192,6 +1252,14 @@ Variant of RandomError.
 
 - `type Region[T] uses {T}`
 
+<a id="def-core_401_2fRemoteCall"></a>
+
+- `type RemoteCall: serializable uses {} = { epoch: u64, position: u64, ordinal: u64, key: Bytes, form: CallForm, path: String, fingerprint: Bytes, code: Bytes, grants: GrantSet, definitions: Option[List[String]], argument: Bytes, acknowledged: u64 }`
+
+<a id="def-core_401_2fRemoteOutcome"></a>
+
+- `type RemoteOutcome: serializable uses {} = { epoch: u64, position: u64, key: Bytes, digest: Bytes, end: CallEnd, callee: Option[Bytes], missing: List[Bytes] }`
+
 <a id="def-core_401_2fResult"></a>
 
 - `type Result[T, E] uses {T, E} = Ok(T) | Error(E)`
@@ -1242,6 +1310,76 @@ Variant of RunError.
 
 Variant of RunError.
 
+<a id="def-core_401_2fRunFrame"></a>
+
+- `type RunFrame: serializable uses {} = Open(SessionOpen) | Opened(SessionOpened) | Refused(NotRunReason) | Call(RemoteCall) | Outcome(RemoteOutcome) | Cancel(CallRef, CancelCause) | Acknowledged(CallRef) | Status(CallRef) | Running(CallRef) | Unknown(CallRef) | Close(u64, u64)`
+
+<a id="def-core_401_2fRunFrame_23Acknowledged"></a>
+
+- `Acknowledged(CallRef) -> RunFrame`
+
+Variant of RunFrame.
+
+<a id="def-core_401_2fRunFrame_23Call"></a>
+
+- `Call(RemoteCall) -> RunFrame`
+
+Variant of RunFrame.
+
+<a id="def-core_401_2fRunFrame_23Cancel"></a>
+
+- `Cancel(CallRef, CancelCause) -> RunFrame`
+
+Variant of RunFrame.
+
+<a id="def-core_401_2fRunFrame_23Close"></a>
+
+- `Close(u64, u64) -> RunFrame`
+
+Variant of RunFrame.
+
+<a id="def-core_401_2fRunFrame_23Open"></a>
+
+- `Open(SessionOpen) -> RunFrame`
+
+Variant of RunFrame.
+
+<a id="def-core_401_2fRunFrame_23Opened"></a>
+
+- `Opened(SessionOpened) -> RunFrame`
+
+Variant of RunFrame.
+
+<a id="def-core_401_2fRunFrame_23Outcome"></a>
+
+- `Outcome(RemoteOutcome) -> RunFrame`
+
+Variant of RunFrame.
+
+<a id="def-core_401_2fRunFrame_23Refused"></a>
+
+- `Refused(NotRunReason) -> RunFrame`
+
+Variant of RunFrame.
+
+<a id="def-core_401_2fRunFrame_23Running"></a>
+
+- `Running(CallRef) -> RunFrame`
+
+Variant of RunFrame.
+
+<a id="def-core_401_2fRunFrame_23Status"></a>
+
+- `Status(CallRef) -> RunFrame`
+
+Variant of RunFrame.
+
+<a id="def-core_401_2fRunFrame_23Unknown"></a>
+
+- `Unknown(CallRef) -> RunFrame`
+
+Variant of RunFrame.
+
 <a id="def-core_401_2fRunner"></a>
 
 - `@capability(global) opaque type Runner: plain + copyable + sendable + noalloc_drop uses {Runner}`
@@ -1257,6 +1395,14 @@ Variant of RunError.
 <a id="def-core_401_2fSender"></a>
 
 - `type Sender[T] uses {Tasks, T}`
+
+<a id="def-core_401_2fSessionOpen"></a>
+
+- `type SessionOpen: serializable uses {} = { stream: Bytes, instance: Bytes, epoch: u64 }`
+
+<a id="def-core_401_2fSessionOpened"></a>
+
+- `type SessionOpened: serializable uses {} = { epoch: u64, incarnation: Bytes, applied: u64, reconciles: bool }`
 
 <a id="def-core_401_2fSet"></a>
 
@@ -1351,6 +1497,54 @@ Variant of Signal.
 - `Terminate() -> Signal`
 
 Variant of Signal.
+
+<a id="def-core_401_2fSignalError"></a>
+
+- `type SignalError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Canceled(CancelCause) | NotGranted() | InvalidInput()`
+
+<a id="def-core_401_2fSignalError_23Canceled"></a>
+
+- `Canceled(CancelCause) -> SignalError`
+
+Variant of SignalError.
+
+<a id="def-core_401_2fSignalError_23InvalidInput"></a>
+
+- `InvalidInput() -> SignalError`
+
+Variant of SignalError.
+
+<a id="def-core_401_2fSignalError_23NotGranted"></a>
+
+- `NotGranted() -> SignalError`
+
+Variant of SignalError.
+
+<a id="def-core_401_2fSignalKind"></a>
+
+- `type SignalKind: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Interrupt() | Terminate() | Hangup()`
+
+<a id="def-core_401_2fSignalKind_23Hangup"></a>
+
+- `Hangup() -> SignalKind`
+
+Variant of SignalKind.
+
+<a id="def-core_401_2fSignalKind_23Interrupt"></a>
+
+- `Interrupt() -> SignalKind`
+
+Variant of SignalKind.
+
+<a id="def-core_401_2fSignalKind_23Terminate"></a>
+
+- `Terminate() -> SignalKind`
+
+Variant of SignalKind.
+
+<a id="def-core_401_2fSignals"></a>
+
+- `@capability(global) opaque type Signals: plain + copyable + sendable + noalloc_drop uses {Signals}`
 
 <a id="def-core_401_2fSimd"></a>
 
@@ -1977,7 +2171,7 @@ Variant of base64.Alphabet.
 
 <a id="def-std_401_2fbase64_2fDecodeError"></a>
 
-- `@serializable pub type base64.DecodeError = InvalidByte(u64) | InvalidLength | InvalidPadding(u64) | NonCanonical( u64 )`
+- `@serializable pub type base64.DecodeError = InvalidByte(u64) | InvalidLength(u64) | InvalidPadding(u64) | NonCanonical( u64 )`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -1991,9 +2185,11 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fbase64_2fDecodeError_23InvalidLength"></a>
 
-- `InvalidLength -> base64.DecodeError`
+- `InvalidLength(u64) -> base64.DecodeError`
 
 Variant of base64.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fbase64_2fDecodeError_23InvalidPadding"></a>
 
@@ -2778,6 +2974,10 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_
 
 - `@preserves_unique(builder) @unretained(data) fn bytes.append(mut builder: List[u8], data: Bytes) -> ()`
 
+<a id="def-core_401_2fbytes_2fappend_5ffrom_5fhistory"></a>
+
+- `@preserves_unique(out) fn bytes.append_from_history(mut out: List[u8], distance: u64, count: u64) -> ()`
+
 <a id="def-std_401_2fbytes_2ffrom_5finline"></a>
 
 - `pub fn bytes.from_inline[n: size](xs: Inline[u8, n]) -> unique Bytes uses {}`
@@ -3276,9 +3476,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_
 
 <a id="def-std_401_2fcsv_2fCsvError"></a>
 
-- `@serializable pub type csv.CsvError = Syntax(u64) | UnequalFields(u64) | RecordTooLarge | InvalidUtf8 | InvalidDelimiter`
+- `@serializable pub type csv.CsvError = Syntax(Position) | UnequalFields(Position) | RecordTooLarge | InvalidUtf8 | InvalidDelimiter`
 
-References: [`core@1/u64`](#def-core_401_2fu64)
+References: [`std@1/csv/Position`](#def-std_401_2fcsv_2fPosition)
 
 <a id="def-std_401_2fcsv_2fCsvError_23InvalidDelimiter"></a>
 
@@ -3300,19 +3500,19 @@ Variant of csv.CsvError.
 
 <a id="def-std_401_2fcsv_2fCsvError_23Syntax"></a>
 
-- `Syntax(u64) -> csv.CsvError`
+- `Syntax(Position) -> csv.CsvError`
 
 Variant of csv.CsvError.
 
-References: [`core@1/u64`](#def-core_401_2fu64)
+References: [`std@1/csv/Position`](#def-std_401_2fcsv_2fPosition)
 
 <a id="def-std_401_2fcsv_2fCsvError_23UnequalFields"></a>
 
-- `UnequalFields(u64) -> csv.CsvError`
+- `UnequalFields(Position) -> csv.CsvError`
 
 Variant of csv.CsvError.
 
-References: [`core@1/u64`](#def-core_401_2fu64)
+References: [`std@1/csv/Position`](#def-std_401_2fcsv_2fPosition)
 
 <a id="def-std_401_2fcsv_2fDriverError"></a>
 
@@ -3365,6 +3565,12 @@ Variant of csv.DriverError.
 - `Source(E) -> csv.DriverError[E]`
 
 Variant of csv.DriverError.
+
+<a id="def-std_401_2fcsv_2fPosition"></a>
+
+- `@serializable pub type csv.Position { start_line: u64, line: u64, column: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fcsv_2fReadError"></a>
 
@@ -3813,11 +4019,31 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/decimal/Decimal`]
 
 - `pub opaque type deque.Deque[T]: () uses {T}`
 
+<a id="def-std_401_2fdeque_2fback"></a>
+
+- `pub fn deque.back[T: copyable](q: Deque[T]) -> Option[T] in q uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/deque/Deque`](#def-std_401_2fdeque_2fDeque)
+
 <a id="def-std_401_2fdeque_2fempty"></a>
 
 - `pub fn deque.empty[T]() -> unique Deque[T] uses {}`
 
 References: [`std@1/deque/Deque`](#def-std_401_2fdeque_2fDeque)
+
+<a id="def-std_401_2fdeque_2ffront"></a>
+
+- `pub fn deque.front[T: copyable](q: Deque[T]) -> Option[T] in q uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/deque/Deque`](#def-std_401_2fdeque_2fDeque)
+
+<a id="def-std_401_2fdeque_2fget"></a>
+
+- `pub fn deque.get[T: copyable](q: Deque[T], index: u64) -> Option[T] in q uses {}`
+
+Copies the item at a logical index, without changing either endpoint.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/deque/Deque`](#def-std_401_2fdeque_2fDeque)
 
 <a id="def-std_401_2fdeque_2flen"></a>
 
@@ -5475,6 +5701,16 @@ References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Path`](#def-core_401_2fPath), [`core@1/String`](#def-core_401_2fString), [`core@1/TlsRoots`](#def-core_401_2fTlsRoots), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
 
+<a id="def-std_401_2fhttp_2fDetached"></a>
+
+- `pub resource type http.Detached: noalloc_drop uses {Net} { net: Net, stream: Stream of .net, input: bufio.Reader, } @noalloc drop(self)`
+
+A server connection after an HTTP/1.1 request, with the bytes already read past that
+request, for a protocol that takes over the connection (WebSocket, an event stream)
+and writes its own response. The connection serves no further requests.
+
+References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Stream`](#def-core_401_2fStream), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+
 <a id="def-std_401_2fhttp_2fHeader"></a>
 
 - `@serializable pub type http.Header { name: String, value: String, }`
@@ -5814,6 +6050,27 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_4
 
 References: [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig)
 
+<a id="def-std_401_2fhttp_2fdetach"></a>
+
+- `pub fn http.detach(take s: ServerStream) -> Result[Detached, HttpError]`
+
+Hands over the connection once `next_stream` has yielded this stream and before any
+response; otherwise `OutOfOrder()`, as for an HTTP/2 stream, whose connection other
+streams share (`Closed()` once closed).
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/Detached`](#def-std_401_2fhttp_2fDetached), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerStream`](#def-std_401_2fhttp_2fServerStream)
+
+<a id="def-std_401_2fhttp_2fdial"></a>
+
+- `pub fn http.dial(n: Net, config: Config, parsed_uri: uri.Uri) -> Result[ Stream of n, HttpError ]`
+
+Opens the connection a request to `parsed_uri` uses: `http` or `https` (any other
+scheme is `UnsupportedScheme()`), the config's `unix_socket` or a TCP connect under
+its connect timeout, the read and write timeouts, then `tls.connect` for `https`.
+Protocols that start with an HTTP/1.1 exchange, such as WebSocket, dial with it.
+
+References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stream`](#def-core_401_2fStream), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/uri/Uri`](#def-std_401_2furi_2fUri)
+
 <a id="def-std_401_2fhttp_2fend_5frequest_5fbody"></a>
 
 - `pub fn http.end_request_body(mut r: Request, request_trailers: List[Header]) -> Result[ (), HttpError ]`
@@ -5846,6 +6103,15 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_4
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader)
 
+<a id="def-std_401_2fhttp_2fhost_5fheader"></a>
+
+- `pub fn http.host_header(parsed_uri: uri.Uri) -> Result[unique String, HttpError] uses {}`
+
+The `host` field value for `parsed_uri`: its canonical host, bracketed when IPv6,
+with `:port` when the URI spells a port.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/uri/Uri`](#def-std_401_2furi_2fUri)
+
 <a id="def-std_401_2fhttp_2fjson_5fbody"></a>
 
 - `pub fn http.json_body(value: json.Value) -> Result[Body, HttpError] uses {}`
@@ -5860,6 +6126,16 @@ Yield one owned exchange and its decoded request. While it remains open,
 this returns OutOfOrder. Dropping it unfinished ends reception.
 
 References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection), [`std@1/http/ServerRequest`](#def-std_401_2fhttp_2fServerRequest), [`std@1/http/ServerStream`](#def-std_401_2fhttp_2fServerStream)
+
+<a id="def-std_401_2fhttp_2fparse_5fresponse_5fhead"></a>
+
+- `pub fn http.parse_response_head(buf: Bytes, config: Config, head_request: bool) -> Result[ Option[(ResponseHead, u64)], HttpError ] uses {}`
+
+Parses a complete response head at the start of `buf`, returning it with the head's
+byte length, or `None()` while it is incomplete. At most `config.max_headers` fields;
+`head_request` says the response answers HEAD, so it has no body.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ResponseHead`](#def-std_401_2fhttp_2fResponseHead)
 
 <a id="def-std_401_2fhttp_2fparse_5fserver_5frequest"></a>
 
@@ -5907,6 +6183,15 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_
 Protocol selected for this request's transport, before sending its headers.
 
 References: [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest), [`std@1/http/Version`](#def-std_401_2fhttp_2fVersion)
+
+<a id="def-std_401_2fhttp_2frequest_5ftarget"></a>
+
+- `pub fn http.request_target(parsed_uri: uri.Uri) -> unique String uses {}`
+
+The origin-form request target for `parsed_uri`: its encoded path (`/` when empty)
+and `?query` when present.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/uri/Uri`](#def-std_401_2furi_2fUri)
 
 <a id="def-std_401_2fhttp_2frespond"></a>
 
@@ -5973,6 +6258,16 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_4
 - `pub fn http.trailers(r: Request) -> unique List[Header]`
 
 References: [`core@1/List`](#def-core_401_2fList), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest)
+
+<a id="def-std_401_2fhttp_2fvalidate_5fheaders"></a>
+
+- `pub fn http.validate_headers(headers: List[Header]) -> Result[(), HttpError] uses {}`
+
+Rejects an empty or non-token header name and a value with a control byte other
+than tab (`Malformed(HeaderName())`, `Malformed(HeaderValue())`): the header-injection
+boundary every writer applies before writing a head.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError)
 
 <a id="def-std_401_2fhttp_2fwrite_5frequest_5fbody"></a>
 
@@ -7279,6 +7574,10 @@ References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Option`]
 
 - `@noalloc fn io.runner(rt: Io, name: String) -> Result[Runner, GrantError]`
 
+<a id="def-core_401_2fio_2fsignals"></a>
+
+- `@noalloc fn io.signals(rt: Io) -> Result[Signals, GrantError]`
+
 <a id="def-core_401_2fio_2fstderr"></a>
 
 - `@noalloc fn io.stderr(rt: Io) -> Result[Stderr, GrantError]`
@@ -7482,6 +7781,195 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_4
 - `@preserves_unique(builder) pub fn json.write_text_into(text: String, mut builder: List[u8]) -> () uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8)
+
+
+## jwt
+
+<a id="def-std_401_2fjwt_2fJwtError"></a>
+
+- `pub type jwt.JwtError = Malformed | Json(json.JsonError) | UnsupportedAlgorithm(String) | Critical | Signature | Expired | NotYetValid | Audience | Issuer | MissingExpiration | InvalidClaim( String ) | Clock(ClockError)`
+
+References: [`core@1/ClockError`](#def-core_401_2fClockError), [`core@1/String`](#def-core_401_2fString), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
+
+<a id="def-std_401_2fjwt_2fJwtError_23Audience"></a>
+
+- `Audience -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+<a id="def-std_401_2fjwt_2fJwtError_23Clock"></a>
+
+- `Clock(ClockError) -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+References: [`core@1/ClockError`](#def-core_401_2fClockError)
+
+<a id="def-std_401_2fjwt_2fJwtError_23Critical"></a>
+
+- `Critical -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+<a id="def-std_401_2fjwt_2fJwtError_23Expired"></a>
+
+- `Expired -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+<a id="def-std_401_2fjwt_2fJwtError_23InvalidClaim"></a>
+
+- `InvalidClaim( String ) -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fjwt_2fJwtError_23Issuer"></a>
+
+- `Issuer -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+<a id="def-std_401_2fjwt_2fJwtError_23Json"></a>
+
+- `Json(json.JsonError) -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+References: [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
+
+<a id="def-std_401_2fjwt_2fJwtError_23Malformed"></a>
+
+- `Malformed -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+<a id="def-std_401_2fjwt_2fJwtError_23MissingExpiration"></a>
+
+- `MissingExpiration -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+<a id="def-std_401_2fjwt_2fJwtError_23NotYetValid"></a>
+
+- `NotYetValid -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+<a id="def-std_401_2fjwt_2fJwtError_23Signature"></a>
+
+- `Signature -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+<a id="def-std_401_2fjwt_2fJwtError_23UnsupportedAlgorithm"></a>
+
+- `UnsupportedAlgorithm(String) -> jwt.JwtError`
+
+Variant of jwt.JwtError.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fjwt_2fKey"></a>
+
+- `pub type jwt.Key = HS256(Bytes) | HS384(Bytes) | HS512(Bytes)`
+
+A verification or signing key and the algorithm it is for.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fjwt_2fKey_23HS256"></a>
+
+- `HS256(Bytes) -> jwt.Key`
+
+Variant of jwt.Key.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fjwt_2fKey_23HS384"></a>
+
+- `HS384(Bytes) -> jwt.Key`
+
+Variant of jwt.Key.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fjwt_2fKey_23HS512"></a>
+
+- `HS512(Bytes) -> jwt.Key`
+
+Variant of jwt.Key.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fjwt_2fValidation"></a>
+
+- `pub type jwt.Validation { audience: Option[String], issuer: Option[String], leeway: u64, require_expiration: bool, }`
+
+Claim checks beyond the signature. `audience` must appear in the `aud` claim (a
+string or an array of strings) and `issuer` equal `iss`; `leeway` seconds widen
+the `exp` and `nbf` windows; `require_expiration` refuses a token without `exp`.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fjwt_2fdefault_5fvalidation"></a>
+
+- `pub fn jwt.default_validation() -> Validation uses {}`
+
+No audience or issuer, no leeway and `exp` optional, as golang-jwt's defaults.
+
+References: [`std@1/jwt/Validation`](#def-std_401_2fjwt_2fValidation)
+
+<a id="def-std_401_2fjwt_2fheader"></a>
+
+- `pub fn jwt.header(token: String) -> Result[json.Value, JwtError] uses {}`
+
+The decoded JOSE header of `token`, unverified: for choosing a key by `kid`
+before `verify`. Never trust it otherwise.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/jwt/JwtError`](#def-std_401_2fjwt_2fJwtError)
+
+<a id="def-std_401_2fjwt_2fsign"></a>
+
+- `pub fn jwt.sign(key: Key, claims: json.Value) -> Result[unique String, JwtError] uses {}`
+
+Signs `claims`, a JSON object, under the header `{"alg":...,"typ":"JWT"}`:
+`header.claims.signature`, each segment unpadded base64url. A claims value that is
+not an object is `InvalidClaim("claims")`.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/jwt/JwtError`](#def-std_401_2fjwt_2fJwtError), [`std@1/jwt/Key`](#def-std_401_2fjwt_2fKey)
+
+<a id="def-std_401_2fjwt_2fvalidate"></a>
+
+- `pub fn jwt.validate(claims: json.Value, validation: Validation, now: i64) -> Result[ (), JwtError ] uses {}`
+
+Checks the claims of a verified token at `now` (Unix seconds), as golang-jwt's
+Validator: `now` must be before `exp` plus the leeway (`Expired()`) and not before
+`nbf` minus it (`NotYetValid()`), a missing `exp` is `MissingExpiration()` when
+required, and `validation`'s audience and issuer must match (`Audience()`,
+`Issuer()`). A claim of the wrong JSON type is `InvalidClaim(name)`.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/i64`](#def-core_401_2fi64), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/jwt/JwtError`](#def-std_401_2fjwt_2fJwtError), [`std@1/jwt/Validation`](#def-std_401_2fjwt_2fValidation)
+
+<a id="def-std_401_2fjwt_2fverify"></a>
+
+- `pub fn jwt.verify(token: String, key: Key, validation: Validation, clock: WallClock) -> Result[ json.Value, JwtError ]`
+
+`verify_at` at the current second of `clock`.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/WallClock`](#def-core_401_2fWallClock), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/jwt/JwtError`](#def-std_401_2fjwt_2fJwtError), [`std@1/jwt/Key`](#def-std_401_2fjwt_2fKey), [`std@1/jwt/Validation`](#def-std_401_2fjwt_2fValidation)
+
+<a id="def-std_401_2fjwt_2fverify_5fat"></a>
+
+- `pub fn jwt.verify_at(token: String, key: Key, validation: Validation, now: i64) -> Result[ json.Value, JwtError ] uses {}`
+
+Verifies `token` with `key` at `now` (Unix seconds) and returns its claims: the
+header's `alg` must be the key's (`UnsupportedAlgorithm(alg)` otherwise), a `crit`
+header is `Critical()`, the MAC must match in constant time (`Signature()`), and
+then the claims must pass `validate`.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/i64`](#def-core_401_2fi64), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/jwt/JwtError`](#def-std_401_2fjwt_2fJwtError), [`std@1/jwt/Key`](#def-std_401_2fjwt_2fKey), [`std@1/jwt/Validation`](#def-std_401_2fjwt_2fValidation)
 
 
 ## keys
@@ -8424,6 +8912,186 @@ lexemes, nonfinite conversions and integers outside the wire range fail.
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/binary/DecodeError`](#def-std_401_2fbinary_2fDecodeError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
 
+## multipart
+
+<a id="def-std_401_2fmultipart_2fField"></a>
+
+- `pub type multipart.Field { name: String, filename: Option[String], content_type: Option[String], data: Bytes, }`
+
+One field to encode: a file when `filename` is present, whose content type then
+defaults to `application/octet-stream`.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmultipart_2fLimits"></a>
+
+- `pub type multipart.Limits { max_parts: u64, max_headers: u64, }`
+
+Go's defaults are 1000 parts and 10000 header fields.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmultipart_2fMultipartError"></a>
+
+- `pub type multipart.MultipartError = MediaType | NotMultipart | MissingBoundary | InvalidBoundary | UnexpectedEof | UnexpectedLine( u64 ) | MalformedHeader(u64) | TooManyParts | TooManyHeaders`
+
+Offsets are byte positions in the decoded body.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmultipart_2fMultipartError_23InvalidBoundary"></a>
+
+- `InvalidBoundary -> multipart.MultipartError`
+
+Variant of multipart.MultipartError.
+
+<a id="def-std_401_2fmultipart_2fMultipartError_23MalformedHeader"></a>
+
+- `MalformedHeader(u64) -> multipart.MultipartError`
+
+Variant of multipart.MultipartError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmultipart_2fMultipartError_23MediaType"></a>
+
+- `MediaType -> multipart.MultipartError`
+
+Variant of multipart.MultipartError.
+
+<a id="def-std_401_2fmultipart_2fMultipartError_23MissingBoundary"></a>
+
+- `MissingBoundary -> multipart.MultipartError`
+
+Variant of multipart.MultipartError.
+
+<a id="def-std_401_2fmultipart_2fMultipartError_23NotMultipart"></a>
+
+- `NotMultipart -> multipart.MultipartError`
+
+Variant of multipart.MultipartError.
+
+<a id="def-std_401_2fmultipart_2fMultipartError_23TooManyHeaders"></a>
+
+- `TooManyHeaders -> multipart.MultipartError`
+
+Variant of multipart.MultipartError.
+
+<a id="def-std_401_2fmultipart_2fMultipartError_23TooManyParts"></a>
+
+- `TooManyParts -> multipart.MultipartError`
+
+Variant of multipart.MultipartError.
+
+<a id="def-std_401_2fmultipart_2fMultipartError_23UnexpectedEof"></a>
+
+- `UnexpectedEof -> multipart.MultipartError`
+
+Variant of multipart.MultipartError.
+
+<a id="def-std_401_2fmultipart_2fMultipartError_23UnexpectedLine"></a>
+
+- `UnexpectedLine( u64 ) -> multipart.MultipartError`
+
+Variant of multipart.MultipartError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmultipart_2fPart"></a>
+
+- `pub type multipart.Part { headers: List[http.Header], name: Option[String], filename: Option[String], content_type: Option[String], body: Bytes, }`
+
+One decoded part. `name` is the Content-Disposition `name` of a `form-data`
+part, `filename` its `filename` without directories, as Go's FileName returns it.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader)
+
+<a id="def-std_401_2fmultipart_2fdecode"></a>
+
+- `pub fn multipart.decode(body: Bytes, boundary: String, limits: Limits) -> Result[ List[Part], MultipartError ] uses {}`
+
+Decodes a multipart body delimited by `boundary` (Go Reader.NextPart over the
+whole body): the preamble before the first delimiter and the epilogue after the
+final one are ignored, delimiter lines may end in spaces or tabs, and a body
+whose first delimiter line ends in LF alone uses LF line ends throughout. More
+than `limits.max_parts` parts or `limits.max_headers` header fields in all fails.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/multipart/Limits`](#def-std_401_2fmultipart_2fLimits), [`std@1/multipart/MultipartError`](#def-std_401_2fmultipart_2fMultipartError), [`std@1/multipart/Part`](#def-std_401_2fmultipart_2fPart)
+
+<a id="def-std_401_2fmultipart_2fdecode_5fform"></a>
+
+- `pub fn multipart.decode_form(media: String, body: Bytes, limits: Limits) -> Result[ List[Part], MultipartError ] uses {}`
+
+Decodes a `multipart/form-data` request body from its Content-Type value: a
+different media type is `NotMultipart()`, a missing `boundary` parameter
+`MissingBoundary()`.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/multipart/Limits`](#def-std_401_2fmultipart_2fLimits), [`std@1/multipart/MultipartError`](#def-std_401_2fmultipart_2fMultipartError), [`std@1/multipart/Part`](#def-std_401_2fmultipart_2fPart)
+
+<a id="def-std_401_2fmultipart_2fdefault_5flimits"></a>
+
+- `pub fn multipart.default_limits() -> Limits uses {}`
+
+References: [`std@1/multipart/Limits`](#def-std_401_2fmultipart_2fLimits)
+
+<a id="def-std_401_2fmultipart_2fencode"></a>
+
+- `pub fn multipart.encode(boundary: String, fields: List[Field]) -> Result[ unique Bytes, MultipartError ] uses {}`
+
+Encodes `fields` as Go's Writer does: each part's Content-Disposition (`form-data;
+name="..."` with `filename` for a file, quotes and backslashes escaped and CR and
+LF percent-encoded) and Content-Type, CRLF line ends and a final delimiter. An
+invalid boundary is `InvalidBoundary()`.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/multipart/Field`](#def-std_401_2fmultipart_2fField), [`std@1/multipart/MultipartError`](#def-std_401_2fmultipart_2fMultipartError)
+
+<a id="def-std_401_2fmultipart_2fform_5fbody"></a>
+
+- `pub fn multipart.form_body(boundary: String, fields: List[Field]) -> Result[ http.Body, MultipartError ] uses {}`
+
+`fields` encoded with `boundary` as an `http.Body` for `http.client_send`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Body`](#def-std_401_2fhttp_2fBody), [`std@1/multipart/Field`](#def-std_401_2fmultipart_2fField), [`std@1/multipart/MultipartError`](#def-std_401_2fmultipart_2fMultipartError)
+
+<a id="def-std_401_2fmultipart_2fform_5ftype"></a>
+
+- `pub fn multipart.form_type(boundary: String) -> unique String uses {}`
+
+The Content-Type of a form with `boundary`, quoting the boundary when it holds a
+tspecial or space.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmultipart_2fparse_5fmedia_5ftype"></a>
+
+- `pub fn multipart.parse_media_type(value: String) -> Result[ (unique String, Map[String, String]), MultipartError ] uses {}`
+
+Splits a media type or disposition value into its lowercased type (`token` or
+`token/token`) and parameters, lowercased by name. Parameter values are tokens or
+quoted strings; RFC 2231 `name*` values and `name*0`, `name*1*` continuations are
+decoded from us-ascii or utf-8. A malformed value or a repeated name with another
+value is `MediaType()`.
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/multipart/MultipartError`](#def-std_401_2fmultipart_2fMultipartError)
+
+<a id="def-std_401_2fmultipart_2frandom_5fboundary"></a>
+
+- `pub fn multipart.random_boundary(r: Random) -> Result[unique String, RandomError]`
+
+Sixty hex digits from 30 bytes of `r`, as Go's randomBoundary.
+
+References: [`core@1/Random`](#def-core_401_2fRandom), [`core@1/RandomError`](#def-core_401_2fRandomError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmultipart_2fvalid_5fboundary"></a>
+
+- `pub fn multipart.valid_boundary(boundary: String) -> bool uses {}`
+
+Go SetBoundary's rule: 1 to 70 bytes of letters, digits and `'()+_,-./:=?`, and
+spaces except last.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
+
+
 ## mutex
 
 <a id="def-core_401_2fmutex_2fcreate"></a>
@@ -8911,9 +9579,15 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_40
 
 <a id="def-std_401_2fpriority_5fqueue_2fempty"></a>
 
-- `pub fn priority_queue.empty[T]() -> unique Heap[T] uses {}`
+- `pub fn priority_queue.empty[T](take by: @noalloc fn(T, T) -> i32 uses {}) -> unique Heap[T] uses {}`
 
-References: [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
+
+<a id="def-std_401_2fpriority_5fqueue_2ffrom_5flist"></a>
+
+- `pub fn priority_queue.from_list[T]( take by: @noalloc fn(T, T) -> i32 uses {}, take input: unique List[unique T] ) -> unique Heap[T] uses {input}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_2fi32), [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
 
 <a id="def-std_401_2fpriority_5fqueue_2flen"></a>
 
@@ -8921,17 +9595,23 @@ References: [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
 
+<a id="def-std_401_2fpriority_5fqueue_2fpeek"></a>
+
+- `pub fn priority_queue.peek[T: copyable](h: Heap[T]) -> Option[T] in h uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
+
 <a id="def-std_401_2fpriority_5fqueue_2fpop"></a>
 
-- `pub fn priority_queue.pop[T](mut h: unique Heap[T], by: @noalloc fn(T, T) -> i32 uses {}) -> unique Option[ T ] uses {h}`
+- `pub fn priority_queue.pop[T](mut h: unique Heap[T]) -> unique Option[T] uses {h}`
 
-References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_401_2fi32), [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
 
 <a id="def-std_401_2fpriority_5fqueue_2fpush"></a>
 
-- `pub fn priority_queue.push[T]( mut h: unique Heap[T], take value: unique T, by: @noalloc fn(T, T) -> i32 uses {} ) -> () uses {h, value}`
+- `pub fn priority_queue.push[T](mut h: unique Heap[T], take value: unique T) -> () uses {h, value}`
 
-References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
+References: [`std@1/priority_queue/Heap`](#def-std_401_2fpriority_5fqueue_2fHeap)
 
 
 ## prng
@@ -9476,6 +10156,26 @@ References: [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
 
 - `pub opaque type schema.CheckState: plain + inert + noalloc_drop uses {}`
 
+<a id="def-std_401_2fschema_2fCheckedWriteError"></a>
+
+- `pub type schema.CheckedWriteError = Boundary(BoundaryError) | ProjectionMismatch`
+
+References: [`std@1/schema/BoundaryError`](#def-std_401_2fschema_2fBoundaryError)
+
+<a id="def-std_401_2fschema_2fCheckedWriteError_23Boundary"></a>
+
+- `Boundary(BoundaryError) -> schema.CheckedWriteError`
+
+Variant of schema.CheckedWriteError.
+
+References: [`std@1/schema/BoundaryError`](#def-std_401_2fschema_2fBoundaryError)
+
+<a id="def-std_401_2fschema_2fCheckedWriteError_23ProjectionMismatch"></a>
+
+- `ProjectionMismatch -> schema.CheckedWriteError`
+
+Variant of schema.CheckedWriteError.
+
 <a id="def-std_401_2fschema_2fDecoder"></a>
 
 - `pub type schema.Decoder[D: inert, W: data + inert] { decode: fn(W, mut CheckState) -> Result[D, SchemaError] uses {}, }`
@@ -9521,6 +10221,26 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_4
 - `pub type schema.Issues { items: List[Issue], truncated: bool, }`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/bool`](#def-core_401_2fbool), [`std@1/schema/Issue`](#def-std_401_2fschema_2fIssue)
+
+<a id="def-std_401_2fschema_2fLawError"></a>
+
+- `pub type schema.LawError = Schema(SchemaError) | ProjectionMismatch`
+
+References: [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fLawError_23ProjectionMismatch"></a>
+
+- `ProjectionMismatch -> schema.LawError`
+
+Variant of schema.LawError.
+
+<a id="def-std_401_2fschema_2fLawError_23Schema"></a>
+
+- `Schema(SchemaError) -> schema.LawError`
+
+Variant of schema.LawError.
+
+References: [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
 
 <a id="def-std_401_2fschema_2fLeaf"></a>
 
@@ -9780,11 +10500,23 @@ References: [`core@1/List`](#def-core_401_2fList), [`std@1/json/Value`](#def-std
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
 
+<a id="def-std_401_2fschema_2fcheck_5fnormalization"></a>
+
+- `pub fn schema.check_normalization[D: inert, W: data + inert, P: serializable]( b: Boundary[D, W], wire: W, projection: fn(W) -> P uses {}, o: Options ) -> Result[(), LawError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary), [`std@1/schema/LawError`](#def-std_401_2fschema_2fLawError), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions)
+
 <a id="def-std_401_2fschema_2fcheck_5fnull"></a>
 
 - `pub fn schema.check_null( wire: std@1/json.Value, p: FieldPolicy, site: String, mut check: CheckState ) -> Result[(), SchemaError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/FieldPolicy`](#def-std_401_2fschema_2fFieldPolicy), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fcheck_5fround_5ftrip"></a>
+
+- `pub fn schema.check_round_trip[D: inert, W: data + inert, P: serializable]( b: Boundary[D, W], value: D, projection: fn(D) -> P uses {}, o: Options ) -> Result[(), LawError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary), [`std@1/schema/LawError`](#def-std_401_2fschema_2fLawError), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions)
 
 <a id="def-std_401_2fschema_2fcheck_5fstate"></a>
 
@@ -9996,11 +10728,130 @@ References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/Value`](#def-std_401
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
 
+<a id="def-std_401_2fschema_2fwrite_5fchecked"></a>
+
+- `pub fn schema.write_checked[D: inert, P: serializable]( b: Boundary[D, std@1/json.Value], value: D, projection: fn(D) -> P uses {}, o: Options ) -> Result[String, CheckedWriteError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary), [`std@1/schema/CheckedWriteError`](#def-std_401_2fschema_2fCheckedWriteError), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions)
+
 <a id="def-std_401_2fschema_2fwrite_5fjson"></a>
 
 - `pub fn schema.write_json[D: inert](b: Boundary[D, std@1/json.Value], value: D, o: Options) -> Result[ String, BoundaryError ] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary), [`std@1/schema/BoundaryError`](#def-std_401_2fschema_2fBoundaryError), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions)
+
+<a id="def-std_401_2fschema_2fwrite_5fjson_5fchecked"></a>
+
+- `pub fn schema.write_json_checked[D: inert, P: serializable]( b: Boundary[D, std@1/json.Value], value: D, projection: fn(D) -> P uses {}, o: Options ) -> Result[String, CheckedWriteError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary), [`std@1/schema/CheckedWriteError`](#def-std_401_2fschema_2fCheckedWriteError), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions)
+
+
+## schema_evolution
+
+<a id="def-std_401_2fschema_5fevolution_2fCompatibility"></a>
+
+- `pub type schema_evolution.Compatibility = Exact | AdapterRequired | Incompatible | UnknownPredicate`
+
+<a id="def-std_401_2fschema_5fevolution_2fCompatibility_23AdapterRequired"></a>
+
+- `AdapterRequired -> schema_evolution.Compatibility`
+
+Variant of schema_evolution.Compatibility.
+
+<a id="def-std_401_2fschema_5fevolution_2fCompatibility_23Exact"></a>
+
+- `Exact -> schema_evolution.Compatibility`
+
+Variant of schema_evolution.Compatibility.
+
+<a id="def-std_401_2fschema_5fevolution_2fCompatibility_23Incompatible"></a>
+
+- `Incompatible -> schema_evolution.Compatibility`
+
+Variant of schema_evolution.Compatibility.
+
+<a id="def-std_401_2fschema_5fevolution_2fCompatibility_23UnknownPredicate"></a>
+
+- `UnknownPredicate -> schema_evolution.Compatibility`
+
+Variant of schema_evolution.Compatibility.
+
+<a id="def-std_401_2fschema_5fevolution_2fField"></a>
+
+- `pub type schema_evolution.Field { name: String, aliases: List[String], scalar: Scalar, predicate_version: Option[String], default: Option[std@1/json.Value], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema_evolution/Scalar`](#def-std_401_2fschema_5fevolution_2fScalar)
+
+<a id="def-std_401_2fschema_5fevolution_2fFinding"></a>
+
+- `pub type schema_evolution.Finding { field: String, code: String, compatibility: Compatibility, }`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/schema_evolution/Compatibility`](#def-std_401_2fschema_5fevolution_2fCompatibility)
+
+<a id="def-std_401_2fschema_5fevolution_2fIdentity"></a>
+
+- `pub type schema_evolution.Identity { package: String, wire_policy: String, constructor: String, codec_envelope: String, }`
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fschema_5fevolution_2fRecord"></a>
+
+- `pub type schema_evolution.Record { identity: Identity, fields: List[Field], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/schema_evolution/Field`](#def-std_401_2fschema_5fevolution_2fField), [`std@1/schema_evolution/Identity`](#def-std_401_2fschema_5fevolution_2fIdentity)
+
+<a id="def-std_401_2fschema_5fevolution_2fReport"></a>
+
+- `pub type schema_evolution.Report { compatibility: Compatibility, findings: List[Finding], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/schema_evolution/Compatibility`](#def-std_401_2fschema_5fevolution_2fCompatibility), [`std@1/schema_evolution/Finding`](#def-std_401_2fschema_5fevolution_2fFinding)
+
+<a id="def-std_401_2fschema_5fevolution_2fScalar"></a>
+
+- `pub type schema_evolution.Scalar = U8 | U16 | U32 | U64 | Text | Boolean`
+
+<a id="def-std_401_2fschema_5fevolution_2fScalar_23Boolean"></a>
+
+- `Boolean -> schema_evolution.Scalar`
+
+Variant of schema_evolution.Scalar.
+
+<a id="def-std_401_2fschema_5fevolution_2fScalar_23Text"></a>
+
+- `Text -> schema_evolution.Scalar`
+
+Variant of schema_evolution.Scalar.
+
+<a id="def-std_401_2fschema_5fevolution_2fScalar_23U16"></a>
+
+- `U16 -> schema_evolution.Scalar`
+
+Variant of schema_evolution.Scalar.
+
+<a id="def-std_401_2fschema_5fevolution_2fScalar_23U32"></a>
+
+- `U32 -> schema_evolution.Scalar`
+
+Variant of schema_evolution.Scalar.
+
+<a id="def-std_401_2fschema_5fevolution_2fScalar_23U64"></a>
+
+- `U64 -> schema_evolution.Scalar`
+
+Variant of schema_evolution.Scalar.
+
+<a id="def-std_401_2fschema_5fevolution_2fScalar_23U8"></a>
+
+- `U8 -> schema_evolution.Scalar`
+
+Variant of schema_evolution.Scalar.
+
+<a id="def-std_401_2fschema_5fevolution_2fcompare"></a>
+
+- `pub fn schema_evolution.compare(writer: Record, reader: Record, options: std@1/schema.Options) -> Result[ Report, std@1/schema.SchemaError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError), [`std@1/schema_evolution/Record`](#def-std_401_2fschema_5fevolution_2fRecord), [`std@1/schema_evolution/Report`](#def-std_401_2fschema_5fevolution_2fReport)
 
 
 ## semver
@@ -10834,6 +11685,13 @@ end of its line, ending any word in progress, as Python
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/shlex/SplitError`](#def-std_401_2fshlex_2fSplitError)
 
 
+## signal
+
+<a id="def-core_401_2fsignal_2fwait"></a>
+
+- `@noalloc fn signal.wait(s: Signals, kinds: List[SignalKind]) -> Result[SignalKind, SignalError]`
+
+
 ## simd
 
 <a id="def-core_401_2fsimd_2fadd"></a>
@@ -11000,6 +11858,182 @@ References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/siphash/State`](#def-std_
 <a id="def-core_401_2fsorted_5fmap_2fremove"></a>
 
 - `fn sorted_map.remove[K, V](by: Order[K], mut m: unique SortedMap[K, V] of by, key: K) -> unique Option[V]`
+
+
+## sse
+
+<a id="def-std_401_2fsse_2fEvent"></a>
+
+- `pub type sse.Event { event: String, data: String, id: Option[String], retry: Option[u64], }`
+
+One dispatched event. Read: `event` is the type (`message` when unnamed), `id`
+the stream's last event ID (`None()` while empty) and `retry` the reconnection
+time in milliseconds when this event's block set one. Written: an `event` of
+`message` or empty is omitted, as are `None()` fields.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fsse_2fParser"></a>
+
+- `pub opaque type sse.Parser: copyable + inert + noalloc_drop uses {}`
+
+Incremental event-stream decoder: `push` bytes, then take events with `next`.
+
+<a id="def-std_401_2fsse_2fSseError"></a>
+
+- `pub type sse.SseError = Http(http.HttpError) | Net(NetError) | TooLarge | NotEventStream | InvalidField`
+
+References: [`core@1/NetError`](#def-core_401_2fNetError), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError)
+
+<a id="def-std_401_2fsse_2fSseError_23Http"></a>
+
+- `Http(http.HttpError) -> sse.SseError`
+
+Variant of sse.SseError.
+
+References: [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError)
+
+<a id="def-std_401_2fsse_2fSseError_23InvalidField"></a>
+
+- `InvalidField -> sse.SseError`
+
+Variant of sse.SseError.
+
+<a id="def-std_401_2fsse_2fSseError_23Net"></a>
+
+- `Net(NetError) -> sse.SseError`
+
+Variant of sse.SseError.
+
+References: [`core@1/NetError`](#def-core_401_2fNetError)
+
+<a id="def-std_401_2fsse_2fSseError_23NotEventStream"></a>
+
+- `NotEventStream -> sse.SseError`
+
+Variant of sse.SseError.
+
+<a id="def-std_401_2fsse_2fSseError_23TooLarge"></a>
+
+- `TooLarge -> sse.SseError`
+
+Variant of sse.SseError.
+
+<a id="def-std_401_2fsse_2fWriter"></a>
+
+- `pub opaque resource type sse.Writer: noalloc_drop uses {Net}`
+
+The server end of one event stream; dropping it closes the connection.
+
+References: [`core@1/Net`](#def-core_401_2fNet)
+
+<a id="def-std_401_2fsse_2fcomment"></a>
+
+- `pub fn sse.comment(mut w: Writer, note: String) -> Result[(), SseError]`
+
+Writes a comment line, which readers ignore: a keep-alive. CR or LF in `note` is
+`InvalidField()`.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/sse/SseError`](#def-std_401_2fsse_2fSseError), [`std@1/sse/Writer`](#def-std_401_2fsse_2fWriter)
+
+<a id="def-std_401_2fsse_2fencode"></a>
+
+- `pub fn sse.encode(event: Event) -> Result[unique String, SseError] uses {}`
+
+`event` in wire form, as `encode_into` appends it.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/sse/Event`](#def-std_401_2fsse_2fEvent), [`std@1/sse/SseError`](#def-std_401_2fsse_2fSseError)
+
+<a id="def-std_401_2fsse_2fencode_5finto"></a>
+
+- `@preserves_unique(out) pub fn sse.encode_into(event: Event, mut out: List[u8]) -> Result[(), SseError] uses {}`
+
+Appends `event` in wire form: `event`, `id` and `retry` fields, one `data` field
+per line of `data` (split at CRLF, LF or CR) and the blank line. An event type or
+id containing CR, LF or NUL is `InvalidField()`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sse/Event`](#def-std_401_2fsse_2fEvent), [`std@1/sse/SseError`](#def-std_401_2fsse_2fSseError)
+
+<a id="def-std_401_2fsse_2flast_5fevent_5fid"></a>
+
+- `pub fn sse.last_event_id(p: Parser) -> unique String uses {}`
+
+The last event ID the stream set, empty when none.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/sse/Parser`](#def-std_401_2fsse_2fParser)
+
+<a id="def-std_401_2fsse_2fnext"></a>
+
+- `pub fn sse.next(mut p: Parser) -> Option[Event] uses {}`
+
+The oldest queued event.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/sse/Event`](#def-std_401_2fsse_2fEvent), [`std@1/sse/Parser`](#def-std_401_2fsse_2fParser)
+
+<a id="def-std_401_2fsse_2fparser"></a>
+
+- `pub fn sse.parser(max_event_bytes: u64) -> Parser uses {}`
+
+A decoder that rejects an event block, or one line, above `max_event_bytes`.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/sse/Parser`](#def-std_401_2fsse_2fParser)
+
+<a id="def-std_401_2fsse_2fpush"></a>
+
+- `pub fn sse.push(mut p: Parser, chunk: Bytes) -> Result[(), SseError] uses {}`
+
+Decodes `chunk`, queueing every event whose block it completes. A stream may
+start with a UTF-8 byte order mark; lines end with CRLF, LF or CR. A final block
+without its blank line is never dispatched.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/sse/Parser`](#def-std_401_2fsse_2fParser), [`std@1/sse/SseError`](#def-std_401_2fsse_2fSseError)
+
+<a id="def-std_401_2fsse_2fread_5fevent"></a>
+
+- `pub fn sse.read_event(mut r: http.Request, mut p: Parser) -> Result[Option[Event], SseError]`
+
+The next event of the response body `r`, decoded by `p`; `None()` at the end of
+the body. Keep one parser per stream, seeded with `set_last_event_id` to resume.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest), [`std@1/sse/Event`](#def-std_401_2fsse_2fEvent), [`std@1/sse/Parser`](#def-std_401_2fsse_2fParser), [`std@1/sse/SseError`](#def-std_401_2fsse_2fSseError)
+
+<a id="def-std_401_2fsse_2frequest"></a>
+
+- `pub fn sse.request( n: Net, config: http.Config, url: String, headers: List[http.Header], resume_from: String ) -> Result[http.Request, SseError]`
+
+Opens an event stream: a GET of `url` with `accept: text/event-stream`,
+`cache-control: no-cache`, `last-event-id` when `resume_from` is nonempty, and
+`headers`. A final status other than 200 is `Http(Status(code))`; a content type
+other than `text/event-stream` is `NotEventStream()`. Read it with `read_event`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_2fNet), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest), [`std@1/sse/SseError`](#def-std_401_2fsse_2fSseError)
+
+<a id="def-std_401_2fsse_2frespond"></a>
+
+- `pub fn sse.respond(take c: http.ServerStream, headers: List[http.Header]) -> Result[ Writer, SseError ]`
+
+Answers the request `next_stream` yielded with `c` with a 200 event stream: `content-type:
+text/event-stream`, `cache-control: no-cache`, `connection: close` and
+`headers`, with no length, so the body ends when the stream does. Framing fields
+among `headers` are `Http(Malformed(ContentLength()))`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/ServerStream`](#def-std_401_2fhttp_2fServerStream), [`std@1/sse/SseError`](#def-std_401_2fsse_2fSseError), [`std@1/sse/Writer`](#def-std_401_2fsse_2fWriter)
+
+<a id="def-std_401_2fsse_2fsend"></a>
+
+- `pub fn sse.send(mut w: Writer, event: Event) -> Result[(), SseError]`
+
+Writes one event.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/sse/Event`](#def-std_401_2fsse_2fEvent), [`std@1/sse/SseError`](#def-std_401_2fsse_2fSseError), [`std@1/sse/Writer`](#def-std_401_2fsse_2fWriter)
+
+<a id="def-std_401_2fsse_2fset_5flast_5fevent_5fid"></a>
+
+- `pub fn sse.set_last_event_id(mut p: Parser, id: String) -> () uses {}`
+
+Starts the last event ID at `id`, as a reconnecting client does.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/sse/Parser`](#def-std_401_2fsse_2fParser)
 
 
 ## stdin
@@ -15152,6 +16186,467 @@ References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/uuid/Uuid`](#def-std_401_
 <a id="def-core_401_2fwatcher_2fnext"></a>
 
 - `fn watcher.next(d: Dir, mut w: Watcher of d) -> Result[WatchEvent, FileError]`
+
+
+## websocket
+
+<a id="def-std_401_2fwebsocket_2fConfig"></a>
+
+- `pub type websocket.Config { transport: http.Config, protocols: List[String], max_message_bytes: u64, }`
+
+`transport` dials the client and bounds its handshake head (`max_head_bytes`);
+its read and write timeouts bound every socket wait on both sides.
+`protocols` are offered by a client and, in preference order of the client's
+offer, accepted by a server. A message, and so each frame, holds at most
+`max_message_bytes`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig)
+
+<a id="def-std_401_2fwebsocket_2fConn"></a>
+
+- `pub opaque resource type websocket.Conn: noalloc_drop uses {Net, Random}`
+
+References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Random`](#def-core_401_2fRandom)
+
+<a id="def-std_401_2fwebsocket_2fFrame"></a>
+
+- `pub type websocket.Frame { fin: bool, opcode: Opcode, payload: Bytes, }`
+
+One frame with its payload unmasked.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool), [`std@1/websocket/Opcode`](#def-std_401_2fwebsocket_2fOpcode)
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError"></a>
+
+- `pub type websocket.HandshakeError = UnsupportedScheme | Status(u16) | NotWebSocket | BadAccept | UnexpectedProtocol | UnexpectedExtension | MethodNotGet | MissingKey | BadKey | BadVersion | ReservedHeader`
+
+References: [`core@1/u16`](#def-core_401_2fu16)
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError_23BadAccept"></a>
+
+- `BadAccept -> websocket.HandshakeError`
+
+Variant of websocket.HandshakeError.
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError_23BadKey"></a>
+
+- `BadKey -> websocket.HandshakeError`
+
+Variant of websocket.HandshakeError.
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError_23BadVersion"></a>
+
+- `BadVersion -> websocket.HandshakeError`
+
+Variant of websocket.HandshakeError.
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError_23MethodNotGet"></a>
+
+- `MethodNotGet -> websocket.HandshakeError`
+
+Variant of websocket.HandshakeError.
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError_23MissingKey"></a>
+
+- `MissingKey -> websocket.HandshakeError`
+
+Variant of websocket.HandshakeError.
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError_23NotWebSocket"></a>
+
+- `NotWebSocket -> websocket.HandshakeError`
+
+Variant of websocket.HandshakeError.
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError_23ReservedHeader"></a>
+
+- `ReservedHeader -> websocket.HandshakeError`
+
+Variant of websocket.HandshakeError.
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError_23Status"></a>
+
+- `Status(u16) -> websocket.HandshakeError`
+
+Variant of websocket.HandshakeError.
+
+References: [`core@1/u16`](#def-core_401_2fu16)
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError_23UnexpectedExtension"></a>
+
+- `UnexpectedExtension -> websocket.HandshakeError`
+
+Variant of websocket.HandshakeError.
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError_23UnexpectedProtocol"></a>
+
+- `UnexpectedProtocol -> websocket.HandshakeError`
+
+Variant of websocket.HandshakeError.
+
+<a id="def-std_401_2fwebsocket_2fHandshakeError_23UnsupportedScheme"></a>
+
+- `UnsupportedScheme -> websocket.HandshakeError`
+
+Variant of websocket.HandshakeError.
+
+<a id="def-std_401_2fwebsocket_2fMessage"></a>
+
+- `pub type websocket.Message = Text(String) | Binary(Bytes)`
+
+A complete data message.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fwebsocket_2fMessage_23Binary"></a>
+
+- `Binary(Bytes) -> websocket.Message`
+
+Variant of websocket.Message.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fwebsocket_2fMessage_23Text"></a>
+
+- `Text(String) -> websocket.Message`
+
+Variant of websocket.Message.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fwebsocket_2fOpcode"></a>
+
+- `pub type websocket.Opcode = Continuation | Text | Binary | Close | Ping | Pong`
+
+<a id="def-std_401_2fwebsocket_2fOpcode_23Binary"></a>
+
+- `Binary -> websocket.Opcode`
+
+Variant of websocket.Opcode.
+
+<a id="def-std_401_2fwebsocket_2fOpcode_23Close"></a>
+
+- `Close -> websocket.Opcode`
+
+Variant of websocket.Opcode.
+
+<a id="def-std_401_2fwebsocket_2fOpcode_23Continuation"></a>
+
+- `Continuation -> websocket.Opcode`
+
+Variant of websocket.Opcode.
+
+<a id="def-std_401_2fwebsocket_2fOpcode_23Ping"></a>
+
+- `Ping -> websocket.Opcode`
+
+Variant of websocket.Opcode.
+
+<a id="def-std_401_2fwebsocket_2fOpcode_23Pong"></a>
+
+- `Pong -> websocket.Opcode`
+
+Variant of websocket.Opcode.
+
+<a id="def-std_401_2fwebsocket_2fOpcode_23Text"></a>
+
+- `Text -> websocket.Opcode`
+
+Variant of websocket.Opcode.
+
+<a id="def-std_401_2fwebsocket_2fProtocolError"></a>
+
+- `pub type websocket.ProtocolError = ReservedBits | ReservedOpcode(u8) | MaskRequired | UnexpectedMask | ControlTooLong | FragmentedControl | UnexpectedContinuation | ExpectedContinuation | BadCloseCode( u16 ) | BadClosePayload | LengthOverflow | InvalidUtf8 | TooLarge`
+
+References: [`core@1/u16`](#def-core_401_2fu16), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23BadCloseCode"></a>
+
+- `BadCloseCode( u16 ) -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+References: [`core@1/u16`](#def-core_401_2fu16)
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23BadClosePayload"></a>
+
+- `BadClosePayload -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23ControlTooLong"></a>
+
+- `ControlTooLong -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23ExpectedContinuation"></a>
+
+- `ExpectedContinuation -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23FragmentedControl"></a>
+
+- `FragmentedControl -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23InvalidUtf8"></a>
+
+- `InvalidUtf8 -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23LengthOverflow"></a>
+
+- `LengthOverflow -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23MaskRequired"></a>
+
+- `MaskRequired -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23ReservedBits"></a>
+
+- `ReservedBits -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23ReservedOpcode"></a>
+
+- `ReservedOpcode(u8) -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+References: [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23TooLarge"></a>
+
+- `TooLarge -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23UnexpectedContinuation"></a>
+
+- `UnexpectedContinuation -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+<a id="def-std_401_2fwebsocket_2fProtocolError_23UnexpectedMask"></a>
+
+- `UnexpectedMask -> websocket.ProtocolError`
+
+Variant of websocket.ProtocolError.
+
+<a id="def-std_401_2fwebsocket_2fWsError"></a>
+
+- `pub type websocket.WsError = Http(http.HttpError) | Net(NetError) | Random(RandomError) | Handshake( HandshakeError ) | Protocol(ProtocolError) | Truncated | Closed`
+
+References: [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/RandomError`](#def-core_401_2fRandomError), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/websocket/HandshakeError`](#def-std_401_2fwebsocket_2fHandshakeError), [`std@1/websocket/ProtocolError`](#def-std_401_2fwebsocket_2fProtocolError)
+
+<a id="def-std_401_2fwebsocket_2fWsError_23Closed"></a>
+
+- `Closed -> websocket.WsError`
+
+Variant of websocket.WsError.
+
+<a id="def-std_401_2fwebsocket_2fWsError_23Handshake"></a>
+
+- `Handshake( HandshakeError ) -> websocket.WsError`
+
+Variant of websocket.WsError.
+
+References: [`std@1/websocket/HandshakeError`](#def-std_401_2fwebsocket_2fHandshakeError)
+
+<a id="def-std_401_2fwebsocket_2fWsError_23Http"></a>
+
+- `Http(http.HttpError) -> websocket.WsError`
+
+Variant of websocket.WsError.
+
+References: [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError)
+
+<a id="def-std_401_2fwebsocket_2fWsError_23Net"></a>
+
+- `Net(NetError) -> websocket.WsError`
+
+Variant of websocket.WsError.
+
+References: [`core@1/NetError`](#def-core_401_2fNetError)
+
+<a id="def-std_401_2fwebsocket_2fWsError_23Protocol"></a>
+
+- `Protocol(ProtocolError) -> websocket.WsError`
+
+Variant of websocket.WsError.
+
+References: [`std@1/websocket/ProtocolError`](#def-std_401_2fwebsocket_2fProtocolError)
+
+<a id="def-std_401_2fwebsocket_2fWsError_23Random"></a>
+
+- `Random(RandomError) -> websocket.WsError`
+
+Variant of websocket.WsError.
+
+References: [`core@1/RandomError`](#def-core_401_2fRandomError)
+
+<a id="def-std_401_2fwebsocket_2fWsError_23Truncated"></a>
+
+- `Truncated -> websocket.WsError`
+
+Variant of websocket.WsError.
+
+<a id="def-std_401_2fwebsocket_2faccept"></a>
+
+- `pub fn websocket.accept(take c: http.ServerStream, request: http.ServerRequest, config: Config) -> Result[ Conn, WsError ]`
+
+Completes the server side of the opening handshake for `request`, the request
+`next_stream` yielded with `c`. A request that is not a version-13 WebSocket
+upgrade is answered and refused: 405 for a method other than GET, 426 with
+`Sec-WebSocket-Version: 13` for another version, 400 otherwise. The selected
+protocol is the client's first offer among `config.protocols`. Bytes already read
+past the request belong to the connection; `config.transport`'s read and write
+timeouts replace the HTTP request's.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/ServerRequest`](#def-std_401_2fhttp_2fServerRequest), [`std@1/http/ServerStream`](#def-std_401_2fhttp_2fServerStream), [`std@1/websocket/Config`](#def-std_401_2fwebsocket_2fConfig), [`std@1/websocket/Conn`](#def-std_401_2fwebsocket_2fConn), [`std@1/websocket/WsError`](#def-std_401_2fwebsocket_2fWsError)
+
+<a id="def-std_401_2fwebsocket_2faccept_5fkey"></a>
+
+- `pub fn websocket.accept_key(key: String) -> unique String uses {}`
+
+The Sec-WebSocket-Accept value for a Sec-WebSocket-Key: base64 of the SHA-1 of
+the key followed by the RFC 6455 GUID.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fwebsocket_2fclose"></a>
+
+- `pub fn websocket.close(mut c: Conn, code: u16, reason: String) -> Result[(), WsError]`
+
+Starts the closing handshake with `code` and a UTF-8 `reason` of at most 123
+bytes, then reads until the peer's close frame, discarding data messages, and
+returns. Closing a connection whose peer already closed returns at once.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u16`](#def-core_401_2fu16), [`std@1/websocket/Conn`](#def-std_401_2fwebsocket_2fConn), [`std@1/websocket/WsError`](#def-std_401_2fwebsocket_2fWsError)
+
+<a id="def-std_401_2fwebsocket_2fconnect"></a>
+
+- `pub fn websocket.connect( n: Net, r: Random, url: String, headers: List[http.Header], config: Config ) -> Result[Conn, WsError]`
+
+Opens a client connection to a `ws` or `wss` URL: dials it as `http` or `https`
+under `config.transport`, sends the RFC 6455 opening handshake with a key drawn
+from `r`, the offered protocols and `headers` (which may not set a field the
+handshake sets: `ReservedHeader()`), and checks the 101 response: the upgrade
+fields, the accept key, no extensions and a protocol only among those offered.
+Every frame the connection sends is masked with a fresh key from `r`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_2fNet), [`core@1/Random`](#def-core_401_2fRandom), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/websocket/Config`](#def-std_401_2fwebsocket_2fConfig), [`std@1/websocket/Conn`](#def-std_401_2fwebsocket_2fConn), [`std@1/websocket/WsError`](#def-std_401_2fwebsocket_2fWsError)
+
+<a id="def-std_401_2fwebsocket_2fdecode_5fclose"></a>
+
+- `pub fn websocket.decode_close(payload: Bytes) -> Result[Option[(u16, String)], ProtocolError] uses {}`
+
+Decodes a close frame's payload: `None()` when empty, otherwise the code and the
+UTF-8 reason. A one-byte payload, an invalid code or a non-UTF-8 reason is rejected.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u16`](#def-core_401_2fu16), [`std@1/websocket/ProtocolError`](#def-std_401_2fwebsocket_2fProtocolError)
+
+<a id="def-std_401_2fwebsocket_2fdecode_5fframe"></a>
+
+- `pub fn websocket.decode_frame(buf: Bytes, max_payload: u64) -> Result[ Option[(Frame, bool, u64)], ProtocolError ] uses {}`
+
+Decodes the frame at the start of `buf`: the frame, whether it was masked and its
+encoded length, or `None()` while incomplete. A payload above `max_payload` is
+`TooLarge()`; reserved bits, reserved opcodes, a fragmented or long control frame
+and a 64-bit length with its top bit set are rejected.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/websocket/Frame`](#def-std_401_2fwebsocket_2fFrame), [`std@1/websocket/ProtocolError`](#def-std_401_2fwebsocket_2fProtocolError)
+
+<a id="def-std_401_2fwebsocket_2fdefault_5fconfig"></a>
+
+- `pub fn websocket.default_config() -> Config uses {}`
+
+x/net's default 32 MiB message bound over `http.default_config()`.
+
+References: [`std@1/websocket/Config`](#def-std_401_2fwebsocket_2fConfig)
+
+<a id="def-std_401_2fwebsocket_2fencode_5fframe"></a>
+
+- `pub fn websocket.encode_frame(frame: Frame, mask: Option[Inline[u8, 4]]) -> unique Bytes uses {}`
+
+Encodes `frame` with the minimal length form, masked with `mask` when present
+(a client masks every frame; a server never does).
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Option`](#def-core_401_2fOption), [`core@1/u8`](#def-core_401_2fu8), [`std@1/websocket/Frame`](#def-std_401_2fwebsocket_2fFrame)
+
+<a id="def-std_401_2fwebsocket_2fpeer_5fclose"></a>
+
+- `pub fn websocket.peer_close(c: Conn) -> Option[(u16, unique String)] uses {}`
+
+The code and reason of the close frame the peer sent, once one was received:
+1005 with an empty reason when its close frame carried no code.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/u16`](#def-core_401_2fu16), [`std@1/websocket/Conn`](#def-std_401_2fwebsocket_2fConn)
+
+<a id="def-std_401_2fwebsocket_2fping"></a>
+
+- `pub fn websocket.ping(mut c: Conn, data: Bytes) -> Result[(), WsError]`
+
+Sends a ping carrying at most 125 bytes; the peer's pong is consumed by `receive`.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/websocket/Conn`](#def-std_401_2fwebsocket_2fConn), [`std@1/websocket/WsError`](#def-std_401_2fwebsocket_2fWsError)
+
+<a id="def-std_401_2fwebsocket_2fprotocol"></a>
+
+- `pub fn websocket.protocol(c: Conn) -> Option[unique String] uses {}`
+
+The protocol the handshake selected, if any.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/websocket/Conn`](#def-std_401_2fwebsocket_2fConn)
+
+<a id="def-std_401_2fwebsocket_2freceive"></a>
+
+- `pub fn websocket.receive(mut c: Conn) -> Result[Option[Message], WsError]`
+
+Receives the next data message, reassembling fragments. It answers each ping
+with a pong carrying its payload and skips pongs. A close frame from the peer is
+answered with a close frame echoing its code (when this side had not closed) and
+returns `None()`; `peer_close` then reports it. A protocol violation sends a close
+frame with code 1002 (1007 for text that is not UTF-8, 1009 for a message above
+`max_message_bytes`) and returns `Protocol(...)`. End of stream before a close
+frame is `Truncated()`; receiving after the closing handshake is `Closed()`.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/websocket/Conn`](#def-std_401_2fwebsocket_2fConn), [`std@1/websocket/Message`](#def-std_401_2fwebsocket_2fMessage), [`std@1/websocket/WsError`](#def-std_401_2fwebsocket_2fWsError)
+
+<a id="def-std_401_2fwebsocket_2fsend_5fbinary"></a>
+
+- `pub fn websocket.send_binary(mut c: Conn, data: Bytes) -> Result[(), WsError]`
+
+Sends `data` as one binary frame.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/websocket/Conn`](#def-std_401_2fwebsocket_2fConn), [`std@1/websocket/WsError`](#def-std_401_2fwebsocket_2fWsError)
+
+<a id="def-std_401_2fwebsocket_2fsend_5fframe"></a>
+
+- `pub fn websocket.send_frame(mut c: Conn, frame: Frame) -> Result[(), WsError]`
+
+Sends one frame: a client masks it. Control frames must be final and carry at
+most 125 bytes (`Protocol(...)` otherwise, sending nothing). After a close frame
+is sent or received, sending is `Closed()`.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/websocket/Conn`](#def-std_401_2fwebsocket_2fConn), [`std@1/websocket/Frame`](#def-std_401_2fwebsocket_2fFrame), [`std@1/websocket/WsError`](#def-std_401_2fwebsocket_2fWsError)
+
+<a id="def-std_401_2fwebsocket_2fsend_5ftext"></a>
+
+- `pub fn websocket.send_text(mut c: Conn, message: String) -> Result[(), WsError]`
+
+Sends `message` as one text frame.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/websocket/Conn`](#def-std_401_2fwebsocket_2fConn), [`std@1/websocket/WsError`](#def-std_401_2fwebsocket_2fWsError)
 
 
 ## write_half
