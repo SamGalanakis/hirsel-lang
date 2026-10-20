@@ -4738,6 +4738,8 @@ conformance/SEM/SEM-1-http-wire-run.hir
 conformance/SEM/SEM-1-http2-frames-run.hir
 conformance/SEM/SEM-1-http2-session-run.hir
 conformance/SEM/SEM-1-https-client-unix-socket-run.hir
+conformance/SEM/SEM-1-int-bit-primitives-run.hir
+conformance/SEM/SEM-1-int-sub-mul-named-run.hir
 conformance/SEM/SEM-1-left-bit-loss.hir
 conformance/SEM/SEM-1-min-remainder.hir
 conformance/SEM/SEM-1-mixed-width-add-bad.hir
@@ -4907,6 +4909,7 @@ conformance/SEM/SEM-1-wrapping-add-unsigned.hir
 conformance/SEM/SEM-2-explicit-fused.hir
 conformance/SEM/SEM-2-f32-ties-even.hir
 conformance/SEM/SEM-2-f64-ties-even.hir
+conformance/SEM/SEM-2-float-exact-primitives-run.hir
 conformance/SEM/SEM-2-float-parse-lemire-vectors-run.hir
 conformance/SEM/SEM-2-float-resize-run.hir
 conformance/SEM/SEM-2-format-into-float-appends-run.hir
@@ -4940,6 +4943,7 @@ conformance/SEM/SEM-2-std-float-f64-pow-specials-positive-ordinary-run.hir
 conformance/SEM/SEM-2-std-float-f64-pow-specials-zero-nan-small-run.hir
 conformance/SEM/SEM-2-std-float-libm-mpfr-run.hir
 conformance/SEM/SEM-2-std-float-sign-fma-powi-run.hir
+conformance/SEM/SEM-2-std-total-order-run.hir
 conformance/SEM/SEM-2-sum-exact-and-f32-run.hir
 conformance/SEM/SEM-2-sum-tree.hir
 conformance/SEM/SEM-2-to-i32-contract.hir

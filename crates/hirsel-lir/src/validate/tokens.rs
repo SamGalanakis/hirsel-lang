@@ -475,7 +475,9 @@ fn token_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<ValueId> {
         | Inst::Reset { value, .. }
         | Inst::Forget { value }
         | Inst::RegionPublish { value } => vec![value],
-        Inst::Unary { operand, .. } | Inst::Convert { operand, .. } => vec![operand],
+        Inst::Unary { operand, .. }
+        | Inst::Convert { operand, .. }
+        | Inst::ScalarUnary { operand, .. } => vec![operand],
         Inst::Binary { left, right, .. }
         | Inst::Compare { left, right, .. }
         | Inst::IntArith { left, right, .. } => vec![left, right],

@@ -130,6 +130,16 @@ impl FnEmitter<'_, '_, '_> {
                 let value = self.mul_add(kind, operands)?;
                 self.define1(result, value)
             }
+            Inst::ScalarUnary {
+                result,
+                op,
+                operand,
+            } => {
+                let kind = self.scalar_kind(operand)?;
+                let operand = self.get1(operand)?;
+                let value = self.scalar_unary(op, kind, operand)?;
+                self.define1(result, value)
+            }
             Inst::Check { condition, failure } => {
                 let condition = self.get1(condition)?;
                 let failed = self.b.ins().bxor_imm_s(condition, 1);

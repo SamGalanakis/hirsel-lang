@@ -35,7 +35,8 @@ propagates, −0 < +0); `float.min_number` and `float.max_number` ignore NaN.
 [core library](core-library.md#numeric-and-string-details); `f32.sum_exact` and
 `f64.sum_exact` are correctly rounded. Math functions are ordinary std source with a stated
 error bound ([floats](std-library.md#scalars)), so every engine computes the same bits.
-`float.to_i32` returns a `Result`; `float.total_order` is for sorting. A finite
+`float.to_i32` returns a `Result`; std's `f32.total_order` and `f64.total_order` are for
+sorting. A finite
 literal spelling outside its type's finite range rounds to infinity.
 
 ### SEM-3: Strings

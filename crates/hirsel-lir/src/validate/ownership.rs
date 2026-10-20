@@ -2044,6 +2044,12 @@ impl<S: Stage> Walker<'_, '_, S> {
                 }
                 self.create(site, st, cr, result);
             }
+            Inst::ScalarUnary {
+                result, operand, ..
+            } => {
+                self.borrow(site, st, cr, operand);
+                self.create(site, st, cr, result);
+            }
             // Structural comparison borrows both operands for the instruction only.
             Inst::Compare {
                 result,

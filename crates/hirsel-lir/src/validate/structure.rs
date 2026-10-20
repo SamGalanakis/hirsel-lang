@@ -1311,7 +1311,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                     B::DivFloor | B::Mod | B::DivExact => {
                         kind.is_some_and(|k| integer_bits(k).is_some())
                     }
-                    B::Min | B::Max | B::MinNumber | B::MaxNumber | B::TotalOrder => float,
+                    B::Min | B::Max | B::MinNumber | B::MaxNumber => float,
                     _ => true,
                 };
                 let ok = kind.is_some()
@@ -1319,8 +1319,6 @@ impl<S: Stage> Checker<'_, '_, S> {
                     && self.same_type(left, right)
                     && if comparison {
                         self.scalar(result) == Some(ScalarKind::Bool)
-                    } else if op == B::TotalOrder {
-                        self.scalar(result) == Some(ScalarKind::I32)
                     } else {
                         self.same_type(result, left)
                     };
@@ -1396,9 +1394,12 @@ impl<S: Stage> Checker<'_, '_, S> {
                 left,
                 right,
             } => {
-                // Named checked/saturating arithmetic is Add; proof removal also
-                // uses the unchecked integer operator forms.
+                // Named checked/saturating arithmetic is Add, Sub and checked
+                // Mul (revision 41); proof removal also uses the unchecked
+                // integer operator forms.
                 let ok = (op == BinaryOp::Add
+                    || op == BinaryOp::Sub
+                    || op == BinaryOp::Mul && mode == ArithMode::Checked
                     || mode == ArithMode::Wrapping
                         && matches!(
                             op,
@@ -1424,6 +1425,22 @@ impl<S: Stage> Checker<'_, '_, S> {
                 if let Some(flag) = flag {
                     self.fresh_holding(site, flag);
                 }
+            }
+            Inst::ScalarUnary {
+                result,
+                op,
+                operand,
+            } => {
+                let kind = self.scalar(operand);
+                let ok = if op.is_float() {
+                    matches!(kind, Some(ScalarKind::F32 | ScalarKind::F64))
+                } else {
+                    kind.is_some_and(|k| integer_bits(k).is_some())
+                } && self.same_type(result, operand);
+                if !ok {
+                    self.add(site, K::Type("scalar unary operation"));
+                }
+                self.fresh_holding(site, result);
             }
             Inst::MulAdd {
                 result,
@@ -4316,7 +4333,9 @@ fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usage)> {
     let op = |v| (v, Usage::Operand);
     let mut out = Vec::new();
     match *inst {
-        Inst::Unary { operand, .. } | Inst::Convert { operand, .. } => out.push(op(operand)),
+        Inst::Unary { operand, .. }
+        | Inst::Convert { operand, .. }
+        | Inst::ScalarUnary { operand, .. } => out.push(op(operand)),
         Inst::Binary { left, right, .. }
         | Inst::Compare { left, right, .. }
         | Inst::IntArith { left, right, .. } => out.extend([op(left), op(right)]),

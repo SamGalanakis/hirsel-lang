@@ -218,6 +218,28 @@ fn channel(n: u64) -> u64 {
     sum
 }
 
+fn float_math(n: u64, salt: u64) -> u64 {
+    let mut acc = 0f64;
+    let base = salt as f64;
+    for i in 0..n * 64 {
+        let x = i as f64 * 0.37 + base;
+        acc += x.floor() + (x * 0.5).ceil() + (-x).trunc() + (x * 1.5).round();
+        acc += x.sqrt() + (-x).abs();
+    }
+    acc.to_bits()
+}
+
+fn int_bits(n: u64, salt: u64) -> u64 {
+    let mut h = 0u64;
+    for i in 0..n * 64 {
+        let x = (i + salt).wrapping_mul(0x9e3779b97f4a7c15);
+        let counts = (x.leading_zeros() + x.trailing_zeros() + x.count_ones()) as u64;
+        let product = x.checked_mul(i).unwrap_or_else(|| x.saturating_sub(i));
+        h = h.wrapping_add(counts).wrapping_sub(product);
+    }
+    h
+}
+
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let which = a[1].as_str();
@@ -242,6 +264,8 @@ fn main() {
             "sha" => sha(n, r),
             "sort" => sort(n, r),
             "map_remove" => map_remove(n, r),
+            "float_math" => float_math(n, r),
+            "int_bits" => int_bits(n, r),
             _ => panic!(),
         });
     }

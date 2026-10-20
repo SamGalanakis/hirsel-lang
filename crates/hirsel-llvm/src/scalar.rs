@@ -13,10 +13,9 @@
 //! `llvm.fptosi.sat` with its status from compares, wrapping/saturating/checked addition are
 //! `add`, `llvm.{s,u}add.sat` and `llvm.{s,u}add.with.overflow`, `min`/`max` are
 //! `llvm.minimum`/`llvm.maximum`, `min_number`/`max_number` select the
-//! other operand of a NaN around them (IEEE 754-2019, -0 < +0), `total_order` compares the
-//! sign-magnitude keys of NaN-canonical bits, and `mul_add` is `llvm.fma`.
+//! other operand of a NaN around them (IEEE 754-2019, -0 < +0), and `mul_add` is `llvm.fma`.
 
-use hirsel_lir::ir::{ArithMode, BinaryOp, ConvertMode, UnaryOp};
+use hirsel_lir::ir::{ArithMode, BinaryOp, ConvertMode, ScalarUnaryOp, UnaryOp};
 use hirsel_lir::layout_types::ScalarKind;
 
 use crate::context::{BinOp, Builder, Cast, FloatPredicate, IntPredicate, Type, Value};
@@ -125,7 +124,6 @@ pub(crate) fn binary<'m>(
                     b.select(left_nan, right, number)
                 }
             }
-            B::TotalOrder => total_order(b, kind, left, right),
             B::Shl
             | B::Shr
             | B::BitAnd
@@ -217,7 +215,7 @@ pub(crate) fn binary<'m>(
                 B::Ge => compare(IntPredicate::Sge, IntPredicate::Uge),
                 B::Shl | B::Shr => unreachable!("shifts return above"),
                 B::DivFloor | B::Mod | B::DivExact => unreachable!("divisions return above"),
-                B::Min | B::Max | B::MinNumber | B::MaxNumber | B::TotalOrder => {
+                B::Min | B::Max | B::MinNumber | B::MaxNumber => {
                     return unsupported(format!("{op:?} on an integer"));
                 }
             })
@@ -351,33 +349,6 @@ fn canonical_bits<'m>(b: &Builder<'m>, kind: ScalarKind, x: Value<'m>) -> Value<
     let is_nan = b.fcmp(FloatPredicate::Une, x, x);
     let bits = b.cast(Cast::Bits, x, bits_ty);
     b.select(is_nan, module.const_int(bits_ty, nan), bits)
-}
-
-/// IEEE totalOrder of two floats after canonicalizing NaN to the positive quiet NaN (SEM-2), as
-/// an i32 -1, 0 or 1: the bits' sign-magnitude keys compared as signed integers.
-fn total_order<'m>(
-    b: &Builder<'m>,
-    kind: ScalarKind,
-    left: Value<'m>,
-    right: Value<'m>,
-) -> Value<'m> {
-    let module = b.module();
-    let width = if kind == ScalarKind::F32 { 32 } else { 64 };
-    let bits_ty = module.int_type(width);
-    let key = |x: Value<'m>| {
-        let bits = canonical_bits(b, kind, x);
-        let top = module.const_int(bits_ty, u128::from(width - 1));
-        let sign = b.binary(BinOp::AShr, bits, top);
-        let one = module.const_int(bits_ty, 1);
-        let magnitude = b.binary(BinOp::LShr, sign, one);
-        b.binary(BinOp::Xor, bits, magnitude)
-    };
-    let (a, c) = (key(left), key(right));
-    let i32_ty = module.int_type(32);
-    let less = b.icmp(IntPredicate::Slt, a, c);
-    let greater = b.icmp(IntPredicate::Sgt, a, c);
-    let greater = b.cast(Cast::ZExt, greater, i32_ty);
-    b.select(less, module.const_int(i32_ty, u128::MAX), greater)
 }
 
 /// `Convert` of `operand` of kind `from` into kind `to`: the result and, for `TryNarrow` and
@@ -574,25 +545,70 @@ pub(crate) fn int_arith<'m>(
         };
         return Ok((value, None));
     }
-    if op != BinaryOp::Add {
-        return Err(format!("{op:?} in IntArith {mode:?}"));
-    }
+    let name = match (op, mode) {
+        (BinaryOp::Add, _) => "add",
+        (BinaryOp::Sub, _) => "sub",
+        (BinaryOp::Mul, ArithMode::Checked) => "mul",
+        _ => return Err(format!("{op:?} in IntArith {mode:?}")),
+    };
     let ty = b.module().int_type(width);
     let s = if signed { 's' } else { 'u' };
     Ok(match mode {
-        ArithMode::Wrapping => (b.binary(BinOp::Add, left, right), None),
+        ArithMode::Wrapping => unreachable!("handled above"),
         ArithMode::Saturating => {
-            let sat = b.module().intrinsic(&format!("llvm.{s}add.sat"), &[ty])?;
+            let sat = b
+                .module()
+                .intrinsic(&format!("llvm.{s}{name}.sat"), &[ty])?;
             (b.call(sat, &[left, right]), None)
         }
         ArithMode::Checked => {
             let checked = b
                 .module()
-                .intrinsic(&format!("llvm.{s}add.with.overflow"), &[ty])?;
+                .intrinsic(&format!("llvm.{s}{name}.with.overflow"), &[ty])?;
             let pair = b.call(checked, &[left, right]);
             (b.extract(pair, 0), Some(b.extract(pair, 1)))
         }
     })
+}
+
+/// `ScalarUnary`: an exact float or integer operation as its LLVM intrinsic. The rounding
+/// intrinsics are one instruction where the target has one and the C library's exact
+/// `floor`/`ceil`/`trunc`/`round` otherwise; the counts are defined at zero (the width).
+pub(crate) fn scalar_unary<'m>(
+    b: &Builder<'m>,
+    op: ScalarUnaryOp,
+    kind: ScalarKind,
+    operand: Value<'m>,
+) -> Result<Value<'m>, String> {
+    use ScalarUnaryOp as U;
+    let float = matches!(kind, ScalarKind::F32 | ScalarKind::F64);
+    if op.is_float() != float || !float && integer(kind).is_none() {
+        return Err(format!("{op:?} of {kind:?}"));
+    }
+    let ty = scalar_type(b, kind);
+    let unary = |name: &str| -> Result<Value<'m>, String> {
+        Ok(b.call(b.module().intrinsic(name, &[ty])?, &[operand]))
+    };
+    let counted = |name: &str| -> Result<Value<'m>, String> {
+        // `is_zero_poison` false: a zero operand counts the width.
+        let no = b.module().const_int(b.module().int_type(1), 0);
+        Ok(b.call(b.module().intrinsic(name, &[ty])?, &[operand, no]))
+    };
+    match op {
+        U::Sqrt => unary("llvm.sqrt"),
+        U::Floor => unary("llvm.floor"),
+        U::Ceil => unary("llvm.ceil"),
+        U::Trunc => unary("llvm.trunc"),
+        U::Round => unary("llvm.round"),
+        U::Abs => unary("llvm.fabs"),
+        U::LeadingZeros => counted("llvm.ctlz"),
+        U::TrailingZeros => counted("llvm.cttz"),
+        U::CountOnes => unary("llvm.ctpop"),
+        // One byte is its own byte order; `llvm.bswap` needs a whole number of byte pairs.
+        U::SwapBytes if matches!(kind, ScalarKind::U8 | ScalarKind::I8) => Ok(operand),
+        U::SwapBytes => unary("llvm.bswap"),
+        U::ReverseBits => unary("llvm.bitreverse"),
+    }
 }
 
 /// `MulAdd`: `left * right + addend` rounded once (SEM-2's one fused operation).

@@ -202,7 +202,7 @@ the license named in its row; the license texts follow once each.
 | bincode | `tests/{basic_types,derive}.rs` scalar, UTF-8 and enum-boundary controls adapted to SER-2 | `conformance/SER/SER-2-*` | bincode 2.0.1 crate release | MIT |
 | RFC 8949 | Appendix A data examples and sections 4.2, 5.3.1, 5.6 deterministic/validity cases adapted to SER-2 | `conformance/SER/SER-2-*` | RFC 8949 (December 2020) | Simplified BSD (IETF Trust) |
 | Go standard library | `src/internal/strconv/{atoi,itoa}.go` cutoff radix loops and radix vectors | `stdlib/std@1/integer.hir`, integer radix conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
-| Go standard library | `src/math/{floor,sqrt}.go`, `src/math/all_test.go`, IEEE rounding and square-root vectors | `tools/generate-float-math.py`, std f32/f64 math sources and conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go); Sun Microsystems permission below for sqrt |
+| Go standard library | `src/math/all_test.go` IEEE rounding and square-root vectors | std f32/f64 math conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Rust libm crate | `libm/src/math/` exp, exp2, expm1, log, log2, log10, log1p, pow, cbrt, hypot, sin, cos, tan, asin, acos, atan, atan2, sinh, cosh, tanh, asinh, acosh, atanh and their `f` forms, kernels, rem_pio2, rem_pio2_large, generic copysign and scalbn; unit-test vectors | `stdlib/std@1/f{32,64}_{exp,power,trig,hyperbolic}.hir`, `stdlib/std@1/libm.hir`, `tools/generate-float-math.py`, `conformance/SEM/SEM-2-std-float-*` | rust-lang/compiler-builtins `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT; musl and FreeBSD msun notices below |
 | libm-test | `libm-test/src/generate/case_list.rs` MPFR-checked vectors, `src/precision.rs` ULP bounds | `docs/spec/std-library.md` | rust-lang/compiler-builtins `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | compiler-builtins | `compiler-builtins/src/float/pow.rs` (`__powidf2`, `__powisf2`) | `tools/generate-float-math.py` powi | rust-lang/compiler-builtins `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
@@ -496,19 +496,6 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-## Sun Microsystems square root
-
-The Go portable square-root algorithm retains the following original notice:
-
-```text
-Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
-
-Developed at SunPro, a Sun Microsystems, Inc. business.
-Permission to use, copy, modify, and distribute this
-software is freely granted, provided that this notice
-is preserved.
-```
 
 ## musl and FreeBSD msun math notices (Rust libm crate)
 

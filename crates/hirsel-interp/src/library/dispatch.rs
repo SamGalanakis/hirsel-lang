@@ -1899,7 +1899,9 @@ primary_operations! { self, call, context, name, a, value;
                     }
                 }
             },
-    Primitive: "int.wrapping_add" | "int.saturating_add" | "int.checked_add" | "int.unchecked_add" => {
+    Primitive: "int.wrapping_add" | "int.saturating_add" | "int.checked_add" | "int.unchecked_add"
+        | "int.wrapping_sub" | "int.saturating_sub" | "int.checked_sub" | "int.wrapping_mul"
+        | "int.checked_mul" => {
                 let offset = usize::from(name == "int.unchecked_add");
                 if offset == 1 {
                     self.simulation.id(arg(a, 0)?, "Unsafe")?;
@@ -1911,7 +1913,7 @@ primary_operations! { self, call, context, name, a, value;
                         context,
                     )?;
                 }
-                let v = integer::add(
+                let v = integer::arith(
                     &call.path.0.name,
                     int(arg(a, offset)?)?,
                     int(arg(a, offset + 1)?)?,
@@ -1928,12 +1930,17 @@ primary_operations! { self, call, context, name, a, value;
                     Err(_) => return Err(invalid("invalid integer schema")),
                     Ok(value) => value,
                 };
-                if name == "int.checked_add" {
+                if matches!(name, "int.checked_add" | "int.checked_sub" | "int.checked_mul") {
                     v.map(|i| some(Value::Integer(i))).unwrap_or_else(none)
                 } else {
                     Value::Integer(v.unwrap())
                 }
             },
+    Primitive: "int.leading_zeros" | "int.trailing_zeros" | "int.count_ones" | "int.swap_bytes"
+        | "int.reverse_bits" => Value::Integer(
+                integer::bits(&call.path.0.name, int(arg(a, 0)?)?)
+                    .map_err(|_| invalid("invalid integer schema"))?,
+            ),
     Primitive: "int.div_floor" | "int.mod" | "int.div_exact" => {
                 match integer::divide(&call.path.0.name, int(arg(a, 0)?)?, int(arg(a, 1)?)?) {
                     Ok(i) => Value::Integer(i),
@@ -1968,10 +1975,10 @@ primary_operations! { self, call, context, name, a, value;
                 float::minmax(&call.path.0.name, arg(a, 0)?.clone(), arg(a, 1)?.clone())
                     .ok_or_else(|| invalid("float type mismatch"))?
             },
-    Primitive: "float.total_order" => i32_value(
-                float::total_order(arg(a, 0)?.clone(), arg(a, 1)?.clone())
-                    .ok_or_else(|| invalid("float type mismatch"))?,
-            ),
+    Primitive: "float.sqrt" | "float.floor" | "float.ceil" | "float.trunc" | "float.round"
+        | "float.abs" => {
+                float::unary(&call.path.0.name, arg(a, 0)?).ok_or_else(|| invalid("expected float"))?
+            },
     Primitive: "float.mul_add" => {
                 float::mul_add(arg(a, 0)?.clone(), arg(a, 1)?.clone(), arg(a, 2)?.clone())
                     .ok_or_else(|| invalid("float type mismatch"))?

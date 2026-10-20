@@ -480,6 +480,18 @@ first `false` releases the value and decodes to `DecodeError.Invalid`, the eleve
 record or variant child at its own layout and the check to that exact FnAbi, and an
 encode plan to no checks; `tests/it/revision29.rs` retains the hand-built twins.
 
+LIR revision 41 adds `Inst::ScalarUnary { result, op, operand }`, which never
+fails, for the exact core operations of one operand (`ScalarUnaryOp`):
+`float.sqrt` (IEEE squareRoot), `float.floor`, `ceil`, `trunc` and `round`
+(roundToIntegral toward negative, toward positive, toward zero and ties away)
+and `float.abs` of f32 or f64, and `int.leading_zeros`, `trailing_zeros`,
+`count_ones`, `swap_bytes` and `reverse_bits` of a sized integer's two's
+complement word (a zero counts the width). `IntArith` also admits `Sub` in every
+mode and `Mul` in `Checked` mode, for `int.wrapping_sub`, `saturating_sub`,
+`checked_sub`, `wrapping_mul` and `checked_mul`. C holds a float op to a float
+operand, an integer op to an integer one, and the result to the operand's type;
+`tests/it/revision6.rs` retains the hand-built twins.
+
 LIR revision 19 adds diverging calls: `Terminator::Call.normal` is
 None exactly when the callee's `FnAbi.diverges`, the ABI of a Never result, which
 has no result or result destination. C rejects a returning call of a diverging

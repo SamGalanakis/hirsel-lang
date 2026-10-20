@@ -931,10 +931,11 @@ fn T.format_radix(value: T, radix: u8) -> Result[unique String, scalar.ParseErro
 
 Checked operations return `None` exactly when the mathematical result is outside
 that type's range. Saturation clamps to its minimum or maximum, according to the
-mathematical result; wrapping computes modulo the type's bit width. These are
-ordinary source kernels; the add helpers delegate to core `int.*`. Wrapping
-multiplication uses a double-width product below 128 bits and three 64-bit limb
-products at 128 bits, with no bit-by-bit loop or wider-than-u128 scalar.
+mathematical result; wrapping computes modulo the type's bit width. Each delegates to
+the core `int.*` operation of its name ([core library](core-library.md#numeric-and-string-details)),
+except `saturating_mul`, which is source over `checked_mul`, as Rust's library form is.
+The bit counts and reversals are the generic core `int.leading_zeros`,
+`int.trailing_zeros`, `int.count_ones`, `int.swap_bytes` and `int.reverse_bits`.
 Radices are 2 through 36, with case-insensitive ASCII digits on input and lowercase
 output. Only signed types accept a leading minus. No plus, whitespace, underscore
 or implicit radix prefix is accepted. Invalid radix or grammar yields `Invalid`,
@@ -958,7 +959,7 @@ correctly, ties to even. `OutOfRange` applies exactly when correct IEEE rounding
 infinity; values above `MAX` that round back to `MAX` succeed. Underflow rounds to a
 subnormal or signed zero without error.
 
-The two float modules also declare these ordinary source functions:
+The two float modules also declare these functions:
 
 ```text
 N fn f32.floor(value: f32) -> f32 uses {}
@@ -971,12 +972,12 @@ N fn f64.round(value: f64) -> f64 uses {}
 N fn f64.sqrt(value: f64) -> f64 uses {}
 ```
 
-Floor rounds toward negative infinity, ceil toward positive infinity and round to
-nearest with halfway cases away from zero. All preserve signed zero and infinity,
-and canonicalize NaNs under SEM-2. Square root rounds correctly to nearest, ties
-to even, handles subnormals, preserves either zero and positive infinity, and
-returns canonical NaN for negative nonzero input. The portable baseline uses bit
-decomposition and integer arithmetic without a platform math call.
+They are the core `float.floor`, `float.ceil`, `float.round` and `float.sqrt`
+([core library](core-library.md#numeric-and-string-details)): floor rounds toward
+negative infinity, ceil toward positive infinity and round to nearest with halfway cases
+away from zero, all exactly, preserving signed zero and infinity and canonicalizing NaNs
+under SEM-2; square root rounds correctly to nearest, ties to even, preserves either zero
+and positive infinity, and returns canonical NaN for negative nonzero input.
 
 Each float module also declares this math library, shown for `f64`; `f32` declares the
 same functions over `f32`:
@@ -1013,9 +1014,9 @@ N fn f64.acosh(value: f64) -> f64 uses {}
 N fn f64.atanh(value: f64) -> f64 uses {}
 ```
 
-`trunc` rounds toward zero, `fract` is `value - trunc(value)`, `abs` clears the sign,
-`copysign` gives `magnitude` the sign of `sign`, and `fma` is `float.mul_add`; these are
-exact. `powi` multiplies by repeated squaring, then takes the reciprocal for a negative
+`trunc` is `float.trunc`, rounding toward zero, `fract` is `value - trunc(value)`, `abs`
+is `float.abs`, clearing the sign, `copysign` gives `magnitude` the sign of `sign` (source,
+as Zig's `math/copysign.zig` is), and `fma` is `float.mul_add`; these are exact. `powi` multiplies by repeated squaring, then takes the reciprocal for a negative
 exponent, as Rust's `powi` does; its rounding errors compound, so use `pow` when the error
 matters. `ln` is the natural logarithm and `ln1p(x)` is `ln(1 + x)`, as `expm1(x)` is
 `exp(x) - 1`, both accurate near zero. `atan2(y, x)` is the angle of the point `(x, y)`,
@@ -1037,6 +1038,12 @@ internally and round once.
 `@noalloc f32.sum(xs: Array[f32]) -> f32` and `f64.sum(xs: Array[f64]) -> f64`, and
 `f32.sum_exact` and `f64.sum_exact` with the same types and allocation allowed, implement the
 reductions of [the core library](core-library.md#numeric-and-string-details).
+
+`@noalloc f32.total_order(a: f32, b: f32) -> i32` and `f64.total_order(a: f64, b: f64) -> i32`
+return -1, 0 or 1 for IEEE 754 totalOrder of the two values after NaN canonicalization, so
+the one NaN, positive, sorts above +inf and -0 sorts below +0. They are source over
+`bits`, as Rust's `total_cmp` is library code (core/src/num/f64.rs): each key is the
+bits read as a signed integer with every bit but the sign flipped for a negative value.
 
 ## Deque
 

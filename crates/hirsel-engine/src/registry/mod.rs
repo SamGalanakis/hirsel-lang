@@ -127,8 +127,11 @@ fn schema(name: &str) -> Vec<SchemaConstraint> {
                 (TypeParameterRef::bound(TypeParamId(1)), Integer),
             ]
         }
-        "int.wrapping_add" | "int.saturating_add" | "int.checked_add" | "int.div_floor"
-        | "int.mod" | "int.div_exact" | "int.unchecked_add" | "simd.add" => {
+        "int.wrapping_add" | "int.saturating_add" | "int.checked_add" | "int.wrapping_sub"
+        | "int.saturating_sub" | "int.checked_sub" | "int.wrapping_mul" | "int.checked_mul"
+        | "int.leading_zeros" | "int.trailing_zeros" | "int.count_ones" | "int.swap_bytes"
+        | "int.reverse_bits" | "int.div_floor" | "int.mod" | "int.div_exact"
+        | "int.unchecked_add" | "simd.add" => {
             vec![(TypeParameterRef::bound(TypeParamId(0)), Integer)]
         }
         "float.from_int" => vec![
@@ -136,7 +139,8 @@ fn schema(name: &str) -> Vec<SchemaConstraint> {
             (TypeParameterRef::bound(TypeParamId(1)), Float),
         ],
         "float.min" | "float.max" | "float.min_number" | "float.max_number" | "float.mul_add"
-        | "float.total_order" | "float.to_i32" => {
+        | "float.sqrt" | "float.floor" | "float.ceil" | "float.trunc" | "float.round"
+        | "float.abs" | "float.to_i32" => {
             vec![(TypeParameterRef::bound(TypeParamId(0)), Float)]
         }
         "atomic.create" | "atomic.load" | "atomic.store" | "Atomic" | "simd.splat" | "Simd" => {

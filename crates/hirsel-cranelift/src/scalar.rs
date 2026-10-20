@@ -11,7 +11,7 @@ use cranelift_codegen::ir::{
     immediates::{Ieee32, Ieee64},
     types,
 };
-use hirsel_lir::ir::{ArithMode, BinaryOp, ConvertMode, FailureId, UnaryOp};
+use hirsel_lir::ir::{ArithMode, BinaryOp, ConvertMode, FailureId, ScalarUnaryOp, UnaryOp};
 use hirsel_lir::layout_types::ScalarKind;
 
 use crate::function::{FnEmitter, flags};
@@ -99,7 +99,6 @@ impl FnEmitter<'_, '_, '_> {
                         self.b.ins().select(left_nan, right, number)
                     }
                 }
-                B::TotalOrder => self.total_order(kind, left, right),
                 B::Shl
                 | B::Shr
                 | B::BitAnd
@@ -206,7 +205,7 @@ impl FnEmitter<'_, '_, '_> {
                     ),
                     B::Shl | B::Shr => unreachable!("shifts return above"),
                     B::DivFloor | B::Mod | B::DivExact => unreachable!("divisions return above"),
-                    B::Min | B::Max | B::MinNumber | B::MaxNumber | B::TotalOrder => {
+                    B::Min | B::Max | B::MinNumber | B::MaxNumber => {
                         return self.invalid(format!("{op:?} on an integer"));
                     }
                 })
@@ -347,23 +346,6 @@ impl FnEmitter<'_, '_, '_> {
         let bits = self.b.ins().bitcast(ty, flags(), x);
         let nan = self.b.ins().iconst(ty, nan as i64);
         self.b.ins().select(is_nan, nan, bits)
-    }
-
-    /// IEEE totalOrder after canonicalizing NaN (SEM-2), as an i32 -1, 0 or 1.
-    fn total_order(&mut self, kind: ScalarKind, left: Value, right: Value) -> Value {
-        let width: i64 = if kind == ScalarKind::F32 { 32 } else { 64 };
-        let key = |this: &mut Self, x: Value| {
-            let bits = this.canonical_bits(kind, x);
-            let sign = this.b.ins().sshr_imm_s(bits, width - 1);
-            let magnitude = this.b.ins().ushr_imm_s(sign, 1);
-            this.b.ins().bxor(bits, magnitude)
-        };
-        let (a, c) = (key(self, left), key(self, right));
-        let less = self.b.ins().icmp(IntCC::SignedLessThan, a, c);
-        let greater = self.b.ins().icmp(IntCC::SignedGreaterThan, a, c);
-        let greater = self.b.ins().uextend(types::I32, greater);
-        let minus_one = self.b.ins().iconst(types::I32, -1);
-        self.b.ins().select(less, minus_one, greater)
     }
 
     /// `op operand`.
@@ -553,8 +535,8 @@ impl FnEmitter<'_, '_, '_> {
         fits
     }
 
-    /// `IntArith`: `Add` of two integers of `kind` in `mode`; `Checked` also yields the
-    /// overflow flag.
+    /// `IntArith`: `Add`, `Sub` or `Mul` of two integers of `kind` in `mode`; `Checked`
+    /// also yields the overflow flag.
     pub(crate) fn int_arith(
         &mut self,
         op: BinaryOp,
@@ -566,13 +548,17 @@ impl FnEmitter<'_, '_, '_> {
         let Some((width, signed)) = integer(kind) else {
             return self.invalid(format!("{op:?} of {kind:?}"));
         };
-        if op != BinaryOp::Add {
-            return self.invalid(format!("{op:?} in IntArith"));
-        }
-        Ok(match mode {
-            ArithMode::Wrapping => (self.b.ins().iadd(left, right), None),
-            ArithMode::Saturating => (self.saturating_add(width, signed, left, right), None),
-            ArithMode::Checked => {
+        Ok(match (op, mode) {
+            (BinaryOp::Add, ArithMode::Wrapping) => (self.b.ins().iadd(left, right), None),
+            (BinaryOp::Sub, ArithMode::Wrapping) => (self.b.ins().isub(left, right), None),
+            (BinaryOp::Mul, ArithMode::Wrapping) => (self.b.ins().imul(left, right), None),
+            (BinaryOp::Add, ArithMode::Saturating) => {
+                (self.saturating_add(width, signed, left, right), None)
+            }
+            (BinaryOp::Sub, ArithMode::Saturating) => {
+                (self.saturating_sub(width, signed, left, right), None)
+            }
+            (BinaryOp::Add, ArithMode::Checked) => {
                 let (sum, overflow) = if signed {
                     self.b.ins().sadd_overflow(left, right)
                 } else {
@@ -580,7 +566,44 @@ impl FnEmitter<'_, '_, '_> {
                 };
                 (sum, Some(overflow))
             }
+            (BinaryOp::Sub, ArithMode::Checked) => {
+                let (difference, overflow) = if signed {
+                    self.b.ins().ssub_overflow(left, right)
+                } else {
+                    self.b.ins().usub_overflow(left, right)
+                };
+                (difference, Some(overflow))
+            }
+            (BinaryOp::Mul, ArithMode::Checked) => {
+                let (product, overflow) = self.mul_overflow(width, signed, left, right)?;
+                (product, Some(overflow))
+            }
+            _ => return self.invalid(format!("{op:?} in IntArith {mode:?}")),
         })
+    }
+
+    /// `left - right`, saturated at the kind's bounds.
+    pub(crate) fn saturating_sub(
+        &mut self,
+        width: u32,
+        signed: bool,
+        left: Value,
+        right: Value,
+    ) -> Value {
+        let ty = left_type(width);
+        if !signed {
+            let (difference, overflow) = self.b.ins().usub_overflow(left, right);
+            let zero = self.int_const(ty, 0);
+            return self.b.ins().select(overflow, zero, difference);
+        }
+        let (difference, overflow) = self.b.ins().ssub_overflow(left, right);
+        // Signed subtraction overflows only toward the left operand's sign.
+        let zero = self.int_const(ty, 0);
+        let negative = self.b.ins().icmp(IntCC::SignedLessThan, left, zero);
+        let min = self.int_const(ty, 1u128 << (width - 1));
+        let max = self.int_const(ty, mask(width) >> 1);
+        let bound = self.b.ins().select(negative, min, max);
+        self.b.ins().select(overflow, bound, difference)
     }
 
     /// `left + right`, saturated at the kind's bounds.
@@ -613,6 +636,43 @@ impl FnEmitter<'_, '_, '_> {
             return self.invalid(format!("mul_add of {kind:?}"));
         }
         Ok(self.b.ins().fma(operands[0], operands[1], operands[2]))
+    }
+
+    /// `ScalarUnary`: an exact float or integer operation of one operand of `kind`.
+    /// Ties-away rounding has no Cranelift instruction and calls the C library's `round`.
+    pub(crate) fn scalar_unary(
+        &mut self,
+        op: ScalarUnaryOp,
+        kind: ScalarKind,
+        operand: Value,
+    ) -> Emitted<Value> {
+        use ScalarUnaryOp as U;
+        let float = matches!(kind, ScalarKind::F32 | ScalarKind::F64);
+        if op.is_float() != float || !float && integer(kind).is_none() {
+            return self.invalid(format!("{op:?} of {kind:?}"));
+        }
+        Ok(match op {
+            U::Sqrt => self.b.ins().sqrt(operand),
+            U::Floor => self.b.ins().floor(operand),
+            U::Ceil => self.b.ins().ceil(operand),
+            U::Trunc => self.b.ins().trunc(operand),
+            U::Round => {
+                let (name, ty) = if kind == ScalarKind::F32 {
+                    ("roundf", types::F32)
+                } else {
+                    ("round", types::F64)
+                };
+                self.toolchain_call(name, &[ty], ty, &[operand])?
+            }
+            U::Abs => self.b.ins().fabs(operand),
+            U::LeadingZeros => self.b.ins().clz(operand),
+            U::TrailingZeros => self.b.ins().ctz(operand),
+            U::CountOnes => self.b.ins().popcnt(operand),
+            // One byte is its own byte order.
+            U::SwapBytes if matches!(kind, ScalarKind::U8 | ScalarKind::I8) => operand,
+            U::SwapBytes => self.b.ins().bswap(operand),
+            U::ReverseBits => self.b.ins().bitrev(operand),
+        })
     }
 
     /// `v cc c`, for a value of any integer type, `i128` included.

@@ -320,9 +320,8 @@ pub enum UnaryOp {
 /// `DivExact` also on a nonzero remainder (docs/spec/core-library.md "Numeric and string
 /// details"). `Min`, `Max`, `MinNumber` and `MaxNumber` are IEEE 754-2019
 /// `minimum`, `maximum`, `minimumNumber` and `maximumNumber` on floats
-/// (SEM-2: NaN propagates or is ignored, -0 < +0), and `TotalOrder` is IEEE
-/// totalOrder after NaN canonicalization as an i32 -1, 0 or 1; none of the
-/// float ones fails.
+/// (SEM-2: NaN propagates or is ignored, -0 < +0); none of the float ones
+/// fails. (Revision 41 removed `TotalOrder`: totalOrder is std source.)
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum BinaryOp {
     Add,
@@ -348,7 +347,6 @@ pub enum BinaryOp {
     Max,
     MinNumber,
     MaxNumber,
-    TotalOrder,
 }
 
 /// What `Inst::Convert` computes (LIR schema revision 6; SEM-1 conversions,
@@ -400,6 +398,46 @@ pub enum ArithMode {
     /// `int.checked_add`: the wrapped result, and `flag` (a Bool) true
     /// exactly when it overflowed.
     Checked,
+}
+
+/// What `Inst::ScalarUnary` computes (LIR schema revision 41,
+/// docs/spec/core-library.md "Numeric and string details"). Every op is
+/// exactly defined, so each engine gives the same bits.
+///
+/// The float ops take and give one float kind: `Sqrt` is IEEE 754
+/// squareRoot, correctly rounded; `Floor`, `Ceil`, `Trunc` and `Round` are
+/// roundToIntegralTowardNegative, TowardPositive, TowardZero and TiesToAway;
+/// `Abs` clears the sign. Signed zeros and infinities pass through the
+/// rounding ops, and a NaN result reads as the kind's one observable NaN
+/// (SEM-2).
+///
+/// The integer ops take and give one sized integer kind and read its two's
+/// complement bits: `LeadingZeros`, `TrailingZeros` and `CountOnes` count
+/// bits (the width for zero), `SwapBytes` reverses the byte order and
+/// `ReverseBits` the bit order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ScalarUnaryOp {
+    Sqrt,
+    Floor,
+    Ceil,
+    Trunc,
+    Round,
+    Abs,
+    LeadingZeros,
+    TrailingZeros,
+    CountOnes,
+    SwapBytes,
+    ReverseBits,
+}
+
+impl ScalarUnaryOp {
+    /// Whether the op is one of the float ops; the rest are integer ops.
+    pub const fn is_float(self) -> bool {
+        matches!(
+            self,
+            Self::Sqrt | Self::Floor | Self::Ceil | Self::Trunc | Self::Round | Self::Abs
+        )
+    }
 }
 
 /// The deepest operand pair `Inst::Compare` visits before failing with MEM-3
@@ -523,9 +561,9 @@ pub enum Inst {
         mode: ConvertMode,
     },
     /// `op` of two integers of one kind with a named overflow behaviour
-    /// (`ArithMode`, LIR schema revision 6). The library names `Add` only,
-    /// the one `op` admitted. `flag` is present exactly in `Checked` mode.
-    /// Never fails.
+    /// (`ArithMode`, LIR schema revision 6). The library names `Add`, `Sub`
+    /// and `Mul` (revision 41), the `op`s admitted; `Mul` has no `Saturating`
+    /// form. `flag` is present exactly in `Checked` mode. Never fails.
     IntArith {
         result: ValueId,
         flag: Option<ValueId>,
@@ -541,6 +579,13 @@ pub enum Inst {
         left: ValueId,
         right: ValueId,
         addend: ValueId,
+    },
+    /// `op` (`ScalarUnaryOp`, LIR schema revision 41) of one scalar of the
+    /// result's kind. Never fails.
+    ScalarUnary {
+        result: ValueId,
+        op: ScalarUnaryOp,
+        operand: ValueId,
     },
     /// A source check; the failure edge carries its rule.
     Check {
@@ -1721,7 +1766,7 @@ impl Inst {
             Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
                 std::iter::once(result).chain(flag).collect()
             }
-            Inst::MulAdd { result, .. } => vec![result],
+            Inst::MulAdd { result, .. } | Inst::ScalarUnary { result, .. } => vec![result],
             Inst::Store { version, .. }
             | Inst::SeqReserve { version, .. }
             | Inst::ArenaPush { version, .. }
@@ -1791,6 +1836,7 @@ impl Inst {
             | Inst::Convert { .. }
             | Inst::IntArith { .. }
             | Inst::MulAdd { .. }
+            | Inst::ScalarUnary { .. }
             | Inst::StorageLive { .. }
             | Inst::StorageDead { .. }
             | Inst::EndScope { .. }
@@ -1867,6 +1913,7 @@ impl Inst {
             | Inst::Convert { .. }
             | Inst::IntArith { .. }
             | Inst::MulAdd { .. }
+            | Inst::ScalarUnary { .. }
             | Inst::StorageLive { .. }
             | Inst::StorageDead { .. }
             | Inst::EndScope { .. }
@@ -2000,6 +2047,14 @@ impl Inst {
                 f(R::Value(left));
                 f(R::Value(right));
                 f(R::Value(addend));
+            }
+            Self::ScalarUnary {
+                result,
+                op: _,
+                operand,
+            } => {
+                f(R::Value(result));
+                f(R::Value(operand));
             }
             Self::IsUnique { result, value }
             | Self::IsWritable { result, value }
@@ -2832,8 +2887,7 @@ snapshot_enum!(BinaryOp {
     Min,
     Max,
     MinNumber,
-    MaxNumber,
-    TotalOrder
+    MaxNumber
 });
 snapshot_enum!(ConvertMode {
     Widen,
@@ -2848,6 +2902,19 @@ snapshot_enum!(ArithMode {
     Wrapping,
     Saturating,
     Checked
+});
+snapshot_enum!(ScalarUnaryOp {
+    Sqrt,
+    Floor,
+    Ceil,
+    Trunc,
+    Round,
+    Abs,
+    LeadingZeros,
+    TrailingZeros,
+    CountOnes,
+    SwapBytes,
+    ReverseBits
 });
 snapshot_enum!(CompareOp {
     Eq,
@@ -2891,6 +2958,7 @@ snapshot_enum!(Inst {
     Convert { result, flag, operand, mode },
     IntArith { result, flag, op, mode, left, right },
     MulAdd { result, left, right, addend },
+    ScalarUnary { result, op, operand },
     Check { condition, failure },
     StorageLive { slot },
     StorageDead { slot, if_live },

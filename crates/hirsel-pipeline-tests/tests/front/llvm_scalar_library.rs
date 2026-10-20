@@ -1,5 +1,5 @@
 //! The scalar library instructions of LIR schema revision 6 (`Convert`, `IntArith`, `MulAdd`
-//! and the named `Binary` operations) at every width and every edge, three ways: the
+//! and the named `Binary` operations) and revision 41 (`ScalarUnary`, `IntArith` Sub and Mul) at every width and every edge, three ways: the
 //! interpreter's kernels (`hirsel_interp::library`), the heap checker executing the unit, and
 //! the emitted code on x86-64 and on AArch64 under qemu. The interpreter writes the expected
 //! lines; the heap checker is compared in the ordinary gate and native code by
@@ -28,9 +28,10 @@ enum Op {
     Convert(ConvertMode),
     /// `int.narrow`: `TryNarrow`, then a SEM-1 `Check` of its flag, as legalization spells it.
     Narrow,
-    Arith(ArithMode),
+    Arith(BinaryOp, ArithMode),
     Binary(BinaryOp),
     MulAdd,
+    Unary(ScalarUnaryOp),
 }
 
 /// One instruction exported as `name(operands) -> returned`: its result, or its flag when
@@ -47,8 +48,8 @@ struct Case {
 impl Case {
     fn arity(&self) -> usize {
         match self.op {
-            Op::Convert(_) | Op::Narrow => 1,
-            Op::Arith(_) | Op::Binary(_) => 2,
+            Op::Convert(_) | Op::Narrow | Op::Unary(_) => 1,
+            Op::Arith(..) | Op::Binary(_) => 2,
             Op::MulAdd => 3,
         }
     }
@@ -56,7 +57,7 @@ impl Case {
     /// The kind of the instruction's flag, when it has one.
     fn flag_kind(&self) -> Option<ScalarKind> {
         match self.op {
-            Op::Convert(ConvertMode::TryNarrow) | Op::Arith(ArithMode::Checked) => {
+            Op::Convert(ConvertMode::TryNarrow) | Op::Arith(_, ArithMode::Checked) => {
                 Some(ScalarKind::Bool)
             }
             Op::Convert(ConvertMode::FloatToI32) => Some(ScalarKind::I32),
@@ -162,13 +163,25 @@ fn cases() -> Vec<Case> {
                 false,
             );
         }
-        for (name, mode) in [
-            ("wrapping_add", ArithMode::Wrapping),
-            ("saturating_add", ArithMode::Saturating),
-            ("checked_add", ArithMode::Checked),
-        ] {
+        for (op, mode) in ARITHMETIC {
             let flagged = mode == ArithMode::Checked;
-            push(format!("{name}_{k}"), Op::Arith(mode), kind, kind, flagged);
+            let name = arith_name(op, mode);
+            push(
+                format!("{name}_{k}"),
+                Op::Arith(op, mode),
+                kind,
+                kind,
+                flagged,
+            );
+        }
+        for op in INTEGER_UNARY {
+            push(
+                format!("{}_{k}", unary_name(op)),
+                Op::Unary(op),
+                kind,
+                kind,
+                false,
+            );
         }
         for op in [BinaryOp::DivFloor, BinaryOp::Mod, BinaryOp::DivExact] {
             let name = format!("{}_{k}", op_name(op));
@@ -186,15 +199,16 @@ fn cases() -> Vec<Case> {
             let name = format!("{}_{k}", op_name(op));
             push(name, Op::Binary(op), kind, kind, false);
         }
-        let order = Op::Binary(BinaryOp::TotalOrder);
-        push(
-            format!("total_order_{k}"),
-            order,
-            kind,
-            ScalarKind::I32,
-            false,
-        );
         push(format!("mul_add_{k}"), Op::MulAdd, kind, kind, false);
+        for op in FLOAT_UNARY {
+            push(
+                format!("{}_{k}", unary_name(op)),
+                Op::Unary(op),
+                kind,
+                kind,
+                false,
+            );
+        }
         let to_i32 = Op::Convert(ConvertMode::FloatToI32);
         push(format!("to_i32_{k}"), to_i32, kind, ScalarKind::I32, true);
         let reinterpret = Op::Convert(ConvertMode::Reinterpret);
@@ -210,6 +224,68 @@ fn cases() -> Vec<Case> {
         push(format!("resize_{k}"), resize, kind, other, false);
     }
     cases
+}
+
+/// The named integer arithmetic: `int.wrapping_`, `saturating_` and `checked_` `add`, `sub`
+/// and `mul` (saturating multiplication is std source).
+const ARITHMETIC: [(BinaryOp, ArithMode); 8] = [
+    (BinaryOp::Add, ArithMode::Wrapping),
+    (BinaryOp::Add, ArithMode::Saturating),
+    (BinaryOp::Add, ArithMode::Checked),
+    (BinaryOp::Sub, ArithMode::Wrapping),
+    (BinaryOp::Sub, ArithMode::Saturating),
+    (BinaryOp::Sub, ArithMode::Checked),
+    (BinaryOp::Mul, ArithMode::Wrapping),
+    (BinaryOp::Mul, ArithMode::Checked),
+];
+
+const INTEGER_UNARY: [ScalarUnaryOp; 5] = [
+    ScalarUnaryOp::LeadingZeros,
+    ScalarUnaryOp::TrailingZeros,
+    ScalarUnaryOp::CountOnes,
+    ScalarUnaryOp::SwapBytes,
+    ScalarUnaryOp::ReverseBits,
+];
+
+const FLOAT_UNARY: [ScalarUnaryOp; 6] = [
+    ScalarUnaryOp::Sqrt,
+    ScalarUnaryOp::Floor,
+    ScalarUnaryOp::Ceil,
+    ScalarUnaryOp::Trunc,
+    ScalarUnaryOp::Round,
+    ScalarUnaryOp::Abs,
+];
+
+fn arith_name(op: BinaryOp, mode: ArithMode) -> &'static str {
+    match (op, mode) {
+        (BinaryOp::Add, ArithMode::Wrapping) => "wrapping_add",
+        (BinaryOp::Add, ArithMode::Saturating) => "saturating_add",
+        (BinaryOp::Add, ArithMode::Checked) => "checked_add",
+        (BinaryOp::Sub, ArithMode::Wrapping) => "wrapping_sub",
+        (BinaryOp::Sub, ArithMode::Saturating) => "saturating_sub",
+        (BinaryOp::Sub, ArithMode::Checked) => "checked_sub",
+        (BinaryOp::Mul, ArithMode::Wrapping) => "wrapping_mul",
+        (BinaryOp::Mul, ArithMode::Checked) => "checked_mul",
+        other => panic!("no library operation {other:?}"),
+    }
+}
+
+/// The core library name of a `ScalarUnary` op (`int.` or `float.`).
+fn unary_name(op: ScalarUnaryOp) -> &'static str {
+    use ScalarUnaryOp as U;
+    match op {
+        U::Sqrt => "sqrt",
+        U::Floor => "floor",
+        U::Ceil => "ceil",
+        U::Trunc => "trunc",
+        U::Round => "round",
+        U::Abs => "abs",
+        U::LeadingZeros => "leading_zeros",
+        U::TrailingZeros => "trailing_zeros",
+        U::CountOnes => "count_ones",
+        U::SwapBytes => "swap_bytes",
+        U::ReverseBits => "reverse_bits",
+    }
 }
 
 fn dedup(values: Vec<u128>) -> Vec<u128> {
@@ -333,6 +409,98 @@ fn float_edges(kind: ScalarKind) -> Vec<u128> {
             f64::NAN,
         ])
     }
+}
+
+/// Bit-operation operands: the integer edges, single bits at both ends and the middle, and
+/// byte- and bit-asymmetric words (Rust coretests num/int_macros.rs `A`, `B`, `C`:
+/// 0b0101100, 0b0100001, 0b1111001), each truncated to the kind's width.
+fn integer_bits(kind: ScalarKind) -> Vec<u128> {
+    let (w, _) = width(kind);
+    let m = mask(w);
+    let mut values = integer_edges(kind);
+    values.extend(
+        [
+            0b0101100,
+            0b0100001,
+            0b1111001,
+            1 << (w / 2),
+            1 << (w - 1),
+            1 << (w - 2),
+            0x0123_4567_89ab_cdef_fedc_ba98_7654_3210,
+            0x5555_5555_5555_5555_5555_5555_5555_5555,
+            0x00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff,
+            0x8000_0000_0000_0001_8000_0000_0000_0001,
+        ]
+        .map(|v: u128| v & m),
+    );
+    dedup(values)
+}
+
+/// `ScalarUnary` float operands: the float edges, the rounding rows of Rust coretests
+/// num/floats.rs (`round`, `floor`, `ceil`, `trunc`: halves of both signs, 1.3, 1.7) and its
+/// `sqrt_domain` rows, Zig test/behavior/floatop.zig `testSqrt`'s squares and inexact roots,
+/// the largest value below one half, and the last binade with a fraction and the first
+/// without one.
+fn float_rounding(kind: ScalarKind) -> Vec<u128> {
+    let mut values = float_edges(kind);
+    if kind == ScalarKind::F32 {
+        values.extend(f32s(&[
+            0.5,
+            -0.5,
+            1.5,
+            -1.5,
+            2.5,
+            -2.5,
+            1.3,
+            -1.3,
+            1.7,
+            -1.7,
+            0.4,
+            -0.4,
+            0.499_999_97,
+            4.0,
+            9.0,
+            25.0,
+            2.0,
+            1.1,
+            3.6,
+            8942.230469,
+            8388607.5,
+            -8388607.5,
+            8388608.0,
+            16777217.0,
+            1e30,
+        ]));
+    } else {
+        values.extend(f64s(&[
+            0.5,
+            -0.5,
+            1.5,
+            -1.5,
+            2.5,
+            -2.5,
+            1.3,
+            -1.3,
+            1.7,
+            -1.7,
+            0.4,
+            -0.4,
+            0.499_999_999_999_999_94,
+            4.0,
+            9.0,
+            25.0,
+            2.0,
+            1.1,
+            3.6,
+            8942.230469,
+            4503599627370495.5,
+            -4503599627370495.5,
+            4503599627370496.0,
+            9007199254740993.0,
+            1e300,
+        ]));
+    }
+    dedup(values)
 }
 
 /// `to_i32` operands: the float edges and both sides of each i32 bound, where truncation
@@ -498,6 +666,10 @@ fn table(case: &Case) -> (&'static str, Vec<u128>) {
         }
         Op::Convert(_) | Op::Narrow => (leak(format!("{name}_bounds")), integer_bounds(case.kind)),
         Op::MulAdd => (leak(format!("{name}_fused")), float_fused(case.kind)),
+        Op::Unary(op) if op.is_float() => {
+            (leak(format!("{name}_rounding")), float_rounding(case.kind))
+        }
+        Op::Unary(_) => (leak(format!("{name}_bits")), integer_bits(case.kind)),
         _ if FLOATS.contains(&case.kind) => (leak(format!("{name}_edges")), float_edges(case.kind)),
         _ => (leak(format!("{name}_edges")), integer_edges(case.kind)),
     }
@@ -575,12 +747,12 @@ fn program(target: &TargetSpec) -> Program {
                         },
                     );
                 }
-                Op::Arith(mode) => u.builder.push(
+                Op::Arith(op, mode) => u.builder.push(
                     ENTRY,
                     Inst::IntArith {
                         result,
                         flag,
-                        op: BinaryOp::Add,
+                        op,
                         mode,
                         left: operands[0],
                         right: operands[1],
@@ -608,6 +780,14 @@ fn program(target: &TargetSpec) -> Program {
                         left: operands[0],
                         right: operands[1],
                         addend: operands[2],
+                    },
+                ),
+                Op::Unary(op) => u.builder.push(
+                    ENTRY,
+                    Inst::ScalarUnary {
+                        result,
+                        op,
+                        operand: operands[0],
                     },
                 ),
             }
@@ -706,33 +886,32 @@ fn interpreted(case: &Case, operands: &[u128]) -> Option<(u128, Option<u128>)> {
                 Err(ordinal) => (u128::from(saturated as u32), Some(u128::from(ordinal) + 1)),
             })
         }
-        Op::Arith(mode) => {
-            let name = match mode {
-                ArithMode::Wrapping => "wrapping_add",
-                ArithMode::Saturating => "saturating_add",
-                ArithMode::Checked => "checked_add",
-            };
-            let sum = integer::add(name, integer(operands[0]), integer(operands[1])).unwrap();
-            Some(match (mode, sum) {
+        Op::Arith(op, mode) => {
+            let (a, b) = (integer(operands[0]), integer(operands[1]));
+            let value = integer::arith(arith_name(op, mode), a, b).unwrap();
+            Some(match (mode, value) {
                 (ArithMode::Checked, Some(v)) => (v.bits(), Some(0)),
-                (ArithMode::Checked, None) => (
-                    operands[0].wrapping_add(operands[1]) & mask(to_width),
-                    Some(1),
-                ),
+                // The flagged result is the wrapped one.
+                (ArithMode::Checked, None) => {
+                    let wrapping = arith_name(op, ArithMode::Wrapping);
+                    let wrapped = integer::arith(wrapping, a, b).unwrap().unwrap();
+                    (wrapped.bits(), Some(1))
+                }
                 (_, v) => (v.unwrap().bits(), None),
             })
+        }
+        Op::Unary(op) if op.is_float() => {
+            let value = float::unary(unary_name(op), &float_value(case.kind, operands[0])).unwrap();
+            Some((float_bits(value), None))
+        }
+        Op::Unary(op) => {
+            let value = integer::bits(unary_name(op), integer(operands[0])).unwrap();
+            Some((value.bits(), None))
         }
         Op::Binary(op @ (BinaryOp::DivFloor | BinaryOp::Mod | BinaryOp::DivExact)) => {
             integer::divide(op_name(op), integer(operands[0]), integer(operands[1]))
                 .ok()
                 .map(|v| (v.bits(), None))
-        }
-        Op::Binary(BinaryOp::TotalOrder) => {
-            let (a, b) = (
-                float_value(case.kind, operands[0]),
-                float_value(case.kind, operands[1]),
-            );
-            Some((u128::from(float::total_order(a, b).unwrap() as u32), None))
         }
         Op::Binary(op) => {
             let (a, b) = (

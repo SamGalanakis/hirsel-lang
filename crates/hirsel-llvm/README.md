@@ -48,12 +48,16 @@ Invariants:
   `Reinterpret` (`f32.bits` and its siblings) is a `bitcast` whose NaN self-compare selects
   the canonical NaN's bits.
   `IntArith` emits unchecked integer operators for proved SEM-1 sites, or
-  `llvm.{s,u}add.sat` / `llvm.{s,u}add.with.overflow` for named Add modes.
+  `llvm.{s,u}{add,sub}.sat` / `llvm.{s,u}{add,sub,mul}.with.overflow` for named modes.
+  `ScalarUnary` is one intrinsic: `llvm.sqrt`, `llvm.floor`, `llvm.ceil`, `llvm.trunc`,
+  `llvm.round`, `llvm.fabs`, `llvm.ctlz`/`llvm.cttz` defined at zero, `llvm.ctpop`,
+  `llvm.bswap` (an 8-bit word is its own swap) and `llvm.bitreverse`. Where the target has
+  no rounding instruction (baseline x86-64 has no SSE4.1) LLVM calls the C library's exact
+  `floor`, `ceil`, `trunc` or `round`, as it does `fma`.
   Signed unchecked remainder still makes a -1 divisor safe, preserving MIN % -1 = 0;
   unchecked projection ordinals skip only their bounds/tag guards.
   The named divisions guard a divisor made safe, `min`/`max` are `llvm.minimum`/`llvm.maximum`
-  (the `_number` forms select a NaN operand's other operand around them) and `total_order`
-  compares sign-magnitude keys of NaN-canonical bits. LLVM may lower `llvm.fma` and
+  (the `_number` forms select a NaN operand's other operand around them). LLVM may lower `llvm.fma` and
   128-bit integer-to-float casts to target support routines. `crates/hirsel-pipeline-tests/tests/front/llvm_scalar_library.rs` holds each to the
   interpreter's kernels and the heap checker at every width and edge, on both targets.
 - The native library's shapes (LIR schema revision 7): `SeqLen` loads a sequence

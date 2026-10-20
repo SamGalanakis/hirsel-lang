@@ -3,7 +3,6 @@ use crate::{
     Value,
     value::{f32_value, f64_value},
 };
-use std::cmp::Ordering;
 
 pub fn minmax(name: &str, a: Value, b: Value) -> Option<Value> {
     macro_rules! kernel {
@@ -41,20 +40,6 @@ pub fn minmax(name: &str, a: Value, b: Value) -> Option<Value> {
         _ => None,
     }
 }
-pub fn total_order(mut a: Value, mut b: Value) -> Option<i32> {
-    a.canonicalize();
-    b.canonicalize();
-    let order = match (a, b) {
-        (Value::F32(a), Value::F32(b)) => f32::from_bits(a).total_cmp(&f32::from_bits(b)),
-        (Value::F64(a), Value::F64(b)) => f64::from_bits(a).total_cmp(&f64::from_bits(b)),
-        _ => return None,
-    };
-    Some(match order {
-        Ordering::Less => -1,
-        Ordering::Equal => 0,
-        Ordering::Greater => 1,
-    })
-}
 pub fn mul_add(a: Value, b: Value, c: Value) -> Option<Value> {
     match (a, b, c) {
         (Value::F32(a), Value::F32(b), Value::F32(c)) => Some(f32_value(
@@ -65,6 +50,29 @@ pub fn mul_add(a: Value, b: Value, c: Value) -> Option<Value> {
         )),
         _ => None,
     }
+}
+/// `float.sqrt` and the exact rounding and sign operations (docs/spec/core-library.md):
+/// Rust's correctly rounded `sqrt` and exact `floor`, `ceil`, `trunc`, `round` (ties away
+/// from zero) and `abs`; a NaN result is the one observable NaN (SEM-2).
+pub fn unary(name: &str, value: &Value) -> Option<Value> {
+    macro_rules! apply {
+        ($x:expr) => {
+            match name {
+                "sqrt" => $x.sqrt(),
+                "floor" => $x.floor(),
+                "ceil" => $x.ceil(),
+                "trunc" => $x.trunc(),
+                "round" => $x.round(),
+                "abs" => $x.abs(),
+                _ => return None,
+            }
+        };
+    }
+    Some(match value {
+        Value::F32(bits) => f32_value(apply!(f32::from_bits(*bits))),
+        Value::F64(bits) => f64_value(apply!(f64::from_bits(*bits))),
+        _ => return None,
+    })
 }
 /// Error ordinals are NotFinite=0, OutOfRange=1, independently of i32 bounds.
 pub fn to_i32(value: &Value) -> Option<Result<i32, u32>> {

@@ -35,33 +35,45 @@ pub fn convert(
         _ => Err(ScalarError::InvalidOperation),
     }
 }
-pub fn add(name: &str, a: Integer, b: Integer) -> Result<Option<Integer>, ScalarError> {
+/// The named `_add`, `_sub` and `_mul` operations; `None` is `checked_`'s overflow.
+pub fn arith(name: &str, a: Integer, b: Integer) -> Result<Option<Integer>, ScalarError> {
     if a.kind() != b.kind() {
         return Err(ScalarError::InvalidOperation);
     }
-    let checked = || match scalar::binary(BinaryOp::Add, Value::Integer(a), Value::Integer(b))? {
+    let (mode, op) = name.split_once('_').ok_or(ScalarError::InvalidOperation)?;
+    let (op, wrapped) = match op {
+        "add" => (BinaryOp::Add, a.bits().wrapping_add(b.bits())),
+        "sub" => (BinaryOp::Sub, a.bits().wrapping_sub(b.bits())),
+        "mul" => (BinaryOp::Mul, a.bits().wrapping_mul(b.bits())),
+        _ => return Err(ScalarError::InvalidOperation),
+    };
+    let checked = || match scalar::binary(op, Value::Integer(a), Value::Integer(b))? {
         Value::Integer(i) => Ok(i),
         _ => unreachable!(),
     };
-    match name {
-        "wrapping_add" => Ok(Some(
-            Integer::new(a.kind(), a.bits().wrapping_add(b.bits()) & mask(a.width())).unwrap(),
+    match mode {
+        "wrapping" => Ok(Some(
+            Integer::new(a.kind(), wrapped & mask(a.width())).unwrap(),
         )),
-        "checked_add" => match checked() {
+        "checked" => match checked() {
             Ok(v) => Ok(Some(v)),
             Err(ScalarError::Overflow) => Ok(None),
             Err(e) => Err(e),
         },
-        "saturating_add" => Ok(Some(match checked() {
+        "saturating" if op != BinaryOp::Mul => Ok(Some(match checked() {
             Ok(v) => v,
             Err(ScalarError::Overflow) => {
+                // Addition overflows toward the right operand's sign, subtraction away
+                // from it; an unsigned difference only below zero.
                 let bits = if a.is_signed() {
                     let (min, max) = signed_bounds(a.width());
-                    if b.signed() < 0 {
+                    if (b.signed() < 0) == (op == BinaryOp::Add) {
                         min as u128
                     } else {
                         max as u128
                     }
+                } else if op == BinaryOp::Sub {
+                    0
                 } else {
                     mask(a.width())
                 };
@@ -69,9 +81,24 @@ pub fn add(name: &str, a: Integer, b: Integer) -> Result<Option<Integer>, Scalar
             }
             Err(e) => return Err(e),
         })),
-        "unchecked_add" => checked().map(Some), // Valid Unsafe calls must satisfy their documented fit contract.
+        "unchecked" if op == BinaryOp::Add => checked().map(Some), // Valid Unsafe calls must satisfy their documented fit contract.
         _ => Err(ScalarError::InvalidOperation),
     }
+}
+/// The bit counts and reversals of a two's complement word at the kind's width.
+pub fn bits(name: &str, a: Integer) -> Result<Integer, ScalarError> {
+    let width = a.width();
+    let word = a.bits() & mask(width);
+    let high = word << (128 - width);
+    let bits = match name {
+        "leading_zeros" => u128::from(high.leading_zeros().min(width)),
+        "trailing_zeros" => u128::from(word.trailing_zeros().min(width)),
+        "count_ones" => u128::from(word.count_ones()),
+        "swap_bytes" => high.swap_bytes(),
+        "reverse_bits" => high.reverse_bits(),
+        _ => return Err(ScalarError::InvalidOperation),
+    };
+    Integer::new(a.kind(), bits).ok_or(ScalarError::InvalidOperation)
 }
 pub fn divide(name: &str, a: Integer, b: Integer) -> Result<Integer, ScalarError> {
     if a.kind() != b.kind() {

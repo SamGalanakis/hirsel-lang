@@ -333,7 +333,10 @@ reuse, elided dups and kept fields through counters and the units.
   from the call's scalar argument and result kinds; the Ready validator
   rejects any such call left. `int.narrow` is a `TryNarrow` `Convert` and a
   SEM-1 `Check` of its flag at the call's site. `int.try_narrow` and
-  `int.checked_add` branch on the flag into `Some(result)` and `None`, and
+  `int.checked_add`, `checked_sub` and `checked_mul` branch on the flag into
+  `Some(result)` and `None`, the wrapping and saturating forms are unflagged
+  `IntArith`, the float rounding family, `float.sqrt`, `float.abs` and the
+  integer bit counts and reversals are a `ScalarUnary`, and
   `float.from_int` is an unflagged `IntToFloat` conversion,
   `f32.bits`/`f64.bits` and `f32.from_bits`/`f64.from_bits` are unflagged
   `Reinterpret` conversions, `f64.from_f32` and `f32.from_f64` are unflagged

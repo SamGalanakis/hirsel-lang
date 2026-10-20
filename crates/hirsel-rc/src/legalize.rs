@@ -22,10 +22,14 @@
 //!   `int.widen` and `int.truncate` a `Convert`; `int.narrow` a `TryNarrow`
 //!   `Convert` and a `Check` of its flag failing SEM-1 at the call's site;
 //!   `int.try_narrow` a `TryNarrow` `Convert` whose flag selects `Some` or
-//!   `None`; `int.wrapping_add` and `int.saturating_add` an `IntArith`, and
-//!   `int.checked_add` a `Checked` one whose overflow flag selects `None`;
+//!   `None`; `int.wrapping_add`, `wrapping_sub`, `wrapping_mul`,
+//!   `saturating_add` and `saturating_sub` an `IntArith` of their `op`, and
+//!   `int.checked_add`, `checked_sub` and `checked_mul` a `Checked` one whose
+//!   overflow flag selects `None`; the float rounding family, `float.sqrt`
+//!   and `float.abs`, and the integer bit counts and reversals, a
+//!   `ScalarUnary`;
 //!   `int.div_floor`, `int.mod` and `int.div_exact` a `Binary` failing SEM-1;
-//!   `float.min`, `max`, `min_number`, `max_number` and `total_order` a
+//!   `float.min`, `max`, `min_number` and `max_number` a
 //!   `Binary` that cannot fail; `float.mul_add` a `MulAdd`; and
 //!   `float.to_i32` a `FloatToI32` `Convert` whose status switches to
 //!   `Ok(v)`, `Error(NotFinite)` or `Error(OutOfRange)`. The `Option` and
@@ -45,8 +49,8 @@ use hirsel_lir::ir::{
     AddressBase, AddressInfo, ArgumentValue, ArithMode, BinaryOp, BlockId, BlockKind, CallSite,
     Callee, ConstantData, ConstantId, ConstantValue, ConstructId, ConstructSite, ConstructorKind,
     ConvertMode, DestinationClass, EdgeId, FailureEdge, FailureId, FieldValue, Holding, Inst,
-    LirUnit, Placement, PoolRange, ProjectionStep, ReadMode, ScopeId, SlotId, SlotInfo, SlotKind,
-    SwitchArm, Symbol, SymbolId, SymbolKind, Terminator, ValueId, ValueRepr,
+    LirUnit, Placement, PoolRange, ProjectionStep, ReadMode, ScalarUnaryOp, ScopeId, SlotId,
+    SlotInfo, SlotKind, SwitchArm, Symbol, SymbolId, SymbolKind, Terminator, ValueId, ValueRepr,
 };
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, LayoutTable, ScalarKind};
 use hirsel_lir::stage::Ready;
@@ -67,9 +71,11 @@ enum ScalarOp {
     Convert(ConvertMode),
     /// `narrow`: `try_narrow`'s conversion and a SEM-1 check of its flag.
     Narrow,
-    Arith(ArithMode),
-    /// `div_floor`, `mod`, `div_exact`, the float min/max family and
-    /// `total_order`.
+    /// The named `Add`, `Sub` and `Mul` of `int`.
+    Arith(BinaryOp, ArithMode),
+    /// The exact unary float and integer operations.
+    Unary(ScalarUnaryOp),
+    /// `div_floor`, `mod`, `div_exact` and the float min/max family.
     Binary(BinaryOp),
     MulAdd,
     /// `char.from_u32`: a scalar-value test of the u32 word into an `Option`.
@@ -127,9 +133,19 @@ fn scalar_op(definition: &DefPath) -> Option<ScalarOp> {
             "truncate" => S::Convert(ConvertMode::Truncate),
             "try_narrow" => S::Convert(ConvertMode::TryNarrow),
             "narrow" => S::Narrow,
-            "wrapping_add" => S::Arith(ArithMode::Wrapping),
-            "saturating_add" => S::Arith(ArithMode::Saturating),
-            "checked_add" => S::Arith(ArithMode::Checked),
+            "wrapping_add" => S::Arith(BinaryOp::Add, ArithMode::Wrapping),
+            "wrapping_sub" => S::Arith(BinaryOp::Sub, ArithMode::Wrapping),
+            "wrapping_mul" => S::Arith(BinaryOp::Mul, ArithMode::Wrapping),
+            "saturating_add" => S::Arith(BinaryOp::Add, ArithMode::Saturating),
+            "saturating_sub" => S::Arith(BinaryOp::Sub, ArithMode::Saturating),
+            "checked_add" => S::Arith(BinaryOp::Add, ArithMode::Checked),
+            "checked_sub" => S::Arith(BinaryOp::Sub, ArithMode::Checked),
+            "checked_mul" => S::Arith(BinaryOp::Mul, ArithMode::Checked),
+            "leading_zeros" => S::Unary(ScalarUnaryOp::LeadingZeros),
+            "trailing_zeros" => S::Unary(ScalarUnaryOp::TrailingZeros),
+            "count_ones" => S::Unary(ScalarUnaryOp::CountOnes),
+            "swap_bytes" => S::Unary(ScalarUnaryOp::SwapBytes),
+            "reverse_bits" => S::Unary(ScalarUnaryOp::ReverseBits),
             "div_floor" => S::Binary(BinaryOp::DivFloor),
             "mod" => S::Binary(BinaryOp::Mod),
             "div_exact" => S::Binary(BinaryOp::DivExact),
@@ -148,8 +164,13 @@ fn scalar_op(definition: &DefPath) -> Option<ScalarOp> {
             "max" => S::Binary(BinaryOp::Max),
             "min_number" => S::Binary(BinaryOp::MinNumber),
             "max_number" => S::Binary(BinaryOp::MaxNumber),
-            "total_order" => S::Binary(BinaryOp::TotalOrder),
             "mul_add" => S::MulAdd,
+            "sqrt" => S::Unary(ScalarUnaryOp::Sqrt),
+            "floor" => S::Unary(ScalarUnaryOp::Floor),
+            "ceil" => S::Unary(ScalarUnaryOp::Ceil),
+            "trunc" => S::Unary(ScalarUnaryOp::Trunc),
+            "round" => S::Unary(ScalarUnaryOp::Round),
+            "abs" => S::Unary(ScalarUnaryOp::Abs),
             "to_i32" => S::Convert(ConvertMode::FloatToI32),
             "from_int" => S::Convert(ConvertMode::IntToFloat),
             _ => return None,
@@ -350,7 +371,7 @@ impl Lowering<'_> {
                 );
                 self.option(b, &site, fits, true, value, normal, failure)?;
             }
-            (ScalarOp::Arith(ArithMode::Checked), &[x, y]) => {
+            (ScalarOp::Arith(op, ArithMode::Checked), &[x, y]) => {
                 let value = self.payload_value(result, OPTION_SOME)?;
                 let overflow = self.bool_value()?;
                 code(
@@ -358,7 +379,7 @@ impl Lowering<'_> {
                     Inst::IntArith {
                         result: value,
                         flag: Some(overflow),
-                        op: BinaryOp::Add,
+                        op,
                         mode: ArithMode::Checked,
                         left: x,
                         right: y,
@@ -366,13 +387,13 @@ impl Lowering<'_> {
                 );
                 self.option(b, &site, overflow, false, value, normal, failure)?;
             }
-            (ScalarOp::Arith(mode), &[x, y]) => {
+            (ScalarOp::Arith(op, mode), &[x, y]) => {
                 code(
                     self,
                     Inst::IntArith {
                         result,
                         flag: None,
-                        op: BinaryOp::Add,
+                        op,
                         mode,
                         left: x,
                         right: y,
@@ -406,6 +427,17 @@ impl Lowering<'_> {
                         left: x,
                         right: y,
                         addend: z,
+                    },
+                );
+                self.ed.unit.terminators[b.index()] = done;
+            }
+            (ScalarOp::Unary(op), &[x]) => {
+                code(
+                    self,
+                    Inst::ScalarUnary {
+                        result,
+                        op,
+                        operand: x,
                     },
                 );
                 self.ed.unit.terminators[b.index()] = done;

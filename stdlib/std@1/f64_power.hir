@@ -229,14 +229,6 @@ pub fn pow(x: f64, y: f64) -> f64 uses {} {
 @noalloc
 fn unsigned_word(n: i64) -> u64 uses {} { core@1/int.truncate(n) }
 
-@noalloc
-fn leading_zeros(value: u64) -> u64 uses {} {
-  if value == 0 { return 64 }
-  let mut count: u64 = 0
-  while value & (0x8000000000000000 >> count) == 0 { count += 1 }
-  count
-}
-
 // The f64 truncation of a nonnegative finite value below 2^64, as Rust's `as u64`.
 @noalloc
 fn truncated_u64(value: f64) -> u64 uses {} {
@@ -265,7 +257,7 @@ pub fn cbrt(value: f64) -> f64 uses {} {
   if (e + 1) & 0x7ff < 2 {
     let ix: u64 = hx & 0x7fffffffffffffff
     if e == 0x7ff || ix == 0 { return x + x }
-    let nz = leading_zeros(ix) - 11
+    let nz = core@1/int.leading_zeros(ix) - 11
     mant <<= nz
     mant &= 0xfffffffffffff
     let shift: u32 = core@1/int.narrow(nz - 1)
@@ -373,7 +365,7 @@ pub fn hypot(x: f64, y: f64) -> f64 uses {} {
       if ex == 0 { return 0.0 }
       return hypot_denormal(ex, ey)
     }
-    let nz = leading_zeros(ey)
+    let nz = core@1/int.leading_zeros(ey)
     ey <<= nz - 11
     ey &= 0xfffffffffffff
     ey = u64.wrapping_sub(ey, (nz - 12) << 52)

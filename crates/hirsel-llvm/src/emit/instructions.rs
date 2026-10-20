@@ -170,6 +170,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             | Inst::Convert { .. }
             | Inst::IntArith { .. }
             | Inst::MulAdd { .. }
+            | Inst::ScalarUnary { .. }
             | Inst::Check { .. }
             | Inst::StorageLive { .. }
             | Inst::EndScope { .. }
@@ -419,6 +420,17 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 }
                 let operands = [self.get(left)?, self.get(right)?, self.get(addend)?];
                 let value = scalar::mul_add(&self.builder, kind, operands)
+                    .or_else(|what| self.invalid(what))?;
+                self.define(result, value)
+            }
+            Inst::ScalarUnary {
+                result,
+                op,
+                operand,
+            } => {
+                let kind = self.scalar_kind(operand)?;
+                let operand = self.get(operand)?;
+                let value = scalar::scalar_unary(&self.builder, op, kind, operand)
                     .or_else(|what| self.invalid(what))?;
                 self.define(result, value)
             }

@@ -53,6 +53,108 @@ micro/channel	7867	_dl_map_object_from_fd
 micro/channel	7631	alloc::fmt::format::format_inner
 micro/channel	6871	<serde_json::read::SliceRead>::skip_to_escape
 micro/channel	6851	<hirsel_rt::alloc::Heap>::refill
+micro/float_math	8314075	<total>
+micro/float_math	2688156	_H19benchmark114mainI870813562345c542E
+micro/float_math	1469068	ceil
+micro/float_math	1466225	floor
+micro/float_math	1280000	round
+micro/float_math	960000	trunc
+micro/float_math	73092	_dl_relocate_object
+micro/float_math	51736	do_lookup_x
+micro/float_math	33877	_dl_lookup_symbol_x
+micro/float_math	27446	sha2::sha256::soft::compress
+micro/float_math	17534	strcmp
+micro/float_math	12989	__memcpy_avx_unaligned_erms
+micro/float_math	12106	check_match
+micro/float_math	11803	__GI___tunables_init
+micro/float_math	10272	_int_malloc
+micro/float_math	9179	hirsel_run_config::integer_tokens
+micro/float_math	8931	_int_free
+micro/float_math	8495	__memset_avx2_unaligned_erms
+micro/float_math	7075	_dl_check_map_versions
+micro/float_math	6687	malloc
+micro/float_math	6630	core::fmt::write
+micro/float_math	6462	_dl_map_object_from_fd
+micro/float_math	5961	hirsel_run_config::digest
+micro/float_math	5660	strsep
+micro/float_math	5590	intel_check_word.constprop.0
+micro/float_math	4743	free
+micro/float_math	4416	<core::fmt::Formatter>::pad_integral
+micro/float_math	4283	alloc::fmt::format::format_inner
+micro/float_math	3787	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, serde_json::ser::CompactFormatter>
+micro/float_math	3717	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, hirsel_run_config::canonical_bytes::Canonical>
+micro/float_math	3641	core::str::converts::from_utf8
+micro/float_math	3249	<alloc::string::String as core::fmt::Write>::write_str
+micro/float_math	3021	<hirsel_rt::alloc::Heap>::release_all
+micro/float_math	2689	_dl_init_paths
+micro/float_math	2657	<serde_json::read::SliceRead>::skip_to_escape
+micro/float_math	2386	hirsel_rt::release::check_frame
+micro/float_math	2368	<alloc::raw_vec::RawVecInner>::finish_grow
+micro/float_math	2188	dl_main
+micro/float_math	2118	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+micro/float_math	2035	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
+micro/float_math	1883	_dl_map_object_deps
+micro/float_math	1832	<u8 as core::fmt::LowerHex>::fmt
+micro/float_math	1624	realloc
+micro/float_math	1591	hirsel_rt::release::check_layout
+micro/float_math	1559	_dl_name_match_p
+micro/float_math	1503	memcpy
+micro/float_math	1455	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
+micro/float_math	1405	<hirsel_rt::alloc::Heap>::refill
+micro/float_math	1405	__rustc::__rdl_alloc
+micro/float_math	1393	_dl_map_object
+micro/float_math	1386	<core::fmt::Formatter>::pad_integral::write_prefix
+micro/int_bits	2947061	<total>
+micro/int_bits	2496180	_H19benchmark114mainI870813562345c542E
+micro/int_bits	73092	_dl_relocate_object
+micro/int_bits	51736	do_lookup_x
+micro/int_bits	33877	_dl_lookup_symbol_x
+micro/int_bits	27446	sha2::sha256::soft::compress
+micro/int_bits	17525	strcmp
+micro/int_bits	12987	__memcpy_avx_unaligned_erms
+micro/int_bits	12106	check_match
+micro/int_bits	11803	__GI___tunables_init
+micro/int_bits	10272	_int_malloc
+micro/int_bits	9179	hirsel_run_config::integer_tokens
+micro/int_bits	8931	_int_free
+micro/int_bits	8495	__memset_avx2_unaligned_erms
+micro/int_bits	7075	_dl_check_map_versions
+micro/int_bits	6687	malloc
+micro/int_bits	6630	core::fmt::write
+micro/int_bits	6462	_dl_map_object_from_fd
+micro/int_bits	5961	hirsel_run_config::digest
+micro/int_bits	5660	strsep
+micro/int_bits	5590	intel_check_word.constprop.0
+micro/int_bits	4743	free
+micro/int_bits	4446	<core::fmt::Formatter>::pad_integral
+micro/int_bits	4283	alloc::fmt::format::format_inner
+micro/int_bits	3787	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, serde_json::ser::CompactFormatter>
+micro/int_bits	3717	serde_json::ser::format_escaped_str::<&mut alloc::vec::Vec<u8>, hirsel_run_config::canonical_bytes::Canonical>
+micro/int_bits	3652	core::str::converts::from_utf8
+micro/int_bits	3243	<alloc::string::String as core::fmt::Write>::write_str
+micro/int_bits	3021	<hirsel_rt::alloc::Heap>::release_all
+micro/int_bits	2689	_dl_init_paths
+micro/int_bits	2657	<serde_json::read::SliceRead>::skip_to_escape
+micro/int_bits	2386	hirsel_rt::release::check_frame
+micro/int_bits	2368	<alloc::raw_vec::RawVecInner>::finish_grow
+micro/int_bits	2188	dl_main
+micro/int_bits	2118	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+micro/int_bits	2035	<serde_json::read::SliceRead as serde_json::read::Read>::parse_str
+micro/int_bits	1883	_dl_map_object_deps
+micro/int_bits	1824	<u8 as core::fmt::LowerHex>::fmt
+micro/int_bits	1624	realloc
+micro/int_bits	1591	hirsel_rt::release::check_layout
+micro/int_bits	1559	_dl_name_match_p
+micro/int_bits	1503	memcpy
+micro/int_bits	1455	<serde_json::de::MapAccess<_> as serde_core::de::MapAccess>::next_key_seed::has_next_key::<serde_json::read::SliceRead>
+micro/int_bits	1405	<hirsel_rt::alloc::Heap>::refill
+micro/int_bits	1405	__rustc::__rdl_alloc
+micro/int_bits	1393	_dl_map_object
+micro/int_bits	1386	<core::fmt::Formatter>::pad_integral::write_prefix
+micro/int_bits	1278	<&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<hirsel_run_schema::IoGrants as serde_core::de::Deserialize>::deserialize::__Visitor>
+micro/int_bits	1244	hirsel_rt::launch::execute
+micro/int_bits	1233	strlen
+micro/int_bits	1198	__minimal_malloc
 micro/map_remove	2539119	<total>
 micro/map_remove	214324	_int_malloc
 micro/map_remove	209230	_H14core119_24native10map__probeI85044cda063bedf7E

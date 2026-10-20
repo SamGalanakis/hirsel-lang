@@ -17,36 +17,20 @@ pub fn wrapping_add(a: i128, b: i128) -> i128 uses {} {
 
 @noalloc
 pub fn checked_sub(a: i128, b: i128) -> Option[i128] uses {} {
-  if b > 0 && a < -170141183460469231731687303715884105728i128 + b || b < 0 && a > 170141183460469231731687303715884105727i128 + b { None } else { Some(a - b) }
+  core@1/int.checked_sub(a, b)
 }
 
 @noalloc
 pub fn checked_mul(a: i128, b: i128) -> Option[i128] uses {} {
-  if a == 0 || b == 0 { return Some(0) }
-  if a > 0 {
-    if b > 0 {
-      if a > 170141183460469231731687303715884105727i128 / b { return None }
-    } else {
-      if b < -170141183460469231731687303715884105728i128 / a { return None }
-    }
-  } else {
-    if b > 0 {
-      if a < -170141183460469231731687303715884105728i128 / b { return None }
-    } else {
-      if a < 170141183460469231731687303715884105727i128 / b { return None }
-    }
-  }
-  Some(a * b)
+  core@1/int.checked_mul(a, b)
 }
 
 @noalloc
 pub fn saturating_sub(a: i128, b: i128) -> i128 uses {} {
-  match checked_sub(a, b) {
-    Some(value) => value,
-    None => if b > 0 { -170141183460469231731687303715884105728i128 } else { 170141183460469231731687303715884105727i128 },
-  }
+  core@1/int.saturating_sub(a, b)
 }
 
+// Rust's saturating_mul is library code over checked_mul; Zig's *| is an operator.
 @noalloc
 pub fn saturating_mul(a: i128, b: i128) -> i128 uses {} {
   match checked_mul(a, b) {
@@ -57,21 +41,12 @@ pub fn saturating_mul(a: i128, b: i128) -> i128 uses {} {
 
 @noalloc
 pub fn wrapping_sub(a: i128, b: i128) -> i128 uses {} {
-  core@1/int.wrapping_add(a, core@1/int.wrapping_add(~b, 1))
+  core@1/int.wrapping_sub(a, b)
 }
 
 @noalloc
 pub fn wrapping_mul(a: i128, b: i128) -> i128 uses {} {
-  let left: u128 = core@1/int.truncate(a)
-  let right: u128 = core@1/int.truncate(b)
-  let low_left = left & 0xffffffffffffffffu128
-  let low_right = right & 0xffffffffffffffffu128
-  let high_left = left >> 64
-  let high_right = right >> 64
-  let low = low_left * low_right
-  let middle = core@1/int.wrapping_add(low_left * high_right, high_left * low_right)
-  let bits = core@1/int.wrapping_add(low, middle << 64)
-  core@1/int.truncate(bits)
+  core@1/int.wrapping_mul(a, b)
 }
 
 @noalloc

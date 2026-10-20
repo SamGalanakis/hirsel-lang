@@ -219,6 +219,103 @@ fn integer_arithmetic_adds_integers_and_flags_exactly_a_checked_overflow() {
         |m| int_arith(l::I64, BinaryOp::Add, ArithMode::Wrapping, m),
         bad,
     );
+    // Revision 41: Sub in every mode and checked Mul; Mul does not saturate.
+    pair(
+        |m| {
+            int_arith(
+                l::I64,
+                BinaryOp::Mul,
+                if m {
+                    ArithMode::Saturating
+                } else {
+                    ArithMode::Checked
+                },
+                !m,
+            )
+        },
+        bad,
+    );
+    for (op, mode) in [
+        (BinaryOp::Sub, ArithMode::Wrapping),
+        (BinaryOp::Sub, ArithMode::Saturating),
+        (BinaryOp::Sub, ArithMode::Checked),
+        (BinaryOp::Mul, ArithMode::Wrapping),
+        (BinaryOp::Mul, ArithMode::Checked),
+    ] {
+        let flagged = mode == ArithMode::Checked;
+        let violations = int_arith(l::U32, op, mode, flagged);
+        assert!(violations.is_empty(), "{op:?} {mode:?}: {violations:?}");
+    }
+}
+
+/// `op(x)` of `operand` into `result`.
+fn scalar_unary(operand: LayoutId, result: LayoutId, op: ScalarUnaryOp) -> Vec<K> {
+    let mut t = Lir::<Ready>::new(&[borrow(operand)], Some(result));
+    let x = t.plain(operand);
+    t.param(x);
+    let r = t.plain(result);
+    t.builder.push(
+        ENTRY,
+        Inst::ScalarUnary {
+            result: r,
+            op,
+            operand: x,
+        },
+    );
+    t.builder.ret(ENTRY, Some(r));
+    t.check()
+}
+
+#[test]
+fn a_scalar_unary_op_keeps_its_operand_kind_in_its_own_domain() {
+    let bad = |k: &K| *k == K::Type("scalar unary operation");
+    use ScalarUnaryOp as U;
+    // A float op of an integer, an integer op of a float, and a changed kind.
+    pair(
+        |m| {
+            scalar_unary(
+                if m { l::U64 } else { l::F64 },
+                if m { l::U64 } else { l::F64 },
+                U::Sqrt,
+            )
+        },
+        bad,
+    );
+    pair(
+        |m| {
+            scalar_unary(
+                if m { l::F64 } else { l::U64 },
+                if m { l::F64 } else { l::U64 },
+                U::CountOnes,
+            )
+        },
+        bad,
+    );
+    pair(
+        |m| scalar_unary(l::U64, if m { l::U32 } else { l::U64 }, U::LeadingZeros),
+        bad,
+    );
+    pair(
+        |m| {
+            let layout = if m { l::BOOL } else { l::U32 };
+            scalar_unary(layout, layout, U::ReverseBits)
+        },
+        bad,
+    );
+    for op in [U::Sqrt, U::Floor, U::Ceil, U::Trunc, U::Round, U::Abs] {
+        assert!(scalar_unary(l::F64, l::F64, op).is_empty(), "{op:?}");
+    }
+    for op in [
+        U::LeadingZeros,
+        U::TrailingZeros,
+        U::CountOnes,
+        U::SwapBytes,
+        U::ReverseBits,
+    ] {
+        for layout in [l::U32, l::U64, l::I64] {
+            assert!(scalar_unary(layout, layout, op).is_empty(), "{op:?}");
+        }
+    }
 }
 
 /// `mul_add(a, b, c)` of `layout`.
@@ -298,27 +395,6 @@ fn the_named_binary_operations_hold_only_in_their_domain() {
             bad,
         );
     }
-    // totalOrder yields an i32 -1, 0 or 1.
-    pair(
-        |m| {
-            binary(
-                l::F64,
-                BinaryOp::TotalOrder,
-                if m { l::F64 } else { l::I32 },
-            )
-        },
-        bad,
-    );
-    pair(
-        |m| {
-            binary(
-                if m { l::I64 } else { l::F64 },
-                BinaryOp::TotalOrder,
-                l::I32,
-            )
-        },
-        bad,
-    );
 }
 
 /// `op(x: i64) -> result` at Ready: a call of the fixture operation with

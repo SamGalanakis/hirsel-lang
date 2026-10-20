@@ -40,6 +40,8 @@ MICRO_OUTPUTS = {
     'map_remove': b'499500\n',
     'channel': b'500500\n',
     'print': ''.join(f'line {i}\n' for i in range(1000)).encode(),
+    'float_math': b'4747071583000339354\n',
+    'int_bits': b'10353835680576761101\n',
 }
 
 

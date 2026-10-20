@@ -17,36 +17,20 @@ pub fn wrapping_add(a: i32, b: i32) -> i32 uses {} {
 
 @noalloc
 pub fn checked_sub(a: i32, b: i32) -> Option[i32] uses {} {
-  if b > 0 && a < -2147483648i32 + b || b < 0 && a > 2147483647i32 + b { None } else { Some(a - b) }
+  core@1/int.checked_sub(a, b)
 }
 
 @noalloc
 pub fn checked_mul(a: i32, b: i32) -> Option[i32] uses {} {
-  if a == 0 || b == 0 { return Some(0) }
-  if a > 0 {
-    if b > 0 {
-      if a > 2147483647i32 / b { return None }
-    } else {
-      if b < -2147483648i32 / a { return None }
-    }
-  } else {
-    if b > 0 {
-      if a < -2147483648i32 / b { return None }
-    } else {
-      if a < 2147483647i32 / b { return None }
-    }
-  }
-  Some(a * b)
+  core@1/int.checked_mul(a, b)
 }
 
 @noalloc
 pub fn saturating_sub(a: i32, b: i32) -> i32 uses {} {
-  match checked_sub(a, b) {
-    Some(value) => value,
-    None => if b > 0 { -2147483648i32 } else { 2147483647i32 },
-  }
+  core@1/int.saturating_sub(a, b)
 }
 
+// Rust's saturating_mul is library code over checked_mul; Zig's *| is an operator.
 @noalloc
 pub fn saturating_mul(a: i32, b: i32) -> i32 uses {} {
   match checked_mul(a, b) {
@@ -57,14 +41,12 @@ pub fn saturating_mul(a: i32, b: i32) -> i32 uses {} {
 
 @noalloc
 pub fn wrapping_sub(a: i32, b: i32) -> i32 uses {} {
-  core@1/int.wrapping_add(a, core@1/int.wrapping_add(~b, 1))
+  core@1/int.wrapping_sub(a, b)
 }
 
 @noalloc
 pub fn wrapping_mul(a: i32, b: i32) -> i32 uses {} {
-  let wide_a: i64 = core@1/int.widen(a)
-  let wide_b: i64 = core@1/int.widen(b)
-  core@1/int.truncate(wide_a * wide_b)
+  core@1/int.wrapping_mul(a, b)
 }
 
 @noalloc

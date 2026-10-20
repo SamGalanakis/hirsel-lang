@@ -30,23 +30,20 @@ pub fn wrapping_add(a: $T, b: $T) -> $T uses {} {
 
 @noalloc
 pub fn checked_sub(a: $T, b: $T) -> Option[$T] uses {} {
-  if $SUB_OVERFLOW { None } else { Some(a - b) }
+  core@1/int.checked_sub(a, b)
 }
 
 @noalloc
 pub fn checked_mul(a: $T, b: $T) -> Option[$T] uses {} {
-$MUL_CHECK
-  Some(a * b)
+  core@1/int.checked_mul(a, b)
 }
 
 @noalloc
 pub fn saturating_sub(a: $T, b: $T) -> $T uses {} {
-  match checked_sub(a, b) {
-    Some(value) => value,
-    None => $SUB_CLAMP,
-  }
+  core@1/int.saturating_sub(a, b)
 }
 
+// Rust's saturating_mul is library code over checked_mul; Zig's *| is an operator.
 @noalloc
 pub fn saturating_mul(a: $T, b: $T) -> $T uses {} {
   match checked_mul(a, b) {
@@ -57,12 +54,12 @@ pub fn saturating_mul(a: $T, b: $T) -> $T uses {} {
 
 @noalloc
 pub fn wrapping_sub(a: $T, b: $T) -> $T uses {} {
-  core@1/int.wrapping_add(a, core@1/int.wrapping_add(~b, 1))
+  core@1/int.wrapping_sub(a, b)
 }
 
 @noalloc
 pub fn wrapping_mul(a: $T, b: $T) -> $T uses {} {
-$WRAPPING_MUL
+  core@1/int.wrapping_mul(a, b)
 }
 
 @noalloc
@@ -93,43 +90,8 @@ def module_text(signed, width):
         'MAX': str(maximum),
         'NEG_LIMIT': str(-minimum),
     }
-    if width < 128:
-        wide = ('i' if signed else 'u') + str(width * 2)
-        fields['WRAPPING_MUL'] = f'''  let wide_a: {wide} = core@1/int.widen(a)
-  let wide_b: {wide} = core@1/int.widen(b)
-  core@1/int.truncate(wide_a * wide_b)'''
-    else:
-        # A = a0 + 2^64*a1, B = b0 + 2^64*b1. The a1*b1 term
-        # vanishes modulo 2^128; each remaining limb product fits u128.
-        fields['WRAPPING_MUL'] = '''  let left: u128 = core@1/int.truncate(a)
-  let right: u128 = core@1/int.truncate(b)
-  let low_left = left & 0xffffffffffffffffu128
-  let low_right = right & 0xffffffffffffffffu128
-  let high_left = left >> 64
-  let high_right = right >> 64
-  let low = low_left * low_right
-  let middle = core@1/int.wrapping_add(low_left * high_right, high_left * low_right)
-  let bits = core@1/int.wrapping_add(low, middle << 64)
-  core@1/int.truncate(bits)'''
     if signed:
         fields.update(
-            SUB_OVERFLOW=(f'b > 0 && a < {minimum}{t} + b || '
-                          f'b < 0 && a > {maximum}{t} + b'),
-            MUL_CHECK=f'''  if a == 0 || b == 0 {{ return Some(0) }}
-  if a > 0 {{
-    if b > 0 {{
-      if a > {maximum}{t} / b {{ return None }}
-    }} else {{
-      if b < {minimum}{t} / a {{ return None }}
-    }}
-  }} else {{
-    if b > 0 {{
-      if a < {minimum}{t} / b {{ return None }}
-    }} else {{
-      if a < {maximum}{t} / b {{ return None }}
-    }}
-  }}''',
-            SUB_CLAMP=f'if b > 0 {{ {minimum}{t} }} else {{ {maximum}{t} }}',
             MUL_CLAMP=(f'if (a < 0) != (b < 0) {{ {minimum}{t} }} '
                        f'else {{ {maximum}{t} }}'),
             PARSE_VALUE=f'''      let raw = if negative {{ core@1/int.wrapping_add(~magnitude, 1) }} else {{ magnitude }}
@@ -142,9 +104,6 @@ def module_text(signed, width):
         )
     else:
         fields.update(
-            SUB_OVERFLOW='a < b',
-            MUL_CHECK=f'  if b != 0 && a > {maximum}{t} / b {{ return None }}',
-            SUB_CLAMP='0',
             MUL_CLAMP=f'{maximum}{t}',
             PARSE_VALUE=f'      let value: {t} = core@1/int.narrow(magnitude)',
             FORMAT_MAGNITUDE='  let magnitude: u128 = core@1/int.widen(value)',

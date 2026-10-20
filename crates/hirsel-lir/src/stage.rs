@@ -85,6 +85,7 @@ impl StageKind {
             | Opcode::Convert
             | Opcode::IntArith
             | Opcode::MulAdd
+            | Opcode::ScalarUnary
             | Opcode::Check
             | Opcode::StorageLive
             | Opcode::StorageDead

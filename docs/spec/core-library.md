@@ -248,6 +248,16 @@ N fn int.truncate[I, J](value: I) -> J
 N fn int.wrapping_add[I](a: I, b: I) -> I
 N fn int.saturating_add[I](a: I, b: I) -> I
 N fn int.checked_add[I](a: I, b: I) -> Option[I]
+N fn int.wrapping_sub[I](a: I, b: I) -> I
+N fn int.saturating_sub[I](a: I, b: I) -> I
+N fn int.checked_sub[I](a: I, b: I) -> Option[I]
+N fn int.wrapping_mul[I](a: I, b: I) -> I
+N fn int.checked_mul[I](a: I, b: I) -> Option[I]
+N fn int.leading_zeros[I](value: I) -> I
+N fn int.trailing_zeros[I](value: I) -> I
+N fn int.count_ones[I](value: I) -> I
+N fn int.swap_bytes[I](value: I) -> I
+N fn int.reverse_bits[I](value: I) -> I
 N fn int.div_floor[I](a: I, b: I) -> I
 N fn int.mod[I](a: I, b: I) -> I
 N fn int.div_exact[I](a: I, b: I) -> I
@@ -257,7 +267,12 @@ N fn float.max[F](a: F, b: F) -> F
 N fn float.min_number[F](a: F, b: F) -> F
 N fn float.max_number[F](a: F, b: F) -> F
 N fn float.mul_add[F](a: F, b: F, c: F) -> F
-N fn float.total_order[F](a: F, b: F) -> i32
+N fn float.sqrt[F](value: F) -> F
+N fn float.floor[F](value: F) -> F
+N fn float.ceil[F](value: F) -> F
+N fn float.trunc[F](value: F) -> F
+N fn float.round[F](value: F) -> F
+N fn float.abs[F](value: F) -> F
 N fn float.to_i32[F](value: F) -> Result[i32, FloatIntError]
 N fn float.from_int[I, F](value: I) -> F
 N fn f32.bits(value: f32) -> u32
@@ -1524,15 +1539,34 @@ SEM-1 when the value is unrepresentable; and `int.truncate` requires a destinati
 than the source and keeps the low bits, interpreted with `J`'s signedness. `int.div_floor`
 rounds the quotient toward negative infinity, `int.mod` is its remainder with the divisor's
 sign, and `int.div_exact` fails SEM-1 for a nonzero remainder; zero divisors and signed
-`MIN / -1` fail. `int.unchecked_add`'s written aliasing contract is "no memory access; the
+`MIN / -1` fail. `int.wrapping_sub` and `int.wrapping_mul` give the mathematical result
+modulo 2^width, read with `I`'s signedness; `int.saturating_sub` gives the nearest bound of
+`I` when the difference is outside it (0 for an unsigned type); `int.checked_sub` and
+`int.checked_mul` give `None` exactly when the result is outside `I`. As for the `_add` forms,
+none fails or allocates. `int.leading_zeros`, `int.trailing_zeros` and `int.count_ones`
+count the zero bits above the highest one bit, the zero bits below the lowest one bit, and
+the one bits, of the operand's two's complement representation at `I`'s width; a zero
+operand has `I`'s width of leading and trailing zeros. `int.swap_bytes` reverses the order of
+the operand's bytes (an 8-bit operand is unchanged) and `int.reverse_bits` the order of its
+bits. Each result has the operand's type, so a count feeds a shift with no conversion, and
+none fails. `int.unchecked_add`'s written aliasing contract is "no memory access; the
 mathematical result must fit `I`"; violating it is outside DET-1. `simd.splat` requires
 `n > 0`; `simd.add` checks integer lanes in ascending order and cites the call on overflow.
+
+`float.sqrt` is IEEE 754 squareRoot, correctly rounded: `sqrt(-0)` is -0, `sqrt(+inf)` is
++inf, and a NaN or any value below -0 (including -inf) gives the NaN. `float.floor`,
+`float.ceil`, `float.trunc` and `float.round` are the IEEE roundToIntegral operations toward
+negative infinity, toward positive infinity, toward zero, and to nearest with ties away from
+zero. Each result is an integer value of the operand's type, exactly; signed zeros and
+infinities pass through, an integral operand is returned unchanged, a result rounded to zero
+keeps the operand's sign (`ceil(-0.5)`, `trunc(-0.5)` and `round(-0.4)` are -0), and a NaN gives
+the NaN. `float.abs` clears the sign: `abs(-0)` is +0 and `abs(-inf)` is +inf. None of these
+allocates or fails, and every result is exactly defined, so each engine gives the same bits.
 
 `float.from_int` converts any sized integer to `f32` or `f64`, rounding to nearest, ties to
 even, with no error case. `float.to_i32` truncates toward zero, returning `NotFinite` for NaN
 and infinities and `OutOfRange` when the truncated result is outside `i32`.
-`float.total_order` returns -1, 0 or 1 for IEEE totalOrder after NaN canonicalization; the
-NaN is the positive quiet canonical NaN. `f32.bits` and `f64.bits` expose the IEEE
+`f32.bits` and `f64.bits` expose the IEEE
 binary32 and binary64 representation, and `from_bits` reinterprets an unsigned word of the
 same width. These allocate nothing, preserve signed zero, infinities and every finite bit
 pattern, and canonicalize NaNs as [SEM-2](semantics.md#sem-2-floats) requires.

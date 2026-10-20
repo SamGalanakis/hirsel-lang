@@ -379,70 +379,13 @@ fn divide_word(a: List[u64], d: u64) -> (unique List[u64], u64) uses {} {
   (q, rem)
 }
 
-fn leading_zeros(word: u64) -> u64 uses {} {
-  if word == 0 {
-    return 64
-  }
-  let mut w = word
-  let mut n: u64 = 0
-  if w <= 0x00000000ffffffffu64 {
-    n += 32
-    w <<= 32
-  }
-  if w <= 0x0000ffffffffffffu64 {
-    n += 16
-    w <<= 16
-  }
-  if w <= 0x00ffffffffffffffu64 {
-    n += 8
-    w <<= 8
-  }
-  if w <= 0x0fffffffffffffffu64 {
-    n += 4
-    w <<= 4
-  }
-  if w <= 0x3fffffffffffffffu64 {
-    n += 2
-    w <<= 2
-  }
-  if w <= 0x7fffffffffffffffu64 {
-    n += 1
-  }
-  n
-}
-
 // Trailing zero bits of a nonzero magnitude.
 fn trailing_zero_bits(a: List[u64]) -> u64 uses {} {
   let mut i: u64 = 0
   while a[i] == 0 {
     i += 1
   }
-  let mut w = a[i]
-  let mut n = i * 64
-  if w & 0xffffffffu64 == 0 {
-    n += 32
-    w >>= 32
-  }
-  if w & 0xffffu64 == 0 {
-    n += 16
-    w >>= 16
-  }
-  if w & 0xffu64 == 0 {
-    n += 8
-    w >>= 8
-  }
-  if w & 0xfu64 == 0 {
-    n += 4
-    w >>= 4
-  }
-  if w & 0x3u64 == 0 {
-    n += 2
-    w >>= 2
-  }
-  if w & 1 == 0 {
-    n += 1
-  }
-  n
+  i * 64 + core@1/int.trailing_zeros(a[i])
 }
 
 fn shift_left_magnitude(a: List[u64], bits: u64) -> unique List[u64] uses {} {
@@ -495,7 +438,7 @@ fn shift_right_magnitude(a: List[u64], bits: u64) -> unique List[u64] uses {} {
 // num-bigint div_rem_core: Knuth TAOCP 4.3.1 algorithm D with the exercise 19-21 estimate.
 // The divisor has at least two limbs and a <= b is handled by the caller.
 fn divide_long(a: List[u64], b: List[u64]) -> (unique List[u64], unique List[u64]) uses {} {
-  let shift = leading_zeros(b[core@1/list.len(b) - 1])
+  let shift = core@1/int.leading_zeros(b[core@1/list.len(b) - 1])
   let divisor = shift_left_magnitude(b, shift)
   let mut rest = shift_left_magnitude(a, shift)
   let length = core@1/list.len(divisor)
@@ -1014,7 +957,7 @@ pub fn bit_length(value: BigInt) -> u64 uses {} {
   if length == 0 {
     return 0
   }
-  length * 64 - leading_zeros(value.magnitude[length - 1])
+  length * 64 - core@1/int.leading_zeros(value.magnitude[length - 1])
 }
 
 /// `value` times 2 to the `bits`.

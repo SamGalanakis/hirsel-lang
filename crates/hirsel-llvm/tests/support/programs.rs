@@ -125,7 +125,6 @@ pub fn op_name(op: BinaryOp) -> &'static str {
         BinaryOp::Max => "max",
         BinaryOp::MinNumber => "min_number",
         BinaryOp::MaxNumber => "max_number",
-        BinaryOp::TotalOrder => "total_order",
     }
 }
 

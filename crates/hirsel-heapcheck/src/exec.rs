@@ -3600,6 +3600,18 @@ impl<'p, S: Stage> Machine<'p, S> {
                     .map_err(|m| err(V::TypeConfusion, m))?;
                 self.define_fresh(f, result, Val::Bits { scalar: kind, bits })?;
             }
+            Inst::ScalarUnary {
+                result,
+                op,
+                operand,
+            } => {
+                let Val::Bits { scalar: kind, bits } = self.read_use(f, operand)? else {
+                    return fail(V::TypeConfusion, "scalar unary operand is not a scalar");
+                };
+                let bits =
+                    scalar::scalar_unary(op, kind, bits).map_err(|m| err(V::TypeConfusion, m))?;
+                self.define_fresh(f, result, Val::Bits { scalar: kind, bits })?;
+            }
             Inst::Compare {
                 result,
                 op,

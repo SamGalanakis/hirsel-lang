@@ -1144,7 +1144,7 @@ fn float_edges(t: &str) -> Vec<u64> {
 }
 
 /// IEEE totalOrder of two canonical-NaN values of `t` (SEM-2), computed on
-/// the bits: the oracle for `total_order` and for comparing results exactly.
+/// the bits: the order the min/max oracle breaks ties with.
 fn total_order(t: &str, a: u64, b: u64) -> i32 {
     let key = |bits: u64| -> i64 {
         if t == "f64" {
@@ -1202,14 +1202,13 @@ fn min_max(t: &str, a: u64, b: u64, min: bool, number: bool) -> u64 {
     }
 }
 
-/// `min`, `max`, `min_number`, `max_number`, `total_order` and `mul_add` of
-/// one float kind over every pair of edges (`mul_add` over triples of a
-/// smaller set), each result compared exactly through totalOrder (SEM-2).
+/// `min`, `max`, `min_number`, `max_number` and `mul_add` of one float kind
+/// over every pair of edges (`mul_add` over triples of a smaller set), each
+/// result compared exactly through its NaN-canonical bits (SEM-2).
 fn float_operations_lower(t: &str) {
     let edges = float_edges(t);
     let lit = |bits: u64| literal(t, bits);
-    let helpers =
-        format!("fn same(a: {t}, b: {t}) -> bool {{\n  float.total_order(a, b) == 0i32\n}}\n");
+    let helpers = format!("fn same(a: {t}, b: {t}) -> bool {{\n  {t}.bits(a) == {t}.bits(b)\n}}\n");
     let mut terms = Vec::new();
     for &a in &edges {
         for &b in &edges {
@@ -1227,12 +1226,6 @@ fn float_operations_lower(t: &str) {
                     lit(r)
                 ));
             }
-            terms.push(format!(
-                "float.total_order({}, {}) == {}i32",
-                lit(a),
-                lit(b),
-                total_order(t, a, b)
-            ));
         }
     }
     // mul_add rounds once: 0.1 * 10 - 1 is not zero, unlike two roundings.

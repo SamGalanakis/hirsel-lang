@@ -4,7 +4,7 @@
 //! library operations (LIR schema revision 6) are computed here on their
 //! mathematical definitions (SEM-1, SEM-2, docs/spec/core-library.md), independently of the
 //! interpreter and of emission.
-use hirsel_lir::ir::{ArithMode, BinaryOp, ConvertMode, UnaryOp};
+use hirsel_lir::ir::{ArithMode, BinaryOp, ConvertMode, ScalarUnaryOp, UnaryOp};
 use hirsel_lir::layout_types::ScalarKind;
 use std::cmp::Ordering;
 
@@ -101,7 +101,6 @@ pub(crate) fn binary(
             let bits = |v: f32| Ok(Some((kind, u128::from(v.to_bits()))));
             match op {
                 B::Min | B::Max | B::MinNumber | B::MaxNumber => bits(minmax_f32(op, a, b)),
-                B::TotalOrder => order_i32(total_order_f32(a, b)),
                 _ => float(op, a, b, bits, boolean),
             }
         }
@@ -110,7 +109,6 @@ pub(crate) fn binary(
             let bits = |v: f64| Ok(Some((kind, u128::from(v.to_bits()))));
             match op {
                 B::Min | B::Max | B::MinNumber | B::MaxNumber => bits(minmax_f64(op, a, b)),
-                B::TotalOrder => order_i32(total_order_f64(a, b)),
                 _ => float(op, a, b, bits, boolean),
             }
         }
@@ -168,7 +166,7 @@ pub(crate) fn binary(
                     B::Ge => boolean(a >= b),
                     B::Shl | B::Shr => unreachable!("shifts handled above"),
                     B::DivFloor | B::Mod | B::DivExact => unreachable!("divisions handled above"),
-                    B::Min | B::Max | B::MinNumber | B::MaxNumber | B::TotalOrder => {
+                    B::Min | B::Max | B::MinNumber | B::MaxNumber => {
                         Err(format!("{op:?} on an integer"))
                     }
                 }
@@ -191,7 +189,7 @@ pub(crate) fn binary(
                     B::Ge => boolean(left >= right),
                     B::Shl | B::Shr => unreachable!("shifts handled above"),
                     B::DivFloor | B::Mod | B::DivExact => unreachable!("divisions handled above"),
-                    B::Min | B::Max | B::MinNumber | B::MaxNumber | B::TotalOrder => {
+                    B::Min | B::Max | B::MinNumber | B::MaxNumber => {
                         Err(format!("{op:?} on an integer"))
                     }
                 }
@@ -234,7 +232,7 @@ where
         B::Shl | B::Shr | B::BitAnd | B::BitOr | B::BitXor | B::DivFloor | B::Mod | B::DivExact => {
             Err(format!("{op:?} on a float"))
         }
-        B::Min | B::Max | B::MinNumber | B::MaxNumber | B::TotalOrder => {
+        B::Min | B::Max | B::MinNumber | B::MaxNumber => {
             unreachable!("named float operations handled by the caller")
         }
     }
@@ -275,17 +273,8 @@ fn divide(op: BinaryOp, width: u32, signed: bool, left: u128, right: u128) -> Op
     Some(v as u128 & mask(width))
 }
 
-fn order_i32(order: Ordering) -> Outcome {
-    let v: i32 = match order {
-        Ordering::Less => -1,
-        Ordering::Equal => 0,
-        Ordering::Greater => 1,
-    };
-    Ok(Some((ScalarKind::I32, u128::from(v as u32))))
-}
-
 macro_rules! float_named {
-    ($minmax:ident, $total:ident, $t:ty) => {
+    ($minmax:ident, $t:ty) => {
         /// IEEE 754-2019 minimum/maximum (NaN propagates) and
         /// minimumNumber/maximumNumber (NaN is ignored), with -0 < +0 (SEM-2).
         fn $minmax(op: BinaryOp, a: $t, b: $t) -> $t {
@@ -314,16 +303,10 @@ macro_rules! float_named {
                 }
             }
         }
-
-        /// IEEE totalOrder after canonicalizing NaN to the positive quiet NaN (SEM-2).
-        fn $total(a: $t, b: $t) -> Ordering {
-            let canonical = |x: $t| if x.is_nan() { <$t>::NAN } else { x };
-            canonical(a).total_cmp(&canonical(b))
-        }
     };
 }
-float_named!(minmax_f32, total_order_f32, f32);
-float_named!(minmax_f64, total_order_f64, f64);
+float_named!(minmax_f32, f32);
+float_named!(minmax_f64, f64);
 
 /// `Convert` of `bits` of kind `from` in `mode` into kind `to`: the result
 /// bits and, for `TryNarrow` and `FloatToI32`, the flag. `Err` is a
@@ -461,11 +444,13 @@ pub(crate) fn int_arith(
         };
         return Ok((value & mask(width), None));
     }
-    if op != BinaryOp::Add {
-        return Err(format!("{op:?} in IntArith {mode:?}"));
-    }
-    let wrapped = left.wrapping_add(right) & mask(width);
-    let exact = binary(BinaryOp::Add, kind, left, kind, right)?.map(|(_, v)| v);
+    let wrapped = match (op, mode) {
+        (BinaryOp::Add, _) => left.wrapping_add(right),
+        (BinaryOp::Sub, _) => left.wrapping_sub(right),
+        (BinaryOp::Mul, ArithMode::Checked) => left.wrapping_mul(right),
+        _ => return Err(format!("{op:?} in IntArith {mode:?}")),
+    } & mask(width);
+    let exact = binary(op, kind, left, kind, right)?.map(|(_, v)| v);
     Ok(match mode {
         ArithMode::Wrapping => (wrapped, None),
         ArithMode::Checked => (
@@ -474,17 +459,80 @@ pub(crate) fn int_arith(
         ),
         ArithMode::Saturating => (
             exact.unwrap_or_else(|| {
-                // Signed overflow is toward the sign both operands share.
-                if signed && signed_value(right, width) < 0 {
-                    1 << (width - 1)
-                } else if signed {
-                    mask(width) >> 1
+                // Signed addition overflows toward the sign both operands share, and
+                // subtraction away from the right operand's sign; unsigned subtraction
+                // only below zero.
+                let negative = signed && signed_value(right, width) < 0;
+                let toward_min = if op == BinaryOp::Sub {
+                    !negative
                 } else {
-                    mask(width)
+                    negative
+                };
+                if !signed {
+                    if op == BinaryOp::Sub { 0 } else { mask(width) }
+                } else if toward_min {
+                    1 << (width - 1)
+                } else {
+                    mask(width) >> 1
                 }
             }),
             None,
         ),
+    })
+}
+
+/// `ScalarUnary`: the exact float or integer operation of one operand of `kind` (SEM-2:
+/// a NaN result reads as the kind's one observable NaN).
+pub(crate) fn scalar_unary(
+    op: ScalarUnaryOp,
+    kind: ScalarKind,
+    bits: u128,
+) -> Result<u128, String> {
+    use ScalarUnaryOp as U;
+    let invalid = || Err(format!("{op:?} of {kind:?}"));
+    if op.is_float() {
+        let f64_op = |x: f64| match op {
+            U::Sqrt => x.sqrt(),
+            U::Floor => x.floor(),
+            U::Ceil => x.ceil(),
+            U::Trunc => x.trunc(),
+            U::Round => x.round(),
+            _ => x.abs(),
+        };
+        let f32_op = |x: f32| match op {
+            U::Sqrt => x.sqrt(),
+            U::Floor => x.floor(),
+            U::Ceil => x.ceil(),
+            U::Trunc => x.trunc(),
+            U::Round => x.round(),
+            _ => x.abs(),
+        };
+        return Ok(match kind {
+            ScalarKind::F32 => {
+                let x = f32_op(f32::from_bits(bits as u32));
+                u128::from(if x.is_nan() { f32::NAN } else { x }.to_bits())
+            }
+            ScalarKind::F64 => {
+                let x = f64_op(f64::from_bits(bits as u64));
+                u128::from(if x.is_nan() { f64::NAN } else { x }.to_bits())
+            }
+            _ => return invalid(),
+        });
+    }
+    let Some((width, _)) = integer(kind) else {
+        return invalid();
+    };
+    let word = bits & mask(width);
+    // The operand's bits at the top of a u128, so the u128 operations count and reverse
+    // exactly the kind's width.
+    let high = word << (128 - width);
+    Ok(match op {
+        U::LeadingZeros => u128::from(high.leading_zeros().min(width)),
+        U::TrailingZeros => u128::from(word.trailing_zeros().min(width)),
+        U::CountOnes => u128::from(word.count_ones()),
+        U::SwapBytes => high.swap_bytes(),
+        U::ReverseBits => high.reverse_bits(),
+        _ => return invalid(),
     })
 }
 

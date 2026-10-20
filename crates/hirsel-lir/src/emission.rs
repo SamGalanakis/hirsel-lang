@@ -93,10 +93,11 @@ pub struct EmitInputs<'a> {
 }
 
 /// C library symbols for byte comparisons and those a backend's lowering may introduce for
-/// fused multiply-add on a target without it, float remainder and memory intrinsics, and the
-/// 128-bit division and integer-to-float conversion routines every C toolchain's support
-/// library (libgcc, compiler-rt) provides.
-pub const TOOLCHAIN_IMPORTS: [&str; 17] = [
+/// fused multiply-add and the exact rounding operations (`float.floor`, `ceil`, `trunc` and
+/// `round`) on a target without an instruction for them, float remainder and memory
+/// intrinsics, and the 128-bit division and integer-to-float conversion routines every C
+/// toolchain's support library (libgcc, compiler-rt) provides.
+pub const TOOLCHAIN_IMPORTS: [&str; 25] = [
     "__divti3",
     "__floattidf",
     "__floattisf",
@@ -106,6 +107,10 @@ pub const TOOLCHAIN_IMPORTS: [&str; 17] = [
     "__udivti3",
     "__umodti3",
     "bcmp",
+    "ceil",
+    "ceilf",
+    "floor",
+    "floorf",
     "fma",
     "fmaf",
     "fmod",
@@ -114,6 +119,10 @@ pub const TOOLCHAIN_IMPORTS: [&str; 17] = [
     "memcpy",
     "memmove",
     "memset",
+    "round",
+    "roundf",
+    "trunc",
+    "truncf",
 ];
 
 /// The link name of a definition (and specialized instance). Injective and C-identifier safe:

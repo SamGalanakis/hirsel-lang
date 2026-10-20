@@ -18,7 +18,6 @@ mod stdlib_constant_time;
 mod stdlib_crc32;
 mod stdlib_deque;
 mod stdlib_exact_sum_vectors;
-mod stdlib_float_math;
 mod stdlib_graphemes;
 mod stdlib_hash_vectors;
 mod stdlib_http;

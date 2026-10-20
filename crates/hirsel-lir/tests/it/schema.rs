@@ -934,7 +934,6 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         BinaryOp::Max,
         BinaryOp::MinNumber,
         BinaryOp::MaxNumber,
-        BinaryOp::TotalOrder,
     ] {
         insts.push(Inst::Binary {
             result: v(44),
@@ -995,6 +994,11 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         left: v(1),
         right: v(10),
         addend: v(1),
+    });
+    insts.push(Inst::ScalarUnary {
+        result: v(54),
+        op: ScalarUnaryOp::ReverseBits,
+        operand: v(1),
     });
     insts.push(Inst::IsUnique {
         result: v(46),

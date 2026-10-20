@@ -50,7 +50,10 @@ File narrowing consumes its handle on success and failure.
 
 Integer kernels cover all ten sized types. The library division family rejects
 MIN/-1 even for mod; the ordinary `%` kernel retains SEM-1's zero exception.
-Float kernels separately round binary32/64 and canonicalize NaNs. The four
+`integer::arith` gives the named wrapping, saturating and checked add, sub and
+mul, and `integer::bits` the bit counts and reversals of the word at its width.
+Float kernels separately round binary32/64 and canonicalize NaNs; `float::unary`
+is Rust's exact `sqrt`, `floor`, `ceil`, `trunc`, `round` and `abs`. The four
 bits/from_bits operations preserve all finite IEEE patterns, signed zeros and
 infinities; `f64.from_f32` widens exactly and `f32.from_f64` rounds to nearest,
 ties to even. `char.to_u32` and `char.from_u32` convert between `Value::Char` and

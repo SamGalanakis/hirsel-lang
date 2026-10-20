@@ -118,8 +118,6 @@ fn float.max_number[F](a: F, b: F) -> F
 @noalloc
 fn float.mul_add[F](a: F, b: F, c: F) -> F
 @noalloc
-fn float.total_order[F](a: F, b: F) -> i32
-@noalloc
 fn float.to_i32[F](value: F) -> Result[i32, FloatIntError]
 @noalloc
 fn float.from_int[I, F](value: I) -> F

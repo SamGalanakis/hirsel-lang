@@ -1964,6 +1964,7 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::Decode { result, .. }
             | Inst::UniqueCopy { result, .. }
             | Inst::MulAdd { result, .. }
+            | Inst::ScalarUnary { result, .. }
             | Inst::Copy { result, .. } => self.create(st, result),
             Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
                 self.create(st, result);
@@ -3616,6 +3617,12 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
                 *left = map(*left);
                 *right = map(*right);
                 *addend = map(*addend);
+            }
+            Inst::ScalarUnary {
+                result, operand, ..
+            } => {
+                *result = map(*result);
+                *operand = map(*operand);
             }
             Inst::SeqLen { result, value }
             | Inst::SeqCapacity { result, value }
