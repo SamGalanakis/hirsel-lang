@@ -64,20 +64,44 @@ pub fn llvm_version() -> String {
     hirsel_llvm::PINNED_LLVM.to_string()
 }
 
+/// For a generated (`= comptime`) body, the item-relative offset of its
+/// `comptime` expression, where its sites are reported: they are offsets into the
+/// generated text, not into the item's file.
+fn generator_site(syntax: &hirsel_syntax::ItemSyntax) -> Option<u32> {
+    let hirsel_syntax::ItemKind::Function {
+        body: Some(body), ..
+    } = syntax.item.kind
+    else {
+        return None;
+    };
+    let body = &syntax.tree.expressions[body.0 as usize];
+    matches!(body.kind, hirsel_syntax::ExprKind::Comptime(_)).then(|| {
+        let span = body.origin.span;
+        if span.anchor == syntax.anchor {
+            span.start
+        } else {
+            0
+        }
+    })
+}
+
 /// Retain immutable source ownership for line/site profiling without querying a backend.
 pub fn profile_sources(input: &hirsel_engine::NativeInput) -> ProfileSources {
     input
         .source_owners
         .iter()
         .filter_map(|(definition, owner)| {
-            let (file, base) = input.sources.anchor(owner.syntax.anchor)?;
+            let syntax = &owner.syntax;
+            let (file, base) = input.sources.anchor(syntax.anchor)?;
             let file = input.sources.file(file)?;
+            let generated = generator_site(syntax);
             Some((
                 definition.clone(),
                 ProfileSource {
                     path: file.path.clone(),
                     file: file.clone(),
                     base,
+                    generated,
                 },
             ))
         })

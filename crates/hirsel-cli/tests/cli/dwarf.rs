@@ -265,6 +265,49 @@ fn cranelift_debug_lines_match_llvm_per_function_on_both_targets() {
     });
 }
 
+/// A generated (`= comptime`) body's sites are offsets into its generated text, not into
+/// the declaring file: its line table names the generator's line for all of its code, as a
+/// macro's expansion is reported at its call, in both backends.
+#[test]
+fn a_generated_body_is_reported_at_its_generator() {
+    let program = "@serializable\npub type Pair {\n  a: u64,\n  b: String,\n}\n\n\
+        @preserves_unique(out)\npub fn pair_json_into(value: Pair, mut out: List[u8], depth: u64) -> Result[\n  \
+        (),\n  json.JsonError\n] uses {} = comptime derive.json_into(shape(Pair))\n\n\
+        pub fn main() -> Result[(), ()] {\n  let mut out: List[u8] = []\n  \
+        match pair_json_into(Pair(a: 1, b: \"x\"), mut out, 0) {\n    Ok(()) => Ok(()),\n    \
+        Error(_) => Error(()),\n  }\n}\n";
+    let generator = program
+        .lines()
+        .position(|line| line.contains("= comptime"))
+        .unwrap() as u64
+        + 1;
+    let source = super::std_file(program);
+    for backend in ["llvm", "cranelift"] {
+        let exe = source.with_extension(format!("{backend}-exe"));
+        let built = output(
+            Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .args(["build", "--debug", "--backend", backend])
+                .arg(&source)
+                .arg("-o")
+                .arg(&exe),
+        );
+        assert!(built.status.success(), "{backend}: {built:?}");
+        let lines = function_lines(&exe, &source);
+        let generated = lines
+            .iter()
+            .find(|(name, _)| name.ends_with("/pair_json_into"))
+            .unwrap_or_else(|| panic!("{backend}: {lines:?}"));
+        assert_eq!(
+            generated.1,
+            &BTreeSet::from([generator]),
+            "{backend}: {lines:?}"
+        );
+        assert_eq!(output(&mut Command::new(&exe)).status.code(), Some(0));
+        std::fs::remove_file(debug_file(&exe)).unwrap();
+        std::fs::remove_file(exe).unwrap();
+    }
+}
+
 #[test]
 fn manifest_artifacts_are_identical_under_different_source_roots() {
     hirsel_engine::with_compiler_stack(|| {
