@@ -571,7 +571,7 @@ fn telemetry_context_is_ordinary_source() {
 }
 
 #[test]
-fn telemetry_limits_and_goldens_agree_on_both_native_backends() {
+fn telemetry_limits_agree_on_both_native_backends() {
     with_compiler_stack(|| {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let limits = root.join("crates/hirsel-driver/tests/fixtures/telemetry/limits.hir");
@@ -591,51 +591,40 @@ fn telemetry_limits_and_goldens_agree_on_both_native_backends() {
             ),
             "{outcome:?}"
         );
-        for fixture in [
-            "conformance/SEM/SEM-3-telemetry-run.hir",
-            "conformance/SEM/SEM-3-telemetry-context-run.hir",
-            "conformance/SEM/SEM-3-log-run.hir",
-            "crates/hirsel-driver/tests/fixtures/telemetry/limits.hir",
-        ] {
-            let path = root.join(fixture);
-            for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-                let grants =
-                    if fixture.ends_with("context-run.hir") || fixture.ends_with("limits.hir") {
-                        "{}"
-                    } else {
-                        r#"{"io":{"dirs":[],"stderr":"stderr.bytes@1"}}"#
-                    };
-                let outcome = native::run_path_native_backend(
-                    &path,
-                    HostLaunch::Live {
-                        config: LaunchConfig::Grants {
-                            input: std::ffi::OsStr::new(grants),
-                            arguments: None,
-                        },
-                        record: None,
-                        revocations: None,
+        // The telemetry corpus cases (SEM-3-telemetry-run, -context-run, SEM-3-log-run)
+        // run on both backends in the Cranelift parity set; the limits fixture,
+        // past the corpus step budget, runs natively only here.
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let outcome = native::run_path_native_backend(
+                &limits,
+                HostLaunch::Live {
+                    config: LaunchConfig::Grants {
+                        input: std::ffi::OsStr::new("{}"),
+                        arguments: None,
                     },
-                    None,
-                    backend,
-                    native::Output::Streams {
-                        stdout: &mut stdout,
-                        stderr: &mut stderr,
-                    },
-                    Verify::On,
-                )
-                .unwrap()
-                .unwrap();
-                assert!(
-                    matches!(
-                        outcome,
-                        RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
-                    ),
-                    "{fixture} {backend:?}: {outcome:?}"
-                );
-                assert!(stdout.is_empty(), "{fixture} {backend:?}: {stdout:?}");
-            }
+                    record: None,
+                    revocations: None,
+                },
+                None,
+                backend,
+                native::Output::Streams {
+                    stdout: &mut stdout,
+                    stderr: &mut stderr,
+                },
+                Verify::On,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(
+                matches!(
+                    outcome,
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+                ),
+                "{backend:?}: {outcome:?}"
+            );
+            assert!(stdout.is_empty(), "{backend:?}: {stdout:?}");
         }
     });
 }

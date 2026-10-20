@@ -1,5 +1,5 @@
-//! The precheck tests' fixture: a temporary directory of packages, std named
-//! absolutely, and loading through a chosen package cache.
+//! The precheck tests' fixture: a temporary directory of packages and loading
+//! through a chosen package cache.
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_syntax::PackageId;
@@ -53,8 +53,10 @@ pub fn package(name: &str) -> PackageId {
         version: "1".into(),
     }
 }
+/// std's manifest, named absolutely: manifests are written into a temporary directory.
+/// The `it` binary's precheck tests use small libraries instead.
+#[allow(dead_code)]
 pub fn std_manifest() -> PathBuf {
-    // Manifests are written into a temporary directory: name std absolutely.
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../stdlib/std@1/hirsel.json")
         .canonicalize()
@@ -63,13 +65,3 @@ pub fn std_manifest() -> PathBuf {
 pub fn load(path: &Path, cache: &PackageCache) -> LoadedProgram {
     load_program_source_with_cache(path, None, cache).unwrap()
 }
-
-pub const STD_PROGRAM: &str = "pub type AppError = Grant(GrantError) | Output(OutputError)
-
-pub fn main(rt: Io) -> Result[(), AppError] {
-  let output = io.stdout(rt) ? Grant
-  out.print(output, string.trim(\" hello \")) ? Output
-  out.print(output, u64.to_string(42u64)) ? Output
-  Ok(())
-}
-";

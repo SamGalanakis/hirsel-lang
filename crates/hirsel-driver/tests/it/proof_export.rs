@@ -679,11 +679,12 @@ fn sampled(path: &Path) -> bool {
         "hirsel.test.sample",
         [SEED, relative.to_string_lossy().as_bytes()],
     );
-    hash.0[0] % 16 == 0
+    // The seeded 1/64 reaches no fact helper (2026-10-20): name one fact owner.
+    hash.0[0] % 64 == 0 || relative == Path::new("CT/CT-1-fact-failure-ok.hir")
 }
 
-/// In every run of this binary: the seeded sample, which must reach
-/// every fingerprint derivation; the full gate runs every program.
+/// In every run of this binary: the seeded sample (1/64 of the accepted corpus),
+/// which must reach every fingerprint derivation; the full gate runs every program.
 #[test]
 fn a_sample_of_accepted_programs_round_trips() {
     let kinds = round_trip_all(sampled);

@@ -256,6 +256,8 @@ fn unreached_dependency_bodies_lower_when_the_program_starts_reaching_them() {
     });
 }
 
+/// std checked completely from source (no precheck: a prechecked std lowers
+/// nothing), so a std construct that forces unreached bodies to lower shows here.
 #[test]
 fn empty_main_lowers_no_std_body_that_it_does_not_reach() {
     with_compiler_stack(|| {
@@ -279,16 +281,10 @@ fn empty_main_lowers_no_std_body_that_it_does_not_reach() {
                 "{module}.{name}"
             );
         }
-        // Each check holds all of std checked from source: end the first before
-        // the second, or both stay alive (shadowing drops nothing).
-        drop(program);
-        f.app(
-            "pub fn main() {\n  let s = std@1/u64.to_string(42u64)\n}\n",
-            ("std", &std),
-        );
-        let program = f.check();
-        assert_eq!(lowered(&program, "std", &["u64"], "to_string"), 1);
-        assert_eq!(lowered(&program, "std", &["unicode"], "normalize_nfc"), 0);
+        // That a body lowers once the program reaches it is
+        // `unreached_dependency_bodies_lower_when_the_program_starts_reaching_them`,
+        // on a small library: a second std check from source here would double
+        // this test's cost for the same property.
     });
 }
 

@@ -77,15 +77,51 @@ fn launch_metadata_errors_are_tool_errors() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// PROG-1's source-dependency program, bundled and moved: a source outside the
+/// program's directory, two exposed packages and a nested dependency on another
+/// version of one of them. Without its std dependency: a bundle renames std's
+/// sources, so the toolchain's precheck cannot serve it and the run would check
+/// all of std from source for a manifest rewrite that treats std like any package.
 #[test]
 fn packaged_replay_moves_without_original_manifest_paths() {
     with_compiler_stack(|| {
-        let source = root().join("conformance/PROG/PROG-1-source-dependencies-run.hir");
+        let fixtures = std::fs::canonicalize(root().join("packages/fixtures")).unwrap();
+        let program = root().join("conformance/PROG/PROG-1-source-dependencies-run.hir");
+        let text = std::fs::read_to_string(&program)
+            .unwrap()
+            .replace("std.identity(42)", "42");
+        assert!(!text.contains("std."));
+        let input =
+            std::env::temp_dir().join(format!("hirsel-package-input-{}", std::process::id()));
+        std::fs::create_dir_all(&input).unwrap();
+        let source = input.join("source.hir");
+        std::fs::write(&source, &text).unwrap();
+        let dependency = |name: &str, head: &str, module: &[&str]| {
+            serde_json::json!({
+                "manifest": fixtures.join(format!("{name}@1/hirsel.json")),
+                "package": {"name": name, "version": "1"},
+                "expose": [{"head": head, "module": module}],
+            })
+        };
+        let manifest = serde_json::json!({
+            "schema": 1,
+            "package": {"name": "application", "version": "1"},
+            "entry": {"module": [], "name": "main"},
+            "sources": [
+                {"path": "source.hir", "module": []},
+                {"path": fixtures.join("helper.hir"), "module": ["helper"]},
+            ],
+            "dependencies": [
+                dependency("probe", "vendor", &["api"]),
+                dependency("wrapper", "other", &[]),
+            ],
+        });
+        std::fs::write(source.with_extension("hir.json"), manifest.to_string()).unwrap();
         let dir =
             std::env::temp_dir().join(format!("hirsel-package-bundle-{}", std::process::id()));
         let moved = dir.with_extension("moved");
-        let text = std::fs::read_to_string(&source).unwrap();
         assert!(bundle_program(&source, &text, &dir).unwrap());
+        std::fs::remove_dir_all(&input).unwrap();
         std::fs::rename(&dir, &moved).unwrap();
         assert!(matches!(
             run_path(&moved.join("source.hir"), &mut Vec::new()).unwrap(),
