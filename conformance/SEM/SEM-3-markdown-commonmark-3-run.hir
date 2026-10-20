@@ -1,0 +1,692 @@
+// rule: SEM-3
+// expect: run
+// steps: 19000000
+// one program runs this batch of the suite, which outgrows the default budget
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/196",
+    "[foo]: /url '\ntitle\nline1\nline2\n'\n\n[foo]\n",
+    "<p><a href=\"/url\" title=\"\ntitle\nline1\nline2\n\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/197",
+    "[foo]: /url 'title\n\nwith blank line'\n\n[foo]\n",
+    "<p>[foo]: /url 'title</p>\n<p>with blank line'</p>\n<p>[foo]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/198",
+    "[foo]:\n/url\n\n[foo]\n",
+    "<p><a href=\"/url\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/199",
+    "[foo]:\n\n[foo]\n",
+    "<p>[foo]:</p>\n<p>[foo]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/200",
+    "[foo]: <>\n\n[foo]\n",
+    "<p><a href=\"\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/201",
+    "[foo]: <bar>(baz)\n\n[foo]\n",
+    "<p>[foo]: <bar>(baz)</p>\n<p>[foo]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/202",
+    "[foo]: /url\\bar\\*baz \"foo\\\"bar\\baz\"\n\n[foo]\n",
+    "<p><a href=\"/url%5Cbar*baz\" title=\"foo&quot;bar\\baz\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/203",
+    "[foo]\n\n[foo]: url\n",
+    "<p><a href=\"url\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/204",
+    "[foo]\n\n[foo]: first\n[foo]: second\n",
+    "<p><a href=\"first\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/205",
+    "[FOO]: /url\n\n[Foo]\n",
+    "<p><a href=\"/url\">Foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/206",
+    "[ΑΓΩ]: /φου\n\n[αγω]\n",
+    "<p><a href=\"/%CF%86%CE%BF%CF%85\">αγω</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/207",
+    "[foo]: /url\n",
+    "",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/208",
+    "[\nfoo\n]: /url\nbar\n",
+    "<p>bar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/209",
+    "[foo]: /url \"title\" ok\n",
+    "<p>[foo]: /url &quot;title&quot; ok</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/210",
+    "[foo]: /url\n\"title\" ok\n",
+    "<p>&quot;title&quot; ok</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/211",
+    "    [foo]: /url \"title\"\n\n[foo]\n",
+    "<pre><code>[foo]: /url &quot;title&quot;\n</code></pre>\n<p>[foo]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/212",
+    "```\n[foo]: /url\n```\n\n[foo]\n",
+    "<pre><code>[foo]: /url\n</code></pre>\n<p>[foo]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/213",
+    "Foo\n[bar]: /baz\n\n[bar]\n",
+    "<p>Foo\n[bar]: /baz</p>\n<p>[bar]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/214",
+    "# [Foo]\n[foo]: /url\n> bar\n",
+    "<h1><a href=\"/url\">Foo</a></h1>\n<blockquote>\n<p>bar</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/215",
+    "[foo]: /url\nbar\n===\n[foo]\n",
+    "<h1>bar</h1>\n<p><a href=\"/url\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/216",
+    "[foo]: /url\n===\n[foo]\n",
+    "<p>===\n<a href=\"/url\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/217",
+    "[foo]: /foo-url \"foo\"\n[bar]: /bar-url\n  \"bar\"\n[baz]: /baz-url\n\n[foo],\n[bar],\n[baz]\n",
+    "<p><a href=\"/foo-url\" title=\"foo\">foo</a>,\n<a href=\"/bar-url\" title=\"bar\">bar</a>,\n<a href=\"/baz-url\">baz</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/218",
+    "[foo]\n\n> [foo]: /url\n",
+    "<p><a href=\"/url\">foo</a></p>\n<blockquote>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/219",
+    "aaa\n\nbbb\n",
+    "<p>aaa</p>\n<p>bbb</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/220",
+    "aaa\nbbb\n\nccc\nddd\n",
+    "<p>aaa\nbbb</p>\n<p>ccc\nddd</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/221",
+    "aaa\n\n\nbbb\n",
+    "<p>aaa</p>\n<p>bbb</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/222",
+    "  aaa\n bbb\n",
+    "<p>aaa\nbbb</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/223",
+    "aaa\n             bbb\n                                       ccc\n",
+    "<p>aaa\nbbb\nccc</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/224",
+    "   aaa\nbbb\n",
+    "<p>aaa\nbbb</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/225",
+    "    aaa\nbbb\n",
+    "<pre><code>aaa\n</code></pre>\n<p>bbb</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Paragraphs/226",
+    "aaa     \nbbb     \n",
+    "<p>aaa<br />\nbbb</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Blank lines/227",
+    "  \n\naaa\n  \n\n# aaa\n\n  \n",
+    "<p>aaa</p>\n<h1>aaa</h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/228",
+    "> # Foo\n> bar\n> baz\n",
+    "<blockquote>\n<h1>Foo</h1>\n<p>bar\nbaz</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/229",
+    "># Foo\n>bar\n> baz\n",
+    "<blockquote>\n<h1>Foo</h1>\n<p>bar\nbaz</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/230",
+    "   > # Foo\n   > bar\n > baz\n",
+    "<blockquote>\n<h1>Foo</h1>\n<p>bar\nbaz</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/231",
+    "    > # Foo\n    > bar\n    > baz\n",
+    "<pre><code>&gt; # Foo\n&gt; bar\n&gt; baz\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/232",
+    "> # Foo\n> bar\nbaz\n",
+    "<blockquote>\n<h1>Foo</h1>\n<p>bar\nbaz</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/233",
+    "> bar\nbaz\n> foo\n",
+    "<blockquote>\n<p>bar\nbaz\nfoo</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/234",
+    "> foo\n---\n",
+    "<blockquote>\n<p>foo</p>\n</blockquote>\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/235",
+    "> - foo\n- bar\n",
+    "<blockquote>\n<ul>\n<li>foo</li>\n</ul>\n</blockquote>\n<ul>\n<li>bar</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/236",
+    ">     foo\n    bar\n",
+    "<blockquote>\n<pre><code>foo\n</code></pre>\n</blockquote>\n<pre><code>bar\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/237",
+    "> ```\nfoo\n```\n",
+    "<blockquote>\n<pre><code></code></pre>\n</blockquote>\n<p>foo</p>\n<pre><code></code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/238",
+    "> foo\n    - bar\n",
+    "<blockquote>\n<p>foo\n- bar</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/239",
+    ">\n",
+    "<blockquote>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/240",
+    ">\n>  \n> \n",
+    "<blockquote>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/241",
+    ">\n> foo\n>  \n",
+    "<blockquote>\n<p>foo</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/242",
+    "> foo\n\n> bar\n",
+    "<blockquote>\n<p>foo</p>\n</blockquote>\n<blockquote>\n<p>bar</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/243",
+    "> foo\n> bar\n",
+    "<blockquote>\n<p>foo\nbar</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/244",
+    "> foo\n>\n> bar\n",
+    "<blockquote>\n<p>foo</p>\n<p>bar</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/245",
+    "foo\n> bar\n",
+    "<p>foo</p>\n<blockquote>\n<p>bar</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/246",
+    "> aaa\n***\n> bbb\n",
+    "<blockquote>\n<p>aaa</p>\n</blockquote>\n<hr />\n<blockquote>\n<p>bbb</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/247",
+    "> bar\nbaz\n",
+    "<blockquote>\n<p>bar\nbaz</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/248",
+    "> bar\n\nbaz\n",
+    "<blockquote>\n<p>bar</p>\n</blockquote>\n<p>baz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/249",
+    "> bar\n>\nbaz\n",
+    "<blockquote>\n<p>bar</p>\n</blockquote>\n<p>baz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/250",
+    "> > > foo\nbar\n",
+    "<blockquote>\n<blockquote>\n<blockquote>\n<p>foo\nbar</p>\n</blockquote>\n</blockquote>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/251",
+    ">>> foo\n> bar\n>>baz\n",
+    "<blockquote>\n<blockquote>\n<blockquote>\n<p>foo\nbar\nbaz</p>\n</blockquote>\n</blockquote>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Block quotes/252",
+    ">     code\n\n>    not code\n",
+    "<blockquote>\n<pre><code>code\n</code></pre>\n</blockquote>\n<blockquote>\n<p>not code</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/253",
+    "A paragraph\nwith two lines.\n\n    indented code\n\n> A block quote.\n",
+    "<p>A paragraph\nwith two lines.</p>\n<pre><code>indented code\n</code></pre>\n<blockquote>\n<p>A block quote.</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/254",
+    "1.  A paragraph\n    with two lines.\n\n        indented code\n\n    > A block quote.\n",
+    "<ol>\n<li>\n<p>A paragraph\nwith two lines.</p>\n<pre><code>indented code\n</code></pre>\n<blockquote>\n<p>A block quote.</p>\n</blockquote>\n</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/255",
+    "- one\n\n two\n",
+    "<ul>\n<li>one</li>\n</ul>\n<p>two</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/256",
+    "- one\n\n  two\n",
+    "<ul>\n<li>\n<p>one</p>\n<p>two</p>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/257",
+    " -    one\n\n     two\n",
+    "<ul>\n<li>one</li>\n</ul>\n<pre><code> two\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/258",
+    " -    one\n\n      two\n",
+    "<ul>\n<li>\n<p>one</p>\n<p>two</p>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/259",
+    "   > > 1.  one\n>>\n>>     two\n",
+    "<blockquote>\n<blockquote>\n<ol>\n<li>\n<p>one</p>\n<p>two</p>\n</li>\n</ol>\n</blockquote>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/260",
+    ">>- one\n>>\n  >  > two\n",
+    "<blockquote>\n<blockquote>\n<ul>\n<li>one</li>\n</ul>\n<p>two</p>\n</blockquote>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/261",
+    "-one\n\n2.two\n",
+    "<p>-one</p>\n<p>2.two</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/262",
+    "- foo\n\n\n  bar\n",
+    "<ul>\n<li>\n<p>foo</p>\n<p>bar</p>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/263",
+    "1.  foo\n\n    ```\n    bar\n    ```\n\n    baz\n\n    > bam\n",
+    "<ol>\n<li>\n<p>foo</p>\n<pre><code>bar\n</code></pre>\n<p>baz</p>\n<blockquote>\n<p>bam</p>\n</blockquote>\n</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/264",
+    "- Foo\n\n      bar\n\n\n      baz\n",
+    "<ul>\n<li>\n<p>Foo</p>\n<pre><code>bar\n\n\nbaz\n</code></pre>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/265",
+    "123456789. ok\n",
+    "<ol start=\"123456789\">\n<li>ok</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/266",
+    "1234567890. not ok\n",
+    "<p>1234567890. not ok</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/267",
+    "0. ok\n",
+    "<ol start=\"0\">\n<li>ok</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/268",
+    "003. ok\n",
+    "<ol start=\"3\">\n<li>ok</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/269",
+    "-1. not ok\n",
+    "<p>-1. not ok</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/270",
+    "- foo\n\n      bar\n",
+    "<ul>\n<li>\n<p>foo</p>\n<pre><code>bar\n</code></pre>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/271",
+    "  10.  foo\n\n           bar\n",
+    "<ol start=\"10\">\n<li>\n<p>foo</p>\n<pre><code>bar\n</code></pre>\n</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/272",
+    "    indented code\n\nparagraph\n\n    more code\n",
+    "<pre><code>indented code\n</code></pre>\n<p>paragraph</p>\n<pre><code>more code\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/273",
+    "1.     indented code\n\n   paragraph\n\n       more code\n",
+    "<ol>\n<li>\n<pre><code>indented code\n</code></pre>\n<p>paragraph</p>\n<pre><code>more code\n</code></pre>\n</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/274",
+    "1.      indented code\n\n   paragraph\n\n       more code\n",
+    "<ol>\n<li>\n<pre><code> indented code\n</code></pre>\n<p>paragraph</p>\n<pre><code>more code\n</code></pre>\n</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/275",
+    "   foo\n\nbar\n",
+    "<p>foo</p>\n<p>bar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/276",
+    "-    foo\n\n  bar\n",
+    "<ul>\n<li>foo</li>\n</ul>\n<p>bar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/277",
+    "-  foo\n\n   bar\n",
+    "<ul>\n<li>\n<p>foo</p>\n<p>bar</p>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/278",
+    "-\n  foo\n-\n  ```\n  bar\n  ```\n-\n      baz\n",
+    "<ul>\n<li>foo</li>\n<li>\n<pre><code>bar\n</code></pre>\n</li>\n<li>\n<pre><code>baz\n</code></pre>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/279",
+    "-   \n  foo\n",
+    "<ul>\n<li>foo</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/280",
+    "-\n\n  foo\n",
+    "<ul>\n<li></li>\n</ul>\n<p>foo</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/281",
+    "- foo\n-\n- bar\n",
+    "<ul>\n<li>foo</li>\n<li></li>\n<li>bar</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/282",
+    "- foo\n-   \n- bar\n",
+    "<ul>\n<li>foo</li>\n<li></li>\n<li>bar</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/283",
+    "1. foo\n2.\n3. bar\n",
+    "<ol>\n<li>foo</li>\n<li></li>\n<li>bar</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/284",
+    "*\n",
+    "<ul>\n<li></li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/285",
+    "foo\n*\n\nfoo\n1.\n",
+    "<p>foo\n*</p>\n<p>foo\n1.</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/286",
+    " 1.  A paragraph\n     with two lines.\n\n         indented code\n\n     > A block quote.\n",
+    "<ol>\n<li>\n<p>A paragraph\nwith two lines.</p>\n<pre><code>indented code\n</code></pre>\n<blockquote>\n<p>A block quote.</p>\n</blockquote>\n</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/287",
+    "  1.  A paragraph\n      with two lines.\n\n          indented code\n\n      > A block quote.\n",
+    "<ol>\n<li>\n<p>A paragraph\nwith two lines.</p>\n<pre><code>indented code\n</code></pre>\n<blockquote>\n<p>A block quote.</p>\n</blockquote>\n</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/288",
+    "   1.  A paragraph\n       with two lines.\n\n           indented code\n\n       > A block quote.\n",
+    "<ol>\n<li>\n<p>A paragraph\nwith two lines.</p>\n<pre><code>indented code\n</code></pre>\n<blockquote>\n<p>A block quote.</p>\n</blockquote>\n</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/289",
+    "    1.  A paragraph\n        with two lines.\n\n            indented code\n\n        > A block quote.\n",
+    "<pre><code>1.  A paragraph\n    with two lines.\n\n        indented code\n\n    &gt; A block quote.\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/290",
+    "  1.  A paragraph\nwith two lines.\n\n          indented code\n\n      > A block quote.\n",
+    "<ol>\n<li>\n<p>A paragraph\nwith two lines.</p>\n<pre><code>indented code\n</code></pre>\n<blockquote>\n<p>A block quote.</p>\n</blockquote>\n</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/291",
+    "  1.  A paragraph\n    with two lines.\n",
+    "<ol>\n<li>A paragraph\nwith two lines.</li>\n</ol>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/List items/292",
+    "> 1. > Blockquote\ncontinued here.\n",
+    "<blockquote>\n<ol>\n<li>\n<blockquote>\n<p>Blockquote\ncontinued here.</p>\n</blockquote>\n</li>\n</ol>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

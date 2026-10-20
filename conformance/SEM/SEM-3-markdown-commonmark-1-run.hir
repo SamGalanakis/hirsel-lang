@@ -1,0 +1,755 @@
+// rule: SEM-3
+// expect: run
+// steps: 19000000
+// one program runs this batch of the suite, which outgrows the default budget
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/1",
+    "\tfoo\tbaz\t\tbim\n",
+    "<pre><code>foo\tbaz\t\tbim\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/2",
+    "  \tfoo\tbaz\t\tbim\n",
+    "<pre><code>foo\tbaz\t\tbim\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/3",
+    "    a\ta\n    ὐ\ta\n",
+    "<pre><code>a\ta\nὐ\ta\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/4",
+    "  - foo\n\n\tbar\n",
+    "<ul>\n<li>\n<p>foo</p>\n<p>bar</p>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/5",
+    "- foo\n\n\t\tbar\n",
+    "<ul>\n<li>\n<p>foo</p>\n<pre><code>  bar\n</code></pre>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/6",
+    ">\t\tfoo\n",
+    "<blockquote>\n<pre><code>  foo\n</code></pre>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/7",
+    "-\t\tfoo\n",
+    "<ul>\n<li>\n<pre><code>  foo\n</code></pre>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/8",
+    "    foo\n\tbar\n",
+    "<pre><code>foo\nbar\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/9",
+    " - foo\n   - bar\n\t - baz\n",
+    "<ul>\n<li>foo\n<ul>\n<li>bar\n<ul>\n<li>baz</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/10",
+    "#\tFoo\n",
+    "<h1>Foo</h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Tabs/11",
+    "*\t*\t*\t\n",
+    "<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/12",
+    "\\!\\\"\\#\\$\\%\\&\\'\\(\\)\\*\\+\\,\\-\\.\\/\\:\\;\\<\\=\\>\\?\\@\\[\\\\\\]\\^\\_\\`\\{\\|\\}\\~\n",
+    "<p>!&quot;#$%&amp;'()*+,-./:;&lt;=&gt;?@[\\]^_`{|}~</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/13",
+    "\\\t\\A\\a\\ \\3\\φ\\«\n",
+    "<p>\\\t\\A\\a\\ \\3\\φ\\«</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/14",
+    "\\*not emphasized*\n\\<br/> not a tag\n\\[not a link](/foo)\n\\`not code`\n1\\. not a list\n\\* not a list\n\\# not a heading\n\\[foo]: /url \"not a reference\"\n\\&ouml; not a character entity\n",
+    "<p>*not emphasized*\n&lt;br/&gt; not a tag\n[not a link](/foo)\n`not code`\n1. not a list\n* not a list\n# not a heading\n[foo]: /url &quot;not a reference&quot;\n&amp;ouml; not a character entity</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/15",
+    "\\\\*emphasis*\n",
+    "<p>\\<em>emphasis</em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/16",
+    "foo\\\nbar\n",
+    "<p>foo<br />\nbar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/17",
+    "`` \\[\\` ``\n",
+    "<p><code>\\[\\`</code></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/18",
+    "    \\[\\]\n",
+    "<pre><code>\\[\\]\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/19",
+    "~~~\n\\[\\]\n~~~\n",
+    "<pre><code>\\[\\]\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/20",
+    "<https://example.com?find=\\*>\n",
+    "<p><a href=\"https://example.com?find=%5C*\">https://example.com?find=\\*</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/21",
+    "<a href=\"/bar\\/)\">\n",
+    "<a href=\"/bar\\/)\">\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/22",
+    "[foo](/bar\\* \"ti\\*tle\")\n",
+    "<p><a href=\"/bar*\" title=\"ti*tle\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/23",
+    "[foo]\n\n[foo]: /bar\\* \"ti\\*tle\"\n",
+    "<p><a href=\"/bar*\" title=\"ti*tle\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Backslash escapes/24",
+    "``` foo\\+bar\nfoo\n```\n",
+    "<pre><code class=\"language-foo+bar\">foo\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/25",
+    "&nbsp; &amp; &copy; &AElig; &Dcaron;\n&frac34; &HilbertSpace; &DifferentialD;\n&ClockwiseContourIntegral; &ngE;\n",
+    "<p>  &amp; © Æ Ď\n¾ ℋ ⅆ\n∲ ≧̸</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/26",
+    "&#35; &#1234; &#992; &#0;\n",
+    "<p># Ӓ Ϡ �</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/27",
+    "&#X22; &#XD06; &#xcab;\n",
+    "<p>&quot; ആ ಫ</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/28",
+    "&nbsp &x; &#; &#x;\n&#87654321;\n&#abcdef0;\n&ThisIsNotDefined; &hi?;\n",
+    "<p>&amp;nbsp &amp;x; &amp;#; &amp;#x;\n&amp;#87654321;\n&amp;#abcdef0;\n&amp;ThisIsNotDefined; &amp;hi?;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/29",
+    "&copy\n",
+    "<p>&amp;copy</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/30",
+    "&MadeUpEntity;\n",
+    "<p>&amp;MadeUpEntity;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/31",
+    "<a href=\"&ouml;&ouml;.html\">\n",
+    "<a href=\"&ouml;&ouml;.html\">\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/32",
+    "[foo](/f&ouml;&ouml; \"f&ouml;&ouml;\")\n",
+    "<p><a href=\"/f%C3%B6%C3%B6\" title=\"föö\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/33",
+    "[foo]\n\n[foo]: /f&ouml;&ouml; \"f&ouml;&ouml;\"\n",
+    "<p><a href=\"/f%C3%B6%C3%B6\" title=\"föö\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/34",
+    "``` f&ouml;&ouml;\nfoo\n```\n",
+    "<pre><code class=\"language-föö\">foo\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/35",
+    "`f&ouml;&ouml;`\n",
+    "<p><code>f&amp;ouml;&amp;ouml;</code></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/36",
+    "    f&ouml;f&ouml;\n",
+    "<pre><code>f&amp;ouml;f&amp;ouml;\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/37",
+    "&#42;foo&#42;\n*foo*\n",
+    "<p>*foo*\n<em>foo</em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/38",
+    "&#42; foo\n\n* foo\n",
+    "<p>* foo</p>\n<ul>\n<li>foo</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/39",
+    "foo&#10;&#10;bar\n",
+    "<p>foo\n\nbar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/40",
+    "&#9;foo\n",
+    "<p>\tfoo</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Entity and numeric character references/41",
+    "[a](url &quot;tit&quot;)\n",
+    "<p>[a](url &quot;tit&quot;)</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Precedence/42",
+    "- `one\n- two`\n",
+    "<ul>\n<li>`one</li>\n<li>two`</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/43",
+    "***\n---\n___\n",
+    "<hr />\n<hr />\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/44",
+    "+++\n",
+    "<p>+++</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/45",
+    "===\n",
+    "<p>===</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/46",
+    "--\n**\n__\n",
+    "<p>--\n**\n__</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/47",
+    " ***\n  ***\n   ***\n",
+    "<hr />\n<hr />\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/48",
+    "    ***\n",
+    "<pre><code>***\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/49",
+    "Foo\n    ***\n",
+    "<p>Foo\n***</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/50",
+    "_____________________________________\n",
+    "<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/51",
+    " - - -\n",
+    "<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/52",
+    " **  * ** * ** * **\n",
+    "<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/53",
+    "-     -      -      -\n",
+    "<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/54",
+    "- - - -    \n",
+    "<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/55",
+    "_ _ _ _ a\n\na------\n\n---a---\n",
+    "<p>_ _ _ _ a</p>\n<p>a------</p>\n<p>---a---</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/56",
+    " *-*\n",
+    "<p><em>-</em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/57",
+    "- foo\n***\n- bar\n",
+    "<ul>\n<li>foo</li>\n</ul>\n<hr />\n<ul>\n<li>bar</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/58",
+    "Foo\n***\nbar\n",
+    "<p>Foo</p>\n<hr />\n<p>bar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/59",
+    "Foo\n---\nbar\n",
+    "<h2>Foo</h2>\n<p>bar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/60",
+    "* Foo\n* * *\n* Bar\n",
+    "<ul>\n<li>Foo</li>\n</ul>\n<hr />\n<ul>\n<li>Bar</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Thematic breaks/61",
+    "- Foo\n- * * *\n",
+    "<ul>\n<li>Foo</li>\n<li>\n<hr />\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/62",
+    "# foo\n## foo\n### foo\n#### foo\n##### foo\n###### foo\n",
+    "<h1>foo</h1>\n<h2>foo</h2>\n<h3>foo</h3>\n<h4>foo</h4>\n<h5>foo</h5>\n<h6>foo</h6>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/63",
+    "####### foo\n",
+    "<p>####### foo</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/64",
+    "#5 bolt\n\n#hashtag\n",
+    "<p>#5 bolt</p>\n<p>#hashtag</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/65",
+    "\\## foo\n",
+    "<p>## foo</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/66",
+    "# foo *bar* \\*baz\\*\n",
+    "<h1>foo <em>bar</em> *baz*</h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/67",
+    "#                  foo                     \n",
+    "<h1>foo</h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/68",
+    " ### foo\n  ## foo\n   # foo\n",
+    "<h3>foo</h3>\n<h2>foo</h2>\n<h1>foo</h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/69",
+    "    # foo\n",
+    "<pre><code># foo\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/70",
+    "foo\n    # bar\n",
+    "<p>foo\n# bar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/71",
+    "## foo ##\n  ###   bar    ###\n",
+    "<h2>foo</h2>\n<h3>bar</h3>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/72",
+    "# foo ##################################\n##### foo ##\n",
+    "<h1>foo</h1>\n<h5>foo</h5>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/73",
+    "### foo ###     \n",
+    "<h3>foo</h3>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/74",
+    "### foo ### b\n",
+    "<h3>foo ### b</h3>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/75",
+    "# foo#\n",
+    "<h1>foo#</h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/76",
+    "### foo \\###\n## foo #\\##\n# foo \\#\n",
+    "<h3>foo ###</h3>\n<h2>foo ###</h2>\n<h1>foo #</h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/77",
+    "****\n## foo\n****\n",
+    "<hr />\n<h2>foo</h2>\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/78",
+    "Foo bar\n# baz\nBar foo\n",
+    "<p>Foo bar</p>\n<h1>baz</h1>\n<p>Bar foo</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/ATX headings/79",
+    "## \n#\n### ###\n",
+    "<h2></h2>\n<h1></h1>\n<h3></h3>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/80",
+    "Foo *bar*\n=========\n\nFoo *bar*\n---------\n",
+    "<h1>Foo <em>bar</em></h1>\n<h2>Foo <em>bar</em></h2>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/81",
+    "Foo *bar\nbaz*\n====\n",
+    "<h1>Foo <em>bar\nbaz</em></h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/82",
+    "  Foo *bar\nbaz*\t\n====\n",
+    "<h1>Foo <em>bar\nbaz</em></h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/83",
+    "Foo\n-------------------------\n\nFoo\n=\n",
+    "<h2>Foo</h2>\n<h1>Foo</h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/84",
+    "   Foo\n---\n\n  Foo\n-----\n\n  Foo\n  ===\n",
+    "<h2>Foo</h2>\n<h2>Foo</h2>\n<h1>Foo</h1>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/85",
+    "    Foo\n    ---\n\n    Foo\n---\n",
+    "<pre><code>Foo\n---\n\nFoo\n</code></pre>\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/86",
+    "Foo\n   ----      \n",
+    "<h2>Foo</h2>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/87",
+    "Foo\n    ---\n",
+    "<p>Foo\n---</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/88",
+    "Foo\n= =\n\nFoo\n--- -\n",
+    "<p>Foo\n= =</p>\n<p>Foo</p>\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/89",
+    "Foo  \n-----\n",
+    "<h2>Foo</h2>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/90",
+    "Foo\\\n----\n",
+    "<h2>Foo\\</h2>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/91",
+    "`Foo\n----\n`\n\n<a title=\"a lot\n---\nof dashes\"/>\n",
+    "<h2>`Foo</h2>\n<p>`</p>\n<h2>&lt;a title=&quot;a lot</h2>\n<p>of dashes&quot;/&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/92",
+    "> Foo\n---\n",
+    "<blockquote>\n<p>Foo</p>\n</blockquote>\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/93",
+    "> foo\nbar\n===\n",
+    "<blockquote>\n<p>foo\nbar\n===</p>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/94",
+    "- Foo\n---\n",
+    "<ul>\n<li>Foo</li>\n</ul>\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/95",
+    "Foo\nBar\n---\n",
+    "<h2>Foo\nBar</h2>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/96",
+    "---\nFoo\n---\nBar\n---\nBaz\n",
+    "<hr />\n<h2>Foo</h2>\n<h2>Bar</h2>\n<p>Baz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/97",
+    "\n====\n",
+    "<p>====</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/98",
+    "---\n---\n",
+    "<hr />\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/99",
+    "- foo\n-----\n",
+    "<ul>\n<li>foo</li>\n</ul>\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/100",
+    "    foo\n---\n",
+    "<pre><code>foo\n</code></pre>\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/101",
+    "> foo\n-----\n",
+    "<blockquote>\n<p>foo</p>\n</blockquote>\n<hr />\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/102",
+    "\\> foo\n------\n",
+    "<h2>&gt; foo</h2>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/103",
+    "Foo\n\nbar\n---\nbaz\n",
+    "<p>Foo</p>\n<h2>bar</h2>\n<p>baz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/104",
+    "Foo\nbar\n\n---\n\nbaz\n",
+    "<p>Foo\nbar</p>\n<hr />\n<p>baz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/105",
+    "Foo\nbar\n* * *\nbaz\n",
+    "<p>Foo\nbar</p>\n<hr />\n<p>baz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Setext headings/106",
+    "Foo\nbar\n\\---\nbaz\n",
+    "<p>Foo\nbar\n---\nbaz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

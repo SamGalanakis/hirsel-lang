@@ -1,11 +1,12 @@
 // rule: SEM-3
 // expect: run
-// steps: 6000000
+// steps: 8000000
 // each case decodes and opens up to 129 bytes, about 188k steps a case
-// Wycheproof aes_gcm_test.json (0.9rc5), part 1 of 2: for each
+// Wycheproof aes_gcm_test.json (0.9rc5), for each
 // key size and flag set with a 96-bit nonce, the first case of each of up to four message and data lengths
 // up to 129 bytes, 23 of the 316 cases. A valid case opens to its message
-// and an invalid one fails to open. Cases 1, 2, 3, 4, 5, 6, 7, 39, 41, 91, 92, 93, 94, 95, 96, 128, 130, 176.
+// and an invalid one fails to open. Cases 1, 2, 3, 4, 5, 6, 7, 39, 41, 91, 92, 93, 94, 95, 96, 128, 130, 176, 178, 179,
+// 180, 181, 213.
 fn decode(text: String) -> unique Bytes {
   let Ok(data) = std@1/hex.decode(text) else {
     failure.check(false, TextInvariant())
@@ -180,6 +181,46 @@ pub fn main() -> Result[(), ()] {
     "0b4dbbba8982e0f649f8ba85f3aa061b",
     "3f875c9bd7d8511448459468e398c3b2ffffffffffffffffffffffffffffffff",
     true
+  )
+  check(
+    "5019eb9fef82e5750b631758f0213e3e5fcca12748b40eb4",
+    "ff0ddb0a0d7b36d219da12b5",
+    "",
+    "",
+    "7971284e6c9e6aac346fe2b7a0a064c2",
+    true
+  )
+  check(
+    "21218af790428f8024d3e7e1428c9fcf578c216636d60e73",
+    "34047bc39b9c608384dff5b8",
+    "",
+    "e3",
+    "fe2e982e24b81cd120d35a70fe6935e665",
+    true
+  )
+  check(
+    "3a8bf543c480925632118245bcbf5d01522b987a31a33da3",
+    "4ebc13cf4636cc7c45e560a7",
+    "",
+    "53fc72e71b59eeb3",
+    "99f2ff1c8a44e5f26870f104ddc514477b400336fb01860e",
+    true
+  )
+  check(
+    "92f4d2672fceec43963ccffb17e6ea7578b11418b06a3b82",
+    "6e7ff7f0797685cfc44b05ff",
+    "",
+    "c3ec16adb184affa8ae9738bffb916",
+    "afe8ef41591bfcc00db3c880ceb18629fff7f285768645c9c8bf7a471c9393",
+    true
+  )
+  check(
+    "000102030405060708090a0b0c0d0e0f1011121314151617",
+    "505152535455565758595a5b",
+    "",
+    "202122232425262728292a2b2c2d2e2f",
+    "458256842dfd297f30bd2f8f15c92db0b5e44c5b2fe90e4c78f358da0d99cb64",
+    false
   )
   Ok(())
 }

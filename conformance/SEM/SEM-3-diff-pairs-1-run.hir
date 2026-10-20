@@ -1,5 +1,7 @@
 // rule: SEM-3
 // expect: run
+// steps: 20000000
+// one program runs the whole vector suite, which outgrows the default budget
 // Inputs: Go src/internal/diff/testdata (golang/go ebe2feef) and fixed pairs.
 // Expected unified diffs are git 2.43.0's `git diff --no-index
 // --no-indent-heuristic -U<n> --diff-algorithm=<myers|patience>` output, with
@@ -42,6 +44,424 @@ fn pairs() -> List[(String, String, String, String, String)] uses {} {
       "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
       "--- old\n+++ new\n@@ -5,7 +5,6 @@\n 5\n 6\n 7\n-eight\n-nine\n-ten\n-eleven\n+8\n+9\n+10\n",
       "--- old\n+++ new\n@@ -5,7 +5,6 @@\n 5\n 6\n 7\n-eight\n-nine\n-ten\n-eleven\n+8\n+9\n+10\n"
+    ),
+    ("go/eof", "a\nb\nc", "a\nb\nc", "", ""),
+    (
+      "go/eof1",
+      "a\nb\nc\n",
+      "a\nb\nc",
+      "--- old\n+++ new\n@@ -1,3 +1,3 @@\n a\n b\n-c\n+c\n\\ No newline at end of file\n",
+      "--- old\n+++ new\n@@ -1,3 +1,3 @@\n a\n b\n-c\n+c\n\\ No newline at end of file\n"
+    ),
+    (
+      "go/eof2",
+      "a\nb\nc",
+      "a\nb\nc\n",
+      "--- old\n+++ new\n@@ -1,3 +1,3 @@\n a\n b\n-c\n\\ No newline at end of file\n+c\n",
+      "--- old\n+++ new\n@@ -1,3 +1,3 @@\n a\n b\n-c\n\\ No newline at end of file\n+c\n"
+    ),
+    (
+      "go/long",
+      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n14½\n15\n16\n17\n18\n19\n20\n",
+      "1\n2\n3\n4\n5\n6\n8\n9\n10\n11\n12\n13\n14\n17\n18\n19\n20\n",
+      "--- old\n+++ new\n@@ -4,7 +4,6 @@\n 4\n 5\n 6\n-7\n 8\n 9\n 10\n@@ -12,9 +11,6 @@\n 12\n 13\n 14\n-14½\n-15\n-16\n 17\n 18\n 19\n",
+      "--- old\n+++ new\n@@ -4,7 +4,6 @@\n 4\n 5\n 6\n-7\n 8\n 9\n 10\n@@ -12,9 +11,6 @@\n 12\n 13\n 14\n-14½\n-15\n-16\n 17\n 18\n 19\n"
+    ),
+    ("go/same", "hello world\n", "hello world\n", "", ""),
+    (
+      "go/start",
+      "e\npi\n4\n5\n6\n7\n8\n9\n10\n",
+      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
+      "--- old\n+++ new\n@@ -1,5 +1,6 @@\n-e\n-pi\n+1\n+2\n+3\n 4\n 5\n 6\n",
+      "--- old\n+++ new\n@@ -1,5 +1,6 @@\n-e\n-pi\n+1\n+2\n+3\n 4\n 5\n 6\n"
+    ),
+    (
+      "go/triv",
+      "a\nb\nc\na\nb\nb\na\n",
+      "c\na\nb\na\nb\nc\n",
+      "--- old\n+++ new\n@@ -1,7 +1,6 @@\n-a\n-b\n c\n a\n b\n-b\n a\n+b\n+c\n",
+      "--- old\n+++ new\n@@ -1,7 +1,6 @@\n-a\n-b\n c\n a\n b\n-b\n a\n+b\n+c\n"
+    ),
+    (
+      "function",
+      "#include <stdio.h>\n\nint main(void)\n{\n    printf(\"hello\\n\");\n    return 0;\n}\n",
+      "#include <stdio.h>\n\nstatic int twice(int x)\n{\n    return 2 * x;\n}\n\nint main(void)\n{\n    printf(\"hello %d\\n\", twice(2));\n    return 0;\n}\n",
+      "--- old\n+++ new\n@@ -1,7 +1,12 @@\n #include <stdio.h>\n \n+static int twice(int x)\n+{\n+    return 2 * x;\n+}\n+\n int main(void)\n {\n-    printf(\"hello\\n\");\n+    printf(\"hello %d\\n\", twice(2));\n     return 0;\n }\n",
+      "--- old\n+++ new\n@@ -1,7 +1,12 @@\n #include <stdio.h>\n \n+static int twice(int x)\n+{\n+    return 2 * x;\n+}\n+\n int main(void)\n {\n-    printf(\"hello\\n\");\n+    printf(\"hello %d\\n\", twice(2));\n     return 0;\n }\n"
+    ),
+    (
+      "braces",
+      "fn a() {\n}\n\nfn b() {\n}\n\nfn c() {\n}\n\nfn d() {\n}\n",
+      "fn a() {\n}\n\nfn x() {\n    y();\n}\n\nfn b() {\n}\n\nfn d() {\n}\n\nfn e() {\n}\n",
+      "--- old\n+++ new\n@@ -1,11 +1,15 @@\n fn a() {\n }\n \n-fn b() {\n+fn x() {\n+    y();\n }\n \n-fn c() {\n+fn b() {\n }\n \n fn d() {\n }\n+\n+fn e() {\n+}\n",
+      "--- old\n+++ new\n@@ -1,11 +1,15 @@\n fn a() {\n }\n \n+fn x() {\n+    y();\n+}\n+\n fn b() {\n }\n \n-fn c() {\n-}\n-\n fn d() {\n }\n+\n+fn e() {\n+}\n"
+    ),
+    (
+      "unicode",
+      "héllo\nwörld\n🐑\n",
+      "héllo\nworld\n🐑\n🐐\n",
+      "--- old\n+++ new\n@@ -1,3 +1,4 @@\n héllo\n-wörld\n+world\n 🐑\n+🐐\n",
+      "--- old\n+++ new\n@@ -1,3 +1,4 @@\n héllo\n-wörld\n+world\n 🐑\n+🐐\n"
+    ),
+    (
+      "crlf",
+      "one\r\ntwo\r\nthree\r\n",
+      "one\r\n2\r\nthree\r\n",
+      "--- old\n+++ new\n@@ -1,3 +1,3 @@\n one\r\n-two\r\n+2\r\n three\r\n",
+      "--- old\n+++ new\n@@ -1,3 +1,3 @@\n one\r\n-two\r\n+2\r\n three\r\n"
+    ),
+    (
+      "empty-old",
+      "",
+      "a\nb\n",
+      "--- old\n+++ new\n@@ -0,0 +1,2 @@\n+a\n+b\n",
+      "--- old\n+++ new\n@@ -0,0 +1,2 @@\n+a\n+b\n"
+    ),
+    (
+      "empty-new",
+      "a\nb\n",
+      "",
+      "--- old\n+++ new\n@@ -1,2 +0,0 @@\n-a\n-b\n",
+      "--- old\n+++ new\n@@ -1,2 +0,0 @@\n-a\n-b\n"
+    ),
+    (
+      "no-newline-both",
+      "a\nb",
+      "a\nc",
+      "--- old\n+++ new\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+c\n\\ No newline at end of file\n",
+      "--- old\n+++ new\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+c\n\\ No newline at end of file\n"
+    ),
+    (
+      "newline-added",
+      "a\nb",
+      "a\nb\n",
+      "--- old\n+++ new\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+b\n",
+      "--- old\n+++ new\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+b\n"
+    ),
+    (
+      "blank-runs",
+      "x\n\n\n\ny\n\n\nz\n",
+      "x\n\ny\n\n\n\n\nz\nw\n",
+      "--- old\n+++ new\n@@ -1,8 +1,9 @@\n x\n \n+y\n \n \n-y\n \n \n z\n+w\n",
+      "--- old\n+++ new\n@@ -1,8 +1,9 @@\n x\n \n-\n-\n y\n \n \n+\n+\n z\n+w\n"
+    ),
+    (
+      "random-0",
+      "f2\nb0\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nh0\nd2\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      "f2\nb0\ny2\nh2\nx1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc2\nc1\nf0\nf1\nc2\nb1\nx0\na2\ng0\nc0\nh2\ne2\ne1\ne2\nb2\nh0\nd2\nd1\na1\ne2\nd0\nz1\nd1\ne0\nf0\nb1\nc2\ne2\nb2\ne0\n",
+      "--- old\n+++ new\n@@ -1,7 +1,8 @@\n f2\n b0\n+y2\n h2\n-e1\n+x1\n a1\n c0\n e1\n@@ -10,30 +11,32 @@\n b1\n e0\n h0\n+c2\n c1\n f0\n f1\n c2\n b1\n+x0\n a2\n g0\n-f1\n+c0\n h2\n e2\n e1\n e2\n b2\n-c1\n h0\n d2\n d1\n a1\n e2\n d0\n+z1\n d1\n e0\n f0\n-g2\n+b1\n c2\n e2\n b2\n",
+      "--- old\n+++ new\n@@ -1,7 +1,8 @@\n f2\n b0\n+y2\n h2\n-e1\n+x1\n a1\n c0\n e1\n@@ -10,30 +11,32 @@\n b1\n e0\n h0\n+c2\n c1\n f0\n f1\n c2\n b1\n+x0\n a2\n g0\n-f1\n+c0\n h2\n e2\n e1\n e2\n b2\n-c1\n h0\n d2\n d1\n a1\n e2\n d0\n+z1\n d1\n e0\n f0\n-g2\n+b1\n c2\n e2\n b2\n"
+    ),
+    (
+      "random-1",
+      "d0\na1\nc0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nb2\nc2\nf1\na0\nf0\nb0\na0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nc1\nf2\nb0\nc0\nd0\nf1\nd0\nd2\nd2\na1\nh2\nb2\nb1\na0\n",
+      "d0\na1\nb0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nc1\nb2\nc2\nf1\nx2\nf0\nb0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nx2\nc1\nf2\nb0\nd0\nf1\nc2\nd0\na1\nd2\na1\nh2\nb2\nb1\na0\nc1\nz2\n",
+      "--- old\n+++ new\n@@ -1,6 +1,6 @@\n d0\n a1\n-c0\n+b0\n e1\n e0\n c0\n@@ -8,13 +8,13 @@\n c0\n c1\n a1\n+c1\n b2\n c2\n f1\n-a0\n+x2\n f0\n b0\n-a0\n g1\n c0\n h2\n@@ -24,17 +24,20 @@\n c1\n d1\n c1\n+x2\n c1\n f2\n b0\n-c0\n d0\n f1\n+c2\n d0\n-d2\n+a1\n d2\n a1\n h2\n b2\n b1\n a0\n+c1\n+z2\n",
+      "--- old\n+++ new\n@@ -1,6 +1,6 @@\n d0\n a1\n-c0\n+b0\n e1\n e0\n c0\n@@ -8,13 +8,13 @@\n c0\n c1\n a1\n+c1\n b2\n c2\n f1\n-a0\n+x2\n f0\n b0\n-a0\n g1\n c0\n h2\n@@ -24,17 +24,20 @@\n c1\n d1\n c1\n+x2\n c1\n f2\n b0\n-c0\n d0\n f1\n+c2\n d0\n-d2\n+a1\n d2\n a1\n h2\n b2\n b1\n a0\n+c1\n+z2\n"
+    ),
+    (
+      "random-2",
+      "f0\nb2\nf0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nf1\nh1\ne0\nd2\ne2\ng0\nd2\nd2\nh0\ng1\na2\ne0\nb1\nh2\ng2\na0\nf1\nf1\nb0\nd1\ne1\nc1\nb2\na2\ne2\na2\nc0\ng1\ng2\n",
+      "f0\nb2\na0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nh1\ne0\nb2\ng0\nd2\nd2\nh0\nc2\ng1\ny1\nz1\ne0\nb1\nh2\ng2\na0\nf1\nb0\nd1\ne1\nc1\nb2\na2\nb2\nc0\ng1\ng2\n",
+      "--- old\n+++ new\n@@ -1,6 +1,6 @@\n f0\n b2\n-f0\n+a0\n f1\n f2\n g2\n@@ -9,32 +9,30 @@\n e0\n d2\n a0\n-f1\n h1\n e0\n-d2\n-e2\n+b2\n g0\n d2\n d2\n h0\n+c2\n g1\n-a2\n+y1\n+z1\n e0\n b1\n h2\n g2\n a0\n f1\n-f1\n b0\n d1\n e1\n c1\n b2\n a2\n-e2\n-a2\n+b2\n c0\n g1\n g2\n",
+      "--- old\n+++ new\n@@ -1,6 +1,6 @@\n f0\n b2\n-f0\n+a0\n f1\n f2\n g2\n@@ -9,32 +9,30 @@\n e0\n d2\n a0\n-f1\n h1\n e0\n-d2\n-e2\n+b2\n g0\n d2\n d2\n h0\n+c2\n g1\n-a2\n+y1\n+z1\n e0\n b1\n h2\n g2\n a0\n f1\n-f1\n b0\n d1\n e1\n c1\n b2\n a2\n-e2\n-a2\n+b2\n c0\n g1\n g2\n"
+    ),
+    (
+      "random-3",
+      "a1\nd2\nd1\nb0\ng1\na1\nd2\nd2\nh1\nd0\nh1\nc0\nf2\na0\nh2\na1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\ng2\nh0\na0\nb0\ne0\nb0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      "a1\ny2\nd2\nd1\nb0\ng1\na1\ny0\nd2\nd2\nh1\nd0\nh1\nc2\nc0\na1\nf2\na0\nh2\nz1\ny1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\nh0\nb1\nb1\ne0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      "--- old\n+++ new\n@@ -1,19 +1,24 @@\n a1\n+y2\n d2\n d1\n b0\n g1\n a1\n+y0\n d2\n d2\n h1\n d0\n h1\n+c2\n c0\n+a1\n f2\n a0\n h2\n-a1\n+z1\n+y1\n b2\n d1\n g1\n@@ -21,12 +26,10 @@\n h0\n g2\n g2\n-g2\n h0\n-a0\n-b0\n+b1\n+b1\n e0\n-b0\n h0\n f0\n g1\n",
+      "--- old\n+++ new\n@@ -1,19 +1,24 @@\n a1\n+y2\n d2\n d1\n b0\n g1\n a1\n+y0\n d2\n d2\n h1\n d0\n h1\n+c2\n c0\n+a1\n f2\n a0\n h2\n-a1\n+z1\n+y1\n b2\n d1\n g1\n@@ -21,12 +26,10 @@\n h0\n g2\n g2\n-g2\n h0\n-a0\n-b0\n+b1\n+b1\n e0\n-b0\n h0\n f0\n g1\n"
+    )
+  ]
+}
+
+fn contexts() -> List[(String, String, diff.Algorithm, u64, String)] uses {} {
+  [
+    (
+      "a\nb\nc\nd\ne\nf\ng\n",
+      "w\na\nb\nx\ny\nz\ne\n",
+      Myers(),
+      0u64,
+      "--- old\n+++ new\n@@ -0,0 +1 @@\n+w\n@@ -3,2 +4,3 @@\n-c\n-d\n+x\n+y\n+z\n@@ -6,2 +7,0 @@\n-f\n-g\n"
+    ),
+    (
+      "a\nb\nc\nd\ne\nf\ng\n",
+      "w\na\nb\nx\ny\nz\ne\n",
+      Myers(),
+      1u64,
+      "--- old\n+++ new\n@@ -1,7 +1,7 @@\n+w\n a\n b\n-c\n-d\n+x\n+y\n+z\n e\n-f\n-g\n"
+    ),
+    (
+      "a\nb\nc\nd\ne\nf\ng\n",
+      "w\na\nb\nx\ny\nz\ne\n",
+      Patience(),
+      0u64,
+      "--- old\n+++ new\n@@ -0,0 +1 @@\n+w\n@@ -3,2 +4,3 @@\n-c\n-d\n+x\n+y\n+z\n@@ -6,2 +7,0 @@\n-f\n-g\n"
+    ),
+    (
+      "a\nb\nc\nd\ne\nf\ng\n",
+      "w\na\nb\nx\ny\nz\ne\n",
+      Patience(),
+      1u64,
+      "--- old\n+++ new\n@@ -1,7 +1,7 @@\n+w\n a\n b\n-c\n-d\n+x\n+y\n+z\n e\n-f\n-g\n"
+    ),
+    (
+      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n14½\n15\n16\n17\n18\n19\n20\n",
+      "1\n2\n3\n4\n5\n6\n8\n9\n10\n11\n12\n13\n14\n17\n18\n19\n20\n",
+      Myers(),
+      0u64,
+      "--- old\n+++ new\n@@ -7 +6,0 @@\n-7\n@@ -15,3 +13,0 @@\n-14½\n-15\n-16\n"
+    ),
+    (
+      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n14½\n15\n16\n17\n18\n19\n20\n",
+      "1\n2\n3\n4\n5\n6\n8\n9\n10\n11\n12\n13\n14\n17\n18\n19\n20\n",
+      Myers(),
+      1u64,
+      "--- old\n+++ new\n@@ -6,3 +6,2 @@\n 6\n-7\n 8\n@@ -14,5 +13,2 @@\n 14\n-14½\n-15\n-16\n 17\n"
+    ),
+    (
+      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n14½\n15\n16\n17\n18\n19\n20\n",
+      "1\n2\n3\n4\n5\n6\n8\n9\n10\n11\n12\n13\n14\n17\n18\n19\n20\n",
+      Patience(),
+      0u64,
+      "--- old\n+++ new\n@@ -7 +6,0 @@\n-7\n@@ -15,3 +13,0 @@\n-14½\n-15\n-16\n"
+    ),
+    (
+      "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n14½\n15\n16\n17\n18\n19\n20\n",
+      "1\n2\n3\n4\n5\n6\n8\n9\n10\n11\n12\n13\n14\n17\n18\n19\n20\n",
+      Patience(),
+      1u64,
+      "--- old\n+++ new\n@@ -6,3 +6,2 @@\n 6\n-7\n 8\n@@ -14,5 +13,2 @@\n 14\n-14½\n-15\n-16\n 17\n"
+    ),
+    (
+      "#include <stdio.h>\n\nint main(void)\n{\n    printf(\"hello\\n\");\n    return 0;\n}\n",
+      "#include <stdio.h>\n\nstatic int twice(int x)\n{\n    return 2 * x;\n}\n\nint main(void)\n{\n    printf(\"hello %d\\n\", twice(2));\n    return 0;\n}\n",
+      Myers(),
+      0u64,
+      "--- old\n+++ new\n@@ -2,0 +3,5 @@\n+static int twice(int x)\n+{\n+    return 2 * x;\n+}\n+\n@@ -5 +10 @@\n-    printf(\"hello\\n\");\n+    printf(\"hello %d\\n\", twice(2));\n"
+    ),
+    (
+      "#include <stdio.h>\n\nint main(void)\n{\n    printf(\"hello\\n\");\n    return 0;\n}\n",
+      "#include <stdio.h>\n\nstatic int twice(int x)\n{\n    return 2 * x;\n}\n\nint main(void)\n{\n    printf(\"hello %d\\n\", twice(2));\n    return 0;\n}\n",
+      Myers(),
+      1u64,
+      "--- old\n+++ new\n@@ -2,5 +2,10 @@\n \n+static int twice(int x)\n+{\n+    return 2 * x;\n+}\n+\n int main(void)\n {\n-    printf(\"hello\\n\");\n+    printf(\"hello %d\\n\", twice(2));\n     return 0;\n"
+    ),
+    (
+      "#include <stdio.h>\n\nint main(void)\n{\n    printf(\"hello\\n\");\n    return 0;\n}\n",
+      "#include <stdio.h>\n\nstatic int twice(int x)\n{\n    return 2 * x;\n}\n\nint main(void)\n{\n    printf(\"hello %d\\n\", twice(2));\n    return 0;\n}\n",
+      Patience(),
+      0u64,
+      "--- old\n+++ new\n@@ -2,0 +3,5 @@\n+static int twice(int x)\n+{\n+    return 2 * x;\n+}\n+\n@@ -5 +10 @@\n-    printf(\"hello\\n\");\n+    printf(\"hello %d\\n\", twice(2));\n"
+    ),
+    (
+      "#include <stdio.h>\n\nint main(void)\n{\n    printf(\"hello\\n\");\n    return 0;\n}\n",
+      "#include <stdio.h>\n\nstatic int twice(int x)\n{\n    return 2 * x;\n}\n\nint main(void)\n{\n    printf(\"hello %d\\n\", twice(2));\n    return 0;\n}\n",
+      Patience(),
+      1u64,
+      "--- old\n+++ new\n@@ -2,5 +2,10 @@\n \n+static int twice(int x)\n+{\n+    return 2 * x;\n+}\n+\n int main(void)\n {\n-    printf(\"hello\\n\");\n+    printf(\"hello %d\\n\", twice(2));\n     return 0;\n"
+    ),
+    (
+      "f2\nb0\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nh0\nd2\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      "f2\nb0\ny2\nh2\nx1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc2\nc1\nf0\nf1\nc2\nb1\nx0\na2\ng0\nc0\nh2\ne2\ne1\ne2\nb2\nh0\nd2\nd1\na1\ne2\nd0\nz1\nd1\ne0\nf0\nb1\nc2\ne2\nb2\ne0\n",
+      Myers(),
+      0u64,
+      "--- old\n+++ new\n@@ -2,0 +3 @@\n+y2\n@@ -4 +5 @@\n-e1\n+x1\n@@ -12,0 +14 @@\n+c2\n@@ -17,0 +20 @@\n+x0\n@@ -20 +23 @@\n-f1\n+c0\n@@ -26 +28,0 @@\n-c1\n@@ -32,0 +35 @@\n+z1\n@@ -36 +39 @@\n-g2\n+b1\n"
+    ),
+    (
+      "f2\nb0\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nh0\nd2\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      "f2\nb0\ny2\nh2\nx1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc2\nc1\nf0\nf1\nc2\nb1\nx0\na2\ng0\nc0\nh2\ne2\ne1\ne2\nb2\nh0\nd2\nd1\na1\ne2\nd0\nz1\nd1\ne0\nf0\nb1\nc2\ne2\nb2\ne0\n",
+      Myers(),
+      1u64,
+      "--- old\n+++ new\n@@ -2,4 +2,5 @@\n b0\n+y2\n h2\n-e1\n+x1\n a1\n@@ -12,2 +13,3 @@\n h0\n+c2\n c1\n@@ -17,5 +19,6 @@\n b1\n+x0\n a2\n g0\n-f1\n+c0\n h2\n@@ -25,3 +28,2 @@\n b2\n-c1\n h0\n@@ -32,2 +34,3 @@\n d0\n+z1\n d1\n@@ -35,3 +38,3 @@\n f0\n-g2\n+b1\n c2\n"
+    ),
+    (
+      "f2\nb0\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nh0\nd2\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      "f2\nb0\ny2\nh2\nx1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc2\nc1\nf0\nf1\nc2\nb1\nx0\na2\ng0\nc0\nh2\ne2\ne1\ne2\nb2\nh0\nd2\nd1\na1\ne2\nd0\nz1\nd1\ne0\nf0\nb1\nc2\ne2\nb2\ne0\n",
+      Patience(),
+      0u64,
+      "--- old\n+++ new\n@@ -2,0 +3 @@\n+y2\n@@ -4 +5 @@\n-e1\n+x1\n@@ -12,0 +14 @@\n+c2\n@@ -17,0 +20 @@\n+x0\n@@ -20 +23 @@\n-f1\n+c0\n@@ -26 +28,0 @@\n-c1\n@@ -32,0 +35 @@\n+z1\n@@ -36 +39 @@\n-g2\n+b1\n"
+    ),
+    (
+      "f2\nb0\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nh0\nd2\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      "f2\nb0\ny2\nh2\nx1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc2\nc1\nf0\nf1\nc2\nb1\nx0\na2\ng0\nc0\nh2\ne2\ne1\ne2\nb2\nh0\nd2\nd1\na1\ne2\nd0\nz1\nd1\ne0\nf0\nb1\nc2\ne2\nb2\ne0\n",
+      Patience(),
+      1u64,
+      "--- old\n+++ new\n@@ -2,4 +2,5 @@\n b0\n+y2\n h2\n-e1\n+x1\n a1\n@@ -12,2 +13,3 @@\n h0\n+c2\n c1\n@@ -17,5 +19,6 @@\n b1\n+x0\n a2\n g0\n-f1\n+c0\n h2\n@@ -25,3 +28,2 @@\n b2\n-c1\n h0\n@@ -32,2 +34,3 @@\n d0\n+z1\n d1\n@@ -35,3 +38,3 @@\n f0\n-g2\n+b1\n c2\n"
+    ),
+    (
+      "d0\na1\nc0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nb2\nc2\nf1\na0\nf0\nb0\na0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nc1\nf2\nb0\nc0\nd0\nf1\nd0\nd2\nd2\na1\nh2\nb2\nb1\na0\n",
+      "d0\na1\nb0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nc1\nb2\nc2\nf1\nx2\nf0\nb0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nx2\nc1\nf2\nb0\nd0\nf1\nc2\nd0\na1\nd2\na1\nh2\nb2\nb1\na0\nc1\nz2\n",
+      Myers(),
+      0u64,
+      "--- old\n+++ new\n@@ -3 +3 @@\n-c0\n+b0\n@@ -10,0 +11 @@\n+c1\n@@ -14 +15 @@\n-a0\n+x2\n@@ -17 +17,0 @@\n-a0\n@@ -26,0 +27 @@\n+x2\n@@ -30 +30,0 @@\n-c0\n@@ -32,0 +33 @@\n+c2\n@@ -34 +35 @@\n-d2\n+a1\n@@ -40,0 +42,2 @@\n+c1\n+z2\n"
+    ),
+    (
+      "d0\na1\nc0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nb2\nc2\nf1\na0\nf0\nb0\na0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nc1\nf2\nb0\nc0\nd0\nf1\nd0\nd2\nd2\na1\nh2\nb2\nb1\na0\n",
+      "d0\na1\nb0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nc1\nb2\nc2\nf1\nx2\nf0\nb0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nx2\nc1\nf2\nb0\nd0\nf1\nc2\nd0\na1\nd2\na1\nh2\nb2\nb1\na0\nc1\nz2\n",
+      Myers(),
+      1u64,
+      "--- old\n+++ new\n@@ -2,3 +2,3 @@\n a1\n-c0\n+b0\n e1\n@@ -10,2 +10,3 @@\n a1\n+c1\n b2\n@@ -13,6 +14,5 @@\n f1\n-a0\n+x2\n f0\n b0\n-a0\n g1\n@@ -26,2 +26,3 @@\n c1\n+x2\n c1\n@@ -29,7 +30,7 @@\n b0\n-c0\n d0\n f1\n+c2\n d0\n-d2\n+a1\n d2\n@@ -40 +41,3 @@\n a0\n+c1\n+z2\n"
+    ),
+    (
+      "d0\na1\nc0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nb2\nc2\nf1\na0\nf0\nb0\na0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nc1\nf2\nb0\nc0\nd0\nf1\nd0\nd2\nd2\na1\nh2\nb2\nb1\na0\n",
+      "d0\na1\nb0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nc1\nb2\nc2\nf1\nx2\nf0\nb0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nx2\nc1\nf2\nb0\nd0\nf1\nc2\nd0\na1\nd2\na1\nh2\nb2\nb1\na0\nc1\nz2\n",
+      Patience(),
+      0u64,
+      "--- old\n+++ new\n@@ -3 +3 @@\n-c0\n+b0\n@@ -10,0 +11 @@\n+c1\n@@ -14 +15 @@\n-a0\n+x2\n@@ -17 +17,0 @@\n-a0\n@@ -26,0 +27 @@\n+x2\n@@ -30 +30,0 @@\n-c0\n@@ -32,0 +33 @@\n+c2\n@@ -34 +35 @@\n-d2\n+a1\n@@ -40,0 +42,2 @@\n+c1\n+z2\n"
+    ),
+    (
+      "d0\na1\nc0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nb2\nc2\nf1\na0\nf0\nb0\na0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nc1\nf2\nb0\nc0\nd0\nf1\nd0\nd2\nd2\na1\nh2\nb2\nb1\na0\n",
+      "d0\na1\nb0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nc1\nb2\nc2\nf1\nx2\nf0\nb0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nx2\nc1\nf2\nb0\nd0\nf1\nc2\nd0\na1\nd2\na1\nh2\nb2\nb1\na0\nc1\nz2\n",
+      Patience(),
+      1u64,
+      "--- old\n+++ new\n@@ -2,3 +2,3 @@\n a1\n-c0\n+b0\n e1\n@@ -10,2 +10,3 @@\n a1\n+c1\n b2\n@@ -13,6 +14,5 @@\n f1\n-a0\n+x2\n f0\n b0\n-a0\n g1\n@@ -26,2 +26,3 @@\n c1\n+x2\n c1\n@@ -29,7 +30,7 @@\n b0\n-c0\n d0\n f1\n+c2\n d0\n-d2\n+a1\n d2\n@@ -40 +41,3 @@\n a0\n+c1\n+z2\n"
+    ),
+    (
+      "f0\nb2\nf0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nf1\nh1\ne0\nd2\ne2\ng0\nd2\nd2\nh0\ng1\na2\ne0\nb1\nh2\ng2\na0\nf1\nf1\nb0\nd1\ne1\nc1\nb2\na2\ne2\na2\nc0\ng1\ng2\n",
+      "f0\nb2\na0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nh1\ne0\nb2\ng0\nd2\nd2\nh0\nc2\ng1\ny1\nz1\ne0\nb1\nh2\ng2\na0\nf1\nb0\nd1\ne1\nc1\nb2\na2\nb2\nc0\ng1\ng2\n",
+      Myers(),
+      0u64,
+      "--- old\n+++ new\n@@ -3 +3 @@\n-f0\n+a0\n@@ -12 +11,0 @@\n-f1\n@@ -15,2 +14 @@\n-d2\n-e2\n+b2\n@@ -20,0 +19 @@\n+c2\n@@ -22 +21,2 @@\n-a2\n+y1\n+z1\n@@ -29 +28,0 @@\n-f1\n@@ -36,2 +35 @@\n-e2\n-a2\n+b2\n"
+    ),
+    (
+      "f0\nb2\nf0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nf1\nh1\ne0\nd2\ne2\ng0\nd2\nd2\nh0\ng1\na2\ne0\nb1\nh2\ng2\na0\nf1\nf1\nb0\nd1\ne1\nc1\nb2\na2\ne2\na2\nc0\ng1\ng2\n",
+      "f0\nb2\na0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nh1\ne0\nb2\ng0\nd2\nd2\nh0\nc2\ng1\ny1\nz1\ne0\nb1\nh2\ng2\na0\nf1\nb0\nd1\ne1\nc1\nb2\na2\nb2\nc0\ng1\ng2\n",
+      Myers(),
+      1u64,
+      "--- old\n+++ new\n@@ -2,3 +2,3 @@\n b2\n-f0\n+a0\n f1\n@@ -11,7 +11,5 @@\n a0\n-f1\n h1\n e0\n-d2\n-e2\n+b2\n g0\n@@ -20,4 +18,6 @@\n h0\n+c2\n g1\n-a2\n+y1\n+z1\n e0\n@@ -28,3 +28,2 @@\n f1\n-f1\n b0\n@@ -35,4 +34,3 @@\n a2\n-e2\n-a2\n+b2\n c0\n"
+    ),
+    (
+      "f0\nb2\nf0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nf1\nh1\ne0\nd2\ne2\ng0\nd2\nd2\nh0\ng1\na2\ne0\nb1\nh2\ng2\na0\nf1\nf1\nb0\nd1\ne1\nc1\nb2\na2\ne2\na2\nc0\ng1\ng2\n",
+      "f0\nb2\na0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nh1\ne0\nb2\ng0\nd2\nd2\nh0\nc2\ng1\ny1\nz1\ne0\nb1\nh2\ng2\na0\nf1\nb0\nd1\ne1\nc1\nb2\na2\nb2\nc0\ng1\ng2\n",
+      Patience(),
+      0u64,
+      "--- old\n+++ new\n@@ -3 +3 @@\n-f0\n+a0\n@@ -12 +11,0 @@\n-f1\n@@ -15,2 +14 @@\n-d2\n-e2\n+b2\n@@ -20,0 +19 @@\n+c2\n@@ -22 +21,2 @@\n-a2\n+y1\n+z1\n@@ -29 +28,0 @@\n-f1\n@@ -36,2 +35 @@\n-e2\n-a2\n+b2\n"
+    ),
+    (
+      "f0\nb2\nf0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nf1\nh1\ne0\nd2\ne2\ng0\nd2\nd2\nh0\ng1\na2\ne0\nb1\nh2\ng2\na0\nf1\nf1\nb0\nd1\ne1\nc1\nb2\na2\ne2\na2\nc0\ng1\ng2\n",
+      "f0\nb2\na0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nh1\ne0\nb2\ng0\nd2\nd2\nh0\nc2\ng1\ny1\nz1\ne0\nb1\nh2\ng2\na0\nf1\nb0\nd1\ne1\nc1\nb2\na2\nb2\nc0\ng1\ng2\n",
+      Patience(),
+      1u64,
+      "--- old\n+++ new\n@@ -2,3 +2,3 @@\n b2\n-f0\n+a0\n f1\n@@ -11,7 +11,5 @@\n a0\n-f1\n h1\n e0\n-d2\n-e2\n+b2\n g0\n@@ -20,4 +18,6 @@\n h0\n+c2\n g1\n-a2\n+y1\n+z1\n e0\n@@ -28,3 +28,2 @@\n f1\n-f1\n b0\n@@ -35,4 +34,3 @@\n a2\n-e2\n-a2\n+b2\n c0\n"
+    ),
+    (
+      "a1\nd2\nd1\nb0\ng1\na1\nd2\nd2\nh1\nd0\nh1\nc0\nf2\na0\nh2\na1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\ng2\nh0\na0\nb0\ne0\nb0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      "a1\ny2\nd2\nd1\nb0\ng1\na1\ny0\nd2\nd2\nh1\nd0\nh1\nc2\nc0\na1\nf2\na0\nh2\nz1\ny1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\nh0\nb1\nb1\ne0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      Myers(),
+      0u64,
+      "--- old\n+++ new\n@@ -1,0 +2 @@\n+y2\n@@ -6,0 +8 @@\n+y0\n@@ -11,0 +14 @@\n+c2\n@@ -12,0 +16 @@\n+a1\n@@ -16 +20,2 @@\n-a1\n+z1\n+y1\n@@ -24 +28,0 @@\n-g2\n@@ -26,2 +30,2 @@\n-a0\n-b0\n+b1\n+b1\n@@ -29 +32,0 @@\n-b0\n"
+    ),
+    (
+      "a1\nd2\nd1\nb0\ng1\na1\nd2\nd2\nh1\nd0\nh1\nc0\nf2\na0\nh2\na1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\ng2\nh0\na0\nb0\ne0\nb0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      "a1\ny2\nd2\nd1\nb0\ng1\na1\ny0\nd2\nd2\nh1\nd0\nh1\nc2\nc0\na1\nf2\na0\nh2\nz1\ny1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\nh0\nb1\nb1\ne0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      Myers(),
+      1u64,
+      "--- old\n+++ new\n@@ -1,2 +1,3 @@\n a1\n+y2\n d2\n@@ -6,2 +7,3 @@\n a1\n+y0\n d2\n@@ -11,3 +13,5 @@\n h1\n+c2\n c0\n+a1\n f2\n@@ -15,3 +19,4 @@\n h2\n-a1\n+z1\n+y1\n b2\n@@ -23,8 +28,6 @@\n g2\n-g2\n h0\n-a0\n-b0\n+b1\n+b1\n e0\n-b0\n h0\n"
+    ),
+    (
+      "a1\nd2\nd1\nb0\ng1\na1\nd2\nd2\nh1\nd0\nh1\nc0\nf2\na0\nh2\na1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\ng2\nh0\na0\nb0\ne0\nb0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      "a1\ny2\nd2\nd1\nb0\ng1\na1\ny0\nd2\nd2\nh1\nd0\nh1\nc2\nc0\na1\nf2\na0\nh2\nz1\ny1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\nh0\nb1\nb1\ne0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      Patience(),
+      0u64,
+      "--- old\n+++ new\n@@ -1,0 +2 @@\n+y2\n@@ -6,0 +8 @@\n+y0\n@@ -11,0 +14 @@\n+c2\n@@ -12,0 +16 @@\n+a1\n@@ -16 +20,2 @@\n-a1\n+z1\n+y1\n@@ -24 +28,0 @@\n-g2\n@@ -26,2 +30,2 @@\n-a0\n-b0\n+b1\n+b1\n@@ -29 +32,0 @@\n-b0\n"
+    ),
+    (
+      "a1\nd2\nd1\nb0\ng1\na1\nd2\nd2\nh1\nd0\nh1\nc0\nf2\na0\nh2\na1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\ng2\nh0\na0\nb0\ne0\nb0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      "a1\ny2\nd2\nd1\nb0\ng1\na1\ny0\nd2\nd2\nh1\nd0\nh1\nc2\nc0\na1\nf2\na0\nh2\nz1\ny1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\nh0\nb1\nb1\ne0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      Patience(),
+      1u64,
+      "--- old\n+++ new\n@@ -1,2 +1,3 @@\n a1\n+y2\n d2\n@@ -6,2 +7,3 @@\n a1\n+y0\n d2\n@@ -11,3 +13,5 @@\n h1\n+c2\n c0\n+a1\n f2\n@@ -15,3 +19,4 @@\n h2\n-a1\n+z1\n+y1\n b2\n@@ -23,8 +28,6 @@\n g2\n-g2\n h0\n-a0\n-b0\n+b1\n+b1\n e0\n-b0\n h0\n"
+    )
+  ]
+}
+
+fn patched() -> List[(String, String, String, List[u64])] uses {} {
+  [
+    (
+      "f2\nk86\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nh0\nd2\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      "--- old\n+++ new\n@@ -1,7 +1,8 @@\n f2\n b0\n+y2\n h2\n-e1\n+x1\n a1\n c0\n e1\n@@ -10,30 +11,32 @@\n b1\n e0\n h0\n+c2\n c1\n f0\n f1\n c2\n b1\n+x0\n a2\n g0\n-f1\n+c0\n h2\n e2\n e1\n e2\n b2\n-c1\n h0\n d2\n d1\n a1\n e2\n d0\n+z1\n d1\n e0\n f0\n-g2\n+b1\n c2\n e2\n b2\n",
+      "f2\nk86\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc2\nc1\nf0\nf1\nc2\nb1\nx0\na2\ng0\nc0\nh2\ne2\ne1\ne2\nb2\nh0\nd2\nd1\na1\ne2\nd0\nz1\nd1\ne0\nf0\nb1\nc2\ne2\nb2\ne0\n",
+      [0u64]
+    ),
+    (
+      "d0\na1\nc0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nb2\nc2\nf1\na0\nf0\nb0\na0\ng1\nc0\nh2\ng2\nk23\nh1\nc1\nd1\nc1\nc1\nf2\nb0\nc0\nd0\nf1\nd0\nd2\nd2\na1\nh2\nb2\nb1\nj20\na0\n",
+      "--- old\n+++ new\n@@ -2,3 +2,3 @@\n a1\n-c0\n+b0\n e1\n@@ -10,2 +10,3 @@\n a1\n+c1\n b2\n@@ -13,6 +14,5 @@\n f1\n-a0\n+x2\n f0\n b0\n-a0\n g1\n@@ -26,2 +26,3 @@\n c1\n+x2\n c1\n@@ -29,7 +30,7 @@\n b0\n-c0\n d0\n f1\n+c2\n d0\n-d2\n+a1\n d2\n@@ -40 +41,3 @@\n a0\n+c1\n+z2\n",
+      "d0\na1\nb0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nc1\nb2\nc2\nf1\nx2\nf0\nb0\ng1\nc0\nh2\ng2\nk23\nh1\nc1\nd1\nc1\nx2\nc1\nf2\nb0\nd0\nf1\nc2\nd0\na1\nd2\na1\nh2\nb2\nb1\nj20\na0\nc1\nz2\n",
+      []
+    ),
+    (
+      "f0\nk87\nf0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nf1\nh1\ne0\nd2\ne2\ng0\nd2\nj15\nd2\nh0\ng1\na2\ne0\nb1\nh2\ng2\na0\nj38\nf1\nf1\nb0\nd1\ne1\nc1\nb2\na2\ne2\na2\nc0\ng1\ng2\n",
+      "--- old\n+++ new\n@@ -3 +3 @@\n-f0\n+a0\n@@ -12 +11,0 @@\n-f1\n@@ -15,2 +14 @@\n-d2\n-e2\n+b2\n@@ -20,0 +19 @@\n+c2\n@@ -22 +21,2 @@\n-a2\n+y1\n+z1\n@@ -29 +28,0 @@\n-f1\n@@ -36,2 +35 @@\n-e2\n-a2\n+b2\n",
+      "f0\nk87\na0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nh1\ne0\nb2\ng0\nd2\nj15\nd2\nc2\nh0\ng1\ny1\nz1\ne0\nb1\nh2\ng2\na0\nj38\nf1\nb0\nd1\ne1\nc1\nb2\na2\nb2\nc0\ng1\ng2\n",
+      []
+    ),
+    (
+      "a1\nd2\nd1\nj64\nb0\ng1\na1\nd2\nd2\nh1\nd0\nh1\nc0\nj0\nf2\na0\nh2\na1\nb2\nj27\nd1\ng1\nf0\nh0\ng2\ng2\ng2\nh0\na0\nk0\ne0\nb0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      "--- old\n+++ new\n@@ -1,19 +1,24 @@\n a1\n+y2\n d2\n d1\n b0\n g1\n a1\n+y0\n d2\n d2\n h1\n d0\n h1\n+c2\n c0\n+a1\n f2\n a0\n h2\n-a1\n+z1\n+y1\n b2\n d1\n g1\n@@ -21,12 +26,10 @@\n h0\n g2\n g2\n-g2\n h0\n-a0\n-b0\n+b1\n+b1\n e0\n-b0\n h0\n f0\n g1\n",
+      "a1\nd2\nd1\nj64\nb0\ng1\na1\nd2\nd2\nh1\nd0\nh1\nc0\nj0\nf2\na0\nh2\na1\nb2\nj27\nd1\ng1\nf0\nh0\ng2\ng2\ng2\nh0\na0\nk0\ne0\nb0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      [0u64, 1u64]
+    ),
+    (
+      "f2\nb0\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nj32\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nh0\nd2\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      "--- old\n+++ new\n@@ -2,4 +2,5 @@\n b0\n+y2\n h2\n-e1\n+x1\n a1\n@@ -12,2 +13,3 @@\n h0\n+c2\n c1\n@@ -17,5 +19,6 @@\n b1\n+x0\n a2\n g0\n-f1\n+c0\n h2\n@@ -25,3 +28,2 @@\n b2\n-c1\n h0\n@@ -32,2 +34,3 @@\n d0\n+z1\n d1\n@@ -35,3 +38,3 @@\n f0\n-g2\n+b1\n c2\n",
+      "f2\nb0\ny2\nh2\nx1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc2\nc1\nj32\nf0\nf1\nc2\nb1\nx0\na2\ng0\nc0\nh2\ne2\ne1\ne2\nb2\nh0\nd2\nd1\na1\ne2\nd0\nz1\nd1\ne0\nf0\nb1\nc2\ne2\nb2\ne0\n",
+      []
+    ),
+    (
+      "k98\na1\nc0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nb2\nc2\nf1\nf0\nb0\na0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nc1\nf2\nb0\nc0\nd0\nf1\nd0\nd2\nd2\na1\nh2\nb2\nb1\na0\n",
+      "--- old\n+++ new\n@@ -3 +3 @@\n-c0\n+b0\n@@ -10,0 +11 @@\n+c1\n@@ -14 +15 @@\n-a0\n+x2\n@@ -17 +17,0 @@\n-a0\n@@ -26,0 +27 @@\n+x2\n@@ -30 +30,0 @@\n-c0\n@@ -32,0 +33 @@\n+c2\n@@ -34 +35 @@\n-d2\n+a1\n@@ -40,0 +42,2 @@\n+c1\n+z2\n",
+      "k98\na1\nb0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nc1\nb2\nc2\nf1\nf0\nb0\nx2\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nc1\nf2\nb0\nc0\nd0\nf1\nd0\nd2\nd2\na1\nh2\nb2\nb1\nx2\nc2\nc1\nz2\n",
+      [5u64, 7u64]
+    ),
+    (
+      "f0\nb2\nf0\nf1\nj90\nk27\ng2\nc0\ng1\ne0\nd2\na0\nf1\nh1\ne0\nd2\ne2\ng0\nd2\nd2\nh0\ng1\na2\ne0\nb1\nh2\ng2\na0\nf1\nf1\nb0\nd1\ne1\nc1\nb2\na2\ne2\na2\nc0\ng1\nk49\n",
+      "--- old\n+++ new\n@@ -1,6 +1,6 @@\n f0\n b2\n-f0\n+a0\n f1\n f2\n g2\n@@ -9,32 +9,30 @@\n e0\n d2\n a0\n-f1\n h1\n e0\n-d2\n-e2\n+b2\n g0\n d2\n d2\n h0\n+c2\n g1\n-a2\n+y1\n+z1\n e0\n b1\n h2\n g2\n a0\n f1\n-f1\n b0\n d1\n e1\n c1\n b2\n a2\n-e2\n-a2\n+b2\n c0\n g1\n g2\n",
+      "f0\nb2\nf0\nf1\nj90\nk27\ng2\nc0\ng1\ne0\nd2\na0\nf1\nh1\ne0\nd2\ne2\ng0\nd2\nd2\nh0\ng1\na2\ne0\nb1\nh2\ng2\na0\nf1\nf1\nb0\nd1\ne1\nc1\nb2\na2\ne2\na2\nc0\ng1\nk49\n",
+      [0u64, 1u64]
+    ),
+    (
+      "a1\nd2\nd1\nb0\ng1\na1\nd2\nj14\nh1\nd0\nk21\nc0\nf2\na0\nh2\na1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\ng2\nh0\na0\nb0\ne0\nb0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      "--- old\n+++ new\n@@ -1,2 +1,3 @@\n a1\n+y2\n d2\n@@ -6,2 +7,3 @@\n a1\n+y0\n d2\n@@ -11,3 +13,5 @@\n h1\n+c2\n c0\n+a1\n f2\n@@ -15,3 +19,4 @@\n h2\n-a1\n+z1\n+y1\n b2\n@@ -23,8 +28,6 @@\n g2\n-g2\n h0\n-a0\n-b0\n+b1\n+b1\n e0\n-b0\n h0\n",
+      "a1\ny2\nd2\nd1\nb0\ng1\na1\ny0\nd2\nj14\nh1\nd0\nk21\nc0\nf2\na0\nh2\nz1\ny1\nb2\nd1\ng1\nf0\nh0\ng2\ng2\ng2\nh0\na0\nb0\ne0\nb0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      [2u64, 4u64]
+    ),
+    (
+      "f2\nb0\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nh0\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      "--- old\n+++ new\n@@ -2,0 +3 @@\n+y2\n@@ -4 +5 @@\n-e1\n+x1\n@@ -12,0 +14 @@\n+c2\n@@ -17,0 +20 @@\n+x0\n@@ -20 +23 @@\n-f1\n+c0\n@@ -26 +28,0 @@\n-c1\n@@ -32,0 +35 @@\n+z1\n@@ -36 +39 @@\n-g2\n+b1\n",
+      "f2\nb0\ny2\nh2\nx1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc2\nc1\nf0\nf1\nc2\nb1\nx0\na2\ng0\nc0\nh2\ne2\ne1\ne2\nb2\nh0\nd1\na1\ne2\nd0\nd1\nz1\ne0\nf0\nb1\nc2\ne2\nb2\ne0\n",
+      []
+    ),
+    (
+      "d0\na1\nc0\ne1\ne0\nc0\nf2\nc0\nc1\nj44\na1\nb2\nc2\nf1\na0\nf0\nb0\na0\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nc1\nf2\nb0\nc0\nd0\nf1\nd0\nd2\nd2\na1\nh2\nb2\nb1\na0\n",
+      "--- old\n+++ new\n@@ -1,6 +1,6 @@\n d0\n a1\n-c0\n+b0\n e1\n e0\n c0\n@@ -8,13 +8,13 @@\n c0\n c1\n a1\n+c1\n b2\n c2\n f1\n-a0\n+x2\n f0\n b0\n-a0\n g1\n c0\n h2\n@@ -24,17 +24,20 @@\n c1\n d1\n c1\n+x2\n c1\n f2\n b0\n-c0\n d0\n f1\n+c2\n d0\n-d2\n+a1\n d2\n a1\n h2\n b2\n b1\n a0\n+c1\n+z2\n",
+      "d0\na1\nb0\ne1\ne0\nc0\nf2\nc0\nc1\nj44\na1\nb2\nc2\nf1\na0\nf0\nb0\na0\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nx2\nc1\nf2\nb0\nd0\nf1\nc2\nd0\na1\nd2\na1\nh2\nb2\nb1\na0\nc1\nz2\n",
+      [1u64]
+    ),
+    (
+      "f0\nb2\nf0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nf1\nh1\ne0\nd2\ne2\ng0\nd2\nd2\nh0\ng1\na2\ne0\nb1\nh2\ng2\na0\nf1\nf1\nb0\nd1\ne1\nc1\nb2\na2\ne2\nj77\nk70\ng1\ng2\n",
+      "--- old\n+++ new\n@@ -2,3 +2,3 @@\n b2\n-f0\n+a0\n f1\n@@ -11,7 +11,5 @@\n a0\n-f1\n h1\n e0\n-d2\n-e2\n+b2\n g0\n@@ -20,4 +18,6 @@\n h0\n+c2\n g1\n-a2\n+y1\n+z1\n e0\n@@ -28,3 +28,2 @@\n f1\n-f1\n b0\n@@ -35,4 +34,3 @@\n a2\n-e2\n-a2\n+b2\n c0\n",
+      "f0\nb2\na0\nf1\nf2\ng2\nc0\ng1\ne0\nd2\na0\nh1\ne0\nb2\ng0\nd2\nd2\nh0\nc2\ng1\ny1\nz1\ne0\nb1\nh2\ng2\na0\nf1\nb0\nd1\ne1\nc1\nb2\na2\ne2\nj77\nk70\ng1\ng2\n",
+      [4u64]
+    ),
+    (
+      "a1\nd2\nd1\nb0\nj26\ng1\na1\nk53\nd2\nh1\nd0\nh1\nc0\nf2\na0\nh2\na1\nb2\nj28\nd1\ng1\nf0\nh0\ng2\ng2\ng2\nh0\nb0\ne0\nb0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      "--- old\n+++ new\n@@ -1,0 +2 @@\n+y2\n@@ -6,0 +8 @@\n+y0\n@@ -11,0 +14 @@\n+c2\n@@ -12,0 +16 @@\n+a1\n@@ -16 +20,2 @@\n-a1\n+z1\n+y1\n@@ -24 +28,0 @@\n-g2\n@@ -26,2 +30,2 @@\n-a0\n-b0\n+b1\n+b1\n@@ -29 +32,0 @@\n-b0\n",
+      "a1\ny2\nd2\nd1\nb0\nj26\ng1\ny0\na1\nk53\nd2\nh1\nd0\nc2\nh1\na1\nc0\nf2\na0\nh2\nz1\ny1\nb2\nj28\nd1\ng1\nf0\nh0\ng2\ng2\nh0\nb0\ne0\nh0\nf0\ng1\nb1\nc0\ng0\ng0\ng0\nd2\ng2\ng2\n",
+      [6u64]
+    ),
+    (
+      "f2\nb0\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nj89\nh0\nd2\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      "--- old\n+++ new\n@@ -1,7 +1,8 @@\n f2\n b0\n+y2\n h2\n-e1\n+x1\n a1\n c0\n e1\n@@ -10,30 +11,32 @@\n b1\n e0\n h0\n+c2\n c1\n f0\n f1\n c2\n b1\n+x0\n a2\n g0\n-f1\n+c0\n h2\n e2\n e1\n e2\n b2\n-c1\n h0\n d2\n d1\n a1\n e2\n d0\n+z1\n d1\n e0\n f0\n-g2\n+b1\n c2\n e2\n b2\n",
+      "f2\nb0\ny2\nh2\nx1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nj89\nh0\nd2\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      [1u64]
+    ),
+    (
+      "d0\na1\nc0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nb2\nc2\nf1\na0\nf0\nb0\na0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nc1\nf2\nb0\nc0\nd0\nf1\nd0\nd2\nd2\na1\nk41\nb2\nb1\n",
+      "--- old\n+++ new\n@@ -2,3 +2,3 @@\n a1\n-c0\n+b0\n e1\n@@ -10,2 +10,3 @@\n a1\n+c1\n b2\n@@ -13,6 +14,5 @@\n f1\n-a0\n+x2\n f0\n b0\n-a0\n g1\n@@ -26,2 +26,3 @@\n c1\n+x2\n c1\n@@ -29,7 +30,7 @@\n b0\n-c0\n d0\n f1\n+c2\n d0\n-d2\n+a1\n d2\n@@ -40 +41,3 @@\n a0\n+c1\n+z2\n",
+      "d0\na1\nb0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nc1\nb2\nc2\nf1\nx2\nf0\nb0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nx2\nc1\nf2\nb0\nd0\nf1\nc2\nd0\na1\nd2\na1\nk41\nb2\nb1\n",
+      [5u64]
     )
   ]
 }
@@ -105,6 +525,21 @@ pub fn main(t: Test) -> Result[(), diff.PatchError] {
     let b = diff.split_lines(new)
     test.check_case(t, replay(a, b, diff.edits(a, b, Myers())), case)
     test.check_case(t, replay(a, b, diff.edits(a, b, Patience())), case)
+    case += 1
+  }
+  for (old, new, algorithm, context, expected) in contexts() {
+    test.check_case(
+      t,
+      diff.unified("old", old, "new", new, algorithm, context) == expected,
+      case
+    )
+    let applied = diff.apply(old, expected)?
+    test.check_case(t, applied.text == new && list.len(applied.rejected) == 0, case)
+    case += 1
+  }
+  for (source, patch, expected, rejected) in patched() {
+    let applied = diff.apply(source, patch)?
+    test.check_case(t, applied.text == expected && applied.rejected == rejected, case)
     case += 1
   }
   Ok(())

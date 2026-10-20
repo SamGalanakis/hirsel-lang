@@ -1,0 +1,636 @@
+// rule: SEM-3
+// expect: run
+// steps: 19000000
+// one program runs this batch of the suite, which outgrows the default budget
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/107/malformed",
+    "    a simple\n      \u{0}[&unterminated",
+    "<pre><code>a simple\n  �[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/108/malformed",
+    "  - foo\n\u{0}[&unterminated",
+    "<ul>\n<li>foo\n�[&amp;unterminated</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/109/malformed",
+    "1.  foo\n\n\u{0}[&unterminated",
+    "<ol>\n<li>foo</li>\n</ol>\n<p>�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/110/malformed",
+    "    <a/>\n    *\u{0}[&unterminated",
+    "<pre><code>&lt;a/&gt;\n*�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/111/malformed",
+    "    chunk1\n\n    chun\u{0}[&unterminated",
+    "<pre><code>chunk1\n\nchun�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/112/malformed",
+    "    chunk1\n    \u{0}[&unterminated",
+    "<pre><code>chunk1\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/113/malformed",
+    "Foo\n  \u{0}[&unterminated",
+    "<p>Foo\n�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/114/malformed",
+    "    fo\u{0}[&unterminated",
+    "<pre><code>fo�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/115/malformed",
+    "# Heading\n    foo\nHeadi\u{0}[&unterminated",
+    "<h1>Heading</h1>\n<pre><code>foo\n</code></pre>\n<p>Headi�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/116/malformed",
+    "        fo\u{0}[&unterminated",
+    "<pre><code>    fo�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/117/malformed",
+    "\n    \n    \u{0}[&unterminated",
+    "<pre><code>�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Indented code blocks/118/malformed",
+    "    f\u{0}[&unterminated",
+    "<pre><code>f�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/119/malformed",
+    "```\n<\n\u{0}[&unterminated",
+    "<pre><code>&lt;\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/120/malformed",
+    "~~~\n<\n\u{0}[&unterminated",
+    "<pre><code>&lt;\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/121/malformed",
+    "``\nfo\u{0}[&unterminated",
+    "<p>``\nfo�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/122/malformed",
+    "```\naaa\n\u{0}[&unterminated",
+    "<pre><code>aaa\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/123/malformed",
+    "~~~\naaa\n\u{0}[&unterminated",
+    "<pre><code>aaa\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/124/malformed",
+    "````\naaa\n`\u{0}[&unterminated",
+    "<pre><code>aaa\n`�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/125/malformed",
+    "~~~~\naaa\n\u{0}[&unterminated",
+    "<pre><code>aaa\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/126/malformed",
+    "``\u{0}[&unterminated",
+    "<p>``�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/127/malformed",
+    "`````\n\n\u{0}[&unterminated",
+    "<pre><code>\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/128/malformed",
+    "> ```\n> \u{0}[&unterminated",
+    "<blockquote>\n<pre><code>�[&amp;unterminated\n</code></pre>\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/129/malformed",
+    "```\n\n \u{0}[&unterminated",
+    "<pre><code>\n �[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/130/malformed",
+    "```\n\u{0}[&unterminated",
+    "<pre><code>�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/131/malformed",
+    " ```\n aaa\u{0}[&unterminated",
+    "<pre><code>aaa�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/132/malformed",
+    "  ```\naaa\n  a\u{0}[&unterminated",
+    "<pre><code>aaa\na�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/133/malformed",
+    "   ```\n   aaa\n   \u{0}[&unterminated",
+    "<pre><code>aaa\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/134/malformed",
+    "    ```\n    \u{0}[&unterminated",
+    "<pre><code>```\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/135/malformed",
+    "```\naaa\u{0}[&unterminated",
+    "<pre><code>aaa�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/136/malformed",
+    "   ```\na\u{0}[&unterminated",
+    "<pre><code>a�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/137/malformed",
+    "```\naaa\n\u{0}[&unterminated",
+    "<pre><code>aaa\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/138/malformed",
+    "``` ``\u{0}[&unterminated",
+    "<p>``` ``�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/139/malformed",
+    "~~~~~~\naa\u{0}[&unterminated",
+    "<pre><code>aa�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/140/malformed",
+    "foo\n```\nba\u{0}[&unterminated",
+    "<p>foo</p>\n<pre><code>ba�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/141/malformed",
+    "foo\n---\n~~~\nb\u{0}[&unterminated",
+    "<h2>foo</h2>\n<pre><code>b�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/142/malformed",
+    "```ruby\ndef foo(x)\n\u{0}[&unterminated",
+    "<pre><code class=\"language-ruby\">def foo(x)\n�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/143/malformed",
+    "~~~~    ruby startline=3 $%@#$\nd\u{0}[&unterminated",
+    "<pre><code class=\"language-ruby\">d�[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/144/malformed",
+    "````;\u{0}[&unterminated",
+    "<pre><code class=\"language-;�[&amp;unterminated\"></code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/145/malformed",
+    "``` aa \u{0}[&unterminated",
+    "<pre><code class=\"language-aa\"></code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/146/malformed",
+    "~~~ aa ``` \u{0}[&unterminated",
+    "<pre><code class=\"language-aa\"></code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Fenced code blocks/147/malformed",
+    "```\n``` \u{0}[&unterminated",
+    "<pre><code>``` �[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/148/malformed",
+    "<table><tr><td>\n<pre>\n**Hello**,\n\n\u{0}[&unterminated",
+    "<table><tr><td>\n<pre>\n**Hello**,\n<p>�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/149/malformed",
+    "<table>\n  <tr>\n    <td>\n           h\u{0}[&unterminated",
+    "<table>\n  <tr>\n    <td>\n           h�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/150/malformed",
+    " <div>\n  *hello*\n\u{0}[&unterminated",
+    " <div>\n  *hello*\n�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/151/malformed",
+    "</div>\u{0}[&unterminated",
+    "</div>�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/152/malformed",
+    "<DIV CLASS=\"foo\">\n\n\u{0}[&unterminated",
+    "<DIV CLASS=\"foo\">\n<p>�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/153/malformed",
+    "<div id=\"foo\"\n  cl\u{0}[&unterminated",
+    "<div id=\"foo\"\n  cl�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/154/malformed",
+    "<div id=\"foo\" class=\u{0}[&unterminated",
+    "<div id=\"foo\" class=�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/155/malformed",
+    "<div>\n*fo\u{0}[&unterminated",
+    "<div>\n*fo�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/156/malformed",
+    "<div id=\"\u{0}[&unterminated",
+    "<div id=\"�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/157/malformed",
+    "<div cl\u{0}[&unterminated",
+    "<div cl�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/158/malformed",
+    "<div *???-&&\u{0}[&unterminated",
+    "<div *???-&&�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/159/malformed",
+    "<div><a href=\"bar\u{0}[&unterminated",
+    "<div><a href=\"bar�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/160/malformed",
+    "<table><tr><td>\nfoo\u{0}[&unterminated",
+    "<table><tr><td>\nfoo�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/161/malformed",
+    "<div></div>\n``` c\u{0}[&unterminated",
+    "<div></div>\n``` c�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/162/malformed",
+    "<a href=\"foo\"\u{0}[&unterminated",
+    "<p>&lt;a href=&quot;foo&quot;�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/163/malformed",
+    "<Warning>\n*ba\u{0}[&unterminated",
+    "<Warning>\n*ba�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/164/malformed",
+    "<i class=\"foo\u{0}[&unterminated",
+    "<p>&lt;i class=&quot;foo�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/165/malformed",
+    "</ins>\u{0}[&unterminated",
+    "<p></ins>�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/166/malformed",
+    "<del>\n*fo\u{0}[&unterminated",
+    "<del>\n*fo�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/167/malformed",
+    "<del>\n\n*fo\u{0}[&unterminated",
+    "<del>\n<p>*fo�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/168/malformed",
+    "<del>*fo\u{0}[&unterminated",
+    "<p><del>*fo�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/169/malformed",
+    "<pre language=\"haskell\"><code>\nimport Text.HTML.TagSoup\n\nmai\u{0}[&unterminated",
+    "<pre language=\"haskell\"><code>\nimport Text.HTML.TagSoup\n\nmai�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/170/malformed",
+    "<script type=\"text/javascript\">\n// JavaScript example\n\ndocument.get\u{0}[&unterminated",
+    "<script type=\"text/javascript\">\n// JavaScript example\n\ndocument.get�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/171/malformed",
+    "<textarea>\n\n*foo*\n\n\u{0}[&unterminated",
+    "<textarea>\n\n*foo*\n\n�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/172/malformed",
+    "<style\n  type=\"text/css\">\nh1 {color:\u{0}[&unterminated",
+    "<style\n  type=\"text/css\">\nh1 {color:�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/173/malformed",
+    "<style\n  type=\"\u{0}[&unterminated",
+    "<style\n  type=\"�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/174/malformed",
+    "> <div>\n>\u{0}[&unterminated",
+    "<blockquote>\n<div>\n�[&unterminated\n</blockquote>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/175/malformed",
+    "- <div>\u{0}[&unterminated",
+    "<ul>\n<li>\n<div>�[&unterminated\n</li>\n</ul>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/176/malformed",
+    "<style>p{color:re\u{0}[&unterminated",
+    "<style>p{color:re�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/177/malformed",
+    "<!-- foo -->\u{0}[&unterminated",
+    "<!-- foo -->�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/178/malformed",
+    "<script>\nfoo\n</\u{0}[&unterminated",
+    "<script>\nfoo\n</�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/179/malformed",
+    "<!-- Foo\n\nbar\n \u{0}[&unterminated",
+    "<!-- Foo\n\nbar\n �[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/180/malformed",
+    "<?php\n\n  echo \u{0}[&unterminated",
+    "<?php\n\n  echo �[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/181/malformed",
+    "<!DOCTYP\u{0}[&unterminated",
+    "<!DOCTYP�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/182/malformed",
+    "<![CDATA[\nfunction matchwo(a,b)\n{\n  if (a < b && a < 0) the\u{0}[&unterminated",
+    "<![CDATA[\nfunction matchwo(a,b)\n{\n  if (a < b && a < 0) the�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/183/malformed",
+    "  <!-- foo -->\n\n\u{0}[&unterminated",
+    "  <!-- foo -->\n<p>�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/184/malformed",
+    "  <div>\n\n\u{0}[&unterminated",
+    "  <div>\n<p>�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/185/malformed",
+    "Foo\n<div>\n\u{0}[&unterminated",
+    "<p>Foo</p>\n<div>\n�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/186/malformed",
+    "<div>\nbar\n<\u{0}[&unterminated",
+    "<div>\nbar\n<�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/187/malformed",
+    "Foo\n<a href\u{0}[&unterminated",
+    "<p>Foo\n&lt;a href�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/188/malformed",
+    "<div>\n\n*Emphasize\u{0}[&unterminated",
+    "<div>\n<p>*Emphasize�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/189/malformed",
+    "<div>\n*Emphasize\u{0}[&unterminated",
+    "<div>\n*Emphasize�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/190/malformed",
+    "<table>\n\n<tr>\n\n<td>\nHi\n\u{0}[&unterminated",
+    "<table>\n<tr>\n<td>\nHi\n�[&unterminated\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/HTML blocks/191/malformed",
+    "<table>\n\n  <tr>\n\n    <td>\n      \u{0}[&unterminated",
+    "<table>\n  <tr>\n<pre><code>&lt;td&gt;\n  �[&amp;unterminated\n</code></pre>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/192/malformed",
+    "[foo]: /url \"\u{0}[&unterminated",
+    "<p>[foo]: /url &quot;�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/193/malformed",
+    "   [foo]: \n      /url  \n    \u{0}[&unterminated",
+    "<p>�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/194/malformed",
+    "[Foo*bar\\]]:my_(url) 'title \u{0}[&unterminated",
+    "<p>[Foo*bar]]:my_(url) 'title �[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Link reference definitions/195/malformed",
+    "[Foo bar]:\n<my url>\u{0}[&unterminated",
+    "<p>[Foo bar]:\n<my url>�[&amp;unterminated</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

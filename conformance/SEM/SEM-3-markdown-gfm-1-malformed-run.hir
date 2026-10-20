@@ -1,0 +1,174 @@
+// rule: SEM-3
+// expect: run
+// steps: 7000000
+// one program runs this batch of the suite, which outgrows the default budget
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "gfm/Tables (extension)/198/malformed",
+    "| foo | bar |\n| --- |\u{0}[&unterminated",
+    "<p>| foo | bar |\n| --- |�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Tables (extension)/199/malformed",
+    "| abc | defghi |\n:-: | \u{0}[&unterminated",
+    "<p>| abc | defghi |\n:-: | �[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Tables (extension)/200/malformed",
+    "| f\\|oo  |\n| ------ |\n| b \u{0}[&unterminated",
+    "<table>\n<thead>\n<tr>\n<th>f|oo</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>b �[&amp;unterminated</td>\n</tr>\n</tbody>\n</table>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Tables (extension)/201/malformed",
+    "| abc | def |\n| --- | --\u{0}[&unterminated",
+    "<p>| abc | def |\n| --- | --�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Tables (extension)/202/malformed",
+    "| abc | def |\n| --- | ---\u{0}[&unterminated",
+    "<p>| abc | def |\n| --- | ---�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Tables (extension)/203/malformed",
+    "| abc | def |\n|\u{0}[&unterminated",
+    "<p>| abc | def |\n|�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Tables (extension)/204/malformed",
+    "| abc | def |\n| --- | --- |\n\u{0}[&unterminated",
+    "<table>\n<thead>\n<tr>\n<th>abc</th>\n<th>def</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>�[&amp;unterminated</td>\n<td></td>\n</tr>\n</tbody>\n</table>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Tables (extension)/205/malformed",
+    "| abc | def |\n\u{0}[&unterminated",
+    "<p>| abc | def |\n�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Task list items (extension)/279/malformed",
+    "- [ ] foo\n\u{0}[&unterminated",
+    "<ul>\n<li><input disabled=\"\" type=\"checkbox\"> foo\n�[&amp;unterminated</li>\n</ul>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Task list items (extension)/280/malformed",
+    "- [x] foo\n  - [ ] bar\n\u{0}[&unterminated",
+    "<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> foo\n<ul>\n<li><input disabled=\"\" type=\"checkbox\"> bar\n�[&amp;unterminated</li>\n</ul>\n</li>\n</ul>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Strikethrough (extension)/491/malformed",
+    "~~Hi~~ Hel\u{0}[&unterminated",
+    "<p><del>Hi</del> Hel�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Strikethrough (extension)/492/malformed",
+    "This ~~has a\n\nn\u{0}[&unterminated",
+    "<p>This ~~has a</p>\n<p>n�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/621/malformed",
+    "www.commo\u{0}[&unterminated",
+    "<p><a href=\"http://www.commo%EF%BF%BD%5B&amp;unterminated\">www.commo�[&amp;unterminated</a></p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/622/malformed",
+    "Visit www.commonmark.org/h\u{0}[&unterminated",
+    "<p>Visit <a href=\"http://www.commonmark.org/h%EF%BF%BD%5B&amp;unterminated\">www.commonmark.org/h�[&amp;unterminated</a></p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/623/malformed",
+    "Visit www.commonmark.org.\n\nV\u{0}[&unterminated",
+    "<p>Visit <a href=\"http://www.commonmark.org\">www.commonmark.org</a>.</p>\n<p>V�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/624/malformed",
+    "www.google.com/search?q=Markup+(business)\n\nwww.google.com/search?q=Markup+(business)))\n\n\u{0}[&unterminated",
+    "<p><a href=\"http://www.google.com/search?q=Markup+(business)\">www.google.com/search?q=Markup+(business)</a></p>\n<p><a href=\"http://www.google.com/search?q=Markup+(business)\">www.google.com/search?q=Markup+(business)</a>))</p>\n<p>�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/625/malformed",
+    "www.google.com/sear\u{0}[&unterminated",
+    "<p><a href=\"http://www.google.com/sear%EF%BF%BD%5B&amp;unterminated\">www.google.com/sear�[&amp;unterminated</a></p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/626/malformed",
+    "www.google.com/search?q=commonmark&hl=en\u{0}[&unterminated",
+    "<p><a href=\"http://www.google.com/search?q=commonmark&amp;hl=en%EF%BF%BD%5B&amp;unterminated\">www.google.com/search?q=commonmark&amp;hl=en�[&amp;unterminated</a></p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/627/malformed",
+    "www.commonma\u{0}[&unterminated",
+    "<p><a href=\"http://www.commonma%EF%BF%BD%5B&amp;unterminated\">www.commonma�[&amp;unterminated</a></p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/628/malformed",
+    "http://commonmark.org\n\n(Visit https://encrypted.google.com/search?q=\u{0}[&unterminated",
+    "<p><a href=\"http://commonmark.org\">http://commonmark.org</a></p>\n<p>(Visit <a href=\"https://encrypted.google.com/search?q=%EF%BF%BD%5B&amp;unterminated\">https://encrypted.google.com/search?q=�[&amp;unterminated</a></p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/629/malformed",
+    "foo@ba\u{0}[&unterminated",
+    "<p>foo@ba�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/630/malformed",
+    "hello@mail+xyz.example isn't vali\u{0}[&unterminated",
+    "<p>hello@mail+xyz.example isn't vali�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failed += harness.check(
+    s,
+    "gfm/Autolinks (extension)/631/malformed",
+    "a.b-c_d@a.b\n\na.b-c_d@a.b.\n\n\u{0}[&unterminated",
+    "<p><a href=\"mailto:a.b-c_d@a.b\">a.b-c_d@a.b</a></p>\n<p><a href=\"mailto:a.b-c_d@a.b\">a.b-c_d@a.b</a>.</p>\n<p>�[&amp;unterminated</p>\n",
+    std@1/markdown.gfm_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

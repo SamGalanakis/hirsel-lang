@@ -1,0 +1,272 @@
+// rule: SEM-3
+// expect: run
+// steps: 7000000
+// one program runs this batch of the suite, which outgrows the default budget
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/616",
+    "<a foo=\"bar\" bam = 'baz <em>\"</em>'\n_boolean zoop:33=zoop:33 />\n",
+    "<p><a foo=\"bar\" bam = 'baz <em>\"</em>'\n_boolean zoop:33=zoop:33 /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/617",
+    "Foo <responsive-image src=\"foo.jpg\" />\n",
+    "<p>Foo <responsive-image src=\"foo.jpg\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/618",
+    "<33> <__>\n",
+    "<p>&lt;33&gt; &lt;__&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/619",
+    "<a h*#ref=\"hi\">\n",
+    "<p>&lt;a h*#ref=&quot;hi&quot;&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/620",
+    "<a href=\"hi'> <a href=hi'>\n",
+    "<p>&lt;a href=&quot;hi'&gt; &lt;a href=hi'&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/621",
+    "< a><\nfoo><bar/ >\n<foo bar=baz\nbim!bop />\n",
+    "<p>&lt; a&gt;&lt;\nfoo&gt;&lt;bar/ &gt;\n&lt;foo bar=baz\nbim!bop /&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/622",
+    "<a href='bar'title=title>\n",
+    "<p>&lt;a href='bar'title=title&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/623",
+    "</a></foo >\n",
+    "<p></a></foo ></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/624",
+    "</a href=\"foo\">\n",
+    "<p>&lt;/a href=&quot;foo&quot;&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/625",
+    "foo <!-- this is a --\ncomment - with hyphens -->\n",
+    "<p>foo <!-- this is a --\ncomment - with hyphens --></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/626",
+    "foo <!--> foo -->\n\nfoo <!---> foo -->\n",
+    "<p>foo <!--> foo --&gt;</p>\n<p>foo <!---> foo --&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/627",
+    "foo <?php echo $a; ?>\n",
+    "<p>foo <?php echo $a; ?></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/628",
+    "foo <!ELEMENT br EMPTY>\n",
+    "<p>foo <!ELEMENT br EMPTY></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/629",
+    "foo <![CDATA[>&<]]>\n",
+    "<p>foo <![CDATA[>&<]]></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/630",
+    "foo <a href=\"&ouml;\">\n",
+    "<p>foo <a href=\"&ouml;\"></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/631",
+    "foo <a href=\"\\*\">\n",
+    "<p>foo <a href=\"\\*\"></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/632",
+    "<a href=\"\\\"\">\n",
+    "<p>&lt;a href=&quot;&quot;&quot;&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/633",
+    "foo  \nbaz\n",
+    "<p>foo<br />\nbaz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/634",
+    "foo\\\nbaz\n",
+    "<p>foo<br />\nbaz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/635",
+    "foo       \nbaz\n",
+    "<p>foo<br />\nbaz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/636",
+    "foo  \n     bar\n",
+    "<p>foo<br />\nbar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/637",
+    "foo\\\n     bar\n",
+    "<p>foo<br />\nbar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/638",
+    "*foo  \nbar*\n",
+    "<p><em>foo<br />\nbar</em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/639",
+    "*foo\\\nbar*\n",
+    "<p><em>foo<br />\nbar</em></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/640",
+    "`code  \nspan`\n",
+    "<p><code>code   span</code></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/641",
+    "`code\\\nspan`\n",
+    "<p><code>code\\ span</code></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/642",
+    "<a href=\"foo  \nbar\">\n",
+    "<p><a href=\"foo  \nbar\"></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/643",
+    "<a href=\"foo\\\nbar\">\n",
+    "<p><a href=\"foo\\\nbar\"></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/644",
+    "foo\\\n",
+    "<p>foo\\</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/645",
+    "foo  \n",
+    "<p>foo</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/646",
+    "### foo\\\n",
+    "<h3>foo\\</h3>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Hard line breaks/647",
+    "### foo  \n",
+    "<h3>foo</h3>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Soft line breaks/648",
+    "foo\nbaz\n",
+    "<p>foo\nbaz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Soft line breaks/649",
+    "foo \n baz\n",
+    "<p>foo\nbaz</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Textual content/650",
+    "hello $.;'there\n",
+    "<p>hello $.;'there</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Textual content/651",
+    "Foo χρῆν\n",
+    "<p>Foo χρῆν</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Textual content/652",
+    "Multiple     spaces\n",
+    "<p>Multiple     spaces</p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}

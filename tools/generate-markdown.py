@@ -151,11 +151,13 @@ def vectors(commonmark, cmark, cmark_build):
     render_gfm = gfm_renderer(cmark_build)
     paths = []
     counts = {}
+    # One program holds as many vectors as fit 19 of the old 1M-step shards (a
+    # shard of 350k estimated cost, both twins counted, always ran under 1M
+    # steps): a program costs about 6 s of gate time before its first vector,
+    # so it raises its own step budget instead of fitting the default.
+    suites = {}
     for (flavor, section), cases in groups.items():
-        slug = re.sub(r'[^a-z0-9]+', '-', section.lower()).strip('-')
         counts[f'{flavor}: {section}'] = len(cases)
-        batches = [[]]
-        spent = 0
         for number, source, expected in cases:
             twin_source = source[:len(source) // 2] + '\0[&unterminated'
             if flavor == 'gfm':
@@ -163,17 +165,23 @@ def vectors(commonmark, cmark, cmark_build):
                 twin_expected = render_gfm(twin_source)
             else:
                 twin_expected = next(twins)
-            cost = 20000 + 900 * (len(source.encode()) + len(twin_source.encode()))
-            if batches[-1] and spent + cost > 350000:
-                batches.append([])
-                spent = 0
-            batches[-1].append((number, source, expected, twin_source, twin_expected))
-            spent += cost
-        for index, batch in enumerate(batches, 1):
-            for twin in (False, True):
-                stem = f'SEM-3-markdown-{flavor}-{slug}-{index}' + ('-malformed-run' if twin else '-run')
-                lines = ['// rule: SEM-3', '// expect: run', '// Published spec.txt vectors; tools/generate-markdown.py.', 'fn grant_error(take e: GrantError) -> () {}', '', 'pub fn main(rt: Io) -> Result[(), ()] {', '  let s = io.stdout(rt) ? grant_error', '  let mut failed: u64 = 0']
-                for number, source, expected, twin_source, twin_expected in batch:
+            suites.setdefault(flavor, []).append((section, number, source, expected, twin_source, twin_expected))
+    for flavor, cases in suites.items():
+        for twin in (False, True):
+            batches = [[]]
+            spent = [0]
+            for case in cases:
+                cost = 20000 + 900 * (len(case[2].encode()) + len(case[4].encode()))
+                if batches[-1] and spent[-1] + cost > 19 * 350000:
+                    batches.append([])
+                    spent.append(0)
+                batches[-1].append(case)
+                spent[-1] += cost
+            for index, batch in enumerate(batches, 1):
+                stem = f'SEM-3-markdown-{flavor}-{index}' + ('-malformed-run' if twin else '-run')
+                steps = -(-spent[index - 1] // 350000) * 1000000
+                lines = ['// rule: SEM-3', '// expect: run', f'// steps: {steps}', '// one program runs this batch of the suite, which outgrows the default budget', '// Published spec.txt vectors; tools/generate-markdown.py.', 'fn grant_error(take e: GrantError) -> () {}', '', 'pub fn main(rt: Io) -> Result[(), ()] {', '  let s = io.stdout(rt) ? grant_error', '  let mut failed: u64 = 0']
+                for section, number, source, expected, twin_source, twin_expected in batch:
                     options = 'std@1/markdown.gfm_options()' if flavor == 'gfm' else 'std@1/markdown.default_options()'
                     label = f'{flavor}/{section}/{number}' + ('/malformed' if twin else '')
                     lines.append(f'  failed += harness.check(s, {literal(label)}, {literal(twin_source if twin else source)}, {literal(twin_expected if twin else expected)}, {options})')

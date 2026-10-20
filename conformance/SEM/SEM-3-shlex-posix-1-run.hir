@@ -1,5 +1,7 @@
 // rule: SEM-3
 // expect: run
+// steps: 20000000
+// one program runs the whole vector suite, which outgrows the default budget
 // CPython Lib/test/test_shlex.py posix_data (testSplitPosix, with comments),
 // the same rows without `#` through split, testJoinRoundtrip over data and
 // posix_data, testQuote and testJoin (python/cpython 036d309c). Python raises
@@ -60,6 +62,156 @@ fn posix() -> List[(String, List[String])] uses {} {
   ]
 }
 
+fn compat() -> List[List[String]] uses {} {
+  [
+    ["x"],
+    ["foo", "bar"],
+    ["foo", "bar"],
+    ["foo", "bar"],
+    ["foo", "bar", "bla", "fasel"],
+    ["x", "y", "z", "xxxx"],
+    [r#"\"#, "x", "bar"],
+    [r#"\"#, "x", "bar"],
+    [r#"\"#, "bar"],
+    ["foo", r#"\"#, "x", "bar"],
+    ["foo", r#"\"#, "x", "bar"],
+    ["foo", r#"\"#, "bar"],
+    ["foo", r#""bar""#, "bla"],
+    [r#""foo""#, r#""bar""#, r#""bla""#],
+    [r#""foo""#, "bar", r#""bla""#],
+    [r#""foo""#, "bar", "bla"],
+    ["foo", "'bar'", "bla"],
+    ["'foo'", "'bar'", "'bla'"],
+    ["'foo'", "bar", "'bla'"],
+    ["'foo'", "bar", "bla"],
+    ["blurb", r#"foo"bar"bar"fasel""#, "baz"],
+    ["blurb", "foo'bar'bar'fasel'", "baz"],
+    [r#""""#],
+    ["''"],
+    ["foo", r#""""#, "bar"],
+    ["foo", "''", "bar"],
+    ["foo", r#""""#, r#""""#, r#""""#, "bar"],
+    ["foo", "''", "''", "''", "bar"],
+    [r#"\"#, r#""""#],
+    [r#""\""#],
+    [r#""foo\ bar""#],
+    [r#""foo\\ bar""#],
+    [r#""foo\\ bar\""#],
+    [r#""foo\\""#, "bar", r#"\"#, r#""""#],
+    [r#""foo\\ bar\""#, r#"dfadf""#],
+    [r#""foo\\\ bar\""#, r#"dfadf""#],
+    [r#""foo\\\x bar\""#, r#"dfadf""#],
+    [r#""foo\x bar\""#, r#"dfadf""#],
+    [r#"\"#, "''"],
+    [r#"'foo\ bar'"#],
+    [r#"'foo\\ bar'"#],
+    [r#""foo\\\x bar\""#, "df'a", r#"\"#, "'df'"],
+    [r#"\"#, r#""foo""#],
+    [r#"\"#, r#""foo""#, r#"\"#, "x"],
+    [r#""foo\x""#],
+    [r#""foo\ ""#],
+    ["foo", r#"\"#, "xx"],
+    ["foo", r#"\"#, "x", r#"\"#, "x"],
+    ["foo", r#"\"#, "x", r#"\"#, "x", r#"\"#, r#""""#],
+    [r#""foo\ x\x""#],
+    [r#""foo\ x\x\\""#],
+    [r#""foo\ x\x\\""#, r#""foobar""#],
+    [r#""foo\ x\x\\""#, r#"\"#, "''", r#""foobar""#],
+    [r#""foo\ x\x\\""#, r#"\"#, r#"'"fo'"#, r#"obar""#],
+    [r#""foo\ x\x\\""#, r#"\"#, r#"'"fo'"#, r#"obar""#, "'don'", r#"\"#, "''", "t'"],
+    [r#"'foo\ bar'"#],
+    [r#"'foo\\ bar'"#],
+    ["foo", r#"\"#, "bar"],
+    ["foobaz"],
+    [":", "-", ")", ";", "-", ")"],
+    ["á", "é", "í", "ó", "ú"]
+  ]
+}
+
+// Formerly SEM-3-shlex-compat-run.
+fn part_1(t: Test) -> Result[(), shlex.SplitError] {
+  let mut case: u64 = 62
+  for expected in compat() {
+    test.check_case(t, shlex.split(shlex.join(expected))? == expected, case)
+    case += 1
+  }
+  Ok(())
+}
+
+fn posix_2() -> List[(String, List[String])] uses {} {
+  [
+    (r#""foo\ x\x\\""foobar""#, [r#"foo\ x\x\foobar"#]),
+    (r#""foo\ x\x\\"\'"foobar""#, [r#"foo\ x\x\'foobar"#]),
+    (r#""foo\ x\x\\"\'"fo'obar""#, [r#"foo\ x\x\'fo'obar"#]),
+    (r#""foo\ x\x\\"\'"fo'obar" 'don'\''t'"#, [r#"foo\ x\x\'fo'obar"#, "don't"]),
+    (
+      r#""foo\ x\x\\"\'"fo'obar" 'don'\''t' \\"#,
+      [r#"foo\ x\x\'fo'obar"#, "don't", r#"\"#]
+    ),
+    (r#"'foo\ bar'"#, [r#"foo\ bar"#]),
+    (r#"'foo\\ bar'"#, [r#"foo\\ bar"#]),
+    (r#"foo\ bar"#, ["foo bar"]),
+    ("foo#bar\nbaz", ["foo", "baz"]),
+    (":-) ;-)", [":-)", ";-)"]),
+    ("áéíóú", ["áéíóú"])
+  ]
+}
+
+// Formerly SEM-3-shlex-posix-2-run.
+fn part_2(t: Test) -> Result[(), shlex.SplitError] {
+  let mut case: u64 = 51
+  for (line, expected) in posix_2() {
+    test.check_case(t, shlex.split_comments(line)? == expected, case)
+    if !string.contains(line, "#") {
+      test.check_case(t, shlex.split(line)? == expected, case)
+    }
+    test.check_case(t, shlex.split(shlex.join(expected))? == expected, case)
+    case += 1
+  }
+  Ok(())
+}
+
+// Formerly SEM-3-shlex-quote-run.
+fn part_3(t: Test) -> Result[(), shlex.SplitError] {
+  // testQuote.
+  let safe = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_-+=:,./"
+  test.equal(t, shlex.quote(""), "''")
+  test.equal(t, shlex.quote(safe), safe)
+  test.equal(t, shlex.quote("test file name"), "'test file name'")
+  let quoted: List[String] = ["\"", "`", "$", "\\", "!", "\u{e9}", "\u{e0}", "\u{df}"]
+  for u in quoted {
+    test.equal(t, shlex.quote(f"test{u}name"), f"'test{u}name'")
+    test.equal(t, shlex.quote(f"test{u}'name'"), f"'test{u}'\"'\"'name'\"'\"''")
+  }
+  // testForceQuote without force.
+  test.equal(t, shlex.quote("spam"), "spam")
+  test.equal(t, shlex.quote("spam eggs"), "'spam eggs'")
+  test.equal(t, shlex.quote("two's-complement"), "'two'\"'\"'s-complement'")
+  // testJoin.
+  test.equal(t, shlex.join(["a ", "b"]), "'a ' b")
+  test.equal(t, shlex.join(["a", " b"]), "a ' b'")
+  test.equal(t, shlex.join(["a", " ", "b"]), "a ' ' b")
+  test.equal(t, shlex.join(["\"a", "b\""]), "'\"a' 'b\"'")
+  test.equal(t, shlex.join([]), "")
+  test.equal(t, shlex.join(["", "x"]), "'' x")
+  // Errors carry the byte offset of the opening quote or the backslash.
+  test.equal(t, shlex.split("a 'b"), Error(UnclosedQuote(2)))
+  test.equal(t, shlex.split("\"abc"), Error(UnclosedQuote(0)))
+  test.equal(t, shlex.split("x \"a\\\""), Error(UnclosedQuote(2)))
+  test.equal(t, shlex.split("abc\\"), Error(TrailingEscape(3)))
+  test.equal(t, shlex.split("\"abc\\"), Error(TrailingEscape(4)))
+  test.equal(t, shlex.split_comments("a # 'unclosed\nb"), Ok(["a", "b"]))
+  test.equal(t, shlex.split_comments("a '#' b#c\nd"), Ok(["a", "#", "b", "d"]))
+  test.equal(
+    t,
+    shlex.split("\u{e9}\\\u{e9} '\u{1f411}'"),
+    Ok(["\u{e9}\u{e9}", "\u{1f411}"])
+  )
+  test.equal(t, shlex.split(""), Ok([]))
+  test.equal(t, shlex.split(" \t\r\n"), Ok([]))
+  Ok(())
+}
+
 pub fn main(t: Test) -> Result[(), shlex.SplitError] {
   let mut case: u64 = 0
   for (line, expected) in posix() {
@@ -70,5 +222,8 @@ pub fn main(t: Test) -> Result[(), shlex.SplitError] {
     test.check_case(t, shlex.split(shlex.join(expected))? == expected, case)
     case += 1
   }
+  part_1(t)?
+  part_2(t)?
+  part_3(t)?
   Ok(())
 }

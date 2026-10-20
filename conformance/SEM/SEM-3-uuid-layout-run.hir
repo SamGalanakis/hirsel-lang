@@ -1,5 +1,7 @@
 // rule: SEM-3
 // expect: run
+// steps: 20000000
+// one program runs the whole vector suite, which outgrows the default budget
 // google/uuid uuid_test.go tests (TestUUID, in both cases) and TestFromBytes
 // (google/uuid 2d3c2a9c), uuid-rs parser.rs test_parse_valid and the inputs of
 // test_parse_invalid (uuid-rs/uuid 276c2362; offsets are this module's), and the
@@ -10,6 +12,139 @@ fn hyphenated(spelling: String) -> String uses {} {
     Ok(id) => uuid.to_string(id),
     Error(_) => "error",
   }
+}
+
+fn go_vectors() -> List[(String, Option[(u8, uuid.Variant)])] uses {} {
+  [
+    ("f47ac10b-58cc-0372-8567-0e02b2c3d479", Some((0u8, Rfc9562()))),
+    ("f47ac10b-58cc-1372-8567-0e02b2c3d479", Some((1u8, Rfc9562()))),
+    ("f47ac10b-58cc-2372-8567-0e02b2c3d479", Some((2u8, Rfc9562()))),
+    ("f47ac10b-58cc-3372-8567-0e02b2c3d479", Some((3u8, Rfc9562()))),
+    ("f47ac10b-58cc-4372-8567-0e02b2c3d479", Some((4u8, Rfc9562()))),
+    ("f47ac10b-58cc-5372-8567-0e02b2c3d479", Some((5u8, Rfc9562()))),
+    ("f47ac10b-58cc-6372-8567-0e02b2c3d479", Some((6u8, Rfc9562()))),
+    ("f47ac10b-58cc-7372-8567-0e02b2c3d479", Some((7u8, Rfc9562()))),
+    ("f47ac10b-58cc-8372-8567-0e02b2c3d479", Some((8u8, Rfc9562()))),
+    ("f47ac10b-58cc-9372-8567-0e02b2c3d479", Some((9u8, Rfc9562()))),
+    ("f47ac10b-58cc-a372-8567-0e02b2c3d479", Some((10u8, Rfc9562()))),
+    ("f47ac10b-58cc-b372-8567-0e02b2c3d479", Some((11u8, Rfc9562()))),
+    ("f47ac10b-58cc-c372-8567-0e02b2c3d479", Some((12u8, Rfc9562()))),
+    ("f47ac10b-58cc-d372-8567-0e02b2c3d479", Some((13u8, Rfc9562()))),
+    ("f47ac10b-58cc-e372-8567-0e02b2c3d479", Some((14u8, Rfc9562()))),
+    ("f47ac10b-58cc-f372-8567-0e02b2c3d479", Some((15u8, Rfc9562()))),
+    ("urn:uuid:f47ac10b-58cc-4372-0567-0e02b2c3d479", Some((4u8, Ncs()))),
+    ("URN:UUID:f47ac10b-58cc-4372-0567-0e02b2c3d479", Some((4u8, Ncs()))),
+    ("f47ac10b-58cc-4372-0567-0e02b2c3d479", Some((4u8, Ncs()))),
+    ("f47ac10b-58cc-4372-1567-0e02b2c3d479", Some((4u8, Ncs()))),
+    ("f47ac10b-58cc-4372-2567-0e02b2c3d479", Some((4u8, Ncs()))),
+    ("f47ac10b-58cc-4372-3567-0e02b2c3d479", Some((4u8, Ncs()))),
+    ("f47ac10b-58cc-4372-4567-0e02b2c3d479", Some((4u8, Ncs()))),
+    ("f47ac10b-58cc-4372-5567-0e02b2c3d479", Some((4u8, Ncs()))),
+    ("f47ac10b-58cc-4372-6567-0e02b2c3d479", Some((4u8, Ncs()))),
+    ("f47ac10b-58cc-4372-7567-0e02b2c3d479", Some((4u8, Ncs())))
+  ]
+}
+
+// Formerly SEM-3-uuid-go-1-run.
+fn part_1(t: Test) -> Result[(), uuid.UuidError] {
+  let mut case: u64 = 0
+  for (spelling, expected) in go_vectors() {
+    let forms: List[String] = [copy spelling, string.ascii_upper(spelling)]
+    for form in forms {
+      let found: Option[(u8, uuid.Variant)] = match uuid.parse(form) {
+        Ok(id) => Some((uuid.version(id), uuid.variant(id))),
+        Error(_) => None(),
+      }
+      test.check_case(t, found == expected, case)
+    }
+    case += 1
+  }
+  Ok(())
+}
+
+fn go_vectors_2() -> List[(String, Option[(u8, uuid.Variant)])] uses {} {
+  [
+    ("f47ac10b-58cc-4372-8567-0e02b2c3d479", Some((4u8, Rfc9562()))),
+    ("f47ac10b-58cc-4372-9567-0e02b2c3d479", Some((4u8, Rfc9562()))),
+    ("f47ac10b-58cc-4372-a567-0e02b2c3d479", Some((4u8, Rfc9562()))),
+    ("f47ac10b-58cc-4372-b567-0e02b2c3d479", Some((4u8, Rfc9562()))),
+    ("f47ac10b-58cc-4372-c567-0e02b2c3d479", Some((4u8, Microsoft()))),
+    ("f47ac10b-58cc-4372-d567-0e02b2c3d479", Some((4u8, Microsoft()))),
+    ("f47ac10b-58cc-4372-e567-0e02b2c3d479", Some((4u8, Future()))),
+    ("f47ac10b-58cc-4372-f567-0e02b2c3d479", Some((4u8, Future()))),
+    ("f47ac10b158cc-5372-a567-0e02b2c3d479", None()),
+    ("f47ac10b-58cc25372-a567-0e02b2c3d479", None()),
+    ("f47ac10b-58cc-53723a567-0e02b2c3d479", None()),
+    ("f47ac10b-58cc-5372-a56740e02b2c3d479", None()),
+    ("f47ac10b-58cc-5372-a567-0e02-2c3d479", None()),
+    ("g47ac10b-58cc-4372-a567-0e02b2c3d479", None()),
+    ("{f47ac10b-58cc-0372-8567-0e02b2c3d479}", Some((0u8, Rfc9562()))),
+    ("{f47ac10b-58cc-0372-8567-0e02b2c3d479", None()),
+    ("f47ac10b-58cc-0372-8567-0e02b2c3d479}", None()),
+    ("f47ac10b58cc037285670e02b2c3d479", Some((0u8, Rfc9562()))),
+    ("f47ac10b58cc037285670e02b2c3d4790", None()),
+    ("f47ac10b58cc037285670e02b2c3d47", None()),
+    ("01ee836c-e7c9-619d-929a-525400475911", Some((6u8, Rfc9562()))),
+    ("018bd12c-58b0-7683-8a5b-8752d0e86651", Some((7u8, Rfc9562())))
+  ]
+}
+
+// Formerly SEM-3-uuid-go-2-run.
+fn part_2(t: Test) -> Result[(), uuid.UuidError] {
+  let mut case: u64 = 26
+  for (spelling, expected) in go_vectors_2() {
+    let forms: List[String] = [copy spelling, string.ascii_upper(spelling)]
+    for form in forms {
+      let found: Option[(u8, uuid.Variant)] = match uuid.parse(form) {
+        Ok(id) => Some((uuid.version(id), uuid.variant(id))),
+        Error(_) => None(),
+      }
+      test.check_case(t, found == expected, case)
+    }
+    case += 1
+  }
+  Ok(())
+}
+
+fn rejected() -> List[(String, uuid.UuidError)] uses {} {
+  [
+    ("", Length(0)),
+    ("{}", Length(2)),
+    ("!", Length(1)),
+    ("F9168C5E-CEB2-4faa-B6BF-329BF39FA1E45", Length(37)),
+    ("F9168C5E-CEB2-4faa-BBF-329BF39FA1E4", Length(35)),
+    ("F9168C5E-CEB2-4faa-BGBF-329BF39FA1E4", Char(20)),
+    ("F9168C5E-CEB2F4faaFB6BFF329BF39FA1E4", Char(13)),
+    ("F9168C5E-CEB2-4faaFB6BFF329BF39FA1E4", Char(18)),
+    ("F9168C5E-CEB2-4faa-B6BFF329BF39FA1E4", Char(23)),
+    ("F9168C5E-CEB2-4faa", Length(18)),
+    ("F9168C5E-CEB2-4faaXB6BFF329BF39FA1E4", Char(18)),
+    ("{F9168C5E-CEB2-4faa9B6BFF329BF39FA1E41", Char(19)),
+    ("{F9168C5E-CEB2-4faa9B6BFF329BF39FA1E41}", Length(39)),
+    ("F9168C5E-CEB-24fa-eB6BFF32-BF39FA1E4", Char(12)),
+    ("01020304-1112-2122-3132-41424344", Char(8)),
+    ("67e5504410b1426f9247bb680e5fe0c", Length(31)),
+    ("67e5504410b1426f9247bb680e5fe0c88", Length(33)),
+    ("67e5504410b1426f9247bb680e5fe0cg8", Length(33)),
+    ("67e5504410b1426%9247bb680e5fe0c8", Char(15)),
+    ("231231212212423424324323477343246663", Char(8)),
+    ("{00000000000000000000000000000000}", Length(34)),
+    ("67e550X410b1426f9247bb680e5fe0cd", Char(6)),
+    ("67e550-4105b1426f9247bb680e5fe0c", Char(6)),
+    ("F9168C5E-CEB2-4faa-B6BF1-02BF39FA1E4", Char(23)),
+    ("\u{bcf3c}", Length(4)),
+    ("\u{130}", Length(2))
+  ]
+}
+
+// Formerly SEM-3-uuid-rejected-run.
+fn part_3(t: Test) -> Result[(), uuid.UuidError] {
+  let mut case: u64 = 48
+  for (spelling, expected) in rejected() {
+    test.check_case(t, uuid.parse(spelling) == Error(expected), case)
+    case += 1
+  }
+  Ok(())
 }
 
 pub fn main(t: Test) -> Result[(), uuid.UuidError] {
@@ -97,5 +232,8 @@ pub fn main(t: Test) -> Result[(), uuid.UuidError] {
       uuid.to_string(late)
     ) < 0
   )
+  part_1(t)?
+  part_2(t)?
+  part_3(t)?
   Ok(())
 }

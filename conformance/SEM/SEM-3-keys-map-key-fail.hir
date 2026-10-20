@@ -2,7 +2,7 @@
 // expect: fail SEM-3 at line 119
 // A Map has no key encoding, so a key schema holding one fails in
 // std@1/keys even when the live value holds no map. The accepted twin is
-// SEM-3-keys-vectors-run, whose key schemas hold none.
+// SEM-3-keys-composite-vectors-run, whose key schemas hold none.
 pub fn main() -> Result[(), ()] {
   let none: Option[Map[u8, u8]] = None
   let _ = std@1/keys.encode(none)

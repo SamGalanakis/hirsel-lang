@@ -19,9 +19,12 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
             tls: Plain(),
             steps: [
               Send(
-                b"GET / HTTP/1.1\r\n\r\nGET /next HTTP/1.1\r\nConnection: close\r\n\r\n"
+                b"GET / HTTP/1.1\r\n\r\nHEAD /head HTTP/1.1\r\n\r\nGET /next HTTP/1.1\r\nConnection: close\r\n\r\n"
               ),
               Expect(b"HTTP/1.1 204 \r\nConnection: keep-alive\r\n\r\n"),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 5\r\nConnection: keep-alive\r\n\r\n"
+              ),
               Expect(
                 b"HTTP/1.1 200 \r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
               ),
@@ -46,6 +49,12 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   let mut exchange1 = take current1
   test.check(t, first.method == "GET")
   http.respond(mut exchange1, 204u16, [], b"hello", false)?
+  let Some((current_head, head)) = http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  let mut exchange_head = take current_head
+  test.check(t, head.method == "HEAD" && head.target == "/head")
+  http.respond(mut exchange_head, 200u16, [], b"hello", false)?
   let Some((current2, next)) = http.next_stream(mut c, None())? else {
     return Error(Closed())
   }

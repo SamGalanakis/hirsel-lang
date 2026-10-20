@@ -1,0 +1,657 @@
+// rule: SEM-3
+// expect: run
+// steps: 19000000
+// one program runs this batch of the suite, which outgrows the default budget
+// Published spec.txt vectors; tools/generate-markdown.py.
+fn grant_error(take e: GrantError) -> () {}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let s = io.stdout(rt) ? grant_error
+  let mut failed: u64 = 0
+  failed += harness.check(
+    s,
+    "commonmark/Links/524",
+    "[foo <bar attr=\"](baz)\">\n",
+    "<p>[foo <bar attr=\"](baz)\"></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/525",
+    "[foo`](/uri)`\n",
+    "<p>[foo<code>](/uri)</code></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/526",
+    "[foo<https://example.com/?search=](uri)>\n",
+    "<p>[foo<a href=\"https://example.com/?search=%5D(uri)\">https://example.com/?search=](uri)</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/527",
+    "[foo][bar]\n\n[bar]: /url \"title\"\n",
+    "<p><a href=\"/url\" title=\"title\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/528",
+    "[link [foo [bar]]][ref]\n\n[ref]: /uri\n",
+    "<p><a href=\"/uri\">link [foo [bar]]</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/529",
+    "[link \\[bar][ref]\n\n[ref]: /uri\n",
+    "<p><a href=\"/uri\">link [bar</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/530",
+    "[link *foo **bar** `#`*][ref]\n\n[ref]: /uri\n",
+    "<p><a href=\"/uri\">link <em>foo <strong>bar</strong> <code>#</code></em></a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/531",
+    "[![moon](moon.jpg)][ref]\n\n[ref]: /uri\n",
+    "<p><a href=\"/uri\"><img src=\"moon.jpg\" alt=\"moon\" /></a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/532",
+    "[foo [bar](/uri)][ref]\n\n[ref]: /uri\n",
+    "<p>[foo <a href=\"/uri\">bar</a>]<a href=\"/uri\">ref</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/533",
+    "[foo *bar [baz][ref]*][ref]\n\n[ref]: /uri\n",
+    "<p>[foo <em>bar <a href=\"/uri\">baz</a></em>]<a href=\"/uri\">ref</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/534",
+    "*[foo*][ref]\n\n[ref]: /uri\n",
+    "<p>*<a href=\"/uri\">foo*</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/535",
+    "[foo *bar][ref]*\n\n[ref]: /uri\n",
+    "<p><a href=\"/uri\">foo *bar</a>*</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/536",
+    "[foo <bar attr=\"][ref]\">\n\n[ref]: /uri\n",
+    "<p>[foo <bar attr=\"][ref]\"></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/537",
+    "[foo`][ref]`\n\n[ref]: /uri\n",
+    "<p>[foo<code>][ref]</code></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/538",
+    "[foo<https://example.com/?search=][ref]>\n\n[ref]: /uri\n",
+    "<p>[foo<a href=\"https://example.com/?search=%5D%5Bref%5D\">https://example.com/?search=][ref]</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/539",
+    "[foo][BaR]\n\n[bar]: /url \"title\"\n",
+    "<p><a href=\"/url\" title=\"title\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/540",
+    "[ẞ]\n\n[SS]: /url\n",
+    "<p><a href=\"/url\">ẞ</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/541",
+    "[Foo\n  bar]: /url\n\n[Baz][Foo bar]\n",
+    "<p><a href=\"/url\">Baz</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/542",
+    "[foo] [bar]\n\n[bar]: /url \"title\"\n",
+    "<p>[foo] <a href=\"/url\" title=\"title\">bar</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/543",
+    "[foo]\n[bar]\n\n[bar]: /url \"title\"\n",
+    "<p>[foo]\n<a href=\"/url\" title=\"title\">bar</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/544",
+    "[foo]: /url1\n\n[foo]: /url2\n\n[bar][foo]\n",
+    "<p><a href=\"/url1\">bar</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/545",
+    "[bar][foo\\!]\n\n[foo!]: /url\n",
+    "<p>[bar][foo!]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/546",
+    "[foo][ref[]\n\n[ref[]: /uri\n",
+    "<p>[foo][ref[]</p>\n<p>[ref[]: /uri</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/547",
+    "[foo][ref[bar]]\n\n[ref[bar]]: /uri\n",
+    "<p>[foo][ref[bar]]</p>\n<p>[ref[bar]]: /uri</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/548",
+    "[[[foo]]]\n\n[[[foo]]]: /url\n",
+    "<p>[[[foo]]]</p>\n<p>[[[foo]]]: /url</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/549",
+    "[foo][ref\\[]\n\n[ref\\[]: /uri\n",
+    "<p><a href=\"/uri\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/550",
+    "[bar\\\\]: /uri\n\n[bar\\\\]\n",
+    "<p><a href=\"/uri\">bar\\</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/551",
+    "[]\n\n[]: /uri\n",
+    "<p>[]</p>\n<p>[]: /uri</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/552",
+    "[\n ]\n\n[\n ]: /uri\n",
+    "<p>[\n]</p>\n<p>[\n]: /uri</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/553",
+    "[foo][]\n\n[foo]: /url \"title\"\n",
+    "<p><a href=\"/url\" title=\"title\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/554",
+    "[*foo* bar][]\n\n[*foo* bar]: /url \"title\"\n",
+    "<p><a href=\"/url\" title=\"title\"><em>foo</em> bar</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/555",
+    "[Foo][]\n\n[foo]: /url \"title\"\n",
+    "<p><a href=\"/url\" title=\"title\">Foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/556",
+    "[foo] \n[]\n\n[foo]: /url \"title\"\n",
+    "<p><a href=\"/url\" title=\"title\">foo</a>\n[]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/557",
+    "[foo]\n\n[foo]: /url \"title\"\n",
+    "<p><a href=\"/url\" title=\"title\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/558",
+    "[*foo* bar]\n\n[*foo* bar]: /url \"title\"\n",
+    "<p><a href=\"/url\" title=\"title\"><em>foo</em> bar</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/559",
+    "[[*foo* bar]]\n\n[*foo* bar]: /url \"title\"\n",
+    "<p>[<a href=\"/url\" title=\"title\"><em>foo</em> bar</a>]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/560",
+    "[[bar [foo]\n\n[foo]: /url\n",
+    "<p>[[bar <a href=\"/url\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/561",
+    "[Foo]\n\n[foo]: /url \"title\"\n",
+    "<p><a href=\"/url\" title=\"title\">Foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/562",
+    "[foo] bar\n\n[foo]: /url\n",
+    "<p><a href=\"/url\">foo</a> bar</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/563",
+    "\\[foo]\n\n[foo]: /url \"title\"\n",
+    "<p>[foo]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/564",
+    "[foo*]: /url\n\n*[foo*]\n",
+    "<p>*<a href=\"/url\">foo*</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/565",
+    "[foo][bar]\n\n[foo]: /url1\n[bar]: /url2\n",
+    "<p><a href=\"/url2\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/566",
+    "[foo][]\n\n[foo]: /url1\n",
+    "<p><a href=\"/url1\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/567",
+    "[foo]()\n\n[foo]: /url1\n",
+    "<p><a href=\"\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/568",
+    "[foo](not a link)\n\n[foo]: /url1\n",
+    "<p><a href=\"/url1\">foo</a>(not a link)</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/569",
+    "[foo][bar][baz]\n\n[baz]: /url\n",
+    "<p>[foo]<a href=\"/url\">bar</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/570",
+    "[foo][bar][baz]\n\n[baz]: /url1\n[bar]: /url2\n",
+    "<p><a href=\"/url2\">foo</a><a href=\"/url1\">baz</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Links/571",
+    "[foo][bar][baz]\n\n[baz]: /url1\n[foo]: /url2\n",
+    "<p>[foo]<a href=\"/url1\">bar</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/572",
+    "![foo](/url \"title\")\n",
+    "<p><img src=\"/url\" alt=\"foo\" title=\"title\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/573",
+    "![foo *bar*]\n\n[foo *bar*]: train.jpg \"train & tracks\"\n",
+    "<p><img src=\"train.jpg\" alt=\"foo bar\" title=\"train &amp; tracks\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/574",
+    "![foo ![bar](/url)](/url2)\n",
+    "<p><img src=\"/url2\" alt=\"foo bar\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/575",
+    "![foo [bar](/url)](/url2)\n",
+    "<p><img src=\"/url2\" alt=\"foo bar\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/576",
+    "![foo *bar*][]\n\n[foo *bar*]: train.jpg \"train & tracks\"\n",
+    "<p><img src=\"train.jpg\" alt=\"foo bar\" title=\"train &amp; tracks\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/577",
+    "![foo *bar*][foobar]\n\n[FOOBAR]: train.jpg \"train & tracks\"\n",
+    "<p><img src=\"train.jpg\" alt=\"foo bar\" title=\"train &amp; tracks\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/578",
+    "![foo](train.jpg)\n",
+    "<p><img src=\"train.jpg\" alt=\"foo\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/579",
+    "My ![foo bar](/path/to/train.jpg  \"title\"   )\n",
+    "<p>My <img src=\"/path/to/train.jpg\" alt=\"foo bar\" title=\"title\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/580",
+    "![foo](<url>)\n",
+    "<p><img src=\"url\" alt=\"foo\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/581",
+    "![](/url)\n",
+    "<p><img src=\"/url\" alt=\"\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/582",
+    "![foo][bar]\n\n[bar]: /url\n",
+    "<p><img src=\"/url\" alt=\"foo\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/583",
+    "![foo][bar]\n\n[BAR]: /url\n",
+    "<p><img src=\"/url\" alt=\"foo\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/584",
+    "![foo][]\n\n[foo]: /url \"title\"\n",
+    "<p><img src=\"/url\" alt=\"foo\" title=\"title\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/585",
+    "![*foo* bar][]\n\n[*foo* bar]: /url \"title\"\n",
+    "<p><img src=\"/url\" alt=\"foo bar\" title=\"title\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/586",
+    "![Foo][]\n\n[foo]: /url \"title\"\n",
+    "<p><img src=\"/url\" alt=\"Foo\" title=\"title\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/587",
+    "![foo] \n[]\n\n[foo]: /url \"title\"\n",
+    "<p><img src=\"/url\" alt=\"foo\" title=\"title\" />\n[]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/588",
+    "![foo]\n\n[foo]: /url \"title\"\n",
+    "<p><img src=\"/url\" alt=\"foo\" title=\"title\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/589",
+    "![*foo* bar]\n\n[*foo* bar]: /url \"title\"\n",
+    "<p><img src=\"/url\" alt=\"foo bar\" title=\"title\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/590",
+    "![[foo]]\n\n[[foo]]: /url \"title\"\n",
+    "<p>![[foo]]</p>\n<p>[[foo]]: /url &quot;title&quot;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/591",
+    "![Foo]\n\n[foo]: /url \"title\"\n",
+    "<p><img src=\"/url\" alt=\"Foo\" title=\"title\" /></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/592",
+    "!\\[foo]\n\n[foo]: /url \"title\"\n",
+    "<p>![foo]</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Images/593",
+    "\\![foo]\n\n[foo]: /url \"title\"\n",
+    "<p>!<a href=\"/url\" title=\"title\">foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/594",
+    "<http://foo.bar.baz>\n",
+    "<p><a href=\"http://foo.bar.baz\">http://foo.bar.baz</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/595",
+    "<https://foo.bar.baz/test?q=hello&id=22&boolean>\n",
+    "<p><a href=\"https://foo.bar.baz/test?q=hello&amp;id=22&amp;boolean\">https://foo.bar.baz/test?q=hello&amp;id=22&amp;boolean</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/596",
+    "<irc://foo.bar:2233/baz>\n",
+    "<p><a href=\"irc://foo.bar:2233/baz\">irc://foo.bar:2233/baz</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/597",
+    "<MAILTO:FOO@BAR.BAZ>\n",
+    "<p><a href=\"MAILTO:FOO@BAR.BAZ\">MAILTO:FOO@BAR.BAZ</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/598",
+    "<a+b+c:d>\n",
+    "<p><a href=\"a+b+c:d\">a+b+c:d</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/599",
+    "<made-up-scheme://foo,bar>\n",
+    "<p><a href=\"made-up-scheme://foo,bar\">made-up-scheme://foo,bar</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/600",
+    "<https://../>\n",
+    "<p><a href=\"https://../\">https://../</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/601",
+    "<localhost:5001/foo>\n",
+    "<p><a href=\"localhost:5001/foo\">localhost:5001/foo</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/602",
+    "<https://foo.bar/baz bim>\n",
+    "<p>&lt;https://foo.bar/baz bim&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/603",
+    "<https://example.com/\\[\\>\n",
+    "<p><a href=\"https://example.com/%5C%5B%5C\">https://example.com/\\[\\</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/604",
+    "<foo@bar.example.com>\n",
+    "<p><a href=\"mailto:foo@bar.example.com\">foo@bar.example.com</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/605",
+    "<foo+special@Bar.baz-bar0.com>\n",
+    "<p><a href=\"mailto:foo+special@Bar.baz-bar0.com\">foo+special@Bar.baz-bar0.com</a></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/606",
+    "<foo\\+@bar.example.com>\n",
+    "<p>&lt;foo+@bar.example.com&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/607",
+    "<>\n",
+    "<p>&lt;&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/608",
+    "< https://foo.bar >\n",
+    "<p>&lt; https://foo.bar &gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/609",
+    "<m:abc>\n",
+    "<p>&lt;m:abc&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/610",
+    "<foo.bar.baz>\n",
+    "<p>&lt;foo.bar.baz&gt;</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/611",
+    "https://example.com\n",
+    "<p>https://example.com</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Autolinks/612",
+    "foo@bar.example.com\n",
+    "<p>foo@bar.example.com</p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/613",
+    "<a><bab><c2c>\n",
+    "<p><a><bab><c2c></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/614",
+    "<a/><b2/>\n",
+    "<p><a/><b2/></p>\n",
+    std@1/markdown.default_options()
+  )
+  failed += harness.check(
+    s,
+    "commonmark/Raw HTML/615",
+    "<a  /><b2\ndata=\"foo\" >\n",
+    "<p><a  /><b2\ndata=\"foo\" ></p>\n",
+    std@1/markdown.default_options()
+  )
+  failure.check(failed == 0, TextInvariant())
+  Ok(())
+}
