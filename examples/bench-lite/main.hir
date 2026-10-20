@@ -94,9 +94,14 @@ fn mix(hash: u64, data: Bytes) -> u64 {
   h
 }
 
-// Count in maps and lists whose storage lives where `counts` and `order` do; the
-// summary is always on the heap.
-fn tally(words: List[String], mut counts: Map[String, u64], mut order: List[String]) -> Summary {
+// Count in maps and lists whose storage lives where `counts` and `order` do. It
+// returns only the byte count: a `mut` argument's content may come back out
+// through a result that can hold it (MODE-1), so the summary is built apart.
+fn count_words(
+  words: List[String],
+  mut counts: Map[String, u64],
+  mut order: List[String]
+) -> u64 {
   let mut bytes = 0u64
   for w in words {
     bytes += string.byte_len(w)
@@ -108,6 +113,11 @@ fn tally(words: List[String], mut counts: Map[String, u64], mut order: List[Stri
       },
     }
   }
+  bytes
+}
+
+// The summary is always on the heap: its words are fresh copies.
+fn summarize(words: u64, bytes: u64, counts: Map[String, u64], order: List[String]) -> Summary {
   let mut checksum = 14695981039346656037u64
   let mut ranked: List[Ranked] = []
   for w in order {
@@ -126,7 +136,7 @@ fn tally(words: List[String], mut counts: Map[String, u64], mut order: List[Stri
     list.push(mut top, (unique r.word, r.count))
   }
   Summary(
-    words: list.len(words),
+    words: words,
     different: list.len(order),
     bytes: bytes,
     checksum: checksum,
@@ -137,7 +147,8 @@ fn tally(words: List[String], mut counts: Map[String, u64], mut order: List[Stri
 fn heap_summary(words: List[String]) -> Summary {
   let mut counts: Map[String, u64] = map.empty()
   let mut order: List[String] = []
-  tally(words, mut counts, mut order)
+  let bytes = count_words(words, mut counts, mut order)
+  summarize(list.len(words), bytes, counts, order)
 }
 
 fn arena_summary(words: List[String], capacity: u64) -> Result[Summary, String] {
@@ -146,7 +157,8 @@ fn arena_summary(words: List[String], capacity: u64) -> Result[Summary, String] 
     fn(a: Arena) -> Summary {
       let mut counts: Map[String, u64] in a = map.empty()
       let mut order: List[String] in a = []
-      tally(words, mut counts, mut order)
+      let bytes = count_words(words, mut counts, mut order)
+      summarize(list.len(words), bytes, counts, order)
     }
   ) {
     Ok(s) => Ok(take s),

@@ -1,0 +1,19 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 18
+// twin: MODE/MODE-1-mut-content-between-ok.hir
+// Content moved in through one relation-free `mut` parameter may come back
+// out through another.
+fn fresh(src: Bytes) -> unique Bytes in src uses {} {
+  bytes.from_list([1u8])
+}
+
+fn stash(mut o: Option[Bytes], mut g: Option[Bytes]) -> () uses {} {
+  g = replace(mut o, take None)
+}
+
+fn leak(src: Bytes) -> Option[Bytes] uses {} {
+  let mut o: Option[Bytes] in src = Some(fresh(src))
+  let mut g: Option[Bytes] = None
+  stash(mut o, mut g)
+  g
+}

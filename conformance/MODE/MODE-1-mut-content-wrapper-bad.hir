@@ -1,0 +1,17 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 16
+// twin: MODE/MODE-1-mut-content-wrapper-ok.hir
+// A wrapper's relation-free `mut` parameter treats its content as global;
+// the caller's result keeps where that content really lives.
+fn fresh(src: Bytes) -> unique Bytes in src uses {} {
+  bytes.from_list([1u8])
+}
+
+fn pop(mut xs: unique List[Bytes]) -> Option[Bytes] uses {} {
+  list.pop(mut xs)
+}
+
+fn leak(src: Bytes) -> Option[Bytes] uses {} {
+  let mut xs: unique List[Bytes] in src = [fresh(src)]
+  pop(mut xs)
+}

@@ -2494,6 +2494,139 @@ impl Checker<'_> {
     }
     /// Join two lifetimes as a call result names them: an equal lifetime is
     /// kept and differing ones are local to this frame.
+    /// MODE-1, caller side: content moved in through any relation-free `mut`
+    /// parameter may come back out through any of them, or as the result. So
+    /// after the call the result and each relation-free `mut` argument's
+    /// content are bounded by the join of every such argument's content, as
+    /// well as by what they already were. Nothing is required of the
+    /// arguments, and callee bodies keep treating that content as global.
+    fn mut_content_bounds(
+        &mut self,
+        state: &mut State,
+        value: &mut Value,
+        expression: ExprId,
+        arguments: &[hirsel_syntax::Argument],
+        requirements: &[Option<super::cfg::Requirement>],
+    ) {
+        // (content, its type, the storage binding it was passed from)
+        let mut contents = vec![];
+        for (argument, requirement) in arguments.iter().zip(requirements) {
+            let Some(requirement) = requirement else {
+                continue;
+            };
+            if requirement.passing != PassingMode::Mut
+                || requirement
+                    .modes
+                    .relation
+                    .reaches()
+                    .iter()
+                    .any(|r| matches!(r, Reach::Place(_)))
+                || self.property(argument.value).is_some_and(|p| p.plain)
+            {
+                continue;
+            }
+            let Some(ty) = self.ty(argument.value) else {
+                continue;
+            };
+            let mut content = self.value(state, argument.value);
+            let mut storage = None;
+            if let Some(p) = place(self.body, argument.value, self.source_rows) {
+                // A `mut` parameter's content is held to its declared
+                // receiving contract; being local to itself is its access
+                // root, which ends with this body, not where it lives.
+                let binding = &self.body.bindings[p.binding];
+                if let ResolvedName::Parameter(parameter) = binding.binding
+                    && self.parameter_passing(&binding.owner, parameter) == PassingMode::Mut
+                {
+                    content.modes.relation = self.receiving_contract(p.binding);
+                }
+                storage = Some(p.binding);
+            }
+            contents.push((content, ty, storage));
+        }
+        let local = |this: &Self, content: &Value| {
+            !this.arenas.global(&content.modes.relation)
+                || content
+                    .content
+                    .summary()
+                    .scopes()
+                    .any(|(kind, _, _)| kind == Kind::Bound)
+        };
+        if !contents.iter().any(|(content, _, _)| local(self, content)) {
+            return;
+        }
+        // Content reaches only storage whose type can hold a part of it.
+        let mut store = self.body.types.clone();
+        let signatures = &self.signatures;
+        let mut lookup = |path: &hirsel_syntax::DefPath| signatures.cached(path);
+        let mut sources = |holder: TypeId| -> Vec<usize> {
+            contents
+                .iter()
+                .enumerate()
+                .filter(|(_, (content, ty, _))| {
+                    local(self, content)
+                        && hirsel_type_analysis::representation::may_hold_content(
+                            &mut store,
+                            holder,
+                            *ty,
+                            &mut lookup,
+                        )
+                })
+                .map(|(i, _)| i)
+                .collect()
+        };
+        let result = (!self.property(expression).is_some_and(|p| p.plain))
+            .then(|| self.ty(expression))
+            .flatten()
+            .map(|ty| sources(ty));
+        let holders: Vec<_> = contents
+            .iter()
+            .filter_map(|(_, ty, storage)| Some((storage.as_ref().copied()?, sources(*ty))))
+            .collect();
+        // What a content holds, without the loans on its own storage, which
+        // the call ends: its lifetime, its bounds and the places it reads.
+        let contents: Vec<_> = contents
+            .into_iter()
+            .map(|(mut content, _, storage)| {
+                let mut whole = content.content.summary().into_owned();
+                whole.retain(|loan| !matches!(loan.on, On::Binding(b) if Some(b) == storage));
+                content.content = Content { whole, parts: None };
+                content
+            })
+            .collect();
+        let bounded = |this: &Self, target: &mut Value, from: &[usize]| {
+            for i in from {
+                let content = &contents[*i];
+                if !this.arenas.global(&content.modes.relation) {
+                    target.modes.relation =
+                        this.join_lifetime(&target.modes.relation, &content.modes.relation);
+                }
+                target.bound_within(content, false);
+                target.read_through(content);
+            }
+        };
+        if let Some(from) = result {
+            bounded(self, value, &from);
+        }
+        for (binding, from) in holders {
+            let mut slot = state.slots[binding].value.clone();
+            bounded(self, &mut slot, &from);
+            state.slots[binding].value = slot;
+        }
+    }
+    /// What a `mut` parameter's storage may hold: its written relation, or
+    /// global without one; its own access bound is not content (MODE-1).
+    fn receiving_contract(&self, binding: usize) -> Relation {
+        let row = self.body.types.get(self.body.bindings[binding].ty).unwrap();
+        Relation::new(
+            row.modes
+                .relation
+                .reaches()
+                .iter()
+                .filter(|r| !matches!(r, Reach::Environment))
+                .cloned(),
+        )
+    }
     fn join_lifetime(&self, value: &Relation, part: &Relation) -> Relation {
         let (a, b) = (self.arenas.lifetime(value), self.arenas.lifetime(part));
         if a.is_global() || a == b {
@@ -6860,6 +6993,17 @@ impl Checker<'_> {
                 value.usage = UseKind::Take;
                 self.usage(*expression, value.usage);
                 self.record(*expression, &mut value);
+                // Flow evidence, as V derives it; the published row stays
+                // the declared one (MODE-1).
+                if !*constructor {
+                    self.mut_content_bounds(
+                        state,
+                        &mut value,
+                        *expression,
+                        arguments,
+                        requirements,
+                    );
+                }
                 // MODE-2: a `@preserves_unique` taken input passes its
                 // uniqueness on to the result. This is flow evidence, as V
                 // derives it; the call's published row stays the declared one.

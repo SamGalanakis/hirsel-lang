@@ -1,0 +1,59 @@
+// rule: PROV-4
+// expect: run
+// Arena content moved out through `mut` operations stays usable inside its
+// arena, and maps placed in an arena keep their builtin `mut` operations.
+fn pop(mut xs: unique List[String]) -> Option[String] uses {} {
+  list.pop(mut xs)
+}
+
+fn launder(mut o: Option[String]) -> Option[String] uses {} {
+  replace(mut o, take None)
+}
+
+fn stash(mut o: Option[String], mut g: Option[String]) -> () uses {} {
+  g = replace(mut o, take None)
+}
+
+fn length(text: Option[String]) -> u64 uses {} {
+  match text {
+    Some(t) => string.byte_len(t),
+    None => 0,
+  }
+}
+
+fn inside(a: Arena) -> u64 uses {} {
+  let text: String in a = "arena text"
+  let mut xs: unique List[String] in a = [text]
+  let mut o: Option[String] in a = Some("other")
+  let mut g: Option[String] in a = None
+  stash(mut o, mut g)
+  let by = u64.order
+  let mut m: SortedMap[u64, String] of by in a = sorted_map.empty(by)
+  sorted_map.insert(by, mut m, 1u64, "one")
+  let mut n: SortedMap[u64, u64] of by in a = sorted_map.empty(by)
+  sorted_map.insert(by, mut n, 1u64, 2u64)
+  let plain = match sorted_map.remove(by, mut n, 1u64) {
+    Some(v) => v,
+    None => 0,
+  }
+  let first = length(list.pop(mut xs)) + length(pop(mut xs))
+  first + length(launder(mut g)) + length(sorted_map.remove(by, mut m, 1u64)) + plain
+}
+
+fn on_heap() -> Option[String] uses {} {
+  let mut xs: unique List[String] = ["global"]
+  pop(mut xs)
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let n: u64 = arena.with(
+    fn(a: Arena) -> u64 {
+      inside(a)
+    }
+  )
+  if n == 20 && length(on_heap()) == 6 {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

@@ -127,6 +127,29 @@ place; with no relation, any argument is accepted. For `mut x: T in S`, `S` is a
 fixed receiving contract of the caller's storage: everything stored into `x` or its parts
 must be within `S`, so a `mut` parameter without a relation receives only global values.
 
+**`mut` content at the caller.** A body treats the content of a `mut` parameter without a
+relation as global, and it may move that content from one such parameter into another or
+into its result. So at a call, the result and each argument passed to a relation-free
+`mut` parameter are afterwards also bounded by the content of every argument passed to
+such a parameter whose type can hold a part of theirs: its lifetime, the places it reads,
+and the arenas and regions it is placed in
+([PROV-4](brands.md#prov-4-arena-placement)). The access loan on the argument's own place
+is not content, and inside a body a `mut` parameter's content is its written relation, else
+global. This asks nothing of the arguments: an arena-placed map passed to
+`sorted_map.insert` keeps working, and what `sorted_map.remove` gives back stays in its
+arena. A plain result holds no content, and storage whose type can hold no part of the
+content (a `List[u8]` beside a `List[String]`) keeps its own bound.
+
+```hirsel
+fn pop(mut xs: unique List[String]) -> Option[String] { list.pop(mut xs) }
+
+fn escape(a: Arena) -> Option[String] {
+  let inside: String in a = "text"
+  let mut xs: unique List[String] in a = [inside]
+  pop(mut xs)                  // PROV-4: the popped value lives in a
+}
+```
+
 **Taken parameters** are global unless related: `take x: T in S` reaches only `S` and its
 argument must be within `S`; `take x: T in x` is local to its own argument.
 

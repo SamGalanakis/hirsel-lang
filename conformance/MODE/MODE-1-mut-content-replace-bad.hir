@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 14
+// twin: MODE/MODE-1-mut-content-replace-ok.hir
+fn fresh(src: Bytes) -> unique Bytes in src uses {} {
+  bytes.from_list([1u8])
+}
+
+fn launder(mut o: Option[Bytes]) -> Option[Bytes] uses {} {
+  replace(mut o, take None)
+}
+
+fn leak(src: Bytes) -> Option[Bytes] uses {} {
+  let mut o: Option[Bytes] in src = Some(fresh(src))
+  launder(mut o)
+}

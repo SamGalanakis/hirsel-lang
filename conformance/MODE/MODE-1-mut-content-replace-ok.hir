@@ -1,0 +1,14 @@
+// rule: MODE-1
+// expect: accept
+fn fresh(src: Bytes) -> unique Bytes in src uses {} {
+  bytes.from_list([1u8])
+}
+
+fn launder(mut o: Option[Bytes]) -> Option[Bytes] uses {} {
+  replace(mut o, take None)
+}
+
+fn kept(src: Bytes) -> Option[Bytes] in src uses {} {
+  let mut o: Option[Bytes] in src = Some(fresh(src))
+  launder(mut o)
+}

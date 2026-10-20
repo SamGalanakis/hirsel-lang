@@ -2516,6 +2516,55 @@ impl<'a> Checker<'a> {
             }
             target.push(row)
         });
+        // PROV-4, caller side: content moved in through any relation-free
+        // `mut` parameter may come back out as the result, so the arenas and
+        // regions that content is placed in may place the result too. Where
+        // that content lives is the source checker's flow evidence (a `mut`
+        // call may have moved it there), so the result may carry the arena
+        // and region placement its destination states.
+        let holder = self.place_type(destination);
+        let carries = arguments.iter().any(|a| {
+            f.parameters.get(a.parameter.0 as usize).is_some_and(|p| {
+                p.passing == PassingMode::Mut
+                    && !store.get(p.ty).is_some_and(|t| {
+                        t.modes
+                            .relation
+                            .reaches()
+                            .iter()
+                            .any(|r| matches!(r, Reach::Place(_)))
+                    })
+                    && hirsel_type_analysis::representation::may_hold_content(
+                        &mut target,
+                        holder,
+                        self.place_type(a.value.place),
+                        &mut |path| self.signatures.get(path).cloned().map(std::sync::Arc::new),
+                    )
+            })
+        });
+        let placement = if carries {
+            target
+                .get(holder)
+                .unwrap()
+                .modes
+                .relation
+                .retain(|r| match r {
+                    Reach::Place(o) => self.arena_place(o),
+                    Reach::Region(_) => true,
+                    Reach::Environment => false,
+                })
+        } else {
+            Relation::global()
+        };
+        let expected = expected.map(|root| {
+            if placement.is_global()
+                || self.bound(&target, root, Bound::Plain, &self.generic_declarations())
+            {
+                return root;
+            }
+            let mut row = target.get(root).unwrap().clone();
+            row.modes.relation = row.modes.relation.union(&placement);
+            target.push(row)
+        });
         let actual_result = if inactive {
             hirsel_types::erase_brands(&mut target, actual_result).unwrap_or(actual_result)
         } else {

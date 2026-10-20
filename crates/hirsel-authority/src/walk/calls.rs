@@ -1501,6 +1501,7 @@ impl Checker<'_> {
         );
         let result = declared_receipt_evidence(&mut self.out.body.types, result)
             .expect("declared call result");
+        let result = self.mut_content_placement(result, &f, &ordered);
         self.set_ty(e, result);
         if obligation_valid && task_obligation(&self.out.body.types, result) {
             self.pending_tasks.insert(e, span);
@@ -1536,6 +1537,114 @@ impl Checker<'_> {
         // Preserve nominal provider attempts and their failure policy.
         let _ = self.authority(result);
         self.facts.insert(e, used.join(required));
+    }
+    /// PROV-4, caller side: content moved in through any relation-free `mut`
+    /// parameter may come back out through any of them, or as the result. The
+    /// arenas and regions each such argument's content is placed in also place
+    /// the result and every such argument's storage after the call; their
+    /// parts inherit the root's placement (`placed_part_type`).
+    fn mut_content_placement(
+        &mut self,
+        result: TypeId,
+        f: &FunctionType,
+        ordered: &[(usize, Argument)],
+    ) -> TypeId {
+        // (placement of the content, its type, the storage it was passed from)
+        let mut contents = vec![];
+        for (ordinal, argument) in ordered {
+            let Some(parameter) = f.parameters.get(*ordinal) else {
+                continue;
+            };
+            let related = self.out.body.types.get(parameter.ty).is_some_and(|t| {
+                t.modes
+                    .relation
+                    .reaches()
+                    .iter()
+                    .any(|r| matches!(r, Reach::Place(_)))
+            });
+            if parameter.passing != PassingMode::Mut || related {
+                continue;
+            }
+            let Some(actual) = self.ty(argument.value) else {
+                continue;
+            };
+            let mut placement = Relation::global();
+            let mut pending = vec![actual];
+            let mut seen = BTreeSet::new();
+            while let Some(ty) = pending.pop() {
+                if !seen.insert(ty) {
+                    continue;
+                }
+                let Some(row) = self.out.body.types.get(ty) else {
+                    continue;
+                };
+                if matches!(row.kind, TypeKind::Function(_)) {
+                    continue;
+                }
+                placement = placement.union(&self.placement(&row.modes.relation));
+                pending.extend(row.kind.value_parts());
+            }
+            let mut root = argument.value;
+            while let ExprKind::Unary { value, .. } = self.tree.expressions[root.0 as usize].kind {
+                root = value;
+            }
+            let mut holder = None;
+            if self.source_rows.places.contains_key(&root) {
+                if let SourceRoot::Binding { owner, binding } = &self.source_place(root).root {
+                    holder = self.root_binding(*owner, binding).cloned();
+                }
+            }
+            contents.push((placement, actual, holder));
+        }
+        if contents
+            .iter()
+            .all(|(placement, _, _)| placement.is_global())
+        {
+            return result;
+        }
+        // Content reaches only storage whose type can hold a part of it.
+        let mut store = std::mem::take(&mut self.out.body.types);
+        let mut placements = |store: &mut TypeStore, this: &mut Self, holder: TypeId| {
+            let mut placement = Relation::global();
+            for (from, ty, _) in &contents {
+                if !from.is_global()
+                    && hirsel_type_analysis::representation::may_hold_content(
+                        store,
+                        holder,
+                        *ty,
+                        &mut |path| this.read(path),
+                    )
+                {
+                    placement = placement.union(from);
+                }
+            }
+            placement
+        };
+        let at_result = placements(&mut store, self, result);
+        let at_holders: Vec<_> = contents
+            .iter()
+            .filter_map(|(_, ty, holder)| Some((holder.clone()?, *ty)))
+            .map(|(holder, ty)| {
+                let placement = placements(&mut store, self, ty);
+                (holder, placement)
+            })
+            .collect();
+        self.out.body.types = store;
+        let place = |this: &mut Self, ty: TypeId, placement: &Relation| {
+            if placement.is_global() || this.property(ty, Bound::Plain) {
+                return ty;
+            }
+            let mut row = this.out.body.types.get(ty).unwrap().clone();
+            row.modes.relation = row.modes.relation.union(placement);
+            this.out.body.types.push(row)
+        };
+        for (holder, placement) in at_holders {
+            let key = binding_key(&holder);
+            let held = self.binding_types.get(&key).copied().unwrap_or(holder.ty);
+            let placed = place(self, held, &placement);
+            self.binding_types.insert(key, placed);
+        }
+        place(self, result, &at_result)
     }
     /// An unheld literal can choose its result promise at the receiving call.
     /// Keep its executable result and complete bound evidence independently.

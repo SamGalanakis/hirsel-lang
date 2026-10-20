@@ -1,0 +1,27 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 11
+// twin: PROV/PROV-4-mut-content-arena-run.hir
+fn launder(mut o: Option[String]) -> Option[String] uses {} {
+  replace(mut o, take None)
+}
+
+fn escape(a: Arena) -> Option[String] uses {} {
+  let inside: String in a = "arena text"
+  let mut o: Option[String] in a = Some(inside)
+  launder(mut o)
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let kept: Option[String] = arena.with(
+    fn(a: Arena) -> Option[String] {
+      escape(a)
+    }
+  )
+  match kept {
+    Some(text) => {
+      let n = string.byte_len(text)
+    },
+    None => {},
+  }
+  Ok(())
+}

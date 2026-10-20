@@ -1,0 +1,24 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 8
+// twin: PROV/PROV-4-mut-content-arena-run.hir
+// Content moved out of a `mut` argument keeps the argument's arena.
+fn escape(a: Arena) -> Option[String] uses {} {
+  let inside: String in a = "arena text"
+  let mut xs: unique List[String] in a = [inside]
+  list.pop(mut xs)
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let kept: Option[String] = arena.with(
+    fn(a: Arena) -> Option[String] {
+      escape(a)
+    }
+  )
+  match kept {
+    Some(text) => {
+      let n = string.byte_len(text)
+    },
+    None => {},
+  }
+  Ok(())
+}

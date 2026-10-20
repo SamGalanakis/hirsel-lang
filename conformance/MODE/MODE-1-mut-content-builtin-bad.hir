@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 11
+// twin: MODE/MODE-1-mut-content-builtin-ok.hir
+// Content moved out of a `mut` argument keeps the argument's lifetime.
+fn fresh(src: Bytes) -> unique Bytes in src uses {} {
+  bytes.from_list([1u8])
+}
+
+fn leak(src: Bytes) -> Option[Bytes] uses {} {
+  let mut xs: unique List[Bytes] in src = [fresh(src)]
+  list.pop(mut xs)
+}

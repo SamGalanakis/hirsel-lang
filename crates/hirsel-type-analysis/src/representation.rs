@@ -1,6 +1,7 @@
 //! Nominal representation expansion for stage-owned layout walks.
 use hirsel_syntax::DefPath;
 use hirsel_types::*;
+use std::collections::HashSet;
 
 /// Why a representation walk stopped before reaching a structural row.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,6 +91,139 @@ pub fn expand_representation(
     }
 }
 
+/// MODE-1, PROV-4: whether storage of type `holder` could come to hold a part
+/// of a value of type `content`, by type: some counted part of each has the
+/// same shape. Nominal parts are read through their representations. A
+/// generic, callable, erased or unexpandable part could be anything, and so
+/// may hold anything; plain scalars hold no storage.
+pub fn may_hold_content(
+    store: &mut TypeStore,
+    holder: TypeId,
+    content: TypeId,
+    lookup: &mut impl FnMut(&DefPath) -> Option<SignatureRef>,
+) -> bool {
+    let (Some(holders), Some(contents)) = (
+        counted_parts(store, holder, lookup),
+        counted_parts(store, content, lookup),
+    ) else {
+        return true;
+    };
+    holders
+        .iter()
+        .any(|h| contents.iter().any(|c| same_shape(store, *h, *c, 0)))
+}
+/// Every counted part of `root`, nominal representations included, or None
+/// when some part could be anything.
+fn counted_parts(
+    store: &mut TypeStore,
+    root: TypeId,
+    lookup: &mut impl FnMut(&DefPath) -> Option<SignatureRef>,
+) -> Option<Vec<TypeId>> {
+    const LIMIT: usize = 256;
+    let mut parts = vec![];
+    let mut pending = vec![root];
+    let mut seen = HashSet::new();
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        if seen.len() > LIMIT {
+            return None;
+        }
+        let kind = store.get(ty)?.kind.clone();
+        match &kind {
+            TypeKind::Primitive(Primitive::String | Primitive::Bytes) => parts.push(ty),
+            TypeKind::Primitive(_) => {}
+            TypeKind::Parameter(_)
+            | TypeKind::Function(_)
+            | TypeKind::Error
+            | TypeKind::Builtin {
+                kind: BuiltinType::Iter,
+                ..
+            } => return None,
+            TypeKind::Named { .. } => {
+                parts.push(ty);
+                let representation = expand_representation(
+                    store,
+                    ty,
+                    &mut |_, path, arguments| {
+                        Ok(lookup(path).map(|signature| {
+                            (signature, vec![AuthoritySummary::Unknown; arguments.len()])
+                        }))
+                    },
+                    None,
+                )
+                .ok()?;
+                let row = store.get(representation)?;
+                if matches!(row.kind, TypeKind::Named { .. }) {
+                    return None;
+                }
+                pending.push(representation);
+            }
+            _ => {
+                parts.push(ty);
+                pending.extend(kind.value_parts());
+            }
+        }
+    }
+    Some(parts)
+}
+/// Structural equality of two types, ignoring modes, brands and relations.
+fn same_shape(store: &TypeStore, a: TypeId, b: TypeId, depth: u32) -> bool {
+    if a == b || depth > 16 {
+        return true;
+    }
+    let (Some(x), Some(y)) = (store.get(a), store.get(b)) else {
+        return true;
+    };
+    let arguments = |p: &[GenericArgument], q: &[GenericArgument]| {
+        p.len() == q.len()
+            && p.iter().zip(q).all(|pair| match pair {
+                (GenericArgument::Type(p), GenericArgument::Type(q)) => {
+                    same_shape(store, *p, *q, depth + 1)
+                }
+                (p, q) => p == q,
+            })
+    };
+    let all = |p: &[TypeId], q: &[TypeId]| {
+        p.len() == q.len()
+            && p.iter()
+                .zip(q)
+                .all(|(p, q)| same_shape(store, *p, *q, depth + 1))
+    };
+    match (&x.kind, &y.kind) {
+        (TypeKind::Parameter(_) | TypeKind::Function(_) | TypeKind::Error, _)
+        | (_, TypeKind::Parameter(_) | TypeKind::Function(_) | TypeKind::Error) => true,
+        (TypeKind::Primitive(p), TypeKind::Primitive(q)) => p == q,
+        (
+            TypeKind::Builtin {
+                kind: p,
+                arguments: a,
+            },
+            TypeKind::Builtin {
+                kind: q,
+                arguments: b,
+            },
+        ) => p == q && arguments(a, b),
+        (
+            TypeKind::Named {
+                definition: p,
+                arguments: a,
+            },
+            TypeKind::Named {
+                definition: q,
+                arguments: b,
+            },
+        ) => p == q && arguments(a, b),
+        (TypeKind::Box(p), TypeKind::Box(q)) => same_shape(store, *p, *q, depth + 1),
+        (TypeKind::Tuple(_) | TypeKind::Record(_) | TypeKind::Variant(_), _) => {
+            std::mem::discriminant(&x.kind) == std::mem::discriminant(&y.kind)
+                && all(&x.kind.value_parts(), &y.kind.value_parts())
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +283,51 @@ mod tests {
         arguments: &[GenericArgument],
     ) -> Option<(SignatureRef, Vec<AuthoritySummary>)> {
         signature.map(|signature| (signature, vec![AuthoritySummary::Unknown; arguments.len()]))
+    }
+
+    #[test]
+    fn storage_holds_content_by_counted_shape_through_representations() {
+        let list = |store: &mut TypeStore, element| {
+            store.push(row(TypeKind::Builtin {
+                kind: BuiltinType::List,
+                arguments: vec![GenericArgument::Type(element)].into(),
+            }))
+        };
+        // `Wrap` is a record holding one String.
+        let mut declaration = TypeStore::default();
+        let field = declaration.push(row(TypeKind::Primitive(Primitive::String)));
+        let record = declaration.push(row(TypeKind::Record(
+            vec![Field {
+                growable: false,
+                name: "text".into(),
+                ty: field,
+            }]
+            .into(),
+        )));
+        let signature = nominal(declaration, Some(record), vec![]);
+        let mut store = TypeStore::default();
+        let bytes = store.push(row(TypeKind::Primitive(Primitive::U8)));
+        let text = store.push(row(TypeKind::Primitive(Primitive::String)));
+        let wrap = store.push(row(TypeKind::Named {
+            definition: path("Wrap"),
+            arguments: vec![].into(),
+        }));
+        let generic = store.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+            TypeParamId(0),
+        ))));
+        let byte_list = list(&mut store, bytes);
+        let text_list = list(&mut store, text);
+        let mut lookup = |_: &DefPath| Some(signature.clone());
+        let mut holds = |store: &mut TypeStore, holder, content| {
+            may_hold_content(store, holder, content, &mut lookup)
+        };
+        assert!(!holds(&mut store, byte_list, text_list));
+        assert!(!holds(&mut store, byte_list, wrap));
+        assert!(holds(&mut store, text, text_list));
+        assert!(holds(&mut store, text_list, wrap));
+        assert!(holds(&mut store, byte_list, generic));
+        let mut missing = |_: &DefPath| None;
+        assert!(may_hold_content(&mut store, byte_list, wrap, &mut missing));
     }
 
     #[test]

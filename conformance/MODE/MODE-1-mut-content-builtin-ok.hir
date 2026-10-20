@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: accept
+fn fresh(src: Bytes) -> unique Bytes in src uses {} {
+  bytes.from_list([1u8])
+}
+
+fn kept(src: Bytes) -> Option[Bytes] in src uses {} {
+  let mut xs: unique List[Bytes] in src = [fresh(src)]
+  list.pop(mut xs)
+}
+
+fn on_heap() -> Option[Bytes] uses {} {
+  let mut xs: unique List[Bytes] = [bytes.from_list([1u8])]
+  list.pop(mut xs)
+}

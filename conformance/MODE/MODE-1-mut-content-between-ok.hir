@@ -1,0 +1,28 @@
+// rule: MODE-1
+// expect: accept
+// Storage whose type cannot hold a part of the content keeps its own bound.
+fn fresh(src: Bytes) -> unique Bytes in src uses {} {
+  bytes.from_list([1u8])
+}
+
+fn stash(mut o: Option[Bytes], mut g: Option[Bytes]) -> () uses {} {
+  g = replace(mut o, take None)
+}
+
+fn count(mut o: Option[Bytes], mut out: List[u8]) -> () uses {} {
+  list.push(mut out, 1u8)
+}
+
+fn kept(src: Bytes) -> Option[Bytes] in src uses {} {
+  let mut o: Option[Bytes] in src = Some(fresh(src))
+  let mut g: Option[Bytes] in src = None
+  stash(mut o, mut g)
+  g
+}
+
+fn separate(src: Bytes) -> Bytes uses {} {
+  let mut o: Option[Bytes] in src = Some(fresh(src))
+  let mut out: List[u8] = []
+  count(mut o, mut out)
+  bytes.from_list(take out)
+}

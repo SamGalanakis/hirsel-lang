@@ -2841,6 +2841,14 @@ conformance/MODE/MODE-1-map-get-result-live-mutation-ok.hir
 conformance/MODE/MODE-1-mapped-view-escape-bad.hir
 conformance/MODE/MODE-1-moved-storage-local-write-bad.hir
 conformance/MODE/MODE-1-moved-storage-local-write-ok.hir
+conformance/MODE/MODE-1-mut-content-between-bad.hir
+conformance/MODE/MODE-1-mut-content-between-ok.hir
+conformance/MODE/MODE-1-mut-content-builtin-bad.hir
+conformance/MODE/MODE-1-mut-content-builtin-ok.hir
+conformance/MODE/MODE-1-mut-content-replace-bad.hir
+conformance/MODE/MODE-1-mut-content-replace-ok.hir
+conformance/MODE/MODE-1-mut-content-wrapper-bad.hir
+conformance/MODE/MODE-1-mut-content-wrapper-ok.hir
 conformance/MODE/MODE-1-mut-global-annotation-bad.hir
 conformance/MODE/MODE-1-mut-global-annotation-ok.hir
 conformance/MODE/MODE-1-mut-result-bad.hir
@@ -4525,6 +4533,11 @@ conformance/PROV/PROV-4-mixed-source-return-first-arena-bad.hir
 conformance/PROV/PROV-4-mixed-source-return-second-arena-bad.hir
 conformance/PROV/PROV-4-mixed-source-store-arena-bad.hir
 conformance/PROV/PROV-4-mixed-source-take-second-bad.hir
+conformance/PROV/PROV-4-mut-content-arena-run.hir
+conformance/PROV/PROV-4-mut-content-between-bad.hir
+conformance/PROV/PROV-4-mut-content-builtin-bad.hir
+conformance/PROV/PROV-4-mut-content-replace-bad.hir
+conformance/PROV/PROV-4-mut-content-wrapper-bad.hir
 conformance/PROV/PROV-4-nested-loop-field-element-run.hir
 conformance/PROV/PROV-4-placed-local-binding-result-bad.hir
 conformance/PROV/PROV-4-placed-local-binding-result-ok.hir

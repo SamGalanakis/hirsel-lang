@@ -118,6 +118,46 @@ pub fn check_ownership_with_clauses(
             }
         }
     }
+    // MODE-1: the caller-side `mut` content bound asks which storage can hold
+    // a part of which content; read the nominal representations it needs.
+    let mut held = std::collections::BTreeSet::new();
+    for graph in &graphs {
+        for node in &graph.nodes {
+            let cfg::Op::Call {
+                expression,
+                arguments,
+                requirements,
+                ..
+            } = &node.op
+            else {
+                continue;
+            };
+            if requirements
+                .iter()
+                .flatten()
+                .any(|r| r.passing == hirsel_syntax::PassingMode::Mut)
+            {
+                held.extend(
+                    arguments
+                        .iter()
+                        .map(|a| a.value)
+                        .chain([*expression])
+                        .filter_map(|e| cfg::expression_type(body, e, &rows)),
+                );
+            }
+        }
+    }
+    if !held.is_empty() {
+        let mut scratch = body.types.clone();
+        for ty in held {
+            hirsel_type_analysis::representation::may_hold_content(
+                &mut scratch,
+                ty,
+                ty,
+                &mut |path| signatures.read(path, body, provider).ok(),
+            );
+        }
+    }
     let result_sharing =
         properties::result_sharing(body, signature, &graphs, &mut signatures, provider, &rows)?;
     let mut mutation_sites = Vec::new();
