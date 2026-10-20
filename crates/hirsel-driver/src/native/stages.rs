@@ -10,9 +10,7 @@ use hirsel_lir::discharge::Discharge;
 use hirsel_lir::ir::LirUnit;
 use hirsel_lir::layout_types::{LayoutId, LayoutTable, TargetSpec};
 use hirsel_lir::stage::{InputIdentity, Ready, Stage, ValidatedUnit};
-use hirsel_lir::validate::{
-    Inputs, Rejected, validate_placed, validate_rc, validate_ready, validate_reuse, validate_value,
-};
+use hirsel_lir::validate::{Inputs, Rejected};
 use hirsel_rc::cleanup::Finalizers;
 use hirsel_rc::insert::Proofs;
 use hirsel_rc::instance::{InstanceRole, Program};
@@ -260,6 +258,17 @@ impl ReadyProgram {
         });
         Ok(())
     }
+    /// Put `unit` at `index` in place of the unit there, with its summary.
+    pub fn replace_unit(&mut self, index: usize, unit: ValidatedUnit<Ready>) -> Result<(), String> {
+        self.summaries[index] = hirsel_lir::fragment::UnitSummary::of(
+            unit.unit(),
+            &self.table,
+            &self.keys,
+            &self.manifest,
+        )?;
+        self.units[index] = unit;
+        Ok(())
+    }
     /// The Ready units, as the heap executor and dumps read them.
     pub fn raw_units(&self) -> Vec<LirUnit<Ready>> {
         self.units.iter().map(|u| u.unit().clone()).collect()
@@ -372,6 +381,7 @@ pub fn build_program(
         layouts: table,
         manifest: &manifest,
     };
+    let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
     let instances = &lowered.instances;
     let statics = std::mem::take(&mut lowered.statics);
     if let Some(objects) = &options.objects {
@@ -394,13 +404,16 @@ pub fn build_program(
         let definition = unit.header.definition.clone();
         let fail = |stage, message: String| NativeError::of(stage, &definition, message);
         timings::count(Count::Units);
-        let value = seal(StageName::Import, || validate_value(unit, &inputs))?.into_raw();
+        let value = seal(StageName::Import, || validation.validate(unit, &inputs))?.into_raw();
         let placement = hirsel_rc::placement::Options::for_instance(options.regions, instances, id);
         let placed = timed(Phase::Place, || {
             hirsel_rc::placement::place(value, table, &placement)
         })
         .map_err(|e| fail(StageName::Placement, e.to_string()))?;
-        let placed = seal(StageName::Placement, || validate_placed(placed, &inputs))?.into_raw();
+        let placed = seal(StageName::Placement, || {
+            validation.validate(placed, &inputs)
+        })?
+        .into_raw();
         let proofs = Proofs::for_instance(instances, id);
         let mut unit = timed(Phase::Rc, || {
             hirsel_rc::insert::insert(placed, table, &proofs)
@@ -412,7 +425,7 @@ pub fn build_program(
             unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
                 .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
         }
-        rc.push(seal(StageName::Perceus, || validate_rc(unit, &inputs))?.into_raw());
+        rc.push(seal(StageName::Perceus, || validation.validate(unit, &inputs))?.into_raw());
     }
     // Cleanup reads only the plan's finalizer facts: no unit waits for another's RC output.
     let finalizers = Finalizers::planned(instances, table);
@@ -427,12 +440,14 @@ pub fn build_program(
             hirsel_rc::reuse::reuse(unit, table, &reuse)
         })
         .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
-        let reused = seal(StageName::Reuse, || validate_reuse(reused, &inputs))?.into_raw();
+        let reused = seal(StageName::Reuse, || validation.validate(reused, &inputs))?.into_raw();
         let ready = timed(Phase::Ready, || {
             hirsel_rc::ready::ready(reused, table, &finalizers)
         })
         .map_err(|e| fail(StageName::Ready, e.to_string()))?;
-        units.push(seal(StageName::Ready, || validate_ready(ready, &inputs))?);
+        units.push(seal(StageName::Ready, || {
+            validation.validate(ready, &inputs)
+        })?);
     }
     let functions = instances
         .ids()
@@ -541,6 +556,14 @@ fn build_units(
         measurement: false,
         fuel: objects.fuel,
     };
+    let inputs = Inputs {
+        discharge: Some(&lowered.native_discharge),
+        operations,
+        target: &options.target,
+        layouts: table,
+        manifest,
+    };
+    let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
     let headers: Vec<(DefPath, ContentHash)> = units
         .iter()
         .map(|u| (u.header.definition.clone(), u.header.instance))
@@ -553,6 +576,7 @@ fn build_units(
             keys: &keys,
             operations,
             discharge: Some(&lowered.native_discharge),
+            validation: &validation,
             emit: &emit,
             instances: &lowered.instances,
             finalizers: &finalizers,
@@ -629,7 +653,9 @@ impl BuiltUnits {
             launches: program
                 .signatures
                 .iter()
-                .filter_map(|(p, s)| super::link::launch_kind(&program.types, s).map(|k| (p.clone(), k)))
+                .filter_map(|(p, s)| {
+                    super::link::launch_kind(&program.types, s).map(|k| (p.clone(), k))
+                })
                 .collect(),
             input: program.input.clone(),
             target: options.target.clone(),

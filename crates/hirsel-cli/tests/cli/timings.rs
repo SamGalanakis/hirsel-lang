@@ -63,7 +63,7 @@ const PHASES: [&str; 18] = [
     "store lookup",
     "debug object",
 ];
-const COUNTS: [&str; 22] = [
+const COUNTS: [&str; 24] = [
     "definitions",
     "units",
     "V runs",

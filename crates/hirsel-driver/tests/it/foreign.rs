@@ -607,7 +607,7 @@ fn native_c_callbacks_follow_library_and_inline_definitions() {
             if library {
                 let mut unit = ready.units[index].clone().into_raw();
                 unit.header.origin = UnitOrigin::Library;
-                ready.units[index] = validate_ready(
+                let unit = validate_ready(
                     unit,
                     &Inputs {
                         target: &ready.target,
@@ -618,6 +618,7 @@ fn native_c_callbacks_follow_library_and_inline_definitions() {
                     },
                 )
                 .unwrap();
+                ready.replace_unit(index, unit).unwrap();
             } else {
                 ready
                     .inline_instances

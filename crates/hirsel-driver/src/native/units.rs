@@ -20,9 +20,7 @@ use hirsel_lir::ir::{Callee, Inst, LirUnit, Symbol, UnitOrigin};
 use hirsel_lir::layout_types::{LayoutId, LayoutTable};
 use hirsel_lir::objects::{ObjectStore, UnitKey, object_key};
 use hirsel_lir::stage::{Ready, ValidatedUnit, Value};
-use hirsel_lir::validate::{
-    Inputs, validate_placed, validate_rc, validate_ready, validate_reuse, validate_value,
-};
+use hirsel_lir::validate::Inputs;
 use hirsel_rc::cleanup::Finalizers;
 use hirsel_rc::insert::Proofs;
 use hirsel_rc::instance::{InstanceId, Instances};
@@ -118,6 +116,8 @@ pub(crate) struct Program<'a> {
     /// The validators' operation declarations and PS-13 discharge (`Inputs`).
     pub operations: &'a (dyn hirsel_lir::operation::OperationDeclarations + Sync),
     pub discharge: Option<&'a hirsel_lir::discharge::Discharge>,
+    /// The layout checks and identities every unit's validations share.
+    pub validation: &'a hirsel_lir::validate::ValidationContext<'a>,
     pub emit: &'a EmitInputs<'a>,
     pub instances: &'a Instances,
     pub finalizers: &'a Finalizers,
@@ -393,14 +393,20 @@ fn stages(
     let definition = unit.header.definition.clone();
     let fail = |stage, message: String| NativeError::of(stage, &definition, message);
     timings::count(Count::Units);
-    let value = seal(StageName::Import, || validate_value(unit, inputs))?.into_raw();
+    let value = seal(StageName::Import, || {
+        program.validation.validate(unit, inputs)
+    })?
+    .into_raw();
     let placement =
         hirsel_rc::placement::Options::for_instance(options.regions, program.instances, id);
     let placed = timed(Phase::Place, || {
         hirsel_rc::placement::place(value, table, &placement)
     })
     .map_err(|e| fail(StageName::Placement, e.to_string()))?;
-    let placed = seal(StageName::Placement, || validate_placed(placed, inputs))?.into_raw();
+    let placed = seal(StageName::Placement, || {
+        program.validation.validate(placed, inputs)
+    })?
+    .into_raw();
     let proofs = Proofs::for_instance(program.instances, id);
     let mut unit = timed(Phase::Rc, || {
         hirsel_rc::insert::insert(placed, table, &proofs)
@@ -410,18 +416,26 @@ fn stages(
         unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
             .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
     }
-    let rc = seal(StageName::Perceus, || validate_rc(unit, inputs))?.into_raw();
+    let rc = seal(StageName::Perceus, || {
+        program.validation.validate(unit, inputs)
+    })?
+    .into_raw();
     let reuse = hirsel_rc::reuse::Options {
         reuse: options.reuse,
     };
     let reused = timed(Phase::Reuse, || hirsel_rc::reuse::reuse(rc, table, &reuse))
         .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
-    let reused = seal(StageName::Reuse, || validate_reuse(reused, inputs))?.into_raw();
+    let reused = seal(StageName::Reuse, || {
+        program.validation.validate(reused, inputs)
+    })?
+    .into_raw();
     let ready = timed(Phase::Ready, || {
         hirsel_rc::ready::ready(reused, table, program.finalizers)
     })
     .map_err(|e| fail(StageName::Ready, e.to_string()))?;
-    let ready = seal(StageName::Ready, || validate_ready(ready, inputs))?;
+    let ready = seal(StageName::Ready, || {
+        program.validation.validate(ready, inputs)
+    })?;
     super::emit::check_unit_runtime_calls(ready.unit(), table, program.emit.manifest)?;
     Ok(ready)
 }
