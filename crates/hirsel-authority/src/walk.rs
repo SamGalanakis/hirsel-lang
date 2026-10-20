@@ -2507,7 +2507,7 @@ impl<'a> Checker<'a> {
         let Some(actual) = self.ty(expression) else {
             return;
         };
-        if !hirsel_types::shape_equal(self.t, actual, peer).unwrap_or(false) {
+        if !self.t.shape_eq(actual, peer).unwrap_or(false) {
             return;
         }
         let Some(TypeKind::Variant(variants)) = self.layout(peer) else {
