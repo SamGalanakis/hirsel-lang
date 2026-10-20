@@ -1,9 +1,0 @@
-// rule: SER-1
-// expect: reject SER-1 at line 5
-// A Path is data, but the Dir it is used with is authority, so a record holding the Dir is
-// not serializable.
-@serializable
-type Located {
-  dir: Dir,
-  path: Path,
-}

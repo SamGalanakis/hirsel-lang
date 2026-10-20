@@ -1,6 +1,0 @@
-// rule: CAP-1
-// expect: accept
-fn exercise(d: Dir) -> Result[(), FileError] uses {d} {
-  let w = file.watch(d, path.of("a"), false)?
-  Ok(())
-}

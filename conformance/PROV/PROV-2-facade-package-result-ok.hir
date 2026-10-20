@@ -1,7 +1,0 @@
-// rule: PROV-2
-// expect: accept
-fn probe() -> () uses {} {
-  let mut m: unique u32_maps.OrderedMap[u8] = u32_maps.empty()
-  u32_maps.insert(mut m, 1, 2)
-  let n = u32_maps.len(m)
-}

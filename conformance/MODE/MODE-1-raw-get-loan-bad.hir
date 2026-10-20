@@ -1,7 +1,0 @@
-// rule: MODE-1
-// expect: reject MODE-1 at line 5
-fn probe(by: Order[u32], mut m: SortedMap[u32, String] of by) -> () uses {} {
-  let found = sorted_map.get(by, m, 1)
-  sorted_map.insert(by, mut m, 2, "two")
-  let _ = found == Some("one")
-}

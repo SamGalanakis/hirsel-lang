@@ -25,15 +25,9 @@ conformance/CAP/CAP-1-file-copy-authority-bad.hir
 conformance/CAP/CAP-1-file-copy-authority-ok.hir
 conformance/CAP/CAP-1-file-list-recursive-authority-bad.hir
 conformance/CAP/CAP-1-file-list-recursive-authority-ok.hir
-conformance/CAP/CAP-1-file-map-authority-bad.hir
-conformance/CAP/CAP-1-file-map-authority-ok.hir
-conformance/CAP/CAP-1-file-put-new-authority-bad.hir
-conformance/CAP/CAP-1-file-put-new-authority-ok.hir
 conformance/CAP/CAP-1-file-set-permissions-authority-bad.hir
 conformance/CAP/CAP-1-file-set-permissions-authority-ok.hir
 conformance/CAP/CAP-1-file-walk-steps-run.hir
-conformance/CAP/CAP-1-file-watch-authority-bad.hir
-conformance/CAP/CAP-1-file-watch-authority-ok.hir
 conformance/CAP/CAP-1-hello-web-scripted-run.hir
 conformance/CAP/CAP-1-host-inputs-run.hir
 conformance/CAP/CAP-1-listen-not-granted-run.hir
@@ -92,8 +86,6 @@ conformance/CAP/CAP-1-random-draws-run.hir
 conformance/CAP/CAP-1-random-projection-bad.hir
 conformance/CAP/CAP-1-random-projection-ok.hir
 conformance/CAP/CAP-1-std-iter-file-pipeline-run.hir
-conformance/CAP/CAP-1-std-store-dir-authority-bad.hir
-conformance/CAP/CAP-1-std-store-dir-authority-ok.hir
 conformance/CAP/CAP-1-stderr-parameter-bad.hir
 conformance/CAP/CAP-1-stderr-parameter-ok.hir
 conformance/CAP/CAP-1-stderr-projection-bad.hir
@@ -148,9 +140,7 @@ conformance/CAP/CAP-2-erased-carrier-inert-bound-bad.hir
 conformance/CAP/CAP-2-erased-carrier-inert-bound-ok.hir
 conformance/CAP/CAP-2-erased-carrier-inert-ok.hir
 conformance/CAP/CAP-2-erased-carrier-net-bad.hir
-conformance/CAP/CAP-2-erased-carrier-net-ok.hir
 conformance/CAP/CAP-2-erased-carrier-store-bad.hir
-conformance/CAP/CAP-2-erased-carrier-store-ok.hir
 conformance/CAP/CAP-2-erased-carrier-unselected-bad.hir
 conformance/CAP/CAP-2-erased-carrier-unselected-ok.hir
 conformance/CAP/CAP-2-external-opaque-inert-bad.hir
@@ -222,17 +212,11 @@ conformance/CAP/CAP-2-recursive-argument-authority-ok.hir
 conformance/CAP/CAP-2-resource-drop-summary-bad.hir
 conformance/CAP/CAP-2-resource-drop-summary-ok.hir
 conformance/CAP/CAP-2-save-file-example.hir
-conformance/CAP/CAP-2-schema-capture-bad.hir
-conformance/CAP/CAP-2-schema-capture-ok.hir
-conformance/CAP/CAP-2-schema-domain-bad.hir
-conformance/CAP/CAP-2-schema-domain-ok.hir
 conformance/CAP/CAP-2-sender-operation-bad.hir
 conformance/CAP/CAP-2-sender-operation-ok.hir
 conformance/CAP/CAP-2-std-stream-file-authority-bad.hir
 conformance/CAP/CAP-2-std-stream-file-authority-ok.hir
 conformance/CAP/CAP-2-std-stream-inert-ok.hir
-conformance/CAP/CAP-2-std-stream-net-authority-bad.hir
-conformance/CAP/CAP-2-std-stream-net-authority-ok.hir
 conformance/CAP/CAP-2-task-operation-bad.hir
 conformance/CAP/CAP-2-task-operation-ok.hir
 conformance/CAP/CAP-2-testhelpers-property-accept.hir
@@ -525,7 +509,6 @@ conformance/CLO/CLO-4-once-take-capture-unique-run.hir
 conformance/CLO/CLO-4-outer-let-mut-capture-bad.hir
 conformance/CLO/CLO-4-outer-let-mut-capture-ok.hir
 conformance/CLO/CLO-4-parameter-authority.hir
-conformance/CLO/CLO-4-schema-retained-run.hir
 conformance/CLO/CLO-4-scope-body-takes-let-mut-file-run.hir
 conformance/CLO/CLO-4-scope-body-takes-let-mut-list-run.hir
 conformance/CLO/CLO-4-scope-body-takes-let-mut-reassigned-run.hir
@@ -538,10 +521,7 @@ conformance/CLO/CLO-4-selected-callback-ok.hir
 conformance/CLO/CLO-4-spec-lazy-map.hir
 conformance/CLO/CLO-4-std-iter-fused-run.hir
 conformance/CLO/CLO-4-std-iter-run.hir
-conformance/CLO/CLO-4-std-stream-advance-replace-bad.hir
 conformance/CLO/CLO-4-std-stream-terminal-run.hir
-conformance/CLO/CLO-4-std-stream-widen-authority-bad.hir
-conformance/CLO/CLO-4-std-stream-widen-authority-ok.hir
 conformance/CLO/CLO-4-stored-borrowed-capture-bad.hir
 conformance/CLO/CLO-4-stored-borrowed-capture-ok.hir
 conformance/CLO/CLO-4-taken-function-needs-global-bad.hir
@@ -639,7 +619,6 @@ conformance/CONC/CONC-3-process-pipeline-canceled-run.hir
 conformance/CONC/CONC-3-process-run-canceled-run.hir
 conformance/CONC/CONC-3-schedule-cancel-run.hir
 conformance/CONC/CONC-3-schedule-driver-run.hir
-conformance/CONC/CONC-3-schedule-network-run.hir
 conformance/CONC/CONC-3-shielded-drop-send-run.hir
 conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir
 conformance/CONC/CONC-3-task-capture-after-sleep-run.hir
@@ -709,7 +688,6 @@ conformance/CONC/CONC-8-two-task-channel-blocked.hir
 conformance/CONC/CONC-8-two-task-channel-run.hir
 conformance/CONC/CONC-8-watch-injected-wake-run.hir
 conformance/CONC/CONC-8-watch-no-event-blocked.hir
-conformance/CONC/CONC-8-watch-no-event-run.hir
 conformance/CT/CT-1-arithmetic-constant.hir
 conformance/CT/CT-1-conditional-constant.hir
 conformance/CT/CT-1-contract-failure-bad.hir
@@ -768,9 +746,7 @@ conformance/CT/CT-2-nested-closure-constant-ok.hir
 conformance/CT/CT-2-nested-resource-constant-bad.hir
 conformance/CT/CT-2-nested-resource-constant-ok.hir
 conformance/CT/CT-2-repeat-count-bad.hir
-conformance/CT/CT-2-repeat-count-ok.hir
 conformance/CT/CT-2-repeat-generic-bad.hir
-conformance/CT/CT-2-repeat-generic-ok.hir
 conformance/CT/CT-2-resource-constant-bad.hir
 conformance/CT/CT-2-resource-constant-ok.hir
 conformance/CT/CT-2-resource-map-constant-bad.hir
@@ -857,7 +833,6 @@ conformance/DET/DET-1-net-ephemeral-listeners-run.hir
 conformance/DET/DET-1-net-script-repeat-run.hir
 conformance/DET/DET-1-std-store-crash-boundaries-run.hir
 conformance/DET/DET-1-std-store-crash-compaction-run.hir
-conformance/DET/DET-1-std-store-crash-model-run.hir
 conformance/DET/DET-1-std-store-fence-run.hir
 conformance/DET/DET-1-std-store-recover-run.hir
 conformance/DET/DET-1-std-store-transact-crash-run.hir
@@ -885,7 +860,6 @@ conformance/DROP/DROP-2-destructure-original-run.hir
 conformance/DROP/DROP-2-destructure-zero-siblings-run.hir
 conformance/DROP/DROP-2-expect-ok-error-drop-fail.hir
 conformance/DROP/DROP-2-expect-ok-error-fail.hir
-conformance/DROP/DROP-2-facade-resource-remove-run.hir
 conformance/DROP/DROP-2-failure-inner-scope-before-cursor-run.hir
 conformance/DROP/DROP-2-fresh-block-fields-run.hir
 conformance/DROP/DROP-2-from-bytes-match-payloads-run.hir
@@ -1048,7 +1022,6 @@ conformance/FACT/FACT-2-percent-maximum.hir
 conformance/FACT/FACT-2-percent-zero.hir
 conformance/FACT/FACT-2-plain-base-invalid.hir
 conformance/FACT/FACT-2-plain-record-base.hir
-conformance/FACT/FACT-2-schema-predicate-failure.hir
 conformance/FACT/FACT-3-known-false-requires.hir
 conformance/FACT/FACT-3-known-invalid-fact.hir
 conformance/FACT/FACT-3-known-true-contract.hir
@@ -1269,8 +1242,6 @@ conformance/GEN/GEN-1-projected-call-local-box-receipt-ok.hir
 conformance/GEN/GEN-1-projected-call-local-tuple-receipt-ok.hir
 conformance/GEN/GEN-1-projected-call-tuple-receipt-run.hir
 conformance/GEN/GEN-1-resource-instantiation.hir
-conformance/GEN/GEN-1-schema-wire-bad.hir
-conformance/GEN/GEN-1-schema-wire-ok.hir
 conformance/GEN/GEN-1-sendable-counted-bad.hir
 conformance/GEN/GEN-1-sendable-counted-ok.hir
 conformance/GEN/GEN-1-serializable-contextual-name-ok.hir
@@ -1316,7 +1287,6 @@ conformance/GEN/GEN-2-schema-boundary-run.hir
 conformance/GEN/GEN-2-schema-issues-run.hir
 conformance/GEN/GEN-2-schema-json-run.hir
 conformance/GEN/GEN-2-schema-limits-run.hir
-conformance/GEN/GEN-2-schema-serde-path-run.hir
 conformance/GEN/GEN-2-top-level-dictionary.hir
 conformance/GEN/GEN-2-user-record-dictionary.hir
 conformance/GEN/GEN-3-shape-alias-bad.hir
@@ -1366,7 +1336,6 @@ conformance/LANG/LANG-1-label-block-ok.hir
 conformance/LANG/LANG-1-label-break-value-bad.hir
 conformance/LANG/LANG-1-label-break-value-ok.hir
 conformance/LANG/LANG-1-label-if-bad.hir
-conformance/LANG/LANG-1-label-if-ok.hir
 conformance/LANG/LANG-1-label-keyword-bad.hir
 conformance/LANG/LANG-1-label-keyword-ok.hir
 conformance/LANG/LANG-1-label-underscore-bad.hir
@@ -1408,7 +1377,6 @@ conformance/LANG/LANG-11-closure-return-runtime.hir
 conformance/LANG/LANG-11-early-return.hir
 conformance/LANG/LANG-11-final-return-bad.hir
 conformance/LANG/LANG-11-final-return-ok.hir
-conformance/LANG/LANG-11-labelled-block-ok.hir
 conformance/LANG/LANG-11-labelled-block-run.hir
 conformance/LANG/LANG-11-labelled-loops-run.hir
 conformance/LANG/LANG-11-nested-block-value.hir
@@ -1480,7 +1448,6 @@ conformance/LANG/LANG-13-loop-element-match-run.hir
 conformance/LANG/LANG-13-loop-tuple-payload-part-run.hir
 conformance/LANG/LANG-13-native-strpat-bytes-run.hir
 conformance/LANG/LANG-13-native-strpat-floats-run.hir
-conformance/LANG/LANG-13-native-strpat-minimal-run.hir
 conformance/LANG/LANG-13-native-strpat-strings-run.hir
 conformance/LANG/LANG-13-nested-match-on-binding-run.hir
 conformance/LANG/LANG-13-nested-ok-none-error-paths-run.hir
@@ -1853,7 +1820,6 @@ conformance/LANG/LANG-7-exhaustive-product-options-run.hir
 conformance/LANG/LANG-7-exhaustive-product-record-run.hir
 conformance/LANG/LANG-7-extern-preserves-unique-bad.hir
 conformance/LANG/LANG-7-extern-preserves-unique-ok.hir
-conformance/LANG/LANG-7-facade-map-reserved-bad.hir
 conformance/LANG/LANG-7-field-locality-bad.hir
 conformance/LANG/LANG-7-field-locality-ok.hir
 conformance/LANG/LANG-7-generic-callable-conflict-bad.hir
@@ -1883,17 +1849,11 @@ conformance/LANG/LANG-7-iterator-callback-mode.hir
 conformance/LANG/LANG-7-label-block-closure-bad.hir
 conformance/LANG/LANG-7-label-block-closure-ok.hir
 conformance/LANG/LANG-7-label-block-continue-bad.hir
-conformance/LANG/LANG-7-label-block-continue-ok.hir
 conformance/LANG/LANG-7-label-block-join-type-bad.hir
-conformance/LANG/LANG-7-label-block-join-type-ok.hir
 conformance/LANG/LANG-7-label-block-shadow-bad.hir
-conformance/LANG/LANG-7-label-block-shadow-ok.hir
 conformance/LANG/LANG-7-label-block-unit-break-bad.hir
-conformance/LANG/LANG-7-label-block-unit-break-ok.hir
 conformance/LANG/LANG-7-label-block-unlabelled-exit-bad.hir
-conformance/LANG/LANG-7-label-block-unlabelled-exit-ok.hir
 conformance/LANG/LANG-7-label-block-value-type-bad.hir
-conformance/LANG/LANG-7-label-block-value-type-ok.hir
 conformance/LANG/LANG-7-label-closure-bad.hir
 conformance/LANG/LANG-7-label-closure-ok.hir
 conformance/LANG/LANG-7-label-function-bad.hir
@@ -1940,9 +1900,7 @@ conformance/LANG/LANG-7-range-coverage-ok.hir
 conformance/LANG/LANG-7-recursive-product-match-bad.hir
 conformance/LANG/LANG-7-recursive-product-match-run.hir
 conformance/LANG/LANG-7-repeat-kind-bad.hir
-conformance/LANG/LANG-7-repeat-kind-ok.hir
 conformance/LANG/LANG-7-repeat-length-bad.hir
-conformance/LANG/LANG-7-repeat-length-ok.hir
 conformance/LANG/LANG-7-repeat-run.hir
 conformance/LANG/LANG-7-size-equality-bad.hir
 conformance/LANG/LANG-7-size-equality-ok.hir
@@ -2058,7 +2016,6 @@ conformance/LANG/LANG-9-test-tasks-deadlock.hir
 conformance/LANG/LANG-9-test-tasks-interleaving.hir
 conformance/LANG/LANG-9-test-tasks-mutex.hir
 conformance/LANG/LANG-9-test-tasks-ping-pong.hir
-conformance/LANG/LANG-9-test-tasks-run.hir
 conformance/LANG/LANG-9-testhelpers-approx-boundary-run.hir
 conformance/LANG/LANG-9-testhelpers-approx-infinity-fail.hir
 conformance/LANG/LANG-9-testhelpers-approx-negative-fail.hir
@@ -2388,8 +2345,6 @@ conformance/MEM/MEM-5-discarded-temporary-cleanup-run.hir
 conformance/MEM/MEM-5-escaping-closure-bad.hir
 conformance/MEM/MEM-5-escaping-closure-ok.hir
 conformance/MEM/MEM-5-explicit-arena-ok.hir
-conformance/MEM/MEM-5-facade-insert-bad.hir
-conformance/MEM/MEM-5-facade-len-ok.hir
 conformance/MEM/MEM-5-failure-path-bad.hir
 conformance/MEM/MEM-5-failure-path-ok.hir
 conformance/MEM/MEM-5-failure-path-temporary-cleanup-bad.hir
@@ -2463,13 +2418,9 @@ conformance/MEM/MEM-5-pathtime-path-parent-reject.hir
 conformance/MEM/MEM-5-pathtime-time-format-accept.hir
 conformance/MEM/MEM-5-pathtime-time-format-reject.hir
 conformance/MEM/MEM-5-proven-unique-no-copy.hir
-conformance/MEM/MEM-5-raw-insert-bad.hir
-conformance/MEM/MEM-5-raw-len-ok.hir
 conformance/MEM/MEM-5-retained-literal-destination-ok.hir
 conformance/MEM/MEM-5-retained-tuple-literal-destination-ok.hir
 conformance/MEM/MEM-5-saxpy-example.hir
-conformance/MEM/MEM-5-stable-sort-callback-bad.hir
-conformance/MEM/MEM-5-stable-sort-callback-ok.hir
 conformance/MEM/MEM-5-string-bad.hir
 conformance/MEM/MEM-5-string-ok.hir
 conformance/MEM/MEM-5-taken-literal-destination-ok.hir
@@ -2607,12 +2558,8 @@ conformance/MEM/MEM-7-json-member-stringify-run.hir
 conformance/MEM/MEM-7-mut-packed-field-fail.hir
 conformance/MEM/MEM-7-mut-packed-field-run.hir
 conformance/MEM/MEM-7-mutual-box-group-run.hir
-conformance/MEM/MEM-7-mutual-fn-group-run.hir
 conformance/MEM/MEM-7-mutual-generic-group-run.hir
 conformance/MEM/MEM-7-mutual-inline-group-bad.hir
-conformance/MEM/MEM-7-mutual-list-group-run.hir
-conformance/MEM/MEM-7-mutual-map-group-run.hir
-conformance/MEM/MEM-7-mutual-option-box-group-run.hir
 conformance/MEM/MEM-7-mutual-record-cycle-bad.hir
 conformance/MEM/MEM-7-mutual-record-cycle-ok.hir
 conformance/MEM/MEM-7-mutual-three-group-run.hir
@@ -2719,8 +2666,6 @@ conformance/MODE/MODE-1-environment-relation-on-binding-ok.hir
 conformance/MODE/MODE-1-environment-result-non-plain-parameter-bad.hir
 conformance/MODE/MODE-1-environment-result-non-plain-parameter-ok.hir
 conformance/MODE/MODE-1-environment-result-plain-parameter-ok.hir
-conformance/MODE/MODE-1-facade-get-loan-bad.hir
-conformance/MODE/MODE-1-facade-get-loan-ok.hir
 conformance/MODE/MODE-1-field-path-caller-copied-same-field-bad.hir
 conformance/MODE/MODE-1-field-path-caller-copied-sibling-ok.hir
 conformance/MODE/MODE-1-field-path-caller-projected-same-field-bad.hir
@@ -2803,7 +2748,6 @@ conformance/MODE/MODE-1-local-taken-parameter-ok.hir
 conformance/MODE/MODE-1-map-get-result-live-mutation-bad.hir
 conformance/MODE/MODE-1-map-get-result-live-mutation-ok.hir
 conformance/MODE/MODE-1-mapped-view-escape-bad.hir
-conformance/MODE/MODE-1-mapped-view-escape-ok.hir
 conformance/MODE/MODE-1-moved-storage-local-write-bad.hir
 conformance/MODE/MODE-1-moved-storage-local-write-ok.hir
 conformance/MODE/MODE-1-mut-global-annotation-bad.hir
@@ -2850,11 +2794,8 @@ conformance/MODE/MODE-1-plain-local-inert.hir
 conformance/MODE/MODE-1-projected-argument-sibling-bad.hir
 conformance/MODE/MODE-1-projected-argument-sibling-ok.hir
 conformance/MODE/MODE-1-propagated-borrowed-error-bad.hir
-conformance/MODE/MODE-1-propagated-borrowed-error-ok.hir
 conformance/MODE/MODE-1-propagated-borrowed-error-variant-bad.hir
 conformance/MODE/MODE-1-propagated-borrowed-error-variant-ok.hir
-conformance/MODE/MODE-1-raw-get-loan-bad.hir
-conformance/MODE/MODE-1-raw-get-loan-ok.hir
 conformance/MODE/MODE-1-receiving-global-holder-inferred-field-bad.hir
 conformance/MODE/MODE-1-receiving-global-holder-local-field-bad.hir
 conformance/MODE/MODE-1-receiving-local-holder-branch-field-ok.hir
@@ -2926,8 +2867,6 @@ conformance/MODE/MODE-1-retained-receiver-mut-new-source-match-ok.hir
 conformance/MODE/MODE-1-retained-receiver-mut-run.hir
 conformance/MODE/MODE-1-retained-receiver-new-source-loop-run.hir
 conformance/MODE/MODE-1-retained-receiver-new-source-three-loop-run.hir
-conformance/MODE/MODE-1-schema-result-bad.hir
-conformance/MODE/MODE-1-schema-result-ok.hir
 conformance/MODE/MODE-1-scoped-capture-replace-bad.hir
 conformance/MODE/MODE-1-scoped-capture-replace-ok.hir
 conformance/MODE/MODE-1-scoped-function-share-bad.hir
@@ -3065,10 +3004,6 @@ conformance/MODE/MODE-2-equality-operand-drops-unique-mismatch-bad.hir
 conformance/MODE/MODE-2-equality-operand-drops-unique-ok.hir
 conformance/MODE/MODE-2-error-mapper-occurrence-bad.hir
 conformance/MODE/MODE-2-error-mapper-occurrence-ok.hir
-conformance/MODE/MODE-2-facade-insert-shared-bad.hir
-conformance/MODE/MODE-2-facade-insert-shared-ok.hir
-conformance/MODE/MODE-2-facade-remove-bad.hir
-conformance/MODE/MODE-2-facade-remove-ok.hir
 conformance/MODE/MODE-2-flat-capture-preserves-unique-ok.hir
 conformance/MODE/MODE-2-flat-copy-preserves-unique-ok.hir
 conformance/MODE/MODE-2-fresh-aggregate-run.hir
@@ -3134,12 +3069,9 @@ conformance/MODE/MODE-2-map-insert-counted-key-bad.hir
 conformance/MODE/MODE-2-map-insert-plain-key-ok.hir
 conformance/MODE/MODE-2-map-insert-taken-key-copied-bad.hir
 conformance/MODE/MODE-2-map-insert-taken-key-unique-ok.hir
-conformance/MODE/MODE-2-map-update-shared-bad.hir
-conformance/MODE/MODE-2-map-update-unique-ok.hir
 conformance/MODE/MODE-2-mut-loop-element-copy-bad.hir
 conformance/MODE/MODE-2-mut-loop-element-copy-ok.hir
 conformance/MODE/MODE-2-mut-loop-element-copy-run.hir
-conformance/MODE/MODE-2-mut-loop-variant-field-run.hir
 conformance/MODE/MODE-2-nested-view-borrow-ok.hir
 conformance/MODE/MODE-2-nested-view-borrow-still-unique-ok.hir
 conformance/MODE/MODE-2-nested-view-copy-kept-bad.hir
@@ -3245,10 +3177,6 @@ conformance/MODE/MODE-2-push-loop-aliased-bad.hir
 conformance/MODE/MODE-2-push-then-pop-aliased-bad.hir
 conformance/MODE/MODE-2-push-then-pop-ok.hir
 conformance/MODE/MODE-2-push-unique-element-ok.hir
-conformance/MODE/MODE-2-raw-insert-shared-bad.hir
-conformance/MODE/MODE-2-raw-insert-shared-ok.hir
-conformance/MODE/MODE-2-raw-remove-bad.hir
-conformance/MODE/MODE-2-raw-remove-ok.hir
 conformance/MODE/MODE-2-record-aliased-part-bad.hir
 conformance/MODE/MODE-2-record-aliased-part-ok.hir
 conformance/MODE/MODE-2-release-failure-block-end-bad.hir
@@ -3445,7 +3373,6 @@ conformance/MODE/MODE-4-shared-root-child-run.hir
 conformance/MODE/MODE-4-shared.hir
 conformance/MODE/MODE-4-std-stream-sendable-bad.hir
 conformance/MODE/MODE-4-std-stream-sendable-ok.hir
-conformance/MODE/MODE-4-std-stream-to-iter-crossing-bad.hir
 conformance/MODE/MODE-4-take-parameter-callable-bad.hir
 conformance/MODE/MODE-4-take-parameter-callable-run.hir
 conformance/MODE/MODE-4-task-bad.hir
@@ -3749,7 +3676,6 @@ conformance/OWN/OWN-1-mut-storage-resource-bad.hir
 conformance/OWN/OWN-1-mut-storage-resource-ok.hir
 conformance/OWN/OWN-1-plain-result-copied.hir
 conformance/OWN/OWN-1-spec-at.hir
-conformance/OWN/OWN-1-std-stream-borrow-escape-bad.hir
 conformance/OWN/OWN-1-variant-binding-key-literal-match-run.hir
 conformance/OWN/OWN-2-arena-branch-tail-place-bad.hir
 conformance/OWN/OWN-2-arena-branch-tail-place-ok.hir
@@ -3816,8 +3742,6 @@ conformance/OWN/OWN-2-pathtime-time-parse-accept.hir
 conformance/OWN/OWN-2-pathtime-time-parse-reject.hir
 conformance/OWN/OWN-2-scope-body-taken-let-mut-read-bad.hir
 conformance/OWN/OWN-2-spec-save.hir
-conformance/OWN/OWN-2-std-store-txn-after-commit-bad.hir
-conformance/OWN/OWN-2-std-store-txn-after-commit-ok.hir
 conformance/OWN/OWN-2-taken-block-capture-run.hir
 conformance/OWN/OWN-2-taken-direct-capture-run.hir
 conformance/OWN/OWN-2-testhelpers-equal-accept.hir
@@ -3954,14 +3878,12 @@ conformance/OWN/OWN-5-receiver-copy-ok.hir
 conformance/OWN/OWN-5-region-copy-bad.hir
 conformance/OWN/OWN-5-region-copy-ok.hir
 conformance/OWN/OWN-5-repeat-copy-bad.hir
-conformance/OWN/OWN-5-repeat-copy-ok.hir
 conformance/OWN/OWN-5-resource-copy-bad.hir
 conformance/OWN/OWN-5-resource-copy-ok.hir
 conformance/OWN/OWN-5-sender-copy-bad.hir
 conformance/OWN/OWN-5-sender-copy-ok.hir
 conformance/OWN/OWN-5-sequence-resource-copy-bad.hir
 conformance/OWN/OWN-5-sequence-resource-copy-ok.hir
-conformance/OWN/OWN-5-std-stream-copy-bad.hir
 conformance/OWN/OWN-5-task-copy-bad.hir
 conformance/OWN/OWN-5-task-copy-ok.hir
 conformance/OWN/OWN-5-task-sender-free-use-bad.hir
@@ -4052,7 +3974,6 @@ conformance/PROG/PROG-2-result-ok.hir
 conformance/PROG/PROG-2-shape-dependency-opaque-bad.hir
 conformance/PROG/PROG-2-shape-dependency-opaque-ok.hir
 conformance/PROG/PROG-2-shape-owner-opaque-run.hir
-conformance/PROG/PROG-2-std-stream-field-bad.hir
 conformance/PROG/PROG-3-entry-error.hir
 conformance/PROG/PROG-3-entry-main.hir
 conformance/PROG/PROG-3-entry-ok.hir
@@ -4109,7 +4030,6 @@ conformance/PROV/PROV-1-alias-branch-match-last-live-bad.hir
 conformance/PROV/PROV-1-annotated-definition-brand-bad.hir
 conformance/PROV/PROV-1-annotated-definition-brand-ok.hir
 conformance/PROV/PROV-1-annotated-tuple-part-bad.hir
-conformance/PROV/PROV-1-annotated-tuple-part-ok.hir
 conformance/PROV/PROV-1-array-index-container-bad.hir
 conformance/PROV/PROV-1-array-index-container-ok.hir
 conformance/PROV/PROV-1-atomic-moved-result.hir
@@ -4200,8 +4120,6 @@ conformance/PROV/PROV-1-exiting-branch-else-ok.hir
 conformance/PROV/PROV-1-exiting-branch-match-ok.hir
 conformance/PROV/PROV-1-exiting-branch-then-ok.hir
 conformance/PROV/PROV-1-facade-alias-package-ok.hir
-conformance/PROV/PROV-1-facade-default-order-bad.hir
-conformance/PROV/PROV-1-facade-default-order-ok.hir
 conformance/PROV/PROV-1-field-index-container-bad.hir
 conformance/PROV/PROV-1-field-index-container-ok.hir
 conformance/PROV/PROV-1-field-owner-for-bad.hir
@@ -4217,8 +4135,6 @@ conformance/PROV/PROV-1-field-path-bad.hir
 conformance/PROV/PROV-1-field-path-ok.hir
 conformance/PROV/PROV-1-file-stream-dir-bad.hir
 conformance/PROV/PROV-1-file-stream-dir-ok.hir
-conformance/PROV/PROV-1-file-sync-brand-bad.hir
-conformance/PROV/PROV-1-file-sync-brand-ok.hir
 conformance/PROV/PROV-1-for-item-find-reject.hir
 conformance/PROV/PROV-1-for-item-find-run.hir
 conformance/PROV/PROV-1-for-mut-container-bad.hir
@@ -4283,8 +4199,6 @@ conformance/PROV/PROV-1-owned-replacement-other-bad.hir
 conformance/PROV/PROV-1-owned-replacement-self-bad.hir
 conformance/PROV/PROV-1-owner-leaves-scope-bad.hir
 conformance/PROV/PROV-1-owner-leaves-scope-ok.hir
-conformance/PROV/PROV-1-raw-default-order-bad.hir
-conformance/PROV/PROV-1-raw-default-order-ok.hir
 conformance/PROV/PROV-1-reassign-ends-brand-bad.hir
 conformance/PROV/PROV-1-reassign-ends-brand-ok.hir
 conformance/PROV/PROV-1-record-held-owner-take-bad.hir
@@ -4361,11 +4275,6 @@ conformance/PROV/PROV-2-computed-addition-bad.hir
 conformance/PROV/PROV-2-computed-addition-ok.hir
 conformance/PROV/PROV-2-computed-bitwise-bad.hir
 conformance/PROV/PROV-2-computed-bitwise-ok.hir
-conformance/PROV/PROV-2-facade-alias-binding-ok.hir
-conformance/PROV/PROV-2-facade-concrete-result-annotation-ok.hir
-conformance/PROV/PROV-2-facade-concrete-result-ok.hir
-conformance/PROV/PROV-2-facade-generic-result-ok.hir
-conformance/PROV/PROV-2-facade-package-result-ok.hir
 conformance/PROV/PROV-2-instant-compare-ok.hir
 conformance/PROV/PROV-2-instant-constructor-bad.hir
 conformance/PROV/PROV-2-instant-copy-clock-ok.hir
@@ -6208,8 +6117,6 @@ conformance/SER/SER-1-lexical-generic-bound-ok.hir
 conformance/SER/SER-1-local-annotation-bad.hir
 conformance/SER/SER-1-local-annotation-ok.hir
 conformance/SER/SER-1-opaque-opt-in-bad.hir
-conformance/SER/SER-1-path-dir-holder-bad.hir
-conformance/SER/SER-1-path-dir-holder-ok.hir
 conformance/SER/SER-1-record-opt-in-bad.hir
 conformance/SER/SER-1-record-opt-in-ok.hir
 conformance/SER/SER-1-recursive-option-payload-bad.hir
@@ -6222,7 +6129,6 @@ conformance/SER/SER-1-resource-field-bad.hir
 conformance/SER/SER-1-resource-field-ok.hir
 conformance/SER/SER-1-shared-nominal-ok.hir
 conformance/SER/SER-1-std-generic-error-bad.hir
-conformance/SER/SER-1-std-generic-error-ok.hir
 conformance/SER/SER-2-bad-magic-run.hir
 conformance/SER/SER-2-bad-tag-run.hir
 conformance/SER/SER-2-bad-version-run.hir

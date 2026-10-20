@@ -13,11 +13,13 @@ The measurements and blockers below are historical, recorded at the baseline
 - A receiving annotation written with the brand its value carries keeps it, whether
   it is spelled directly, through a transparent alias or with a module-qualified
   definition path (PROV-2 in [brands.md](../../../docs/spec/brands.md)). The four
-  facade probes now accept as `PROV-2-facade-{alias-binding,concrete-result-annotation,generic-result,package-result}-ok`.
+  facade probes now accept; `PROV-2-annotated-{alias,definition}-brand-ok`,
+  `PROV-2-annotated-generic-result-ok` and `PROV-1-facade-alias-package-ok` pin the rule.
 - Checked execution bounds a resource that a native operation moves out of a `mut`
-  argument by the caller's content, not by the wrapper's access to it. The repro is
-  now the passing corpus case
-  [DROP-2-facade-resource-remove-run.hir](../../../conformance/DROP/DROP-2-facade-resource-remove-run.hir).
+  argument by the caller's content, not by the wrapper's access to it. The passing
+  corpus case
+  [DROP-2-wrapped-sorted-map-remove-resource-run.hir](../../../conformance/DROP/DROP-2-wrapped-sorted-map-remove-resource-run.hir)
+  pins it.
 
 The remaining calls have not been migrated again since then.
 
@@ -103,16 +105,14 @@ and execution limitations prevent claiming all obligations work end to end.
 ## Blockers and durable probes
 
 1. **Reserved alias name (LANG-7).**
-   [LANG-7-facade-map-reserved-bad.hir](../../../conformance/LANG/LANG-7-facade-map-reserved-bad.hir)
-   is the minimal requested spelling. All callers use `OrderedMap` where supported.
+   The minimal requested spelling was `Map`; since 01f4f3f8 a user type may be named
+   `Map`, so its reject witness is gone. All callers use `OrderedMap` where supported.
 2. **Result/receiving-annotation brand loss (PROV-2): 21 empty calls blocked at the baseline; fixed.**
    At the baseline a concrete result kept its brand only without a receiving
    annotation; writing the same branded type, a local alias, a generic result or
-   the package result dropped it. The probes are now the passing
-   [PROV-2-facade-generic-result-ok.hir](../../../conformance/PROV/PROV-2-facade-generic-result-ok.hir),
-   [PROV-2-facade-package-result-ok.hir](../../../conformance/PROV/PROV-2-facade-package-result-ok.hir),
-   `concrete-result-annotation-ok` and `alias-binding-ok`, next to the
-   `concrete-result-ok` twin. The raw `SortedMap[K,V] of by` declarations and the
+   the package result dropped it. The probes now pass; the surviving witnesses are
+   `PROV-2-annotated-{alias,definition}-brand-ok`, `PROV-2-annotated-generic-result-ok`
+   and the cross-package `PROV-1-facade-alias-package-ok`. The raw `SortedMap[K,V] of by` declarations and the
    21 builtin empty calls were not migrated again. A zero-argument source header
    also has no caller arena parameter to name in its result relation; the pilot
    makes no claim of replacing the builtin's expected-destination placement rule.
@@ -121,11 +121,11 @@ and execution limitations prevent claiming all obligations work end to end.
    raw. At the baseline, wrapping it returned normally but checked interpretation
    trapped `region use after scope exit (MODE-1/MEM-10)` at the caller match. The
    checker was sound and the checked interpreter was wrong. The repro now passes
-   in every engine as
-   [DROP-2-facade-resource-remove-run.hir](../../../conformance/DROP/DROP-2-facade-resource-remove-run.hir).
+   in every engine; the corpus case
+   [DROP-2-wrapped-sorted-map-remove-resource-run.hir](../../../conformance/DROP/DROP-2-wrapped-sorted-map-remove-resource-run.hir)
+   pins it.
 4. **Initial slow check: no persistent stall reproduced.**
-   The original small trigger is the durable `package-result-ok` corpus case (formerly `-bad`)
-   linked above. An initial check took over two minutes, then completed; warm
+   The original small trigger was the `package-result-ok` probe (formerly `-bad`). An initial check took over two minutes, then completed; warm
    probes took about 0.5–0.8 seconds. The host rules already identify slow std
    prechecking (~118 seconds). This is a recorded observation, not a speed
    benchmark or an assertion that a new checker deadlock exists.

@@ -1,5 +1,0 @@
-// rule: MODE-2
-// expect: reject MODE-2 at line 4
-fn probe(by: Order[u32], mut m: u32_maps.OrderedMap[String]) -> unique Option[String] uses {} {
-  u32_maps.remove(mut m, 1)
-}

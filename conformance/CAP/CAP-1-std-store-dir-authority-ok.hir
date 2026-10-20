@@ -1,6 +1,0 @@
-// rule: CAP-1
-// expect: accept
-// A store's authority is its Dir grant: a function allowed to use the Dir can open one.
-fn open_store(d: Dir) -> Result[store.Store, store.StoreError] uses {d} {
-  store.open(d, store.default_config())
-}

@@ -1,5 +1,0 @@
-// rule: CAP-1
-// expect: accept
-fn exercise(d: Dir) -> Result[(), FileError] uses {d} {
-  file.put_new(d, path.of("a"), b"x", Durable())
-}

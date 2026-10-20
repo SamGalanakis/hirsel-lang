@@ -5,7 +5,7 @@
 // stdout: left 3
 // stdout: right 4
 // stdout: total 10
-// The same program under local.threads@1; RUN-5-two-runners-sim-run.hir is its twin.
+// Two local.threads@1 runners; RUN-6-sim-faults-run covers sim@1 calls.
 // runners: [{"name":"left","provider":"local.threads@1","grants":{"stdout":"stdout.bytes@1","dirs":[]},"definitions":null},{"name":"right","provider":"local.threads@1","threads":2,"grants":{"stdout":"stdout.bytes@1","dirs":[]},"definitions":null}]
 pub type AppError = Grant(GrantError) | Output(OutputError)
 

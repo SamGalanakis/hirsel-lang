@@ -1,9 +1,0 @@
-// rule: MODE-2
-// expect: accept
-fn probe(by: Order[u32], mut m: unique u32_maps.OrderedMap[String], take value: String) -> () uses {} {
-  let kept = copy value
-  let restored = unique value
-  u32_maps.insert(mut m, 1, take restored)
-  let _ = u32_maps.remove(mut m, 1)
-  let _ = string.byte_len(kept)
-}

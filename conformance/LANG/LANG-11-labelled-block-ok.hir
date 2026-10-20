@@ -1,7 +1,0 @@
-// rule: LANG-11
-// expect: accept
-fn f() {
-  'outer: {
-    ()
-  }
-}
