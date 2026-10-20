@@ -54,11 +54,6 @@ else
     mv -T "$HIRSEL_TEST_TMPDIR.$$" "$HIRSEL_TEST_TMPDIR" 2>/dev/null || rm -f "$HIRSEL_TEST_TMPDIR.$$"
   done
 fi
-# Tests observe the compiler's own work (its phases, counts and errors): the
-# user's program cache (crates/hirsel-driver/src/native/program_cache.rs) would
-# skip it for a program another run built. Tests of the cache enable it in their
-# own directory.
-export HIRSEL_PROGRAM_CACHE="${HIRSEL_PROGRAM_CACHE:-off}"
 LLVM_SYS_211_PREFIX="$(cd "$LLVM_SYS_211_PREFIX" && pwd)"
 export LLVM_SYS_211_PREFIX
 if [ -n "${HIRSEL_NATIVE_ENVIRONMENT:-}" ]; then

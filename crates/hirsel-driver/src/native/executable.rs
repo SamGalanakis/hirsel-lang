@@ -90,58 +90,6 @@ pub fn build_path_native_backend(
             "release builds use LLVM; select LLVM or a non-release profile",
         )));
     }
-    // An unchanged program's build copies its cached executable (`program_cache`).
-    let cache = evidence
-        .is_none()
-        .then(super::program_cache::ProgramCache::open)
-        .flatten();
-    let program = cache.as_ref().and_then(|_| {
-        let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
-        crate::COMPILER
-            .with_verify(verify)
-            .program_identity(source)
-            .ok()
-            .flatten()
-    });
-    let toolchain = || {
-        let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
-            .map(PathBuf::from)
-            .unwrap_or_else(super::runtime_cache::default_directory);
-        let mut tools = Toolchain::in_tree(&cache, &[&target])?;
-        tools.debug_info = profile == BuildProfile::Debug;
-        Ok::<_, NativeError>(tools)
-    };
-    let entry = |tools: &Toolchain| -> Option<String> {
-        let identity = super::program_cache::toolchain_identity(tools, &target.triple).ok()?;
-        let key = super::program_cache::key(
-            "hirsel.program-cache.build.v1",
-            [
-                program.as_ref()?.0.as_slice(),
-                backend.name().as_bytes(),
-                target.triple.as_bytes(),
-                format!("{profile:?}").as_bytes(),
-                &[u8::from(fuel)],
-                &identity.0,
-            ],
-        );
-        Some(format!("b-{key}"))
-    };
-    if let Some(cache) = &cache
-        && program.is_some()
-    {
-        let copied = toolchain()
-            .ok()
-            .and_then(|tools| entry(&tools))
-            .and_then(|entry| copy_cached(cache, &entry, output));
-        hirsel_intern::timings::count(if copied.is_some() {
-            hirsel_intern::timings::Count::ProgramHits
-        } else {
-            hirsel_intern::timings::Count::ProgramMisses
-        });
-        if copied.is_some() {
-            return Ok(Ok(Vec::new()));
-        }
-    }
     let mut loaded = crate::COMPILER.with_verify(verify).load_program(source)?;
     loaded.check_for_execution()?;
     let mut engine = loaded.engine;
@@ -174,7 +122,11 @@ pub fn build_path_native_backend(
         // Fuel checks let the executable accept a fuel budget (`budgets.limits@2`).
         program.fuel = fuel;
         let scratch = Scratch::new()?;
-        let tools = toolchain()?;
+        let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
+            .map(PathBuf::from)
+            .unwrap_or_else(super::runtime_cache::default_directory);
+        let mut tools = Toolchain::in_tree(&cache, &[&target])?;
+        tools.debug_info = profile == BuildProfile::Debug;
         let objects = super::emit_backend_objects(
             &program,
             backend,
@@ -193,66 +145,7 @@ pub fn build_path_native_backend(
             let beside = output.with_file_name(debug.file_name().unwrap());
             std::fs::copy(debug, beside).map_err(io)?;
         }
-        if let (Some(cache), Some(entry)) = (&cache, entry(&tools))
-            && proofs.is_none()
-        {
-            store_cached(cache, &entry, &linked.path, linked.debug.as_deref());
-        }
         drop(timing);
         Ok(proofs.map_or_else(Vec::new, |p| p.report(&program)))
     })())
-}
-
-/// Store a build's executable and debug file as `entry`: its debug file and the
-/// debug file's name first, the executable last, so a present executable means a
-/// complete entry.
-fn store_cached(
-    cache: &super::program_cache::ProgramCache,
-    entry: &str,
-    executable: &Path,
-    debug: Option<&Path>,
-) {
-    let name = debug
-        .and_then(Path::file_name)
-        .map(|n| n.to_string_lossy().into_owned());
-    if let Some(debug) = debug {
-        cache.put_file(&format!("{entry}.debug"), debug);
-    }
-    let record = serde_json::json!({"schema": 1, "debug": name});
-    cache.put(
-        &format!("{entry}.json"),
-        &serde_json::to_vec(&record).unwrap(),
-    );
-    cache.put_file(&format!("{entry}.exe"), executable);
-}
-
-/// Copy the cached build `entry` to `output` (and its debug file beside it), or
-/// `None` when the cache does not hold all of it.
-fn copy_cached(
-    cache: &super::program_cache::ProgramCache,
-    entry: &str,
-    output: &Path,
-) -> Option<()> {
-    let executable = cache.get(&format!("{entry}.exe"))?;
-    let record: serde_json::Value =
-        serde_json::from_slice(&cache.read(&format!("{entry}.json"))?).ok()?;
-    if record["schema"] != 1 {
-        return None;
-    }
-    let debug = match &record["debug"] {
-        serde_json::Value::Null => None,
-        name => {
-            let name = name.as_str()?;
-            if name.contains('/') {
-                return None;
-            }
-            Some((cache.get(&format!("{entry}.debug"))?, name.to_owned()))
-        }
-    };
-    let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
-    std::fs::copy(&executable, output).ok()?;
-    if let Some((debug, name)) = debug {
-        std::fs::copy(debug, output.with_file_name(name)).ok()?;
-    }
-    Some(())
 }

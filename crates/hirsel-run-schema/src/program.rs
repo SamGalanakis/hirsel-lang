@@ -102,12 +102,4 @@ impl ProgramRevision {
     pub fn digest(&self) -> [u8; 32] {
         self.digest
     }
-    /// The revision `encode` gave for `entry` and `digest`, as a cache of the
-    /// program's build products recorded it under the program's inputs.
-    pub fn recorded(entry: &str, digest: [u8; 32]) -> Self {
-        Self {
-            entry: entry.into(),
-            digest,
-        }
-    }
 }

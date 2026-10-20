@@ -299,43 +299,6 @@ runner, and stdout, stderr, exit status and observation record must agree byte
 for byte; under the first configuration each path's recorded Io tape must replay
 through the other with the same observation.
 
-### The program cache
-
-An unchanged program's `hirsel run --native` and `hirsel build` run no compiler
-phase: the program cache keeps each program's build products under its
-*identity*, a digest of the compiler's identity, whether V runs, and every file
-loading the program reads (a standalone source, or each package manifest of the
-launch's graph and every source it selects, by canonical and logical path and by
-content). A warm run reads its entries, binds its grants, launches the cached
-image and reports its outcome exactly as a fresh run would; a warm build copies
-the executable and its debug file. hello world's warm `run --native` takes
-about 0.06 s.
-
-| entry | key | holds |
-|---|---|---|
-| `f-<identity>.json` | the program | the launch facts a run binds its grants to: the semantic revision, launch kind, entry roots and code reach |
-| `s-<identity>.json` | the program | the site table a run's failures are reported from: each site code's rule, definition, position and file |
-| `i-<key>.so` | the program, backend, target, fuel, the bound run's record, the runner and the link toolchain | the program image linked for that run |
-| `b-<key>.exe`, `.debug`, `.json` | the program, backend, target, profile, `--fuel` and the link toolchain | a `hirsel build` executable, its split debug file and the debug file's name |
-
-The link toolchain enters keys by path, size and modification time of `ld.lld`,
-the selected runtime archives, the builtins archive and every file of the link
-kit, not by their bytes, which would cost a warm run more than its launch: a
-toolchain file replaced in place with the same size and modification time is
-not noticed, so toolchains are replaced by new files, as Buck2 and installs do.
-A program with an `unsafe_ffi` surface, a run that records or replays a
-tape, a run or build with `--proofs`, and a program that runs as an executable
-(see above) always build afresh. Nothing that fails is cached.
-
-The cache lives in `$HIRSEL_NATIVE_CACHE/programs-v1` when that is set, else in
-`$XDG_CACHE_HOME/hirsel/programs-v1` (`~/.cache/hirsel/programs-v1`).
-`HIRSEL_PROGRAM_CACHE=off` disables it; Buck2 test runs set that, since tests
-observe the compiler's own work. Writers write a temporary file and rename it
-into place, so concurrent runs never read a partial entry and need no lock.
-Past 2 GiB the least recently used entries are removed, except an image a run
-holds or an entry used in the last minute; an unreadable entry is a miss.
-`--timings` counts `program hits` and `program misses`.
-
 ## Run a package's tests
 
 ```sh
@@ -621,10 +584,8 @@ The report keeps three measures apart (`hirsel_intern::timings`):
 Counts: `definitions` (bodies checked), `units` (native units built), `V runs`
 (full V runs; a definition V already passed is skipped), `lowered` (bodies
 lowered; under `check`, the bodies lowered at check time), `recomputes`
-(per-definition queries computed rather than reused), store and object
-hits and misses (0 until those caches exist) and `program hits` and `program
-misses` (native runs and builds the program cache served or could not serve;
-see "The program cache").
+(per-definition queries computed rather than reused) and store and object
+hits and misses (0 until those caches exist).
 
 `runner` reports the native runs made as program images in a runner (`image
 runs`), how many of those images were already cached (`cached images`), and each

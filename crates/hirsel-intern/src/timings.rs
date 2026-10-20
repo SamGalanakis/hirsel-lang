@@ -145,15 +145,11 @@ pub enum Count {
     Lowered,
     /// Per-definition queries computed rather than reused.
     Recomputes,
-    /// Native runs and builds the program cache served without compiling.
-    ProgramHits,
-    /// Native runs and builds the program cache could not serve.
-    ProgramMisses,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 11] = [
+    pub const ALL: [Count; 9] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -163,8 +159,6 @@ impl Count {
         Count::ObjectMisses,
         Count::Lowered,
         Count::Recomputes,
-        Count::ProgramHits,
-        Count::ProgramMisses,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -178,8 +172,6 @@ impl Count {
             Count::ObjectMisses => "object misses",
             Count::Lowered => "lowered",
             Count::Recomputes => "recomputes",
-            Count::ProgramHits => "program hits",
-            Count::ProgramMisses => "program misses",
         }
     }
 }
