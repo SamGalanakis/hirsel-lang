@@ -38,7 +38,7 @@ fn hash(label: &str) -> ContentHash {
 
 fn layout(table: &LayoutTable, kind: LayoutKind, size: SizeSpec, align: u32) -> LayoutRecord {
     LayoutRecord {
-        key: LayoutKey {
+        key: LayoutIdentity {
             owner_revision: None,
             instance: None,
             target: table.target,

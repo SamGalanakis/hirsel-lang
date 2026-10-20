@@ -17,6 +17,7 @@ pub mod emission;
 pub mod fuel;
 pub mod ir;
 pub mod layout;
+pub mod layout_keys;
 pub mod layout_types;
 pub mod layout_validate;
 pub mod object;
@@ -33,7 +34,8 @@ pub mod validate;
 pub use abi_types::{FnAbi, FnAbiId};
 pub use effect::{Effects, Opcode};
 pub use ir::{LirUnit, SchemaError};
-pub use layout_types::{LayoutId, LayoutRecord, LayoutTable, TargetSpec};
+pub use layout_keys::LayoutKeys;
+pub use layout_types::{LayoutId, LayoutKey, LayoutRecord, LayoutTable, TargetSpec};
 pub use stage::{
     InputIdentity, NativeReceipt, ObjectArtifact, Placed, RawReceipt, Rc, Ready, Reuse, Stage,
     StageKind, ValidatedUnit, Value,

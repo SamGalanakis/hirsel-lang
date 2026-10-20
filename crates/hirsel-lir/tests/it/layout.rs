@@ -1904,90 +1904,10 @@ fn canonical(table: &LayoutTable) -> Vec<LayoutRecord> {
         .iter()
         .map(|&i| {
             let mut r = table.layouts[i].clone();
-            renumber(&mut r, &map);
+            r.for_each_reference_mut(&mut |id: &mut LayoutId| map(id));
             r
         })
         .collect()
-}
-
-fn renumber(r: &mut LayoutRecord, map: &impl Fn(&mut LayoutId)) {
-    match &mut r.kind {
-        LayoutKind::Inline { element, .. }
-        | LayoutKind::Simd { element, .. }
-        | LayoutKind::Slice { element }
-        | LayoutKind::Iterator { element }
-        | LayoutKind::SoaColumns { element }
-        | LayoutKind::Sequence { element }
-        | LayoutKind::Sequential { element } => map(element),
-        LayoutKind::Block { payload }
-        | LayoutKind::Box { payload }
-        | LayoutKind::Shared { payload } => map(payload),
-        LayoutKind::Frozen { value } => map(value),
-        LayoutKind::Callable { environment } => environment.iter_mut().for_each(map),
-        LayoutKind::Unit
-        | LayoutKind::Scalar(_)
-        | LayoutKind::Aggregate
-        | LayoutKind::Environment { .. }
-        | LayoutKind::Variant
-        | LayoutKind::Packed
-        | LayoutKind::Opaque { .. }
-        | LayoutKind::Handle
-        | LayoutKind::Arena
-        | LayoutKind::Path
-        | LayoutKind::Resource
-        | LayoutKind::Header
-        | LayoutKind::Flat => {}
-    }
-    r.fields.iter_mut().for_each(|f| map(&mut f.layout));
-    if let Some(tag) = &mut r.tag {
-        tag.variants
-            .iter_mut()
-            .flat_map(|v| v.fields.iter_mut())
-            .for_each(|f| map(&mut f.layout));
-    }
-    r.scan.iter_mut().for_each(|s| renumber_scan(s, map));
-    r.drop.iter_mut().for_each(|d| renumber_drop(d, map));
-}
-
-fn renumber_columns(c: &mut SoaColumns, map: &impl Fn(&mut LayoutId)) {
-    c.columns.iter_mut().for_each(|c| map(&mut c.layout));
-}
-
-fn renumber_scan(s: &mut ScanStep, map: &impl Fn(&mut LayoutId)) {
-    match s {
-        ScanStep::Inline { layout, .. } => map(layout),
-        ScanStep::ActiveVariant { variants, .. } => variants
-            .iter_mut()
-            .flat_map(|(_, steps)| steps.iter_mut())
-            .for_each(|s| renumber_scan(s, map)),
-        ScanStep::Sequence { element, .. } | ScanStep::Repeat { element, .. } => map(element),
-        ScanStep::Columns(c) => renumber_columns(c, map),
-        ScanStep::Counted { .. }
-        | ScanStep::Root { .. }
-        | ScanStep::Uncounted { .. }
-        | ScanStep::SliceOwner { .. }
-        | ScanStep::Environment { .. }
-        | ScanStep::Handle { .. } => {}
-    }
-}
-
-fn renumber_drop(d: &mut DropStep, map: &impl Fn(&mut LayoutId)) {
-    match d {
-        DropStep::Child { layout, .. } | DropStep::Thaw { layout, .. } => map(layout),
-        DropStep::ActiveVariant { variants, .. } => variants
-            .iter_mut()
-            .flat_map(|(_, steps)| steps.iter_mut())
-            .for_each(|d| renumber_drop(d, map)),
-        DropStep::ElementsReverse { element, .. } | DropStep::RepeatReverse { element, .. } => {
-            map(element)
-        }
-        DropStep::ColumnsReverse(c) => renumber_columns(c, map),
-        DropStep::Finalize
-        | DropStep::Release { .. }
-        | DropStep::ReleaseRoot { .. }
-        | DropStep::Environment { .. }
-        | DropStep::CloseHandle { .. } => {}
-    }
 }
 
 /// Every permutation of `0..n` (Heap's algorithm).
@@ -2083,6 +2003,104 @@ fn recursive_layouts_do_not_depend_on_request_order() {
     for order in permutations(requests.len()) {
         assert!(derive(&order) == first, "request order {order:?}");
     }
+}
+
+/// Content keys (design §1e): `Cons` and mutually recursive `Even`/`Odd` get the same
+/// `LayoutKey` whatever order they are requested in and whatever unrelated layouts the
+/// table holds first, although their `LayoutId`s differ; editing one member changes the
+/// key of exactly the layouts that reach it.
+#[test]
+fn layout_keys_depend_on_content_alone() {
+    let owners = |odd_field: Primitive| {
+        let mut owners = Owners::default();
+        owner(&mut owners, "Cons", OwnerSpec::default(), |t| {
+            let v = t.p(Primitive::I64);
+            let me = t.named(&path("Cons"), vec![]);
+            let tail = t.boxed(me);
+            t.variant(&[&[], &[v, tail]])
+        });
+        owner(&mut owners, "Even", OwnerSpec::default(), |t| {
+            let odd = t.named(&path("Odd"), vec![]);
+            let next = t.boxed(odd);
+            t.variant(&[&[], &[next]])
+        });
+        owner(&mut owners, "Odd", OwnerSpec::default(), |t| {
+            let even = t.named(&path("Even"), vec![]);
+            let v = t.p(odd_field);
+            t.record(&[v, even])
+        });
+        owners
+    };
+    let mut t = Ty::default();
+    let cons = t.named(&path("Cons"), vec![]);
+    let even = t.named(&path("Even"), vec![]);
+    let odd = t.named(&path("Odd"), vec![]);
+    let requests = [cons, t.boxed(cons), even, odd, t.boxed(even)];
+    let i32_ = t.p(Primitive::I32);
+    let u16_ = t.p(Primitive::U16);
+    let list = t.list(i32_);
+    let unrelated = [list, t.record(&[u16_, list]), t.boxed(u16_)];
+    let derive = |owners: &Owners, order: &[usize], first: &[TypeId]| {
+        let mut b = LayoutBuilder::new(&x86(), owners);
+        for ty in first {
+            b.layout(&t.store, *ty).unwrap();
+        }
+        let mut ids = vec![LayoutId(0); requests.len()];
+        for &i in order {
+            ids[i] = b.layout(&t.store, requests[i]).unwrap();
+        }
+        let table = checked(b);
+        let keys = hirsel_lir::LayoutKeys::new(&table);
+        let named: Vec<LayoutKey> = ids.iter().map(|id| keys.key(*id)).collect();
+        (named, ids, table, keys)
+    };
+    let plain = owners(Primitive::U8);
+    let (base, base_ids, table, keys) = derive(&plain, &[0, 1, 2, 3, 4], &[]);
+    let (reversed, reversed_ids, ..) = derive(&plain, &[4, 3, 2, 1, 0], &[]);
+    let (inserted, inserted_ids, ..) = derive(&plain, &[4, 3, 2, 1, 0], &unrelated);
+    assert_ne!(
+        base_ids, reversed_ids,
+        "the request order renumbers the table"
+    );
+    assert_ne!(
+        reversed_ids, inserted_ids,
+        "unrelated layouts renumber the table"
+    );
+    assert_eq!(base, reversed);
+    assert_eq!(base, inserted);
+    let distinct: std::collections::BTreeSet<_> = keys.all().iter().collect();
+    assert_eq!(
+        distinct.len(),
+        keys.all().len(),
+        "distinct layouts, distinct keys"
+    );
+
+    // Editing `Odd` changes exactly the keys of the layouts that reach it.
+    let (edited, edited_ids, edited_table, edited_keys) =
+        derive(&owners(Primitive::U16), &[0, 1, 2, 3, 4], &[]);
+    assert_eq!(edited_ids, base_ids);
+    assert_eq!(edited_table.layouts.len(), table.layouts.len());
+    let odd_id = base_ids[3];
+    let reaches = |from: LayoutId| {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut pending = vec![from];
+        while let Some(id) = pending.pop() {
+            if seen.insert(id) {
+                pending.extend(rec(&table, id).references());
+            }
+        }
+        seen.contains(&odd_id)
+    };
+    for id in (0..table.layouts.len() as u32).map(LayoutId) {
+        let what = format!("layout {id:?}: {:?}", rec(&table, id).kind);
+        if reaches(id) {
+            assert_ne!(keys.key(id), edited_keys.key(id), "{what}");
+        } else if rec(&table, id) == rec(&edited_table, id) {
+            assert_eq!(keys.key(id), edited_keys.key(id), "{what}");
+        }
+    }
+    assert_eq!(edited[0..2], base[0..2], "Cons does not reach Odd");
+    assert!(edited[2..].iter().zip(&base[2..]).all(|(a, b)| a != b));
 }
 
 /// A borrowed capture's field is the captured view, its holders scanned as

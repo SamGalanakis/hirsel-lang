@@ -566,10 +566,25 @@ pub struct AbiInputs {
     pub unaligned: bool,
 }
 
-/// Identity of a layout record: owner representation revision, instance, target
-/// and layout version.
+/// A layout's content key (design §1e): the record's content with every layout it
+/// references replaced by that layout's key, hashed per strongly connected component of
+/// the layout graph (`crate::layout_keys`). It never depends on a `LayoutId`, the order
+/// layouts were requested in or the other layouts of the table, so the same layout gets
+/// the same key in every program; it names the layout in content-named symbols.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct LayoutKey(pub ContentHash);
+
+impl LayoutKey {
+    /// The key's lowercase hex digits, as content-named symbols spell it.
+    pub fn hex(&self) -> String {
+        self.0.0.iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+/// Identity of the request a layout record answers: owner representation revision,
+/// instance, target and layout version.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct LayoutKey {
+pub struct LayoutIdentity {
     /// `RepresentationRecord.representation_revision` for nominal owners.
     pub owner_revision: Option<ContentHash>,
     /// Digest of the complete `InstanceKey`, for generic instances.
@@ -581,7 +596,7 @@ pub struct LayoutKey {
 /// The only physical truth for one representation.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct LayoutRecord {
-    pub key: LayoutKey,
+    pub key: LayoutIdentity,
     pub kind: LayoutKind,
     pub size: SizeSpec,
     /// Alignment in bytes; a power of two.
@@ -848,7 +863,7 @@ snapshot_struct!(FinalizerRef {
     unsafe_ffi_package
 });
 snapshot_struct!(AbiInputs { scalars, unaligned });
-snapshot_struct!(LayoutKey {
+snapshot_struct!(LayoutIdentity {
     owner_revision,
     instance,
     target,
@@ -876,6 +891,14 @@ snapshot_struct!(LayoutTable {
     layouts,
     fn_abis
 });
+impl hirsel_codec::Snapshot for LayoutKey {
+    fn write(&self, w: &mut hirsel_codec::Writer) {
+        self.0.write(w);
+    }
+    fn read(r: &mut hirsel_codec::Reader<'_>) -> Result<Self, hirsel_codec::DecodeError> {
+        Ok(Self(ContentHash::read(r)?))
+    }
+}
 impl hirsel_codec::Snapshot for LayoutId {
     fn write(&self, w: &mut hirsel_codec::Writer) {
         w.uint(u128::from(self.0));

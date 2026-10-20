@@ -132,6 +132,15 @@ Invariants:
   layouts they read are complete, and a Box is complete before its payload is
   derived, so the records do not depend on request order; an inline cycle is
   `InfiniteSize`.
+- Content keys. A record's `LayoutIdentity` names the request it answers; its
+  `LayoutKey` (`layout_keys.rs`) names its content. `hirsel_graph::scc_keys` keys
+  the layout graph, whose edges are a record's references in record order (kind,
+  fields, variants' fields, scan, drop): a layout outside every cycle is a Merkle
+  hash of its record with each reference replaced by its target's key, and a
+  member of a cycle (`Cons`, `Even`/`Odd`) hashes the rooted DFS of its
+  component. Keys never depend on `LayoutId`s, request order or unrelated
+  layouts, and an edit changes the key of every layout that reaches it. FnAbi
+  keys replace parameter and result layouts by their keys.
 - ABI. Passing classes read only the declared convention and the public
   structure of each parameter type. Every nominal travels by address, so a
   private representation change moves layout keys and never the ABI digest

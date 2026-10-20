@@ -56,7 +56,7 @@ impl Layouts {
     fn push(&mut self, kind: LayoutKind, size: u64, align: u32) -> LayoutId {
         let id = LayoutId(self.table.layouts.len() as u32);
         self.table.layouts.push(LayoutRecord {
-            key: LayoutKey {
+            key: LayoutIdentity {
                 owner_revision: None,
                 instance: None,
                 target: self.table.target,

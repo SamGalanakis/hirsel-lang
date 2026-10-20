@@ -132,7 +132,7 @@ pub mod l {
 
 fn record(table: &LayoutTable, kind: LayoutKind, size: u64, align: u32) -> LayoutRecord {
     LayoutRecord {
-        key: LayoutKey {
+        key: LayoutIdentity {
             owner_revision: None,
             instance: None,
             target: table.target,

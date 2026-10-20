@@ -32,7 +32,7 @@ fn path(name: &str) -> DefPath {
 
 fn record(target: &TargetSpec, kind: LayoutKind, size: SizeSpec) -> LayoutRecord {
     LayoutRecord {
-        key: LayoutKey {
+        key: LayoutIdentity {
             owner_revision: None,
             instance: None,
             target: target.digest(),

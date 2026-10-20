@@ -797,8 +797,8 @@ impl<'o> LayoutBuilder<'o> {
         result
     }
 
-    fn key(&self, bytes: &[u8]) -> LayoutKey {
-        LayoutKey {
+    fn key(&self, bytes: &[u8]) -> LayoutIdentity {
+        LayoutIdentity {
             owner_revision: None,
             instance: Some(ContentHash::of_parts("hirsel.layout-key.v1", [bytes])),
             target: self.table.target,
