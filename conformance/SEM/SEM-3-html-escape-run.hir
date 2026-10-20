@@ -1,6 +1,12 @@
 // rule: SEM-3
 // expect: run
 // exit: 0
+// The formatting adapter is a view and performs no allocation.
+@noalloc
+fn escaped_view(value: String) -> html.Escaped in value uses {} {
+  html.esc(value)
+}
+
 pub fn main() -> Result[(), ()] {
   failure.check(html.escape("") == "", TextInvariant())
   failure.check(html.escape("abc def\t\n雪 🐑") == "abc def\t\n雪 🐑", TextInvariant())
@@ -24,5 +30,12 @@ pub fn main() -> Result[(), ()] {
   )
   failure.check(f"{html.esc("<&>"):>15}" == "  &lt;&amp;&gt;", TextInvariant())
   failure.check(f"{"<b>"}" == "<b>", TextInvariant())
+  let borrowed = escaped_view(input)
+  failure.check(f"{borrowed}" == "&#34;&#39;&gt;&lt;script&gt;&amp;", TextInvariant())
+  failure.check(input == "\"'><script>&", TextInvariant())
+  // Unchanged UTF-8 runs on both sides of adjacent replacements and at EOF.
+  failure.check(html.escape("雪<&é'plain") == "雪&lt;&amp;é&#39;plain", TextInvariant())
+  failure.check(html.escape("abc&") == "abc&amp;", TextInvariant())
+  failure.check(html.escape("&abc") == "&amp;abc", TextInvariant())
   Ok(())
 }

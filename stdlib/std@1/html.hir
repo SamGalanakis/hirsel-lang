@@ -8,8 +8,10 @@ pub type Escaped {
 }
 
 /// Wrap text so an f-string hole escapes it as HTML.
-pub fn esc(value: String) -> Escaped uses {} {
-  Escaped(text: unique value)
+@noalloc
+pub fn esc(value: String) -> Escaped in value uses {} {
+  // A formatting wrapper may share immutable text; it does not mutate it.
+  Escaped(text: value)
 }
 
 fn escaped_format(value: Escaped, mut out: List[u8]) -> () uses {} {
@@ -19,20 +21,37 @@ fn escaped_format(value: Escaped, mut out: List[u8]) -> () uses {} {
 /// Append HTML text/quoted-attribute escaping, retaining existing output bytes.
 @preserves_unique(out)
 pub fn escape_into(mut out: List[u8], value: String) -> () uses {} {
-  for b in string.as_bytes(value) {
-    if b == b'&' {
-      text.append(mut out, "&amp;")
+  // Go strings/replace.go:550-579, byteStringReplacer.WriteString at
+  // ebe2feefc400f813aefdc8a036e66d2619da6649: flush unchanged spans, then
+  // replacements, rather than growing/checking the builder for every byte.
+  let data = string.as_bytes(value)
+  let mut start: u64 = 0
+  let mut at: u64 = 0
+  while at < bytes.len(data) {
+    let b = data[at]
+    let replacement = if b == b'&' {
+      "&amp;"
     } else if b == b'<' {
-      text.append(mut out, "&lt;")
+      "&lt;"
     } else if b == b'>' {
-      text.append(mut out, "&gt;")
+      "&gt;"
     } else if b == b'"' {
-      text.append(mut out, "&#34;")
+      "&#34;"
     } else if b == b'\'' {
-      text.append(mut out, "&#39;")
+      "&#39;"
     } else {
-      list.push(mut out, b)
+      at += 1
+      continue
     }
+    if start < at {
+      core@1/bytes.append(mut out, core@1/bytes.slice(data, start, at))
+    }
+    text.append(mut out, replacement)
+    at += 1
+    start = at
+  }
+  if start < at {
+    core@1/bytes.append(mut out, core@1/bytes.slice(data, start, at))
   }
 }
 

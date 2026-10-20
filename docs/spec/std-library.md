@@ -4028,8 +4028,8 @@ These are [HTML character references](https://html.spec.whatwg.org/multipage/syn
 for element text and single- or double-quoted attribute values.
 
 `html.escape_into(mut out: List[u8], text: String)` appends the same escaped
-bytes and preserves `out`'s uniqueness. `html.esc(text: String) -> html.Escaped`
-returns an owned wrapper with an `@format` association, so
+bytes and preserves `out`'s uniqueness. `html.esc(text: String) -> html.Escaped in text`
+returns an allocation-free borrowed wrapper with an `@format` association, so
 `f"<p>{html.esc(value)}</p>"` escapes the hole. Ordinary String holes keep
 their ordinary formatting. Escape each untrusted hole individually.
 This is HTML text/attribute escaping; URL, JavaScript, CSS and unquoted
