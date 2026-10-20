@@ -1,0 +1,38 @@
+// rule: SEM-3
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  let texts: List[String] = [
+    "",
+    "A",
+    "aZ09\u{0}\u{7f}",
+    "Task 9999",
+    "Straße",
+    "İstanbul",
+    "ΟΣ",
+    "Kelvin",
+    "AΣ'",
+    "e\u{301}",
+    "ﬃ",
+    "ΣA"
+  ]
+  for a in texts {
+    for b in texts {
+      test.check(
+        t,
+        string.eq_ignore_case(a, b) == (string.casefold(a) == string.casefold(b))
+      )
+      test.check(
+        t,
+        string.contains_ignore_case(a, b) == string.contains(
+          string.casefold(a),
+          string.casefold(b)
+        )
+      )
+    }
+  }
+  test.check(t, string.contains_ignore_case("Straße", "SSE"))
+  test.check(t, string.contains_ignore_case("prefix ASCII SUFFIX", "ascii"))
+  test.check(t, !string.contains_ignore_case("abc", "abcdef"))
+  test.check(t, string.to_lower("AΣ'") == "aς'")
+  Ok(())
+}

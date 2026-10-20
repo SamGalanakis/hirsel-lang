@@ -320,8 +320,8 @@ fn matches(item: Item, query: Query, folded: String) -> bool uses {} {
   if string.byte_len(folded) == 0 {
     return true
   }
-  string.contains(string.casefold(item.title), folded) || string.contains(
-    string.casefold(item.description),
+  string.contains_ignore_case(item.title, folded) || string.contains_ignore_case(
+    item.description,
     folded
   ) || list.any(
     item.tags,
@@ -459,3 +459,27 @@ pub fn draft_from_json(value: json.Value) -> Result[unique Draft, String] uses {
 pub fn query_from_json(value: json.Value) -> Result[unique Query, String] uses {} = comptime derive.from_json(
   shape(Query)
 )
+
+@preserves_unique(out)
+pub fn board_json_into(value: Board, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Board))
+
+@preserves_unique(out)
+pub fn item_json_into(value: Item, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Item))
+
+@preserves_unique(out)
+pub fn status_json_into(value: Status, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Status))
+
+@preserves_unique(out)
+pub fn priority_json_into(value: Priority, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Priority))

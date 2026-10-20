@@ -11,7 +11,7 @@
 //! ID. Every source program carries one in its descriptor (`crate::program`), and each run's
 //! context reaches its own program's table, so runs of different programs share a process.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::alloc::{allocate_sequence, payload, sequence_elements_offset};
 use crate::context::RunCtx;
@@ -31,6 +31,11 @@ struct Site {
 
 /// A program's failure table.
 pub struct FailureTable {
+    encoded: Box<[u8]>,
+    decoded: OnceLock<DecodedTable>,
+}
+
+struct DecodedTable {
     /// Sorted by code.
     sites: Vec<Site>,
     /// The rule ID of program rule code `index + 1`.
@@ -41,15 +46,26 @@ impl FailureTable {
     /// Decode an encoded table: little-endian u64 words, the site count, then each site's code,
     /// line, column and definition length followed by the definition's bytes and a
     /// length-prefixed file path, in code order, then the rule count and each rule's length and
-    /// bytes. `None` when malformed or out of site order.
+    /// bytes. Validate and own the encoding now, decoding text on first use.
+    /// `None` when malformed or out of site order.
     pub fn decode(bytes: &[u8]) -> Option<FailureTable> {
-        decode(bytes).filter(|table| table.sites.is_sorted_by_key(|s| s.code))
+        validate(bytes)?;
+        Some(Self {
+            encoded: bytes.into(),
+            decoded: OnceLock::new(),
+        })
+    }
+
+    fn decoded(&self) -> &DecodedTable {
+        self.decoded
+            .get_or_init(|| decode(&self.encoded).expect("a validated failure table"))
     }
 
     fn site(&self, code: u64) -> &Site {
-        self.sites
+        self.decoded()
+            .sites
             .binary_search_by_key(&code, |s| s.code)
-            .map(|i| &self.sites[i])
+            .map(|i| &self.decoded().sites[i])
             .unwrap_or_else(|_| fault("a failure site the program's table does not list"))
     }
 
@@ -59,7 +75,7 @@ impl FailureTable {
             Some(i) => hirsel_core_contract::RUNTIME_RULES.get(i as usize).copied(),
             None => code
                 .checked_sub(1)
-                .and_then(|i| self.rules.get(i as usize))
+                .and_then(|i| self.decoded().rules.get(i as usize))
                 .map(String::as_str),
         };
         rule.unwrap_or_else(|| fault("a failure rule the program's table does not list"))
@@ -89,7 +105,41 @@ impl FailureTable {
     }
 }
 
-fn decode(mut bytes: &[u8]) -> Option<FailureTable> {
+// Keep load-time validation (including UTF-8 and site ordering) without
+// allocating a String for every site. Decoding is shared by all program runs
+// and happens only when a failure or blocked wait needs source text.
+fn validate(mut bytes: &[u8]) -> Option<()> {
+    fn word(bytes: &mut &[u8]) -> Option<u64> {
+        let (head, rest) = bytes.split_first_chunk::<8>()?;
+        *bytes = rest;
+        Some(u64::from_le_bytes(*head))
+    }
+    fn text(bytes: &mut &[u8]) -> Option<()> {
+        let length = usize::try_from(word(bytes)?).ok()?;
+        let (head, rest) = bytes.split_at_checked(length)?;
+        std::str::from_utf8(head).ok()?;
+        *bytes = rest;
+        Some(())
+    }
+    let mut previous = None;
+    for _ in 0..word(&mut bytes)? {
+        let code = word(&mut bytes)?;
+        if previous.is_some_and(|p| p > code) {
+            return None;
+        }
+        previous = Some(code);
+        word(&mut bytes)?;
+        word(&mut bytes)?;
+        text(&mut bytes)?;
+        text(&mut bytes)?;
+    }
+    for _ in 0..word(&mut bytes)? {
+        text(&mut bytes)?;
+    }
+    bytes.is_empty().then_some(())
+}
+
+fn decode(mut bytes: &[u8]) -> Option<DecodedTable> {
     fn word(bytes: &mut &[u8]) -> Option<u64> {
         let (head, rest) = bytes.split_first_chunk::<8>()?;
         *bytes = rest;
@@ -116,7 +166,7 @@ fn decode(mut bytes: &[u8]) -> Option<FailureTable> {
     let rules = (0..word(&mut bytes)?)
         .map(|_| text(&mut bytes))
         .collect::<Option<_>>()?;
-    bytes.is_empty().then_some(FailureTable { sites, rules })
+    bytes.is_empty().then_some(DecodedTable { sites, rules })
 }
 
 /// The failure table of the program `ctx` runs.
@@ -341,4 +391,67 @@ pub(crate) fn foreign_location(ctx: *mut RunCtx, code: u64) -> String {
         "{} ({}:{}:{})",
         source.definition, source.file, source.line, source.column
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encoded(codes: &[u64]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend((codes.len() as u64).to_le_bytes());
+        for code in codes {
+            for word in [*code, 12, 3, 4] {
+                out.extend(word.to_le_bytes());
+            }
+            out.extend(b"main");
+            out.extend(8u64.to_le_bytes());
+            out.extend(b"test.hir");
+        }
+        out.extend(1u64.to_le_bytes());
+        out.extend(5u64.to_le_bytes());
+        out.extend(b"RULE1");
+        out
+    }
+
+    #[test]
+    fn failure_table_decodes_once_on_first_location_or_rule() {
+        let bytes = encoded(&[1, 2, 3]);
+        let table = FailureTable::decode(&bytes).unwrap();
+        assert!(table.decoded.get().is_none());
+        drop(bytes); // the table owns its validated input
+        assert_eq!(table.located(2).definition, "main");
+        assert_eq!(table.located(2).file, "test.hir");
+        assert_eq!(table.located(2).line, 12);
+        let decoded = std::ptr::from_ref(table.decoded.get().unwrap());
+        assert_eq!(table.rule(1), "RULE1");
+        assert_eq!(decoded, std::ptr::from_ref(table.decoded.get().unwrap()));
+    }
+
+    #[test]
+    fn lazy_validation_retains_the_eager_decoder_rejections() {
+        for codes in [&[][..], &[1, 2, 2, u64::MAX][..], &[2, 1][..]] {
+            let bytes = encoded(codes);
+            for end in 0..=bytes.len() {
+                let input = &bytes[..end];
+                let eager = decode(input).filter(|t| t.sites.is_sorted_by_key(|s| s.code));
+                assert_eq!(FailureTable::decode(input).is_some(), eager.is_some());
+            }
+            for index in 0..bytes.len() {
+                let mut mutated = bytes.clone();
+                mutated[index] ^= 0xff;
+                let eager = decode(&mutated).filter(|t| t.sites.is_sorted_by_key(|s| s.code));
+                assert_eq!(FailureTable::decode(&mutated).is_some(), eager.is_some());
+            }
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert!(FailureTable::decode(&trailing).is_none());
+        }
+        let mut bytes = encoded(&[1]);
+        bytes[40] = 255; // invalid UTF-8 in the definition
+        assert!(FailureTable::decode(&bytes).is_none());
+        let mut bytes = encoded(&[1]);
+        bytes[32..40].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(FailureTable::decode(&bytes).is_none());
+    }
 }

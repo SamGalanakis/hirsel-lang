@@ -328,6 +328,37 @@ pub fn append(mut out: List[u8], magnitude: u128, negative: bool) -> () uses {} 
   } else {
     0
   }
+  // Short integers fit one decimal quad. Emit it directly instead of filling
+  // and then walking an inline scratch buffer (including its initialization).
+  if magnitude < 10000 {
+    let value: u64 = core@1/int.narrow(magnitude)
+    let count: u64 = if value >= 1000 {
+      4
+    } else if value >= 100 {
+      3
+    } else if value >= 10 {
+      2
+    } else {
+      1
+    }
+    core@1/list.reserve(mut out, core@1/list.len(out) + sign + count)
+    if negative {
+      core@1/list.push(mut out, 45)
+    }
+    if value >= 100 {
+      let high = value / 100
+      if high >= 10 {
+        core@1/list.push(mut out, DECIMAL_PAIRS[high * 2])
+      }
+      core@1/list.push(mut out, DECIMAL_PAIRS[high * 2 + 1])
+    }
+    let low = value % 100
+    if value >= 10 {
+      core@1/list.push(mut out, DECIMAL_PAIRS[low * 2])
+    }
+    core@1/list.push(mut out, DECIMAL_PAIRS[low * 2 + 1])
+    return
+  }
   if magnitude > 18446744073709551615 {
     let mut buffer: Inline[u8, 39] = [
       0u8,

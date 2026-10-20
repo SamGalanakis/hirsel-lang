@@ -36,7 +36,7 @@ fn snapshot_revision(name: String) -> Option[u64] uses {} {
 /// The board's stored form: compact JSON.
 pub fn encode(board: model.Board) -> unique Bytes uses {} {
   let mut out: List[u8] = []
-  match json.stringify_into(model.board_to_json(board), mut out) {
+  match model.board_json_into(board, mut out, 0) {
     Ok(()) => bytes.from_list(take out),
     Error(_) => b"{}",
   }

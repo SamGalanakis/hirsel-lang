@@ -79,13 +79,12 @@ fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
   Ok(())
 }
 
-// Adapted serde_json src/read.rs scratch string copying,
-// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: copy validated token bytes.
-fn json_owned_text(data: Bytes, start: u64, end: u64) -> unique String uses {} {
-  let mut output: List[u8] = []
-  core@1/bytes.append(mut output, core@1/bytes.slice(data, start, end))
-  match text.finish(take output) {
-    Ok(s) => s,
+// Tokens without escapes share the consumed input's immutable storage. Taking
+// `data` makes the slice global; no borrow of the parser's stack escapes.
+fn json_owned_text(take data: Bytes, start: u64, end: u64) -> String uses {} {
+  let token = core@1/bytes.slice(data, start, end)
+  match core@1/string.from_bytes(copy token) {
+    Ok(s) => take s,
     Error(_) => {
       core@1/failure.check(false, TextInvariant())
       ""
@@ -114,12 +113,22 @@ fn json_hex4(data: Bytes, mut pos: u64) -> Result[u64, JsonError] uses {} {
 
 // Adapted serde_json src/read.rs parse_str_bytes/parse_escape/parse_unicode_escape,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8. Strict UTF-8 mode only.
-fn json_quoted(data: Bytes, mut pos: u64) -> Result[unique String, JsonError] uses {} {
+fn json_quoted(take data: Bytes, mut pos: u64) -> Result[String, JsonError] uses {} {
   if json_peek(data, pos) != 34 {
     return Error(Syntax(pos))
   }
   pos += 1
+  let plain_start = pos
+  while pos < core@1/bytes.len(data) && data[pos] >= 32 && data[pos] != 34 && data[pos] != 92 {
+    pos += 1
+  }
+  if pos < core@1/bytes.len(data) && data[pos] == 34 {
+    let value = json_owned_text(copy data, plain_start, pos)
+    pos += 1
+    return Ok(take value)
+  }
   let mut output: List[u8] = []
+  core@1/bytes.append(mut output, core@1/bytes.slice(data, plain_start, pos))
   while pos < core@1/bytes.len(data) {
     let c = data[pos]
     pos += 1
@@ -213,7 +222,7 @@ fn json_keyword(data: Bytes, mut pos: u64, word: String) -> Result[(), JsonError
 // 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8; Zig lib/std/json/dynamic.zig
 // handleCompleteValue at bff490a23889750de7096d9057c0a432efc929a8 supplies
 // ordered-object duplicate rejection. Ordinary owned locals clean up on every ?.
-fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] uses {} {
+fn json_node(take data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] uses {} {
   json_whitespace(data, mut pos)
   let c = json_peek(data, pos)
   if c == 110 {
@@ -229,12 +238,12 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
     return Ok(Bool(false))
   }
   if c == 34 {
-    return Ok(Text(json_quoted(data, mut pos)?))
+    return Ok(Text(json_quoted(copy data, mut pos)?))
   }
   if c == 45 || std@1/ascii.is_digit(c) {
     let start = pos
     json_number_end(data, mut pos)?
-    return Ok(Number(json_owned_text(data, start, pos)))
+    return Ok(Number(json_owned_text(copy data, start, pos)))
   }
   if c != 91 && c != 123 {
     return Error(Syntax(pos))
@@ -252,7 +261,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
       return Ok(take array_value)
     }
     while true {
-      let child = json_node(data, mut pos, depth + 1)?
+      let child = json_node(copy data, mut pos, depth + 1)?
       core@1/list.push(mut items, take child)
       json_whitespace(data, mut pos)
       let next = json_peek(data, pos)
@@ -276,7 +285,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
   while true {
     json_whitespace(data, mut pos)
     let key_pos = pos
-    let key = json_quoted(data, mut pos)?
+    let key = json_quoted(copy data, mut pos)?
     if let Some(_) = core@1/map.get(entries, key) {
       return Error(DuplicateKey(key_pos))
     }
@@ -285,7 +294,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
       return Error(Syntax(pos))
     }
     pos += 1
-    let child = json_node(data, mut pos, depth + 1)?
+    let child = json_node(copy data, mut pos, depth + 1)?
     core@1/map.insert(mut entries, take key, take child)
     json_whitespace(data, mut pos)
     let next = json_peek(data, pos)
@@ -307,7 +316,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
 pub fn parse(take text: String) -> Result[Value, JsonError] uses {} {
   let data = core@1/string.as_bytes(text)
   let mut pos: u64 = 0
-  let value = json_node(data, mut pos, 0)?
+  let value = json_node(copy data, mut pos, 0)?
   json_whitespace(data, mut pos)
   if pos != core@1/bytes.len(data) {
     return Error(Syntax(pos))
@@ -319,7 +328,11 @@ pub fn parse(take text: String) -> Result[Value, JsonError] uses {} {
 // 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8. Compact ASCII escape spelling,
 // preserving UTF-8 runs; no escaping of solidus or non-ASCII scalars.
 @preserves_unique(builder)
-fn json_write_text(text: String, mut builder: List[u8]) -> () uses {} {
+pub fn write_text_into(text: String, mut builder: List[u8]) -> () uses {} {
+  core@1/list.reserve(
+    mut builder,
+    core@1/list.len(builder) + core@1/string.byte_len(text) + 2
+  )
   core@1/list.push(mut builder, 34)
   let data = core@1/string.as_bytes(text)
   let hex: Bytes = b"0123456789abcdef"
@@ -411,7 +424,7 @@ fn json_write_value(value: Value, mut builder: List[u8], depth: u64) -> Result[
     },
     Number(n) => json_write_number(n, mut builder),
     Text(s) => {
-      json_write_text(s, mut builder)
+      write_text_into(s, mut builder)
       Ok(())
     },
     Array(xs) => {
@@ -441,7 +454,7 @@ fn json_write_value(value: Value, mut builder: List[u8], depth: u64) -> Result[
           core@1/list.push(mut builder, 44)
         }
         first = false
-        json_write_text(key, mut builder)
+        write_text_into(key, mut builder)
         core@1/list.push(mut builder, 58)
         json_write_value(child, mut builder, depth + 1)?
       }
@@ -468,5 +481,15 @@ pub fn stringify(value: Value) -> Result[unique String, JsonError] uses {} {
   match take built {
     Ok(s) => Ok(take s),
     Error(_) => Error(InvalidNumber()),
+  }
+}
+
+/// Check a writer's number of open containers, before writing its delimiter.
+@noalloc
+pub fn check_depth(depth: u64) -> Result[(), JsonError] uses {} {
+  if depth >= MAX_NESTING {
+    Error(Nesting(depth))
+  } else {
+    Ok(())
   }
 }

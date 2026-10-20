@@ -150,6 +150,10 @@ fn decompose(mut points: List[u32], cp: u32, compatibility: bool) -> () uses {} 
 }
 
 fn normalize(s: String, compatibility: bool, compose: bool) -> unique String uses {} {
+  // Every ASCII scalar is a starter and has no decomposition or composition.
+  if string.is_ascii(s) {
+    return unique s
+  }
   let mut points: List[u32] = []
   for c in core@1/string.scalars(s) {
     decompose(mut points, core@1/char.to_u32(c), compatibility)

@@ -3471,6 +3471,40 @@ hirsel_test(
     edition = "2024",
 )
 
+hirsel_binary(
+    name = "hirsel-rt-example-failure_table",
+    bin_name = "failure_table",
+    deps = [
+        "//:hirsel-rt",
+        "//:hirsel-core-contract",
+        "//:hirsel-guard",
+        "//:hirsel-interp",
+        "//:hirsel-kernels",
+        "//:hirsel-layout",
+        "//:hirsel-lir",
+        "//:hirsel-run-config",
+        "//:hirsel-span",
+        "//:hirsel-syntax",
+        "//:hirsel-tir",
+        "//:hirsel-types",
+        "//third-party:libc",
+        "//third-party:rustls",
+        "//third-party:sha2",
+        "//third-party:webpki-roots",
+    ],
+    crate = "failure_table",
+    crate_root = "crates/hirsel-rt/examples/failure_table.rs",
+    srcs = glob(["crates/hirsel-rt/examples/**"]),
+    features = [
+        "default",
+        "diagnostic",
+    ],
+    manifest_dir = "crates/hirsel-rt",
+    package_name = "hirsel-rt",
+    version = "0.1.0",
+    edition = "2024",
+)
+
 hirsel_test(
     name = "hirsel-rt-test-it",
     deps = [

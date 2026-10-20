@@ -957,3 +957,177 @@ pub fn hash[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] us
   put(mut w, "  std@1/fnv.digest(core@1/bytes.from_list(take out))\n}")
   Ok(body(take w))
 }
+
+// Emit a direct writer. Containers pass their current depth through nominal
+// writers too, so the same MAX_NESTING contract applies without building a DOM.
+fn json_into_of(mut w: Writer, ty: String, read: String, depth: String) -> Result[
+  (),
+  String
+] uses {} {
+  if ty == "String" {
+    put(mut w, f"std@1/json.write_text_into({read}, mut out)\n")
+    return Ok(())
+  }
+  if integer(ty) || ty == "bool" {
+    put(mut w, f"std@1/{ty}.format_into({read}, mut out)\n")
+    return Ok(())
+  }
+  if float(ty) {
+    put(
+      mut w,
+      f"std@1/json.stringify_into(std@1/derive.json_float(std@1/{ty}.to_string({read})), mut out)?\n"
+    )
+    return Ok(())
+  }
+  if let Some(inner) = argument(ty, "core@1/Option") {
+    nested_option(ty, inner)?
+    let item = fresh(mut w, "item")
+    put(mut w, f"match {read} {{ Some({item}) => {{\n")
+    json_into_of(mut w, inner, item, depth)?
+    put(mut w, "}, None => std@1/text.append(mut out, \"null\") }\n")
+    return Ok(())
+  }
+  if let Some(inner) = element(ty) {
+    let item = fresh(mut w, "item")
+    let first = fresh(mut w, "first")
+    put(
+      mut w,
+      f"std@1/json.check_depth({depth})?\nstd@1/text.append(mut out, \"[\")\nlet mut {first} = true\nfor {item} in {read} {{\nif !{first} {{ std@1/text.append(mut out, \",\") }}\n{first} = false\n"
+    )
+    json_into_of(mut w, inner, item, f"({depth} + 1)")?
+    put(mut w, "}\nstd@1/text.append(mut out, \"]\")\n")
+    return Ok(())
+  }
+  if let Some(pair) = parameters(ty, "Map") {
+    let key = fresh(mut w, "key")
+    let item = fresh(mut w, "item")
+    let first = fresh(mut w, "first")
+    let object = pair[0] == "String"
+    put(mut w, f"std@1/json.check_depth({depth})?\n")
+    literal(
+      mut w,
+      "",
+      "out",
+      if object {
+        "{"
+      } else {
+        "["
+      }
+    )
+    put(
+      mut w,
+      f"let mut {first} = true\nfor ({key}, {item}) in {read} {{\nif !{first} {{ std@1/text.append(mut out, \",\") }}\n{first} = false\n"
+    )
+    if object {
+      put(
+        mut w,
+        f"std@1/json.write_text_into({key}, mut out)\nstd@1/text.append(mut out, \":\")\n"
+      )
+      json_into_of(mut w, pair[1], item, f"({depth} + 1)")?
+    } else {
+      put(mut w, f"std@1/json.check_depth({depth} + 1)?\n")
+      literal(mut w, "", "out", "[")
+      json_into_of(mut w, pair[0], key, f"({depth} + 2)")?
+      literal(mut w, "", "out", ",")
+      json_into_of(mut w, pair[1], item, f"({depth} + 2)")?
+      literal(mut w, "", "out", "]")
+    }
+    put(mut w, "}\n")
+    literal(
+      mut w,
+      "",
+      "out",
+      if object {
+        "}"
+      } else {
+        "]"
+      }
+    )
+    return Ok(())
+  }
+  if let Some(components) = tuple(ty) {
+    let names = fresh_names(mut w, "part", list.len(components))
+    put(mut w, f"std@1/json.check_depth({depth})?\nlet {tuple_form(names)} = {read}\n")
+    literal(mut w, "", "out", "[")
+    let mut i: u64 = 0
+    for component in components {
+      if i != 0 {
+        literal(mut w, "", "out", ",")
+      }
+      json_into_of(mut w, component, names[i], f"({depth} + 1)")?
+      i += 1
+    }
+    literal(mut w, "", "out", "]")
+    return Ok(())
+  }
+  if nominal(ty) {
+    put(mut w, f"{deriver(ty, "json_into")}({read}, mut out, {depth})?\n")
+    return Ok(())
+  }
+  Error(f"no JSON form for {ty}")
+}
+
+/// Write the same compact JSON as json_value followed by stringify_into,
+/// directly from a record or choice. Nested nominal types supply their own
+/// `<snake_name>_json_into` writer. Pass depth 0 at the root.
+pub fn json_into[T](s: TypeShape[T]) -> Result[
+  Body[fn(T, mut List[u8], u64) -> Result[(), json.JsonError] uses {}],
+  String
+] uses {} {
+  let info = type_shape.info(s)
+  let mut w = writer()
+  put(
+    mut w,
+    f"fn(value: {info.name}, mut out: List[u8], depth: u64) -> Result[(), std@1/json.JsonError] uses {{}} {{\n"
+  )
+  match info.body {
+    Record(fields) => {
+      put(mut w, "std@1/json.check_depth(depth)?\nstd@1/text.append(mut out, \"{\")\n")
+      let mut first = true
+      for f in fields {
+        if !first {
+          literal(mut w, "", "out", ",")
+        }
+        first = false
+        put(
+          mut w,
+          f"std@1/json.write_text_into(\"{f.name}\", mut out)\nstd@1/text.append(mut out, \":\")\n"
+        )
+        json_into_of(mut w, f.ty, f"value.{f.name}", "(depth + 1)")?
+      }
+      literal(mut w, "", "out", "}")
+    },
+    Choice(variants) => {
+      put(mut w, "match value {\n")
+      for v in variants {
+        let names = binders("p", list.len(v.payload))
+        put(mut w, f"{variant_form(v, names)} => {{\n")
+        if list.len(v.payload) == 0 {
+          put(mut w, f"std@1/json.write_text_into(\"{v.name}\", mut out)\n")
+        } else {
+          put(
+            mut w,
+            "std@1/json.check_depth(depth)?\nstd@1/text.append(mut out, \"{\")\n"
+          )
+          put(
+            mut w,
+            f"std@1/json.write_text_into(\"{v.name}\", mut out)\nstd@1/text.append(mut out, \":\")\nstd@1/json.check_depth(depth + 1)?\nstd@1/text.append(mut out, \"[\")\n"
+          )
+          let mut i: u64 = 0
+          for p in v.payload {
+            if i != 0 {
+              literal(mut w, "", "out", ",")
+            }
+            json_into_of(mut w, p.ty, names[i], "(depth + 2)")?
+            i += 1
+          }
+          literal(mut w, "", "out", "]}")
+        }
+        put(mut w, "},\n")
+      }
+      put(mut w, "}\n")
+    },
+  }
+  put(mut w, "Ok(())\n}")
+  Ok(body(take w))
+}

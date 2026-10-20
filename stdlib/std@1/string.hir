@@ -153,6 +153,7 @@ pub fn trim(s: String) -> String in s uses {} {
 fn ascii_case(s: String, lower: bool) -> unique String uses {} {
   let source = core@1/string.as_bytes(s)
   let mut builder: List[u8] = []
+  core@1/list.reserve(mut builder, core@1/bytes.len(source))
   let mut i: u64 = 0
   while i < core@1/bytes.len(source) {
     let byte = source[i]

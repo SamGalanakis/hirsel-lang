@@ -361,3 +361,30 @@ fn f64_parse_steps_grow_linearly_with_the_decimal_exponent() {
         );
     }
 }
+
+#[test]
+fn short_decimal_writer_matches_the_independent_inline_writer_for_every_quad() {
+    with_compiler_stack(|| {
+        execute(
+            r#"
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut buffer: Inline[u8, 5] = [0u8, 0u8, 0u8, 0u8, 0u8]
+  for n in 0u64..10001 {
+    let Ok(count) = u64.format_inline(n, mut buffer) else { return Error(()) }
+    let text = u64.to_string(n)
+    let data = string.as_bytes(text)
+    test.check(t, bytes.len(data) == count)
+    for i in 0u64..count { test.check(t, data[i] == buffer[i]) }
+    let signed: i64 = -int.narrow(n)
+    let Ok(signed_count) = i64.format_inline(signed, mut buffer) else { return Error(()) }
+    let signed_text = i64.to_string(signed)
+    let signed_data = string.as_bytes(signed_text)
+    test.check(t, bytes.len(signed_data) == signed_count)
+    for i in 0u64..signed_count { test.check(t, signed_data[i] == buffer[i]) }
+  }
+  Ok(())
+}
+"#,
+        )
+    });
+}

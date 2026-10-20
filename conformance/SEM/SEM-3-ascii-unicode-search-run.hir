@@ -1,0 +1,11 @@
+// rule: SEM-3
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, string.contains_ignore_case("Straße", "SSE"))
+  test.check(t, string.contains_ignore_case("prefix ASCII SUFFIX", "ascii"))
+  test.check(t, !string.contains_ignore_case("abc", "abcdef"))
+  test.check(t, string.to_lower("AΣ'") == "aς'")
+  test.check(t, string.eq_ignore_case("ASCII", "ascii"))
+  test.check(t, string.eq_ignore_case("K", "k"))
+  Ok(())
+}

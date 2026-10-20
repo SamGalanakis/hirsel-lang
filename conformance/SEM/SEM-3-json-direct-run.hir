@@ -1,0 +1,100 @@
+// rule: SEM-3
+// expect: run
+// Direct writers preserve DOM spelling, field/insertion order, escaping and depth.
+type Leaf {
+  signed: i128,
+  unsigned: u128,
+  text: String,
+  flag: bool,
+}
+
+type Tree = Empty | Node(List[Tree])
+
+type Record {
+  leaf: Leaf,
+  trees: List[Tree],
+  opt: Option[String],
+  tuple: (u64, String),
+  string_keys: Map[String, u64],
+  int_keys: Map[u64, bool],
+  set: Set[String],
+  floats: (f64, f32),
+}
+
+fn leaf_to_json(value: Leaf) -> json.Value uses {} = comptime derive.json_value(
+  shape(Leaf)
+)
+
+fn tree_to_json(value: Tree) -> json.Value uses {} = comptime derive.json_value(
+  shape(Tree)
+)
+
+fn record_to_json(value: Record) -> json.Value uses {} = comptime derive.json_value(
+  shape(Record)
+)
+
+@preserves_unique(out)
+fn leaf_json_into(value: Leaf, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Leaf))
+
+@preserves_unique(out)
+fn tree_json_into(value: Tree, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Tree))
+
+@preserves_unique(out)
+fn record_json_into(value: Record, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Record))
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut keys: Map[String, u64] = map.empty()
+  map.insert(mut keys, "z", 0)
+  map.insert(mut keys, "a", 18446744073709551615)
+  let mut ints: Map[u64, bool] = map.empty()
+  map.insert(mut ints, 9, true)
+  let mut set_items: Set[String] = set.empty()
+  set.insert(mut set_items, "one")
+  let value = Record(
+    leaf: Leaf(
+      signed: -170141183460469231731687303715884105728i128,
+      unsigned: 340282366920938463463374607431768211455u128,
+      text: "é\n\u{0}\\\"",
+      flag: true
+    ),
+    trees: [Empty(), Node([Empty()])],
+    opt: Some("optional"),
+    tuple: (7, "seven"),
+    string_keys: take keys,
+    int_keys: take ints,
+    set: take set_items,
+    floats: (1e-7, -0.0)
+  )
+  let Ok(expected) = json.stringify(record_to_json(value)) else {
+    return Error(())
+  }
+  let mut out: List[u8] = []
+  let Ok(()) = record_json_into(value, mut out, 0) else {
+    return Error(())
+  }
+  test.check(t, text.finish_valid(take out) == expected)
+  let mut deep: Tree = Empty()
+  for i in 0u64..65 {
+    deep = Node([take deep])
+  }
+  let mut direct: List[u8] = []
+  let mut dom: List[u8] = []
+  test.check(
+    t,
+    tree_json_into(deep, mut direct, 0) == json.stringify_into(
+      tree_to_json(deep),
+      mut dom
+    )
+  )
+  test.check(t, bytes.from_list(take direct) == bytes.from_list(take dom))
+  Ok(())
+}

@@ -1,0 +1,750 @@
+{
+  "schema": 1,
+  "suite": "micro",
+  "session": "e63b99c1-47b0-442d-a4dd-664d00e1eb68",
+  "started": "2026-10-20T02:44:16Z",
+  "host": "turbo2-sam",
+  "cpu": 31,
+  "seed": 20261020,
+  "rounds": 10,
+  "participants": [
+    {
+      "name": "before",
+      "command": [
+        "/tmp/tasks-perf/search-before",
+        "--hirsel-grants",
+        "/workspace/code/hirsel-wt/tasks-perf/bench/micro/grants.json",
+        "20000",
+        "1"
+      ],
+      "cwd": "/workspace/code/hirsel-wt/tasks-perf",
+      "binary_sha256": "8fda1f1ebac6958a97db44753d50938f9d9786d9768353064f8e531c531fa528"
+    },
+    {
+      "name": "after",
+      "command": [
+        "/tmp/tasks-perf/search-after",
+        "--hirsel-grants",
+        "/workspace/code/hirsel-wt/tasks-perf/bench/micro/grants.json",
+        "20000",
+        "1"
+      ],
+      "cwd": "/workspace/code/hirsel-wt/tasks-perf",
+      "binary_sha256": "4f6cf32c9ccba4cd38f750b56e775da82e98a57eae093f7f4380553356e34c56"
+    }
+  ],
+  "reference": "before",
+  "samples": [
+    {
+      "counts": {
+        "task-clock": 52.28,
+        "cycles": 192787029.0,
+        "instructions": 534758869.0,
+        "cycles:u": 181677560.0,
+        "instructions:u": 530785593.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603381,
+          "idle": 360847466
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603388,
+          "idle": 360847466
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 0,
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 6.84,
+        "cycles": 25597603.0,
+        "instructions": 53108430.0,
+        "cycles:u": 18584841.0,
+        "instructions:u": 50283674.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603426,
+          "idle": 360847468
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603427,
+          "idle": 360847468
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 0,
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 56.37,
+        "cycles": 212184200.0,
+        "instructions": 534759323.0,
+        "cycles:u": 199237294.0,
+        "instructions:u": 530785594.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603463,
+          "idle": 360847470
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603469,
+          "idle": 360847470
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 1,
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 7.86,
+        "cycles": 29231081.0,
+        "instructions": 53295451.0,
+        "cycles:u": 21238269.0,
+        "instructions:u": 50283891.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603499,
+          "idle": 360847471
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603501,
+          "idle": 360847471
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 1,
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 7.9,
+        "cycles": 29787196.0,
+        "instructions": 53261529.0,
+        "cycles:u": 20754099.0,
+        "instructions:u": 50283861.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603538,
+          "idle": 360847471
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603540,
+          "idle": 360847471
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 2,
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 49.12,
+        "cycles": 190208682.0,
+        "instructions": 535227295.0,
+        "cycles:u": 177821740.0,
+        "instructions:u": 530785827.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603579,
+          "idle": 360847473
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603585,
+          "idle": 360847473
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 2,
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 47.8,
+        "cycles": 185444867.0,
+        "instructions": 534660497.0,
+        "cycles:u": 173957884.0,
+        "instructions:u": 530785582.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603621,
+          "idle": 360847473
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603628,
+          "idle": 360847474
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.8571428571428571
+      },
+      "round": 3,
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 6.96,
+        "cycles": 25752975.0,
+        "instructions": 53072293.0,
+        "cycles:u": 18642102.0,
+        "instructions:u": 50283624.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603728,
+          "idle": 360847474
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603729,
+          "idle": 360847474
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 3,
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 7.79,
+        "cycles": 30413490.0,
+        "instructions": 53175204.0,
+        "cycles:u": 21525794.0,
+        "instructions:u": 50283689.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603797,
+          "idle": 360847475
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603798,
+          "idle": 360847475
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 4,
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 47.01,
+        "cycles": 176736235.0,
+        "instructions": 534318334.0,
+        "cycles:u": 166840103.0,
+        "instructions:u": 530785575.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603836,
+          "idle": 360847475
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603842,
+          "idle": 360847476
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.8333333333333334
+      },
+      "round": 4,
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 44.81,
+        "cycles": 176382320.0,
+        "instructions": 534761647.0,
+        "cycles:u": 164618964.0,
+        "instructions:u": 530785628.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603890,
+          "idle": 360847479
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603896,
+          "idle": 360847480
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.8333333333333334
+      },
+      "round": 5,
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 7.46,
+        "cycles": 28838601.0,
+        "instructions": 53042639.0,
+        "cycles:u": 21459969.0,
+        "instructions:u": 50283707.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552603990,
+          "idle": 360847481
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552603992,
+          "idle": 360847481
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 5,
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 7.53,
+        "cycles": 28586402.0,
+        "instructions": 53345395.0,
+        "cycles:u": 20486828.0,
+        "instructions:u": 50283862.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552604042,
+          "idle": 360847482
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552604044,
+          "idle": 360847482
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 6,
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 50.4,
+        "cycles": 194454287.0,
+        "instructions": 536680844.0,
+        "cycles:u": 179131088.0,
+        "instructions:u": 530785765.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552604082,
+          "idle": 360847483
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552604089,
+          "idle": 360847483
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 6,
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 7.57,
+        "cycles": 29333847.0,
+        "instructions": 53386126.0,
+        "cycles:u": 21607602.0,
+        "instructions:u": 50283678.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552604149,
+          "idle": 360847486
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552604151,
+          "idle": 360847486
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 7,
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 56.09,
+        "cycles": 216811576.0,
+        "instructions": 535604065.0,
+        "cycles:u": 202033366.0,
+        "instructions:u": 530785670.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552604183,
+          "idle": 360847486
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552604190,
+          "idle": 360847486
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 7,
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 8.0,
+        "cycles": 30267966.0,
+        "instructions": 53479785.0,
+        "cycles:u": 21739172.0,
+        "instructions:u": 50283636.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552604220,
+          "idle": 360847486
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552604222,
+          "idle": 360847486
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 8,
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 52.45,
+        "cycles": 193450096.0,
+        "instructions": 535140887.0,
+        "cycles:u": 180999732.0,
+        "instructions:u": 530785868.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552604259,
+          "idle": 360847487
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552604266,
+          "idle": 360847488
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.8571428571428571
+      },
+      "round": 8,
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 47.86,
+        "cycles": 185187586.0,
+        "instructions": 534458064.0,
+        "cycles:u": 174570071.0,
+        "instructions:u": 530785872.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552604293,
+          "idle": 360847488
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552604297,
+          "idle": 360847488
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 9,
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 8.8,
+        "cycles": 33981469.0,
+        "instructions": 53557415.0,
+        "cycles:u": 23593804.0,
+        "instructions:u": 50283631.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "0be508172e87a2af98f344d18610bbaaa0e6bbfcef0c7804b24457f839e129c9",
+      "sibling_before": {
+        "cpu15": {
+          "total": 552604335,
+          "idle": 360847491
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 552604337,
+          "idle": 360847491
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 1.0
+      },
+      "round": 9,
+      "name": "after"
+    }
+  ],
+  "status": "ok",
+  "comparisons": [
+    {
+      "name": "before",
+      "reference": "before",
+      "instructions_ratio": 1.0,
+      "instructions:u_ratio": 1.0,
+      "cycles_ratio": 1.0,
+      "task-clock_ratio": 1.0,
+      "task-clock_ratio_ci95": [
+        1.0,
+        1.0
+      ],
+      "ipc": 2.7938636945755144,
+      "ipc:u": 2.974022875717301
+    },
+    {
+      "name": "after",
+      "reference": "before",
+      "instructions_ratio": 0.09963056638337815,
+      "instructions:u_ratio": 0.09473444429919016,
+      "cycles_ratio": 0.15291275154775819,
+      "task-clock_ratio": 0.15434083601286175,
+      "task-clock_ratio_ci95": [
+        0.13978303396763292,
+        0.16422472857594603
+      ],
+      "ipc": 1.8215978404852047,
+      "ipc:u": 2.355373780961207
+    }
+  ]
+}

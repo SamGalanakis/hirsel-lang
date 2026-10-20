@@ -1,3 +1,15 @@
+/// Whether every UTF-8 byte of this slice is ASCII.
+@noalloc
+pub fn is_ascii(s: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(s)
+  for i in 0u64..core@1/bytes.len(data) {
+    if data[i] >= 128 {
+      return false
+    }
+  }
+  true
+}
+
 // Full default Unicode16 mappings. Rust str's Final_Sigma rule examines the
 // original text, skipping Case_Ignorable and then testing Cased on each side.
 @noalloc
@@ -26,8 +38,20 @@ fn case_property(table: Bytes, cp: u32) -> bool uses {} {
 }
 
 @preserves_unique(bytes)
-fn append_case(mut bytes: List[u8], table: Bytes, data: Bytes, c: char) -> () uses {} {
+fn append_case(mut bytes: List[u8], table: Bytes, data: Bytes, c: char, upper: bool) -> () uses {} {
   let cp = core@1/char.to_u32(c)
+  if cp < 128 {
+    let byte: u8 = core@1/int.narrow(cp)
+    core@1/list.push(
+      mut bytes,
+      if upper {
+        ascii.to_upper(byte)
+      } else {
+        ascii.to_lower(byte)
+      }
+    )
+    return
+  }
   let mut lo: u64 = 0
   let mut hi = core@1/bytes.len(table) / 7
   while lo < hi {
@@ -54,22 +78,28 @@ fn append_case(mut bytes: List[u8], table: Bytes, data: Bytes, c: char) -> () us
   }
 }
 
-fn mapped_case(s: String, table: Bytes, data: Bytes) -> unique String uses {} {
+fn mapped_case(s: String, table: Bytes, data: Bytes, upper: bool) -> unique String uses {} {
+  if is_ascii(s) {
+    return ascii_case(s, !upper)
+  }
   let mut bytes: List[u8] = []
   for c in core@1/string.scalars(s) {
-    append_case(mut bytes, table, data, c)
+    append_case(mut bytes, table, data, c, upper)
   }
   text.finish_valid(take bytes)
 }
 
 /// Full Unicode16 uppercase, including expansions; locale independent.
 pub fn to_upper(s: String) -> unique String uses {} {
-  mapped_case(s, FULL_UPPER, FULL_UPPER_DATA)
+  mapped_case(s, FULL_UPPER, FULL_UPPER_DATA, true)
 }
 
 /// Full Unicode16 lowercase, including expansions and context-sensitive final
 /// sigma. Uses the original slice as context; locale independent.
 pub fn to_lower(s: String) -> unique String uses {} {
+  if is_ascii(s) {
+    return ascii_case(s, true)
+  }
   let mut chars: List[char] = []
   for c in core@1/string.scalars(s) {
     core@1/list.push(mut chars, c)
@@ -101,7 +131,7 @@ pub fn to_lower(s: String) -> unique String uses {} {
         mut bytes
       )
     } else {
-      append_case(mut bytes, FULL_LOWER, FULL_LOWER_DATA, c)
+      append_case(mut bytes, FULL_LOWER, FULL_LOWER_DATA, c, false)
     }
     if !case_property(CASE_IGNORABLE, cp) {
       preceding = case_property(CASED, cp)
@@ -114,11 +144,50 @@ pub fn to_lower(s: String) -> unique String uses {} {
 /// Full default Unicode16 case folding (CaseFolding C+F). Locale independent;
 /// does not normalize text. Turkic-specific mappings are excluded.
 pub fn casefold(s: String) -> unique String uses {} {
-  mapped_case(s, CASEFOLD, CASEFOLD_DATA)
+  mapped_case(s, CASEFOLD, CASEFOLD_DATA, false)
 }
 
 /// Compare full default case folds. Normalize explicitly when canonical or
 /// compatibility equivalence is also wanted.
 pub fn eq_ignore_case(a: String, b: String) -> bool uses {} {
+  if is_ascii(a) && is_ascii(b) {
+    let left = core@1/string.as_bytes(a)
+    let right = core@1/string.as_bytes(b)
+    if core@1/bytes.len(left) != core@1/bytes.len(right) {
+      return false
+    }
+    let mut i: u64 = 0
+    while i < core@1/bytes.len(left) {
+      if ascii.to_lower(left[i]) != ascii.to_lower(right[i]) {
+        return false
+      }
+      i += 1
+    }
+    return true
+  }
   casefold(a) == casefold(b)
+}
+
+/// Whether `pattern` occurs in the full default case fold of `s`. Like casefold,
+/// this does not normalize text. ASCII inputs need no intermediate strings.
+pub fn contains_ignore_case(s: String, pattern: String) -> bool uses {} {
+  if !is_ascii(s) || !is_ascii(pattern) {
+    return contains(casefold(s), casefold(pattern))
+  }
+  let source = core@1/string.as_bytes(s)
+  let needle = core@1/string.as_bytes(pattern)
+  let width = core@1/bytes.len(needle)
+  let len = core@1/bytes.len(source)
+  let mut i: u64 = 0
+  while i <= len && width <= len - i {
+    let mut j: u64 = 0
+    while j < width && ascii.to_lower(source[i + j]) == ascii.to_lower(needle[j]) {
+      j += 1
+    }
+    if j == width {
+      return true
+    }
+    i += 1
+  }
+  false
 }

@@ -312,6 +312,77 @@ fn run_vectors(vectors: &[OracleVector], worker: usize, jobs: usize, entry_name:
     checked
 }
 
+// ASCII shortcuts are checked against the pinned full Unicode mappings too,
+// including unmapped controls and punctuation, and mixed ASCII/Unicode strings.
+#[test]
+fn ascii_case_shortcuts_match_full_unicode_tables_and_mixed_contexts() {
+    with_compiler_stack(|| {
+        let mut mappings: [BTreeMap<u32, String>; 3] = Default::default();
+        for line in include_str!("../../../../stdlib/unicode16/UnicodeData.txt").lines() {
+            let fields: Vec<_> = line.split(';').collect();
+            let cp = u32::from_str_radix(fields[0], 16).unwrap();
+            for (i, column) in [(0, 12), (1, 13)] {
+                if !fields[column].is_empty() {
+                    mappings[i].insert(cp, text(fields[column]));
+                }
+            }
+        }
+        for line in include_str!("../../../../stdlib/unicode16/SpecialCasing.txt").lines() {
+            let fields: Vec<_> = line
+                .split('#')
+                .next()
+                .unwrap()
+                .split(';')
+                .map(str::trim)
+                .collect();
+            if fields.len() >= 5 && fields[4].is_empty() {
+                let cp = u32::from_str_radix(fields[0], 16).unwrap();
+                mappings[0].insert(cp, text(fields[3]));
+                mappings[1].insert(cp, text(fields[1]));
+            }
+        }
+        for line in include_str!("../../../../stdlib/unicode16/CaseFolding.txt").lines() {
+            let fields: Vec<_> = line
+                .split('#')
+                .next()
+                .unwrap()
+                .split(';')
+                .map(str::trim)
+                .collect();
+            if fields.len() >= 3 && matches!(fields[1], "C" | "F") {
+                mappings[2].insert(u32::from_str_radix(fields[0], 16).unwrap(), text(fields[2]));
+            }
+        }
+        let ascii: String = (0u8..128).map(char::from).collect();
+        let inputs = (0u8..128).map(|b| char::from(b).to_string()).chain([
+            String::new(),
+            ascii.clone(),
+            format!("é{ascii}ßİKﬃ"),
+            "Task 9999: BENCHMARK description".into(),
+        ]);
+        let vectors: Vec<_> = inputs
+            .enumerate()
+            .map(|(i, input)| {
+                let expected = mappings
+                    .each_ref()
+                    .map(|map| {
+                        input
+                            .chars()
+                            .map(|c| {
+                                map.get(&u32::from(c))
+                                    .cloned()
+                                    .unwrap_or_else(|| c.to_string())
+                            })
+                            .collect::<String>()
+                    })
+                    .to_vec();
+                (i, 0, input, expected)
+            })
+            .collect();
+        assert_eq!(run_vectors(&vectors, 0, 1, "batch_case"), 132);
+    });
+}
+
 // The official pinned mapping files are the oracle; Rust's host Unicode version
 // is deliberately not involved. Context cases belong in conformance instead.
 #[test]
@@ -412,6 +483,40 @@ fn every_official_unicode16_full_case_mapping_executes_std_source() {
         eprintln!(
             "Unicode16: {} full upper/lower/fold comparisons",
             checked * 3 + long_checked
+        );
+    });
+}
+
+#[test]
+fn case_insensitive_search_and_equality_match_full_casefold_composition() {
+    with_compiler_stack(|| {
+        let source = std::fs::read_to_string(fixture().with_file_name("search.hir")).unwrap();
+        let mut loaded = load_program_source(&fixture(), Some(&source)).unwrap();
+        loaded.check_for_execution().unwrap();
+        loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
+            limits: Limits {
+                steps: Some(100_000_000),
+                call_depth: 256,
+            },
+            ..Default::default()
+        }));
+        let run = run_observed_snapshot(
+            &mut loaded.engine,
+            &RunConfiguration {
+                entry: loaded.entry,
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            SimulationConfig::default(),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                run.outcome,
+                Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
+            ),
+            "{:?}",
+            run.outcome
         );
     });
 }
