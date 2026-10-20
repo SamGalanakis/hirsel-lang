@@ -76,6 +76,28 @@ are in [pure representation boundaries](schema.md). Facts and opaque domains
 are reconstructed by their owners after validation; canonical HSC1 admission
 and legacy JSON derive behavior are unchanged.
 
+`std@1/schema_evolution` is optional pure tooling for explicit DTO evolution.
+It exports `Compatibility = Exact | AdapterRequired | Incompatible | UnknownPredicate`,
+`Scalar = U8 | U16 | U32 | U64 | Text | Boolean`, and these inert summaries:
+
+```hirsel
+pub type Identity { package: String, wire_policy: String, constructor: String, codec_envelope: String }
+pub type Field { name: String, aliases: List[String], scalar: Scalar, predicate_version: Option[String], default: Option[json.Value] }
+pub type Record { identity: Identity, fields: List[Field] }
+pub type Finding { field: String, code: String, compatibility: Compatibility }
+pub type Report { compatibility: Compatibility, findings: List[Finding] }
+fn schema_evolution.compare(writer: Record, reader: Record, options: schema.Options)
+  -> Result[Report, schema.SchemaError] uses {}
+```
+
+Compare each writer/reader direction separately. Reports describe flat strict
+JSON record summaries and reviewed adapter requirements; they never execute a
+decoder, predicate, default constructor or migration. Changed arbitrary facts
+remain unknown. Actual upgrades and fallible downgrades are program-written,
+and defaults still pass the real boundary. See [explicit evolution](schema.md#explicit-evolution)
+for scope, ordering, precedence, work charges and reference vectors. HSC1 and
+storage descriptors keep their existing separate contracts.
+
 ## The catalogue
 
 These declarations are normative: the source package must declare exactly these
@@ -121,6 +143,7 @@ N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
 fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
 @preserves_unique(out) fn json.stringify_into(value: Value, mut out: List[u8]) -> Result[(), JsonError] uses {}
+fn schema_evolution.compare(writer: Record, reader: Record, options: std@1/schema.Options) -> Result[Report, std@1/schema.SchemaError] uses {}
 fn schema.default_options() -> Options uses {}
 fn schema.check_state(o: Options) -> Result[CheckState, SchemaError] uses {}
 fn schema.charge_check(mut check: CheckState) -> Result[(), SchemaError] uses {}

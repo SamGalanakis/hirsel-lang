@@ -1,0 +1,209 @@
+// Directional record resolution adapted from Apache Avro 3a207fa6e87c535b95eafca4cf5a6ef524d77df2:
+// Resolver.java:513-548; TestSchemaCompatibility.java:158-184,460-465.
+// Unlike Avro, strict boundaries require reviewed adapters to drop/rename fields.
+// This is inert tooling metadata, never a runtime decoder/constructor registry.
+pub type Compatibility = Exact | AdapterRequired | Incompatible | UnknownPredicate
+
+pub type Scalar = U8 | U16 | U32 | U64 | Text | Boolean
+
+pub type Field {
+  name: String,
+  aliases: List[String],
+  scalar: Scalar,
+  predicate_version: Option[String],
+  default: Option[std@1/json.Value],
+}
+
+pub type Identity {
+  package: String,
+  wire_policy: String,
+  constructor: String,
+  codec_envelope: String,
+}
+
+pub type Record {
+  identity: Identity,
+  fields: List[Field],
+}
+
+pub type Finding {
+  field: String,
+  code: String,
+  compatibility: Compatibility,
+}
+
+pub type Report {
+  compatibility: Compatibility,
+  findings: List[Finding],
+}
+
+fn rank(c: Compatibility) -> u8 uses {} {
+  match c {
+    Exact => 0,
+    AdapterRequired => 1,
+    UnknownPredicate => 2,
+    Incompatible => 3,
+  }
+}
+
+fn note(mut report: Report, field: String, code: String, c: Compatibility) -> () uses {} {
+  if rank(c) > rank(report.compatibility) {
+    report.compatibility = c
+  }
+  core@1/list.push(
+    mut report.findings,
+    Finding(field: unique field, code: unique code, compatibility: c)
+  )
+}
+
+// Reject ambiguous policy rather than guess a field. Work is charged even for
+// equal-name comparisons, so descriptors cannot hide a quadratic free scan.
+fn validate(record: Record, mut check: std@1/schema.CheckState) -> Result[
+  (),
+  std@1/schema.SchemaError
+] uses {} {
+  let mut seen: List[String] = []
+  for field in record.fields {
+    let mut names: List[String] = [unique field.name]
+    for alias in field.aliases {
+      std@1/schema.charge_check(mut check)?
+      core@1/list.push(mut names, unique alias)
+    }
+    for name in names {
+      std@1/schema.charge_check(mut check)?
+      if core@1/string.byte_len(name) > std@1/schema.MAX_LABEL_BYTES {
+        return Error(
+          std@1/schema.invalid(mut check, "InvalidPolicy", Migration, "Record", None)
+        )
+      }
+      for old in seen {
+        std@1/schema.charge_check(mut check)?
+        if name == old {
+          return Error(
+            std@1/schema.invalid(mut check, "AmbiguousName", Migration, "Record", None)
+          )
+        }
+      }
+      core@1/list.push(mut seen, unique name)
+    }
+  }
+  Ok(())
+}
+
+fn maximum(s: Scalar) -> u64 uses {} {
+  match s {
+    U8 => 255,
+    U16 => 65535,
+    U32 => 4294967295,
+    U64 => 18446744073709551615,
+    _ => 0,
+  }
+}
+
+fn scalar_compatibility(writer: Scalar, reader: Scalar) -> Compatibility uses {} {
+  if writer == reader {
+    Exact
+  } else if maximum(writer) > 0 && maximum(reader) >= maximum(writer) {
+    AdapterRequired
+  } else {
+    Incompatible
+  }
+}
+
+fn valid_default(field: Field) -> bool uses {} {
+  let Some(value) = field.default else {
+    return false
+  }
+  match (field.scalar, value) {
+    (Text, Text(_)) => true,
+    (Boolean, Bool(_)) => true,
+    (kind, Number(n)) => match std@1/u64.parse(n) {
+      Ok(number) => maximum(kind) > 0 && number <= maximum(kind),
+      Error(_) => false,
+    },
+    _ => false,
+  }
+}
+
+fn compare_field(writer: Field, reader: Field, mut report: Report) -> () uses {} {
+  if writer.name != reader.name {
+    note(mut report, reader.name, "Rename", AdapterRequired)
+  }
+  let scalar = scalar_compatibility(writer.scalar, reader.scalar)
+  if scalar != Exact {
+    note(mut report, reader.name, "Scalar", scalar)
+  }
+  if writer.predicate_version != reader.predicate_version {
+    note(mut report, reader.name, "PredicateChanged", UnknownPredicate)
+  }
+}
+
+// Compare writer's canonical output to reader's input policy. A report describes
+// adapter requirements, not permission to silently change either boundary.
+pub fn compare(writer: Record, reader: Record, options: std@1/schema.Options) -> Result[
+  Report,
+  std@1/schema.SchemaError
+] uses {} {
+  let mut check = std@1/schema.check_state(options)?
+  validate(writer, mut check)?
+  validate(reader, mut check)?
+  let mut report = Report(compatibility: Exact, findings: [])
+  if writer.identity.package != reader.identity.package {
+    note(mut report, "", "PackageChanged", AdapterRequired)
+  }
+  if writer.identity.wire_policy != reader.identity.wire_policy {
+    note(mut report, "", "WirePolicyChanged", AdapterRequired)
+  }
+  if writer.identity.constructor != reader.identity.constructor {
+    note(mut report, "", "ConstructorChanged", UnknownPredicate)
+  }
+  if writer.identity.codec_envelope != reader.identity.codec_envelope {
+    note(mut report, "", "CodecEnvelopeChanged", Incompatible)
+  }
+  let mut consumed: List[String] = []
+  for target in reader.fields {
+    std@1/schema.charge_check(mut check)?
+    let mut source: Option[Field] = None
+    let mut matches: u64 = 0
+    for candidate in writer.fields {
+      std@1/schema.charge_check(mut check)?
+      let mut matched = candidate.name == target.name
+      for alias in target.aliases {
+        std@1/schema.charge_check(mut check)?
+        matched = matched || candidate.name == alias
+      }
+      if matched {
+        matches += 1
+        source = Some(unique candidate)
+        core@1/list.push(mut consumed, unique candidate.name)
+      }
+    }
+    if matches > 1 {
+      note(mut report, target.name, "AliasCollision", Incompatible)
+    } else if let Some(field) = source {
+      compare_field(field, target, mut report)
+    } else if let Some(_) = target.default {
+      if !valid_default(target) {
+        note(mut report, target.name, "InvalidDefault", Incompatible)
+      } else if let Some(_) = target.predicate_version {
+        note(mut report, target.name, "DefaultPredicate", UnknownPredicate)
+      } else {
+        note(mut report, target.name, "Default", AdapterRequired)
+      }
+    } else {
+      note(mut report, target.name, "MissingRequired", Incompatible)
+    }
+  }
+  for source in writer.fields {
+    std@1/schema.charge_check(mut check)?
+    let mut found = false
+    for name in consumed {
+      std@1/schema.charge_check(mut check)?
+      found = found || source.name == name
+    }
+    if !found {
+      note(mut report, source.name, "Drop", AdapterRequired)
+    }
+  }
+  Ok(take report)
+}

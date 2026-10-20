@@ -1,0 +1,194 @@
+// rule: GEN-2
+// expect: run
+// stdout: old->new: unknown-predicate|:WirePolicyChanged|:ConstructorChanged|id:Scalar|discount:PredicateChanged|priority:Default
+// stdout: new->old: incompatible|:WirePolicyChanged|:ConstructorChanged|id:Scalar|discount:PredicateChanged|priority:Drop
+// Frozen directional goldens. Avro TestSchemaCompatibility.java:158-184
+// supplies the added-default-42 / required-field pair; :460 adds widening.
+fn field(name: String, scalar: evolution.Scalar) -> evolution.Field uses {} {
+  evolution.Field(
+    name: unique name,
+    aliases: [],
+    scalar: scalar,
+    predicate_version: None,
+    default: None
+  )
+}
+
+fn identity() -> evolution.Identity uses {} {
+  evolution.Identity(
+    package: "orders@1",
+    wire_policy: "1",
+    constructor: "1",
+    codec_envelope: "json@1"
+  )
+}
+
+fn old() -> evolution.Record uses {} {
+  let mut discount = field("discount", U8)
+  discount.predicate_version = Some("percent@1")
+  evolution.Record(identity: identity(), fields: [field("id", U8), take discount])
+}
+
+fn current() -> evolution.Record uses {} {
+  let mut id = identity()
+  id.wire_policy = "2"
+  id.constructor = "2"
+  let mut discount = field("discount", U8)
+  discount.predicate_version = Some("percent@2")
+  let mut priority = field("priority", U8)
+  priority.default = Some(Number("42"))
+  evolution.Record(
+    identity: take id,
+    fields: [field("id", U16), take discount, take priority]
+  )
+}
+
+fn label(c: evolution.Compatibility) -> String uses {} {
+  match c {
+    Exact => "exact",
+    AdapterRequired => "adapter-required",
+    Incompatible => "incompatible",
+    UnknownPredicate => "unknown-predicate",
+  }
+}
+
+fn golden(r: evolution.Report) -> String uses {} {
+  let mut parts: List[String] = [label(r.compatibility)]
+  for f in r.findings {
+    list.push(mut parts, f"{f.field}:{f.code}")
+  }
+  string.join(parts, "|")
+}
+
+fn matches_report(writer: evolution.Record, reader: evolution.Record, expected: String) -> bool uses {} {
+  let Ok(report) = evolution.compare(writer, reader, schema.default_options()) else {
+    return false
+  }
+  golden(report) == expected
+}
+
+fn vectors() -> bool uses {} {
+  let base = evolution.Record(identity: identity(), fields: [field("oldfield1", U8)])
+  if !matches_report(base, base, "exact") {
+    return false
+  }
+  let mut added = unique base
+  let mut new_field = field("newfield1", U8)
+  new_field.default = Some(Number("42"))
+  list.push(mut added.fields, take new_field)
+  if !matches_report(base, added, "adapter-required|newfield1:Default") {
+    return false
+  }
+  if !matches_report(added, base, "adapter-required|newfield1:Drop") {
+    return false
+  }
+  added.fields[1].default = None
+  if !matches_report(base, added, "incompatible|newfield1:MissingRequired") {
+    return false
+  }
+  added.fields[1].default = Some(Number("256"))
+  if !matches_report(base, added, "incompatible|newfield1:InvalidDefault") {
+    return false
+  }
+  added.fields[1].default = Some(Number("42"))
+  added.fields[1].predicate_version = Some("owner@1/predicate@1")
+  if !matches_report(base, added, "unknown-predicate|newfield1:DefaultPredicate") {
+    return false
+  }
+  added.fields[1].predicate_version = None
+  added.fields[1].scalar = Text
+  added.fields[1].default = Some(Text("ready"))
+  if !matches_report(base, added, "adapter-required|newfield1:Default") {
+    return false
+  }
+  added.fields[1].scalar = Boolean
+  added.fields[1].default = Some(Bool(false))
+  if !matches_report(base, added, "adapter-required|newfield1:Default") {
+    return false
+  }
+  added.fields[1].default = Some(Null)
+  if !matches_report(base, added, "incompatible|newfield1:InvalidDefault") {
+    return false
+  }
+  let mut renamed = unique base
+  renamed.fields[0].name = "newfield1"
+  renamed.fields[0].aliases = ["oldfield1"]
+  if !matches_report(base, renamed, "adapter-required|newfield1:Rename") {
+    return false
+  }
+  let both = evolution.Record(
+    identity: identity(),
+    fields: [field("oldfield1", U8), field("newfield1", U8)]
+  )
+  if !matches_report(both, renamed, "incompatible|newfield1:AliasCollision") {
+    return false
+  }
+  let wide = evolution.Record(identity: identity(), fields: [field("oldfield1", U64)])
+  if !matches_report(base, wide, "adapter-required|oldfield1:Scalar") {
+    return false
+  }
+  if !matches_report(wide, base, "incompatible|oldfield1:Scalar") {
+    return false
+  }
+  let text = evolution.Record(identity: identity(), fields: [field("oldfield1", Text)])
+  if !matches_report(base, text, "incompatible|oldfield1:Scalar") {
+    return false
+  }
+  let mut changed = unique base
+  changed.fields[0].predicate_version = Some("arbitrary-new-body@2")
+  if !matches_report(base, changed, "unknown-predicate|oldfield1:PredicateChanged") {
+    return false
+  }
+  changed = unique base
+  changed.identity.codec_envelope = "hsc1"
+  if !matches_report(base, changed, "incompatible|:CodecEnvelopeChanged") {
+    return false
+  }
+  changed = unique base
+  changed.identity.package = "other@1"
+  if !matches_report(base, changed, "adapter-required|:PackageChanged") {
+    return false
+  }
+  changed = unique base
+  changed.fields[0].aliases = ["oldfield1"]
+  let Error(Invalid(issues)) = evolution.compare(
+    base,
+    changed,
+    schema.default_options()
+  ) else {
+    return false
+  }
+  if issues.items[0].code != "AmbiguousName" {
+    return false
+  }
+  let mut options = schema.default_options()
+  options.limits.max_work = 0
+  let Error(Limit(cause)) = evolution.compare(base, base, options) else {
+    return false
+  }
+  if cause.kind != Work {
+    return false
+  }
+  options.limits.max_depth = 0
+  let Error(Limit(invalid)) = evolution.compare(base, base, options) else {
+    return false
+  }
+  invalid.kind == InvalidOptions
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  if !vectors() {
+    return Error(())
+  }
+  let Ok(forward) = evolution.compare(old(), current(), schema.default_options()) else {
+    return Error(())
+  }
+  let Ok(reverse) = evolution.compare(current(), old(), schema.default_options()) else {
+    return Error(())
+  }
+  let Ok(out) = io.stdout(rt) else {
+    return Error(())
+  }
+  let _ = out.print(out, f"old->new: {golden(forward)}\nnew->old: {golden(reverse)}\n")
+  Ok(())
+}

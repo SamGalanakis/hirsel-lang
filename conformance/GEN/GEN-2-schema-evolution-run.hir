@@ -1,0 +1,283 @@
+// rule: GEN-2
+// expect: run
+// stdout: schema evolution: true
+// Frozen V1/V2 tagged DTOs; incoming identifiers only select written match arms.
+// Default 42 and missing-required vectors port Avro TestSchemaCompatibility:158-184.
+@serializable
+type OrderV1 {
+  id: u8,
+  discount: u8,
+}
+
+@serializable
+type OrderV2 {
+  id: u16,
+  discount: u8,
+  priority: u8,
+}
+
+type Envelope = V1(OrderV1) | V2(OrderV2)
+
+fn percent_valid(v: u8) -> bool uses {} {
+  v <= 80
+}
+
+distinct type Percent(v: u8) where percent_valid(v)
+
+type Order {
+  id: u16,
+  discount: Percent,
+  priority: u8,
+}
+
+fn construct(dto: OrderV2, mut check: schema.CheckState) -> Result[
+  Order,
+  schema.SchemaError
+] uses {} {
+  schema.charge_check(mut check)?
+  if !percent_valid(dto.discount) {
+    let error = schema.invalid(
+      mut check,
+      "FactViolation",
+      Fact,
+      "Percent@2",
+      Some("0..80")
+    )
+    return Error(schema.prefix_error(Field("discount"), take error))
+  }
+  Ok(Order(id: dto.id, discount: Percent(dto.discount), priority: dto.priority))
+}
+
+fn upgrade_v1(dto: OrderV1, mut check: schema.CheckState) -> Result[
+  Order,
+  schema.SchemaError
+] uses {} {
+  schema.charge_check(mut check)?
+  construct(
+    OrderV2(id: int.widen(dto.id), discount: dto.discount, priority: 42),
+    mut check
+  )
+}
+
+// Downgrade is an explicit fallible export. Dropping non-default priority would
+// lose information, so it refuses, independently of successful V1 import.
+fn downgrade_v1(order: Order, mut check: schema.CheckState) -> Result[
+  OrderV1,
+  schema.SchemaError
+] uses {} {
+  schema.charge_check(mut check)?
+  if order.id > 255 || order.priority != 42 {
+    return Error(schema.invalid(mut check, "DowngradeLoss", Migration, "OrderV1", None))
+  }
+  let Percent(discount) = order.discount
+  let id: u8 = int.narrow(order.id)
+  Ok(OrderV1(id: id, discount: discount))
+}
+
+fn export_v1(order: Order) -> Result[OrderV1, schema.SchemaError] uses {} {
+  let mut check = schema.check_state(schema.default_options())?
+  downgrade_v1(order, mut check)
+}
+
+fn bounded_decode(w: json.Value, mut check: schema.CheckState) -> Result[
+  u8,
+  schema.SchemaError
+] uses {} {
+  let b = schema.u8_json()
+  let v = b.decode(w, mut check)?
+  if v > 100 {
+    return Error(schema.invalid(mut check, "FactViolation", Fact, "V2.byte", None))
+  }
+  Ok(v)
+}
+
+fn bounded_encode(v: u8, mut check: schema.CheckState) -> Result[
+  json.Value,
+  schema.SchemaError
+] uses {} {
+  let b = schema.u8_json()
+  b.encode(v, mut check)
+}
+
+fn policy(default_priority: String) -> schema.Policy uses {} {
+  schema.Policy(
+    fields: [
+      schema.FieldPolicy(
+        name: "priority",
+        wire_name: "priority",
+        aliases: [],
+        missing: Default(Number(unique default_priority)),
+        nulls: Reject
+      )
+    ],
+    tags: [],
+    leaves: [
+      schema.Leaf(
+        ty: "u8",
+        decode: "application@1/bounded_decode",
+        encode: "application@1/bounded_encode"
+      )
+    ]
+  )
+}
+
+fn order_v1_schema_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  unique OrderV1,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(OrderV1), schema.strict_policy())
+
+fn order_v2_schema_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  unique OrderV2,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(OrderV2), policy("42"))
+
+fn bad_default_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  unique OrderV2,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(OrderV2), policy("200"))
+
+fn envelope_schema_decode(w: json.Value, mut c: schema.CheckState) -> Result[
+  unique Envelope,
+  schema.SchemaError
+] uses {} = comptime derive.schema_decode(shape(Envelope), schema.strict_policy())
+
+fn load(w: json.Value, mut check: schema.CheckState) -> Result[
+  Order,
+  schema.SchemaError
+] uses {} {
+  match envelope_schema_decode(w, mut check)? {
+    V1(dto) => upgrade_v1(dto, mut check),
+    V2(dto) => construct(dto, mut check),
+  }
+}
+
+fn read(text: String) -> Result[Order, schema.SchemaError] uses {} {
+  let mut check = schema.check_state(schema.default_options())?
+  let Ok(wire) = json.parse(unique text) else {
+    return Error(schema.invalid(mut check, "FrozenSyntax", Syntax, "Envelope", None))
+  }
+  let decoder = schema.Decoder(decode: load)
+  decoder.decode(wire, mut check)
+}
+
+fn has_issue(
+  text: String,
+  code: String,
+  stage: schema.Stage,
+  path: List[schema.Segment]
+) -> bool uses {} {
+  let Error(Invalid(issues)) = read(text) else {
+    return false
+  }
+  list.len(issues.items) == 1 && issues.items[0].code == code && issues.items[0].stage == stage && issues.items[0].path == path
+}
+
+fn vectors() -> bool uses {} {
+  // Old id 255 widens exactly; default priority comes from the reviewed upgrade.
+  let Ok(old) = read("{\"V1\":{\"id\":255,\"discount\":80}}") else {
+    return false
+  }
+  let Percent(discount) = old.discount
+  if old.id != 255 || discount != 80 || old.priority != 42 {
+    return false
+  }
+  let Ok(back) = export_v1(old) else {
+    return false
+  }
+  if back != OrderV1(id: 255, discount: 80) {
+    return false
+  }
+  // HSC1 stays exact: only an explicitly selected V1 type decodes V1 bytes.
+  let frozen = codec.encode(back)
+  let old_decoded: Result[OrderV1, DecodeError] = codec.decode(frozen)
+  let Ok(same) = old_decoded else {
+    return false
+  }
+  let new_decoded: Result[OrderV2, DecodeError] = codec.decode(frozen)
+  let Error(_) = new_decoded else {
+    return false
+  }
+  if same != back {
+    return false
+  }
+  // Previously accepted 99 must fail before constructing Percent@2.
+  if !has_issue(
+    "{\"V1\":{\"id\":1,\"discount\":99}}",
+    "FactViolation",
+    Fact,
+    [Field("discount")]
+  ) {
+    return false
+  }
+  // Current DTO defaults run through the same leaf as present values.
+  let Ok(current) = read("{\"V2\":{\"id\":256,\"discount\":70}}") else {
+    return false
+  }
+  if current.id != 256 || current.priority != 42 {
+    return false
+  }
+  let Error(Invalid(loss)) = export_v1(current) else {
+    return false
+  }
+  if loss.items[0].code != "DowngradeLoss" || loss.items[0].stage != Migration {
+    return false
+  }
+  let Ok(other) = read("{\"V2\":{\"id\":1,\"discount\":70,\"priority\":7}}") else {
+    return false
+  }
+  let Error(Invalid(_)) = export_v1(other) else {
+    return false
+  }
+  if !has_issue(
+    "{\"V2\":{\"id\":1,\"discount\":70,\"priority\":200}}",
+    "FactViolation",
+    Fact,
+    [Variant("V2"), Field("priority")]
+  ) {
+    return false
+  }
+  if !has_issue(
+    "{\"V1\":{\"id\":1}}",
+    "Missing",
+    Wire,
+    [Variant("V1"), Field("discount")]
+  ) {
+    return false
+  }
+  let Ok(missing) = json.parse("{\"id\":1,\"discount\":70}") else {
+    return false
+  }
+  let Ok(check0) = schema.check_state(schema.default_options()) else {
+    return false
+  }
+  let mut check = take check0
+  let Error(Invalid(bad)) = bad_default_decode(missing, mut check) else {
+    return false
+  }
+  if bad.items[0].code != "FactViolation" || bad.items[0].path != [Field("priority")] {
+    return false
+  }
+  // No package/descriptor/function text is looked up or executed.
+  let Error(Invalid(_)) = read(
+    "{\"attacker@1/constructor\":{\"id\":1,\"discount\":70}}"
+  ) else {
+    return false
+  }
+  let Error(Invalid(_)) = read(
+    "{\"V1\":{\"id\":1,\"discount\":70},\"V2\":{\"id\":1,\"discount\":70}}"
+  ) else {
+    return false
+  }
+  let Error(Invalid(_)) = read(
+    "{\"V1\":{\"id\":1,\"discount\":70,\"constructor\":\"attacker@1/load\"}}"
+  ) else {
+    return false
+  }
+  true
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let _ = out.print(out, f"schema evolution: {vectors()}\n")
+  Ok(())
+}

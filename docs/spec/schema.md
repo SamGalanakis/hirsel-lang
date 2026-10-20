@@ -334,3 +334,84 @@ inputs/shrinking reuse Hirsel's existing test helpers; formatting reuses its
 existing JSON codec. Cross-engine real-I/O replay follows the existing CLI
 replay fixture, recording natively and removing host data before interpreter
 replay of identical structured issue fields and checked output bytes.
+
+## Explicit evolution
+
+Keep versioned DTOs (`OrderV1`, `OrderV2`) and their strict policies frozen.
+A program-written version match selects a known old decoder, then calls a
+named `upgrade_v1` and the current owner's fallible constructor. Incoming
+identifiers are data: they never name, fetch, load or invoke executable code.
+An unknown version fails before domain construction. A migration may reject
+values accepted by an old predicate; it must branch before constructing a
+new constrained value. Failed conversion returns no partial domain object.
+A downgrade is a separately named fallible export, with an explicit policy
+for information loss; it is never synthesized by reversing an upgrade.
+
+Defaults are wire inputs to the same field boundary as present values. A
+primitive-valid default can still fail a fact or owner constructor. The frozen
+`GEN-2-schema-evolution-run` corpus exercises default 42, invalid default 200,
+old discount 99 rejected by the current 0..80 fact, exact ID widening, and
+downgrade refusal on overflow or non-default information. Its tagged envelope
+only dispatches to two statically written DTO decoders. Canonical V1 bytes
+still fail decoding as V2: evolution does not relax HSC1 descriptors.
+
+`std@1/schema_evolution` supplies optional pure **directional tooling**, not
+an automatic migration engine. `compare(writer, reader, options)` compares
+explicit program-supplied summaries of flat strict JSON records. `Record`
+contains `Identity` and ordered `Field` entries. Identity keeps package,
+wire-policy, constructor semantic version and codec-envelope identity separate.
+Fields supply a canonical name, reader aliases, a closed primitive `Scalar`
+(`U8`, `U16`, `U32`, `U64`, `Text`, `Boolean`), an optional arbitrary predicate
+semantic identity and an optional JSON default. These summaries are reviewed
+contracts about the program, not reflected facts or proofs about arbitrary
+callbacks. Predicate identity must change whenever its meaning changes,
+including captured policy; constructor identity must cover cross-field facts.
+Nested records, options, variants, custom transforms and other scalar domains
+are outside this reporter's input vocabulary and require manual review.
+
+The report has four outcomes:
+
+| Outcome | Meaning within the supplied summary |
+|---|---|
+| `Exact` | Canonical writer fields are accepted with the same primitive and predicate identities; no adapter step was found. This is not byte or HSC1 descriptor equality. |
+| `AdapterRequired` | A named reviewed adapter must rename/drop a field, supply a primitive-validated default, widen an unsigned integer, or bridge package/wire-policy identity. No adapter is generated or run. |
+| `Incompatible` | A required reader field is absent, a primitive/default is incompatible, multiple writer fields collide with a reader alias, or codec envelopes differ. A custom fallible migration may still accept a subset. |
+| `UnknownPredicate` | A predicate or constructor semantic identity changed, or a missing field's default needs arbitrary predicate validation. No inclusion or compatibility proof is claimed. |
+
+Identity findings precede reader fields in declaration order, then writer-only
+fields in writer order. Multiple findings are retained; the summary precedence
+is incompatible, unknown-predicate, adapter-required, exact. Alias matching uses
+the reader's canonical name/aliases against **canonical writer output**, never
+writer aliases. Duplicate names or colliding aliases within either record are
+an `Invalid` policy error. Dropping writer-only fields requires an explicit
+adapter because the strict reader itself rejects extras. Defaults are checked
+against primitive ranges/types; predicate defaults remain unknown until actual
+boundary validation. Work is charged per name/alias/field comparison using one
+CheckState; exhaustion returns `SchemaError.Limit`, never a partial report.
+`max_issues`, format-byte and traversal-depth limits do not truncate findings;
+this flat reporter allocates at most a fixed number of findings per field plus
+identity findings. Diagnostic field names obey the schema label byte cap.
+
+Always compare old-writer/new-reader **and** new-writer/old-reader. The two
+frozen stdout goldens in `GEN-2-schema-evolution-report-run` intentionally
+report different outcomes. Changed arbitrary predicates report uncertainty,
+including when a programmer believes a change widens acceptance.
+
+These operations remain pure source functions. I/O retains its capability and
+tape rules; replay repeats the same bytes and bound program revision without
+new schema events. Changing a predicate changes program identity. Migration is
+new authorized execution, not historical replay under a substituted predicate.
+[STORE-7/9](storage.md#store-7-rows-and-storage-identity) govern storage
+identity/history/migrations separately; this reporter neither compares storage
+or HSC1 descriptors nor changes their resolution rules.
+
+Evolution resolution adapts Apache Avro
+`3a207fa6e87c535b95eafca4cf5a6ef524d77df2`,
+`lang/java/avro/src/main/java/org/apache/avro/Resolver.java:513-548`
+(reader fields, writer-only fields, defaults), and
+`lang/java/avro/src/test/java/org/apache/avro/TestSchemaCompatibility.java:158-184,460-465`
+(default 42, missing required field, integer widening). Deviations are strict
+unknown fields requiring explicit drop adapters, no lossy integer-to-float
+promotion, no executable resolver, and conservative uncertainty for arbitrary
+facts/constructors. The commented-out record-name check at Resolver.java:499
+is not used as evidence of nominal-name enforcement.

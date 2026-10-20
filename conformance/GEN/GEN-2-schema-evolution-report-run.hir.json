@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "GEN-2-schema-evolution-report-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "schema",
+          "module": [
+            "schema"
+          ]
+        },
+        {
+          "head": "evolution",
+          "module": [
+            "schema_evolution"
+          ]
+        }
+      ]
+    }
+  ]
+}

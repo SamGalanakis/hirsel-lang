@@ -1143,6 +1143,12 @@
       "module": [
         "schema"
       ]
+    },
+    {
+      "path": "schema_evolution.hir",
+      "module": [
+        "schema_evolution"
+      ]
     }
   ],
   "dependencies": []
