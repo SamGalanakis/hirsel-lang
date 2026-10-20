@@ -109,7 +109,7 @@ fn dependency_cards_preserve_facts_when_a_matching_precheck_saves_body_work() {
         let leaf = manifest.parent().unwrap().join("../leaf/hirsel.json");
         let path =
             std::env::temp_dir().join(format!("hirsel-card-precheck-{}.bin", std::process::id()));
-        std::fs::write(&path, COMPILER.precheck_package(&leaf).unwrap()).unwrap();
+        COMPILER.precheck_package(&leaf, &path).unwrap();
         let cache = PackageCache::prechecked(vec![Arc::new(Precheck::read(&path).unwrap())]);
         let mut source = COMPILER
             .load_program_source_with_cache(&manifest, None, &PackageCache::disabled())
