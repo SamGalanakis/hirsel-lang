@@ -12,7 +12,7 @@ pub type Credentials {
   session_token: Option[String],
 }
 
-pub type S3Error = Invalid | Http(http.HttpError) | Status(u16) | Missing | Exists | Clock | Grant | Malformed | ConditionalUnsupported(
+pub type S3Error = Denied | Invalid | Http(http.HttpError) | Status(u16) | Missing | Exists | Clock | Grant | Malformed | ConditionalUnsupported(
   String
 )
 

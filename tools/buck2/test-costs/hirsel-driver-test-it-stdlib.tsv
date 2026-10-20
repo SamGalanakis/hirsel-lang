@@ -1,3 +1,6 @@
+package_s3::client_facets_confine_authority_before_effects	41.042
+package_s3::opaque_client_examples_typecheck	19.681
+package_s3::published_aws_sigv4_vectors_execute_package_source	28.811
 stdlib_aead_vectors::aes_gcm_0	24.536
 stdlib_aead_vectors::aes_gcm_1	23.792
 stdlib_aead_vectors::aes_gcm_2	20.255

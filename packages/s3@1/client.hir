@@ -9,11 +9,14 @@ pub type Config {
   max_object_bytes: u64,
 }
 
-pub type Client {
+/// Authority stays inside the package, as in std http.Client.
+pub opaque type Client: copyable + noalloc_drop uses {Net, WallClock} {
   network: Net,
   clock: WallClock,
   config: Config,
   credentials: Credentials,
+  writable: bool,
+  prefixes: List[String],
 }
 
 /// Bind only explicit grants. Nothing consults the ambient environment or files.
@@ -41,9 +44,96 @@ pub fn client(
   if string.ends_with(config.endpoint, "/") {
     return Error(Invalid())
   }
+  let host = endpoint_host(parsed)?
+  let port = match parsed.port {
+    Some(port) => port,
+    None() => if scheme == "https" {
+      443u16
+    } else {
+      80u16
+    },
+  }
+  let operation: NetOperation = if scheme == "https" {
+    ConnectTls()
+  } else {
+    Connect()
+  }
+  let network = net.narrow(
+    n,
+    [NetRule(address: host, port: port, operation: operation)]
+  ) ? network_grant
   Ok(
-    Client(network: n, clock: clock, config: take config, credentials: take credentials)
+    Client(
+      network: network,
+      clock: clock,
+      config: take config,
+      credentials: take credentials,
+      writable: true,
+      prefixes: []
+    )
   )
+}
+
+// Same host canonicalization as std http.hir:http_host (Zig HostName.fromUri):
+// bracketless canonical IPv6, lowercase DNS with one terminal dot removed.
+fn endpoint_host(parsed: uri.Uri) -> Result[String, S3Error] uses {} {
+  let Some(component) = parsed.host else {
+    return Error(Invalid())
+  }
+  let raw = string.from_bytes(uri.component_raw(component)) ? invalid_utf8
+  if string.starts_with(raw, "[") && string.ends_with(raw, "]") {
+    let ip = net.parse_ip(part(raw, 1, string.byte_len(raw) - 1)) ? invalid_ip
+    return Ok(net.ip_to_string(ip))
+  }
+  let lower_host = string.ascii_lower(raw)
+  let host = if string.ends_with(lower_host, ".") {
+    part(lower_host, 0, string.byte_len(lower_host) - 1)
+  } else {
+    unique lower_host
+  }
+  net.validate_host(host) ? invalid_host
+  Ok(take host)
+}
+
+fn invalid_utf8(error: Bytes) -> S3Error uses {} {
+  Invalid()
+}
+
+fn invalid_ip(error: net.AddrParseError) -> S3Error uses {} {
+  Invalid()
+}
+
+fn invalid_host(error: net.HostError) -> S3Error uses {} {
+  Invalid()
+}
+
+fn network_grant(error: NetError) -> S3Error uses {} {
+  Grant()
+}
+
+/// Copy a facet that refuses PUT and DELETE. Further attenuation preserves it.
+pub fn read_only(c: Client) -> Client uses {} {
+  let mut facet = unique c
+  facet.writable = false
+  take facet
+}
+
+/// Intersect with a literal S3 key prefix, relative to Config.prefix. Keys keep
+/// their original names; use a trailing slash for a directory boundary. Empty
+/// prefixes cannot widen a facet; disjoint prefixes yield a facet denying all.
+pub fn narrow_prefix(c: Client, prefix: String) -> Client uses {} {
+  let mut facet = unique c
+  list.push(mut facet.prefixes, unique prefix)
+  take facet
+}
+
+fn check_key(c: Client, key: String) -> Result[(), S3Error] uses {} {
+  for prefix in c.prefixes {
+    if !string.starts_with(key, prefix) {
+      return Error(Denied())
+    }
+  }
+  Ok(())
 }
 
 fn invalid_uri(error: uri.UriError) -> S3Error uses {} {
@@ -172,6 +262,12 @@ fn request(
   extra: List[http.Header],
   body: Option[Bytes]
 ) -> Result[http.Response, S3Error] {
+  if !c.writable && method != Get() && method != Head() {
+    return Error(Denied())
+  }
+  if let Some(key) = selected_key {
+    check_key(c, key)?
+  }
   let path = match selected_key {
     Some(key) => encode_path(
       string.concat(
@@ -410,6 +506,7 @@ fn xml_values(source: String, tag: String) -> Result[List[String], S3Error] uses
 /// List v2 follows every continuation token. Keys are decoded, confined to the
 /// selected prefix, sorted, and deduplicated before returning relative names.
 pub fn list_objects(mut c: Client, prefix: String) -> Result[List[String], S3Error] {
+  check_key(c, prefix)?
   let full_prefix = object_key(c, prefix)
   let mut token: Option[String] = None()
   let mut visited_tokens: List[String] = []

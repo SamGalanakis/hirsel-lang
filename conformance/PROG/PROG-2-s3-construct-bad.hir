@@ -1,0 +1,12 @@
+// rule: PROG-2
+// expect: reject PROG-2 at line 4
+fn probe(n: Net, clock: WallClock, config: s3.Config, credentials: s3.Credentials) -> s3.Client {
+  s3.Client(
+    network: n,
+    clock: clock,
+    config: unique config,
+    credentials: unique credentials,
+    writable: true,
+    prefixes: []
+  )
+}

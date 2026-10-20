@@ -1,0 +1,10 @@
+// rule: PROG-2
+// expect: run
+fn facet(c: s3.Client) -> s3.Client {
+  s3.narrow_prefix(s3.read_only(c), "tenant/")
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, true)
+  Ok(())
+}

@@ -11,14 +11,33 @@ The vectors are AWS's published aws4_testsuite from botocore. Each full
 signature exceeds the corpus step budget, so a bounded Rust integration test
 executes their unchanged Hirsel assertions in `tests/aws-*.hir`.
 
-`client` binds explicit Config/Credentials/Net/WallClock values. `from_grants`
-loads the `HIRSEL_S3_<NAME>_*` Env snapshots expanded from a RunConfig
+`Client` is opaque: construct it through `client` or `from_grants`; its network,
+credentials, bucket and restrictions cannot be read or replaced by callers.
+`client` binds explicit Config/Credentials/Net/WallClock values, narrowing Net to
+one endpoint host/port (TLS-only for HTTPS). Missing endpoint authority is `Grant`.
+`from_grants` loads the `HIRSEL_S3_<NAME>_*` Env snapshots expanded from a RunConfig
 `object_stores` entry, reads a credentials JSON file through its granted Dir,
 and obtains the explicitly granted network and wall clock. Credentials JSON:
 `{"access_key":"...","secret_key":"...","session_token":"..."}`; the token
 may be omitted. Config carries the endpoint origin, bucket, signing region,
 object prefix, cache byte bound and maximum object size. HTTP redirects and
 response decompression are disabled for signed requests.
+
+`read_only(c) -> Client` copies a facet that refuses PUT and DELETE with `Denied`.
+`narrow_prefix(c, prefix) -> Client` intersects the current facet with a literal
+S3 key prefix relative to Config.prefix. It keeps key names unchanged; use `"tenant/"`
+for a slash boundary. Repeated narrowing cannot widen authority; disjoint prefixes
+deny all keys. GET, range GET, PUT, DELETE and LIST reject keys or requested list
+prefixes outside the facet before reading the clock, signing or networking. A LIST
+request must itself be inside the facet (listing `""` does not silently broaden it).
+
+```hirsel
+let client = s3.from_grants(io, env, "data")?
+let mut reader = s3.narrow_prefix(s3.read_only(client), "tenant/")
+let value = s3.get(mut reader, "tenant/item")?
+// s3.put(mut reader, "tenant/item", value, s3.Create()) returns Error(Denied()).
+// s3.get(mut reader, "other/item") returns Error(Denied()).
+```
 
 `get`, `get_range`, `put(Create | Match(etag))`, `list_objects` and `delete`
 implement GET, validated Range GET, conditional PUT, paginated ListObjectsV2
@@ -59,6 +78,10 @@ Protocol references read from shallow clones (no server code copied):
   `crates/e2e_test/src/conditional_write_policy_test.rs:163` (conditional create),
   `rustfs/src/server/layer.rs:1101` (PreconditionFailed responses).
 - arrow-rs object_store `279572ea60f3a7a6e5237e066a6f4a35eee611e0`,
+  `src/prefix.rs:34,108,129,154` (private wrapper and centralized key mapping);
+  facets retain original key names and intersect restrictions instead of rebasing,
+  so handing out a facet cannot expand the original namespace. Literal prefixes
+  preserve S3 key semantics instead of filesystem path normalization.
   `src/aws/mod.rs:255` (refuse unsupported conditional PUT; map 304/412 to Exists).
 - SlateDB `a5c4fd22b36c836a89d8c4f27bf0b7b045e62e32`,
   `slatedb/src/wal/slatedb/store.rs:225` (create-only log objects),
@@ -68,6 +91,7 @@ MinIO is not used: its upstream README, “Source-Only Distribution”, states t
 community precompiled releases are no longer provided and legacy binaries
 receive no updates. Real-server validation uses Garage or RustFS in scratch.
 
+The `e2e/read-only.hir.json` example delegates a `public/` reader.
 The standalone `e2e/hirsel.json` program loads a named `data` object store from
 `--grants`, reports one acknowledged commit group's elapsed nanoseconds, then
 compacts, reopens and verifies the value. Grant stdout and a read-only credentials

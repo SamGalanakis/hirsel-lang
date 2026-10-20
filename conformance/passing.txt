@@ -4032,6 +4032,10 @@ conformance/PROG/PROG-2-public-record-field-bad.hir
 conformance/PROG/PROG-2-public-record-field-ok.hir
 conformance/PROG/PROG-2-result-bad.hir
 conformance/PROG/PROG-2-result-ok.hir
+conformance/PROG/PROG-2-s3-construct-bad.hir
+conformance/PROG/PROG-2-s3-facets-ok.hir
+conformance/PROG/PROG-2-s3-network-bad.hir
+conformance/PROG/PROG-2-s3-secret-bad.hir
 conformance/PROG/PROG-2-shape-dependency-opaque-bad.hir
 conformance/PROG/PROG-2-shape-dependency-opaque-ok.hir
 conformance/PROG/PROG-2-shape-owner-opaque-run.hir

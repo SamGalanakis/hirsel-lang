@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "s3",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "endpoint-grants.hir",
+      "module": []
+    },
+    {
+      "path": "../sigv4.hir",
+      "module": [
+        "s3"
+      ]
+    },
+    {
+      "path": "../client.hir",
+      "module": [
+        "s3"
+      ]
+    },
+    {
+      "path": "../backend.hir",
+      "module": [
+        "s3"
+      ]
+    },
+    {
+      "path": "../sim.hir",
+      "module": [
+        "s3"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

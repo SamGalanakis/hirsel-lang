@@ -1,0 +1,7 @@
+// A caller can hand out a reader for one key prefix without revealing grants.
+pub fn main(io: Io, env: Env) -> Result[(), s3.S3Error] {
+  let c = s3.from_grants(io, env, "data")?
+  let mut reader = s3.narrow_prefix(s3.read_only(c), "public/")
+  let _ = s3.get(mut reader, "public/config.json")?
+  Ok(())
+}

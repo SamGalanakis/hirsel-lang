@@ -93,6 +93,7 @@ authority is exactly that directory's; a transaction on it gives its body only a
 `Tx` ([storage](storage.md)).
 
 Libraries define further capabilities and declare each global or scoped.
+A package type that holds authority is opaque or sealed, and offers attenuated facets.
 
 ### CAP-2: Charged at use
 

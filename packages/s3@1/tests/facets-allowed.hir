@@ -1,0 +1,48 @@
+fn make(n: Net, clock: WallClock, endpoint: String) -> Result[s3.Client, s3.S3Error] {
+  s3.client(
+    n,
+    clock,
+    s3.Config(
+      endpoint: unique endpoint,
+      bucket: "bucket",
+      region: "us-east-1",
+      prefix: "root",
+      cache_bytes: 0,
+      max_object_bytes: 1024
+    ),
+    s3.Credentials(access_key: "fixture", secret_key: b"fixture", session_token: None())
+  )
+}
+
+pub fn main(io: Io) -> Result[(), s3.S3Error] {
+  let Ok(n) = io.net(io) else {
+    return Error(Grant())
+  }
+  let Ok(clock) = io.wall_clock(io) else {
+    return Error(Grant())
+  }
+  let c = make(n, clock, "http://example.com")?
+  let mut facet = s3.narrow_prefix(s3.read_only(c), "safe/")
+  // An authorized read reaches the refused connection, rather than Denied.
+  failure.check(
+    s3.get(mut facet, "safe/key") == Error(Http(Net(ConnectionRefused()))),
+    Arithmetic()
+  )
+  failure.check(
+    s3.get_range(mut facet, "safe/key", 0, 1) == Error(Http(Net(ConnectionRefused()))),
+    Arithmetic()
+  )
+  failure.check(
+    s3.list_objects(mut facet, "safe/") == Error(Http(Net(ConnectionRefused()))),
+    Arithmetic()
+  )
+  // Attenuation did not mutate the parent: it still reaches PUT on another key.
+  let mut parent = unique c
+  failure.check(
+    s3.put(mut parent, "other/key", b"v", Create()) == Error(
+      Http(Net(ConnectionRefused()))
+    ),
+    Arithmetic()
+  )
+  Ok(())
+}
