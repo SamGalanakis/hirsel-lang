@@ -1,0 +1,37 @@
+// rule: SEM-3
+// expect: run
+// CPython Lib/test/test_shlex.py posix_data (testSplitPosix, with comments),
+// the same rows without `#` through split, testJoinRoundtrip over data and
+// posix_data, testQuote and testJoin (python/cpython 036d309c). Python raises
+// ValueError where these return UnclosedQuote or TrailingEscape.
+fn posix() -> List[(String, List[String])] uses {} {
+  [
+    (r#""foo\ x\x\\""foobar""#, [r#"foo\ x\x\foobar"#]),
+    (r#""foo\ x\x\\"\'"foobar""#, [r#"foo\ x\x\'foobar"#]),
+    (r#""foo\ x\x\\"\'"fo'obar""#, [r#"foo\ x\x\'fo'obar"#]),
+    (r#""foo\ x\x\\"\'"fo'obar" 'don'\''t'"#, [r#"foo\ x\x\'fo'obar"#, "don't"]),
+    (
+      r#""foo\ x\x\\"\'"fo'obar" 'don'\''t' \\"#,
+      [r#"foo\ x\x\'fo'obar"#, "don't", r#"\"#]
+    ),
+    (r#"'foo\ bar'"#, [r#"foo\ bar"#]),
+    (r#"'foo\\ bar'"#, [r#"foo\\ bar"#]),
+    (r#"foo\ bar"#, ["foo bar"]),
+    ("foo#bar\nbaz", ["foo", "baz"]),
+    (":-) ;-)", [":-)", ";-)"]),
+    ("áéíóú", ["áéíóú"])
+  ]
+}
+
+pub fn main(t: Test) -> Result[(), shlex.SplitError] {
+  let mut case: u64 = 51
+  for (line, expected) in posix() {
+    test.check_case(t, shlex.split_comments(line)? == expected, case)
+    if !string.contains(line, "#") {
+      test.check_case(t, shlex.split(line)? == expected, case)
+    }
+    test.check_case(t, shlex.split(shlex.join(expected))? == expected, case)
+    case += 1
+  }
+  Ok(())
+}

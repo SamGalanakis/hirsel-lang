@@ -1,0 +1,171 @@
+// Port of CPython Lib/shlex.py shlex.read_token in POSIX mode with
+// whitespace_split, and quote and join, python/cpython
+// 036d309cf542986a39eeba5ca805b2ec7619731d (PSF-2.0; third-party/NOTICES.md).
+// Offsets are byte positions in the split text.
+pub type SplitError = UnclosedQuote(u64) | TrailingEscape(u64)
+
+// CPython shlex whitespace: space, tab, CR and LF only.
+@noalloc
+fn space(byte: u8) -> bool uses {} {
+  byte == b' ' || byte == b'\t' || byte == b'\r' || byte == b'\n'
+}
+
+fn lex(line: String, comments: bool) -> Result[unique List[String], SplitError] uses {} {
+  let data = core@1/string.as_bytes(line)
+  let size = core@1/bytes.len(data)
+  let mut out: List[String] = []
+  let mut token: List[u8] = []
+  // A word is open once any character or quote of it is read, so "" is a word.
+  let mut open = false
+  let mut i: u64 = 0
+  while i < size {
+    let byte = data[i]
+    if space(byte) {
+      if open {
+        core@1/list.push(mut out, text.finish_valid(take token))
+        token = []
+        open = false
+      }
+      i += 1
+    } else if comments && byte == b'#' {
+      // A comment runs through the end of its line, even inside a word.
+      if open {
+        core@1/list.push(mut out, text.finish_valid(take token))
+        token = []
+        open = false
+      }
+      while i < size && data[i] != b'\n' {
+        i += 1
+      }
+      i += 1
+    } else if byte == b'\\' {
+      if i + 1 == size {
+        return Error(TrailingEscape(i))
+      }
+      core@1/list.push(mut token, data[i + 1])
+      open = true
+      i += 2
+    } else if byte == b'\'' {
+      let start = i
+      i += 1
+      while i < size && data[i] != b'\'' {
+        core@1/list.push(mut token, data[i])
+        i += 1
+      }
+      if i == size {
+        return Error(UnclosedQuote(start))
+      }
+      open = true
+      i += 1
+    } else if byte == b'"' {
+      let start = i
+      i += 1
+      while i < size && data[i] != b'"' {
+        if data[i] == b'\\' {
+          if i + 1 == size {
+            return Error(TrailingEscape(i))
+          }
+          // Only a quote or a backslash is escaped inside double quotes.
+          let next = data[i + 1]
+          if next != b'"' && next != b'\\' {
+            core@1/list.push(mut token, b'\\')
+          }
+          core@1/list.push(mut token, next)
+          i += 2
+        } else {
+          core@1/list.push(mut token, data[i])
+          i += 1
+        }
+      }
+      if i == size {
+        return Error(UnclosedQuote(start))
+      }
+      open = true
+      i += 1
+    } else {
+      core@1/list.push(mut token, byte)
+      open = true
+      i += 1
+    }
+  }
+  if open {
+    core@1/list.push(mut out, text.finish_valid(take token))
+  }
+  Ok(take out)
+}
+
+/// Splits a command line into words as POSIX shells do, as Python
+/// `shlex.split(line)`: space, tab, CR and LF separate words; single quotes keep
+/// their contents literally; inside double quotes a backslash escapes only `"`
+/// and `\`; elsewhere a backslash escapes the next character. Adjacent quoted
+/// and unquoted parts join into one word, and `""` is an empty word. There is no
+/// expansion of any kind, and `#` is an ordinary character.
+pub fn split(line: String) -> Result[unique List[String], SplitError] uses {} {
+  lex(line, false)
+}
+
+/// `split`, except that an unquoted, unescaped `#` starts a comment through the
+/// end of its line, ending any word in progress, as Python
+/// `shlex.split(line, comments=True)`.
+pub fn split_comments(line: String) -> Result[unique List[String], SplitError] uses {} {
+  lex(line, true)
+}
+
+// Python shlex.quote's safe characters.
+@noalloc
+fn safe(byte: u8) -> bool uses {} {
+  std@1/ascii.is_alnum(byte) || byte == b'%' || byte == b'+' || byte == b',' || byte == b'-' || byte == b'.' || byte == b'/' || byte == b':' || byte == b'=' || byte == b'@' || byte == b'_'
+}
+
+@preserves_unique(out)
+fn quote_into(word: String, mut out: List[u8]) -> () uses {} {
+  let data = core@1/string.as_bytes(word)
+  let size = core@1/bytes.len(data)
+  let mut plain = size > 0
+  let mut i: u64 = 0
+  while i < size {
+    if !safe(data[i]) {
+      plain = false
+    }
+    i += 1
+  }
+  if plain {
+    text.append(mut out, word)
+    return
+  }
+  core@1/list.push(mut out, b'\'')
+  i = 0
+  while i < size {
+    if data[i] == b'\'' {
+      text.append(mut out, "'\"'\"'")
+    } else {
+      core@1/list.push(mut out, data[i])
+    }
+    i += 1
+  }
+  core@1/list.push(mut out, b'\'')
+}
+
+/// Quotes a word for a POSIX shell, as Python `shlex.quote`: a nonempty word of
+/// ASCII letters, digits and `%+,-./:=@_` is unchanged; any other word is
+/// enclosed in single quotes, each `'` written as `'"'"'`.
+pub fn quote(word: String) -> unique String uses {} {
+  let mut out: List[u8] = []
+  quote_into(word, mut out)
+  text.finish_valid(take out)
+}
+
+/// Quotes each word and joins them with single spaces, as Python `shlex.join`;
+/// `split` of the result returns the words.
+pub fn join(words: List[String]) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut first = true
+  for word in words {
+    if !first {
+      core@1/list.push(mut out, b' ')
+    }
+    quote_into(word, mut out)
+    first = false
+  }
+  text.finish_valid(take out)
+}

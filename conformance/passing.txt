@@ -5496,6 +5496,10 @@ conformance/SEM/SEM-3-sha512-256-golden-run.hir
 conformance/SEM/SEM-3-sha512-boundary-run.hir
 conformance/SEM/SEM-3-sha512-golden-run.hir
 conformance/SEM/SEM-3-shake-run.hir
+conformance/SEM/SEM-3-shlex-compat-run.hir
+conformance/SEM/SEM-3-shlex-posix-1-run.hir
+conformance/SEM/SEM-3-shlex-posix-2-run.hir
+conformance/SEM/SEM-3-shlex-quote-run.hir
 conformance/SEM/SEM-3-split-ascii-whitespace-run.hir
 conformance/SEM/SEM-3-split-once-run.hir
 conformance/SEM/SEM-3-string-common-run.hir

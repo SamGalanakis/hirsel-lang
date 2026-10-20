@@ -3313,3 +3313,30 @@ They are external tooling: they add no source API, ambient context or authority.
 `log` entries and stderr rendering keep their existing representation. Structured
 application metadata must still be passed explicitly; a tape cannot reconstruct
 missing domain names, trace parents or original elapsed time.
+
+## Shell words
+
+`std@1/shlex` splits and quotes POSIX shell words, as Python `shlex` does with
+`posix=True`:
+
+```text
+SplitError = UnclosedQuote(u64) | TrailingEscape(u64)
+fn shlex.split(line: String) -> Result[unique List[String], SplitError] uses {}
+fn shlex.split_comments(line: String) -> Result[unique List[String], SplitError] uses {}
+fn shlex.quote(word: String) -> unique String uses {}
+fn shlex.join(words: List[String]) -> unique String uses {}
+```
+
+Space, tab, CR and LF separate words. Single quotes keep everything up to the
+next single quote; inside double quotes a backslash escapes only `"` and `\` and
+is kept before any other character; elsewhere a backslash takes the next
+character literally. Quoted and unquoted parts join into one word, so `a"b"'c'`
+is `abc` and `""` is an empty word. `split_comments` also treats an unquoted,
+unescaped `#` as the start of a comment through the end of its line, ending any
+word in progress, as Python's `comments=True`. Nothing is expanded. An open
+quote at the end is `UnclosedQuote` at the quote's byte offset; a backslash at
+the end, quoted or not, is `TrailingEscape` at its offset; errors return no
+words. `quote` leaves a nonempty word of ASCII letters, digits and `%+,-./:=@_`
+alone and otherwise single-quotes it, writing each `'` as `'"'"'`; `join` quotes
+each word and separates them with one space, and `split` of the result gives the
+words back.
