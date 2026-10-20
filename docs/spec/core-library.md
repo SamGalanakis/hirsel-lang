@@ -1221,7 +1221,10 @@ allocation effect. `iter.from` accepts a global `next` function or closure, owns
 state, and computes sendability and authority from both; `next` need not be noalloc.
 `iter.map` owns its inputs; advancing it preserves the iterator and moves out each `Some`
 item. The `file.walk` iterator stops on `Error`; user `iter.from` callbacks decide their own
-termination.
+termination. For terminal-error composition, use the opaque
+[`std@1/stream` Flow](std-library.md#terminal-streams). Its capture contracts retain
+the inner iterator's complete environment; its mutable `next` operation preserves
+that environment through the same advance-only promise as `iter.next`.
 
 | List operation | Type | Bounds and failure |
 |---|---|---|

@@ -1,0 +1,222 @@
+// Pull composition follows Effect 4cddd3c Channel.pipeTo; terminal state is
+// explicit, like Rust Fuse. Unlike raw Result iterators, errors also end a Flow.
+/// An owned fallible cursor. Its source and callbacks stay owned until destruction.
+@captures(inner)
+pub opaque type Flow[T, E]: () uses {} {
+  inner: Iter[Result[T, E]],
+}
+
+type Source[S, T, E] {
+  state: S,
+  step: @preserves_captures(cursor) fn(mut cursor: S) -> Result[Option[T], E],
+  ended: bool,
+}
+
+type Results[T, E] {
+  inner: Iter[Result[T, E]],
+  ended: bool,
+}
+
+type Mapped[T, U, E] {
+  inner: Iter[Result[T, E]],
+  f: fn(take T) -> Result[U, E],
+  ended: bool,
+}
+
+type Filtered[T, E] {
+  inner: Iter[Result[T, E]],
+  predicate: fn(T) -> Result[bool, E],
+  ended: bool,
+}
+
+/// Own state and its preserving callback without pulling. Error or EOF ends it.
+@captures(state, step)
+pub fn from[S, T, E](
+  take state: S,
+  take step: @preserves_captures(cursor) fn(mut cursor: S) -> Result[Option[T], E]
+) -> Flow[T, E] uses {state, step} {
+  Flow(
+    inner: core@1/iter.from(
+      take Source(state: take state, step: take step, ended: false),
+      fn(mut s: Source[S, T, E]) -> Option[Result[T, E]] {
+        if s.ended {
+          return None
+        }
+        match s.step(mut s.state) {
+          Ok(item) => match take item {
+            Some(value) => Some(Ok(take value)),
+            None => {
+              s.ended = true
+              None
+            },
+          },
+          Error(error) => {
+            s.ended = true
+            Some(Error(take error))
+          },
+        }
+      }
+    )
+  )
+}
+
+/// Normalize a raw result iterator, ending at its first error or EOF.
+@captures(input)
+pub fn from_results[T, E](take input: Iter[Result[T, E]]) -> Flow[T, E] uses {input} {
+  Flow(
+    inner: core@1/iter.from(
+      take Results(inner: take input, ended: false),
+      fn(mut s: Results[T, E]) -> Option[Result[T, E]] {
+        if s.ended {
+          return None
+        }
+        match core@1/iter.next(mut s.inner) {
+          Some(item) => match take item {
+            Ok(value) => Some(Ok(take value)),
+            Error(error) => {
+              s.ended = true
+              Some(Error(take error))
+            },
+          },
+          None => {
+            s.ended = true
+            None
+          },
+        }
+      }
+    )
+  )
+}
+
+/// Transform successful items in order; source and callback errors end the flow.
+@captures(input, f)
+pub fn try_map[T, U, E](take input: Flow[T, E], take f: fn(take T) -> Result[U, E]) -> Flow[
+  U,
+  E
+] uses {input, f} {
+  let Flow(inner: inner) = take input
+  Flow(
+    inner: core@1/iter.from(
+      take Mapped(inner: take inner, f: take f, ended: false),
+      fn(mut s: Mapped[T, U, E]) -> Option[Result[U, E]] {
+        if s.ended {
+          return None
+        }
+        match core@1/iter.next(mut s.inner) {
+          Some(item) => match take item {
+            Ok(value) => match s.f(take value) {
+              Ok(mapped) => Some(Ok(take mapped)),
+              Error(error) => {
+                s.ended = true
+                Some(Error(take error))
+              },
+            },
+            Error(error) => {
+              s.ended = true
+              Some(Error(take error))
+            },
+          },
+          None => {
+            s.ended = true
+            None
+          },
+        }
+      }
+    )
+  )
+}
+
+/// Test successful items in order, dropping rejections; errors end the flow.
+@captures(input, predicate)
+pub fn try_filter[T, E](
+  take input: Flow[T, E],
+  take predicate: fn(T) -> Result[bool, E]
+) -> Flow[T, E] uses {input, predicate} {
+  let Flow(inner: inner) = take input
+  Flow(
+    inner: core@1/iter.from(
+      take Filtered(inner: take inner, predicate: take predicate, ended: false),
+      fn(mut s: Filtered[T, E]) -> Option[Result[T, E]] {
+        while !s.ended {
+          match core@1/iter.next(mut s.inner) {
+            Some(item) => match take item {
+              Ok(value) => match s.predicate(value) {
+                Ok(accepted) => if accepted {
+                  return Some(Ok(take value))
+                },
+                Error(error) => {
+                  s.ended = true
+                  return Some(Error(take error))
+                },
+              },
+              Error(error) => {
+                s.ended = true
+                return Some(Error(take error))
+              },
+            },
+            None => {
+              s.ended = true
+            },
+          }
+        }
+        None
+      }
+    )
+  )
+}
+
+/// Consume through the first error or clean end, releasing the owned pipeline.
+pub fn try_fold[T, A, E](
+  take input: Flow[T, E],
+  take initial: A,
+  take step: fn(take A, take T) -> Result[A, E]
+) -> Result[A, E] uses {input, initial, step} {
+  let Flow(inner: inner) = take input
+  let mut accumulator = take initial
+  for item in take inner {
+    match take item {
+      Ok(value) => {
+        accumulator = step(take accumulator, take value)?
+      },
+      Error(error) => return Error(take error),
+    }
+  }
+  Ok(take accumulator)
+}
+
+/// Visit successful items in order and release the pipeline before returning.
+pub fn try_for_each[T, E](
+  take input: Flow[T, E],
+  take visit: fn(take T) -> Result[(), E]
+) -> Result[(), E] uses {input, visit} {
+  let Flow(inner: inner) = take input
+  for item in take inner {
+    match take item {
+      Ok(value) => {
+        visit(take value)?
+      },
+      Error(error) => return Error(take error),
+    }
+  }
+  Ok(())
+}
+
+/// Advance once. An error is reported once; later calls return None.
+@advance_only(flow)
+pub fn next[T, E](mut flow: Flow[T, E]) -> Option[Result[T, E]] uses {flow} {
+  core@1/iter.next(mut flow.inner)
+}
+
+/// Leave the error-aware namespace explicitly, retaining terminal pull behavior.
+@captures(input)
+pub fn to_iter[T, E](take input: Flow[T, E]) -> Iter[Result[T, E]] uses {input} {
+  let Flow(inner: inner) = take input
+  take inner
+}
+
+/// Own at most count upstream pulls; zero performs no work.
+@captures(input)
+pub fn take_n[T, E](take input: Flow[T, E], count: u64) -> Flow[T, E] uses {input} {
+  let Flow(inner: inner) = take input
+  Flow(inner: iter.take_n(take inner, count))
+}

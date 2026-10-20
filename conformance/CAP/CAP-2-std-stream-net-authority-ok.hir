@@ -1,0 +1,31 @@
+// rule: CAP-2
+// expect: accept
+type Source {
+  net: Net,
+  socket: Stream of .net,
+}
+
+fn read(mut s: Source) -> Option[Result[Bytes, NetError]] uses {s} {
+  let mut buffer: List[u8] = []
+  let count = match net.read(s.net, mut s.socket, mut buffer, 1) {
+    Ok(n) => n,
+    Error(e) => return Some(Error(take e)),
+  }
+  if count == 0 {
+    None
+  } else {
+    Some(Ok(bytes.from_list(take buffer)))
+  }
+}
+
+fn consume(take input: stream.Flow[Bytes, NetError]) -> () uses {input} {
+  let mut flow = take input
+  let _ = stream.next(mut flow)
+  let _ = stream.to_iter(take flow)
+}
+
+fn pipeline(net: Net, take socket: Stream of net) -> () uses {net, socket} {
+  consume(
+    stream.from_results(iter.from(take Source(net: net, socket: take socket), read))
+  )
+}

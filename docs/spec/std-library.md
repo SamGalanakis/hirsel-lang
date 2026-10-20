@@ -2470,6 +2470,83 @@ callback failure and normal exhaustion release captured sources and callbacks
 through their ordinary cleanup. Authority and capture bounds propagate from the
 selected inputs; a file-walk pipeline retains its Dir authority.
 
+## Terminal streams
+
+`std@1/stream` provides an opaque, noncopyable `stream.Flow[T, E]` owning an
+`Iter[Result[T, E]]`. Its private iterator cannot be accessed by callers. Use
+namespace functions, as for other std containers:
+
+```text
+@captures(state, step)
+fn stream.from[S, T, E](take state: S,
+  take step: @preserves_captures(cursor) fn(mut cursor: S) -> Result[Option[T], E])
+  -> stream.Flow[T, E] uses {state, step}
+@captures(input)
+fn stream.from_results[T, E](take input: Iter[Result[T, E]]) -> stream.Flow[T, E] uses {input}
+@advance_only(flow)
+fn stream.next[T, E](mut flow: stream.Flow[T, E]) -> Option[Result[T, E]] uses {flow}
+@captures(input, f)
+fn stream.try_map[T, U, E](take input: stream.Flow[T, E],
+  take f: fn(take T) -> Result[U, E]) -> stream.Flow[U, E] uses {input, f}
+@captures(input, predicate)
+fn stream.try_filter[T, E](take input: stream.Flow[T, E],
+  take predicate: fn(T) -> Result[bool, E]) -> stream.Flow[T, E] uses {input, predicate}
+@captures(input)
+fn stream.take_n[T, E](take input: stream.Flow[T, E], count: u64) -> stream.Flow[T, E] uses {input}
+fn stream.try_fold[T, A, E](take input: stream.Flow[T, E], take initial: A,
+  take step: fn(take A, take T) -> Result[A, E]) -> Result[A, E] uses {input, initial, step}
+fn stream.try_for_each[T, E](take input: stream.Flow[T, E],
+  take visit: fn(take T) -> Result[(), E]) -> Result[(), E] uses {input, visit}
+@captures(input)
+fn stream.to_iter[T, E](take input: stream.Flow[T, E]) -> Iter[Result[T, E]] uses {input}
+```
+
+Construction does no pull, source effect or task spawn. A pull executes in the
+consumer's task and can suspend there. `Some(Ok(item))` transfers one item;
+`Some(Error(error))` reports one terminal error. An error or `None` ends the flow
+before that outcome is returned. Every later pull returns `None` without calling
+the source or a callback, even if an input raw iterator would resume after its
+error or end. A mutable loan serializes pulls; reuse requires an explicit factory
+creating a fresh flow.
+
+Map and filter invoke callbacks in source order, only on successful items. Filter
+may consume several items per output and drops rejected items. Source, mapper,
+predicate and sink errors use the same `E`; convert them explicitly to a
+program-specific sum before composing. To keep per-record errors recoverable,
+put a nested `Result` in the item `T`. No error is converted to clean EOF and
+there is no automatic retry after partial effects.
+
+`take_n` uses `iter.take_n` internally: zero does not pull, and stopping at the
+prefix limit does not look ahead. Consuming fold and for-each stop at the first
+source or callback error and destroy the owned pipeline before returning. On
+success they consume through clean EOF (or the prefix limit). An ended flow
+retained by its caller still owns its source and callbacks until destruction;
+EOF alone is not prompt release. Ordinary finalizers determine cleanup order
+and discard close errors under DROP-3/4.
+
+Capture and advance-only contracts retain source/callback authority and locality
+through the opaque wrapper; a flow over a file or socket has the same held authority as its inner iterator.
+It grants no capability and cannot retain `Scope` or borrowed resources in
+escaping state. A flow may prove sendable per value; a receiver-backed flow does
+not. The wrapper exports no `noalloc_drop` bound, so destruction allocation is
+conservative even when the inner iterator has a stronger receipt. An explicit
+`to_iter` conversion currently also loses positive crossing evidence: a pure
+flow may prove sendable while its converted iterator does not. This is a
+conservative checking limitation, with no additional runtime work. The mutable
+source callback must preserve its incoming capture contract. Concrete resource callbacks that need branded mutable reads can use
+`from_results(iter.from(take state, next))`, with an ordinary concrete
+`next(mut State) -> Option[Result[T, E]]`, rather than claim a preservation
+promise their operations do not provide. Generic callback calls make no
+universal unique-output or zero-copy promise. No implicit tasks, channels, capacity, cancellation checkpoints or new
+tape events are introduced. An infinitely rejecting pure filter may not yield;
+cancellation-aware bounded parsing belongs in a scoped consuming driver.
+
+`to_iter` explicitly leaves the error-aware namespace. It retains the flow's
+terminal pull behavior and source/callback authority, but raw iterator operators treat
+`Result` as ordinary item data: a caller can then filter out an error. Raw
+`Iter[Result[T, E]]` alone makes no terminal-error guarantee; `from_results`
+normalizes it before exposing a `Flow`. Pure iteration remains `Iter[T]`.
+
 ## Bounded regular expressions
 
 `regex` compiles immutable source patterns and searches strings without authority:

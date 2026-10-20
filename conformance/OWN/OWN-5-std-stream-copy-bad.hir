@@ -1,0 +1,5 @@
+// rule: OWN-5
+// expect: reject OWN-5 at line 4
+fn duplicate(take input: stream.Flow[u64, ()]) -> () {
+  let other = copy input
+}

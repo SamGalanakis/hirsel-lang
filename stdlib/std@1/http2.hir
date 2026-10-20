@@ -187,9 +187,9 @@ fn add_stream(mut s: Session, id: u32) uses {} {
 
 fn retire(mut s: Session) uses {} {
   let mut active: List[StreamState] = []
-  for stream in s.streams {
-    if !stream.sent_end || !stream.received_end || stream.unconsumed != 0 {
-      core@1/list.push(mut active, copy stream)
+  for state in s.streams {
+    if !state.sent_end || !state.received_end || state.unconsumed != 0 {
+      core@1/list.push(mut active, copy state)
     }
   }
   s.streams = take active
@@ -1139,8 +1139,8 @@ fn decimal(data: Bytes) -> Option[u64] uses {} {
 @noalloc
 fn active_streams(s: Session) -> u64 uses {} {
   let mut count: u64 = 0
-  for stream in s.streams {
-    if !stream.sent_end || !stream.received_end {
+  for state in s.streams {
+    if !state.sent_end || !state.received_end {
       count += 1
     }
   }

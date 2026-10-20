@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 12
+// Conservative carrier-input crossing: conversion currently loses the receipt.
+@preserves_captures(n)
+fn read(mut n: u64) -> Result[Option[u64], ()] {
+  Ok(None)
+}
+
+fn send[T: sendable](take value: T) -> () uses {value} {}
+
+fn cross() -> () uses {} {
+  send(stream.to_iter(stream.from(0u64, read)))
+}

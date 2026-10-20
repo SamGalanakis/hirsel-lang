@@ -216,6 +216,11 @@ conformance/CAP/CAP-2-resource-drop-summary-ok.hir
 conformance/CAP/CAP-2-save-file-example.hir
 conformance/CAP/CAP-2-sender-operation-bad.hir
 conformance/CAP/CAP-2-sender-operation-ok.hir
+conformance/CAP/CAP-2-std-stream-file-authority-bad.hir
+conformance/CAP/CAP-2-std-stream-file-authority-ok.hir
+conformance/CAP/CAP-2-std-stream-inert-ok.hir
+conformance/CAP/CAP-2-std-stream-net-authority-bad.hir
+conformance/CAP/CAP-2-std-stream-net-authority-ok.hir
 conformance/CAP/CAP-2-task-operation-bad.hir
 conformance/CAP/CAP-2-task-operation-ok.hir
 conformance/CAP/CAP-2-testhelpers-property-accept.hir
@@ -520,6 +525,10 @@ conformance/CLO/CLO-4-selected-callback-ok.hir
 conformance/CLO/CLO-4-spec-lazy-map.hir
 conformance/CLO/CLO-4-std-iter-fused-run.hir
 conformance/CLO/CLO-4-std-iter-run.hir
+conformance/CLO/CLO-4-std-stream-advance-replace-bad.hir
+conformance/CLO/CLO-4-std-stream-terminal-run.hir
+conformance/CLO/CLO-4-std-stream-widen-authority-bad.hir
+conformance/CLO/CLO-4-std-stream-widen-authority-ok.hir
 conformance/CLO/CLO-4-stored-borrowed-capture-bad.hir
 conformance/CLO/CLO-4-stored-borrowed-capture-ok.hir
 conformance/CLO/CLO-4-taken-function-needs-global-bad.hir
@@ -919,6 +928,9 @@ conformance/DROP/DROP-2-std-priority-queue-run.hir
 conformance/DROP/DROP-2-std-results-owned-run.hir
 conformance/DROP/DROP-2-std-sorted-map-key-remove-run.hir
 conformance/DROP/DROP-2-std-sorted-map-remove-run.hir
+conformance/DROP/DROP-2-std-stream-prefix-run.hir
+conformance/DROP/DROP-2-std-stream-retained-run.hir
+conformance/DROP/DROP-2-std-stream-sink-run.hir
 conformance/DROP/DROP-2-testhelpers-expect-error-ok-drop-fail.hir
 conformance/DROP/DROP-2-testhelpers-property-law-resource-fail.hir
 conformance/DROP/DROP-2-testhelpers-property-resource-fail.hir
@@ -3389,6 +3401,9 @@ conformance/MODE/MODE-4-send-related-holder-live-bad.hir
 conformance/MODE/MODE-4-sender.hir
 conformance/MODE/MODE-4-shared-root-child-run.hir
 conformance/MODE/MODE-4-shared.hir
+conformance/MODE/MODE-4-std-stream-sendable-bad.hir
+conformance/MODE/MODE-4-std-stream-sendable-ok.hir
+conformance/MODE/MODE-4-std-stream-to-iter-crossing-bad.hir
 conformance/MODE/MODE-4-take-parameter-callable-bad.hir
 conformance/MODE/MODE-4-take-parameter-callable-run.hir
 conformance/MODE/MODE-4-task-bad.hir
@@ -3627,6 +3642,7 @@ conformance/MODE/MODE-6-net-test-capture-bad.hir
 conformance/MODE/MODE-6-scope-return-bad.hir
 conformance/MODE/MODE-6-scope-return-ok.hir
 conformance/MODE/MODE-6-scoped-body-keeps-capability.hir
+conformance/MODE/MODE-6-std-stream-scope-capture-bad.hir
 conformance/MODE/MODE-6-store-scoped-bad.hir
 conformance/MODE/MODE-6-store-scoped-ok.hir
 conformance/MODE/MODE-6-test-return-bad.hir
@@ -3691,6 +3707,7 @@ conformance/OWN/OWN-1-mut-storage-resource-bad.hir
 conformance/OWN/OWN-1-mut-storage-resource-ok.hir
 conformance/OWN/OWN-1-plain-result-copied.hir
 conformance/OWN/OWN-1-spec-at.hir
+conformance/OWN/OWN-1-std-stream-borrow-escape-bad.hir
 conformance/OWN/OWN-1-variant-binding-key-literal-match-run.hir
 conformance/OWN/OWN-2-arena-branch-tail-place-bad.hir
 conformance/OWN/OWN-2-arena-branch-tail-place-ok.hir
@@ -3902,6 +3919,7 @@ conformance/OWN/OWN-5-sender-copy-bad.hir
 conformance/OWN/OWN-5-sender-copy-ok.hir
 conformance/OWN/OWN-5-sequence-resource-copy-bad.hir
 conformance/OWN/OWN-5-sequence-resource-copy-ok.hir
+conformance/OWN/OWN-5-std-stream-copy-bad.hir
 conformance/OWN/OWN-5-task-copy-bad.hir
 conformance/OWN/OWN-5-task-copy-ok.hir
 conformance/OWN/OWN-5-task-sender-free-use-bad.hir
@@ -3992,6 +4010,7 @@ conformance/PROG/PROG-2-result-ok.hir
 conformance/PROG/PROG-2-shape-dependency-opaque-bad.hir
 conformance/PROG/PROG-2-shape-dependency-opaque-ok.hir
 conformance/PROG/PROG-2-shape-owner-opaque-run.hir
+conformance/PROG/PROG-2-std-stream-field-bad.hir
 conformance/PROG/PROG-3-entry-error.hir
 conformance/PROG/PROG-3-entry-main.hir
 conformance/PROG/PROG-3-entry-ok.hir

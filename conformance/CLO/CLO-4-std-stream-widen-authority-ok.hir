@@ -1,0 +1,12 @@
+// rule: CLO-4
+// expect: accept
+@captures(input, net)
+fn retain(take input: stream.Flow[u64, ()], net: Net) -> stream.Flow[u64, ()] uses {input, net} {
+  stream.try_map(
+    take input,
+    fn(take n: u64) -> Result[u64, ()] {
+      let _ = net
+      Ok(n)
+    }
+  )
+}

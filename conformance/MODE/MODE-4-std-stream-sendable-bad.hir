@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 12
+fn step(mut r: Receiver[u64]) -> Option[Result[u64, ChannelError]] {
+  None
+}
+
+fn send[T: sendable](take value: T) -> () uses {value} {}
+
+fn cross(take receiver: Receiver[u64]) -> () uses {receiver} {
+  let mut flow = stream.from_results(iter.from(take receiver, step))
+  let _ = stream.next(mut flow)
+  send(take flow)
+}

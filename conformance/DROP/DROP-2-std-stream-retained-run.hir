@@ -1,0 +1,33 @@
+// rule: DROP-2
+// expect: run
+// stdout: ended
+// stdout: source
+// stdout: returned
+resource type Source {
+  out: Stdout,
+  polled: bool,
+}
+drop(x) {
+  let _ = out.print(x.out, "source\n")
+}
+
+fn read(mut s: Source) -> Option[Result[u64, ()]] {
+  failure.check(!s.polled, Bounds())
+  s.polled = true
+  Some(Error(()))
+}
+
+fn release(take input: stream.Flow[u64, ()]) -> () uses {input} {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let mut flow = stream.from_results(
+    iter.from(take Source(out: output, polled: false), read)
+  )
+  failure.check(stream.next(mut flow) == Some(Error(())), Bounds())
+  failure.check(stream.next(mut flow) == None, Bounds())
+  let _ = out.print(output, "ended\n")
+  release(take flow)
+  let _ = out.print(output, "returned\n")
+  Ok(())
+}

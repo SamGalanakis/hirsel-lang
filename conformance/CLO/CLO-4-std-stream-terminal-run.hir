@@ -1,0 +1,190 @@
+// rule: CLO-4
+// expect: run
+// Effect 4cddd3c Stream.test.ts: filtering 1..4; no pull after done.
+// futures-rs 706e29b stream_try_stream.rs: callback error stops consumption.
+@preserves_captures(n)
+fn count(mut n: u64) -> Result[Option[u64], u64] {
+  n += 1
+  if n <= 4 {
+    Ok(Some(n))
+  } else {
+    Ok(None)
+  }
+}
+
+@preserves_captures(pulled)
+fn fail_source(mut pulled: bool) -> Result[Option[u64], u64] {
+  failure.check(!pulled, Bounds())
+  pulled = true
+  Error(17u64)
+}
+
+@preserves_captures(pulled)
+fn end_source(mut pulled: bool) -> Result[Option[u64], u64] {
+  failure.check(!pulled, Bounds())
+  pulled = true
+  Ok(None)
+}
+
+@preserves_captures(n)
+fn forbidden(mut n: u64) -> Result[Option[u64], u64] {
+  failure.check(false, Bounds())
+  Ok(None)
+}
+
+fn even(n: u64) -> Result[bool, u64] {
+  Ok(n % 2 == 0)
+}
+
+fn plus_ten(take n: u64) -> Result[u64, u64] {
+  Ok(n + 10)
+}
+
+fn add(take a: u64, take n: u64) -> Result[u64, u64] {
+  Ok(a + n)
+}
+
+fn reject(n: u64) -> Result[bool, u64] {
+  Error(n)
+}
+
+fn map_error(take n: u64) -> Result[u64, u64] {
+  Error(n)
+}
+
+fn no_predicate(n: u64) -> Result[bool, u64] {
+  failure.check(false, Bounds())
+  Ok(false)
+}
+
+fn no_map(take n: u64) -> Result[u64, u64] {
+  failure.check(false, Bounds())
+  Ok(n)
+}
+
+fn sink_error(take n: u64) -> Result[(), u64] {
+  Error(n)
+}
+
+fn fold_error(take a: u64, take n: u64) -> Result[u64, u64] {
+  Error(n)
+}
+
+fn raw_error(mut pulled: bool) -> Option[Result[u64, u64]] {
+  failure.check(!pulled, Bounds())
+  pulled = true
+  Some(Error(23u64))
+}
+
+fn raw_end(mut pulled: bool) -> Option[Result[u64, u64]] {
+  failure.check(!pulled, Bounds())
+  pulled = true
+  None
+}
+
+@preserves_captures(pulled)
+fn one(mut pulled: bool) -> Result[Option[u64], u64] {
+  failure.check(!pulled, Bounds())
+  pulled = true
+  Ok(Some(1u64))
+}
+
+fn decimal(take a: u64, take n: u64) -> Result[u64, u64] {
+  Ok(a * 10 + n)
+}
+
+fn visit(take n: u64) -> Result[(), u64] {
+  Ok(())
+}
+
+@preserves_captures(pulled)
+fn nested(mut pulled: bool) -> Result[Option[Result[u64, u64]], u64] {
+  if pulled {
+    return Ok(None)
+  }
+  pulled = true
+  Ok(Some(Error(99u64)))
+}
+
+fn nested_data(take item: Result[u64, u64]) -> Result[(), u64] {
+  failure.check(item == Error(99u64), Bounds())
+  Ok(())
+}
+
+fn repeated_end(take input: stream.Flow[u64, u64]) -> () uses {input} {
+  let mut it = take input
+  failure.check(stream.next(mut it) == None, Bounds())
+  failure.check(stream.next(mut it) == None, Bounds())
+  failure.check(stream.next(mut it) == None, Bounds())
+}
+
+fn error_once(take input: stream.Flow[u64, u64], error: u64) -> () uses {input} {
+  let mut it = take input
+  failure.check(stream.next(mut it) == Some(Error(error)), Bounds())
+  repeated_end(take it)
+}
+
+fn raw_error_once(take source: Iter[Result[u64, u64]], error: u64) -> () uses {source} {
+  let mut cursor = take source
+  failure.check(iter.next(mut cursor) == Some(Error(error)), Bounds())
+  failure.check(iter.next(mut cursor) == None, Bounds())
+  failure.check(iter.next(mut cursor) == None, Bounds())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let dormant = stream.try_filter(
+    stream.try_map(stream.from(0u64, forbidden), no_map),
+    no_predicate
+  )
+  repeated_end(stream.take_n(stream.from(0u64, forbidden), 0))
+  repeated_end(stream.from_results(iter.from(false, raw_end)))
+  repeated_end(stream.from(false, end_source))
+  repeated_end(stream.try_map(stream.from(false, end_source), no_map))
+  repeated_end(stream.try_filter(stream.from(false, end_source), no_predicate))
+  error_once(stream.from(false, fail_source), 17)
+  raw_error_once(stream.to_iter(stream.from(false, fail_source)), 17)
+  error_once(stream.from_results(iter.from(false, raw_error)), 23)
+  error_once(stream.try_filter(stream.from(false, fail_source), no_predicate), 17)
+  error_once(stream.try_map(stream.from(false, fail_source), no_map), 17)
+  error_once(stream.try_filter(stream.from(0u64, count), reject), 1)
+  error_once(stream.try_map(stream.from(0u64, count), map_error), 1)
+  let items = iter.collect(
+    stream.to_iter(
+      stream.try_map(stream.try_filter(stream.from(0u64, count), even), plus_ten)
+    )
+  )
+  failure.check(items == [Ok(12u64), Ok(14u64)], Bounds())
+  failure.check(
+    stream.try_fold(stream.from(0u64, count), 0u64, add) == Ok(10u64),
+    Bounds()
+  )
+  failure.check(
+    stream.try_fold(stream.from(false, one), 0u64, fold_error) == Error(1u64),
+    Bounds()
+  )
+  failure.check(
+    stream.try_for_each(stream.from(false, one), sink_error) == Error(1u64),
+    Bounds()
+  )
+  failure.check(
+    stream.try_fold(stream.from(false, fail_source), 0u64, add) == Error(17u64),
+    Bounds()
+  )
+  failure.check(
+    stream.try_fold(stream.from(0u64, count), 0u64, decimal) == Ok(1234u64),
+    Bounds()
+  )
+  failure.check(
+    stream.try_for_each(stream.from(0u64, count), visit) == Ok(()),
+    Bounds()
+  )
+  failure.check(
+    stream.try_for_each(stream.from(false, fail_source), visit) == Error(17u64),
+    Bounds()
+  )
+  failure.check(
+    stream.try_for_each(stream.from(false, nested), nested_data) == Ok(()),
+    Bounds()
+  )
+  Ok(())
+}

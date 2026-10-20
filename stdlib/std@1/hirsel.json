@@ -735,6 +735,12 @@
       ]
     },
     {
+      "path": "stream.hir",
+      "module": [
+        "stream"
+      ]
+    },
+    {
       "path": "regex.hir",
       "module": [
         "regex"

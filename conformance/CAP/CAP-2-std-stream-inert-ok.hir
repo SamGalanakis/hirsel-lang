@@ -1,0 +1,15 @@
+// rule: CAP-2
+// expect: accept
+@preserves_captures(n)
+fn read(mut n: u64) -> Result[Option[u64], ()] {
+  Ok(None)
+}
+
+fn inert[T: inert](take value: T) -> () uses {} {}
+
+fn pure() -> () uses {} {
+  let mut flow = stream.from(0u64, read)
+  let _ = stream.next(mut flow)
+  inert(take flow)
+  inert(stream.to_iter(stream.from(0u64, read)))
+}

@@ -1,0 +1,42 @@
+// rule: DROP-2
+// expect: run
+// stdout: visit
+// stdout: item
+// stdout: source
+// stdout: returned
+resource type Source {
+  out: Stdout,
+  polled: bool,
+}
+drop(x) {
+  let _ = out.print(x.out, "source\n")
+}
+
+resource type Item {
+  out: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.out, "item\n")
+}
+
+fn read(mut s: Source) -> Option[Result[Item, ()]] {
+  failure.check(!s.polled, Bounds())
+  s.polled = true
+  Some(Ok(Item(out: s.out)))
+}
+
+fn visit(take item: Item) -> Result[(), ()] {
+  let _ = out.print(item.out, "visit\n")
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let flow = stream.from_results(
+    iter.from(take Source(out: output, polled: false), read)
+  )
+  let outcome = stream.try_for_each(stream.take_n(take flow, 1), visit)
+  failure.check(outcome == Ok(()), Bounds())
+  let _ = out.print(output, "returned\n")
+  Ok(())
+}

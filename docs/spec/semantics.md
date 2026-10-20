@@ -144,7 +144,11 @@ Over an iterator, `for x in take it` consumes it and `for x in mut it` advances 
 item is an owned value. `Iter[T]` is a noncopyable pull iterator built by
 `iter.from(take s, next)` (an allocation site) from a state and a `next(mut S) -> Option[T]`;
 it erases `S`, so each adapter step is an indirect call. A fallible iterator is an
-`Iter[Result[T, E]]`; library iterators end after their first `Error`.
+`Iter[Result[T, E]]`; raw iterator combinators treat the `Result` as data.
+The opaque [`stream.Flow[T, E]`](std-library.md#terminal-streams) exposes only
+error-aware operations, stops after its first error or end, and requires explicit
+`stream.to_iter` conversion before using raw iterator operations. Its owned
+state and callbacks retain the inner iterator's authority and cleanup obligations.
 
 ```hirsel
 fn evens(n: u64) -> u64 {

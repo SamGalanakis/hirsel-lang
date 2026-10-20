@@ -1,0 +1,51 @@
+// rule: DROP-2
+// expect: run
+// stdout: item
+// stdout: accumulator
+// stdout: source
+// stdout: returned
+resource type Source {
+  out: Stdout,
+  remaining: u64,
+}
+drop(x) {
+  let _ = out.print(x.out, "source\n")
+}
+
+resource type Item {
+  out: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.out, "item\n")
+}
+
+resource type Accumulator {
+  out: Stdout,
+  count: u64,
+}
+drop(x) {
+  let _ = out.print(x.out, "accumulator\n")
+}
+
+fn read(mut s: Source) -> Option[Result[Item, ()]] {
+  if s.remaining == 0 {
+    return None
+  }
+  s.remaining -= 1
+  Some(Ok(Item(out: s.out)))
+}
+
+fn stop(take a: Accumulator, take item: Item) -> Result[Accumulator, ()] {
+  Error(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let outcome = stream.try_fold(
+    stream.from_results(iter.from(take Source(out: output, remaining: 2), read)),
+    take Accumulator(out: output, count: 0),
+    stop
+  )
+  let _ = out.print(output, "returned\n")
+  Ok(())
+}
