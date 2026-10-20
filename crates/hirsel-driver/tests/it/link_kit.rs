@@ -130,12 +130,12 @@ fn an_executable_links_each_host_provider_only_when_its_program_reaches_it() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let target = TargetSpec::x86_64_unknown_linux_gnu();
-    // By name: rustls's client handshake and the compiled root set (TLS), the resolver
-    // and sockets (network), and process spawning. Admission still loads a scripted
-    // `Serves` peer's key, so ring itself is in every executable.
+    // By name: ring's primitives, rustls's client handshake and the compiled root set
+    // (TLS), the resolver and sockets (network), and process spawning.
     let providers = |bytes: &[u8]| {
         [
-            &b"ClientConnection"[..],
+            &b"ring_core_"[..],
+            b"ClientConnection",
             b"ISRG Root",
             b"getaddrinfo",
             b"setsockopt",
@@ -144,12 +144,12 @@ fn an_executable_links_each_host_provider_only_when_its_program_reaches_it() {
         .map(|name| bytes.windows(name.len()).any(|w| w == name))
     };
     for (name, program, expected) in [
-        ("plain", PROGRAM, [false; 5]),
-        ("tls", TLS_PROGRAM, [true, true, true, true, false]),
+        ("plain", PROGRAM, [false; 6]),
+        ("tls", TLS_PROGRAM, [true, true, true, true, true, false]),
         (
             "process",
             PROCESS_PROGRAM,
-            [false, false, false, false, true],
+            [false, false, false, false, false, true],
         ),
     ] {
         let source = root.join(format!("{name}.hir"));

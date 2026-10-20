@@ -95,7 +95,9 @@ snake_case tags: `"plain"`, `{"certificate":["example.com"]}`,
 `{"fails":f}`, for a listener's client only `{"presents":[["example.com"],[45,45]]}`
 (names, then the PEM chain it presents), or for a peer only
 `{"serves":{"identities":[{"chain":[45],"key":[45]}],"clients":{"require":[45]}}}` (a
-`TlsServer` that must load as `tls.accept` loads one; `clients` is `"anonymous"`,
+`TlsServer` that must be well formed, `tls::well_formed`: PEM chains and keys and a
+parsable trust set; the scripted handshake loads it as `tls.accept` loads one, and an
+unloadable one fails that handshake; `clients` is `"anonymous"`,
 `{"request":..}` or `{"require":..}`, and canonical bytes omit it when anonymous) for TLS,
 where `f` is a TlsFailure tag such as `"unknown_issuer"`
 or `{"alert_received":40}`; `"refused"`, `"unanswered"` or `{"open":[steps]}`

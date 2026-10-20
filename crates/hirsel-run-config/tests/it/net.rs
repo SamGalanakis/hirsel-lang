@@ -723,7 +723,7 @@ const SERVER_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGC
 const OTHER_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgFD3CxPNtNZAwpcag\nrHsUkJEIM+0UdizTBq/YVe/m5y2hRANCAATq2wzoRnCgvo/nS120U87CJqPr2Bll\ntrhCgv4Ildnh5D8wJHEUkWcQA8mqtpTkBgtUkk/t5aADqLpQs2eNrjFo\n-----END PRIVATE KEY-----\n";
 
 #[test]
-fn a_serving_peer_is_a_loadable_server_whose_anonymous_policy_is_absent_from_canonical_bytes() {
+fn a_serving_peer_is_a_well_formed_server_whose_anonymous_policy_is_absent_from_canonical_bytes() {
     let serves = |key: &str, clients: Option<Value>| {
         let mut server = json!({"identities": [
             {"chain": SERVER_CERT.as_bytes(), "key": key.as_bytes()}
@@ -757,9 +757,20 @@ fn a_serving_peer_is_a_loadable_server_whose_anonymous_policy_is_absent_from_can
         panic!("serves")
     };
     assert_eq!(server.clients, tls::ClientAuth::Request(trust.to_vec()));
-    // The server loads as tls.accept loads one: a key that is not the leaf's, an empty
-    // identity list and a malformed trust set are invalid.
-    invalid(serves(OTHER_KEY, None), "io.net.peers.address");
+    // Admission checks only the server's form: a key that is not PEM, an empty identity
+    // list and a malformed trust set are invalid. A well-formed key that is not the
+    // leaf's is admitted; the scripted handshake loads the server as tls.accept loads
+    // one, and fails.
+    invalid(serves("not a key", None), "io.net.peers.address");
+    let run = validate(serves(OTHER_KEY, None)).unwrap();
+    let peer = &run.net_grant().unwrap().peers.as_ref().unwrap()[0].tls;
+    assert_eq!(
+        tls::scripted_connect(peer, "localhost", None),
+        Err(TlsFailure::HandshakeFailure)
+    );
+    let run = validate(serves(SERVER_KEY, None)).unwrap();
+    let peer = &run.net_grant().unwrap().peers.as_ref().unwrap()[0].tls;
+    assert!(tls::scripted_connect(peer, "localhost", None).is_ok());
     let mut empty = serves(SERVER_KEY, None);
     empty["peers"][0]["tls"]["serves"]["identities"] = json!([]);
     invalid(empty, "io.net.peers.address");

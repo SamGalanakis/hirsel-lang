@@ -483,10 +483,11 @@ interpreter's TLS operations) name the engine, handing it to the adapter
 (`Adapter::tls`) before their material and request, and the policy layer and every world
 take it from there; a TLS request without it is an invariant fault. With one function per
 section in the archive and `--gc-sections`, an executable whose program calls no TLS entry
-links no TLS handshake and not the root set
-(`link_kit::an_executable_links_each_host_provider_only_when_its_program_reaches_it`); ring
-and rustls's key loading stay, because admission loads a scripted `Serves` peer's server
-(`hirsel_run_config::check_peer_address`). `tls.close` sends close_notify before closing on every outcome; implicit
+links none of rustls, ring, webpki's verifiers or the root set
+(`link_kit::an_executable_links_each_host_provider_only_when_its_program_reaches_it`).
+Admission only checks that a scripted `Serves` peer's server is well formed
+(`hirsel_run_config::tls::well_formed`); the scripted handshake loads it through the
+engine (`TlsEngine::scripted_connect`), and an unloadable one fails that handshake. `tls.close` sends close_notify before closing on every outcome; implicit
 drop only closes. PEM bytes pass through `Adapter::tls_roots` to the host provider
 for its next handshake, outside the tape request, whose SHA-256 must match. Replay
 and scripted providers ignore the bundle and use only the digest. `tls.accept` is the

@@ -386,13 +386,14 @@ pub fn canonical_unix_path(path: &str) -> bool {
 
 /// A scripted peer names a host or IP literal, or a socket path: a Unix peer, which has
 /// port 0 and resolves to nothing. A peer's TLS is never a client's `Presents`, and a
-/// `Serves` server loads as `tls.accept` loads one.
+/// `Serves` server is well formed (`tls::well_formed`); it is loaded, as `tls.accept` loads
+/// one, only by the scripted handshake that meets it, so admission needs no crypto.
 pub fn check_peer_address(peer: &NetPeer) -> Result<(), String> {
     match &peer.tls {
         PeerTls::Presents(..) => {
             return Err("presents is a scripted client's TLS, not a peer's".into());
         }
-        PeerTls::Serves(server) if crate::tls::load(server).is_none() => {
+        PeerTls::Serves(server) if !crate::tls::well_formed(server) => {
             return Err("a serves peer's server is not a valid TlsServer".into());
         }
         _ => {}

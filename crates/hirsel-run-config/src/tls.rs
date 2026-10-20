@@ -124,6 +124,22 @@ pub fn server(identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>) -> Opti
     })
 }
 
+/// Whether a `TlsServer`'s data is well formed without loading it: a nonempty identity
+/// list whose chains are PEM certificates and whose keys are PEM private keys, and a
+/// trust set that parses as trust anchors. No crypto provider is consulted, so a key of an
+/// unsupported type or one that does not match its leaf passes here and fails where the
+/// server is loaded (`load`), in its handshake.
+pub fn well_formed(server: &crate::TlsServer) -> bool {
+    !server.identities.is_empty()
+        && server.identities.iter().all(|identity| {
+            chain(&identity.chain).is_some() && PrivateKeyDer::from_pem_slice(&identity.key).is_ok()
+        })
+        && match server.clients.as_ref().map(Vec::as_slice) {
+            ClientAuth::Anonymous => true,
+            ClientAuth::Request(pem) | ClientAuth::Require(pem) => pem_roots(pem).is_some(),
+        }
+}
+
 /// Load a `TlsServer`'s data as `server` does.
 pub fn load(server: &crate::TlsServer) -> Option<Server> {
     let identities = server
