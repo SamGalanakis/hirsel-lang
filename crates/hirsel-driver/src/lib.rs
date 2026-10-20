@@ -307,7 +307,7 @@ pub enum LaunchConfig<'a> {
     },
 }
 impl LaunchConfig<'_> {
-    fn read(
+    pub(crate) fn read(
         self,
         revision: &hirsel_run_schema::ProgramRevision,
         launch: hirsel_run_schema::LaunchKind,

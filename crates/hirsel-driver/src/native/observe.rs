@@ -154,10 +154,18 @@ impl Observation {
 }
 
 /// Source positions of the snapshot's definitions: a failure site is a byte
-/// range relative to its definition's anchor.
+/// range relative to its definition's anchor. A cached program's sites come
+/// from its `SiteTable` instead, which holds the same answers.
 pub struct Sites<'a> {
-    input: &'a NativeInput,
-    anchors: BTreeMap<&'a DefPath, hirsel_span::Anchor>,
+    source: Source<'a>,
+}
+
+enum Source<'a> {
+    Input {
+        input: &'a NativeInput,
+        anchors: BTreeMap<&'a DefPath, hirsel_span::Anchor>,
+    },
+    Table(&'a SiteTable),
 }
 
 impl<'a> Sites<'a> {
@@ -167,7 +175,16 @@ impl<'a> Sites<'a> {
             .iter()
             .map(|(path, owner)| (path, owner.syntax.anchor))
             .collect();
-        Self { input, anchors }
+        Self {
+            source: Source::Input { input, anchors },
+        }
+    }
+
+    /// The sites `table` recorded.
+    pub(crate) fn table(table: &'a SiteTable) -> Self {
+        Self {
+            source: Source::Table(table),
+        }
     }
 
     pub fn failure(
@@ -191,16 +208,25 @@ impl<'a> Sites<'a> {
         })
     }
 
-    /// The file a definition's source stands in.
-    fn file(&self, definition: &DefPath) -> Option<&hirsel_span::SourceFile> {
-        let (file, _) = self.input.sources.anchor(*self.anchors.get(definition)?)?;
-        self.input.sources.file(file)
+    /// The path and the logical path of the file a definition's source stands in.
+    fn file(&self, definition: &DefPath) -> Option<(String, String)> {
+        match &self.source {
+            Source::Input { input, anchors } => {
+                let (file, _) = input.sources.anchor(*anchors.get(definition)?)?;
+                let file = input.sources.file(file)?;
+                Some((
+                    file.path.to_string_lossy().into_owned(),
+                    file.logical_path().to_string_lossy().into_owned(),
+                ))
+            }
+            Source::Table(table) => table.files.get(definition).cloned(),
+        }
     }
     pub fn failure_site(&self, failure: &Failure) -> Option<hirsel_run_schema::Site> {
-        let file = self.file(&failure.definition)?;
+        let (file, _) = self.file(&failure.definition)?;
         Some(hirsel_run_schema::Site {
             definition: failure.definition.to_string(),
-            file: file.path.to_string_lossy().into_owned(),
+            file,
             line: failure.line.into(),
             column: failure.column.into(),
         })
@@ -221,20 +247,137 @@ impl<'a> Sites<'a> {
         &self,
         source: &hirsel_interp::observation::SourceSite,
     ) -> Option<hirsel_run_schema::Site> {
-        let file = self.file(&source.definition)?;
+        let (file, _) = self.file(&source.definition)?;
         Some(hirsel_run_schema::Site {
             definition: source.definition.to_string(),
-            file: file.path.to_string_lossy().into_owned(),
+            file,
             line: source.line.into(),
             column: source.column.into(),
         })
     }
     /// The one-based line and column a failure site starts at.
     pub fn position(&self, definition: &DefPath, site: SiteRange) -> Option<(u32, u32)> {
-        let anchor = self.anchors.get(definition)?;
-        let span = Span::new(*anchor, site.start, site.end)?;
-        let location = self.input.sources.location(span)?;
-        Some((location.line, location.column))
+        match &self.source {
+            Source::Input { input, anchors } => {
+                let anchor = anchors.get(definition)?;
+                let span = Span::new(*anchor, site.start, site.end)?;
+                let location = input.sources.location(span)?;
+                Some((location.line, location.column))
+            }
+            Source::Table(table) => {
+                *table
+                    .positions
+                    .get(&(definition.clone(), site.start, site.end))?
+            }
+        }
+    }
+}
+
+/// What observing a program's runs reads from it and its sources: its rules by
+/// code (`failure_rules`), its site codes (`site_codes`) and each site's position
+/// and file as `Sites` answers them. The program cache keeps it beside the image
+/// (`program_cache`), so a cached run reports exactly what a fresh one does.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SiteTable {
+    pub(crate) rules: Vec<String>,
+    pub(crate) codes: BTreeMap<u64, (DefPath, SiteRange)>,
+    positions: BTreeMap<(DefPath, u32, u32), Option<(u32, u32)>>,
+    files: BTreeMap<DefPath, (String, String)>,
+}
+
+impl SiteTable {
+    pub(crate) fn new(program: &ReadyProgram, sites: &Sites<'_>) -> Self {
+        let codes = site_codes(program);
+        let mut table = Self {
+            rules: super::emit::failure_rules(program),
+            ..Self::default()
+        };
+        for (definition, range) in codes.values() {
+            table.positions.insert(
+                (definition.clone(), range.start, range.end),
+                sites.position(definition, *range),
+            );
+            if let Some(file) = sites.file(definition) {
+                table.files.insert(definition.clone(), file);
+            }
+        }
+        table.codes = codes;
+        table
+    }
+
+    /// The table as JSON: `rules`, then each code as `[code, definition, start, end,
+    /// line, column]` (line and column `null` outside the source), then each
+    /// definition's `[path, logical path]`.
+    pub(crate) fn encode(&self) -> Vec<u8> {
+        let codes: Vec<_> = self
+            .codes
+            .iter()
+            .map(|(code, (definition, range))| {
+                let position = self.positions[&(definition.clone(), range.start, range.end)];
+                serde_json::json!([
+                    code,
+                    definition.to_string(),
+                    range.start,
+                    range.end,
+                    position.map(|p| p.0),
+                    position.map(|p| p.1),
+                ])
+            })
+            .collect();
+        let files: serde_json::Map<_, _> = self
+            .files
+            .iter()
+            .map(|(definition, (path, logical))| {
+                (definition.to_string(), serde_json::json!([path, logical]))
+            })
+            .collect();
+        serde_json::to_vec(&serde_json::json!({
+            "schema": 1,
+            "rules": self.rules,
+            "codes": codes,
+            "files": files,
+        }))
+        .expect("a site table is JSON")
+    }
+
+    pub(crate) fn decode(bytes: &[u8]) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+        if value["schema"] != 1 {
+            return None;
+        }
+        let mut table = Self::default();
+        for rule in value["rules"].as_array()? {
+            table.rules.push(rule.as_str()?.to_owned());
+        }
+        for code in value["codes"].as_array()? {
+            let [code, definition, start, end, line, column] = code.as_array()?.as_slice() else {
+                return None;
+            };
+            let definition = crate::def_path(definition.as_str()?)?;
+            let number = |v: &serde_json::Value| u32::try_from(v.as_u64()?).ok();
+            let range = SiteRange {
+                start: number(start)?,
+                end: number(end)?,
+            };
+            let position = match (line, column) {
+                (serde_json::Value::Null, serde_json::Value::Null) => None,
+                (line, column) => Some((number(line)?, number(column)?)),
+            };
+            table
+                .positions
+                .insert((definition.clone(), range.start, range.end), position);
+            table.codes.insert(code.as_u64()?, (definition, range));
+        }
+        for (definition, file) in value["files"].as_object()? {
+            let [path, logical] = file.as_array()?.as_slice() else {
+                return None;
+            };
+            table.files.insert(
+                crate::def_path(definition)?,
+                (path.as_str()?.to_owned(), logical.as_str()?.to_owned()),
+            );
+        }
+        Some(table)
     }
 }
 
@@ -329,7 +472,7 @@ pub fn failure_table(program: &ReadyProgram, sites: &Sites<'_>) -> FailureTable 
                 let (line, column) = sites.position(&definition, range).unwrap_or((0, 0));
                 let file = sites
                     .file(&definition)
-                    .map(|f| f.logical_path().to_string_lossy().into_owned())
+                    .map(|(_, logical)| logical)
                     .unwrap_or_else(|| "<core>".into());
                 (code, definition.to_string(), line, column, file)
             })

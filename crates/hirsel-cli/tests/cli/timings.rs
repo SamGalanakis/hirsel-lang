@@ -62,7 +62,7 @@ const PHASES: [&str; 17] = [
     "codegen",
     "store lookup",
 ];
-const COUNTS: [&str; 9] = [
+const COUNTS: [&str; 11] = [
     "definitions",
     "units",
     "V runs",
@@ -72,6 +72,8 @@ const COUNTS: [&str; 9] = [
     "object misses",
     "lowered",
     "recomputes",
+    "program hits",
+    "program misses",
 ];
 
 fn build(source: &std::path::Path, timings: &str) -> std::process::Output {

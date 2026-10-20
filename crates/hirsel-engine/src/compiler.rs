@@ -52,6 +52,23 @@ impl Compiler {
             .ok_or(ToolError::SourceTooLarge)?;
         Ok((engine, file))
     }
+    /// The program `path` names, for caches of its build products: this
+    /// compiler's identity, whether it runs V, and every file loading `path`
+    /// reads (`package::program_inputs`). `None` for a program whose link reads
+    /// files no manifest lists (`unsafe_ffi`).
+    pub fn program_identity(&self, path: &Path) -> Result<Option<ContentHash>, ToolError> {
+        let Some(inputs) = crate::package::program_inputs(path)? else {
+            return Ok(None);
+        };
+        let verify: &[u8] = match self.verify {
+            Verify::On => b"verify",
+            Verify::Off => b"no-verify",
+        };
+        Ok(Some(ContentHash::of_parts(
+            "hirsel.program-identity.v1",
+            [self.identity.as_slice(), verify, inputs.0.as_slice()],
+        )))
+    }
     /// Index an explicit package and its dependency declarations without an entry
     /// or any body checking, compile-time evaluation or precheck loading.
     pub fn load_package_declarations(

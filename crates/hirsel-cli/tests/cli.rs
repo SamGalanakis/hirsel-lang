@@ -26,6 +26,8 @@ mod https;
 mod observation_view;
 #[path = "cli/placement.rs"]
 mod placement;
+#[path = "cli/program_cache.rs"]
+mod program_cache;
 #[path = "cli/ready_together.rs"]
 mod ready_together;
 #[path = "cli/remote.rs"]

@@ -1,5 +1,7 @@
 //! `hirsel run --native`: the checked program, optimized, run as an image in the host's
 //! runner (or, when it calls C, as an executable).
+use super::observe::SiteTable;
+use super::program_cache::{LaunchFacts, ProgramCache};
 use super::{
     NativeError, OptLevel, Options, Partition, Sites, StageName, TargetSpec, Toolchain, build,
 };
@@ -77,6 +79,48 @@ pub fn run_path_native_backend(
         Output::Inherit { json } => (true, json, &mut host_stdout, &mut host_stderr),
         Output::Streams { stdout, stderr } => (false, false, stdout, stderr),
     };
+    // An unchanged program's live launch without a recording runs its cached image.
+    let cache = match launch {
+        crate::HostLaunch::Live { record: None, .. } if evidence.is_none() => ProgramCache::open(),
+        _ => None,
+    };
+    let program = cache.as_ref().and_then(|_| {
+        crate::COMPILER
+            .with_verify(verify)
+            .program_identity(path)
+            .ok()
+            .flatten()
+            .map(|identity| super::program_cache::hex(&identity.0))
+    });
+    if let (
+        Some(cache),
+        Some(program),
+        crate::HostLaunch::Live {
+            config,
+            revocations,
+            ..
+        },
+    ) = (&cache, &program, launch)
+    {
+        let cached = cached(
+            cache,
+            program,
+            config,
+            revocations,
+            backend,
+            inherit,
+            json,
+            &mut *stdout,
+            &mut *stderr,
+        )?;
+        hirsel_intern::timings::count(match cached {
+            Some(_) => hirsel_intern::timings::Count::ProgramHits,
+            None => hirsel_intern::timings::Count::ProgramMisses,
+        });
+        if let Some(outcome) = cached {
+            return Ok(outcome);
+        }
+    }
     let mut loaded = crate::COMPILER.with_verify(verify).load_program(path)?;
     loaded.check_for_execution()?;
     if matches!(
@@ -128,6 +172,15 @@ pub fn run_path_native_backend(
             ));
         }
     };
+    // What a later launch of this program binds against, to store with its image.
+    let store = match (cache, program) {
+        (Some(cache), Some(program)) => LaunchFacts::of(&mut loaded).ok().map(|facts| Store {
+            cache,
+            program,
+            facts,
+        }),
+        _ => None,
+    };
     let entry = loaded.entry;
     let mut engine = loaded.engine;
     let query = |engine: &hirsel_engine::QueryEngine, error| ToolError::Query {
@@ -155,16 +208,29 @@ pub fn run_path_native_backend(
         Ok(proofs) => proofs,
         Err(error) => return Ok(Err(error)),
     };
-    let observation = match run(
+    let observed = run(
         &validated,
         &entry,
         (&host.0, host.1),
         proofs.as_ref(),
         backend,
+        store.as_ref(),
         inherit,
         stdout,
         stderr,
-    ) {
+    );
+    finish(observed, &Sites::new(validated.snapshot()), json, stderr)
+}
+
+/// A launch's observation as `run --native` reports it: each failure on `stderr`,
+/// then the outcome.
+fn finish(
+    observed: Result<super::link::Observed, NativeError>,
+    sites: &Sites<'_>,
+    json: bool,
+    stderr: &mut dyn Write,
+) -> Result<Result<RunOutcome, NativeError>, ToolError> {
+    let observation = match observed {
         Ok(super::link::Observed::Ran(observation, waits)) => Ok((observation, waits)),
         // The executable admitted the run and refused it: the same refusal the interpreter's
         // admission reports.
@@ -179,21 +245,148 @@ pub fn run_path_native_backend(
     };
     Ok(observation.and_then(|(observation, waits)| {
         let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
-
-        let sites = Sites::new(validated.snapshot());
         for failure in &observation.failures {
             writeln!(stderr, "{}", sites.report(failure, json)?).map_err(io)?;
         }
-        observation.outcome(&sites, waits)
+        observation.outcome(sites, waits)
     }))
 }
 
+/// The program cache entries a fresh build of a run fills.
+struct Store {
+    cache: ProgramCache,
+    program: String,
+    facts: LaunchFacts,
+}
+
+fn facts_entry(program: &str) -> String {
+    format!("f-{program}.json")
+}
+
+fn sites_entry(program: &str) -> String {
+    format!("s-{program}.json")
+}
+
+/// The image entry of `program` linked for `run` and `runner` with `toolchain`.
+fn image_entry(
+    program: &str,
+    backend: super::Backend,
+    run: &hirsel_run_config::ValidatedRun,
+    toolchain: &Toolchain,
+    runner: &super::runner::Runner,
+    target: &TargetSpec,
+) -> Result<String, NativeError> {
+    let toolchain = super::program_cache::toolchain_identity(toolchain, &target.triple)?;
+    let fuel = run.budgets().is_some_and(|b| b.fuel.is_some());
+    let key = super::program_cache::key(
+        "hirsel.program-cache.image.v1",
+        [
+            program.as_bytes(),
+            backend.name().as_bytes(),
+            target.triple.as_bytes(),
+            &[u8::from(fuel)],
+            run.canonical(),
+            &runner.build_id,
+            &toolchain.0,
+        ],
+    );
+    Ok(format!("i-{key}.so"))
+}
+
+/// Run `program`'s cached image for a live launch of `config`, or `None` when the cache
+/// cannot serve it, before anything runs: no facts, sites or image for this program, run
+/// and runner, or a toolchain that runs executables.
+#[allow(clippy::too_many_arguments)]
+fn cached(
+    cache: &ProgramCache,
+    program: &str,
+    config: crate::LaunchConfig<'_>,
+    revocations: Option<&Path>,
+    backend: super::Backend,
+    inherit: bool,
+    json: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<Option<Result<RunOutcome, NativeError>>, ToolError> {
+    let Some(facts) = cache
+        .read(&facts_entry(program))
+        .and_then(|bytes| LaunchFacts::decode(&bytes))
+    else {
+        return Ok(None);
+    };
+    let Some(table) = cache
+        .read(&sites_entry(program))
+        .and_then(|bytes| SiteTable::decode(&bytes))
+    else {
+        return Ok(None);
+    };
+    let bound = facts.bind(config)?;
+    hirsel_rt::host_launch::recording_level(bound.run(), false)
+        .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+    let run = bound.into_run();
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let directory = std::env::var_os("HIRSEL_NATIVE_CACHE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(super::runtime_cache::default_directory);
+    let image = (|| {
+        let toolchain = Toolchain::in_tree(&directory, &[&target]).ok()?;
+        if toolchain.execution == super::runner::Execution::Executable {
+            return None;
+        }
+        let runner = super::runner::runner(&toolchain, &target).ok()?;
+        let entry = image_entry(program, backend, &run, &toolchain, &runner, &target).ok()?;
+        let path = cache.get(&entry)?;
+        let key = runner.build_id;
+        Some((
+            toolchain,
+            super::runner::Image {
+                path,
+                key,
+                runner,
+                cached: true,
+            },
+        ))
+    })();
+    let Some((toolchain, image)) = image else {
+        return Ok(None);
+    };
+    let scratch = std::env::temp_dir().join(format!("hirsel-native-{}", std::process::id()));
+    let io = |e: std::io::Error| NativeError::new(StageName::Link, e.to_string());
+    let observed = std::fs::create_dir_all(&scratch)
+        .map_err(io)
+        .and_then(|()| {
+            super::link::write_run(&scratch, &run)?;
+            let launched = super::link::launch_live(
+                &super::link::Runnable::Image(image),
+                &target,
+                &toolchain,
+                &scratch,
+                super::link::Tape::Live {
+                    record: None,
+                    revocations,
+                },
+                super::link::LiveRun {
+                    run: &run,
+                    inherit,
+                    stdout,
+                    stderr: &mut *stderr,
+                },
+            )?;
+            let sites = Sites::table(&table);
+            super::link::observe_codes(&launched, &table.rules, &table.codes, &sites)
+        });
+    let _ = std::fs::remove_dir_all(&scratch);
+    finish(observed, &Sites::table(&table), json, stderr).map(Some)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run(
     validated: &hirsel_engine::ValidatedNativeInput,
     entry: &hirsel_engine::DefPath,
     (run, tape): (&hirsel_run_config::ValidatedRun, super::link::Tape<'_>),
     proofs: Option<&super::Proofs>,
     backend: super::Backend,
+    store: Option<&Store>,
     inherit: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -232,6 +425,26 @@ fn run(
         )?;
         let runnable =
             super::link::link_runnable(&program, entry, &objects, &toolchain, &scratch, Some(run))?;
+        let sites = Sites::new(validated.snapshot());
+        // Images are cached; a program that runs as an executable is not.
+        if let (Some(store), super::link::Runnable::Image(image)) = (store, &runnable) {
+            let entry = image_entry(
+                &store.program,
+                backend,
+                run,
+                &toolchain,
+                &image.runner,
+                &target,
+            )?;
+            store.cache.put_file(&entry, &image.path);
+            store.cache.put(
+                &sites_entry(&store.program),
+                &SiteTable::new(&program, &sites).encode(),
+            );
+            store
+                .cache
+                .put(&facts_entry(&store.program), &store.facts.encode());
+        }
         let launched = super::link::launch_live(
             &runnable,
             &target,
@@ -245,8 +458,7 @@ fn run(
                 stderr,
             },
         )?;
-        let observation =
-            super::link::observe_run(&launched, &program, &Sites::new(validated.snapshot()))?;
+        let observation = super::link::observe_run(&launched, &program, &sites)?;
         Ok(observation)
     })();
     let _ = std::fs::remove_dir_all(&scratch);

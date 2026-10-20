@@ -1189,6 +1189,15 @@ fn write(dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, NativeError> {
         .map_err(|e| NativeError::new(StageName::Link, format!("{name}: {e}")))
 }
 
+/// Write the record a launched program's runner reads (`--hirsel-run`) into `dir`.
+pub(crate) fn write_run(
+    dir: &Path,
+    run: &hirsel_run_config::ValidatedRun,
+) -> Result<(), NativeError> {
+    std::fs::write(dir.join("run.json"), run.launch_bytes())
+        .map_err(|error| NativeError::new(StageName::Link, error.to_string()))
+}
+
 fn launcher_object(
     program: &ReadyProgram,
     entry: &DefPath,
@@ -1297,8 +1306,7 @@ done:
     run.check_revision(revision, launch)
         .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
     if !standalone {
-        std::fs::write(dir.join("run.json"), run.launch_bytes())
-            .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?;
+        write_run(dir, run)?;
     }
     // A launched executable binds the one run it was built for; a standalone one takes fresh
     // grants at each launch.
@@ -2463,6 +2471,22 @@ pub fn observe_run(
     program: &ReadyProgram,
     sites: &Sites<'_>,
 ) -> Result<Observed, NativeError> {
+    observe_codes(
+        launched,
+        &failure_rules(program),
+        &site_codes(program),
+        sites,
+    )
+}
+
+/// `observe_run` with the program's rules (`failure_rules`) and site codes
+/// (`site_codes`) given, as a cached program's `SiteTable` holds them.
+pub(crate) fn observe_codes(
+    launched: &Launched,
+    rules: &[String],
+    codes: &BTreeMap<u64, (DefPath, hirsel_lir::ir::SiteRange)>,
+    sites: &Sites<'_>,
+) -> Result<Observed, NativeError> {
     let bad = |what: String| {
         NativeError::new(
             StageName::Launch,
@@ -2502,8 +2526,6 @@ pub fn observe_run(
     if lines.next() != Some(version.as_str()) {
         return Err(bad("the process left no observation record".into()));
     }
-    let rules = failure_rules(program);
-    let codes = site_codes(program);
     let mut status = None;
     let mut result = None;
     let mut failures = Vec::new();

@@ -584,6 +584,61 @@ pub fn bundle_program(path: &Path, source: &str, dir: &Path) -> Result<bool, Too
     }
     Ok(true)
 }
+/// A digest of every file loading `path` reads, by path and content: a standalone
+/// source alone, or the launch manifest's package graph, each package's manifest
+/// and every source it selects, with their canonical and logical paths. Nothing
+/// else enters a program's check, so with the compiler's identity it names the
+/// program for caches of its build products. `None` when a package selects an
+/// `unsafe_ffi` surface, whose link reads files no manifest lists.
+pub(crate) fn program_inputs(path: &Path) -> Result<Option<ContentHash>, ToolError> {
+    let canonical = std::fs::canonicalize(path)?;
+    let manifest = if path.extension().is_some_and(|e| e == "json") {
+        Some(path.to_path_buf())
+    } else {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(".json");
+        let sidecar = PathBuf::from(sidecar);
+        match std::fs::metadata(&sidecar) {
+            Ok(_) => Some(sidecar),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        }
+    };
+    let text = |path: &Path| path.as_os_str().as_encoded_bytes().to_vec();
+    let mut parts: Vec<Vec<u8>> = vec![text(&canonical)];
+    let Some(manifest) = manifest else {
+        parts.push(b"standalone".to_vec());
+        parts.push(std::fs::read(&canonical)?);
+        return Ok(Some(ContentHash::of_parts(
+            "hirsel.program-inputs.v1",
+            parts.iter().map(Vec::as_slice),
+        )));
+    };
+    let mut graph = Graph::default();
+    graph.visit(&manifest, None)?;
+    for (id, package) in &graph.packages {
+        if package.unsafe_ffi.is_some() {
+            return Ok(None);
+        }
+        parts.extend([
+            id.name.as_bytes().to_vec(),
+            id.version.as_bytes().to_vec(),
+            text(&package.path),
+            package.manifest.clone(),
+        ]);
+        for (source, _) in &package.sources {
+            parts.push(text(source));
+            if let Some(logical) = package.logical_sources.get(source) {
+                parts.push(text(logical));
+            }
+            parts.push(std::fs::read(source)?);
+        }
+    }
+    Ok(Some(ContentHash::of_parts(
+        "hirsel.program-inputs.v1",
+        parts.iter().map(Vec::as_slice),
+    )))
+}
 /// Load with explicit artifact storage, or `PackageCache::disabled()` for a fresh oracle.
 pub(crate) fn load_program_source_with_cache(
     compiler: &Compiler,
