@@ -13,6 +13,7 @@ use hirsel_engine::{
 pub mod api_index;
 pub mod native;
 mod network;
+pub mod observation_view;
 mod pipeline;
 pub mod testing;
 pub use pipeline::{BodyAdapter, FrontPhases, LowerAdapter, ModeAdapter};
@@ -474,7 +475,34 @@ pub fn run_path_on_host(
     max_steps: Option<u64>,
     verify: hirsel_engine::Verify,
 ) -> Result<RunOutcome, ToolError> {
-    use hirsel_interp::Outcome;
+    run_path_on_host_observed(path, launch, max_steps, verify, None)
+}
+
+/// Replay-only semantic enrichment. Binding and exact request consumption happen before
+/// an observation is returned; this path never constructs or admits live host providers.
+pub fn replay_observations(
+    path: &Path,
+    tape: &Path,
+    max_steps: Option<u64>,
+) -> Result<hirsel_interp::observation::Observable, ToolError> {
+    let mut observed = None;
+    run_path_on_host_observed(
+        path,
+        HostLaunch::Replay(tape),
+        max_steps,
+        hirsel_engine::Verify::On,
+        Some(&mut observed),
+    )?;
+    observed.ok_or_else(|| ToolError::Runtime("replay produced no semantic observation".into()))
+}
+
+fn run_path_on_host_observed(
+    path: &Path,
+    launch: HostLaunch<'_>,
+    max_steps: Option<u64>,
+    verify: hirsel_engine::Verify,
+    observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
+) -> Result<RunOutcome, ToolError> {
     let mut program = COMPILER.with_verify(verify).load_program(path)?;
     program.check_for_execution()?;
     program.refuse_foreign_interpretation()?;
@@ -545,6 +573,9 @@ pub fn run_path_on_host(
     if let network::HostIo::Replay(io) = &mut operations.io {
         io.finish()
             .map_err(|e| ToolError::Runtime(format!("replay refused: {e:?}")))?;
+    }
+    if let Some(observed) = observed {
+        *observed = execution.observable(&sources);
     }
     let outcome = hirsel_engine::project_outcome(&execution, &sources)
         .map_err(|error| ToolError::Runtime(format!("{error:?}")))?;

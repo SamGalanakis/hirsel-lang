@@ -304,3 +304,12 @@ arena storage, hashing (SipHash-1-3 keyed from the run's hash seed), `Io` provid
 recording and replay, and the network and TLS providers. Compiled code reaches it only
 through its versioned Hirsel-ABI exports. The in-memory layout of flat values is private and
 is not the [canonical codec](serialization.md).
+
+The offline observation viewer is `hirsel_driver::observation_view`. It reuses
+`launch::parse_recording_prefix` and `journal::recover`; durable recovery preserves
+an exact event-to-Prepared index for tooling. `hirsel view` renders normalized JSON
+or a logical Perfetto trace without host admission. Replay enrichment uses the same
+checked, bound interpreter host-replay path and `Execution::observable` as execution
+comparison. It never opens live providers or invokes transport exporters. See
+[Offline observation views](determinism.md#offline-observation-views) for evidence,
+timing-sidecar, completeness and diagnostic format contracts.

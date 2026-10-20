@@ -571,3 +571,59 @@ checks the admitted stream grants and exact Env name grants. Stderr writes recor
 the accepted prefix and errors just like stdout, on a distinct stream. Simulation
 JSON supplies `stdin` as UTF-8 text or an array of bytes, and `env` as an object
 whose exact keys are grants and whose values are UTF-8 strings or null for unset.
+
+### Offline observation views
+
+`hirsel view <recording> --capture <archival-id> -o <view.json>` inspects an
+ordinary recording or a durable journal without executing the program or admitting
+its grants. `--perfetto` writes a Perfetto-compatible Chrome trace-event JSON file.
+The versioned `hirsel-observation-view` v1 document binds the tooling-supplied
+capture identity to the SHA-256 of the exact input bytes. Independent captures must
+receive distinct archival identities even when their bytes match. Program/config
+identity alone is not execution identity. These diagnostic formats do not change
+the tape, journal, language, or application-visible inputs.
+
+Events retain zero-based tape order, canonical request/completion text (including
+outcomes and faults), origin, and accepted byte counts when the completion proves
+them. A blocked write has unknown accepted length; requested bytes are not counted
+as successful bytes. Ordinary recordings have no task/issue anchors. Durable events
+carry only their recorded Prepared association; scheduling inputs have none. Source
+and original time are null unless separately evidenced. Pure calls are not tape
+observations. A complete tape is not a complete business trace.
+
+An ordinary recording without its complete trailer is a prefix with an unknown
+suffix. The viewer cuts only a final unterminated line, retaining its byte boundary
+and marking `torn_tail`; terminated malformed lines, interior damage, bad counts,
+and bytes after a complete trailer are refused. A missing header is refused.
+Durable inspection uses the journal recovery rules above, retains requests in doubt
+and any outcome, and marks completeness and torn-tail status separately. Inspection
+never authorizes resumption.
+
+`--source <source-or-manifest> --analysis <analysis-id>` additionally replays a
+complete recording against its bound program. Every request must match and every
+event must be consumed. Replay uses recorded providers only: it performs no
+application host effects or exports. The normalized view stores existing semantic
+effect observations, source coordinates, and analysis identity under
+`replay_observer`, retaining the original evidence identity. This separately ordered
+sequence does not infer joins to tape ordinals or become new production traffic.
+A tooling limit or program mismatch refuses enrichment. This is effect observation,
+not arbitrary source-local probes or pure-call tracing.
+
+The default timing sidecar path is `<recording>.timing.json`; `--timing <path>`
+selects an explicit required sidecar. Missing default sidecars leave time unknown.
+The diagnostic `hirsel-observation-timing` v1 JSON format contains `schema`,
+`version`, `evidence: {capture, sha256}`, `clock: "host-monotonic-ns"`, and
+`samples: [{ordinal, ns}]`. Both numeric fields are unsigned 64-bit integers;
+ordinals strictly increase, timestamps never decrease, and each ordinal names an
+existing event. Sparse samples leave other timestamps null. Evidence mismatch,
+duplicate samples, invalid clocks, and invalid values refuse the sidecar atomically.
+Sidecar timestamps are original execution evidence and include runtime and
+instrumentation overhead; replay duration is never original latency. Generating
+sidecars requires a runtime observer; the offline viewer itself reads no host clock.
+
+Logical Perfetto exports always label the track and category as logical ordinal
+order, retaining evidence identity and completeness in metadata. Each event is a
+thread-scoped instant with its ordinal as a synthetic coordinate, without duration.
+No same-track span nesting, task ancestry, parent/link edges or measured nanoseconds
+are invented from request order. Canonical requests can contain secrets: views and
+exports need the same archival access controls as their source recordings.

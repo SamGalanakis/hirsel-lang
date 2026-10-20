@@ -520,6 +520,8 @@ pub struct Recovered {
     /// The header and every tape event, in order: the replayable prefix.
     pub recording: Recording,
     pub prepared: Vec<Prepared>,
+    /// Exact Prepared association for each replayable event; scheduling inputs have none.
+    pub event_prepared: Vec<Option<u64>>,
     /// Prepared requests with no completion or withdrawal, in preparation order.
     pub in_doubt: Vec<Prepared>,
     /// The trailer's outcome: a complete recording.
@@ -633,6 +635,7 @@ pub fn recover(bytes: &[u8]) -> Result<Recovered, Unrecoverable> {
         return Err(corrupt(at, "header contains events".into()));
     }
     let mut prepared = vec![];
+    let mut event_prepared = vec![];
     let mut open: BTreeMap<u64, Prepared> = BTreeMap::new();
     let mut outcome = None;
     for (at, kind, payload) in records {
@@ -686,6 +689,11 @@ pub fn recover(bytes: &[u8]) -> Result<Recovered, Unrecoverable> {
                         }
                     }
                 }
+                event_prepared.push(if id == "-" {
+                    None
+                } else {
+                    Some(canonical_number(id).map_err(|e| corrupt(at, e))?)
+                });
                 recording.events.push(event);
             }
             Kind::Withdrawn => {
@@ -710,6 +718,7 @@ pub fn recover(bytes: &[u8]) -> Result<Recovered, Unrecoverable> {
     Ok(Recovered {
         recording,
         prepared,
+        event_prepared,
         in_doubt: open.into_values().collect(),
         outcome,
         valid,

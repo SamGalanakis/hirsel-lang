@@ -3069,3 +3069,10 @@ returns an owned wrapper with an `@format` association, so
 their ordinary formatting. Escape each untrusted hole individually.
 This is HTML text/attribute escaping; URL, JavaScript, CSS and unquoted
 attribute contexts need their own validation or encoding.
+
+Observation views of recorded std-library effects are available through
+`hirsel view` (see [Offline observation views](determinism.md#offline-observation-views)).
+They are external tooling: they add no source API, ambient context or authority.
+`log` entries and stderr rendering keep their existing representation. Structured
+application metadata must still be passed explicitly; a tape cannot reconstruct
+missing domain names, trace parents or original elapsed time.

@@ -1,0 +1,49 @@
+{
+  "complete": true,
+  "events": [
+    {
+      "accepted_bytes": null,
+      "completion": "handle ok 2",
+      "durable_anchor": {
+        "issue": 0,
+        "request_id": 0,
+        "task": []
+      },
+      "ordinal": 0,
+      "origin": "application",
+      "original_time_ns": null,
+      "request": "stdout 1",
+      "source": null
+    },
+    {
+      "accepted_bytes": 5,
+      "completion": "unit ok ",
+      "durable_anchor": {
+        "issue": 0,
+        "request_id": 1,
+        "task": [
+          0,
+          1
+        ]
+      },
+      "ordinal": 1,
+      "origin": "application",
+      "original_time_ns": null,
+      "request": "print 2 68656c6c6f",
+      "source": null
+    }
+  ],
+  "evidence": {
+    "capture": "fixture",
+    "sha256": "7c437b9eb65efd0a831da8052cb8699772bf82e60f6509c3730e8e028f66d3df"
+  },
+  "format": "durable",
+  "in_doubt": [],
+  "outcome": "returned ok",
+  "replay_observer": null,
+  "schema": "hirsel-observation-view",
+  "time_basis": "logical-order",
+  "torn_tail": false,
+  "valid_bytes": 391,
+  "version": 1
+}

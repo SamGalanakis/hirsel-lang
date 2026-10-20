@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file>";
 
 mod allocator;
 mod execution_policy;
@@ -52,6 +52,15 @@ enum Command {
         backend: hirsel_driver::native::Backend,
         proofs: Proofs,
         fuel: bool,
+    },
+    View {
+        tape: OsString,
+        capture: String,
+        output: OsString,
+        perfetto: bool,
+        timing: Option<OsString>,
+        source: Option<OsString>,
+        analysis: Option<String>,
     },
     Export {
         run: bool,
@@ -174,6 +183,50 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
     let command = match args.next()? {
         Some(Long("help")) => Command::Help,
         Some(Value(command)) if command == "help" => Command::Help,
+        Some(Value(command)) if command == "view" => {
+            let (mut tape, mut capture, mut output) = (None, None, None);
+            let (mut timing, mut source, mut analysis) = (None, None, None);
+            let mut perfetto = false;
+            while let Some(arg) = args.next()? {
+                match arg {
+                    Long("capture") if capture.is_none() => {
+                        capture = Some(
+                            args.value()?
+                                .into_string()
+                                .map_err(|_| "capture must be UTF-8")?,
+                        )
+                    }
+                    Short('o') if output.is_none() => output = Some(args.value()?),
+                    Long("perfetto") if !perfetto => perfetto = true,
+                    Long("timing") if timing.is_none() => timing = Some(args.value()?),
+                    Long("source") if source.is_none() => source = Some(args.value()?),
+                    Long("analysis") if analysis.is_none() => {
+                        analysis = Some(
+                            args.value()?
+                                .into_string()
+                                .map_err(|_| "analysis must be UTF-8")?,
+                        )
+                    }
+                    Value(value) if tape.is_none() => tape = Some(value),
+                    arg => return Err(arg.unexpected()),
+                }
+            }
+            if source.is_some() != analysis.is_some() {
+                return Err("view --source and --analysis must be supplied together".into());
+            }
+            if perfetto && source.is_some() {
+                return Err("replay enrichment is available in the normalized view".into());
+            }
+            Command::View {
+                tape: tape.ok_or("view requires a recording")?,
+                capture: capture.ok_or("view requires an archival --capture identity")?,
+                output: output.ok_or("view requires -o <file>")?,
+                perfetto,
+                timing,
+                source,
+                analysis,
+            }
+        }
         Some(Value(command)) if command == "test" => {
             let (mut manifest, mut filters, mut seed, mut json, mut native, mut selected) =
                 (None, Vec::new(), None, false, false, None);
@@ -912,6 +965,53 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                     2
                 }
                 Err(error) => tool_error(error, false),
+            };
+        }
+        Command::View {
+            tape,
+            capture,
+            output,
+            perfetto,
+            timing,
+            source,
+            analysis,
+        } => {
+            let view = || -> Result<String, String> {
+                let bytes = std::fs::read(&tape).map_err(|e| e.to_string())?;
+                let mut view = hirsel_driver::observation_view::View::parse(&capture, &bytes)?;
+                let explicit_timing = timing.is_some();
+                let timing_path = timing.unwrap_or_else(|| {
+                    let mut path = tape.clone();
+                    path.push(".timing.json");
+                    path
+                });
+                match std::fs::read_to_string(&timing_path) {
+                    Ok(text) => view.apply_timing(&text)?,
+                    Err(e) if !explicit_timing && e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.to_string()),
+                }
+                if let (Some(source), Some(analysis)) = (source, analysis) {
+                    view.replay_enrich(
+                        Path::new(&source),
+                        Path::new(&tape),
+                        &analysis,
+                        Some(DEFAULT_RUN_MAX_STEPS),
+                    )?;
+                }
+                Ok(if perfetto {
+                    view.logical_perfetto()
+                } else {
+                    view.normalized()
+                })
+            };
+            return match view()
+                .and_then(|text| std::fs::write(output, text).map_err(|e| e.to_string()))
+            {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("view: {error}");
+                    1
+                }
             };
         }
         Command::Export { run, entry, output } => {
