@@ -294,9 +294,10 @@ pub fn owner_view(public: &Signature, types: TypeStore, declaration: TypeDefinit
 }
 
 /// The public signature an owner view seals to: no representation graph (but a
-/// checked serializable opt-in's, its published wire contract), no representation
-/// and no CAP-5 implementation ceiling. A view is consistent exactly when it seals
-/// to its public signature.
+/// checked serializable opt-in's, its published wire contract), no representation,
+/// no carrier field ordinals and no CAP-5 implementation ceiling. The carrier
+/// marker remains public. A view is consistent exactly when it seals to its
+/// public signature.
 pub fn sealed(view: &Signature) -> Signature {
     let mut public = view.clone();
     if let SignatureKind::Type(declaration) = &mut public.kind {
@@ -305,6 +306,7 @@ pub fn sealed(view: &Signature) -> Signature {
         }
         declaration.representation = None;
         declaration.implementation_authority = None;
+        declaration.captures = declaration.captures.as_ref().map(|_| Default::default());
     }
     public
 }

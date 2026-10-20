@@ -281,6 +281,47 @@ fn an_owner_view_that_does_not_seal_to_its_public_signature_is_refused() {
         assert_eq!(error.at, "standalone@0/Meters.owner_view", "{error}");
         let error = refused(&|view, public| *view = public.clone());
         assert_eq!(error.at, "standalone@0/Meters.owner_view", "{error}");
+        let error = refused(&|view, _| {
+            let hirsel_types::SignatureKind::Type(declaration) = &mut view.kind else {
+                panic!("expected a type");
+            };
+            declaration.captures = Some(Default::default());
+        });
+        assert_eq!(error.at, "standalone@0/Meters.owner_view", "{error}");
+    });
+}
+
+#[test]
+fn a_carrier_owner_view_hides_field_ordinals_but_keeps_its_public_marker() {
+    with_compiler_stack(|| {
+        let (_, mut export) = exported(
+            "@captures(inner)\npub opaque type Pipe: () uses {} {\n  tag: u64,\n  inner: Iter[u64],\n}\n",
+        );
+        let pipe = signature(&export, "Pipe");
+        let view = pipe.owner_view.as_ref().expect("an owner view");
+        let captures = |signature: &hirsel_types::Signature| {
+            let hirsel_types::SignatureKind::Type(declaration) = &signature.kind else {
+                panic!("expected a type");
+            };
+            declaration.captures.clone()
+        };
+        assert_eq!(captures(view).unwrap().as_ref(), &[1]);
+        assert!(captures(&pipe.public).unwrap().is_empty());
+        assert_eq!(hirsel_types::encoding::sealed(view), pipe.public);
+        // Sealing hides the selection, not whether this is a carrier at all.
+        let pipe = export
+            .signatures
+            .iter_mut()
+            .find(|s| s.path == named("Pipe"))
+            .unwrap();
+        let hirsel_types::SignatureKind::Type(declaration) =
+            &mut pipe.owner_view.as_mut().unwrap().kind
+        else {
+            panic!("expected a type");
+        };
+        declaration.captures = None;
+        let error = import(&hirsel_proof_export::export(&export.to_input())).unwrap_err();
+        assert_eq!(error.at, "standalone@0/Pipe.owner_view", "{error}");
     });
 }
 
@@ -660,6 +701,34 @@ fn a_sample_of_accepted_programs_round_trips() {
 #[ignore = "full gate"]
 fn full_gate_every_accepted_program_round_trips() {
     round_trip_all(|_| true);
+}
+
+/// Every erased-carrier -ok fixture must import, including declarations with
+/// no executable body. Do not silently skip a fixture that stops compiling.
+#[test]
+fn every_erased_carrier_ok_program_round_trips() {
+    with_compiler_stack(|| {
+        let mut programs = vec![];
+        accepted(&corpus(), &mut programs);
+        programs.retain(|path| {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            name.contains("erased-carrier") && name.ends_with("-ok.hir")
+        });
+        assert!(programs.len() >= 5, "missing erased-carrier fixtures");
+        let mut failures = vec![];
+        for path in &programs {
+            match round_trip(path) {
+                Ok(Some(_)) => {}
+                Ok(None) => failures.push(format!("{}: no longer accepted", path.display())),
+                Err(error) => failures.push(format!("{}: {error}", path.display())),
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        eprintln!(
+            "proof export: all {} erased-carrier -ok programs round-trip",
+            programs.len()
+        );
+    });
 }
 
 #[test]
