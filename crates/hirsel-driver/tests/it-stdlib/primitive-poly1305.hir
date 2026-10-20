@@ -1,0 +1,24 @@
+// Test-only RFC 8439 section 2.5 adapter for the private AEAD Poly1305 kernel.
+// Adapted from Zig lib/std/crypto/poly1305.zig:156-163, MIT.
+// Copyright (c) Zig contributors. Append 1, then zeroes, with no high bit.
+fn primitive_mac(key: Bytes, message: Bytes) -> unique Bytes uses {} {
+  let mut state = poly_new(key)
+  let len = core@1/bytes.len(message)
+  let full = len - len % 16
+  poly_padded(mut state, core@1/bytes.slice(message, 0, full))
+  if full < len {
+    let mut block: List[u8] = []
+    let mut i = full
+    while i < len {
+      core@1/list.push(mut block, message[i])
+      i += 1
+    }
+    core@1/list.push(mut block, 1)
+    while core@1/list.len(block) < 16 {
+      core@1/list.push(mut block, 0)
+    }
+    let tail = core@1/bytes.from_list(take block)
+    poly_block(mut state, le64(tail, 0), le64(tail, 8), 0)
+  }
+  poly_finish(take state)
+}

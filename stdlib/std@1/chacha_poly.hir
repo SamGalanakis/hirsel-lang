@@ -277,12 +277,12 @@ fn wide(value: u64) -> u128 uses {} {
   core@1/int.widen(value)
 }
 
-// One 16-byte block, little-endian, with the 2^128 bit set.
+// One little-endian block; high is 1 << 40 for full blocks, zero for a final partial block.
 @noalloc
-fn poly_block(mut state: Poly1305, t0: u64, t1: u64) -> () uses {} {
+fn poly_block(mut state: Poly1305, t0: u64, t1: u64, high: u64) -> () uses {} {
   let h0 = state.h[0] + (t0 & MASK44)
   let h1 = state.h[1] + ((t0 >> 44 | t1 << 20) & MASK44)
-  let h2 = state.h[2] + (t1 >> 24 | 1u64 << 40)
+  let h2 = state.h[2] + (t1 >> 24 | high)
   let r0 = wide(state.r[0])
   let r1 = wide(state.r[1])
   let r2 = wide(state.r[2])
@@ -315,7 +315,7 @@ fn poly_padded(mut state: Poly1305, data: Bytes) -> () uses {} {
       t[i >> 3] = t[i >> 3] | byte << (i & 7) * 8
       i += 1
     }
-    poly_block(mut state, t[0], t[1])
+    poly_block(mut state, t[0], t[1], 1u64 << 40)
     at += 16
   }
 }
@@ -394,7 +394,7 @@ fn tag(key: Bytes, nonce: Bytes, data: Bytes, ciphertext: Bytes) -> unique Bytes
   let mut state = poly_new(block)
   poly_padded(mut state, data)
   poly_padded(mut state, ciphertext)
-  poly_block(mut state, core@1/bytes.len(data), core@1/bytes.len(ciphertext))
+  poly_block(mut state, core@1/bytes.len(data), core@1/bytes.len(ciphertext), 1u64 << 40)
   poly_finish(take state)
 }
 
