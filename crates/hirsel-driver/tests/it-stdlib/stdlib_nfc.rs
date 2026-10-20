@@ -1090,99 +1090,130 @@ fn rust_flt2dec_all_97_exact_rows_and_their_precision_sweeps() {
         let corpus =
             include_str!("../../../../conformance/SEM/SEM-3-fstring-flt2dec-exact-1-run.hir");
         let helper = corpus.split("pub fn main").next().unwrap();
+        // Compile the helper once. Passing vector data as interpreter arguments
+        // avoids making the compiler track thousands of large literal rows.
+        let source = helper
+            .replace("fn exact(t: Test, ", "pub fn probe(")
+            .replace("-> () {", "-> bool {")
+            .replace(
+                "test.check(t, std@1/internal.big.big_compare(actual, wanted, false) == 0)",
+                "std@1/internal.big.big_compare(actual, wanted, false) == 0",
+            )
+            + "\npub fn main(t: Test) -> Result[(), ()] { Ok(()) }\n";
+        let mut loaded = load_program_source(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../conformance/SEM/SEM-3-fstring-flt2dec-exact-1-run.hir"),
+            Some(&source),
+        )
+        .unwrap();
+        loaded
+            .check_for_execution()
+            .unwrap_or_else(|error| panic!("{error}"));
+        let runtime = loaded.engine.runtime_types().unwrap();
+        let sources = loaded.engine.sources.clone();
+        let mut entry = loaded.entry;
+        entry.0.name = "probe".into();
+        let configuration = RunConfiguration {
+            entry,
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let mut provider = CorpusProvider {
+            engine: loaded.engine,
+            definitions: BTreeMap::new(),
+            constants: BTreeMap::new(),
+        };
+        let signed = |value: i64| {
+            let bits = u32::from_ne_bytes(i32::try_from(value).unwrap().to_ne_bytes());
+            Value::Integer(
+                hirsel_interp::Integer::new(hirsel_types::Primitive::I32, u128::from(bits))
+                    .unwrap(),
+            )
+        };
         let mut checks = 0;
-        for batch in rows.chunks(14) {
-            let mut source = String::from(helper);
-            source.push_str("pub fn main(t: Test) -> Result[(), ()] {\nlet rows: List[(u64, i32, String, i32)] = [\n");
-            for row in batch {
-                let digits = row["digits"].as_str().unwrap().as_bytes();
-                let exponent = row["k"].as_i64().unwrap();
-                let cut = digits.iter().position(|&c| c == b' ');
-                let end = cut.unwrap_or(digits.len() - 1);
-                let precisions: Vec<_> = if row["kind"] == "one" {
-                    vec![digits.len()]
-                } else {
-                    (1..end)
-                        .chain(if cut.is_some() {
-                            end..digits.len() - 1
-                        } else {
-                            0..0
-                        })
-                        .collect()
-                };
-                for precision in precisions {
-                    let mut expected = if row["kind"] == "one" {
-                        digits.to_vec()
+        for row in rows {
+            let digits = row["digits"].as_str().unwrap().as_bytes();
+            let exponent = row["k"].as_i64().unwrap();
+            let cut = digits.iter().position(|&c| c == b' ');
+            let end = cut.unwrap_or(digits.len() - 1);
+            let precisions: Vec<_> = if row["kind"] == "one" {
+                vec![digits.len()]
+            } else {
+                (1..end)
+                    .chain(if cut.is_some() {
+                        end..digits.len() - 1
                     } else {
-                        digits[..precision.min(end)].to_vec()
-                    };
-                    expected.resize(precision, b'0');
-                    if precision < end && digits[precision] >= b'5' {
-                        let tie_even = precision + 1 < digits.len()
-                            && digits[precision - 1] & 1 == 0
-                            && digits[precision] == b'5'
-                            && digits[precision + 1] == b' ';
-                        if !tie_even {
-                            let mut carry = true;
-                            for digit in expected.iter_mut().rev() {
-                                if *digit != b'9' {
-                                    *digit += 1;
-                                    carry = false;
-                                    break;
-                                }
-                                *digit = b'0';
+                        0..0
+                    })
+                    .collect()
+            };
+            for precision in precisions {
+                let mut expected = if row["kind"] == "one" {
+                    digits.to_vec()
+                } else {
+                    digits[..precision.min(end)].to_vec()
+                };
+                expected.resize(precision, b'0');
+                if precision < end && digits[precision] >= b'5' {
+                    let tie_even = precision + 1 < digits.len()
+                        && digits[precision - 1] & 1 == 0
+                        && digits[precision] == b'5'
+                        && digits[precision + 1] == b' ';
+                    if !tie_even {
+                        let mut carry = true;
+                        for digit in expected.iter_mut().rev() {
+                            if *digit != b'9' {
+                                *digit += 1;
+                                carry = false;
+                                break;
                             }
-                            if carry {
-                                expected.insert(0, b'1');
-                            }
+                            *digit = b'0';
+                        }
+                        if carry {
+                            expected.insert(0, b'1');
                         }
                     }
-                    source += &format!(
-                        "({}u64, {}i32, \"{}\", {}i32),\n",
-                        row["m"].as_u64().unwrap(),
-                        row["e"].as_i64().unwrap(),
-                        String::from_utf8(expected).unwrap(),
-                        exponent - precision as i64
-                    );
-                    checks += 1;
                 }
+                let arguments = vec![
+                    Value::Integer(
+                        hirsel_interp::Integer::new(
+                            hirsel_types::Primitive::U64,
+                            u128::from(row["m"].as_u64().unwrap()),
+                        )
+                        .unwrap(),
+                    ),
+                    signed(row["e"].as_i64().unwrap()),
+                    Value::String(String::from_utf8(expected).unwrap()),
+                    signed(exponent - precision as i64),
+                ];
+                let mut library = Library::new(&configuration, Default::default()).unwrap();
+                let execution = hirsel_interp::run_with_runtime(
+                    &mut provider,
+                    &sources,
+                    &configuration,
+                    arguments,
+                    Limits {
+                        steps: Some(10_000_000),
+                        call_depth: 256,
+                    },
+                    &mut library,
+                    &runtime,
+                )
+                .unwrap();
+                assert!(
+                    matches!(
+                        execution.outcome,
+                        Outcome::Returned {
+                            value: Value::Bool(true),
+                            ..
+                        }
+                    ),
+                    "flt2dec source line {}, precision {precision}: {:?}",
+                    row["line"],
+                    execution.outcome
+                );
+                checks += 1;
             }
-            source.push_str("]\nfor row in rows {\nlet (mantissa, exponent, expected, cutoff) = row\nexact(t, mantissa, exponent, expected, cutoff)\n}\nOk(())\n}\n");
-            let mut loaded = load_program_source(
-                &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../conformance/SEM/SEM-3-fstring-flt2dec-exact-1-run.hir"),
-                Some(&source),
-            )
-            .unwrap();
-            loaded
-                .check_for_execution()
-                .unwrap_or_else(|error| panic!("{error}"));
-            loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
-                limits: Limits {
-                    steps: Some(500_000_000),
-                    call_depth: 256,
-                },
-                ..Default::default()
-            }));
-            let run = run_observed_snapshot(
-                &mut loaded.engine,
-                &RunConfiguration {
-                    entry: loaded.entry,
-                    hash_seed: 0,
-                    inputs: vec![],
-                },
-                SimulationConfig::default(),
-            )
-            .unwrap();
-            assert!(
-                matches!(
-                    run.outcome,
-                    Ok(RunOutcome::Returned(hirsel_run_config::Returned::Ok))
-                ),
-                "flt2dec rows starting at source line {}: {:?}",
-                batch[0]["line"],
-                run.outcome
-            );
         }
         eprintln!("Rust flt2dec: 97 rows, {checks} exact rounding comparisons");
         assert_eq!(checks, 1706);

@@ -4979,12 +4979,16 @@ conformance/SEM/SEM-3-fstring-flt2dec-exact-7-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-exact-8-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-exact-9-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-public-1-run.hir
+conformance/SEM/SEM-3-fstring-flt2dec-public-10-run.hir
+conformance/SEM/SEM-3-fstring-flt2dec-public-11-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-public-2-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-public-3-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-public-4-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-public-5-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-public-6-run.hir
 conformance/SEM/SEM-3-fstring-flt2dec-public-7-run.hir
+conformance/SEM/SEM-3-fstring-flt2dec-public-8-run.hir
+conformance/SEM/SEM-3-fstring-flt2dec-public-9-run.hir
 conformance/SEM/SEM-3-fstring-lone-brace-bad.hir
 conformance/SEM/SEM-3-fstring-lone-brace-ok.hir
 conformance/SEM/SEM-3-fstring-multiline-hole-bad.hir
