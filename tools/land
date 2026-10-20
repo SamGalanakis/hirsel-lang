@@ -41,6 +41,9 @@ BUILD_SET = ('root//: - kind("_rust_test", root//:) - attrregexfilter(name, "-cl
              ' - attrfilter(labels, gate, root//:) - kind("_link_hosts_local", root//:)'
              ' - rdeps(root//:, kind("_hirsel_precheck", root//:))')
 ATTEMPTS = 10
+# After this many lost races on clean rebases, push without rebuilding: the change passed every
+# check, and the next landing's build checks main with it, so a bad combination surfaces at once.
+UNCHECKED_AFTER = 3
 REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
 LANDINGS = 'hirsel-landings.jsonl'
 
@@ -98,8 +101,10 @@ def main():
         return 1
     branch = git('branch', '--show-current').stdout.strip()
     started = time.monotonic()
-    linted = False
-    for attempt in range(1, ATTEMPTS + 1):
+    # Kept across the re-exec into a rebased tree's own tools/land.
+    first = int(os.environ.get('HIRSEL_LAND_ATTEMPT', '1'))
+    linted = os.environ.get('HIRSEL_LAND_LINTED') == '1'
+    for attempt in range(first, ATTEMPTS + 1):
         if (fetched := git('fetch', '-q', 'origin', 'main')).returncode:
             say('git fetch failed\n' + fetched.stderr)
             return 1
@@ -121,10 +126,16 @@ def main():
         # Run the rebased tree's own land, so a landed fix to it holds at once.
         if (ROOT / 'tools/land').read_bytes() != Path(__file__).read_bytes():
             say('the rebased tree has another tools/land; running it')
+            os.environ.update(HIRSEL_LAND_ATTEMPT=str(attempt), HIRSEL_LAND_LINTED='1' if linted else '0')
             os.execv(PY, [PY, str(ROOT / 'tools/land')])
-        say(f'attempt {attempt}: checking {head[:12]} on origin/main {main_sha[:12]}'
-            + ('' if not linted else ' (build only: Clippy and formatting passed on attempt 1)'))
-        if not checks(lint=not linted):
+        unchecked = linted and attempt >= UNCHECKED_AFTER
+        if unchecked:
+            say(f'attempt {attempt}: pushing {head[:12]} on origin/main {main_sha[:12]} without rebuilding:'
+                f' it passed every check and lost {attempt - 1} races on clean rebases')
+        else:
+            say(f'attempt {attempt}: checking {head[:12]} on origin/main {main_sha[:12]}'
+                + ('' if not linted else ' (build only: Clippy and formatting passed already)'))
+        if not unchecked and not checks(lint=not linted):
             say('refusing to push a red tree')
             return 1
         linted = True
@@ -132,7 +143,7 @@ def main():
         if pushed.returncode == 0:
             common = Path(git('rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
             with open(common / LANDINGS, 'a') as log:
-                log.write(json.dumps(dict(landed=head, pushed=head, base=main_sha, branch=branch,
+                log.write(json.dumps(dict(landed=head, pushed=head, base=main_sha, branch=branch, unchecked_rebase=unchecked,
                                           at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
                                      sort_keys=True) + '\n')
             say(f'landed {head[:12]} on main in {time.monotonic() - started:.0f} s')
