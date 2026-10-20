@@ -1,0 +1,82 @@
+pub type Error = Grant(GrantError) | File(FileError) | Config(stream.StreamConfigError)
+
+resource type Destination {
+  out: Stdout,
+}
+drop(d) {
+  let _ = out.print(d.out, "destination dropped\n")
+}
+
+fn fail(mut d: Destination, data: Bytes) -> Result[u64, u64] {
+  let _ = out.print(d.out, f"write {bytes.len(data)}\n")
+  Error(19)
+}
+
+pub fn main(rt: Io) -> Result[(), Error] {
+  let output = io.stdout(rt) ? Grant
+  let dir = io.dir(rt, path.of("data")) ? File
+  let limit = stream.chunk_limit(1) ? Config
+  let complete_file = file.open(dir, path.of("input")) ? File
+  let source = stream.file_chunks(dir, take complete_file, limit)
+  let mapped = stream.try_map(
+    take source,
+    fn(take data: Bytes) -> Result[Bytes, FileError] {
+      let _ = out.print(output, f"map {bytes.len(data)}\n")
+      Ok(take data)
+    }
+  )
+  let filtered = stream.try_filter(
+    take mapped,
+    fn(data: Bytes) -> Result[bool, FileError] {
+      let _ = out.print(output, "filter\n")
+      Ok(true)
+    }
+  )
+  let initial: List[u8] = []
+  let total = stream.try_fold(
+    take filtered,
+    take initial,
+    fn(take prior: List[u8], take data: Bytes) -> Result[List[u8], FileError] {
+      let mut joined = take prior
+      bytes.append(mut joined, data)
+      Ok(take joined)
+    }
+  ) ? File
+  failure.check(bytes.from_list(take total) == b"a\xc3\xa9z", Bounds())
+  let _ = out.print(output, "complete\n")
+  let zero_file = file.open(dir, path.of("input")) ? File
+  let zero = stream.take_n(stream.file_chunks(dir, take zero_file, limit), 0)
+  stream.try_for_each(
+    take zero,
+    fn(take data: Bytes) -> Result[(), FileError] {
+      failure.check(false, Bounds())
+      Ok(())
+    }
+  ) ? File
+  let _ = out.print(output, "zero\n")
+  let prefix_file = file.open(dir, path.of("input")) ? File
+  let first = stream.take_n(stream.file_chunks(dir, take prefix_file, limit), 1)
+  stream.try_for_each(
+    take first,
+    fn(take data: Bytes) -> Result[(), FileError] {
+      failure.check(data == b"a", Bounds())
+      Ok(())
+    }
+  ) ? File
+  let _ = out.print(output, "prefix\n")
+  let error_file = file.open(dir, path.of("input")) ? File
+  let outcome = stream.write_to(
+    stream.file_chunks(dir, take error_file, limit),
+    take Destination(out: output),
+    fail
+  )
+  failure.check(
+    match take outcome {
+      Error(Write(19)) => true,
+      _ => false,
+    },
+    Bounds()
+  )
+  let _ = out.print(output, "error returned\n")
+  Ok(())
+}

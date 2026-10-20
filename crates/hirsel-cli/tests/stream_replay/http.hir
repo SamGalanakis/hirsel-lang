@@ -1,0 +1,140 @@
+pub type Error = Grant(GrantError) | Http(http.HttpError) | Config(
+  stream.StreamConfigError
+)
+
+resource type Body {
+  request: http.Request,
+  out: Stdout,
+}
+drop(s) {
+  let _ = out.print(s.out, "body dropped\n")
+}
+
+fn refill(mut s: Body, mut out: List[u8], max: u64) -> Result[u64, http.HttpError] {
+  failure.check(max == 1, Bounds())
+  http.read_body(mut s.request, mut out, max)
+}
+
+fn body(n: Net) -> Result[http.Request, http.HttpError] {
+  let mut request = http.request(
+    n,
+    http.default_config(),
+    Get(),
+    "http://127.0.0.1:PORT/",
+    []
+  )?
+  http.send_bodiless(mut request)?
+  let _ = http.receive_head(mut request)?
+  Ok(take request)
+}
+
+pub fn main(rt: Io) -> Result[(), Error] {
+  let output = io.stdout(rt) ? Grant
+  let n = io.net(rt) ? Grant
+  let tasks = io.tasks(rt) ? Grant
+  let clock = io.monotonic_clock(rt) ? Grant
+  let limit = stream.chunk_limit(1) ? Config
+  {
+    let mut chunks = stream.http_chunks(body(n) ? Http, limit)
+    let mut combined: List[u8] = []
+    while let Some(item) = stream.next(mut chunks) {
+      let data = item ? Http
+      failure.check(bytes.len(data) == 1, Bounds())
+      let _ = out.print(output, f"byte {bytes.len(data)}\n")
+      bytes.append(mut combined, data)
+    }
+    failure.check(bytes.from_list(take combined) == b"a\xc3\xa9z", Bounds())
+    failure.check(
+      match stream.next(mut chunks) {
+        None => true,
+        _ => false,
+      },
+      Bounds()
+    )
+  }
+  let _ = out.print(output, "chunks done\n")
+  let request = body(n) ? Http
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let sibling = task.async(
+        s,
+        fn() {
+          task.scope(
+            tasks,
+            fn(child: Scope) {
+              for i in 0u64..4u64 {
+                let _ = task.check_canceled(child)
+              }
+            }
+          )
+        }
+      )
+      let cfg = csv.StreamConfig(
+        csv: csv.Config(
+          delimiter: b',',
+          fields_per_record: Some(1),
+          max_record_bytes: 16
+        ),
+        refill_bytes: 1,
+        max_input_bytes: 16,
+        max_records: 3,
+        max_outputs: 2
+      )
+      let outcome = stream.csv_fold_scoped(
+        s,
+        take Body(request: take request, out: output),
+        cfg,
+        0u64,
+        refill,
+        fn(row: List[String]) -> Result[bool, http.HttpError] {
+          Ok(row[0] != "skip")
+        },
+        fn(take count: u64, take row: List[String]) -> Result[u64, http.HttpError] {
+          // An explicit clock effect makes the slow sink part of the recording.
+          let Ok(now) = clock.monotonic(clock) else {
+            failure.check(false, Bounds())
+            return Ok(count)
+          }
+          let Some(at) = instant.checked_add(clock, now, 1000000u64) else {
+            failure.check(false, Bounds())
+            return Ok(count)
+          }
+          failure.check(clock.sleep_until(clock, at) == Ok(()), Bounds())
+          let _ = out.print(output, f"row {row[0]}\n")
+          Ok(count + 1)
+        }
+      )
+      failure.check(outcome == Ok(2u64), Bounds())
+      let _ = out.print(output, "scoped returned\n")
+      task.await(s, take sibling)
+    }
+  )
+  {
+    let mut broken = stream.http_chunks(body(n) ? Http, limit)
+    failure.check(
+      match stream.next(mut broken) {
+        Some(Ok(data)) => data == b"x",
+        _ => false,
+      },
+      Bounds()
+    )
+    failure.check(
+      match stream.next(mut broken) {
+        Some(Error(Truncated())) => true,
+        _ => false,
+      },
+      Bounds()
+    )
+    failure.check(
+      match stream.next(mut broken) {
+        None => true,
+        _ => false,
+      },
+      Bounds()
+    )
+    let _ = out.print(output, "truncated once\n")
+  }
+  let _ = out.print(output, "all closed\n")
+  Ok(())
+}

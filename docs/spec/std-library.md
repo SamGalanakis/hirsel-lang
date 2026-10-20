@@ -2731,6 +2731,16 @@ terminal pull behavior and source/callback authority, but raw iterator operators
 `Iter[Result[T, E]]` alone makes no terminal-error guarantee; `from_results`
 normalizes it before exposing a `Flow`. Pure iteration remains `Iter[T]`.
 
+Stream execution uses the existing [replay contract](determinism.md#sequential-stream-replay):
+adapters add no tape event, and replay re-executes their ordinary owned state.
+Source limits, callback/pull order, terminal errors, explicit checkpoints and
+observable destruction order must agree across engines and optimizations.
+Changing a chunk limit or checkpoint sequence changes the bound program;
+an old tape is refused rather than rechunked or supplemented with host inputs.
+Consuming a prefix or returning a sink error must not cause an extra upstream
+read. An HTTP parser may already hold its documented lookahead; replay retains
+the original core reads rather than inventing one read per output row.
+
 ## Bounded byte streams
 
 The `stream` namespace also provides owned byte adapters over `Flow`:

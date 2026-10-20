@@ -1,0 +1,63 @@
+pub type Error = Grant(GrantError) | Net(NetError) | Config(stream.StreamConfigError) | Write(
+  stream.WriteError[u64, NetError]
+)
+
+resource type Writer {
+  net: Net,
+  socket: Stream of .net,
+  out: Stdout,
+}
+drop(s) {
+  let _ = out.print(s.out, "writer dropped\n")
+}
+
+fn one_byte(mut s: Writer, data: Bytes) -> Result[u64, NetError] {
+  let _ = out.print(s.out, f"remaining {bytes.len(data)}\n")
+  net.write(s.net, mut s.socket, bytes.slice(data, 0, 1))
+}
+
+@preserves_captures(i)
+fn source(mut i: u64) -> Result[Option[Bytes], u64] {
+  i += 1
+  if i == 1 {
+    Ok(Some(b"a\xc3\xa9z"))
+  } else {
+    Ok(None)
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), Error] {
+  let output = io.stdout(rt) ? Grant
+  let n = io.net(rt) ? Grant
+  let limit = stream.chunk_limit(1) ? Config
+  let address = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: PORTu16)
+  {
+    let socket = net.connect_addr(n, address, Unbounded()) ? Net
+    let mut chunks = stream.net_chunks(n, take socket, limit)
+    let mut combined: List[u8] = []
+    while let Some(item) = stream.next(mut chunks) {
+      let data = item ? Net
+      failure.check(bytes.len(data) == 1, Bounds())
+      bytes.append(mut combined, data)
+    }
+    failure.check(bytes.from_list(take combined) == b"a\xc3\xa9z", Bounds())
+    failure.check(
+      match stream.next(mut chunks) {
+        None => true,
+        _ => false,
+      },
+      Bounds()
+    )
+  }
+  let _ = out.print(output, "read closed\n")
+  let socket = net.connect_addr(n, address, Unbounded()) ? Net
+  {
+    let _ = stream.write_to(
+      stream.from(take 0u64, source),
+      take Writer(net: n, socket: take socket, out: output),
+      one_byte
+    ) ? Write
+  }
+  let _ = out.print(output, "write returned\n")
+  Ok(())
+}

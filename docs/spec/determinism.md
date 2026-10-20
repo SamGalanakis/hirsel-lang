@@ -48,6 +48,35 @@ failure, its site and every effect before it stay the same.
 No flag, environment variable, build mode or topology changes what the checker accepts or
 what a program means.
 
+### Sequential stream replay
+
+The owned `std@1/stream` adapters introduce no tape operation. Their private
+iterator state, terminal flags, map/filter decisions and parser carry are
+re-executed from recorded capability inputs. Core file/network requests retain
+their requested limits, exact returned chunks, accepted write prefixes and
+errors. Explicit clock calls, task checks and scheduling inputs retain their
+ordinary recording contracts. Replay supplies these inputs without opening
+host files, connecting sockets or consulting a live clock.
+
+Chunk/refill limits, callback order, prefix lengths and checkpoint positions
+are part of the selected semantic program revision. Changing them refuses an
+incompatible recording at program binding, before entry; replay never adapts
+old chunks to a new limit or adds current readiness observations. Independent
+live runs can have different short reads. A fixed recording must reproduce
+its original chunk-sensitive results, errors and observable finalizer order.
+
+Under DET-2, adapter fusion or indirect-call elimination must preserve the
+effect and pull order, terminal errors, destruction, observable chunks and
+logical scheduling points. It cannot combine reads, pull beyond `take_n`,
+move a sink write before its upstream callback, or remove a scoped driver's
+checks, including checks for rejected or already-buffered records. Rechunking
+is an explicit stateful transformation, not an implicit provider choice.
+
+The CLI stream replay tests record these pipelines with both native backends,
+then consume the recordings in the interpreter with host inputs removed. They
+also refuse changed limits/checkpoints. See
+[the fixture and prior-art notes](../../reports/stream-replay.md).
+
 ### DET-4: Outside
 
 Outside the determinism contract: `Unsafe` code, foreign functions and environmental
