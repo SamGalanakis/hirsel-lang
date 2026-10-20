@@ -374,7 +374,7 @@ fn full_gate_websocket_large_frame_native() {
         assert!(
             matches!(
                 outcome,
-                RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
             ),
             "{outcome:?}"
         );
@@ -441,7 +441,7 @@ fn jwt_verify_reads_the_wall_clock() {
             assert!(
                 matches!(
                     outcome,
-                    RunOutcome::Returned(hirsel_run_config::Returned::Ok)
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
                 ),
                 "{expected}: {outcome:?}"
             );
