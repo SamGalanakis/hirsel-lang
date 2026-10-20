@@ -34,3 +34,4 @@ mod stdlib_text_wire;
 mod stdlib_uri;
 mod stdlib_wave1;
 mod stdlib_wave2_num;
+mod stdlib_xxhash64;

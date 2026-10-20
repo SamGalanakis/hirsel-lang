@@ -1,0 +1,53 @@
+// cespare/xxhash xxhash_test.go:13-67 TestAll: all nine vectors and every
+// chunk size (one empty write for empty input).
+fn check(input: String, seed: u64, expected: u64) -> () {
+  let data = string.as_bytes(input)
+  if seed == 0 {
+    failure.check(std@1/xxhash64.digest(data) == expected, TextInvariant())
+    failure.check(
+      std@1/xxhash64.digest_hex(data) == f"{expected:016x}",
+      TextInvariant()
+    )
+  }
+  let mut chunk: u64 = 1
+  let mut last_chunk = bytes.len(data)
+  if last_chunk == 0 {
+    last_chunk = 1
+  }
+  while chunk <= last_chunk {
+    let mut state = std@1/xxhash64.new_with_seed(seed)
+    std@1/xxhash64.update(mut state, b"")
+    let mut at: u64 = 0
+    while at < bytes.len(data) {
+      let mut end = at + chunk
+      if end > bytes.len(data) {
+        end = bytes.len(data)
+      }
+      std@1/xxhash64.update(mut state, bytes.slice(data, at, end))
+      at = end
+    }
+    failure.check(std@1/xxhash64.finish(take state) == expected, TextInvariant())
+    chunk += 1
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  check("", 0u64, 0xef46db3751d8e999u64)
+  check("a", 0u64, 0xd24ec4f1a98c6e5bu64)
+  check("as", 0u64, 0x1c330fb2d66be179u64)
+  check("asd", 0u64, 0x631c37ce72a97393u64)
+  check("asdf", 0u64, 0x415872f599cea71eu64)
+  check(
+    "Call me Ishmael. Some years ago--never mind how long precisely-",
+    0u64,
+    0x02a2e85470d6fd96u64
+  )
+  check("", 123u64, 0xe0db84de91f3e198u64)
+  check("asdf", 18446744073709551615u64, 0x9a2fd8473be539b6u64)
+  check(
+    "Call me Ishmael. Some years ago--never mind how long precisely-",
+    54321u64,
+    0x1736d186daf5d1cdu64
+  )
+  Ok(())
+}

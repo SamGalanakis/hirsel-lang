@@ -1,4 +1,5 @@
-// github.com/cespare/xxhash/v2 xxhash.go (MIT): XXH64, a fast non-cryptographic hash
+// github.com/cespare/xxhash/v2 @ab37246c889f9db16b606fda1c232d659df9271d
+// xxhash.go:72-109 and xxhash_other.go:64-75 (MIT): XXH64, a fast non-cryptographic hash
 // for checksums, deduplication and hash tables. It is not collision resistant
 // against an adversary. Multiplications wrap at 64 bits.
 pub opaque type State: plain + inert uses {} {
@@ -104,30 +105,115 @@ fn word(mem: Inline[u8, 32], at: u64, count: u64) -> u64 uses {} {
   value
 }
 
-// Shared byte absorption for byte slices and list suffixes. The caller counts
-// its input length once; this helper only fills and compresses complete stripes.
+// cespare/xxhash xxhash_other.go:64-75 (writeBlocks): keep the four
+// accumulators local and read complete stripes directly from the input.
+// Both storage-specific loops use this kernel; only partial stripes use mem.
 @noalloc
-fn absorb(mut state: State, byte: u8) -> () uses {} {
-  state.mem[state.used] = byte
-  state.used += 1
-  if state.used == 32 {
-    let mut lane: u64 = 0
-    while lane < 4 {
-      state.lanes[lane] = round(state.lanes[lane], word(state.mem, lane * 8, 8))
-      lane += 1
-    }
-    state.used = 0
-  }
+fn stripe(lanes: Inline[u64, 4], a: u64, b: u64, c: u64, d: u64) -> Inline[u64, 4] uses {} {
+  [round(lanes[0], a), round(lanes[1], b), round(lanes[2], c), round(lanes[3], d)]
 }
 
 @noalloc
+fn buffered_stripe(mut state: State) -> () uses {} {
+  state.lanes = stripe(
+    state.lanes,
+    word(state.mem, 0, 8),
+    word(state.mem, 8, 8),
+    word(state.mem, 16, 8),
+    word(state.mem, 24, 8)
+  )
+}
+
+@noalloc
+fn bytes_word(data: Bytes, at: u64) -> u64 uses {} {
+  let b0: u64 = core@1/int.widen(data[at])
+  let b1: u64 = core@1/int.widen(data[at + 1])
+  let b2: u64 = core@1/int.widen(data[at + 2])
+  let b3: u64 = core@1/int.widen(data[at + 3])
+  let b4: u64 = core@1/int.widen(data[at + 4])
+  let b5: u64 = core@1/int.widen(data[at + 5])
+  let b6: u64 = core@1/int.widen(data[at + 6])
+  let b7: u64 = core@1/int.widen(data[at + 7])
+  b0 | b1 << 8 | b2 << 16 | b3 << 24 | b4 << 32 | b5 << 40 | b6 << 48 | b7 << 56
+}
+
+@noalloc
+fn write_bytes_blocks(mut state: State, data: Bytes, start: u64, end: u64) -> u64 uses {} {
+  let mut lanes = state.lanes
+  let mut at = start
+  while end - at >= 32 {
+    lanes = stripe(
+      lanes,
+      bytes_word(data, at),
+      bytes_word(data, at + 8),
+      bytes_word(data, at + 16),
+      bytes_word(data, at + 24)
+    )
+    at += 32
+  }
+  state.lanes = lanes
+  at
+}
+
+@noalloc
+fn list_word(data: List[u8], at: u64) -> u64 uses {} {
+  let b0: u64 = core@1/int.widen(data[at])
+  let b1: u64 = core@1/int.widen(data[at + 1])
+  let b2: u64 = core@1/int.widen(data[at + 2])
+  let b3: u64 = core@1/int.widen(data[at + 3])
+  let b4: u64 = core@1/int.widen(data[at + 4])
+  let b5: u64 = core@1/int.widen(data[at + 5])
+  let b6: u64 = core@1/int.widen(data[at + 6])
+  let b7: u64 = core@1/int.widen(data[at + 7])
+  b0 | b1 << 8 | b2 << 16 | b3 << 24 | b4 << 32 | b5 << 40 | b6 << 48 | b7 << 56
+}
+
+@noalloc
+fn write_list_blocks(mut state: State, data: List[u8], start: u64, end: u64) -> u64 uses {} {
+  let mut lanes = state.lanes
+  let mut at = start
+  while end - at >= 32 {
+    lanes = stripe(
+      lanes,
+      list_word(data, at),
+      list_word(data, at + 8),
+      list_word(data, at + 16),
+      list_word(data, at + 24)
+    )
+    at += 32
+  }
+  state.lanes = lanes
+  at
+}
+
+// cespare/xxhash xxhash.go:72-109 (Digest.Write): fill, stripes, tail.
+@noalloc
 pub fn update(mut state: State, data: Bytes) -> () uses {} {
-  let len = core@1/bytes.len(data)
-  state.total = core@1/int.wrapping_add(state.total, len)
-  let mut i: u64 = 0
-  while i < len {
-    absorb(mut state, data[i])
-    i += 1
+  let end = core@1/bytes.len(data)
+  let mut at: u64 = 0
+  state.total = core@1/int.wrapping_add(state.total, end - at)
+  if end - at < 32 - state.used {
+    while at < end {
+      state.mem[state.used] = data[at]
+      state.used += 1
+      at += 1
+    }
+    return
+  }
+  if state.used > 0 {
+    while state.used < 32 {
+      state.mem[state.used] = data[at]
+      state.used += 1
+      at += 1
+    }
+    buffered_stripe(mut state)
+    state.used = 0
+  }
+  at = write_bytes_blocks(mut state, data, at, end)
+  while at < end {
+    state.mem[state.used] = data[at]
+    state.used += 1
+    at += 1
   }
 }
 
@@ -139,11 +225,30 @@ pub fn update_list(mut state: State, data: List[u8], start: u64) -> () uses {} {
   if start >= end {
     return
   }
-  state.total = core@1/int.wrapping_add(state.total, end - start)
-  let mut i = start
-  while i < end {
-    absorb(mut state, data[i])
-    i += 1
+  let mut at = start
+  state.total = core@1/int.wrapping_add(state.total, end - at)
+  if end - at < 32 - state.used {
+    while at < end {
+      state.mem[state.used] = data[at]
+      state.used += 1
+      at += 1
+    }
+    return
+  }
+  if state.used > 0 {
+    while state.used < 32 {
+      state.mem[state.used] = data[at]
+      state.used += 1
+      at += 1
+    }
+    buffered_stripe(mut state)
+    state.used = 0
+  }
+  at = write_list_blocks(mut state, data, at, end)
+  while at < end {
+    state.mem[state.used] = data[at]
+    state.used += 1
+    at += 1
   }
 }
 
