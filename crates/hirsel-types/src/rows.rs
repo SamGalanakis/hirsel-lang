@@ -56,6 +56,16 @@ impl<T: Clone> Clone for Node<T> {
         }
     }
 }
+fn child<'a, T>(
+    node: &'a Option<Rc<Node<T>>>,
+    i: usize,
+    empty: &'a Option<Rc<Node<T>>>,
+) -> &'a Option<Rc<Node<T>>> {
+    match node.as_deref() {
+        Some(Node::Branch(children)) => &children[i],
+        _ => empty,
+    }
+}
 fn same<T>(a: &Option<Rc<Node<T>>>, b: &Option<Rc<Node<T>>>) -> bool {
     match (a, b) {
         (None, None) => true,
@@ -203,11 +213,27 @@ impl<T: Clone + PartialEq> Rows<T> {
     }
     /// The operation must be idempotent: equal rows are not visited.
     pub fn join(&mut self, other: &Self, mut join: impl FnMut(&mut T, &T)) {
-        self.merge(other, false, &mut join, None);
+        self.merge(None, other, false, &mut join, None);
     }
     /// Union whose default row is an identity. Entire disjoint subtrees share.
     pub fn union(&mut self, other: &Self, mut join: impl FnMut(&mut T, &T)) {
-        self.merge(other, true, &mut join, None);
+        self.merge(None, other, true, &mut join, None);
+    }
+    /// `join` of an `other` that is `base` changed in place, into rows that
+    /// already joined `base`. Only rows where `other` differs from `base` are
+    /// visited, and subtrees `other` still shares with `base` are skipped, so
+    /// the cost is proportional to the change since `base`, not to how far
+    /// this snapshot has drifted from `other`. The operation must be
+    /// idempotent and associative: a row equal in `base` and `other` already
+    /// holds its join.
+    pub fn join_since(&mut self, base: &Self, other: &Self, mut join: impl FnMut(&mut T, &T)) {
+        assert_eq!(base.len, other.len);
+        self.merge(Some(&base.root), other, false, &mut join, None);
+    }
+    /// `union` of an `other` that is `base` changed in place (see `join_since`).
+    pub fn union_since(&mut self, base: &Self, other: &Self, mut join: impl FnMut(&mut T, &T)) {
+        assert_eq!(base.len, other.len);
+        self.merge(Some(&base.root), other, true, &mut join, None);
     }
     /// Memoize exact ordered node pairs, without assigning a neutral default.
     /// A cache belongs to one operation and one equal default-row domain.
@@ -222,10 +248,18 @@ impl<T: Clone + PartialEq> Rows<T> {
         } else {
             cache.default = Some(self.default.clone());
         }
-        self.merge(other, false, &mut cache.operation, Some(&mut cache.entries))
+        self.merge(
+            None,
+            other,
+            false,
+            &mut cache.operation,
+            Some(&mut cache.entries),
+        )
     }
+    /// `base` (the row tree `other` was changed from) defaults to `self`.
     fn merge(
         &mut self,
+        base: Option<&Option<Rc<Node<T>>>>,
         other: &Self,
         neutral: bool,
         join: &mut impl FnMut(&mut T, &T),
@@ -233,8 +267,10 @@ impl<T: Clone + PartialEq> Rows<T> {
     ) -> bool {
         assert_eq!(self.len, other.len);
         assert!(self.default == other.default);
+        #[allow(clippy::too_many_arguments)]
         fn merge<T: Clone + PartialEq>(
             a: &mut Option<Rc<Node<T>>>,
+            base: Option<&Option<Rc<Node<T>>>>,
             b: &Option<Rc<Node<T>>>,
             height: usize,
             default: &T,
@@ -243,7 +279,7 @@ impl<T: Clone + PartialEq> Rows<T> {
             join: &mut impl FnMut(&mut T, &T),
             mut cache: Option<&mut HashMap<(usize, usize, usize), Joined<T>>>,
         ) -> bool {
-            if same(a, b) || neutral && b.is_none() {
+            if same(a, b) || base.is_some_and(|base| same(base, b)) || neutral && b.is_none() {
                 return false;
             }
             if neutral && a.is_none() {
@@ -259,8 +295,11 @@ impl<T: Clone + PartialEq> Rows<T> {
             let mut changed = false;
             if height == 0 {
                 for i in 0..WIDTH {
-                    let old = Rows::at(a, 0, i, default);
                     let incoming = Rows::at(b, 0, i, default);
+                    if base.is_some_and(|base| Rows::at(base, 0, i, default) == incoming) {
+                        continue;
+                    }
+                    let old = Rows::at(a, 0, i, default);
                     if old == incoming {
                         continue;
                     }
@@ -278,13 +317,10 @@ impl<T: Clone + PartialEq> Rows<T> {
                     _ => std::array::from_fn(|_| None),
                 };
                 for i in 0..WIDTH {
-                    let incoming = match b.as_deref() {
-                        Some(Node::Branch(children)) => &children[i],
-                        _ => &empty,
-                    };
                     changed |= merge(
                         &mut children[i],
-                        incoming,
+                        base.map(|base| child(base, i, &empty)),
+                        child(b, i, &empty),
                         height - 1,
                         default,
                         neutral,
@@ -328,6 +364,7 @@ impl<T: Clone + PartialEq> Rows<T> {
         }
         merge(
             &mut self.root,
+            base,
             &other.root,
             self.height,
             &self.default,
@@ -493,6 +530,33 @@ mod tests {
         let small = measure(32);
         let large = measure(128);
         assert!(large <= 8 * small, "{small} / {large} row joins");
+    }
+
+    #[test]
+    fn joins_since_a_base_equal_full_joins_of_each_prefix() {
+        use std::collections::BTreeSet;
+        let join = |a: &mut BTreeSet<u32>, b: &BTreeSet<u32>| a.extend(b);
+        for len in [1, 17, 257, 4097] {
+            for neutral in [false, true] {
+                let mut state = Rows::new(BTreeSet::<u32>::new(), len);
+                state[0].insert(1000);
+                let (mut full, mut since, mut joined) =
+                    (state.clone(), state.clone(), state.clone());
+                for step in 0..200u32 {
+                    let index = (step as usize * 971 + 7) % len;
+                    state[index] = [step].into();
+                    if neutral {
+                        full.union(&state, join);
+                        since.union_since(&joined, &state, join);
+                    } else {
+                        full.join(&state, join);
+                        since.join_since(&joined, &state, join);
+                    }
+                    joined = state.clone();
+                    assert!(since == full, "{len} rows, step {step}");
+                }
+            }
+        }
     }
 
     #[test]
