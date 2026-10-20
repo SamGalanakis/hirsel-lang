@@ -5,9 +5,7 @@ use crate::{
     host_paths::PinnedDirectory, host_stdin::CooperativeStdin, io_real::RealIo, io_sim::SimIo,
     net::NetRule, net_host::CooperativeNet, readiness::Readiness,
 };
-use hirsel_run_config::{
-    AdmittedRun, HostAuthority, RevocationEvidence, RunConfig, RunRefusal, ValidatedRun,
-};
+use hirsel_run_config::{AdmittedRun, HostAuthority, RevocationEvidence, RunRefusal, ValidatedRun};
 use std::{fs::File, path::Path};
 
 /// Record an admitted host run at the level its record selects (determinism.md, Recording
@@ -226,7 +224,8 @@ impl HostGrants {
     }
 }
 impl HostAuthority for HostGrants {
-    fn authorize(&mut self, record: &RunConfig) -> Result<(), RunRefusal> {
+    fn authorize(&mut self, run: &hirsel_run_config::ValidatedRun) -> Result<(), RunRefusal> {
+        let record = run.record();
         // Cooperative providers share one readiness, which the RealIo polls and records.
         let readiness = (self.always_cooperative
             || record.io.as_ref().is_some_and(|io| io.tasks.is_some()))
@@ -246,8 +245,6 @@ impl HostAuthority for HostGrants {
             .collect::<Result<Vec<_>, _>>()?;
         let mut io =
             RealIo::from_pinned_mounts(mounts, self.output.take().expect("single admission"))?;
-        // Use the sole validator even for callers admitting already-built data.
-        let run = record.validated()?;
         io.set_projections(run.io_projections());
         if record
             .io

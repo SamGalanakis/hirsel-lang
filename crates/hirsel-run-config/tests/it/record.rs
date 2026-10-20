@@ -306,7 +306,7 @@ struct Host {
     deny: bool,
 }
 impl HostAuthority for Host {
-    fn authorize(&mut self, _: &RunConfig) -> Result<(), RunRefusal> {
+    fn authorize(&mut self, _: &ValidatedRun) -> Result<(), RunRefusal> {
         self.calls += 1;
         if self.deny {
             Err(RunRefusal::Unauthorized { field: "io".into() })

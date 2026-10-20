@@ -451,16 +451,17 @@ impl RunConfig {
         entry: String,
         launch: LaunchKind,
     ) -> Result<ValidatedRun, RunRefusal> {
-        Self::bind_grants_at(bytes, program, entry, launch, None)
+        Self::template_at(bytes, program, entry, launch, None)?.validated()
     }
 
-    fn bind_grants_at(
+    /// The record a grants template binds to the selected code, before validation.
+    fn template_at(
         bytes: &[u8],
         program: [u8; 32],
         entry: String,
         launch: LaunchKind,
         base: Option<&std::path::Path>,
-    ) -> Result<ValidatedRun, RunRefusal> {
+    ) -> Result<RunConfig, RunRefusal> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Grants {
@@ -506,7 +507,7 @@ impl RunConfig {
         record.admission = grants.admission;
         record.budgets = grants.budgets;
         record.recording = grants.recording;
-        record.validated()
+        Ok(record)
     }
 
     /// Select inline JSON only when the argument starts with `{`; otherwise read a path.
@@ -517,10 +518,21 @@ impl RunConfig {
         entry: String,
         launch: LaunchKind,
     ) -> Result<ValidatedRun, RunRefusal> {
+        Self::grants_template(input, program, entry, launch)?.validated()
+    }
+
+    /// The record [`Self::grants_input`] validates, for a launcher that completes it (its
+    /// argument snapshot) before the one validation.
+    pub fn grants_template(
+        input: &std::ffi::OsStr,
+        program: [u8; 32],
+        entry: String,
+        launch: LaunchKind,
+    ) -> Result<RunConfig, RunRefusal> {
         if input.as_encoded_bytes().starts_with(b"{") {
-            Self::bind_grants(input.as_encoded_bytes(), program, entry, launch)
+            Self::template_at(input.as_encoded_bytes(), program, entry, launch, None)
         } else {
-            Self::read_grants(std::path::Path::new(input), program, entry, launch)
+            Self::read_template(std::path::Path::new(input), program, entry, launch)
         }
     }
 
@@ -533,6 +545,16 @@ impl RunConfig {
         }
     }
 
+    /// The record [`Self::record_input`] selects, parsed but not validated, for a launcher
+    /// that completes it before the one validation.
+    pub fn record_template(input: &std::ffi::OsStr) -> Result<RunConfig, RunRefusal> {
+        if input.as_encoded_bytes().starts_with(b"{") {
+            Self::parse(input.as_encoded_bytes())
+        } else {
+            Self::parse(&Self::read_record(std::path::Path::new(input))?)
+        }
+    }
+
     /// Read the explicitly selected template. Relative template paths are tooling inputs.
     pub fn read_grants(
         path: &std::path::Path,
@@ -540,19 +562,31 @@ impl RunConfig {
         entry: String,
         launch: LaunchKind,
     ) -> Result<ValidatedRun, RunRefusal> {
+        Self::read_template(path, program, entry, launch)?.validated()
+    }
+
+    fn read_template(
+        path: &std::path::Path,
+        program: [u8; 32],
+        entry: String,
+        launch: LaunchKind,
+    ) -> Result<RunConfig, RunRefusal> {
         let bytes = std::fs::read(path)
             .map_err(|e| invalid("grants", &format!("{}: {e}", path.display())))?;
-        Self::bind_grants_at(&bytes, program, entry, launch, path.parent())
+        Self::template_at(&bytes, program, entry, launch, path.parent())
     }
 
     /// Read an explicitly selected record; relative paths cannot resolve against cwd.
     pub fn read_path(path: &std::path::Path) -> Result<ValidatedRun, RunRefusal> {
+        Self::validate(&Self::read_record(path)?)
+    }
+
+    fn read_record(path: &std::path::Path) -> Result<Vec<u8>, RunRefusal> {
         if !path.is_absolute() {
             return Err(invalid("--hirsel-run", "expected an absolute record path"));
         }
-        let bytes = std::fs::read(path)
-            .map_err(|error| invalid("--hirsel-run", &format!("{}: {error}", path.display())))?;
-        Self::validate(&bytes)
+        std::fs::read(path)
+            .map_err(|error| invalid("--hirsel-run", &format!("{}: {error}", path.display())))
     }
     /// Deny all roots while selecting the canonical semantic dependency closure.
     pub fn for_program(program: &ProgramRevision, launch: LaunchKind) -> Self {
@@ -578,11 +612,7 @@ impl RunConfig {
     /// Parse human JSON, rejecting duplicates, unknown fields and noncanonical numbers.
     /// Member order, whitespace and string escapes may normalize; grants never widen.
     pub fn validate(bytes: &[u8]) -> Result<ValidatedRun, RunRefusal> {
-        integer_tokens(bytes)?;
-        let mut record: Self =
-            serde_json::from_slice(bytes).map_err(|e| RunRefusal::Malformed {
-                detail: e.to_string(),
-            })?;
+        let mut record = Self::parse(bytes)?;
         if record.schema != SCHEMA {
             return Err(RunRefusal::Schema {
                 found: record.schema,
@@ -657,6 +687,14 @@ impl RunConfig {
             record,
             canonical,
             identity,
+        })
+    }
+    /// The record's JSON, rejecting duplicates, unknown fields and noncanonical numbers,
+    /// before validation.
+    fn parse(bytes: &[u8]) -> Result<Self, RunRefusal> {
+        integer_tokens(bytes)?;
+        serde_json::from_slice(bytes).map_err(|e| RunRefusal::Malformed {
+            detail: e.to_string(),
         })
     }
     /// Builders pass through exactly the same parser/validator as standalone bytes.
@@ -955,7 +993,7 @@ impl BoundRun {
                 revocation = Some(evidence);
             }
         }
-        host.authorize(&self.run.record)?;
+        host.authorize(&self.run)?;
         Ok(AdmittedRun {
             run: self.run.clone(),
             evidence: AdmissionEvidence {
@@ -976,7 +1014,8 @@ pub enum Root {
 /// Implemented by a launch adapter which can actually enforce every requested restriction.
 /// authorize must acquire/pin grants and reject recorder overlap before reporting success.
 pub trait HostAuthority {
-    fn authorize(&mut self, record: &RunConfig) -> Result<(), RunRefusal>;
+    /// Pin the host authority the validated run's grants name.
+    fn authorize(&mut self, run: &ValidatedRun) -> Result<(), RunRefusal>;
     fn revocation(&mut self, reference: &str) -> Result<RevocationEvidence, RunRefusal>;
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

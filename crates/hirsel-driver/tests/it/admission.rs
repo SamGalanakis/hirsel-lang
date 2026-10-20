@@ -5,7 +5,7 @@ use hirsel_run_config::*;
 #[derive(Default)]
 struct Host(usize);
 impl HostAuthority for Host {
-    fn authorize(&mut self, _: &RunConfig) -> Result<(), RunRefusal> {
+    fn authorize(&mut self, _: &ValidatedRun) -> Result<(), RunRefusal> {
         self.0 += 1;
         Ok(())
     }

@@ -206,7 +206,8 @@ struct Host {
     recorder: Option<File>,
 }
 impl HostAuthority for Host {
-    fn authorize(&mut self, record: &RunConfig) -> Result<(), RunRefusal> {
+    fn authorize(&mut self, run: &hirsel_run_config::ValidatedRun) -> Result<(), RunRefusal> {
+        let record = run.record();
         // Hand-built host policy grants directories only; unsupported providers
         // are refused instead of manufacturing broader authority.
         let io = record.io.as_ref().unwrap();

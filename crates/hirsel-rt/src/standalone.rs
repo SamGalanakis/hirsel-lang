@@ -177,17 +177,23 @@ fn select_run(
         None => RunConfig::empty(program, entry.into(), launch),
         Some(flag) if flag == "--hirsel-run" || flag == "--hirsel-grants" => {
             let input = arguments.get(1).ok_or_else(invalid)?;
-            let run = if flag == "--hirsel-grants" {
-                RunConfig::grants_input(input, program, entry.into(), launch)?
+            let mut record = if flag == "--hirsel-grants" {
+                RunConfig::grants_template(input, program, entry.into(), launch)?
             } else {
-                RunConfig::record_input(input)?
+                RunConfig::record_template(input)?
             };
+            match hirsel_run_config::snapshot_args(arguments.into_iter().skip(2)) {
+                Ok(args) => record.args = Some(args),
+                // The selected record's own refusal comes first.
+                Err(refusal) => {
+                    record.validated()?.check_program(program, entry, launch)?;
+                    return Err(refusal);
+                }
+            }
+            // One validation: the record with its snapshot, checked against the code.
+            let run = record.validated()?;
             run.check_program(program, entry, launch)?;
-            let mut record = run.record().clone();
-            record.args = Some(hirsel_run_config::snapshot_args(
-                arguments.into_iter().skip(2),
-            )?);
-            record
+            return run.bind(&facts(program, entry, roots, escapes, fueled)?);
         }
         Some(flag) if flag == "--" => {
             let mut record = RunConfig::empty(program, entry.into(), launch);

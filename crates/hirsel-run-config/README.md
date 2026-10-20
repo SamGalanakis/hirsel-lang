@@ -163,6 +163,10 @@ starts with `{`; otherwise they use `read_path` and `read_grants`. Inline templa
 have no file directory and require absolute directory hosts. Both forms use the
 same schema validator and denial defaults; malformed inline input never falls
 back to reading a file.
+`grants_template` and `record_template` return the record either selects before
+validation, so a launcher that completes it (a standalone executable's argument snapshot)
+validates and hashes it once. `HostAuthority::authorize` receives the `ValidatedRun` that
+admission checked.
 
 `budgets` is the record's last member: absent for `budgets.none@1` (null and an explicit
 `{"provider":"budgets.none@1"}` normalize to absence, and the canonical bytes omit it, so
