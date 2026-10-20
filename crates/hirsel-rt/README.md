@@ -82,7 +82,8 @@ Invariants and boundary:
   available slab is selected (mimalloc's page design; third-party/NOTICES.md).
   A free-list pointer overlays the entire header. Diagnostic states and returned-storage
   tombstones are cold side records; production stores no lifecycle byte. Idle slabs above
-  the cap (8 MiB default) return at trim points, and task exit returns every backing block.
+  the cap (1 MiB default) return at region exits and worker collection points,
+  including runs with long-lived tasks; task exit returns every backing block.
 - One immutable descriptor registry belongs to a run context. The driver assigns it before
   partitioning the linked program and every emitted object receives the same assignment.
   Runtime-owned bytes/file-walk descriptors reserve indices 0/1, empty environments use 2,

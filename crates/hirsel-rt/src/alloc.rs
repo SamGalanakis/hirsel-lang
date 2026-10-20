@@ -2008,6 +2008,13 @@ unsafe fn release_slab(slab: *mut Slab) {
                 HostLayout::from_size_align_unchecked((*slab).slots as usize, 1),
             );
         }
+        // mimalloc src/prim/unix/prim.c:549-558 (31d034d94cdb) uses
+        // MADV_DONTNEED when decommitting to lower RSS immediately. libc free
+        // may retain these aligned 64 KiB allocations in its arena. All bytes
+        // here belong to the retired slab; allocator metadata is outside it.
+        // Do this after the last metadata read and before returning the backing.
+        #[cfg(target_os = "linux")]
+        libc::madvise(slab.cast(), SLAB_SIZE, libc::MADV_DONTNEED);
         host_dealloc(slab.cast(), slab_layout());
     }
 }

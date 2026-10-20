@@ -35,7 +35,7 @@ pub struct Config {
     /// The count bound `max` of D's model: finite counts are `1 .. max - 1` and a dup that would
     /// reach `max` saturates. At least 2; 0 selects the full width. Small only in tests.
     pub count_max: u64,
-    /// Idle slab bytes kept at each trim point; 0 selects the default (8 MiB, as MEM-10).
+    /// Idle slab bytes kept at each trim point; 0 selects the default (1 MiB).
     pub heap_idle_cap: u64,
     /// The Io adapter's handle close; without one a handle drop is an invariant fault.
     pub close_handle: Option<CloseThunk>,
@@ -208,10 +208,13 @@ impl Worker {
     }
 
     /// A scheduling point: take back what other heaps published to this worker's heap, and
-    /// collect orphaned heaps.
+    /// collect orphaned heaps and return excess idle slabs.
     #[inline]
     pub(crate) fn collect(&mut self) {
-        self.heap().collect();
+        // mimalloc theap.c:124-147 (31d034d94cdb): collection also visits
+        // retired pages. Enforce the idle bound even when a long-lived task
+        // never exits a compiler region; trim's under-cap path is constant work.
+        self.heap().trim();
         // SAFETY: the run outlives its workers.
         unsafe { (*self.run).heaps.collect_orphans(self.id) };
     }
@@ -617,7 +620,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         return LAUNCH_INVALID_CONFIG;
     }
     let idle_cap = if config.heap_idle_cap == 0 {
-        REGION_POOL_IDLE_CAP
+        1024 * 1024
     } else {
         config.heap_idle_cap
     };

@@ -335,7 +335,73 @@ fn idle_slabs_above_the_cap_are_returned_after_churn() {
 
 #[cfg(not(feature = "system-allocator"))]
 #[test]
-fn the_default_idle_cap_is_eight_mebibytes() {
+fn worker_collection_reclaims_idle_slabs_without_a_region_exit() {
+    let ctx = Ctx::production();
+    let empty = leaf(0);
+    let blocks: Vec<_> = (0..12_000).map(|_| alloc(&ctx, empty, 1024, 8)).collect();
+    for block in blocks {
+        release(&ctx, block, empty);
+    }
+    assert!(ctx.stats().idle_slab_bytes > 8 << 20);
+    unsafe { hirsel_rt::context::hirsel_rt_v2_worker_collect(ctx.0) };
+    let stats = ctx.stats();
+    assert!(stats.idle_slab_bytes <= 1 << 20, "{stats:?}");
+    assert_eq!(stats.live_blocks, 0);
+    let again = alloc(&ctx, empty, 1024, 8);
+    unsafe { ptr::write_bytes(payload(again), 7, capacity(again) as usize) };
+    release(&ctx, again, empty);
+}
+
+#[cfg(not(feature = "system-allocator"))]
+#[cfg(target_os = "linux")]
+#[test]
+fn retiring_slabs_discards_their_resident_pages_and_preserves_live_ones() {
+    let ctx = Ctx::with(Config {
+        heap_idle_cap: 1,
+        ..Config::new()
+    });
+    let empty = leaf(0);
+    let blocks: Vec<_> = (0..2000).map(|_| alloc(&ctx, empty, 1024, 8)).collect();
+    let slab = |block: *mut Header| (block.addr() & !(SLAB_SIZE - 1)) as *mut libc::c_void;
+    let first = blocks[0];
+    let live_slab = slab(first);
+    let retired_slab = slab(*blocks.last().unwrap());
+    assert_ne!(live_slab, retired_slab);
+    for &block in &blocks {
+        unsafe { ptr::write_bytes(payload(block), 0x39, 1024) };
+    }
+    for block in blocks.into_iter().skip(1) {
+        release(&ctx, block, empty);
+    }
+    unsafe { hirsel_rt::context::hirsel_rt_v2_worker_collect(ctx.0) };
+    assert_eq!(ctx.stats().live_blocks, 1);
+    assert_eq!(unsafe { *payload(first) }, 0x39);
+    // mincore may return ENOMEM if libc returned the slab's mapping outright.
+    // Otherwise all but allocator metadata at its edges must be nonresident.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+    let mut residency = vec![0u8; SLAB_SIZE / page];
+    let result = unsafe { libc::mincore(retired_slab, SLAB_SIZE, residency.as_mut_ptr()) };
+    if result == 0 {
+        assert!(
+            residency
+                .iter()
+                .skip(1)
+                .take(residency.len().saturating_sub(2))
+                .all(|b| b & 1 == 0),
+            "{residency:?}"
+        );
+    } else {
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ENOMEM)
+        );
+    }
+    release(&ctx, first, empty);
+}
+
+#[cfg(not(feature = "system-allocator"))]
+#[test]
+fn the_default_idle_cap_is_one_mebibyte() {
     let ctx = Ctx::production();
     let empty = leaf(0);
     let blocks: Vec<_> = (0..12_000).map(|_| alloc(&ctx, empty, 1024, 8)).collect();
@@ -346,7 +412,7 @@ fn the_default_idle_cap_is_eight_mebibytes() {
     unsafe { hirsel_rt::context::hirsel_rt_v2_trim(ctx.0) };
     let stats = ctx.stats();
     assert!(
-        stats.idle_slab_bytes <= 8 << 20 && stats.idle_slab_bytes > (8 << 20) - SLAB_SIZE as u64,
+        stats.idle_slab_bytes <= 1 << 20 && stats.idle_slab_bytes > (1 << 20) - SLAB_SIZE as u64,
         "{stats:?}"
     );
 }

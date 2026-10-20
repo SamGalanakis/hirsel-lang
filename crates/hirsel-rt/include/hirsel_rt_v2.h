@@ -301,7 +301,7 @@ typedef struct hirsel_rt_v2_config {
     uint32_t abi_version;
     uint32_t flags;
     uint64_t count_max; /* D's count bound: finite counts 1 .. count_max - 1; 0 = full width */
-    uint64_t heap_idle_cap;               /* 0 selects 8 MiB */
+    uint64_t heap_idle_cap;               /* 0 selects 1 MiB */
     hirsel_rt_v2_close_thunk close_handle; /* NULL: a handle drop is an invariant fault */
     uint64_t hash_seed;
     const hirsel_rt_v2_layout *const *layouts;
