@@ -16,6 +16,5 @@ hirsel-check-protocol = { path = "../hirsel-check-protocol" }
 
 [dev-dependencies]
 hirsel-guard = { path = "../hirsel-guard" }
-hirsel-interp = { path = "../hirsel-interp" }
 hirsel-validate = { path = "../hirsel-validate" }
 insta = "1"

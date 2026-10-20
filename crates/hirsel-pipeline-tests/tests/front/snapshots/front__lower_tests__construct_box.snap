@@ -1,5 +1,5 @@
 ---
-source: crates/hirsel-lower/src/tests.rs
+source: crates/hirsel-pipeline-tests/tests/front/lower_tests.rs
 expression: "print::definition(&d)"
 ---
 definition main entry b0

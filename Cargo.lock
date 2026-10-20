@@ -787,7 +787,6 @@ dependencies = [
  "hirsel-diag",
  "hirsel-guard",
  "hirsel-intern",
- "hirsel-interp",
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",
@@ -868,6 +867,7 @@ name = "hirsel-pipeline-tests"
 version = "0.1.0"
 dependencies = [
  "hirsel-analysis-canary",
+ "hirsel-check-protocol",
  "hirsel-code-store",
  "hirsel-codec",
  "hirsel-core-contract",
@@ -880,6 +880,7 @@ dependencies = [
  "hirsel-interp",
  "hirsel-layout",
  "hirsel-lir",
+ "hirsel-lower",
  "hirsel-object-storage",
  "hirsel-proof-export",
  "hirsel-rc",

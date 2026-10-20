@@ -1,5 +1,5 @@
 ---
-source: crates/hirsel-lower/src/tests.rs
+source: crates/hirsel-pipeline-tests/tests/front/lower_tests.rs
 expression: "print::definition(&d)"
 ---
 definition main entry b0
@@ -17,21 +17,21 @@ body 0 result t3 parameters []
   place 5: slot 3 [] t2
   place 6: slot 4 [] t3
   place 7: slot 4 [] t3
-  rvalue 0: Constant(Integer(3))
+  rvalue 0: Constant(Integer(8))
   rvalue 1: Use(Operand { place: PlaceId(1), usage: Take })
-  rvalue 2: Constant(Integer(8))
+  rvalue 2: Constant(Integer(3))
   rvalue 3: Use(Operand { place: PlaceId(4), usage: Take })
-  rvalue 4: Construct { constructor: Tuple, fields: [ConstructField { field: 0, value: Operand { place: PlaceId(2), usage: Take } }, ConstructField { field: 1, value: Operand { place: PlaceId(5), usage: Take } }], destination: Inferred }
+  rvalue 4: Construct { constructor: Record(DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: [], name: "Pair" })), fields: [ConstructField { field: 1, value: Operand { place: PlaceId(2), usage: Take } }, ConstructField { field: 0, value: Operand { place: PlaceId(5), usage: Take } }], destination: Inferred }
   cleanup 0: []
   block 0:
-    StorageLive(LocalId(0)) fail 0 @0..1
-    Assign { destination: PlaceId(0), value: RvalueId(0) } fail 0 @0..1
-    BindOrigin { source: PlaceId(0), place: PlaceId(1), kind: Fresh } fail 0 @0..1
-    StorageLive(LocalId(1)) fail 0 @0..1
-    Assign { destination: PlaceId(2), value: RvalueId(1) } fail 0 @0..1
-    StorageLive(LocalId(2)) fail 0 @2..3
-    Assign { destination: PlaceId(3), value: RvalueId(2) } fail 0 @2..3
-    BindOrigin { source: PlaceId(3), place: PlaceId(4), kind: Fresh } fail 0 @2..3
+    StorageLive(LocalId(0)) fail 0 @2..3
+    Assign { destination: PlaceId(0), value: RvalueId(0) } fail 0 @2..3
+    BindOrigin { source: PlaceId(0), place: PlaceId(1), kind: Fresh } fail 0 @2..3
+    StorageLive(LocalId(1)) fail 0 @2..3
+    Assign { destination: PlaceId(2), value: RvalueId(1) } fail 0 @2..3
+    StorageLive(LocalId(2)) fail 0 @0..1
+    Assign { destination: PlaceId(3), value: RvalueId(2) } fail 0 @0..1
+    BindOrigin { source: PlaceId(3), place: PlaceId(4), kind: Fresh } fail 0 @0..1
     StorageLive(LocalId(3)) fail 0 @0..1
     Assign { destination: PlaceId(5), value: RvalueId(3) } fail 0 @0..1
     StorageLive(LocalId(4)) fail 0 @0..1

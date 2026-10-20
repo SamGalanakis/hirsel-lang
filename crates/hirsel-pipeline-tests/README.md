@@ -3,11 +3,13 @@
 Tests that an implementation crate owns but that compile source through
 `hirsel-driver`: the real checker, lowering, native export and import feed the
 crate under test. They live here so that no implementation crate dev-depends on
-the driver. Each implementation
-crate's own `tests/it` keeps the tests that build their input by hand.
+the driver. Tests that run the interpreter (`hirsel-interp`) as their reference
+live here too, so that no crate below the interpreter dev-depends on it. Each
+implementation crate's own `tests/it` keeps the tests that build their input by
+hand and need neither.
 
-Allowed dependencies: dev-dependencies only, on the driver and the crates whose
-public API the tests read. The library is empty and nothing depends on this
+Allowed dependencies: dev-dependencies only, on the driver, the interpreter and
+the crates whose public API the tests read. The library is empty and nothing depends on this
 crate. The TLS native export test also uses rustls as its independent local server.
 Only this crate, `hirsel-cli`, `hirsel-conformance`, `hirsel-native-build`, and
 check and modes (whose internal unit-test harnesses read the core library
@@ -18,7 +20,7 @@ Layout:
 - Two binaries, each a third to two thirds of the former single harness, so a
   check or modes edit relinks them in parallel:
   `tests/rc/main.rs` links hirsel-rc's suites and `tests/front/main.rs` those of
-  check, modes, lir, rt and code-store, and `analysis_canaries`, which exports
+  check, modes, lir, lower, rt and code-store, and `analysis_canaries`, which exports
   `front/fixtures/analysis/` and runs hirsel-analysis-canary's analyses over the
   export files. A module named `<crate>_<file>` holds what was
   `crates/hirsel-<crate>/tests/it/<file>.rs`, so `rc::cleanup::x` became
@@ -29,8 +31,9 @@ Layout:
   (golden LIR dumps, `tools/bless.sh rc-import` rewrites them), `rc/maps/seed.c`, and
   `front/check_support.rs`.
 - Shared files of other crates are included by path: the driver's
-  `tests/support/source_std.rs` and the runtime's `tests/support/io.rs`
-  (independent replay of runtime completion tapes).
+  `tests/support/source_std.rs`, the runtime's `tests/support/io.rs`
+  (independent replay of runtime completion tapes) and the lowering fixture
+  `crates/hirsel-lower/src/support.rs`.
 - `full_gate_` tests keep their names and `#[ignore = "full gate"]`; the full
   gate runs them with the rest of the workspace.
 

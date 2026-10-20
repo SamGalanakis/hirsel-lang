@@ -1,12 +1,9 @@
 //! Isolated lowering fixtures with explicit declarations and analyzed facts.
 use super::*;
 use hirsel_intern::Symbol;
-use hirsel_interp::{Execution, Limits, run};
-use hirsel_span::{FileId, SourceMap};
+use hirsel_span::FileId;
 use hirsel_syntax::*;
-use hirsel_tir::{DefinitionRef, RunConfiguration, TirProvider};
 use hirsel_types::*;
-use std::sync::Arc;
 pub fn path(name: &str) -> DefPath {
     DefPath(ItemPath {
         package: PackageId {
@@ -392,71 +389,6 @@ impl Fixture {
         );
         call
     }
-    pub fn call_plan(
-        &mut self,
-        expression: ExprId,
-        target: hirsel_types::CallTarget,
-        ordinals: Vec<u32>,
-    ) {
-        let ExprKind::Call { callee, arguments } =
-            &self.tree.expressions[expression.0 as usize].kind
-        else {
-            panic!("call fixture")
-        };
-        let parameters = if let Some(row) = self
-            .checked
-            .calls
-            .iter()
-            .find(|r| r.expression == expression)
-        {
-            let mut parameters = row
-                .arguments
-                .iter()
-                .map(|a| a.parameter.clone().unwrap())
-                .collect::<Vec<_>>();
-            parameters.sort_by_key(|(i, _)| *i);
-            parameters.into_iter().map(|(_, p)| p).collect::<Vec<_>>()
-        } else {
-            let hirsel_types::TypeKind::Function(f) = &self
-                .checked
-                .types
-                .get(self.checked.expressions[callee.0 as usize].ty)
-                .unwrap()
-                .kind
-            else {
-                panic!("callable fixture")
-            };
-            f.parameters.to_vec()
-        };
-        let row = hirsel_types::CheckedCall {
-            expression,
-            target,
-            arguments: arguments
-                .iter()
-                .zip(ordinals)
-                .map(|(a, i)| hirsel_types::CheckedArgument {
-                    expression: a.value,
-                    parameter: Some((i, parameters[i as usize].clone())),
-                })
-                .collect(),
-            generic_arguments: vec![],
-            result: self.checked.expressions[expression.0 as usize].ty,
-            state: hirsel_types::CallState::Complete,
-        };
-        self.checked.calls.retain(|r| r.expression != expression);
-        self.checked.calls.push(row);
-    }
-    pub fn indirect_call_plan(&mut self, expression: ExprId, ordinals: Vec<u32>) {
-        let ExprKind::Call { callee, .. } = self.tree.expressions[expression.0 as usize].kind
-        else {
-            panic!("call fixture")
-        };
-        self.call_plan(
-            expression,
-            hirsel_types::CallTarget::Value(callee),
-            ordinals,
-        );
-    }
     pub fn assign(
         &mut self,
         place: ExprId,
@@ -494,33 +426,6 @@ impl Fixture {
     pub fn register(&mut self, signature: Signature) {
         self.declarations
             .insert(signature.definition.clone(), signature);
-    }
-    pub fn nominal(&mut self, name: &str, representation: TypeId) {
-        self.register(Signature {
-            metadata: SignatureMetadata::default(),
-            definition: path(name),
-            types: self.checked.types.clone(),
-            kind: SignatureKind::Type(TypeDefinition {
-                loop_source: None,
-                format: None,
-                generics: vec![],
-                representation: Some(representation),
-                destructor_allocation: Allocation::NoAlloc,
-                bounds: vec![],
-                authority: AuthoritySummary::inert(),
-                capability: None,
-                implementation_authority: None,
-                serializable: false,
-                serializable_check: None,
-                layout: Layout::default(),
-                distinct: false,
-                resource: false,
-                drop: None,
-                fact: None,
-                captures: None,
-            }),
-            fingerprint: ContentHash::default(),
-        });
     }
     pub fn closure(&mut self, info: ClosureInfo, result: TypeId, capture_owner: NameSite) {
         self.frames
@@ -563,7 +468,12 @@ impl Fixture {
             arena: None,
         }
     }
-    pub fn lower(&self, expression: ExprId, name: &str, result: TypeId) -> Result<Definition> {
+    pub fn lower(
+        &self,
+        expression: ExprId,
+        name: &str,
+        result: TypeId,
+    ) -> std::result::Result<Definition, LowerError> {
         let mut declarations = self.declarations.clone();
         declarations.entry(path(name)).or_insert_with(|| Signature {
             metadata: SignatureMetadata::default(),
@@ -591,58 +501,6 @@ impl Fixture {
 pub fn ty(kind: TypeKind) -> Type {
     Type::with_kind(kind)
 }
-pub struct Provider(pub Vec<Definition>);
-impl TirProvider for Provider {
-    fn constant(
-        &mut self,
-        _path: &hirsel_syntax::DefPath,
-    ) -> std::result::Result<hirsel_tir::MaterializedRef, hirsel_types::QueryError> {
-        Err(hirsel_types::QueryError::NotImplemented)
-    }
-    fn constant_definitions(
-        &mut self,
-    ) -> std::result::Result<Vec<hirsel_syntax::DefPath>, hirsel_types::QueryError> {
-        Ok(vec![])
-    }
-
-    fn definition(&mut self, path: &DefPath) -> std::result::Result<DefinitionRef, QueryError> {
-        self.0
-            .iter()
-            .find(|d| &d.path == path)
-            .cloned()
-            .map(Arc::new)
-            .ok_or_else(|| QueryError::NotImplemented)
-    }
-}
-pub fn execute(definitions: Vec<Definition>, arguments: Vec<hirsel_interp::Value>) -> Execution {
-    let mut sources = SourceMap::default();
-    sources.add("fixture.hir", "x\n".repeat(100)).unwrap();
-    run(
-        &mut Provider(definitions),
-        &sources,
-        &RunConfiguration {
-            entry: path("main"),
-            hash_seed: 0,
-            inputs: vec![],
-        },
-        arguments,
-        Limits::default(),
-    )
-    .unwrap()
-}
-pub fn returned(execution: Execution) -> hirsel_interp::Value {
-    match execution.outcome {
-        hirsel_interp::Outcome::Returned { value, .. } => value,
-        outcome => panic!("unexpected {outcome:?}"),
-    }
-}
-pub fn bits(execution: Execution) -> u128 {
-    match returned(execution) {
-        hirsel_interp::Value::Integer(i) => i.bits(),
-        value => panic!("expected integer, got {value:?}"),
-    }
-}
-
 pub fn passing(usage: UseKind) -> PassingMode {
     match usage {
         UseKind::Take => PassingMode::Take,
@@ -664,17 +522,4 @@ pub fn function(parameters: Vec<hirsel_types::Parameter>, result: TypeId) -> Fun
         incomplete: false,
         foreign: None,
     }
-}
-
-/// Runs deep fixtures on a thread with the compiler's stack size, without
-/// linking the driver.
-pub fn with_large_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(hirsel_intern::jobs::COMPILER_STACK_BYTES)
-            .spawn_scoped(scope, work)
-            .unwrap_or_else(|error| hirsel_guard::spawn_failed(128 * 1024 * 1024, error))
-            .join()
-            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-    })
 }
