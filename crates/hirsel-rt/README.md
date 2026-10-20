@@ -327,7 +327,7 @@ child request names (CAP-2); the policy tracks whether its input is open. A scri
 world plays the entry with `hirsel_run_config::ScriptChild`: a read at an `Expect` is
 `AdapterError::Blocked`, and a contradicted or unmet `Expect` writes its Test report and
 completes `Checked(false)` (LANG-9). A host child goes through `HostCall` to
-`host_child::HostChildren`, three nonblocking pipes per child: a write or read that would
+the `process::ProcessHost` provider, `host_child::HostChildren`, three nonblocking pipes per child: a write or read that would
 block records its pipe as the token's interest and parks (a write that accepted bytes is
 committed, so it is no longer a cancellation point), and without cooperative admission it
 polls that pipe. `child.wait` closes input, discards the remaining output and reaps, as a
@@ -477,14 +477,16 @@ from its bound rules (`set_net_rules`; launch reads the root Net's `io.net` gran
 `HIRSEL_RT_NET` and binds `net.script@2` peers through `set_net_script`). TLS upgrades the granted
 socket through rustls in `net_tls.rs`; subsequent network reads and writes carry
 plaintext. Every TLS operation reaches rustls only through a `net_tls::TlsEngine` (material
-checks, handshake starts, scripted accepts) and the `TlsSession` each handshake returns,
+checks, handshake starts, scripted handshakes) and the `TlsSession` each handshake returns,
 which the host providers hold per stream. Only the TLS entries (`tls_abi.rs`, and the
 interpreter's TLS operations) name the engine, handing it to the adapter
 (`Adapter::tls`) before their material and request, and the policy layer and every world
 take it from there; a TLS request without it is an invariant fault. With one function per
 section in the archive and `--gc-sections`, an executable whose program calls no TLS entry
-links none of rustls, ring, webpki or the root set
-(`link_kit::an_executable_links_the_tls_provider_only_when_its_program_calls_tls`). `tls.close` sends close_notify before closing on every outcome; implicit
+links no TLS handshake and not the root set
+(`link_kit::an_executable_links_each_host_provider_only_when_its_program_reaches_it`); ring
+and rustls's key loading stay, because admission loads a scripted `Serves` peer's server
+(`hirsel_run_config::check_peer_address`). `tls.close` sends close_notify before closing on every outcome; implicit
 drop only closes. PEM bytes pass through `Adapter::tls_roots` to the host provider
 for its next handshake, outside the tape request, whose SHA-256 must match. Replay
 and scripted providers ignore the bundle and use only the digest. `tls.accept` is the
@@ -1085,9 +1087,20 @@ DNS runs outside the evaluator and signals a descriptor; relative timeouts retai
 deadline across readiness retries. Partially published writes/TLS exchanges cannot be
 reported as effect-free cancellation. HostNet remains the native blocking provider.
 `HostGrants::cooperative` (the interpreter, always) and `HostGrants::new` (native, when the
-record grants `io.tasks`) install CooperativeNet and CooperativeStdin over one Readiness,
-which `RealIo::set_cooperative` also receives; without tasks a native run keeps the blocking
-providers. RealIo answers the `Adapter` wait methods from that Readiness and records a
+record grants `io.tasks`) install CooperativeStdin over one Readiness, which
+`RealIo::set_cooperative_net` also receives; without tasks a native run keeps the blocking
+providers. RealIo starts with no host network provider: the entries that open host network
+state (connect, resolve, listen, Unix connect and listen, UDP bind) hand
+`net_host::provider` to the adapter (`Adapter::net`) before their request, and RealIo builds
+CooperativeNet on that Readiness, or otherwise HostNet (as under the harness virtual
+clock, whose Readiness parks only timers), on the first. The entries that
+start a process (`proc.run`, `proc.pipeline`, `proc.spawn`, `proc.spawn_pipeline`) likewise
+hand `process::host` over (`Adapter::process`); a later request on a handle they made finds
+the provider in place. The interpreter, which reaches every operation, hands both over at
+admission. So, with `--gc-sections`, an executable whose program opens no socket links no
+sockets or resolver, and one that starts no process links no process spawning, and the
+dynamic loader binds none of their libc symbols at start
+(`link_kit::an_executable_links_each_host_provider_only_when_its_program_reaches_it`). RealIo answers the `Adapter` wait methods from that Readiness and records a
 `blocked` completion for every request that parks (with whether it already committed part
 of its effect) and, at a scheduling point, a `ready <wait> <points>` event for each ready
 token, in creation order before any is re-issued: the wait's creation ordinal and the

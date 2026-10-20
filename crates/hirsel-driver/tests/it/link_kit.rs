@@ -113,22 +113,49 @@ const TLS_PROGRAM: &str = "pub fn main(rt: Io) -> Result[(), NetError] {
 }
 ";
 
+const PROCESS_PROGRAM: &str = "pub fn main(rt: Io) -> Result[(), ProcessError] {
+  let p = match io.process(rt) {
+    Ok(p) => p,
+    Error(_) => return Ok(()),
+  }
+  let command = Command(program: path.of(\"/bin/true\"), args: [], dir: None(), env: None(), own_group: false)
+  let _ = proc.run(p, command, b\"\", 64u64, None())?
+  Ok(())
+}
+";
+
 #[test]
-fn an_executable_links_the_tls_provider_only_when_its_program_calls_tls() {
+fn an_executable_links_each_host_provider_only_when_its_program_reaches_it() {
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("link-kit-providers");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let target = TargetSpec::x86_64_unknown_linux_gnu();
-    // ring's primitives and rustls's client handshake, by symbol name.
-    let tls = |bytes: &[u8]| {
-        [&b"ring_core_"[..], b"ClientConnection"]
-            .map(|name| bytes.windows(name.len()).any(|w| w == name))
+    // By name: rustls's client handshake and the compiled root set (TLS), the resolver
+    // and sockets (network), and process spawning. Admission still loads a scripted
+    // `Serves` peer's key, so ring itself is in every executable.
+    let providers = |bytes: &[u8]| {
+        [
+            &b"ClientConnection"[..],
+            b"ISRG Root",
+            b"getaddrinfo",
+            b"setsockopt",
+            b"posix_spawnp",
+        ]
+        .map(|name| bytes.windows(name.len()).any(|w| w == name))
     };
-    for (name, program, expected) in [("plain", PROGRAM, false), ("tls", TLS_PROGRAM, true)] {
+    for (name, program, expected) in [
+        ("plain", PROGRAM, [false; 5]),
+        ("tls", TLS_PROGRAM, [true, true, true, true, false]),
+        (
+            "process",
+            PROCESS_PROGRAM,
+            [false, false, false, false, true],
+        ),
+    ] {
         let source = root.join(format!("{name}.hir"));
         std::fs::write(&source, program).unwrap();
         let (bytes, _) = build(&source, &root.join(name), &target, BuildProfile::Default);
-        assert_eq!(tls(&bytes), [expected; 2], "{name}");
+        assert_eq!(providers(&bytes), expected, "{name}");
     }
     std::fs::remove_dir_all(root).unwrap();
 }

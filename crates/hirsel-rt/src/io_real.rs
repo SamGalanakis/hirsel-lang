@@ -26,6 +26,9 @@ pub struct RealIo {
     net: Option<Box<dyn NetProvider>>,
     /// Cooperative admission: the readiness its providers park on and the waits it records.
     cooperative: Option<(crate::readiness::Readiness, crate::readiness::WaitLog)>,
+    /// Whether the host network provider parks on that readiness (`set_cooperative_net`);
+    /// otherwise it blocks, as under the harness virtual clock.
+    cooperative_net: bool,
     /// Test clocks use the same timer heap, with an independent virtual origin.
     test_clock: Option<crate::readiness::Readiness>,
     /// The host process provider, once a process entry handed its constructor over
@@ -79,6 +82,12 @@ impl RealIo {
     /// `AdapterError::Blocked`, and the tape records it and each ready poll (DET-1).
     pub fn set_cooperative(&mut self, readiness: crate::readiness::Readiness) {
         self.cooperative = Some((readiness, Default::default()));
+    }
+    /// Cooperative admission whose host network provider is cooperative too: the net
+    /// entries build `net_host::CooperativeNet` on `readiness` (`Adapter::net`).
+    pub fn set_cooperative_net(&mut self, readiness: crate::readiness::Readiness) {
+        self.set_cooperative(readiness);
+        self.cooperative_net = true;
     }
     /// Semantic harness clock, with the ordinary cooperative park/ready tape protocol.
     pub(crate) fn virtual_clock(&mut self, ticks: u64) {
@@ -159,6 +168,7 @@ impl RealIo {
             retain_history: true,
             net: None,
             cooperative: None,
+            cooperative_net: false,
             test_clock: None,
             children: None,
         })
@@ -471,7 +481,8 @@ impl Adapter for RealIo {
     }
     fn net(&mut self, host: crate::net_host::Provider) {
         if self.net.is_none() {
-            self.net = Some(host(self.cooperative.as_ref().map(|(r, _)| r)));
+            let readiness = self.cooperative.as_ref().filter(|_| self.cooperative_net);
+            self.net = Some(host(readiness.map(|(readiness, _)| readiness)));
         }
     }
     fn process(&mut self, host: fn() -> Box<dyn crate::process::ProcessHost>) {

@@ -271,8 +271,7 @@ impl HostAuthority for HostGrants {
             }
         }
         if let Some(readiness) = &readiness {
-            // The net entries build the cooperative host provider on this readiness.
-            io.set_cooperative(readiness.clone());
+            io.set_cooperative_net(readiness.clone());
         }
         if let Some(provider) = run.random_provider() {
             io.set_random(provider, run.config().random_seed());
