@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "DET-1-store-sim-crash-compaction-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../packages/s3@1/hirsel.json",
+      "package": {
+        "name": "s3",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

@@ -1,0 +1,103 @@
+// rule: SEM-5
+// expect: run
+// std@1/store over a test Dir: a transaction reads its own writes, a commit is
+// visible to later snapshots at once, a snapshot never changes, ranges walk
+// either way with paging and prefix bounds, a transaction begun before another
+// commit conflicts, and a reopened store holds every durable commit.
+fn keys(entries: List[(Bytes, Bytes)]) -> List[Bytes] {
+  let mut out: List[Bytes] = []
+  for (k, _) in entries {
+    list.push(mut out, unique k)
+  }
+  out
+}
+
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  let mut s = store.open_backend(
+    s3.simulated(d, 0, 0, 0, 0),
+    s3.simulated_backend(),
+    store.default_config()
+  )?
+  let mut first = store.begin(mut s)
+  txn.put(mut first, b"user/ada", b"1815")
+  txn.put(mut first, b"user/alan", b"1912")
+  txn.put(mut first, b"user/grace", b"1906")
+  txn.put(mut first, b"zone", b"z")
+  txn.delete(mut first, b"zone")
+  test.check(
+    t,
+    txn.get(first, b"user/ada") == Some(b"1815") && txn.get(first, b"zone") == None()
+  )
+  let earlier = store.snapshot(mut s)
+  let ticket = store.commit(mut s, take first)?
+  test.check(t, store.sequence(ticket) == 1)
+  let after = store.snapshot(mut s)
+  test.check(
+    t,
+    store.get(earlier, b"user/ada") == None() && store.get(after, b"user/ada") == Some(
+      b"1815"
+    )
+  )
+  // Ranges: ascending, descending, paging and prefixes.
+  let up: ordered_map.Direction = Ascending()
+  let down: ordered_map.Direction = Descending()
+  let all: ordered_map.Bound[Bytes] = Unbounded()
+  test.check(
+    t,
+    keys(store.range(after, all, Unbounded(), up, 10)) == [
+      b"user/ada",
+      b"user/alan",
+      b"user/grace"
+    ]
+  )
+  test.check(
+    t,
+    keys(store.range(after, all, Unbounded(), down, 2)) == [b"user/grace", b"user/alan"]
+  )
+  let page = store.range(after, all, Unbounded(), up, 1)
+  let (last, _) = page[0]
+  let next: ordered_map.Bound[Bytes] = Excluded(unique last)
+  test.check(t, keys(store.range(after, next, Unbounded(), up, 1)) == [b"user/alan"])
+  let (low, high) = store.prefix_bounds(b"user/a")
+  test.check(
+    t,
+    keys(store.range(after, low, high, up, 10)) == [b"user/ada", b"user/alan"]
+  )
+  let (ff_low, ff_high) = store.prefix_bounds(b"\xff")
+  test.check(
+    t,
+    store.range(after, ff_low, ff_high, up, 10) == [] && ff_high == Unbounded()
+  )
+  // A transaction that began before another commit conflicts.
+  let mut early = store.begin(mut s)
+  let mut late = store.begin(mut s)
+  txn.delete(mut late, b"user/alan")
+  txn.put(mut late, b"user/ada", b"1815-12-10")
+  let second = store.commit(mut s, take late)?
+  txn.put(mut early, b"user/x", b"x")
+  test.check(t, store.commit(mut s, take early) == Error(Conflict()))
+  test.check(
+    t,
+    keys(store.range(after, all, Unbounded(), up, 10)) == [
+      b"user/ada",
+      b"user/alan",
+      b"user/grace"
+    ]
+  )
+  store.durable(mut s, second)?
+  store.close(take s)?
+  let mut again = store.open_backend(
+    s3.simulated(d, 0, 0, 0, 0),
+    s3.simulated_backend(),
+    store.default_config()
+  )?
+  let now = store.snapshot(mut again)
+  test.check(t, store.snapshot_sequence(now) == 2)
+  test.check(
+    t,
+    store.get(now, b"user/ada") == Some(b"1815-12-10") && store.get(now, b"user/alan") == None()
+  )
+  store.close(take again)?
+  Ok(())
+}

@@ -15,7 +15,7 @@ fn value(n: u8) -> Bytes {
 }
 
 // The values of a, b and c, 0 meaning absent.
-fn read_state(mut s: store.Store) -> List[u8] {
+fn read_state(mut s: store.Store[Dir]) -> List[u8] {
   let snap = store.snapshot(mut s)
   let mut out: List[u8] = []
   let keys: List[Bytes] = [b"a", b"b", b"c"]
@@ -29,7 +29,7 @@ fn read_state(mut s: store.Store) -> List[u8] {
   out
 }
 
-fn first(mut s: store.Store) -> Result[(), store.TxFailure[Unused]] {
+fn first(mut s: store.Store[Dir]) -> Result[(), store.TxFailure[Unused]] {
   store.transact(
     mut s,
     fn(mut tx: store.Tx) -> Result[(), Unused] {
@@ -40,7 +40,7 @@ fn first(mut s: store.Store) -> Result[(), store.TxFailure[Unused]] {
   )
 }
 
-fn second(mut s: store.Store) -> Result[(), store.TxFailure[Unused]] {
+fn second(mut s: store.Store[Dir]) -> Result[(), store.TxFailure[Unused]] {
   store.transact(
     mut s,
     fn(mut tx: store.Tx) -> Result[(), Unused] {

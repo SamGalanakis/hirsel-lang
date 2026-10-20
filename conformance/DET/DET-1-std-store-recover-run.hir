@@ -6,7 +6,7 @@
 // object before the tail refuses the open with Corrupt() naming it; a
 // Volatile store crashed after its log names became durable without their
 // bytes keeps a prefix of its commits.
-fn put(mut s: store.Store, k: Bytes, v: Bytes) -> Result[(), store.StoreError] {
+fn put(mut s: store.Store[Dir], k: Bytes, v: Bytes) -> Result[(), store.StoreError] {
   let mut x = store.begin(mut s)
   txn.put(mut x, unique k, unique v)
   let ticket = store.commit(mut s, take x)?
@@ -29,7 +29,7 @@ fn corrupt(d: Dir, p: String) -> Result[(), FileError] uses {d} {
   file.put_new(d, path.of(p), b"not a log object", Durable())
 }
 
-fn size(mut s: store.Store) -> u64 {
+fn size(mut s: store.Store[Dir]) -> u64 {
   let all: ordered_map.Bound[Bytes] = Unbounded()
   list.len(store.range(store.snapshot(mut s), all, Unbounded(), Ascending(), 100))
 }

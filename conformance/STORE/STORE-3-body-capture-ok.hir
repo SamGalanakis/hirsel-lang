@@ -2,7 +2,7 @@
 // expect: accept
 // A transaction body is `uses {}`: it holds its Tx and data, and writing the
 // file after the transaction, outside the body, is allowed.
-pub fn note(mut s: store.Store, d: Dir) -> Result[(), store.TxFailure[FileError]] {
+pub fn note(mut s: store.Store[Dir], d: Dir) -> Result[(), store.TxFailure[FileError]] {
   store.transact(
     mut s,
     fn(mut tx: store.Tx) -> Result[(), FileError] {

@@ -12,7 +12,10 @@ fn logs(d: Dir) -> u64 uses {d} {
   }
 }
 
-fn put(mut s: store.Store, k: Bytes, v: Bytes) -> Result[store.Ticket, store.StoreError] {
+fn put(mut s: store.Store[Dir], k: Bytes, v: Bytes) -> Result[
+  store.Ticket,
+  store.StoreError
+] {
   let mut x = store.begin(mut s)
   txn.put(mut x, unique k, unique v)
   store.commit(mut s, take x)

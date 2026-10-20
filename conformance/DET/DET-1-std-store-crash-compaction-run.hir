@@ -24,7 +24,7 @@ fn expected(acked: u64) -> List[(Bytes, Bytes)] {
   }
 }
 
-fn commit(mut s: store.Store, writes: List[(Bytes, Option[Bytes])]) -> Result[
+fn commit(mut s: store.Store[Dir], writes: List[(Bytes, Option[Bytes])]) -> Result[
   (),
   store.StoreError
 ] {
@@ -65,7 +65,7 @@ fn workload(d: Dir, stop: u64) -> (u64, bool) uses {d} {
   (3, finished)
 }
 
-fn contents(mut s: store.Store) -> List[(Bytes, Bytes)] {
+fn contents(mut s: store.Store[Dir]) -> List[(Bytes, Bytes)] {
   let all: ordered_map.Bound[Bytes] = Unbounded()
   store.range(store.snapshot(mut s), all, Unbounded(), Ascending(), 100)
 }

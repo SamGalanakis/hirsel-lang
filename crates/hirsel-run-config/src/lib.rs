@@ -10,6 +10,9 @@ use hirsel_run_schema::{
 };
 use serde::{Deserialize, Serialize};
 mod calls;
+mod object_stores;
+pub use object_stores::{CredentialsReference, ObjectStore};
+
 mod grants;
 pub use grants::grants_within;
 mod runners;
@@ -98,6 +101,12 @@ pub struct RunConfig {
     /// the default, leaves it to the launch: a recording destination records the tape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recording: Option<RecordingLevel>,
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "object_stores::unique"
+    )]
+    pub object_stores: BTreeMap<String, ObjectStore>,
 }
 
 fn invalid(field: &str, detail: &str) -> RunRefusal {
@@ -191,6 +200,8 @@ impl RunConfig {
             #[serde(default)]
             budgets: Option<Budgets>,
             recording: Option<RecordingLevel>,
+            #[serde(default, deserialize_with = "object_stores::unique")]
+            object_stores: BTreeMap<String, ObjectStore>,
         }
         integer_tokens(bytes)?;
         let mut grants: Grants =
@@ -221,6 +232,7 @@ impl RunConfig {
         record.admission = grants.admission;
         record.budgets = grants.budgets;
         record.recording = grants.recording;
+        record.object_stores = grants.object_stores;
         Ok(record)
     }
 
@@ -322,6 +334,7 @@ impl RunConfig {
             admission: None,
             budgets: None,
             recording: None,
+            object_stores: BTreeMap::new(),
         }
     }
     /// Parse human JSON, rejecting duplicates, unknown fields and noncanonical numbers.
@@ -352,6 +365,7 @@ impl RunConfig {
                 return Err(invalid("inputs.scheduler.version", "zero version"));
             }
         }
+        object_stores::expand(&mut record)?;
         if let Some(io) = &mut record.io {
             validate_io(io, "io")?;
             runners::validate(&mut io.runners, validate_io)?;

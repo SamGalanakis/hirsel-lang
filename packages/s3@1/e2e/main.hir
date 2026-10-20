@@ -1,0 +1,43 @@
+pub type E2EError = Object(s3.S3Error) | Store(store.StoreError) | Grant(GrantError) | Clock(
+  ClockError
+) | Output(OutputError)
+
+pub fn main(io: Io, env: Env) -> Result[(), E2EError] {
+  let out = io.stdout(io) ? Grant
+  let clock = io.wall_clock(io) ? Grant
+  let c = s3.from_grants(io, env, "data") ? Object
+  let state = s3.object_state(take c) ? Object
+  let mut s = store.open_backend(
+    take state,
+    s3.object_backend(),
+    store.default_config()
+  ) ? Store
+  let start = clock.wall(clock) ? Clock
+  let mut tx = store.begin(mut s)
+  txn.put(mut tx, b"e2e/key", b"value")
+  let ticket = store.commit(mut s, take tx) ? Store
+  store.durable(mut s, ticket) ? Store
+  let finished = clock.wall(clock) ? Clock
+  let elapsed = finished - start
+  let message = string.concat(
+    string.concat("one acknowledged commit group: ", i64.to_string(elapsed)),
+    " ns\n"
+  )
+  out.print(out, message) ? Output
+  let snap = store.snapshot(mut s)
+  if store.get(snap, b"e2e/key") != Some(b"value") {
+    return Error(Store(Corrupt("e2e read")))
+  }
+  store.compact(mut s) ? Store
+  let reopened_state = store.into_state(take s) ? Store
+  let mut again = store.open_backend(
+    take reopened_state,
+    s3.object_backend(),
+    store.default_config()
+  ) ? Store
+  if store.get(store.snapshot(mut again), b"e2e/key") != Some(b"value") {
+    return Error(Store(Corrupt("e2e recovery")))
+  }
+  store.close(take again) ? Store
+  Ok(())
+}

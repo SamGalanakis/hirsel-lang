@@ -1,0 +1,124 @@
+// rule: DET-1
+// expect: run
+// steps: 4000000
+// sixteen rounds each open a store four times and run two transactions
+// A crash during a transaction's commit recovers to all of it or none of it.
+// A Durable store's commit is stopped at each of its storage writes in turn
+// and the disk crashed: a transaction that returned Ok survives, and one that
+// returned a storage failure left nothing. A Volatile store's commit is torn
+// by the crash at a seeded byte: the reopened store holds the transaction
+// whole or not at all, and never loses the durable one before it.
+type Unused = Unused()
+
+fn value(n: u8) -> Bytes {
+  bytes.from_list([n])
+}
+
+// The values of a, b and c, 0 meaning absent.
+fn read_state(mut s: store.Store[s3.Sim]) -> List[u8] {
+  let snap = store.snapshot(mut s)
+  let mut out: List[u8] = []
+  let keys: List[Bytes] = [b"a", b"b", b"c"]
+  for k in keys {
+    let v = match store.get(snap, k) {
+      Some(b) => b[0],
+      None() => 0,
+    }
+    list.push(mut out, v)
+  }
+  out
+}
+
+fn first(mut s: store.Store[s3.Sim]) -> Result[(), store.TxFailure[Unused]] {
+  store.transact(
+    mut s,
+    fn(mut tx: store.Tx) -> Result[(), Unused] {
+      store.tx_put(mut tx, b"a", value(1))
+      store.tx_put(mut tx, b"b", value(1))
+      Ok(())
+    }
+  )
+}
+
+fn second(mut s: store.Store[s3.Sim]) -> Result[(), store.TxFailure[Unused]] {
+  store.transact(
+    mut s,
+    fn(mut tx: store.Tx) -> Result[(), Unused] {
+      store.tx_put(mut tx, b"a", value(2))
+      store.tx_delete(mut tx, b"b")
+      store.tx_put(mut tx, b"c", value(2))
+      Ok(())
+    }
+  )
+}
+
+// A store in a fresh directory holding the first transaction durably.
+fn seeded(t: Test) -> Result[Dir, store.StoreError] {
+  let d = test.dir(t, [])
+  let mut s = store.open_backend(
+    s3.simulated(d, 0, 0, 0, 0),
+    s3.simulated_backend(),
+    store.default_config()
+  )?
+  test.check(t, first(mut s) == Ok(()))
+  store.close(take s)?
+  Ok(d)
+}
+
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let kept: List[u8] = [1, 1, 0]
+  let replaced: List[u8] = [2, 0, 2]
+  for n in 0u64..8 {
+    let d = seeded(t)?
+    let mut config = store.default_config()
+    config.faults = StopAfterWrites(n)
+    let committed = match store.open_backend(
+      s3.simulated(d, 0, 0, 0, 0),
+      s3.simulated_backend(),
+      config
+    ) {
+      Ok(opened) => {
+        let mut s = take opened
+        match second(mut s) {
+          Ok(()) => true,
+          Error(Storage(Injected())) => false,
+          Error(_) => {
+            test.check_case(t, false, n)
+            false
+          },
+        }
+      },
+      Error(_) => false,
+    }
+    test.crash(t, d, n)
+    let mut s = store.open_backend(
+      s3.simulated(d, 0, 0, 0, 0),
+      s3.simulated_backend(),
+      store.default_config()
+    )?
+    let state = read_state(mut s)
+    test.check_case(t, committed && state == replaced || !committed && state == kept, n)
+    store.close(take s)?
+  }
+  let mut volatile = store.default_config()
+  volatile.durability = Volatile()
+  for seed in 0u64..8 {
+    let d = seeded(t)?
+    let mut s = store.open_backend(
+      s3.simulated(d, 0, 0, 0, 0),
+      s3.simulated_backend(),
+      volatile
+    )?
+    test.check_case(t, second(mut s) == Ok(()), seed)
+    test.crash(t, d, seed)
+    let mut reopened = store.open_backend(
+      s3.simulated(d, 0, 0, 0, 0),
+      s3.simulated_backend(),
+      volatile
+    )?
+    let state = read_state(mut reopened)
+    test.check_case(t, state == kept || state == replaced, seed)
+    store.close(take reopened)?
+  }
+  Ok(())
+}

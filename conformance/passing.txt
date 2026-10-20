@@ -101,6 +101,8 @@ conformance/CAP/CAP-1-stdout-parameter-bad.hir
 conformance/CAP/CAP-1-stdout-parameter-ok.hir
 conformance/CAP/CAP-1-stdout-projection-bad.hir
 conformance/CAP/CAP-1-stdout-projection-ok.hir
+conformance/CAP/CAP-1-store-backend-authority-bad.hir
+conformance/CAP/CAP-1-store-backend-authority-ok.hir
 conformance/CAP/CAP-1-tasks-parameter-bad.hir
 conformance/CAP/CAP-1-tasks-parameter-ok.hir
 conformance/CAP/CAP-1-tasks-projection-bad.hir
@@ -840,6 +842,12 @@ conformance/DET/DET-1-std-store-crash-compaction-run.hir
 conformance/DET/DET-1-std-store-fence-run.hir
 conformance/DET/DET-1-std-store-recover-run.hir
 conformance/DET/DET-1-std-store-transact-crash-run.hir
+conformance/DET/DET-1-store-sim-crash-boundaries-run.hir
+conformance/DET/DET-1-store-sim-crash-compaction-run.hir
+conformance/DET/DET-1-store-sim-crash-model-run.hir
+conformance/DET/DET-1-store-sim-fence-run.hir
+conformance/DET/DET-1-store-sim-recover-run.hir
+conformance/DET/DET-1-store-sim-transact-crash-run.hir
 conformance/DET/DET-1-tls-connect-as-replay-run.hir
 conformance/DET/DET-1-tls-mtls-replay-run.hir
 conformance/DET/DET-1-udp-replay-run.hir
@@ -6148,6 +6156,7 @@ conformance/SEM/SEM-5-map-tombstones-nested-borrow-run.hir
 conformance/SEM/SEM-5-map-upsert-update-run.hir
 conformance/SEM/SEM-5-mut-map-value-ok.hir
 conformance/SEM/SEM-5-replace-keeps-order.hir
+conformance/SEM/SEM-5-s3-uri-run.hir
 conformance/SEM/SEM-5-same-entries.hir
 conformance/SEM/SEM-5-set-contains-hit-miss-run.hir
 conformance/SEM/SEM-5-set-equality.hir
@@ -6169,6 +6178,9 @@ conformance/SEM/SEM-5-std-sorted-map-owned-cycle-run.hir
 conformance/SEM/SEM-5-std-sorted-map-string-get-run.hir
 conformance/SEM/SEM-5-std-store-group-commit-run.hir
 conformance/SEM/SEM-5-std-store-run.hir
+conformance/SEM/SEM-5-store-object-faults-run.hir
+conformance/SEM/SEM-5-store-sim-group-commit-run.hir
+conformance/SEM/SEM-5-store-sim-run.hir
 conformance/SEM/SEM-5-tour-04-collections-run.hir
 conformance/SEM/SEM-5-wave2-map-same-entries-counted-run.hir
 conformance/SEM/SEM-5-wave2-map-same-entries-empty-run.hir
@@ -6275,6 +6287,8 @@ conformance/SER/SER-2-utf8-run.hir
 conformance/SER/SER-2-variable-flat-run.hir
 conformance/SER/SER-2-vectors-run.hir
 conformance/STORE/STORE-12-call-stream-run.hir
+conformance/STORE/STORE-12-sim-call-stream-run.hir
+conformance/STORE/STORE-2-sim-transact-run.hir
 conformance/STORE/STORE-2-transact-run.hir
 conformance/STORE/STORE-3-body-capture-bad.hir
 conformance/STORE/STORE-3-body-capture-ok.hir

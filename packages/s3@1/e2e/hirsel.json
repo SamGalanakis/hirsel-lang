@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "s3_e2e",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../hirsel.json",
+      "package": {
+        "name": "s3",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

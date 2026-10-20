@@ -1,0 +1,107 @@
+// rule: DET-1
+// expect: run
+// steps: 3000000
+// each stop point opens the store three times and crashes it twice
+// std@1/store stopped before each of its storage writes from the ninth on in
+// turn (a compaction's manifest and removals, then a third commit group), then
+// crashed and reopened: the store holds exactly the commits whose durable() returned, and
+// accepts and keeps a new commit afterwards.
+fn config(stop: Option[u64]) -> store.StoreConfig {
+  let mut c = store.default_config()
+  if let Some(n) = stop {
+    c.faults = StopAfterWrites(n)
+  }
+  c
+}
+
+// The model after each acknowledged commit.
+fn expected(acked: u64) -> List[(Bytes, Bytes)] {
+  match acked {
+    0 => [],
+    1 => [(b"a", b"1"), (b"b", b"2")],
+    2 => [(b"b", b"2"), (b"c", b"3")],
+    _ => [(b"a", b"4"), (b"b", b"2"), (b"c", b"3")],
+  }
+}
+
+fn commit(mut s: store.Store[s3.Sim], writes: List[(Bytes, Option[Bytes])]) -> Result[
+  (),
+  store.StoreError
+] {
+  let mut x = store.begin(mut s)
+  for (k, v) in writes {
+    match v {
+      Some(value) => txn.put(mut x, unique k, unique value),
+      None() => txn.delete(mut x, unique k),
+    }
+  }
+  let ticket = store.commit(mut s, take x)?
+  store.durable(mut s, ticket)
+}
+
+// Runs the workload, stopping before write `stop`, and returns how many
+// commits were acknowledged and whether it ran to the end.
+fn workload(d: Dir, stop: u64) -> (u64, bool) uses {d} {
+  let Ok(s0) = store.open_backend(
+    s3.simulated(d, 0, 0, 0, 0),
+    s3.simulated_backend(),
+    config(Some(stop))
+  ) else {
+    return (0, false)
+  }
+  let mut s = take s0
+  if let Error(_) = commit(mut s, [(b"a", Some(b"1")), (b"b", Some(b"2"))]) {
+    return (0, false)
+  }
+  if let Error(_) = commit(mut s, [(b"c", Some(b"3")), (b"a", None())]) {
+    return (1, false)
+  }
+  if let Error(_) = store.compact(mut s) {
+    return (2, false)
+  }
+  if let Error(_) = commit(mut s, [(b"a", Some(b"4"))]) {
+    return (2, false)
+  }
+  let finished = match store.close(take s) {
+    Ok(()) => true,
+    Error(_) => false,
+  }
+  (3, finished)
+}
+
+fn contents(mut s: store.Store[s3.Sim]) -> List[(Bytes, Bytes)] {
+  let all: ordered_map.Bound[Bytes] = Unbounded()
+  store.range(store.snapshot(mut s), all, Unbounded(), Ascending(), 100)
+}
+
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let mut stop: u64 = 8
+  let mut finished = false
+  while !finished {
+    let d = test.dir(t, [])
+    let (acked, done) = workload(d, stop)
+    finished = done
+    test.crash(t, d, stop)
+    let mut s = store.open_backend(
+      s3.simulated(d, 0, 0, 0, 0),
+      s3.simulated_backend(),
+      config(None())
+    )?
+    test.check_case(t, contents(mut s) == expected(acked), stop)
+    commit(mut s, [(b"d", Some(b"5"))])?
+    store.close(take s)?
+    test.crash(t, d, stop + 100)
+    let mut again = store.open_backend(
+      s3.simulated(d, 0, 0, 0, 0),
+      s3.simulated_backend(),
+      config(None())
+    )?
+    let mut with_d = expected(acked)
+    list.push(mut with_d, (b"d", b"5"))
+    test.check_case(t, contents(mut again) == with_d, stop)
+    store.close(take again)?
+    stop += 1
+  }
+  test.check(t, stop == 15)
+  Ok(())
+}

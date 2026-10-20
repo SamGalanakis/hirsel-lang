@@ -1,0 +1,475 @@
+/// One S3-compatible path-style endpoint. Prefixes have no leading/trailing slash.
+/// Reads are bounded by max_object_bytes; cache_bytes=0 is the cheap default.
+pub type Config {
+  endpoint: String,
+  bucket: String,
+  region: String,
+  prefix: String,
+  cache_bytes: u64,
+  max_object_bytes: u64,
+}
+
+pub type Client {
+  network: Net,
+  clock: WallClock,
+  config: Config,
+  credentials: Credentials,
+}
+
+/// Bind only explicit grants. Nothing consults the ambient environment or files.
+pub fn client(
+  n: Net,
+  clock: WallClock,
+  take config: Config,
+  take credentials: Credentials
+) -> Result[Client, S3Error] {
+  let parsed = uri.parse(config.endpoint) ? invalid_uri
+  let scheme = parsed.scheme
+  if parsed.host == None() || parsed.port == Some(0) || parsed.user != None() || parsed.password != None() || parsed.query != None() || parsed.fragment != None() || uri.component_text(
+    parsed.path
+  ) != Ok("") && uri.component_text(parsed.path) != Ok("/") {
+    return Error(Invalid())
+  }
+  if scheme != "https" && scheme != "http" {
+    return Error(Invalid())
+  }
+  if config.bucket == "" || config.region == "" || config.max_object_bytes == 0 || credentials.access_key == "" || bytes.len(
+    credentials.secret_key
+  ) == 0 {
+    return Error(Invalid())
+  }
+  if string.ends_with(config.endpoint, "/") {
+    return Error(Invalid())
+  }
+  Ok(
+    Client(network: n, clock: clock, config: take config, credentials: take credentials)
+  )
+}
+
+fn invalid_uri(error: uri.UriError) -> S3Error uses {} {
+  Invalid()
+}
+
+fn grant(env: Env, prefix: String, suffix: String) -> Result[String, S3Error] {
+  let found = env.get(env, string.concat(prefix, suffix)) ? missing_grant
+  match found {
+    Some(value) => Ok(value),
+    None() => Error(Grant()),
+  }
+}
+
+fn missing_grant(error: EnvError) -> S3Error uses {} {
+  Grant()
+}
+
+fn missing_file(error: FileError) -> S3Error uses {} {
+  Grant()
+}
+
+fn missing_dir(error: GrantError) -> S3Error uses {} {
+  Grant()
+}
+
+fn invalid_json(error: json.JsonError) -> S3Error uses {} {
+  Malformed()
+}
+
+fn field(object: Map[String, json.Value], key: String) -> Result[String, S3Error] uses {} {
+  match map.get(object, key) {
+    Some(Text(value)) => Ok(unique value),
+    _ => Error(Malformed()),
+  }
+}
+
+/// Read one object_stores declaration expanded by RunConfig. The credentials
+/// reference names a JSON file in a granted Dir: access_key, secret_key and an
+/// optional session_token. Secret bytes are never stored inline in a run record.
+pub fn from_grants(io: Io, env: Env, name: String) -> Result[Client, S3Error] {
+  let prefix = string.concat(string.concat("HIRSEL_S3_", string.ascii_upper(name)), "_")
+  let n = io.net(io) ? missing_dir
+  let clock = io.wall_clock(io) ? missing_dir
+  let credentials_dir = io.dir(io, path.of(grant(env, prefix, "CREDENTIALS_DIR")?)) ? missing_file
+  let data = file.read_bytes(
+    credentials_dir,
+    path.of(grant(env, prefix, "CREDENTIALS")?)
+  ) ? missing_file
+  let source = match string.from_bytes(take data) {
+    Ok(source) => source,
+    Error(_) => return Error(Malformed()),
+  }
+  let Object(object) = json.parse(take source) ? invalid_json else {
+    return Error(Malformed())
+  }
+  let token: Option[String] = match map.get(object, "session_token") {
+    Some(Text(value)) => Some(unique value),
+    None() => None(),
+    _ => return Error(Malformed()),
+  }
+  let cache = match u64.parse(grant(env, prefix, "CACHE_BYTES")?) {
+    Ok(capacity) => capacity,
+    Error(_) => return Error(Invalid()),
+  }
+  client(
+    n,
+    clock,
+    Config(
+      endpoint: grant(env, prefix, "ENDPOINT")?,
+      bucket: grant(env, prefix, "BUCKET")?,
+      region: grant(env, prefix, "REGION")?,
+      prefix: grant(env, prefix, "PREFIX")?,
+      cache_bytes: cache,
+      max_object_bytes: 16777216
+    ),
+    Credentials(
+      access_key: field(object, "access_key")?,
+      secret_key: string.as_bytes(field(object, "secret_key")?),
+      session_token: token
+    )
+  )
+}
+
+fn request_timestamp(clock: WallClock) -> Result[String, S3Error] {
+  let now = clock.wall(clock) ? clock_error
+  let stamp = time.Timestamp(unix_nanoseconds: int.widen(now))
+  let civil = time.broken_down(stamp, 0) ? time_error
+  Ok(time.format(civil, "%Y%m%dT%H%M%SZ") ? format_error)
+}
+
+fn clock_error(error: ClockError) -> S3Error uses {} {
+  Clock()
+}
+
+fn time_error(error: time.TimeError) -> S3Error uses {} {
+  Clock()
+}
+
+fn format_error(error: time.FormatError) -> S3Error uses {} {
+  Clock()
+}
+
+fn object_key(c: Client, key: String) -> String uses {} {
+  if c.config.prefix == "" {
+    return unique key
+  }
+  string.concat(string.concat(c.config.prefix, "/"), key)
+}
+
+fn method_text(method: http.Method) -> String uses {} {
+  match method {
+    Get() => "GET",
+    Head() => "HEAD",
+    Put() => "PUT",
+    Delete() => "DELETE",
+    _ => "",
+  }
+}
+
+fn request(
+  mut c: Client,
+  method: http.Method,
+  selected_key: Option[String],
+  pairs: List[(String, String)],
+  extra: List[http.Header],
+  body: Option[Bytes]
+) -> Result[http.Response, S3Error] {
+  let path = match selected_key {
+    Some(key) => encode_path(
+      string.concat(
+        string.concat(string.concat("/", c.config.bucket), "/"),
+        object_key(c, key)
+      )
+    ),
+    None() => encode_path(string.concat("/", c.config.bucket)),
+  }
+  let query = canonical_query(pairs)
+  let suffix = if query == "" {
+    unique path
+  } else {
+    string.concat(string.concat(path, "?"), query)
+  }
+  let host = part(
+    c.config.endpoint,
+    if string.starts_with(c.config.endpoint, "https://") {
+      8
+    } else {
+      7
+    },
+    string.byte_len(c.config.endpoint)
+  )
+  let stamp = request_timestamp(c.clock)?
+  let payload = match body {
+    Some(data) => unique data,
+    None() => b"",
+  }
+  let mut headers: List[http.Header] = [
+    http.Header(name: "host", value: host),
+    http.Header(name: "x-amz-date", value: unique stamp),
+    http.Header(name: "x-amz-content-sha256", value: hash_hex(payload))
+  ]
+  for header in extra {
+    list.push(mut headers, unique header)
+  }
+  if let Some(token) = c.credentials.session_token {
+    list.push(
+      mut headers,
+      http.Header(name: "x-amz-security-token", value: unique token)
+    )
+  }
+  let signed = sign(
+    c.credentials,
+    c.config.region,
+    "s3",
+    method_text(method),
+    path,
+    query,
+    headers,
+    payload,
+    stamp
+  )?
+  list.push(
+    mut headers,
+    http.Header(name: "authorization", value: signed.authorization)
+  )
+  let mut config = http.default_config()
+  config.max_redirects = 0
+  config.status_as_error = false
+  config.decompress = false
+  config.max_body_bytes = c.config.max_object_bytes
+  config.max_idle_connections = 0
+  config.idle_timeout = None()
+  let mut http_client = http.client(c.network, None(), config) ? Http
+  Ok(
+    http.client_fetch(
+      mut http_client,
+      method,
+      string.concat(c.config.endpoint, suffix),
+      headers,
+      body
+    ) ? Http
+  )
+}
+
+/// Full GET; 404 is missing, other error statuses stay typed.
+pub fn get(mut c: Client, key: String) -> Result[Bytes, S3Error] {
+  let response = request(mut c, Get(), Some(unique key), [], [], None())?
+  if response.status == 404 {
+    return Error(Missing())
+  }
+  if response.status != 200 {
+    return Error(Status(response.status))
+  }
+  Ok(unique response.body)
+}
+
+/// Range GET with checked offsets and Content-Range validation. The returned
+/// bytes are a prefix of the requested range when it reaches EOF.
+pub fn get_range(mut c: Client, key: String, offset: u64, length: u64) -> Result[
+  Bytes,
+  S3Error
+] {
+  let (data, _) = range_get(mut c, key, offset, length)?
+  Ok(take data)
+}
+
+fn range_get(mut c: Client, key: String, offset: u64, length: u64) -> Result[
+  (Bytes, u64),
+  S3Error
+] {
+  if length == 0 {
+    let data = get(mut c, key)?
+    return Ok((b"", bytes.len(data)))
+  }
+  let Some(end) = int.checked_add(offset, length - 1) else {
+    return Error(Invalid())
+  }
+  let range = string.concat(
+    string.concat(string.concat("bytes=", u64.to_string(offset)), "-"),
+    u64.to_string(end)
+  )
+  let response = request(
+    mut c,
+    Get(),
+    Some(unique key),
+    [],
+    [http.Header(name: "range", value: range)],
+    None()
+  )?
+  if response.status == 404 {
+    return Error(Missing())
+  }
+  if response.status == 416 {
+    // Some servers omit Content-Range on InvalidRange; a full bounded GET
+    // distinguishes missing from empty and verifies that offset is beyond EOF.
+    let data = get(mut c, key)?
+    if offset < bytes.len(data) {
+      return Error(Malformed())
+    }
+    return Ok((b"", bytes.len(data)))
+  }
+  if response.status != 206 {
+    return Error(Status(response.status))
+  }
+  let Some(header) = http.header(response.headers, "content-range") else {
+    return Error(Malformed())
+  }
+  let Some((unit, span)) = string.split_once(header, " ") else {
+    return Error(Malformed())
+  }
+  let Some((bounds, total_text)) = string.split_once(span, "/") else {
+    return Error(Malformed())
+  }
+  let Some((start_text, end_text)) = string.split_once(bounds, "-") else {
+    return Error(Malformed())
+  }
+  let first = u64.parse(start_text) ? invalid_range
+  let last = u64.parse(end_text) ? invalid_range
+  let total = u64.parse(total_text) ? invalid_range
+  if unit != "bytes" || first != offset || last < first || last > end || last >= total || last != end && last != total - 1 || bytes.len(
+    response.body
+  ) != last - first + 1 {
+    return Error(Malformed())
+  }
+  Ok((unique response.body, total))
+}
+
+fn invalid_range(error: scalar.ParseError) -> S3Error uses {} {
+  Malformed()
+}
+
+/// Conditional writes. Create sends If-None-Match: *; Match sends the caller's
+/// exact ETag. A failed/lost response is never retried by the client.
+pub type Condition = Create | Match(String)
+
+pub fn put(mut c: Client, key: String, data: Bytes, condition: Condition) -> Result[
+  (),
+  S3Error
+] {
+  if bytes.len(data) > c.config.max_object_bytes {
+    return Error(Invalid())
+  }
+  let header = match condition {
+    Create() => http.Header(name: "if-none-match", value: "*"),
+    Match(etag) => http.Header(name: "if-match", value: unique etag),
+  }
+  let response = request(
+    mut c,
+    Put(),
+    Some(unique key),
+    [],
+    [header],
+    Some(unique data)
+  )?
+  if response.status == 412 || response.status == 409 || response.status == 304 {
+    return Error(Exists())
+  }
+  if response.status != 200 && response.status != 201 && response.status != 204 {
+    return Error(Status(response.status))
+  }
+  Ok(())
+}
+
+/// DELETE is idempotent. No recovery retry or backoff policy is hidden here.
+pub fn delete(mut c: Client, key: String) -> Result[(), S3Error] {
+  let response = request(mut c, Delete(), Some(unique key), [], [], None())?
+  if response.status != 200 && response.status != 204 && response.status != 404 {
+    return Error(Status(response.status))
+  }
+  Ok(())
+}
+
+// ListObjectsV2 requests encoding-type=url. Only the needed XML text fields
+// are parsed, with a strict bounded scanner, not a general XML parser.
+fn xml_values(source: String, tag: String) -> Result[List[String], S3Error] uses {} {
+  let open = string.concat(string.concat("<", tag), ">")
+  let close = string.concat(string.concat("</", tag), ">")
+  let mut rest = unique source
+  let mut values: List[String] = []
+  while let Some((_, tail)) = string.split_once(rest, open) {
+    let Some((value, after)) = string.split_once(tail, close) else {
+      return Error(Malformed())
+    }
+    let decoded = string.replace(
+      string.replace(
+        string.replace(
+          string.replace(string.replace(value, "&lt;", "<"), "&gt;", ">"),
+          "&quot;",
+          "\""
+        ),
+        "&apos;",
+        "'"
+      ),
+      "&amp;",
+      "&"
+    )
+    list.push(mut values, take decoded)
+    rest = unique after
+  }
+  Ok(take values)
+}
+
+/// List v2 follows every continuation token. Keys are decoded, confined to the
+/// selected prefix, sorted, and deduplicated before returning relative names.
+pub fn list_objects(mut c: Client, prefix: String) -> Result[List[String], S3Error] {
+  let full_prefix = object_key(c, prefix)
+  let mut token: Option[String] = None()
+  let mut visited_tokens: List[String] = []
+  let mut keys: unique List[String] = unique []
+  while true {
+    let mut query: List[(String, String)] = [
+      ("list-type", "2"),
+      ("encoding-type", "url"),
+      ("prefix", unique full_prefix)
+    ]
+    if let Some(value) = token {
+      list.push(mut query, ("continuation-token", unique value))
+    }
+    let response = request(mut c, Get(), None(), take query, [], None())?
+    if response.status != 200 {
+      return Error(Status(response.status))
+    }
+    let xml = match string.from_bytes(unique response.body) {
+      Ok(xml) => xml,
+      Error(_) => return Error(Malformed()),
+    }
+    if !string.contains(xml, "<ListBucketResult") {
+      return Error(Malformed())
+    }
+    for value in xml_values(xml, "Key")? {
+      let raw = uri.percent_decode(value)
+      let key = match string.from_bytes(take raw) {
+        Ok(key) => key,
+        Error(_) => return Error(Malformed()),
+      }
+      if !string.starts_with(key, full_prefix) {
+        return Error(Malformed())
+      }
+      let relative = if c.config.prefix == "" {
+        unique key
+      } else {
+        part(key, string.byte_len(c.config.prefix) + 1, string.byte_len(key))
+      }
+      list.push(mut keys, take relative)
+    }
+    let truncated = xml_values(xml, "IsTruncated")?
+    if truncated == ["false"] {
+      break
+    }
+    if truncated != ["true"] {
+      return Error(Malformed())
+    }
+    let next = xml_values(xml, "NextContinuationToken")?
+    if list.len(next) != 1 || next[0] == "" || token == Some(next[0]) {
+      return Error(Malformed())
+    }
+    for visited in visited_tokens {
+      if visited == next[0] {
+        return Error(Malformed())
+      }
+    }
+    list.push(mut visited_tokens, unique next[0])
+    token = Some(unique next[0])
+  }
+  let mut sorted_keys = unique keys
+  list.sort(mut sorted_keys, string.compare)
+  Ok(list.dedup(take sorted_keys))
+}

@@ -1,0 +1,35 @@
+// AWS SigV4 published test suite, verbatim expected canonical request and signature.
+pub fn main(t: Test) -> Result[(), s3.S3Error] {
+  let credentials = s3.Credentials(
+    access_key: "AKIDEXAMPLE",
+    secret_key: b"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+    session_token: None()
+  )
+  let signed3 = s3.sign(
+    credentials,
+    "us-east-1",
+    "service",
+    "GET",
+    "/",
+    "",
+    [
+      http.Header(name: "Host", value: "example.amazonaws.com"),
+      http.Header(name: "My-Header1", value: "value4"),
+      http.Header(name: "My-Header1", value: "value1"),
+      http.Header(name: "My-Header1", value: "value3"),
+      http.Header(name: "My-Header1", value: "value2"),
+      http.Header(name: "X-Amz-Date", value: "20150830T123600Z")
+    ],
+    b"",
+    "20150830T123600Z"
+  )?
+  test.check(
+    t,
+    signed3.canonical == "GET\n/\n\nhost:example.amazonaws.com\nmy-header1:value4,value1,value3,value2\nx-amz-date:20150830T123600Z\n\nhost;my-header1;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  )
+  test.check(
+    t,
+    signed3.authorization == "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;my-header1;x-amz-date, Signature=08c7e5a9acfcfeb3ab6b2185e75ce8b1deb5e634ec47601a50643f830c755c01"
+  )
+  Ok(())
+}

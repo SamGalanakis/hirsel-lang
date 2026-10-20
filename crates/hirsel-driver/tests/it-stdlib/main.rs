@@ -4,6 +4,7 @@
 
 hirsel_guard::install!();
 
+mod package_s3;
 mod reference_vectors;
 #[path = "../support/source_std.rs"]
 mod source_std;

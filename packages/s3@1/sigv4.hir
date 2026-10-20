@@ -1,0 +1,194 @@
+// Structural port of botocore/auth.py SigV4Auth canonical query/headers/request,
+// string_to_sign and signature (lines 273-430), plus S3SigV4Auth path preservation
+// (line 541), boto/botocore 4d9f375e71c1a97693d961cdefb1827bdaaccfb9.
+// Copyright (c) 2012-2013 Mitch Garnaat; Copyright 2012-2014 Amazon.com, Inc.
+// or its affiliates. Apache-2.0; third-party/NOTICES.md. Explicit inputs replace ambient SDK state.
+// Garage src/api/common/signature/payload.rs canonical_request/signing_hmac:
+// S3 preserves path slashes and does not normalize or double-encode object keys.
+// AWS's aws4_testsuite, vendored in botocore, supplies the signing oracle.
+pub type Credentials {
+  access_key: String,
+  secret_key: Bytes,
+  session_token: Option[String],
+}
+
+pub type S3Error = Invalid | Http(http.HttpError) | Status(u16) | Missing | Exists | Clock | Grant | Malformed | ConditionalUnsupported(
+  String
+)
+
+pub type Signed {
+  canonical: String,
+  string_to_sign: String,
+  authorization: String,
+}
+
+fn hash_hex(data: Bytes) -> String uses {} {
+  hex.encode(bytes.from_inline(sha256.digest(data)))
+}
+
+fn mac(key: Bytes, data: String) -> Bytes uses {} {
+  bytes.from_inline(hmac.mac(sha256.hash(), key, string.as_bytes(data)))
+}
+
+fn part(text: String, start: u64, end: u64) -> String uses {} {
+  let data = string.as_bytes(text)
+  let mut out: List[u8] = []
+  for i in start..end {
+    list.push(mut out, data[i])
+  }
+  text.finish_valid(take out)
+}
+
+/// RFC 3986 query encoding, sorted after encoding; duplicate keys are retained.
+pub fn canonical_query(pairs: List[(String, String)]) -> String uses {} {
+  let mut encoded: unique List[(String, String)] = unique []
+  for (key, value) in pairs {
+    list.push(
+      mut encoded,
+      (
+        uri.percent_encode(string.as_bytes(key)),
+        uri.percent_encode(string.as_bytes(value))
+      )
+    )
+  }
+  list.sort(mut encoded, compare_query_pair)
+  let mut joined: List[String] = []
+  for (key, value) in encoded {
+    list.push(mut joined, string.concat(string.concat(key, "="), value))
+  }
+  string.join(joined, "&")
+}
+
+@noalloc
+fn compare_query_pair(a: (String, String), b: (String, String)) -> i32 uses {} {
+  let (ak, av) = a
+  let (bk, bv) = b
+  let order = string.compare(ak, bk)
+  if order == 0 {
+    string.compare(av, bv)
+  } else {
+    order
+  }
+}
+
+/// Encode an object path once, preserving every slash and empty component.
+pub fn encode_path(raw: String) -> String uses {} {
+  let mut pieces: List[String] = []
+  for piece in string.split(unique raw, "/") {
+    list.push(mut pieces, uri.percent_encode(string.as_bytes(piece)))
+  }
+  string.join(pieces, "/")
+}
+
+fn trimmed(value: String) -> String uses {} {
+  string.join(string.split_ascii_whitespace(unique value), " ")
+}
+
+/// Sign already encoded path and query text. Headers include Host and X-Amz-Date;
+/// every supplied header is signed. The S3 caller also supplies the payload hash
+/// and temporary session token. Signing is pure and reads no clock or environment.
+pub fn sign(
+  credentials: Credentials,
+  region: String,
+  service: String,
+  method: String,
+  encoded_path: String,
+  query: String,
+  headers: List[http.Header],
+  payload: Bytes,
+  timestamp: String
+) -> Result[Signed, S3Error] uses {} {
+  let stamp = string.as_bytes(timestamp)
+  if bytes.len(stamp) != 16 || stamp[8] != b'T' || stamp[15] != b'Z' {
+    return Error(Invalid())
+  }
+  for i in 0u64..16 {
+    if i != 8 && i != 15 && (stamp[i] < b'0' || stamp[i] > b'9') {
+      return Error(Invalid())
+    }
+  }
+  let mut names: unique List[String] = unique []
+  let mut values: Map[String, String] = map.empty()
+  for header in headers {
+    let name = string.ascii_lower(header.name)
+    let value = trimmed(header.value)
+    match map.get(values, name) {
+      Some(previous) => {
+        let combined = string.concat(string.concat(previous, ","), value)
+        map.insert(mut values, copy name, take combined)
+      },
+      None() => {
+        list.push(mut names, copy name)
+        map.insert(mut values, copy name, take value)
+      },
+    }
+  }
+  if map.get(values, "host") == None() || map.get(values, "x-amz-date") != Some(
+    timestamp
+  ) {
+    return Error(Invalid())
+  }
+  let mut sorted_names = unique names
+  list.sort(mut sorted_names, string.compare)
+  let mut canonical_headers: List[u8] = []
+  for name in sorted_names {
+    text.append(mut canonical_headers, name)
+    text.append(mut canonical_headers, ":")
+    let Some(value) = map.get(values, name) else {
+      return Error(Invalid())
+    }
+    text.append(mut canonical_headers, value)
+    text.append(mut canonical_headers, "\n")
+  }
+  let signed_names = string.join(sorted_names, ";")
+  let canonical = string.join(
+    [
+      unique method,
+      unique encoded_path,
+      unique query,
+      text.finish_valid(take canonical_headers),
+      copy signed_names,
+      hash_hex(payload)
+    ],
+    "\n"
+  )
+  let day = part(timestamp, 0, 8)
+  let scope = string.join(
+    [unique day, unique region, unique service, "aws4_request"],
+    "/"
+  )
+  let to_sign = string.join(
+    [
+      "AWS4-HMAC-SHA256",
+      unique timestamp,
+      copy scope,
+      hash_hex(string.as_bytes(canonical))
+    ],
+    "\n"
+  )
+  let mut initial: List[u8] = [b'A', b'W', b'S', b'4']
+  for byte in credentials.secret_key {
+    list.push(mut initial, byte)
+  }
+  let day_key = mac(bytes.from_list(take initial), day)
+  let region_key = mac(day_key, region)
+  let service_key = mac(region_key, service)
+  let signing_key = mac(service_key, "aws4_request")
+  let signature = hex.encode(mac(signing_key, to_sign))
+  let authorization = string.concat(
+    string.concat(
+      string.concat(
+        string.concat(
+          string.concat("AWS4-HMAC-SHA256 Credential=", credentials.access_key),
+          "/"
+        ),
+        scope
+      ),
+      string.concat(", SignedHeaders=", signed_names)
+    ),
+    string.concat(", Signature=", signature)
+  )
+  Ok(
+    Signed(canonical: canonical, string_to_sign: to_sign, authorization: authorization)
+  )
+}

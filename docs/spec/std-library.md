@@ -2829,36 +2829,37 @@ TxLimit = KeyBytes | ValueBytes | TransactionBytes | RangeRows
 CallRequest { stream: Bytes, epoch: u64, position: u64, digest: Bytes, acknowledged: u64 }
 CallFailure[E] = Tx(TxFailure[E]) | Denied | Rejected
 fn store.default_config() -> store.StoreConfig uses {}
-fn store.transact[R: inert, E: inert](mut s: store.Store, body: fn(mut tx: store.Tx) -> Result[R, E] uses {}) -> Result[R, store.TxFailure[E]]
-fn store.call[R: inert + serializable, E: inert + serializable](mut s: store.Store, req: store.CallRequest, body: fn(mut tx: store.Tx) -> Result[R, E] uses {}) -> Result[R, store.CallFailure[E]]
+fn store.transact[S, R: inert, E: inert](mut s: store.Store[S], body: fn(mut tx: store.Tx) -> Result[R, E] uses {}) -> Result[R, store.TxFailure[E]] uses {s}
+fn store.call[S, R: inert + serializable, E: inert + serializable](mut s: store.Store[S], req: store.CallRequest, body: fn(mut tx: store.Tx) -> Result[R, E] uses {}) -> Result[R, store.CallFailure[E]] uses {s}
 fn store.tx_get(tx: store.Tx, key: Bytes) -> Option[Bytes] in tx uses {}
 fn store.tx_put(mut tx: store.Tx, take key: Bytes, take value: Bytes) -> () uses {} requires !store.reserved(key)
 fn store.tx_delete(mut tx: store.Tx, take key: Bytes) -> () uses {} requires !store.reserved(key)
 fn store.tx_range(tx: store.Tx, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64) -> List[(Bytes, Bytes)] uses {}
 fn store.reserved(key: Bytes) -> bool uses {}
-fn store.open(d: Dir, config: store.StoreConfig) -> Result[store.Store, store.StoreError]
-fn store.snapshot(mut s: store.Store) -> store.Snapshot uses {}
+fn store.open(d: Dir, config: store.StoreConfig) -> Result[store.Store[Dir], store.StoreError] uses {d}
+fn store.snapshot[S](mut s: store.Store[S]) -> store.Snapshot uses {}
 fn store.snapshot_sequence(snap: store.Snapshot) -> u64 uses {}
 fn store.get(snap: store.Snapshot, key: Bytes) -> Option[Bytes] in snap uses {}
 fn store.range(snap: store.Snapshot, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64) -> List[(Bytes, Bytes)] uses {}
 fn store.prefix_bounds(prefix: Bytes) -> (ordered_map.Bound[Bytes], ordered_map.Bound[Bytes]) uses {}
 fn store.compare_keys(a: Bytes, b: Bytes) -> i32 uses {}
-fn store.begin(mut s: store.Store) -> store.Txn uses {}
+fn store.begin[S](mut s: store.Store[S]) -> store.Txn uses {}
 fn txn.put(mut t: store.Txn, take key: Bytes, take value: Bytes) -> () uses {}
 fn txn.delete(mut t: store.Txn, take key: Bytes) -> () uses {}
 fn txn.get(t: store.Txn, key: Bytes) -> Option[Bytes] in t uses {}
 fn txn.range(t: store.Txn, from: ordered_map.Bound[Bytes], to: ordered_map.Bound[Bytes], direction: ordered_map.Direction, limit: u64) -> List[(Bytes, Bytes)] uses {}
-fn store.commit(mut s: store.Store, take t: store.Txn) -> Result[store.Ticket, store.StoreError]
+fn store.commit[S](mut s: store.Store[S], take t: store.Txn) -> Result[store.Ticket, store.StoreError] uses {s}
 fn store.sequence(t: store.Ticket) -> u64 uses {}
-fn store.durable(mut s: store.Store, t: store.Ticket) -> Result[(), store.StoreError]
-fn store.compact(mut s: store.Store) -> Result[(), store.StoreError]
-fn store.close(take store: store.Store) -> Result[(), store.StoreError]
+fn store.durable[S](mut s: store.Store[S], t: store.Ticket) -> Result[(), store.StoreError] uses {s}
+fn store.compact[S](mut s: store.Store[S]) -> Result[(), store.StoreError] uses {s}
+fn store.close[S](take store: store.Store[S]) -> Result[(), store.StoreError] uses {store}
 ```
 
 `std@1/store` is an embedded, transactional, ordered key-value store written in Hirsel
-over one `Dir`, which is its whole authority and its whole storage seam: real files, a
-`test.dir` world and recordings work unchanged. Keys and values are `Bytes`, ordered
-byte-lexicographically (`compare_keys`). A `Store` is the single writer of its directory;
+over an explicit `Backend[S]` function dictionary and owned backend state `S`.
+`open(d, config)` selects the local Dir backend; real files, Test dirs and recordings
+work unchanged. Keys and values are `Bytes`, ordered
+byte-lexicographically (`compare_keys`). An affine `Store[S]` is the single writer of its backend;
 `Snapshot` and `Txn` are copyable values that hold no authority.
 
 **Transactions.** `begin` starts a `Txn` at the latest commit. `txn.get` and `txn.range`
@@ -2942,6 +2943,32 @@ read a whole object, list a kind directory's names in byte order, and remove an 
 It never appends, renames, overwrites or reads at an offset. `StopAfterWrites(n)` is the
 fault seam for crash tests: the store's storage mutation after its first `n` (creates,
 removals and directory creations, from `open` on) returns `Injected()` with no effect.
+
+**Backend interface.** `store.Backend[S]` contains `read(mut state: S, name: String)`
+returning `Result[Bytes, FileError]`, `put_new(mut state: S, name: String, data: Bytes,
+mode: Durability)` returning `Result[(), FileError]`, `list(mut state: S, prefix: String)`
+returning `Result[List[String], FileError]`, and `remove` and `mkdir` with the same
+state/name inputs and unit result. Every callback declares `uses {state}`. `list` returns
+full relative names in byte order. The shipped dictionaries use top-level functions and put provider authority in
+the state; any captured callback authority remains explicit erased evidence. `Store[S]` is ordinary opaque, with `@captures(backend)` and `uses {S}`:
+it exports no copying bound, has no automatic flush and keeps its callbacks' erased
+authority.
+
+```text
+fn store.local_backend() -> store.Backend[Dir] uses {}
+fn store.open_backend[S](take state: S, take backend: store.Backend[S], config: store.StoreConfig) -> Result[store.Store[S], store.StoreError] uses {state, backend}
+fn store.into_state[S](take store: store.Store[S]) -> Result[S, store.StoreError] uses {store}
+```
+
+`open_backend` runs the same recovery, fencing and group-commit protocol as `open`.
+An error from conditional creation is resolved by an uncached whole-object read-back:
+exact requested bytes prove success, different bytes fence, and a failed read leaves
+the store closed with the storage error. No blind create retry occurs. `into_state`
+flushes like `close`, then returns the owned backend state for lifecycle management and
+simulation observations. S3 is the pure Hirsel package `s3@1`, not a std dependency;
+its backend and its deterministic simulator implement this dictionary. Cache and
+transport policy live in the backend, and cache size zero disables caching.
+
 
 ## Compressed data
 

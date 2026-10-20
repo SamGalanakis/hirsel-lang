@@ -1,0 +1,5 @@
+// rule: CAP-1
+// expect: reject CAP-1 at line 4
+fn denied(d: Dir) -> Result[store.Store[Dir], store.StoreError] uses {} {
+  store.open_backend(d, store.local_backend(), store.default_config())
+}

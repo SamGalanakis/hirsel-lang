@@ -11,12 +11,14 @@ body reads and writes byte keys with `store.tx_get`, `store.tx_put`, `store.tx_d
 program that names them does not resolve yet. Items marked **Reserved** are designed here
 but have no implementation owner yet.
 
+The S3 backend and its grants are implemented in `packages/s3@1`.
+
 A **store** is an embedded, transactional, ordered key-value database kept in a directory.
 It is ordinary Hirsel code in `std@1/store`: a log-structured engine that writes immutable,
-checksummed objects through the `Dir` capability and keeps the current state in an
-in-memory ordered index. Its authority is exactly the `Dir` it is opened over, so the host
-decides where a store may live by granting a directory, and every store effect is a file
-effect, recorded, replayed and fault-injected as file effects are. Programs change a store
+checksummed objects through a backend function dictionary and keeps current state in an
+in-memory ordered index. The local backend owns a `Dir`; the S3 package backend owns
+explicit Net and clock grants and credential data. The host selects those grants in
+the run configuration, and effects retain ordinary file or network recording and replay. Programs change a store
 only inside a transaction, whose body holds nothing but a scoped `Tx` and data. Rows live in
 typed tables: keys in an order-preserving encoding, values as canonical codec payloads,
 each table with a recorded schema history. A transaction's outcome is released only once
@@ -36,8 +38,8 @@ fn store.close(take s: Store) -> Result[(), StoreError]
 `store.open` opens or creates the store kept in `d` and claims it as its writer
 ([STORE-11](#store-11-engine-and-storage-seam)): it recovers the newest intact state,
 publishes the next **writer epoch**, and returns a `Store` holding `d` and the in-memory
-state. `Store` is a sealed resource ([CAP-5](capabilities.md#cap-5-capability-sealing))
-whose authority ceiling is its `Dir`; it is neither `copyable` nor `sendable`, and every
+state. `Store[S]` is an ordinary affine opaque type with owned backend state and
+explicitly captured dictionary authority; it exports no copying or sending bound, and every
 operation that changes it takes it `mut`. One `Store` value is therefore the store's only
 writer in its run, and a second opener of the same directory, in this process or any
 other, fences the first: the first's next write fails and it closes with `Fenced()`. Other
@@ -388,8 +390,9 @@ absent one proves it never happened. That is a provider recovery procedure
 
 ### STORE-11: Engine and storage seam
 
-The engine is `db.local@1`, the provider of `std@1/store`. Its **storage seam** is the
-`Dir` it is opened over, and it uses exactly these operations on it:
+The engine is `db.local@1`, the provider of `std@1/store`. Its **storage seam** is an
+explicit `Backend[S]` record of functions over owned state `S`; `store.open(d, config)`
+selects `local_backend()` with state `Dir`. The local implementation uses these operations:
 
 - `file.put_new(d, path, bytes, mode)`: create an immutable object only if no object has
   that path, whole or nothing; an existing object with equal bytes is success, any other is
@@ -401,11 +404,23 @@ There is no append, no rewrite in place, no rename, no lock and no read at an of
 host chooses the medium by the mount it grants ([RUN-13](runners.md#run-13-provider-seams)):
 a host directory by default; a simulated directory for tests, whose crash drops every
 unsynced write, tears the last write at a seeded byte and loses unsynced directory entries;
-or an **object-storage backend**, which presents the same operations over the host's
-object-storage seam (the one `code.object@1` uses; an S3-compatible bucket among its
-providers), mapping `put_new` to a conditional create (`If-None-Match: *`) and a lost
-response to a read-back. The object-storage backend's mount schema is **Reserved**.
-A medium that cannot honor create-if-absent refuses the launch.
+or an **object-storage backend**, which presents the same operations over explicit
+network grants, mapping `put_new` to a conditional create (`If-None-Match: *`) and a
+lost response to a read-back. The pure Hirsel package `s3@1` supplies the S3 backend; std never depends on it.
+The host `ObjectStorage` trait is reserved for code fetching and is not this seam.
+The run-config `object_stores` declaration below supplies S3 grants.
+The S3 backend probes conditional-create support before opening the store. An
+endpoint that ignores it refuses open with `ConditionalUnsupported(endpoint)`;
+raw S3 GET and LIST remain usable directly.
+
+`Backend[S]` has callbacks `read`, `put_new`, `list`, `remove` and `mkdir`, each
+taking `mut state: S` and a relative name. `list` returns full relative names sorted
+by bytes. `open_backend` owns state and dictionary. `Store[S]` is affine ordinary
+opaque state with captured backend authority, rather than a resource destructor:
+only explicit `close`, `durable` and `into_state` flush. The local callback maps
+to Dir operations; the S3 callback maps to HTTP, and the simulated callback injects
+pre-write failures, lost responses, racing conditional creates and virtual latency.
+They run exactly the same engine.
 
 **Layout.** Under its directory the store keeps `manifest/`, `log/` and `snap/`, each a
 sequence of immutable objects named by fixed-width, zero-padded decimal ids, so byte order

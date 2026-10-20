@@ -4,7 +4,7 @@
 // fences the first: the first writer's next log object finds its id taken,
 // so its commit's durable() returns Fenced() and every later call Closed(),
 // while the second writer's commits survive a reopen.
-fn put(mut s: store.Store, k: Bytes, v: Bytes) -> Result[(), store.StoreError] {
+fn put(mut s: store.Store[Dir], k: Bytes, v: Bytes) -> Result[(), store.StoreError] {
   let mut x = store.begin(mut s)
   txn.put(mut x, unique k, unique v)
   let ticket = store.commit(mut s, take x)?

@@ -1,0 +1,49 @@
+// rule: SEM-5
+// expect: run
+// The exact immutable log resolves an acknowledged PUT with a lost response;
+// a racing different log fences, and a pre-write fault publishes no group.
+fn write_one(mut s: store.Store[s3.Sim]) -> Result[(), store.StoreError] {
+  let mut tx = store.begin(mut s)
+  txn.put(mut tx, b"key", b"value")
+  let ticket = store.commit(mut s, take tx)?
+  store.durable(mut s, ticket)
+}
+
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  // The seventh backend call is the writer's conditional fence-log creation.
+  let mut s = store.open_backend(
+    s3.simulated(d, 5, 0, 7, 0),
+    s3.simulated_backend(),
+    store.default_config()
+  )?
+  write_one(mut s)?
+  let state = store.into_state(take s)?
+  test.check(t, state.operations > 8 && state.ticks == state.operations * 5)
+  let mut recovered = store.open_backend(
+    s3.simulated(d, 0, 0, 0, 0),
+    s3.simulated_backend(),
+    store.default_config()
+  )?
+  test.check(t, store.get(store.snapshot(mut recovered), b"key") == Some(b"value"))
+  store.close(take recovered)?
+  let raced = store.open_backend(
+    s3.simulated(test.dir(t, []), 0, 0, 0, 7),
+    s3.simulated_backend(),
+    store.default_config()
+  )
+  match raced {
+    Error(Fenced()) => {},
+    _ => test.check(t, false),
+  }
+  let failed = store.open_backend(
+    s3.simulated(test.dir(t, []), 0, 7, 0, 0),
+    s3.simulated_backend(),
+    store.default_config()
+  )
+  match failed {
+    Error(Storage(_)) => {},
+    _ => test.check(t, false),
+  }
+  Ok(())
+}

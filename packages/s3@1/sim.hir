@@ -1,0 +1,83 @@
+/// A deterministic object medium over a Test Dir. All objects are immutable;
+/// every completed call adds virtual ticks without delaying a thread. The
+/// administrator chooses operation ordinals for failures, lost replies or races.
+pub type Sim {
+  dir: Dir,
+  operations: u64,
+  ticks: u64,
+  latency: u64,
+  fail_at: u64,
+  lost_reply_at: u64,
+  race_at: u64,
+}
+
+pub fn simulated(d: Dir, latency: u64, fail_at: u64, lost_reply_at: u64, race_at: u64) -> Sim {
+  Sim(
+    dir: d,
+    operations: 0,
+    ticks: 0,
+    latency: latency,
+    fail_at: fail_at,
+    lost_reply_at: lost_reply_at,
+    race_at: race_at
+  )
+}
+
+pub fn simulated_backend() -> store.Backend[Sim] uses {} {
+  store.Backend(
+    read: sim_read,
+    put_new: sim_put,
+    list: sim_list,
+    remove: sim_remove,
+    mkdir: sim_mkdir
+  )
+}
+
+fn advance(mut state: Sim) -> Result[(), FileError] uses {} {
+  state.operations += 1
+  state.ticks += state.latency
+  if state.operations == state.fail_at {
+    return Error(FileFault(1))
+  }
+  Ok(())
+}
+
+fn sim_read(mut state: Sim, name: String) -> Result[Bytes, FileError] {
+  advance(mut state)?
+  file.read_bytes(state.dir, path.of(name))
+}
+
+fn sim_put(mut state: Sim, name: String, data: Bytes, mode: Durability) -> Result[
+  (),
+  FileError
+] {
+  advance(mut state)?
+  if state.operations == state.race_at {
+    file.put_new(state.dir, path.of(name), b"competing writer", Durable())?
+  }
+  file.put_new(state.dir, path.of(name), unique data, mode)?
+  if state.operations == state.lost_reply_at {
+    return Error(FileFault(2))
+  }
+  Ok(())
+}
+
+fn sim_list(mut state: Sim, name: String) -> Result[List[String], FileError] {
+  advance(mut state)?
+  let entries = file.read_dir(state.dir, path.of(name))?
+  let mut names: List[String] = []
+  for entry in entries {
+    list.push(mut names, path.text(entry.path))
+  }
+  Ok(take names)
+}
+
+fn sim_remove(mut state: Sim, name: String) -> Result[(), FileError] {
+  advance(mut state)?
+  file.remove(state.dir, path.of(name))
+}
+
+fn sim_mkdir(mut state: Sim, name: String) -> Result[(), FileError] {
+  advance(mut state)?
+  file.mkdir(state.dir, path.of(name))
+}

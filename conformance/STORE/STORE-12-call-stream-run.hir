@@ -22,7 +22,7 @@ fn request(position: u64, digest: Bytes, epoch: u64, acknowledged: u64) -> store
 
 // Adds one to the counter and returns its new value; Empty when asked to
 // fail.
-fn bump(mut s: store.Store, req: store.CallRequest, fail: bool) -> Result[
+fn bump(mut s: store.Store[Dir], req: store.CallRequest, fail: bool) -> Result[
   u64,
   store.CallFailure[Short]
 ] {
@@ -43,7 +43,7 @@ fn bump(mut s: store.Store, req: store.CallRequest, fail: bool) -> Result[
   )
 }
 
-fn counter(mut s: store.Store) -> Option[Bytes] {
+fn counter(mut s: store.Store[Dir]) -> Option[Bytes] {
   store.get(store.snapshot(mut s), b"counter")
 }
 

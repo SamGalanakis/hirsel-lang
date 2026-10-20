@@ -1,0 +1,14 @@
+// rule: SEM-5
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(
+    t,
+    s3.canonical_query([("z", "a b"), ("a", "/"), ("a", "a"), ("a", "")]) == "a=&a=%2F&a=a&z=a%20b"
+  )
+  test.check(
+    t,
+    s3.canonical_query([("a-", "v"), ("a", "z"), ("a", "")]) == "a=&a=z&a-=v"
+  )
+  test.check(t, s3.encode_path("/bucket/a b//c%/é") == "/bucket/a%20b//c%25/%C3%A9")
+  Ok(())
+}

@@ -1,8 +1,8 @@
-// An embedded, transactional, ordered key-value store over one Dir: a
-// log-structured engine whose every object is immutable and created with
-// file.put_new, after SlateDB's object-storage protocol (manifest, write-ahead
-// objects and writer fencing by create-if-absent; mechanisms only). The Dir
-// grant is the store's whole authority and its whole storage seam.
+// An embedded, transactional, ordered key-value store over Backend[S]: a
+// log-structured engine whose objects are immutable and conditionally created,
+// after SlateDB's object-storage protocol (manifest, write-ahead objects and
+// writer fencing by create-if-absent). The local backend uses an explicit Dir;
+// object backends supply the same operations through their owned state.
 //
 // Layout under the Dir, every name a 20-digit decimal id:
 //   manifest/N  the writer epoch, the current snapshot and the first log id
@@ -14,6 +14,57 @@
 // A writer claims the store by creating a fence log at the next log id and
 // then the next manifest with the next epoch. A stale writer's next create
 // finds its id taken and the store reports Fenced().
+/// The storage seam: immutable whole-object reads, conditional creation,
+/// ordered prefix discovery, deletion and directory setup. A successful durable
+/// create acknowledges the exact bytes; an uncertain create must be read back.
+/// Implementations may issue range GETs and cache immutable data behind `read`.
+pub type Backend[S] {
+  read: fn(mut state: S, String) -> Result[Bytes, FileError] uses {state},
+  put_new: fn(mut state: S, String, Bytes, Durability) -> Result[(), FileError] uses {state},
+  list: fn(mut state: S, String) -> Result[List[String], FileError] uses {state},
+  remove: fn(mut state: S, String) -> Result[(), FileError] uses {state},
+  mkdir: fn(mut state: S, String) -> Result[(), FileError] uses {state},
+}
+
+/// The default backend: an explicitly granted local or simulated Dir.
+pub fn local_backend() -> Backend[Dir] uses {} {
+  Backend(
+    read: local_read,
+    put_new: local_put,
+    list: local_list,
+    remove: local_remove,
+    mkdir: local_mkdir
+  )
+}
+
+fn local_read(mut d: Dir, name: String) -> Result[Bytes, FileError] uses {d} {
+  file.read_bytes(d, path.of(name))
+}
+
+fn local_put(mut d: Dir, name: String, data: Bytes, mode: Durability) -> Result[
+  (),
+  FileError
+] uses {d} {
+  file.put_new(d, path.of(name), unique data, mode)
+}
+
+fn local_list(mut d: Dir, name: String) -> Result[List[String], FileError] uses {d} {
+  let entries = file.read_dir(d, path.of(name))?
+  let mut names: List[String] = []
+  for entry in entries {
+    list.push(mut names, path.text(entry.path))
+  }
+  Ok(take names)
+}
+
+fn local_remove(mut d: Dir, name: String) -> Result[(), FileError] uses {d} {
+  file.remove(d, path.of(name))
+}
+
+fn local_mkdir(mut d: Dir, name: String) -> Result[(), FileError] uses {d} {
+  file.mkdir(d, path.of(name))
+}
+
 /// How the store makes commits survive a crash, and where it may stop for a
 /// test. `durability` is the mode of every log object: `Durable()` returns a
 /// commit's ticket from `durable` only once its group is synced, `Volatile()`
@@ -133,8 +184,10 @@ pub opaque type Tx: () uses {} {
 }
 
 /// The writer of one store directory.
-pub opaque resource type Store: () uses {Dir} {
-  dir: Dir,
+@captures(backend)
+pub opaque type Store[S]: () uses {S} {
+  state: S,
+  backend: Backend[S],
   config: StoreConfig,
   epoch: u64,
   index: ordered_map.OrderedMap[Bytes, Bytes],
@@ -152,7 +205,6 @@ pub opaque resource type Store: () uses {Dir} {
   writes: u64,
   closed: bool,
 }
-drop(self) {}
 
 const MAGIC: u32 = 0x52545348
 
@@ -239,9 +291,19 @@ pub fn prefix_bounds(prefix: Bytes) -> (
 
 /// Opens the store in `d`, creating its layout when `d` is empty, recovers the
 /// newest valid state and claims the store as its writer at the next epoch.
-pub fn open(d: Dir, config: StoreConfig) -> Result[Store, StoreError] {
-  let mut s = Store(
-    dir: d,
+pub fn open(d: Dir, config: StoreConfig) -> Result[Store[Dir], StoreError] uses {d} {
+  open_backend(d, local_backend(), config)
+}
+
+/// Opens the same engine over a host-selected storage implementation. The state
+/// is owned by the store; all effects go through this explicit function dictionary.
+pub fn open_backend[S](take state: S, take backend: Backend[S], config: StoreConfig) -> Result[
+  Store[S],
+  StoreError
+] uses {state, backend} {
+  let mut s: Store[S] = Store(
+    state: take state,
+    backend: take backend,
     config: config,
     epoch: 0,
     index: ordered_map.empty(compare_keys),
@@ -264,7 +326,7 @@ pub fn open(d: Dir, config: StoreConfig) -> Result[Store, StoreError] {
 
 /// A stable view of every commit so far, durable or not. Later commits never
 /// change it, and holding it never holds up the writer.
-pub fn snapshot(mut s: Store) -> Snapshot uses {} {
+pub fn snapshot[S](mut s: Store[S]) -> Snapshot uses {} {
   Snapshot(seq: s.visible, index: current(mut s))
 }
 
@@ -293,13 +355,13 @@ pub fn range(
 }
 
 /// Starts a transaction at the latest commit.
-pub fn begin(mut s: Store) -> Txn uses {} {
+pub fn begin[S](mut s: Store[S]) -> Txn uses {} {
   Txn(base: s.visible, state: current(mut s), writes: ordered_map.empty(compare_keys))
 }
 
 // A share of the index that outlives this call: the index moves out of the
 // store, which only holds owned values, so a copy of it is owned too.
-fn current(mut s: Store) -> ordered_map.OrderedMap[Bytes, Bytes] uses {} {
+fn current[S](mut s: Store[S]) -> ordered_map.OrderedMap[Bytes, Bytes] uses {} {
   let index = replace(mut s.index, ordered_map.empty(compare_keys))
   let share = copy index
   s.index = take index
@@ -310,7 +372,7 @@ fn current(mut s: Store) -> ordered_map.OrderedMap[Bytes, Bytes] uses {} {
 /// snapshots and transactions, and returns its ticket. `Conflict()` when another
 /// commit landed since `t` began. A commit that fills its group writes the
 /// group's log object; await its durability with `durable`.
-pub fn commit(mut s: Store, take t: Txn) -> Result[Ticket, StoreError] {
+pub fn commit[S](mut s: Store[S], take t: Txn) -> Result[Ticket, StoreError] uses {s} {
   if s.closed {
     return Error(Closed())
   }
@@ -346,7 +408,7 @@ pub fn commit(mut s: Store, take t: Txn) -> Result[Ticket, StoreError] {
 /// The output gate: returns once the commit `t` names is in a written log
 /// object, synced when the store is `Durable()`, together with every earlier
 /// commit. Writes the pending group if `t` is in it.
-pub fn durable(mut s: Store, t: Ticket) -> Result[(), StoreError] {
+pub fn durable[S](mut s: Store[S], t: Ticket) -> Result[(), StoreError] uses {s} {
   if s.closed {
     return Error(Closed())
   }
@@ -360,7 +422,7 @@ pub fn durable(mut s: Store, t: Ticket) -> Result[(), StoreError] {
 /// manifest and removes the objects it supersedes. A crash at any point
 /// recovers: until the manifest exists the old state is current, and after it
 /// the superseded objects are garbage that the next open removes.
-pub fn compact(mut s: Store) -> Result[(), StoreError] {
+pub fn compact[S](mut s: Store[S]) -> Result[(), StoreError] uses {s} {
   if s.closed {
     return Error(Closed())
   }
@@ -376,7 +438,7 @@ pub fn compact(mut s: Store) -> Result[(), StoreError] {
 }
 
 /// Writes any pending commits and closes the store.
-pub fn close(take store: Store) -> Result[(), StoreError] {
+pub fn close[S](take store: Store[S]) -> Result[(), StoreError] uses {store} {
   let mut s = take store
   if s.closed {
     return Error(Closed())
@@ -389,10 +451,10 @@ pub fn close(take store: Store) -> Result[(), StoreError] {
 /// returned only once every commit the body could see, and its own, is
 /// durable: the output gate. `Error(e)` discards the writes and returns
 /// `Aborted(e)`; a failure in the body discards them and propagates.
-pub fn transact[R: inert, E: inert](
-  mut s: Store,
+pub fn transact[S, R: inert, E: inert](
+  mut s: Store[S],
   body: fn(mut tx: Tx) -> Result[R, E] uses {}
-) -> Result[R, TxFailure[E]] {
+) -> Result[R, TxFailure[E]] uses {s} {
   if s.closed {
     return Error(Storage(Closed()))
   }
@@ -424,11 +486,11 @@ pub fn transact[R: inert, E: inert](
 /// `body`, and the same commit records the outcome in the row, so an outcome
 /// is recorded exactly when its writes commit. An outcome that writes
 /// nothing (an abort, a limit) is recorded by a commit of the row alone.
-pub fn call[R: inert + serializable, E: inert + serializable](
-  mut s: Store,
+pub fn call[S, R: inert + serializable, E: inert + serializable](
+  mut s: Store[S],
   req: CallRequest,
   body: fn(mut tx: Tx) -> Result[R, E] uses {}
-) -> Result[R, CallFailure[E]] {
+) -> Result[R, CallFailure[E]] uses {s} {
   if s.closed {
     return Error(Tx(Storage(Closed())))
   }
@@ -564,7 +626,7 @@ fn stream_key(stream: Bytes) -> unique Bytes uses {} {
 }
 
 // Releases a refusal once every commit the request could see is durable.
-fn refuse[R, E](mut s: Store, base: u64, take f: CallFailure[E]) -> Result[
+fn refuse[S, R, E](mut s: Store[S], base: u64, take f: CallFailure[E]) -> Result[
   R,
   CallFailure[E]
 ] {
@@ -612,7 +674,7 @@ fn over_limit(limits: StoreLimits, t: Txn) -> Option[TxLimit] uses {} {
 // The output gate at `version`: writes the pending group when a commit at or
 // below it is not yet durable. Nothing was attempted for this outcome, so a
 // failure is `Storage`.
-fn gate(mut s: Store, version: u64) -> Result[(), Unreleased] {
+fn gate[S](mut s: Store[S], version: u64) -> Result[(), Unreleased] {
   if version <= s.durable {
     return Ok(())
   }
@@ -624,7 +686,7 @@ fn gate(mut s: Store, version: u64) -> Result[(), Unreleased] {
 
 // Commits `t` when it writes anything and waits until it is durable; a
 // transaction without writes waits for the commit it began at.
-fn settle(mut s: Store, take t: Txn) -> Result[(), Unreleased] {
+fn settle[S](mut s: Store[S], take t: Txn) -> Result[(), Unreleased] {
   if ordered_map.len(t.writes) == 0 {
     return gate(mut s, t.base)
   }
@@ -662,6 +724,18 @@ fn released_call[E](take u: Unreleased) -> CallFailure[E] uses {} {
   Tx(released(take u))
 }
 
+/// Flushes the pending group and returns the backend state, for explicit
+/// lifecycle management, simulation observations or reopening the same medium.
+pub fn into_state[S](take store: Store[S]) -> Result[S, StoreError] uses {store} {
+  let mut s = take store
+  if s.closed {
+    return Error(Closed())
+  }
+  flush(mut s)?
+  let Store(state: state, ..) = take s
+  Ok(take state)
+}
+
 // Effective entries of `m` in a range, copied out.
 fn entries_in(
   m: ordered_map.OrderedMap[Bytes, Bytes],
@@ -694,13 +768,13 @@ fn entries_in(
 
 // Closes the store on an error that ends it. Every storage mutation goes
 // through `create`, `remove` or `make_dir`, which count it for the fault seam.
-fn stop(mut s: Store, take e: StoreError) -> StoreError uses {} {
+fn stop[S](mut s: Store[S], take e: StoreError) -> StoreError uses {} {
   s.closed = true
   e
 }
 
 // Counts one storage mutation, refusing it when the fault seam says so.
-fn mutation(mut s: Store) -> Result[(), StoreError] uses {} {
+fn mutation[S](mut s: Store[S]) -> Result[(), StoreError] uses {} {
   if let StopAfterWrites(n) = s.config.faults {
     if s.writes >= n {
       return Error(stop(mut s, Injected()))
@@ -710,36 +784,49 @@ fn mutation(mut s: Store) -> Result[(), StoreError] uses {} {
   Ok(())
 }
 
-fn create(mut s: Store, name: String, take data: Bytes, mode: Durability) -> Result[
+fn create[S](mut s: Store[S], name: String, take data: Bytes, mode: Durability) -> Result[
   (),
   StoreError
 ] {
   mutation(mut s)?
-  match file.put_new(s.dir, path.of(name), take data, mode) {
+  match s.backend.put_new(mut s.state, name, data, mode) {
     Ok(()) => Ok(()),
-    Error(AlreadyExists()) => Error(stop(mut s, Fenced())),
-    Error(e) => Error(stop(mut s, Storage(e))),
+    Error(error) => {
+      // An S3 conditional PUT can commit and lose its response. The exact
+      // immutable object is the proof of success; never resend blindly.
+      match s.backend.read(mut s.state, name) {
+        Ok(stored) => if stored == data {
+          Ok(())
+        } else {
+          Error(stop(mut s, Fenced()))
+        },
+        Error(_) => match error {
+          AlreadyExists() => Error(stop(mut s, Fenced())),
+          _ => Error(stop(mut s, Storage(error))),
+        },
+      }
+    },
   }
 }
 
-fn remove(mut s: Store, name: String) -> Result[(), StoreError] {
+fn remove[S](mut s: Store[S], name: String) -> Result[(), StoreError] {
   mutation(mut s)?
-  match file.remove(s.dir, path.of(name)) {
+  match s.backend.remove(mut s.state, name) {
     Ok(()) | Error(NotFound()) => Ok(()),
     Error(e) => Error(stop(mut s, Storage(e))),
   }
 }
 
-fn make_dir(mut s: Store, name: String) -> Result[(), StoreError] {
+fn make_dir[S](mut s: Store[S], name: String) -> Result[(), StoreError] {
   mutation(mut s)?
-  match file.mkdir(s.dir, path.of(name)) {
+  match s.backend.mkdir(mut s.state, name) {
     Ok(()) | Error(AlreadyExists()) => Ok(()),
     Error(e) => Error(stop(mut s, Storage(e))),
   }
 }
 
-fn read(mut s: Store, name: String) -> Result[Bytes, StoreError] {
-  match file.read_bytes(s.dir, path.of(name)) {
+fn read[S](mut s: Store[S], name: String) -> Result[Bytes, StoreError] {
+  match s.backend.read(mut s.state, name) {
     Ok(data) => Ok(unique data),
     Error(e) => Error(stop(mut s, Storage(e))),
   }
@@ -747,15 +834,15 @@ fn read(mut s: Store, name: String) -> Result[Bytes, StoreError] {
 
 // The ids of the objects under `kind`, ascending; other names (a crashed
 // put_new's temporary) are ignored.
-fn list_ids(mut s: Store, kind: String) -> Result[List[u64], StoreError] {
-  let entries = match file.read_dir(s.dir, path.of(kind)) {
+fn list_ids[S](mut s: Store[S], kind: String) -> Result[List[u64], StoreError] {
+  let entries = match s.backend.list(mut s.state, kind) {
     Ok(entries) => entries,
     Error(e) => return Error(stop(mut s, Storage(e))),
   }
   let prefix_len = string.byte_len(kind) + 1
   let mut ids: List[u64] = []
   for entry in entries {
-    let name = string.as_bytes(path.text(entry.path))
+    let name = string.as_bytes(entry)
     if bytes.len(name) != prefix_len + 20 {
       continue
     }
@@ -807,7 +894,7 @@ fn manifest_name(id: u64) -> unique String uses {} {
 }
 
 // Writes the pending commits as one log object, the commit point of each.
-fn flush(mut s: Store) -> Result[(), StoreError] {
+fn flush[S](mut s: Store[S]) -> Result[(), StoreError] {
   if list.len(s.pending) == 0 {
     return Ok(())
   }
@@ -821,7 +908,7 @@ fn flush(mut s: Store) -> Result[(), StoreError] {
   Ok(())
 }
 
-fn publish_manifest(mut s: Store) -> Result[(), StoreError] {
+fn publish_manifest[S](mut s: Store[S]) -> Result[(), StoreError] {
   let id = s.next_manifest
   let data = encode_manifest(id, s.epoch, s.snap, s.log_start)
   create(mut s, manifest_name(id), take data, Durable())?
@@ -831,7 +918,7 @@ fn publish_manifest(mut s: Store) -> Result[(), StoreError] {
 
 // Removes every object the current manifest no longer reaches: older
 // manifests and snapshots, and logs before its first log id.
-fn collect(mut s: Store) -> Result[(), StoreError] {
+fn collect[S](mut s: Store[S]) -> Result[(), StoreError] {
   let manifests = list_ids(mut s, "manifest")?
   let snaps = list_ids(mut s, "snap")?
   let logs = list_ids(mut s, "log")?
@@ -840,10 +927,12 @@ fn collect(mut s: Store) -> Result[(), StoreError] {
 
 // Removes, among the listed objects, every one the current manifest does not
 // reach: older manifests, other snapshots and logs before its first log id.
-fn remove_garbage(mut s: Store, manifests: List[u64], snaps: List[u64], logs: List[u64]) -> Result[
-  (),
-  StoreError
-] {
+fn remove_garbage[S](
+  mut s: Store[S],
+  manifests: List[u64],
+  snaps: List[u64],
+  logs: List[u64]
+) -> Result[(), StoreError] {
   for id in manifests {
     if id + 1 < s.next_manifest {
       remove(mut s, manifest_name(id))?
@@ -867,7 +956,7 @@ fn remove_garbage(mut s: Store, manifests: List[u64], snaps: List[u64], logs: Li
 }
 
 // Loads the newest valid state, then claims the store at the next epoch.
-fn recover(mut s: Store) -> Result[(), StoreError] {
+fn recover[S](mut s: Store[S]) -> Result[(), StoreError] {
   make_dir(mut s, "manifest")?
   make_dir(mut s, "log")?
   make_dir(mut s, "snap")?
@@ -976,7 +1065,7 @@ fn apply(mut index: ordered_map.OrderedMap[Bytes, Bytes], set: List[Write]) -> (
 }
 
 // Fences every older writer, then records the new epoch in a manifest.
-fn claim(mut s: Store, epoch: u64) -> Result[(), StoreError] {
+fn claim[S](mut s: Store[S], epoch: u64) -> Result[(), StoreError] {
   s.epoch = epoch
   let id = s.next_log
   let empty: List[List[Write]] = []

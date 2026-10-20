@@ -1,0 +1,118 @@
+/// The store backend state. Whole-object engine reads use bounded Range GETs;
+/// cache_bytes=0 opts out. Cache contents belong to this engine instance only.
+pub type ObjectBackend {
+  client: Client,
+  cached: List[(String, Bytes)],
+  cached_bytes: u64,
+}
+
+/// Verify conditional creation before publishing any store manifest or log.
+/// Servers that ignore If-None-Match must refuse, never weaken writer fencing.
+pub fn object_state(take c: Client) -> Result[ObjectBackend, S3Error] {
+  let mut checked = take c
+  let probe = string.concat(
+    "conditional-probe-",
+    hash_hex(
+      string.as_bytes(
+        string.concat(
+          checked.credentials.access_key,
+          i64.to_string(clock.wall(checked.clock) ? clock_error)
+        )
+      )
+    )
+  )
+  match put(mut checked, probe, b"first", Create()) {
+    Ok(()) => {},
+    Error(Exists()) => return Error(Exists()),
+    Error(Status(501)) => return Error(
+      ConditionalUnsupported(unique checked.config.endpoint)
+    ),
+    Error(e) => return Error(e),
+  }
+  let competing = put(mut checked, probe, b"different", Create())
+  let original = get(mut checked, probe)?
+  delete(mut checked, probe)?
+  let rejected = match competing {
+    Error(Exists()) => true,
+    Ok(()) | Error(Status(501)) => false,
+    Error(e) => return Error(e),
+  }
+  if !rejected || original != b"first" {
+    return Error(ConditionalUnsupported(unique checked.config.endpoint))
+  }
+  Ok(ObjectBackend(client: take checked, cached: [], cached_bytes: 0))
+}
+
+pub fn object_backend() -> store.Backend[ObjectBackend] uses {} {
+  store.Backend(
+    read: object_read,
+    put_new: object_put,
+    list: object_list,
+    remove: object_remove,
+    mkdir: object_mkdir
+  )
+}
+
+fn file_error(error: S3Error) -> FileError uses {} {
+  match error {
+    Missing() => NotFound(),
+    Exists() => AlreadyExists(),
+    _ => FileFault(1),
+  }
+}
+
+fn object_read(mut state: ObjectBackend, name: String) -> Result[Bytes, FileError] {
+  for (key, value) in state.cached {
+    if key == name {
+      return Ok(unique value)
+    }
+  }
+  // A range larger than every accepted object is still bounded by max_body_bytes.
+  // The server responds with the whole existing object, or a confirmed empty range.
+  let limit = state.client.config.max_object_bytes
+  let (data, total) = range_get(mut state.client, name, 0, limit) ? file_error
+  if total > limit {
+    return Error(FileFault(1))
+  }
+  let charge = bytes.len(data) + string.byte_len(name) + 64
+  if charge <= state.client.config.cache_bytes {
+    if state.cached_bytes + charge > state.client.config.cache_bytes {
+      state.cached = []
+      state.cached_bytes = 0
+    }
+    list.push(mut state.cached, (unique name, unique data))
+    state.cached_bytes += charge
+  }
+  Ok(take data)
+}
+
+fn object_put(mut state: ObjectBackend, name: String, data: Bytes, mode: Durability) -> Result[
+  (),
+  FileError
+] {
+  state.cached = []
+  state.cached_bytes = 0
+  put(mut state.client, name, data, Create()) ? file_error
+  Ok(())
+}
+
+fn object_list(mut state: ObjectBackend, prefix: String) -> Result[
+  List[String],
+  FileError
+] {
+  state.cached = []
+  state.cached_bytes = 0
+  Ok(list_objects(mut state.client, string.concat(prefix, "/")) ? file_error)
+}
+
+fn object_remove(mut state: ObjectBackend, name: String) -> Result[(), FileError] {
+  state.cached = []
+  state.cached_bytes = 0
+  delete(mut state.client, name) ? file_error
+  Ok(())
+}
+
+fn object_mkdir(mut state: ObjectBackend, name: String) -> Result[(), FileError] uses {} {
+  // S3 prefixes need no directory objects; discovery is ListObjectsV2.
+  Ok(())
+}

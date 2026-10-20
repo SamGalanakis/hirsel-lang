@@ -1,0 +1,42 @@
+// rule: DET-1
+// expect: run
+// A second std@1/store writer opening the same Dir claims the next epoch and
+// fences the first: the first writer's next log object finds its id taken,
+// so its commit's durable() returns Fenced() and every later call Closed(),
+// while the second writer's commits survive a reopen.
+fn put(mut s: store.Store[s3.Sim], k: Bytes, v: Bytes) -> Result[(), store.StoreError] {
+  let mut x = store.begin(mut s)
+  txn.put(mut x, unique k, unique v)
+  let ticket = store.commit(mut s, take x)?
+  store.durable(mut s, ticket)
+}
+
+pub fn main(t: Test) -> Result[(), store.StoreError] {
+  let d = test.dir(t, [])
+  let mut old = store.open_backend(
+    s3.simulated(d, 0, 0, 0, 0),
+    s3.simulated_backend(),
+    store.default_config()
+  )?
+  put(mut old, b"a", b"old")?
+  let mut new = store.open_backend(
+    s3.simulated(d, 0, 0, 0, 0),
+    s3.simulated_backend(),
+    store.default_config()
+  )?
+  test.check(t, store.get(store.snapshot(mut new), b"a") == Some(b"old"))
+  test.check(t, put(mut old, b"b", b"stale") == Error(Fenced()))
+  test.check(t, put(mut old, b"c", b"late") == Error(Closed()))
+  test.check(t, store.close(take old) == Error(Closed()))
+  put(mut new, b"b", b"new")?
+  store.close(take new)?
+  let mut again = store.open_backend(
+    s3.simulated(d, 0, 0, 0, 0),
+    s3.simulated_backend(),
+    store.default_config()
+  )?
+  let now = store.snapshot(mut again)
+  test.check(t, store.get(now, b"b") == Some(b"new") && store.get(now, b"c") == None())
+  store.close(take again)?
+  Ok(())
+}
