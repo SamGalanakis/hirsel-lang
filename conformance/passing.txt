@@ -628,6 +628,9 @@ conformance/CONC/CONC-3-explicit-cancellation-check.hir
 conformance/CONC/CONC-3-http-client-deadline-run.hir
 conformance/CONC/CONC-3-process-pipeline-canceled-run.hir
 conformance/CONC/CONC-3-process-run-canceled-run.hir
+conformance/CONC/CONC-3-schedule-cancel-run.hir
+conformance/CONC/CONC-3-schedule-driver-run.hir
+conformance/CONC/CONC-3-schedule-network-run.hir
 conformance/CONC/CONC-3-shielded-drop-send-run.hir
 conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir
 conformance/CONC/CONC-3-task-capture-after-sleep-run.hir
@@ -5479,6 +5482,9 @@ conformance/SEM/SEM-3-regex-go-2-run.hir
 conformance/SEM/SEM-3-regex-go-3-run.hir
 conformance/SEM/SEM-3-regex-limits-run.hir
 conformance/SEM/SEM-3-scalar-safe-slices.hir
+conformance/SEM/SEM-3-schedule-jitter-run.hir
+conformance/SEM/SEM-3-schedule-laws-run.hir
+conformance/SEM/SEM-3-schedule-vectors-run.hir
 conformance/SEM/SEM-3-semver-cargo-1-run.hir
 conformance/SEM/SEM-3-semver-cargo-2-run.hir
 conformance/SEM/SEM-3-semver-cargo-leading-run.hir

@@ -4,9 +4,9 @@ use crate::source_std;
 use hirsel_engine::*;
 use hirsel_interp::{library::simulation::Fault, observation::Effect};
 
-fn run_replayed(engine: &mut QueryEngine, config: SimulationConfig) {
+fn run_replayed(engine: &mut QueryEngine, entry: hirsel_syntax::DefPath, config: SimulationConfig) {
     let run = RunConfiguration {
-        entry: entry_path(&default_context()),
+        entry,
         hash_seed: 0,
         inputs: vec![],
     };
@@ -53,7 +53,7 @@ fn schedule_seeded_waits_replay_exactly() {
             .join("../../conformance/SEM/SEM-3-schedule-jitter-run.hir");
         let mut loaded = hirsel_driver::load_program(&path).unwrap();
         loaded.check_for_execution().unwrap();
-        run_replayed(&mut loaded.engine, clocked());
+        run_replayed(&mut loaded.engine, loaded.entry, clocked());
     });
 }
 
@@ -66,7 +66,7 @@ pub fn main(rt: Io, args: Args) -> Result[(),GrantError] {
   let expected = match arg.text(args,0) { Ok(text) => text, Error(_) => "" }
   let c = io.monotonic_clock(rt)?
   let r = io.random(rt)?
-  let policy = schedule.jittered(schedule.spaced(10),Full())
+  let policy = schedule.max_attempts(schedule.jittered(schedule.spaced(10),Full()),3)
   let retried = schedule.retry(c,r,policy,fn() -> Result[(),u64] { Error(77) },fn(e:u64) -> bool { true })
   failure.check(match retried {
     Error(Interrupted(Some(77),1,Random(Source(Unavailable())))) => expected == "random.bytes",
@@ -86,6 +86,42 @@ pub fn main(rt: Io, args: Args) -> Result[(),GrantError] {
         for operation in ["random.bytes", "clock.sleep_until", "clock.monotonic"] {
             let mut config = clocked();
             config.args = vec![operation.into()];
+            if operation == "random.bytes" {
+                // Random has an explicit provider seam rather than a fault queue.
+                let run = RunConfiguration {
+                    entry: entry_path(&default_context()),
+                    hash_seed: 0,
+                    inputs: vec![],
+                };
+                let mut library = hirsel_interp::library::Library::new(&run, config).unwrap();
+                let args = vec![
+                    library.simulation.grant_root("Io").unwrap(),
+                    library.simulation.grant_root("Args").unwrap(),
+                ];
+                library.simulation.supply_random(Err(()));
+                let runtime = engine.runtime_types().unwrap();
+                let sources = engine.sources.clone();
+                let execution = hirsel_interp::run_with_runtime(
+                    &mut engine,
+                    &sources,
+                    &run,
+                    args,
+                    Default::default(),
+                    &mut library,
+                    &runtime,
+                )
+                .unwrap();
+                assert!(
+                    matches!(
+                        execution.outcome,
+                        hirsel_interp::Outcome::Returned { exit_code: 0, .. }
+                    ),
+                    "{:?}",
+                    execution.outcome
+                );
+                assert!(execution.failures.is_empty());
+                continue;
+            }
             config.faults.insert(
                 operation.into(),
                 [Fault::Fault {
@@ -94,7 +130,7 @@ pub fn main(rt: Io, args: Args) -> Result[(),GrantError] {
                 }]
                 .into(),
             );
-            run_replayed(&mut engine, config);
+            run_replayed(&mut engine, entry_path(&default_context()), config);
         }
     });
 }
