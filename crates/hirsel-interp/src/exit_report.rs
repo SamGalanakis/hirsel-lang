@@ -1,7 +1,7 @@
 //! PROG-3 host exit text, separate from semantic program output and observations.
 use crate::Value;
 use crate::aggregate::RuntimeTypes;
-use hirsel_types::logical::{Logical, LogicalNominal, Resolved, Scope, type_arguments};
+use hirsel_type_analysis::logical::{Logical, LogicalNominal, Resolved, Scope, type_arguments};
 use hirsel_types::{Signature, SignatureKind, TypeId, TypeKind};
 
 /// A host report's position among captured program stream bytes. The report

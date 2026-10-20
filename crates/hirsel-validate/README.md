@@ -391,7 +391,7 @@ must be unique. Only its "preserved unique
 hand-back" violations are kept. A call result declared as a bare type parameter is
 expected with the declared root modes (aliased unless written `unique`), whatever
 contract argument instantiates it, as the checker publishes it. A parametric call
-(`parametric_unique`, from `hirsel_types::parametric_inputs`) makes its destination
+(`parametric_unique`, from `hirsel_type_analysis::parametric::parametric_inputs`) makes its destination
 current-unique when every argument that may supply its result is; a core callee counts as
 bodyless, so its borrowed inputs disqualify it. Hand-built controls, including a borrowed
 input, a nominal part naming no held parameter, a lent `uses {}` callback and a callback

@@ -6,10 +6,10 @@
 //! arena token) is 8, a callable or `Iter` is 16, a tuple, record or resource is the sum
 //! of its fields, a variant is 4 plus its largest variant's fields, and `Inline[T, n]`
 //! and `Simd[T, n]` are `n` times `T`. Padding, headers and slabs are never charged.
-use crate::{
+use hirsel_syntax::DefPath;
+use hirsel_types::{
     BinderRef, BuiltinType, GenericArgument, Primitive, Size, Type, TypeId, TypeKind, TypeStore,
 };
-use hirsel_syntax::DefPath;
 use std::rc::Rc;
 
 /// What a nominal type contributes: its representation's shape in that
@@ -167,7 +167,7 @@ impl<'a, 'r> Logical<'a, 'r> {
             (BuiltinType::List | BuiltinType::Array | BuiltinType::Set, [element, ..]) => {
                 std::slice::from_ref(element)
             }
-            (BuiltinType::Map | BuiltinType::SortedMap, [key, value, ..]) => &types[..2],
+            (BuiltinType::Map | BuiltinType::SortedMap, [_, _, ..]) => &types[..2],
             _ => return Ok(None),
         };
         let mut total = 0u64;
@@ -273,7 +273,7 @@ pub fn logical_element<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Field, Type, TypeParamId, Variant};
+    use hirsel_types::{Field, Type, TypeParamId, Variant};
 
     fn push(store: &mut TypeStore, kind: TypeKind) -> TypeId {
         store.push(Type::with_kind(kind))

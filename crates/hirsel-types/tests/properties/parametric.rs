@@ -8,6 +8,7 @@
 use super::property_tests::{Declared, Random, World};
 use super::*;
 use hirsel_syntax::PassingMode;
+use hirsel_type_analysis::parametric::{ParametricInput, parametric_inputs, unique_rows};
 use std::{collections::BTreeSet, rc::Rc};
 
 /// Bound sets a signature's parameters draw from; unbounded is drawn twice,
@@ -43,7 +44,7 @@ fn signature_type(
     world: &World,
 ) -> TypeId {
     let choice = if depth == 0 { r.below(6) } else { r.below(16) };
-    let mut child = |r: &mut Random, store: &mut TypeStore| {
+    let child = |r: &mut Random, store: &mut TypeStore| {
         signature_type(r, store, depth - 1, binder, generics, world)
     };
     let builtin = |kind, arguments: Vec<TypeId>| TypeKind::Builtin {

@@ -1,5 +1,8 @@
 //! Declared cleanup effects, independent of invocation effects (MEM-5, GEN-1).
 use super::*;
+use hirsel_type_analysis::cleanup::{
+    CleanupLeaf, cleanup_summary, declared_cleanup, parameter_cleanup, specialized_cleanup,
+};
 
 impl Normalizer<'_, '_> {
     pub(super) fn drop_summary(&self, id: TypeId) -> DropAllocation {

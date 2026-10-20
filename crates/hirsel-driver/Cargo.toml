@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 hirsel-code-store = { path = "../hirsel-code-store" }
+hirsel-type-analysis = { path = "../hirsel-type-analysis" }
 hirsel-layout = { path = "../hirsel-layout" }
 hirsel-engine = { path = "../hirsel-engine" }
 hirsel-check-protocol = { path = "../hirsel-check-protocol" }

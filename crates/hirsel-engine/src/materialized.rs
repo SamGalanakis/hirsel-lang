@@ -4,6 +4,7 @@ use hirsel_interp::Value;
 use hirsel_span::Span;
 use hirsel_tir::{Constant, Constructor};
 use hirsel_tir::{Materialized, ValueKind, ValueNode};
+use hirsel_type_analysis::cleanup::{CleanupLeaf, cleanup_summary};
 use hirsel_types::{GenericArgument, SignatureKind, Substitution, TypeId, TypeKind, TypeStore};
 fn invalid(message: impl Into<String>) -> QueryError {
     QueryError::Operational(hirsel_types::OperationalFailure {
@@ -282,13 +283,12 @@ impl QueryEngine {
                                 .map_entry_fields()
                                 .ok_or_else(|| invalid("map entry type is missing"))?;
                             let kind = hirsel_types::TypeKind::Tuple(fields.to_vec().into());
-                            let drop_allocation =
-                                hirsel_types::cleanup_summary(&kind, |leaf| match leaf {
-                                    hirsel_types::CleanupLeaf::Component(t) => {
-                                        types.get(t).unwrap().drop_allocation.clone()
-                                    }
-                                    _ => unreachable!("tuple cleanup contains only components"),
-                                });
+                            let drop_allocation = cleanup_summary(&kind, |leaf| match leaf {
+                                CleanupLeaf::Component(t) => {
+                                    types.get(t).unwrap().drop_allocation.clone()
+                                }
+                                _ => unreachable!("tuple cleanup contains only components"),
+                            });
                             let entry = types.push(hirsel_types::Type {
                                 drop_allocation,
                                 ..hirsel_types::Type::with_kind(kind)

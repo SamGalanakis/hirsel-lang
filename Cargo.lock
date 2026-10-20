@@ -445,6 +445,7 @@ dependencies = [
  "hirsel-signature",
  "hirsel-span",
  "hirsel-syntax",
+ "hirsel-type-analysis",
  "hirsel-types",
  "proptest",
 ]
@@ -464,6 +465,7 @@ dependencies = [
  "hirsel-signature",
  "hirsel-span",
  "hirsel-syntax",
+ "hirsel-type-analysis",
  "hirsel-types",
  "proptest",
 ]
@@ -613,6 +615,7 @@ dependencies = [
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",
+ "hirsel-type-analysis",
  "hirsel-types",
  "hirsel-validate",
  "libc",
@@ -642,6 +645,7 @@ dependencies = [
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",
+ "hirsel-type-analysis",
  "hirsel-types",
  "hirsel-validate",
  "serde",
@@ -714,6 +718,7 @@ dependencies = [
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",
+ "hirsel-type-analysis",
  "hirsel-types",
  "hirsel-validate",
  "sha2",
@@ -764,6 +769,7 @@ dependencies = [
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",
+ "hirsel-type-analysis",
  "hirsel-types",
  "serde_json",
 ]
@@ -850,6 +856,7 @@ dependencies = [
  "hirsel-signature",
  "hirsel-span",
  "hirsel-syntax",
+ "hirsel-type-analysis",
  "hirsel-types",
  "proptest",
 ]
@@ -1018,6 +1025,7 @@ dependencies = [
  "hirsel-run-schema",
  "hirsel-span",
  "hirsel-syntax",
+ "hirsel-type-analysis",
  "hirsel-types",
 ]
 
@@ -1054,6 +1062,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirsel-type-analysis"
+version = "0.1.0"
+dependencies = [
+ "hirsel-guard",
+ "hirsel-intern",
+ "hirsel-syntax",
+ "hirsel-types",
+]
+
+[[package]]
 name = "hirsel-types"
 version = "0.1.0"
 dependencies = [
@@ -1064,6 +1082,7 @@ dependencies = [
  "hirsel-run-schema",
  "hirsel-span",
  "hirsel-syntax",
+ "hirsel-type-analysis",
  "serde",
  "serde_json",
 ]
@@ -1079,6 +1098,7 @@ dependencies = [
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",
+ "hirsel-type-analysis",
  "hirsel-types",
 ]
 

@@ -553,7 +553,7 @@ LIR revision 26 (MEM-6) adds an optional u64 `budget` operand to `ArenaOpen`
 and `ArenaToken`, the bounded arena's capacity in logical bytes (the table is
 in the runtime README; `layout::logical_size` and `layout::block_charge` read
 it from layouts, and `tests/it/logical.rs` holds them to
-`hirsel_types::logical`). `Terminator::Recover { arena, caught, failed }` is
+`hirsel_type_analysis::logical`). `Terminator::Recover { arena, caught, failed }` is
 the one way from failure cleanup back to ordinary code: when the active failure
 is exactly the `OutOfSpace` of a bounded arena this unit opened, with no later
 failure, it is forgotten and control resumes on `caught`; otherwise it continues

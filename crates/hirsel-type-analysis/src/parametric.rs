@@ -1,6 +1,6 @@
 //! MODE-2 parametricity: what a generic signature can do with the values of a
 //! type parameter it has no permission to copy.
-use crate::*;
+use hirsel_types::*;
 use std::collections::BTreeSet;
 
 /// How one argument of a parametric call supplies the result's content.

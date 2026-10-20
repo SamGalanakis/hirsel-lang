@@ -52,7 +52,7 @@ fn row(kind: TypeKind, once: bool) -> Type {
 fn generate(r: &mut Random, store: &mut TypeStore, depth: u32) -> TypeId {
     let leaf = depth == 0;
     let choice = if leaf { r.below(5) } else { r.below(12) };
-    let mut child = |r: &mut Random, store: &mut TypeStore| generate(r, store, depth - 1);
+    let child = |r: &mut Random, store: &mut TypeStore| generate(r, store, depth - 1);
     let kind = match choice {
         0 => TypeKind::Primitive(
             [Primitive::U8, Primitive::U64, Primitive::Bool][r.below(3) as usize],

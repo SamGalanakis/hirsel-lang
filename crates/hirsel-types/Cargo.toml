@@ -17,6 +17,7 @@ hirsel-diag = { path = "../hirsel-diag" }
 serde = { version = "1", features = ["derive", "rc"] }
 
 [dev-dependencies]
+hirsel-type-analysis = { path = "../hirsel-type-analysis" }
 hirsel-guard = { path = "../hirsel-guard" }
 hirsel-run-schema = { path = "../hirsel-run-schema" }
 serde_json = "1"

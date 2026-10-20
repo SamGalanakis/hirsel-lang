@@ -1,5 +1,6 @@
 use super::*;
 use hirsel_syntax::{BinaryOp as B, PassingMode, UnaryOp as U};
+use hirsel_type_analysis::cleanup::{CleanupLeaf, cleanup_summary};
 use hirsel_types::*;
 
 /// How a place receives a value, which decides what its nested rows may forget.
@@ -3767,7 +3768,7 @@ impl<'a> Checker<'a> {
                 let SignatureKind::Type(declared) = &declaration.kind else {
                     return None;
                 };
-                order.drop_allocation = hirsel_types::declared_cleanup(
+                order.drop_allocation = hirsel_type_analysis::cleanup::declared_cleanup(
                     declared,
                     &declaration.types,
                     &[GenericArgument::Type(*key)],

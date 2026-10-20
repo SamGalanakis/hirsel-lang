@@ -4,6 +4,7 @@ use super::properties::Properties;
 use super::*;
 use hirsel_diag::{Obligation, RuleId};
 use hirsel_syntax::{ExprKind, PassingMode, UnaryOp};
+use hirsel_type_analysis::parametric::{ParametricInput, parametric_inputs, unique_rows};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

@@ -1,6 +1,10 @@
 use super::shared::Shared;
 use super::*;
 use hirsel_syntax::PassingMode;
+use hirsel_type_analysis::parametric::{ParametricInput, parametric_inputs, unique_rows};
+use hirsel_type_analysis::representation::{
+    RepresentationError, RepresentationFailure, expand_representation,
+};
 use hirsel_types::rows::Rows;
 use hirsel_types::{
     BuiltinType, Origin, OriginArgument, OriginRoot, ParameterRef, Primitive, Relation,
@@ -492,7 +496,7 @@ impl Model {
             }
             let keys = children.entry(place.ty).or_insert_with(|| {
                 use super::flow_origins::EnvironmentField as F;
-                let layout = hirsel_types::expand_representation(
+                let layout = expand_representation(
                     &mut store,
                     place.ty,
                     &mut |_, path, arguments| {
@@ -507,8 +511,8 @@ impl Model {
                 );
                 let kind = match layout {
                     Ok(root) => store.get(root).map(|row| row.kind.clone()),
-                    Err(hirsel_types::RepresentationError {
-                        failure: hirsel_types::RepresentationFailure::Query(error),
+                    Err(RepresentationError {
+                        failure: RepresentationFailure::Query(error),
                         ..
                     }) => checker.proof_failure(error, None),
                     Err(_) => None, // Opaque rows expose no sibling schema.
@@ -4310,8 +4314,7 @@ impl Checker<'_> {
             |path: &DefPath| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new));
         // A bodyless core declaration has no checked body.
         let checked = !path.package_is("core", "1");
-        let Some(inputs) =
-            hirsel_types::parametric_inputs(&signature.types, function, checked, &mut lookup)
+        let Some(inputs) = parametric_inputs(&signature.types, function, checked, &mut lookup)
         else {
             return false;
         };
@@ -4319,15 +4322,15 @@ impl Checker<'_> {
         arguments.iter().all(|a| {
             let ty = self.place_type(a.value.place);
             match inputs.get(a.parameter.0 as usize) {
-                Some(hirsel_types::ParametricInput::Free) => true,
-                Some(hirsel_types::ParametricInput::Unique) => {
+                Some(ParametricInput::Free) => true,
+                Some(ParametricInput::Unique) => {
                     !needs_release(self, ty, types)
                         || super::handle_root(types, ty)
                         || self.operand_unique(state, &a.value)
                 }
-                Some(hirsel_types::ParametricInput::UniqueResult) => {
+                Some(ParametricInput::UniqueResult) => {
                     matches!(&types.get(ty).unwrap().kind, TypeKind::Function(f)
-                    if hirsel_types::unique_rows(
+                    if unique_rows(
                         types,
                         f.result,
                         &self.generic_declarations(),

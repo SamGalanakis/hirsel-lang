@@ -1,4 +1,7 @@
 use hirsel_syntax::DefPath;
+use hirsel_type_analysis::representation::{
+    RepresentationError, RepresentationFailure, expand_representation,
+};
 use hirsel_types::*;
 use std::collections::BTreeMap;
 

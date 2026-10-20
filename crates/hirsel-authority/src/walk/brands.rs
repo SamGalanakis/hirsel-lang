@@ -1,4 +1,7 @@
 use super::*;
+use hirsel_type_analysis::representation::{
+    RepresentationError, RepresentationFailure, expand_representation,
+};
 
 impl Checker<'_> {
     /// The arenas a relation admits: the arenas it names and those named by

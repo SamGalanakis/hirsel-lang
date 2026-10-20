@@ -497,7 +497,7 @@ pub const LOGICAL_CALLABLE: u64 = 16;
 
 /// The logical size of a value of `id` (MEM-6): the target-independent bytes a
 /// bounded arena charges, read from layout structure alone, and so independent
-/// of offsets, padding and niches. It is the table `hirsel_types::logical`
+/// of offsets, padding and niches. It is the table `hirsel_type_analysis::logical`
 /// computes from types. None for a layout that is no inline value (a block
 /// payload, a header or a flat encoding).
 pub fn logical_size(table: &LayoutTable, id: LayoutId) -> Option<u64> {

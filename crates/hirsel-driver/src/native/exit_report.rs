@@ -3,7 +3,7 @@ use super::{NativeError, ReadyProgram, StageName};
 use hirsel_engine::NativeInput;
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, SizeSpec, TagForm};
 use hirsel_syntax::DefPath;
-use hirsel_types::logical::{Logical, LogicalNominal, Resolved, Scope, type_arguments};
+use hirsel_type_analysis::logical::{Logical, LogicalNominal, Resolved, Scope, type_arguments};
 use hirsel_types::{Primitive, SignatureKind, TypeId, TypeKind};
 use std::collections::BTreeMap;
 
@@ -163,7 +163,7 @@ pub(crate) fn derive(
                     Bytes => 6,
                     Never => 0,
                 };
-                node.a = hirsel_types::logical::primitive(*p);
+                node.a = hirsel_type_analysis::logical::primitive(*p);
             }
             TypeKind::Tuple(ts) => {
                 node.kind = 7;

@@ -452,7 +452,7 @@ logical size, and `hirsel_rt_v2_block_grow` (runtime ABI 15) regrows a full unsh
 arena and empties the old block. A callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
 cleanup failed too: then the failure propagates with the `OutOfSpace` primary (FAIL-3). The
 reference interpreter (`hirsel-interp`, `src/bounded.rs`) charges from
-`hirsel_types::logical`; H and native execution charge from layouts
+`hirsel_type_analysis::logical`; H and native execution charge from layouts
 (`hirsel_lir::layout::block_charge`, held to the type table by a cross-check test).
 
 Natively (runtime ABI 7) an arena record carries `remaining` (offset 48, `u64::MAX`

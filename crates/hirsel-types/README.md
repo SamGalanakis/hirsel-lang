@@ -516,3 +516,10 @@ parameters are excluded from constant signatures.
 Signature encoding v16 adds `TypeDefinition.serializable_check`: an opaque type's
 `@serializable(check = f)` publishes its check function and its representation, the
 wire contract its schema is a nominal node over (SER-1).
+
+Stage-selected analyses live in `hirsel-type-analysis`: cleanup summaries and
+specialization, MODE-2 parametric uniqueness, logical arena sizing, diagnostic
+spelling, and successive nominal representation expansion. Import those modules
+directly. Core definitions, canonical CT spelling, graph transport, nominal proof
+memoization and basic property/crossing queries remain here. Cleanup-bound graph
+normalization remains with the shared property normalizer.

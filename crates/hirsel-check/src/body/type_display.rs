@@ -3,7 +3,7 @@ use super::*;
 
 impl Checker<'_, '_> {
     pub(super) fn type_spelling(&self, root: TypeId) -> String {
-        hirsel_types::type_spelling(
+        hirsel_type_analysis::spelling::type_spelling(
             &self.body.types,
             root,
             &self.body.resolution.generic_declarations,
@@ -19,7 +19,7 @@ impl Checker<'_, '_> {
         actual: TypeId,
         expected: TypeId,
     ) {
-        let [expected, actual] = hirsel_types::type_spellings_apart(
+        let [expected, actual] = hirsel_type_analysis::spelling::type_spellings_apart(
             &self.body.types,
             [expected, actual],
             &self.body.resolution.generic_declarations,

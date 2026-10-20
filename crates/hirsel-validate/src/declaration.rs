@@ -1,6 +1,9 @@
 //! Recheck owner declarations independently of source normalization. Public
 //! opaque snapshots have no representation; private owner views do.
 use super::*;
+use hirsel_type_analysis::cleanup::{
+    CleanupLeaf, cleanup_summary, declared_cleanup, parameter_cleanup,
+};
 use hirsel_types::*;
 
 pub(super) fn valid(s: &Signature, signatures: &dyn SignatureLookup) -> bool {

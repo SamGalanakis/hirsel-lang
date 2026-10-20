@@ -1,4 +1,7 @@
 //! Definition-local expression checking. No callee implementation is consulted.
+use hirsel_type_analysis::cleanup::{
+    CleanupLeaf, cleanup_summary, declared_cleanup, parameter_cleanup,
+};
 mod calls;
 mod comptime;
 mod contracts;

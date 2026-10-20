@@ -33,6 +33,8 @@ opt-level = 1
 opt-level = 1
 [profile.dev.package.hirsel-types]
 opt-level = 1
+[profile.dev.package.hirsel-type-analysis]
+opt-level = 1
 [profile.dev.package.hirsel-tir]
 opt-level = 1
 [profile.dev.package.hirsel-validate]

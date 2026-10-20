@@ -10,6 +10,7 @@ rust-version.workspace = true
 testing = []
 
 [dependencies]
+hirsel-type-analysis = { path = "../hirsel-type-analysis" }
 hirsel-span = { path = "../hirsel-span" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-types = { path = "../hirsel-types" }

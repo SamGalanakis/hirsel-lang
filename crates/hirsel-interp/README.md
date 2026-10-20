@@ -370,7 +370,7 @@ this.
 `arena.bounded(cap, body)` (MEM-6, `src/bounded.rs`) calls its callback the same way
 with a fresh bounded arena handle (a checked arena instance under checked execution), whose
 budget is `cap`. A box, sequence, map, set or closure construction into that arena, and a
-`copy_to` into it, takes its logical charge (`hirsel_types::logical`, the table in the
+`copy_to` into it, takes its logical charge (`hirsel_type_analysis::logical`, the table in the
 runtime README) before any operand is consumed; a charge past the budget records the failure
 `OutOfSpace` (MEM-6) at that site. When the callback frame exits, a return is `Ok`, and a
 failure whose first record is that arena's `OutOfSpace` with no later record (no failure

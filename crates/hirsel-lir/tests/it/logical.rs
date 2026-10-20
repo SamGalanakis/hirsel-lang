@@ -1,11 +1,11 @@
 //! MEM-6 logical sizes read from layouts agree with the same table read from
-//! types (`hirsel_types::logical`), across nominals, generics and niches.
+//! types (`hirsel_type_analysis::logical`), across nominals, generics and niches.
 use hirsel_layout::layout::{LayoutBuilder, OwnerRepresentation, Owners};
 use hirsel_lir::layout::{LogicalCharge, block_charge, logical_size};
 use hirsel_lir::layout_types::{LayoutKind, TargetSpec};
 use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir::RepresentationRecord;
-use hirsel_types::logical::{LogicalNominal, logical_size as type_size};
+use hirsel_type_analysis::logical::{LogicalNominal, logical_size as type_size};
 use hirsel_types::testing::Types as Ty;
 use hirsel_types::*;
 

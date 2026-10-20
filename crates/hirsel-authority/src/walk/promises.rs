@@ -665,7 +665,7 @@ impl Checker<'_> {
         receiver: Span,
     ) -> Explanation {
         let spell = |root| {
-            hirsel_types::type_spelling(
+            hirsel_type_analysis::spelling::type_spelling(
                 &self.out.body.types,
                 root,
                 &self.out.body.resolution.generic_declarations,

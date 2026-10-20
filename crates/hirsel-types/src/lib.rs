@@ -710,7 +710,7 @@ pub use parameters::*;
 mod graph;
 pub use graph::*;
 mod spelling;
-pub use spelling::{CanonicalSpelling, type_spelling, type_spellings_apart};
+pub use spelling::CanonicalSpelling;
 mod store;
 pub use store::*;
 /// Self-contained cross-query signature. Importers remap TypeIds into their own store (LANG-6).
@@ -1141,21 +1141,15 @@ pub trait SignatureProvider {
 }
 
 #[cfg(test)]
-mod parametric_tests;
-#[cfg(test)]
-mod property_tests;
-#[cfg(test)]
 mod revision_tests;
 
 mod declarations;
 pub use declarations::*;
 
 mod local_results;
-mod parametric;
 pub use local_results::{
     local_result_destination, local_result_generics, local_result_permissions,
 };
-pub use parametric::{ParametricInput, parametric_inputs, unique_rows};
 mod relation;
 pub use relation::{
     Destination, Reach, Relation, adopt_local, arena_parameter, destination, is_arena_type,
@@ -1164,8 +1158,6 @@ pub use relation::{
 
 mod nominal;
 pub use nominal::*;
-
-pub mod logical;
 
 /// Shared fixture builders, available only with the `testing` feature.
 #[cfg(feature = "testing")]

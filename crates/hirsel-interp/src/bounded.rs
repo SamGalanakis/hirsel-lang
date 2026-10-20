@@ -11,7 +11,7 @@ use crate::value::ArenaStorage;
 use crate::{Error, Value, invalid};
 use hirsel_syntax::DefPath;
 use hirsel_tir::Constructor;
-use hirsel_types::logical::{
+use hirsel_type_analysis::logical::{
     Logical, LogicalError, LogicalNominal, Resolved, Scope, type_arguments,
 };
 use hirsel_types::{BuiltinType, Primitive, TypeId, TypeKind, TypeStore};

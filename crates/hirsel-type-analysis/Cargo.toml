@@ -1,0 +1,14 @@
+[package]
+name = "hirsel-type-analysis"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-types = { path = "../hirsel-types" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+
+[dev-dependencies]
+hirsel-intern = { path = "../hirsel-intern" }
+hirsel-guard = { path = "../hirsel-guard" }

@@ -1,6 +1,9 @@
 //! Small declaration-data reader, intentionally independent of runtime dispatch.
 use super::*;
 use hirsel_syntax::Visibility;
+use hirsel_type_analysis::cleanup::{
+    CleanupLeaf, cleanup_summary, declared_cleanup, parameter_cleanup,
+};
 
 pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     let mut out = BTreeMap::new();

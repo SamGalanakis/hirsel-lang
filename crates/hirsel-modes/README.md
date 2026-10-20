@@ -556,7 +556,7 @@ bare nullary variant is fresh, as a literal is. Releasing a value with user-visi
 destruction (`destroyed`: noncopyable or once) at a kill, at the end of a statement that
 holds such a call temporary (`destroying`), or by a displacing write is a failure site
 for the hand-back. A parametric call (`parametric_unique`, from
-`hirsel_types::parametric_inputs`) returns a unique value when every argument that may
+`hirsel_type_analysis::parametric::parametric_inputs`) returns a unique value when every argument that may
 supply its result's type-parameter values is unique; a core callee counts as bodyless. A taken argument of
 a call reaching it makes the share real (`share`). A `@preserves_unique`
 body is checked a second time (`flow::check` with a proof parameter) with its
@@ -775,7 +775,7 @@ A header row's own uniqueness follows the same edges (MODE-2,
 `hirsel_types::header_weakens_uniqueness`, shared with V): a `unique` result
 meets an aliased one, an aliased non-`mut` parameter a `unique` one; rows below
 it stay exact. Header diagnostics name both function types through
-`hirsel_types::type_spelling` with modes shown.
+`hirsel_type_analysis::spelling::type_spelling` with modes shown.
 
 `@noalloc` is a promise that is proven (MEM-5). A function value is received
 by a `@noalloc` function type, at the root or as any value part, only when its
