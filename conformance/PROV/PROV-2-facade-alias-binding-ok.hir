@@ -1,5 +1,5 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 6
+// expect: accept
 fn probe() -> u64 uses {} {
   let by = u32.order
   let m: u32_maps.OrderedMap[u8] = sorted_map.empty(by)

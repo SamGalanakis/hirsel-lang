@@ -5,6 +5,22 @@ not public std. The survey found this repetition in fixtures and no default-orde
 argument sites in std, packages, examples or benchmarks. The current compiler
 also prevents a complete facade migration. No compiler or language change is included.
 
+## Current status
+
+The measurements and blockers below are historical, recorded at the baseline
+`b37afd18`. The brand-region-fixes lane has since fixed blockers 2 and 3:
+
+- A receiving annotation written with the brand its value carries keeps it, whether
+  it is spelled directly, through a transparent alias or with a module-qualified
+  definition path (PROV-2 in [brands.md](../../../docs/spec/brands.md)). The four
+  facade probes now accept as `PROV-2-facade-{alias-binding,concrete-result-annotation,generic-result,package-result}-ok`.
+- Checked execution bounds a resource that a native operation moves out of a `mut`
+  argument by the caller's content, not by the wrapper's access to it. The repro is
+  now the passing corpus case
+  [DROP-2-facade-resource-remove-run.hir](../../../conformance/DROP/DROP-2-facade-resource-remove-run.hir).
+
+The remaining calls have not been migrated again since then.
+
 ## Measured migration
 
 Baseline: `b37afd182199b86fd85331a7edacfc4f3590ffa1` (the launch `origin/main`).
@@ -89,35 +105,26 @@ and execution limitations prevent claiming all obligations work end to end.
 1. **Reserved alias name (LANG-7).**
    [LANG-7-facade-map-reserved-bad.hir](../../../conformance/LANG/LANG-7-facade-map-reserved-bad.hir)
    is the minimal requested spelling. All callers use `OrderedMap` where supported.
-2. **Result/receiving-annotation brand loss (PROV-2): 21 empty calls blocked.**
-   [PROV-2-facade-generic-result-bad.hir](../../../conformance/PROV/PROV-2-facade-generic-result-bad.hir)
-   spells the full result header without an alias or package. The package variant
-   [PROV-2-facade-package-result-bad.hir](../../../conformance/PROV/PROV-2-facade-package-result-bad.hir)
-   calls the actual pilot. A concrete result without a receiving annotation passes
-   in the `concrete-result-ok` twin; adding the explicit receiving annotation
-   fails in `concrete-result-annotation-bad`. A local alias annotation fails in
-   `alias-binding-bad` even when the builtin constructor supplies the map.
-   Consequently the existing raw `SortedMap[K,V] of by` declarations and all 21
-   builtin empty calls remain unchanged. A zero-argument source header also has
-   no caller arena parameter to name in its result relation; the pilot makes no
-   claim of replacing the builtin’s expected-destination placement rule.
-3. **Resource result region: one remove call blocked.**
+2. **Result/receiving-annotation brand loss (PROV-2): 21 empty calls blocked at the baseline; fixed.**
+   At the baseline a concrete result kept its brand only without a receiving
+   annotation; writing the same branded type, a local alias, a generic result or
+   the package result dropped it. The probes are now the passing
+   [PROV-2-facade-generic-result-ok.hir](../../../conformance/PROV/PROV-2-facade-generic-result-ok.hir),
+   [PROV-2-facade-package-result-ok.hir](../../../conformance/PROV/PROV-2-facade-package-result-ok.hir),
+   `concrete-result-annotation-ok` and `alias-binding-ok`, next to the
+   `concrete-result-ok` twin. The raw `SortedMap[K,V] of by` declarations and the
+   21 builtin empty calls were not migrated again. A zero-argument source header
+   also has no caller arena parameter to name in its result relation; the pilot
+   makes no claim of replacing the builtin's expected-destination placement rule.
+3. **Resource result region: one remove call blocked at the baseline; fixed.**
    The original resource removal in `DROP-2-std-sorted-map-remove-run.hir` stays
-   raw. Wrapping it returns normally, but checked interpretation detects a dead
-   region at the caller match. Minimal corpus-shaped repro:
-   [repros/resource-remove-run.hir](repros/resource-remove-run.hir). It is outside
-   the passing conformance corpus and outside the package sources, because it
-   demonstrates an open execution defect rather than a passing expectation.
-   Its harness creates a temporary corpus and invokes the real checked witness:
-
-   ```sh
-   python3 packages/fixtures/sorted_facades@1/repros/check-resource.py /absolute/path/to/hirsel_conformance
-   ```
-
-   Current outcome: exit 1, `region use after scope exit (MODE-1/MEM-10)`;
-   normal execution returns `Ok`. The harness preserves that failing exit code.
+   raw. At the baseline, wrapping it returned normally but checked interpretation
+   trapped `region use after scope exit (MODE-1/MEM-10)` at the caller match. The
+   checker was sound and the checked interpreter was wrong. The repro now passes
+   in every engine as
+   [DROP-2-facade-resource-remove-run.hir](../../../conformance/DROP/DROP-2-facade-resource-remove-run.hir).
 4. **Initial slow check: no persistent stall reproduced.**
-   The original small trigger is the durable `package-result-bad` corpus case
+   The original small trigger is the durable `package-result-ok` corpus case (formerly `-bad`)
    linked above. An initial check took over two minutes, then completed; warm
    probes took about 0.5–0.8 seconds. The host rules already identify slow std
    prechecking (~118 seconds). This is a recorded observation, not a speed

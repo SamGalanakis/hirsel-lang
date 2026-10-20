@@ -6,13 +6,13 @@
   },
   "sources": [
     {
-      "path": "resource-remove-run.hir",
+      "path": "DROP-2-facade-resource-remove-run.hir",
       "module": []
     }
   ],
   "dependencies": [
     {
-      "manifest": "../hirsel.json",
+      "manifest": "../../packages/fixtures/sorted_facades@1/hirsel.json",
       "package": {
         "name": "sorted_facades",
         "version": "1"

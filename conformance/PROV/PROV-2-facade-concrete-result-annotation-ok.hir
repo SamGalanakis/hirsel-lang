@@ -1,5 +1,5 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 14
+// expect: accept
 fn empty() -> unique SortedMap[u32, u8] of u32.order uses {} {
   let by = u32.order
   sorted_map.empty(by)

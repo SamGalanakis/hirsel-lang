@@ -1,6 +1,6 @@
 // rule: DROP-2
 // expect: run
-// Known pilot blocker: normal run returns; checked run reaches a dead region.
+// A source wrapper around sorted_map.remove returns a resource holding a String; checked execution bounds it by the map.
 resource type Token {
   label: String,
 }

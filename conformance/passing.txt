@@ -855,6 +855,7 @@ conformance/DROP/DROP-2-destructure-original-run.hir
 conformance/DROP/DROP-2-destructure-zero-siblings-run.hir
 conformance/DROP/DROP-2-expect-ok-error-drop-fail.hir
 conformance/DROP/DROP-2-expect-ok-error-fail.hir
+conformance/DROP/DROP-2-facade-resource-remove-run.hir
 conformance/DROP/DROP-2-failure-inner-scope-before-cursor-run.hir
 conformance/DROP/DROP-2-fresh-block-fields-run.hir
 conformance/DROP/DROP-2-from-bytes-match-payloads-run.hir
@@ -4299,11 +4300,11 @@ conformance/PROV/PROV-2-computed-addition-bad.hir
 conformance/PROV/PROV-2-computed-addition-ok.hir
 conformance/PROV/PROV-2-computed-bitwise-bad.hir
 conformance/PROV/PROV-2-computed-bitwise-ok.hir
-conformance/PROV/PROV-2-facade-alias-binding-bad.hir
-conformance/PROV/PROV-2-facade-concrete-result-annotation-bad.hir
+conformance/PROV/PROV-2-facade-alias-binding-ok.hir
+conformance/PROV/PROV-2-facade-concrete-result-annotation-ok.hir
 conformance/PROV/PROV-2-facade-concrete-result-ok.hir
-conformance/PROV/PROV-2-facade-generic-result-bad.hir
-conformance/PROV/PROV-2-facade-package-result-bad.hir
+conformance/PROV/PROV-2-facade-generic-result-ok.hir
+conformance/PROV/PROV-2-facade-package-result-ok.hir
 conformance/PROV/PROV-2-instant-compare-ok.hir
 conformance/PROV/PROV-2-instant-constructor-bad.hir
 conformance/PROV/PROV-2-instant-copy-clock-ok.hir

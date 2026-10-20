@@ -6,7 +6,7 @@
   },
   "sources": [
     {
-      "path": "PROV-2-facade-package-result-bad.hir",
+      "path": "PROV-2-facade-alias-binding-ok.hir",
       "module": []
     }
   ],
