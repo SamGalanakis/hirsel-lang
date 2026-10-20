@@ -28,8 +28,8 @@ pub(super) fn result(
         }));
     };
     // Resolve the library parameter namespace before inserting caller generics.
-    let declared = instantiate_parameter_sources(t, function.result, origins, actuals)
-        .map_err(graph_error)?;
+    let declared =
+        instantiate_parameter_sources(t, function.result, origins, actuals).map_err(graph_error)?;
     let result = substitute(
         t,
         m,
@@ -214,7 +214,10 @@ where
         let (t, read) = (self.t, &mut self.read);
         if t.contains(item)
             && t.contains(owner)
-            && t.row(item).modes.relation.union(&t.row(owner).modes.relation)
+            && t.row(item)
+                .modes
+                .relation
+                .union(&t.row(owner).modes.relation)
                 != t.row(item).modes.relation
         {
             let plain = structural_property(t, item, StructuralProperty::Plain, generics, read)?;

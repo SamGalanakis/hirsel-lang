@@ -197,7 +197,11 @@ impl Checker<'_> {
                     let representation = if arguments.is_empty() {
                         Ok::<TypeId, GraphError>(representation)
                     } else {
-                        substitute(self.t, self.m, representation, &Substitution {
+                        substitute(
+                            self.t,
+                            self.m,
+                            representation,
+                            &Substitution {
                                 binder: Some(hirsel_types::GenericBinder::Bound(0)),
                                 roles: &self.signature.metadata.roles,
                                 arguments: &arguments,
@@ -222,9 +226,7 @@ impl Checker<'_> {
                     let matching: Vec<_> = self
                         .closures
                         .iter()
-                        .filter(|closure| {
-                            self.t.semantic_eq(t, closure.ty)
-                        })
+                        .filter(|closure| self.t.semantic_eq(t, closure.ty))
                         .cloned()
                         .collect();
                     if matching.is_empty() && row.modes.multiplicity == Multiplicity::Once {
@@ -304,7 +306,12 @@ impl Checker<'_> {
     pub(super) fn scoped(&mut self, id: TypeId) -> bool {
         self.scoped_in(self.t, id, &mut BTreeSet::new())
     }
-    fn scoped_in(&mut self, store: &TypeInterner, id: TypeId, active: &mut BTreeSet<DefId>) -> bool {
+    fn scoped_in(
+        &mut self,
+        store: &TypeInterner,
+        id: TypeId,
+        active: &mut BTreeSet<DefId>,
+    ) -> bool {
         // Specialize generic and erased authority before opening a shape. A
         // nominal generic holder must not hide the scoped seal of its actual.
         if let AuthoritySummary::Known(terms) = self.authority_in(store, id) {
@@ -380,11 +387,9 @@ impl Checker<'_> {
         row.modes.uniqueness = Uniqueness::Unique;
         let unique = store.intern(row.clone());
         let declarations = self.declarations();
-        row.modes.sendability =
-            structural_sendability(store, unique, &declarations, &mut |path| {
-                Ok(self.read(path))
-            })
-            .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable));
+        row.modes.sendability = self.proof(Sendability::NotSendable, |memo| {
+            hirsel_modes::proofs::sendability(memo, unique)
+        });
         let root = store.intern(row);
         self.property(root, Bound::Sendable)
     }
@@ -428,9 +433,9 @@ impl Checker<'_> {
         row.modes.relation = self.placement(&row.modes.relation);
         let actual = store.intern(row);
         let generics = self.declarations();
-        let derived =
-            content_sendability(store, actual, &generics, &mut |path| Ok(self.read(path)))
-                .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable));
+        let derived = self.proof(Sendability::NotSendable, |memo| {
+            hirsel_modes::proofs::content_sendability(memo, actual)
+        });
         Self::crossing_satisfies(&derived, expected)
     }
     pub(super) fn crossing_satisfies(actual: &Sendability, expected: &Sendability) -> bool {

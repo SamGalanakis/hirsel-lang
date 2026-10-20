@@ -102,9 +102,9 @@ impl Checker<'_> {
         let shared = self.intern(row.clone());
         let store = self.t;
         let generics = self.declarations();
-        row.modes.sendability =
-            sendability_after_sharing(store, shared, &generics, &mut |path| Ok(self.read(path)))
-                .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable));
+        row.modes.sendability = self.proof(Sendability::NotSendable, |memo| {
+            hirsel_modes::proofs::sendability_after_sharing(memo, shared)
+        });
         Some(self.intern(row))
     }
     pub(super) fn copy_value_type(&mut self, e: ExprId, value: ExprId) {
@@ -161,8 +161,8 @@ impl Checker<'_> {
             || self
                 .binding(value)
                 .is_some_and(|binding| binding.usage == UseKind::Take);
-        let deep_unique = owned
-            && self.t.get(actual).unwrap().modes.uniqueness == Uniqueness::Unique;
+        let deep_unique =
+            owned && self.t.get(actual).unwrap().modes.uniqueness == Uniqueness::Unique;
         let ownership = if deep_unique {
             PatternOwnership::Unique
         } else if owned {

@@ -631,7 +631,9 @@ impl Checker<'_> {
             let mut row = store.get(expected).unwrap().clone();
             row.kind = store.get(actual).unwrap().kind.clone();
             let actual = store.intern(row);
-            self.proof(false, |memo| memo.view(expected, actual, TypeRelation::Parameter))
+            self.proof(false, |memo| {
+                memo.view(expected, actual, TypeRelation::Parameter)
+            })
         };
         if !valid {
             let value = self.received_span(span);

@@ -3,8 +3,8 @@ use super::identities::Identities;
 use super::type_bindings::BindingTypes;
 use super::*;
 use hirsel_diag::{Label, Obligation, RuleId};
-use hirsel_syntax::{Argument, ExprKind, ItemKind, StmtKind, UnaryOp};
 use hirsel_modes::reader::Reader;
+use hirsel_syntax::{Argument, ExprKind, ItemKind, StmtKind, UnaryOp};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 mod brands;
@@ -538,9 +538,7 @@ impl<'a> Checker<'a> {
             self.check_pending_tasks();
         }
         for (root, function) in self.clauses.clone() {
-            let TypeKind::Function(function) =
-                self.t.get(function).unwrap().kind.clone()
-            else {
+            let TypeKind::Function(function) = self.t.get(function).unwrap().kind.clone() else {
                 continue;
             };
             self.frames.push(Frame {
@@ -563,11 +561,11 @@ impl<'a> Checker<'a> {
         self.out.identity_joins.sort();
         self.out.identity_joins.dedup();
         // Rows have no order; ties keep their production order.
-        self.out
-            .identity_fields
-            .sort_by(|a, b| (&a.0, &a.1, &a.2).cmp(&(&b.0, &b.1, &b.2)).then_with(|| {
-                a.3.iter().map(|(f, _)| f).cmp(b.3.iter().map(|(f, _)| f))
-            }));
+        self.out.identity_fields.sort_by(|a, b| {
+            (&a.0, &a.1, &a.2)
+                .cmp(&(&b.0, &b.1, &b.2))
+                .then_with(|| a.3.iter().map(|(f, _)| f).cmp(b.3.iter().map(|(f, _)| f)))
+        });
         self.out.result_types.sort_by(|(a, _), (b, _)| a.cmp(b));
         self.out.captures = self.captures.into_sorted();
         self.out.body.closures = self.closures.into_sorted();
@@ -713,15 +711,16 @@ impl<'a> Checker<'a> {
         row.modes.uniqueness = Uniqueness::Unique;
         let t = self.intern(row.clone());
         let declarations = self.declarations();
-        row.modes.sendability =
-            structural_sendability(self.t, t, &declarations, &mut |d| Ok(self.read(d)))
-                .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable));
+        row.modes.sendability = self.proof(Sendability::NotSendable, |memo| {
+            hirsel_modes::proofs::sendability(memo, t)
+        });
         let t = self.intern(row);
         self.set_ty(e, t);
     }
     fn valid(&self, e: ExprId) -> bool {
         self.ty(e).is_some_and(|t| {
-            self.t.get(t)
+            self.t
+                .get(t)
                 .is_some_and(|t| !matches!(t.kind, TypeKind::Error))
         })
     }
@@ -745,9 +744,7 @@ impl<'a> Checker<'a> {
             return;
         };
         for (i, (p, syntax)) in f.parameters.iter().zip(&signature.parameters).enumerate() {
-            if p.passing != PassingMode::Take
-                || !calls::task_obligation(&self.t, p.ty)
-            {
+            if p.passing != PassingMode::Take || !calls::task_obligation(&self.t, p.ty) {
                 continue;
             }
             let task = ExprId(u32::MAX - i as u32);
@@ -924,11 +921,7 @@ impl<'a> Checker<'a> {
                     {
                         // Inspect variant producers only when an identity has
                         // actually ended. Ordinary reads need no payload proof.
-                        let inactive = self.t.get(ty)
-                            .unwrap()
-                            .brand
-                            .alternatives
-                            .is_empty()
+                        let inactive = self.t.get(ty).unwrap().brand.alternatives.is_empty()
                             && self.brandless_variant(e, ty).is_some();
                         if !inactive {
                             let mut diagnostic = Diagnostic::error(
@@ -1034,9 +1027,7 @@ impl<'a> Checker<'a> {
                 && self.place_construction(e, expected)
             {
                 // The signature's result is sendable; a placed one is not.
-                let mut row = self.t.get(self.ty(e).unwrap())
-                    .unwrap()
-                    .clone();
+                let mut row = self.t.get(self.ty(e).unwrap()).unwrap().clone();
                 row.modes.sendability = Sendability::NotSendable;
                 let ty = self.intern(row);
                 self.set_ty(e, ty);
@@ -1338,11 +1329,7 @@ impl<'a> Checker<'a> {
                                         .collect()
                                 })
                                 .unwrap_or_default();
-                            ty = super::facts::siblings(
-                                self.t,
-                                fields[index].ty,
-                                &replacements,
-                            );
+                            ty = super::facts::siblings(self.t, fields[index].ty, &replacements);
                             if let Some(o) = &mut origin {
                                 o.fields.push(FieldId(index as u32));
                             }
@@ -1404,10 +1391,7 @@ impl<'a> Checker<'a> {
                 }
                 used = if matches!(self.resolved.get(&e), Some(ResolvedName::Definition(_)))
                     && self.ty(e).is_some_and(|t| {
-                        matches!(
-                            self.t.get(t).unwrap().kind,
-                            TypeKind::Function(_)
-                        )
+                        matches!(self.t.get(t).unwrap().kind, TypeKind::Function(_))
                     }) {
                     // A direct callee names its definition; only a value
                     // use is a closure.
@@ -1528,13 +1512,9 @@ impl<'a> Checker<'a> {
                     self.set_ty(e, ty);
                 }
                 if let Some(actual) = self.ty(e) {
-                    let evidence = self.t.get(actual)
-                        .unwrap()
-                        .modes
-                        .sendability
-                        .clone();
-                    let receipt = declared_receipt_evidence(self.t, actual)
-                        .expect("checked literal parts");
+                    let evidence = self.t.get(actual).unwrap().modes.sendability.clone();
+                    let receipt =
+                        declared_receipt_evidence(self.t, actual).expect("checked literal parts");
                     let mut row = self.t.get(receipt).unwrap().clone();
                     row.modes.sendability = evidence;
                     let receipt = self.intern(row);
@@ -1564,9 +1544,7 @@ impl<'a> Checker<'a> {
                 used = self.used(value);
                 if inferred_box {
                     let payload = self.construction_part_type(value).unwrap();
-                    let mut owner = self.t.get(self.ty(e).unwrap())
-                        .unwrap()
-                        .clone();
+                    let mut owner = self.t.get(self.ty(e).unwrap()).unwrap().clone();
                     owner.kind = TypeKind::Box(payload);
                     let owner = self.intern(owner);
                     self.set_ty(e, owner);
@@ -1608,15 +1586,10 @@ impl<'a> Checker<'a> {
                                 let root = self.intern(ty.clone());
                                 let store = self.t;
                                 let declarations = self.declarations();
-                                ty.modes.sendability = sendability_after_sharing(
-                                    store,
-                                    root,
-                                    &declarations,
-                                    &mut |path| Ok(self.read(path)),
-                                )
-                                .unwrap_or_else(|error| {
-                                    self.proof_failure(error, Sendability::NotSendable)
-                                });
+                                ty.modes.sendability =
+                                    self.proof(Sendability::NotSendable, |memo| {
+                                        hirsel_modes::proofs::sendability_after_sharing(memo, root)
+                                    });
                                 let t = self.intern(ty);
                                 self.set_ty(e, t);
                             }
@@ -1683,11 +1656,7 @@ impl<'a> Checker<'a> {
                                         siblings.insert(FieldId(i as u32), o);
                                     }
                                 }
-                                let ty = super::facts::siblings(
-                                    self.t,
-                                    field.ty,
-                                    &siblings,
-                                );
+                                let ty = super::facts::siblings(self.t, field.ty, &siblings);
                                 let ty = self.projected_item(base_ty, ty);
                                 self.refine_projection(e, ty);
                                 if let Some(bound) = self.carrier_bound(base_ty) {
@@ -1784,9 +1753,7 @@ impl<'a> Checker<'a> {
                 // The callee result has now been substituted into the caller's
                 // origin namespace. Propagation returns that exact success edge.
                 if let Some(source) = self.ty(value) {
-                    if let TypeKind::Named { arguments, .. } =
-                        &self.t.get(source).unwrap().kind
-                    {
+                    if let TypeKind::Named { arguments, .. } = &self.t.get(source).unwrap().kind {
                         if let Some(GenericArgument::Type(success)) = arguments.first() {
                             self.set_ty(e, *success);
                         }
@@ -1927,8 +1894,7 @@ impl<'a> Checker<'a> {
                 && before.len() == self.binding_types.len()
                 && before.iter().all(|(key, (old, expired))| {
                     self.binding_types.get(key).is_some_and(|new| {
-                        *expired == self.expired_type(*new)
-                            && self.t.semantic_eq(*old, *new)
+                        *expired == self.expired_type(*new) && self.t.semantic_eq(*old, *new)
                     })
                 });
             if unchanged {
@@ -2092,10 +2058,7 @@ impl<'a> Checker<'a> {
                 };
                 let context = if ty.is_some()
                     && expected.is_some_and(|t| {
-                        matches!(
-                            self.t.get(t).map(|t| &t.kind),
-                            Some(TypeKind::Function(_))
-                        )
+                        matches!(self.t.get(t).map(|t| &t.kind), Some(TypeKind::Function(_)))
                     }) {
                     Some((
                         CaptureContext::Escaping,
@@ -2106,12 +2069,8 @@ impl<'a> Checker<'a> {
                     // An inferred function binding supplies scope, not a
                     // declared callable/result promise. Keep literal inference
                     // and its own written uses clause independent of that row.
-                    let expected = expected.filter(|t| {
-                        !matches!(
-                            self.t.get(*t).unwrap().kind,
-                            TypeKind::Function(_)
-                        )
-                    });
+                    let expected = expected
+                        .filter(|t| !matches!(self.t.get(*t).unwrap().kind, TypeKind::Function(_)));
                     Some((
                         CaptureContext::Scoped,
                         expected,
@@ -2226,9 +2185,8 @@ impl<'a> Checker<'a> {
                         }
                         let evidence = row.modes.sendability.clone();
                         let received = self.intern(row);
-                        let received =
-                            declared_receipt_evidence(self.t, received)
-                                .expect("checked binding receipt");
+                        let received = declared_receipt_evidence(self.t, received)
+                            .expect("checked binding receipt");
                         let mut row = self.t.get(received).unwrap().clone();
                         row.modes.sendability = evidence;
                         self.intern(row)
@@ -2552,9 +2510,7 @@ impl<'a> Checker<'a> {
         let Some(actual) = self.ty(expression) else {
             return;
         };
-        if !hirsel_types::shape_equal(self.t, actual, peer)
-            .unwrap_or(false)
-        {
+        if !hirsel_types::shape_equal(self.t, actual, peer).unwrap_or(false) {
             return;
         }
         let Some(TypeKind::Variant(variants)) = self.layout(peer) else {

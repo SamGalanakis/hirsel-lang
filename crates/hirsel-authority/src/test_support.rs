@@ -390,8 +390,7 @@ impl Fixture {
                     let SignatureKind::Type(t) = &signature.kind else {
                         panic!("constructor fixture")
                     };
-                    let TypeKind::Record(fields) =
-                        &self.types.row(t.representation.unwrap()).kind
+                    let TypeKind::Record(fields) = &self.types.row(t.representation.unwrap()).kind
                     else {
                         panic!("record fixture")
                     };

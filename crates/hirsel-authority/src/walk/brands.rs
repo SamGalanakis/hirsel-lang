@@ -329,7 +329,9 @@ impl Checker<'_> {
     }
     pub(super) fn arena_construction(&mut self, expression: ExprId) {
         let Some(t) = self.ty(expression) else { return };
-        if self.t.get(t)
+        if self
+            .t
+            .get(t)
             .unwrap()
             .modes
             .relation
@@ -708,8 +710,7 @@ impl Checker<'_> {
                                 (FieldId(ordinal as u32), partition.at(&p))
                             })
                             .collect();
-                        let part =
-                            super::facts::siblings(self.t, part.ty, &siblings);
+                        let part = super::facts::siblings(self.t, part.ty, &siblings);
                         // I places the declared part under the binding's final row.
                         ty = self.projected_item(ty, part);
                         prefix.push(*field);
@@ -758,10 +759,8 @@ impl Checker<'_> {
     /// `actual` with the brands of `expected`'s parts at every depth where
     /// the two have the same shape; the root brand stays `actual`'s.
     pub(super) fn part_brands(&mut self, actual: TypeId, expected: TypeId) -> TypeId {
-        let (Some(a), Some(b)) = (
-            self.t.get(actual).cloned(),
-            self.t.get(expected).cloned(),
-        ) else {
+        let (Some(a), Some(b)) = (self.t.get(actual).cloned(), self.t.get(expected).cloned())
+        else {
             return actual;
         };
         if std::mem::discriminant(&a.kind) != std::mem::discriminant(&b.kind) {
@@ -813,10 +812,8 @@ impl Checker<'_> {
     /// `instance` with `source`'s single brands wherever it has none yet, at
     /// every depth where the two have the same shape.
     pub(super) fn adopt_brands(&mut self, instance: TypeId, source: TypeId) -> TypeId {
-        let (Some(a), Some(b)) = (
-            self.t.get(instance).cloned(),
-            self.t.get(source).cloned(),
-        ) else {
+        let (Some(a), Some(b)) = (self.t.get(instance).cloned(), self.t.get(source).cloned())
+        else {
             return instance;
         };
         if std::mem::discriminant(&a.kind) != std::mem::discriminant(&b.kind) {
@@ -852,11 +849,7 @@ impl Checker<'_> {
                 _ => {}
             }
         }
-        if row == a {
-            instance
-        } else {
-            self.intern(row)
-        }
+        if row == a { instance } else { self.intern(row) }
     }
     pub(super) fn placed_item(&mut self, owner: TypeId, part: TypeId) -> TypeId {
         let store = self.t;
