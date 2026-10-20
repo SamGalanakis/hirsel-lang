@@ -7,7 +7,7 @@ mod loops;
 pub mod review;
 #[cfg(test)]
 mod tests;
-use hirsel_syntax::{ContentHash, DefPath, FileContext, Path};
+use hirsel_syntax::{ContentHash, DefId, DefPath, FileContext, Path};
 use hirsel_types::*;
 use std::{
     collections::BTreeMap,
@@ -36,33 +36,94 @@ pub fn nominal_roles() -> NominalRoles {
 }
 #[derive(Clone)]
 pub struct BuiltinRegistry {
-    signatures: Arc<BTreeMap<DefPath, SignatureRef>>,
+    /// The interner the signatures' rows were built into.
+    types: Arc<TypeInterner>,
+    signatures: Arc<BTreeMap<DefId, SignatureRef>>,
     revision: ContentHash,
+}
+/// The process's core rows: the registry built once into a scratch interner,
+/// frozen as an interner base at the same positions, so its signatures name
+/// rows of every interner built over [`base`].
+struct Shared {
+    base: Arc<TypeBase>,
+    registry: BuiltinRegistry,
+    variants: std::collections::BTreeSet<String>,
+}
+fn shared() -> &'static Shared {
+    static SHARED: OnceLock<Shared> = OnceLock::new();
+    SHARED.get_or_init(|| {
+        let scratch = TypeInterner::new(None);
+        let registry = BuiltinRegistry::build(&scratch);
+        let mut variants = std::collections::BTreeSet::new();
+        let base = TypeBase::build(scratch.len(), |ids| {
+            ids.iter()
+                .map(|id| {
+                    let row = scratch.row(*id);
+                    if let hirsel_types::TypeKind::Variant(cases) = &row.kind {
+                        variants.extend(cases.iter().map(|v| v.name.as_str().to_string()));
+                    }
+                    row.clone()
+                })
+                .collect()
+        });
+        Shared {
+            base,
+            registry,
+            variants,
+        }
+    })
+}
+/// Every variant name a core type declares: the resolver defers these names
+/// to expected context.
+pub fn variant_names() -> &'static std::collections::BTreeSet<String> {
+    &shared().variants
+}
+/// The interner base holding the core rows [`BuiltinRegistry::shared`] names.
+pub fn base() -> Arc<TypeBase> {
+    shared().base.clone()
+}
+/// The interner holding [`BuiltinRegistry::shared`]'s rows.
+pub fn shared_types() -> &'static Arc<TypeInterner> {
+    &shared().registry.types
+}
+/// A session interner over the core rows.
+pub fn session_types() -> Arc<TypeInterner> {
+    TypeInterner::new(Some(base()))
 }
 impl Default for BuiltinRegistry {
     fn default() -> Self {
-        Self::new()
+        Self::shared()
     }
 }
 impl BuiltinRegistry {
+    /// The process-shared core signatures ([`BuiltinRegistry::shared`]).
     pub fn new() -> Self {
-        static REGISTRY: OnceLock<BuiltinRegistry> = OnceLock::new();
-        REGISTRY
-            .get_or_init(|| {
-                let signatures = build::registry();
-                let revision = ContentHash::of_parts(
-                    "hirsel.core.registry.v9",
-                    signatures.values().map(|s| s.fingerprint.0.as_slice()),
-                );
-                Self {
-                    signatures: Arc::new(signatures),
-                    revision,
-                }
-            })
-            .clone()
+        Self::shared()
     }
-    pub fn get(&self, path: &DefPath) -> Option<SignatureRef> {
-        self.signatures.get(path).cloned()
+    /// The core signatures, built into `types`.
+    pub fn build(types: &Arc<TypeInterner>) -> Self {
+        let signatures = build::registry(types);
+        let revision = ContentHash::of_parts(
+            "hirsel.core.registry.v9",
+            signatures.values().map(|s| s.fingerprint.0.as_slice()),
+        );
+        Self {
+            types: types.clone(),
+            signatures: Arc::new(signatures),
+            revision,
+        }
+    }
+    /// The core signatures over [`base`]: valid in every interner built over it.
+    pub fn shared() -> Self {
+        shared().registry.clone()
+    }
+    /// The interner holding the signatures' rows; every interner over
+    /// [`base`] holds the shared registry's rows at the same ids.
+    pub fn types(&self) -> &Arc<TypeInterner> {
+        &self.types
+    }
+    pub fn get(&self, definition: impl Into<DefId>) -> Option<SignatureRef> {
+        self.signatures.get(&definition.into()).cloned()
     }
     pub fn signatures(&self) -> impl Iterator<Item = &SignatureRef> {
         self.signatures.values()
@@ -90,12 +151,14 @@ impl BuiltinRegistry {
         if path.0.modules.iter().any(|m| m.starts_with('$')) {
             return None;
         }
-        self.signatures.contains_key(&path).then_some(path)
+        self.signatures
+            .contains_key(&DefId::intern(&path))
+            .then_some(path)
     }
 }
 impl SignatureProvider for BuiltinRegistry {
-    fn signature(&mut self, path: &DefPath) -> Result<SignatureRef, QueryError> {
-        self.get(path).ok_or(QueryError::NotImplemented)
+    fn signature(&mut self, definition: DefId) -> Result<SignatureRef, QueryError> {
+        self.get(definition).ok_or(QueryError::NotImplemented)
     }
     fn lookup(&mut self, _: &FileContext, path: &Path) -> LookupOutput {
         LookupOutput {
@@ -104,12 +167,16 @@ impl SignatureProvider for BuiltinRegistry {
         }
     }
 }
-fn publish(mut signature: Signature, signatures: &mut BTreeMap<DefPath, SignatureRef>) {
-    signature.fingerprint =
-        hirsel_types::encoding::fingerprint(&signature, &[]).expect("well-formed core signature");
+fn publish(
+    t: &TypeInterner,
+    mut signature: Signature,
+    signatures: &mut BTreeMap<DefId, SignatureRef>,
+) {
+    signature.fingerprint = hirsel_types::encoding::fingerprint(t, &signature, &[])
+        .expect("well-formed core signature");
     assert!(
         signatures
-            .insert(signature.definition.clone(), Arc::new(signature))
+            .insert(signature.definition, Arc::new(signature))
             .is_none(),
         "duplicate core declaration"
     );

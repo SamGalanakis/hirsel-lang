@@ -381,7 +381,7 @@ pub fn discover(
         let SignatureKind::Function(f) = &signature.kind else {
             unreachable!("checked @test")
         };
-        let unit = matches!(signature.types.get(f.result).map(|t| &t.kind), Some(TypeKind::Tuple(fields)) if fields.is_empty());
+        let unit = matches!(program.engine.types().get(f.result).map(|t| &t.kind), Some(TypeKind::Tuple(fields)) if fields.is_empty());
         let mut generate = |iterations: Option<u64>| {
             let prefix = if iterations.is_some() {
                 "bench"

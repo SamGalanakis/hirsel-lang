@@ -276,7 +276,8 @@ pub fn export_run_path(path: &Path) -> Result<Vec<u8>, ToolError> {
     let mut program = load_program(path)?;
     program.check_for_execution()?;
     let signature = launch_signature(&mut program)?;
-    let launch = hirsel_engine::entry_launch_kind(&signature).map_err(ToolError::Launch)?;
+    let launch = hirsel_engine::entry_launch_kind(program.engine.types(), &signature)
+        .map_err(ToolError::Launch)?;
     let revision = program
         .engine
         .semantic_program_revision(&program.entry)
@@ -439,7 +440,8 @@ pub(crate) fn bind_launch(
         Some((_, run)) if run.record().launch == hirsel_run_schema::LaunchKind::Call => {
             hirsel_run_schema::LaunchKind::Call
         }
-        _ => hirsel_engine::entry_launch_kind(&signature).map_err(ToolError::Launch)?,
+        _ => hirsel_engine::entry_launch_kind(program.engine.types(), &signature)
+            .map_err(ToolError::Launch)?,
     };
     let revision = program
         .engine
@@ -454,13 +456,20 @@ pub(crate) fn bind_launch(
             let requested = config
                 .read(&revision, kind)
                 .map_err(|e| ToolError::Runtime(e.to_string()))?;
-            let bound =
-                hirsel_engine::bind_run(&signature, &revision, kind, Some(&requested), code)
-                    .map_err(ToolError::Launch)?;
+            let bound = hirsel_engine::bind_run(
+                program.engine.types(),
+                &signature,
+                &revision,
+                kind,
+                Some(&requested),
+                code,
+            )
+            .map_err(ToolError::Launch)?;
             Ok(BoundHostRun::Live(bound))
         }
         (HostLaunch::Replay(_), Some((io, run))) => {
-            let roots = hirsel_engine::entry_roots(&signature, kind).map_err(refused)?;
+            let roots = hirsel_engine::entry_roots(program.engine.types(), &signature, kind)
+                .map_err(refused)?;
             let run = run
                 .bind(&hirsel_run_config::ProgramFacts::of(
                     &revision, kind, roots, code,

@@ -8,7 +8,7 @@ use hirsel_span::Span;
 use hirsel_types::{NameSite, TypeId};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-/// H's complete definition-local result. Every TypeId belongs to checked.types.
+/// H's complete definition-local result. Every TypeId is a session interner row.
 #[derive(Clone, Debug)]
 pub struct TypedBody {
     pub syntax: Arc<ItemSyntax>,
@@ -24,7 +24,11 @@ pub struct AnalyzedBody {
     pub ownership: hirsel_types::OwnershipFacts,
     pub results: Vec<(NameSite, TypeId)>,
     pub call_allocations: Vec<(hirsel_syntax::ExprId, hirsel_types::Allocation)>,
-    /// Evaluator-owned graphs stay separate until lowering checks and imports them.
+}
+/// The compile-time products lowering reads beside a borrowed analyzed body.
+#[derive(Clone, Debug, Default)]
+pub struct Comptime {
+    /// Evaluated subexpressions, which lowering emits as values.
     pub materialized: Vec<(hirsel_syntax::ExprId, hirsel_tir::Materialized)>,
     /// Shared reception types of hidden size-generic constants.
     pub staged: Vec<(hirsel_syntax::ExprId, TypeId)>,
@@ -42,6 +46,8 @@ pub trait Phases {
     /// Validates a `loop_source` association even when no loop uses its type.
     fn validate_loop_source(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         signature: &Signature,
         span: Span,
         provider: &mut dyn SignatureProvider,
@@ -49,6 +55,8 @@ pub trait Phases {
     /// Validates a `format` association even when no f-string formats its type.
     fn validate_format(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         signature: &Signature,
         span: Span,
         provider: &mut dyn SignatureProvider,
@@ -56,6 +64,8 @@ pub trait Phases {
     /// Validates a `serializable(check = f)` association even when nothing decodes it.
     fn validate_serializable_check(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         signature: &Signature,
         span: Span,
         provider: &mut dyn SignatureProvider,
@@ -81,6 +91,8 @@ pub(crate) fn engine_only_adapters() -> PhaseAdapters {
         }
         fn validate_loop_source(
             &self,
+            _: &hirsel_types::TypeInterner,
+            _: &hirsel_types::TypeMemo,
             _: &Signature,
             _: Span,
             _: &mut dyn SignatureProvider,
@@ -89,6 +101,8 @@ pub(crate) fn engine_only_adapters() -> PhaseAdapters {
         }
         fn validate_format(
             &self,
+            _: &hirsel_types::TypeInterner,
+            _: &hirsel_types::TypeMemo,
             _: &Signature,
             _: Span,
             _: &mut dyn SignatureProvider,
@@ -97,6 +111,8 @@ pub(crate) fn engine_only_adapters() -> PhaseAdapters {
         }
         fn validate_serializable_check(
             &self,
+            _: &hirsel_types::TypeInterner,
+            _: &hirsel_types::TypeMemo,
             _: &Signature,
             _: Span,
             _: &mut dyn SignatureProvider,

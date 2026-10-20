@@ -232,20 +232,17 @@ fn independent_ir_validation_rejects_forged_tail_obligations_and_continuations()
         let input = engine.export_native_input().unwrap();
         let mut path = entry_path(&default_context());
         path.0.name = "descend".into();
-        let base = input.definitions[&path].clone();
-        let signatures: hirsel_validate::SignatureMap = input
-            .signatures
-            .iter()
-            .map(|(p, s)| (p.clone(), (**s).clone()))
-            .collect();
+        let base = input.definitions.get(&path).unwrap().clone();
+        let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+        signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
         assert!(
-            hirsel_validate::validate(&base, &signatures, &mut vec![])
+            hirsel_validate::validate(&base, engine.types(), &signatures, &mut vec![])
                 .violations
                 .is_empty()
         );
         let rejected = |definition: &hirsel_tir::Definition| {
             assert!(
-                hirsel_validate::validate(definition, &signatures, &mut vec![])
+                hirsel_validate::validate(definition, engine.types(), &signatures, &mut vec![])
                     .violations
                     .iter()
                     .any(|v| matches!(
@@ -331,12 +328,9 @@ fn a_diverging_self_tail_call_is_a_checked_loop_site() {
         let input = engine.export_native_input().unwrap();
         let mut path = entry_path(&default_context());
         path.0.name = "serve".into();
-        let base = input.definitions[&path].clone();
-        let signatures: hirsel_validate::SignatureMap = input
-            .signatures
-            .iter()
-            .map(|(p, s)| (p.clone(), (**s).clone()))
-            .collect();
+        let base = input.definitions.get(&path).unwrap().clone();
+        let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+        signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
         let body = &base.bodies[0];
         let [site] = body.tail_sites.as_slice() else {
             panic!("{:?}", body.tail_sites)
@@ -350,7 +344,7 @@ fn a_diverging_self_tail_call_is_a_checked_loop_site() {
             panic!("not a diverging call site")
         };
         assert!(
-            hirsel_validate::validate(&base, &signatures, &mut vec![])
+            hirsel_validate::validate(&base, engine.types(), &signatures, &mut vec![])
                 .violations
                 .is_empty()
         );
@@ -369,8 +363,9 @@ fn a_diverging_self_tail_call_is_a_checked_loop_site() {
             panic!()
         };
         *on_failure = owing;
+        bad.types = hirsel_tir::definition_types(engine.types(), &bad);
         assert!(
-            hirsel_validate::validate(&bad, &signatures, &mut vec![])
+            hirsel_validate::validate(&bad, engine.types(), &signatures, &mut vec![])
                 .violations
                 .iter()
                 .any(|v| matches!(

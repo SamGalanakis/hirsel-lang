@@ -278,6 +278,8 @@ enum Scope {
     Base(u32),
     /// Table rows, whose edges already are positions.
     Raw,
+    /// Every id serialized, in order, each written as 0.
+    Collect(Vec<TypeId>),
 }
 thread_local! {
     static SCOPE: RefCell<Vec<Scope>> = const { RefCell::new(vec![]) };
@@ -307,6 +309,26 @@ pub fn with_table_encoding<R>(t: &TypeInterner, roots: &[TypeId], f: impl FnOnce
     scoped(Scope::Encode(index), f)
 }
 
+/// Serialize while recording every `TypeId` written (each as 0): the roots a
+/// persisted form whose ids are not otherwise enumerable encodes its table of.
+pub fn with_table_collection<R>(f: impl FnOnce() -> R) -> (R, Vec<TypeId>) {
+    SCOPE.with_borrow_mut(|s| s.push(Scope::Collect(vec![])));
+    struct Pop;
+    impl Drop for Pop {
+        fn drop(&mut self) {
+            SCOPE.with_borrow_mut(|s| s.pop());
+        }
+    }
+    let pop = Pop;
+    let result = f();
+    let ids = SCOPE.with_borrow_mut(|s| match s.last_mut() {
+        Some(Scope::Collect(ids)) => std::mem::take(ids),
+        _ => unreachable!("the collection scope is innermost"),
+    });
+    drop(pop);
+    (result, ids)
+}
+
 /// Deserialize with table positions read as the ids `decode_table` gave them.
 pub fn with_table_decoding<R>(ids: &[TypeId], f: impl FnOnce() -> R) -> R {
     scoped(Scope::Decode(ids.to_vec()), f)
@@ -328,6 +350,10 @@ impl serde::Serialize for TypeId {
             Some(Scope::Encode(index)) => Some(index.get(self).copied().unwrap_or(MISSING)),
             Some(Scope::Grow(builder)) => Some(builder.position(*self)),
             Some(Scope::Raw) => Some(self.raw_index()),
+            Some(Scope::Collect(ids)) => {
+                ids.push(*self);
+                Some(0)
+            }
             _ => None,
         });
         match position {

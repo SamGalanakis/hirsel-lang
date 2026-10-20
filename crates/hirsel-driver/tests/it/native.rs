@@ -571,13 +571,14 @@ fn second[U: copyable](x:U) { third(x) }
 fn third[V: copyable](x:V) { first(x) }
 ";
     with_compiler_stack(move || {
-        let finite = checked(GENERIC).validated.snapshot().instances.clone();
+        let finite_input = checked(GENERIC).validated.snapshot().clone();
+        let (finite, finite_types) = (finite_input.instances.clone(), finite_input.types.clone());
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
         let file = engine.sources.add("growing.hir", growing.into()).unwrap();
         let output = check_progress(&mut engine, file, &default_context()).unwrap();
         assert_eq!(output.diagnostics[0].rule.as_str(), "GEN-5");
         let growing = engine.gen5_source_graph().unwrap();
-        let expected = finite.growing_sites();
+        let expected = finite.growing_sites(&finite_types);
         assert!(expected.is_empty());
         let mut owners: Vec<&DefPath> = finite.edges.iter().map(|e| &e.owner).collect();
         owners.sort();
@@ -590,7 +591,12 @@ fn third[V: copyable](x:V) { first(x) }
             let mut edges = finite.edges.clone();
             edges.sort_by_key(|e| objects[owners.binary_search(&&e.owner).unwrap()]);
             let reordered = InstanceGraph { edges };
-            assert_eq!(reordered.growing_sites(), expected, "{}", partition.name());
+            assert_eq!(
+                reordered.growing_sites(&finite_types),
+                expected,
+                "{}",
+                partition.name()
+            );
         }
         let expected = growing.growing_sites();
         assert_eq!(expected.len(), 1);
@@ -604,7 +610,12 @@ fn third[V: copyable](x:V) { first(x) }
             let objects = partition.assign(owners.len());
             let mut edges = growing.edges.to_vec();
             edges.sort_by_key(|e| objects[owners.binary_search(&e.0.0).unwrap()]);
-            assert_eq!(hirsel_engine::growing_sites(&edges), expected, "{}", partition.name());
+            assert_eq!(
+                hirsel_engine::growing_sites(&edges),
+                expected,
+                "{}",
+                partition.name()
+            );
         }
     });
 }

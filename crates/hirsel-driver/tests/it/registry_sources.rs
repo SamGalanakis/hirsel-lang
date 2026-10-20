@@ -39,7 +39,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
         };
         for signature in registry.signatures() {
             metadata.definitions.insert(
-                signature.definition.clone(),
+                signature.definition.path().clone(),
                 DefinitionMetadata {
                     public: true,
                     alias: signature.metadata.alias,
@@ -89,8 +89,14 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 "{qualified}: {:?}",
                 parsed.diagnostics
             );
+            let (header_types, header_memo) = (
+                loaded.engine.types().clone(),
+                loaded.engine.type_memo().clone(),
+            );
             let expected = normalize(
                 Input {
+                    types: &header_types,
+                    memo: &header_memo,
                     syntax: &parsed.syntax.items[0],
                     context: &context,
                     resolution: &Resolution::default(),
@@ -102,15 +108,18 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
             )
             .unwrap()
             .value;
-            let actual = loaded.engine.signature(&path).unwrap();
+            let actual = loaded
+                .engine
+                .signature(hirsel_syntax::DefId::intern(&path))
+                .unwrap();
             assert_eq!(actual.metadata.visibility, Visibility::Public);
             assert_eq!(actual.definition, expected.definition);
             // Hash both complete contracts with the same empty dependency list:
             // package resolution may record additional transitive read hashes.
             // Every type, bound, mode, relation and effect still participates.
             assert_eq!(
-                hirsel_types::encoding::fingerprint(&actual, &[]).unwrap(),
-                hirsel_types::encoding::fingerprint(&expected, &[]).unwrap(),
+                hirsel_types::encoding::fingerprint(&header_types, &actual, &[]).unwrap(),
+                hirsel_types::encoding::fingerprint(&header_types, &expected, &[]).unwrap(),
                 "{qualified}"
             );
             assert!(
@@ -201,7 +210,7 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
         };
         for signature in registry.signatures() {
             metadata.definitions.insert(
-                signature.definition.clone(),
+                signature.definition.path().clone(),
                 DefinitionMetadata {
                     public: true,
                     alias: signature.metadata.alias,
@@ -209,8 +218,13 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
             );
         }
         let mut provider = registry.clone();
+        // A session over the registry's base, so registry ids read here too.
+        let header_types = hirsel_engine::registry::session_types();
+        let header_memo = TypeMemo::new();
         let mut normalized = normalize(
             Input {
+                types: &header_types,
+                memo: &header_memo,
                 syntax: &parsed.syntax.items[0],
                 context: &context,
                 resolution: &Resolution::default(),
@@ -252,20 +266,20 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
                 promises[0].unretained = ordinals.into();
                 f.state_promises = promises.into();
             }
-            let mut result = normalized.types.get(f.result).unwrap().clone();
+            let mut result = header_types.row(f.result).clone();
             assert!(result.erased_captures.is_none());
             result.erased_captures = expected_captures;
-            f.result = normalized.types.push(result);
+            f.result = header_types.intern(result);
             // Spec #91: an advance-only row's state parameter keeps the
             // argument's own captures.
             if name == "iter.next" {
                 let parameter = &mut f.parameters[0];
-                let mut state = normalized.types.get(parameter.ty).unwrap().clone();
+                let mut state = header_types.row(parameter.ty).clone();
                 assert!(state.erased_captures.is_none());
                 state.erased_captures = Some(ErasedCaptures::FromArguments(
                     vec![ParameterRef::bound(ParamId(0)).into()].into(),
                 ));
-                parameter.ty = normalized.types.push(state);
+                parameter.ty = header_types.intern(state);
             }
         }
         let declared = registry.get(&path).unwrap();
@@ -273,8 +287,8 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
             (&declared.kind, &normalized.kind)
         {
             assert_eq!(
-                describe_function(declared.as_ref(), a),
-                describe_function(&normalized, b),
+                describe_function(&header_types, a),
+                describe_function(&header_types, b),
                 "{name}"
             );
             assert_eq!(a.generics, b.generics, "{name}");
@@ -321,10 +335,10 @@ fn builtin_print_result_agrees_with_the_same_written_source_result() {
         panic!()
     };
     assert_eq!(
-        source.types.get(a.result).unwrap().drop_allocation,
+        engine.types().get(a.result).unwrap().drop_allocation,
         DropAllocation::NoAlloc
     );
-    assert!(semantic_equal(&source.types, a.result, &builtin.types, b.result).unwrap());
+    assert!(engine.types().semantic_eq(a.result, b.result));
 }
 
 #[test]
@@ -351,15 +365,11 @@ fn declaration_body_and_builtin_cleanup_agree_on_owned_aggregate_results() {
         let SignatureKind::Function(function) = &signature.kind else {
             panic!()
         };
-        let declared = &signature
-            .types
-            .get(function.result)
-            .unwrap()
-            .drop_allocation;
+        let declared = &engine.types().get(function.result).unwrap().drop_allocation;
         assert_eq!(*declared, DropAllocation::NoAlloc, "{result}");
         let actual = checked.expressions.last().unwrap().ty;
         assert_eq!(
-            &checked.types.get(actual).unwrap().drop_allocation,
+            &engine.types().get(actual).unwrap().drop_allocation,
             declared,
             "{body}"
         );
@@ -370,7 +380,7 @@ fn declaration_body_and_builtin_cleanup_agree_on_owned_aggregate_results() {
             panic!()
         };
         assert_eq!(
-            &builtin.types.get(function.result).unwrap().drop_allocation,
+            &engine.types().get(function.result).unwrap().drop_allocation,
             declared,
             "{builtin_name}"
         );

@@ -18,6 +18,9 @@ pub enum NativeStatus {
 /// Raw snapshots can be constructed by callers, but must be imported before use.
 #[derive(Clone, Debug)]
 pub struct NativeInput {
+    /// The session interner every definition, signature and value TypeId
+    /// names; an input is imported only by the session that holds it.
+    pub types: std::sync::Arc<hirsel_types::TypeInterner>,
     pub environment: QueryEnvironment,
     pub operations: BTreeMap<OperationKey, OperationRecord>,
     pub registry_revision: ContentHash,
@@ -185,10 +188,12 @@ impl QueryEngine {
                 );
             }
         }
+        let registry = registry::BuiltinRegistry::shared();
         let mut input = NativeInput {
+            types: self.types.clone(),
             environment: self.environment.clone(),
-            operations: registry::BuiltinRegistry::new().operation_inventory(),
-            registry_revision: registry::BuiltinRegistry::new().revision(),
+            operations: registry.operation_inventory(),
+            registry_revision: registry.revision(),
             definitions,
             signatures,
             signature_dependencies,
@@ -225,8 +230,11 @@ impl QueryEngine {
         input: NativeInput,
         current: NativeInput,
     ) -> Result<ValidatedNativeInput, QueryError> {
+        if !std::sync::Arc::ptr_eq(&input.types, &self.types) {
+            return Err(invalid("native input from another session's interner"));
+        }
         if input.environment != self.environment
-            || input.registry_revision != registry::BuiltinRegistry::new().revision()
+            || input.registry_revision != registry::BuiltinRegistry::shared().revision()
             || input.completed_source_stages != NativeStatus::Complete
         {
             return Err(invalid(
@@ -275,7 +283,7 @@ impl QueryEngine {
         }
         for (path, signature) in &input.signatures {
             if signature.as_ref() != current.signatures[path].as_ref()
-                || signature.definition != *path
+                || signature.definition.path() != path
                 || input.signature_dependencies.get(path)
                     != current.signature_dependencies.get(path)
             {
@@ -283,7 +291,7 @@ impl QueryEngine {
             }
         }
         for (path, definition) in &input.definitions {
-            if definition.path != *path
+            if definition.path.path() != path
                 || definition.signature_hash != input.signatures[path].fingerprint
             {
                 return Err(invalid("definition/declaration identity mismatch"));
@@ -319,11 +327,12 @@ impl QueryEngine {
                 return Err(invalid("stale or forged owner representation"));
             }
         }
+        let types = input.types.clone();
         let equal_value = |a: &Materialized, b: &Materialized| {
             use hirsel_tir::ValueKind;
             let mut todo = vec![(&a.root, &b.root)];
             while let Some((left, right)) = todo.pop() {
-                if hirsel_types::semantic_equal(&a.types, left.ty, &b.types, right.ty) != Ok(true) {
+                if !types.semantic_eq(left.ty, right.ty) {
                     return false;
                 }
                 match (&left.kind, &right.kind) {
@@ -369,6 +378,7 @@ impl QueryEngine {
         }
         let timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Verify);
         let violations = hirsel_validate::validate_instance_bodies(
+            &input.types,
             &input.instance_bodies,
             &input.signatures,
             &input.definitions,
@@ -377,10 +387,10 @@ impl QueryEngine {
         if !violations.is_empty() {
             return Err(invalid(format!("invalid instance bodies: {violations:?}")));
         }
-        if !InstanceGraph::native(&input)?.same(&input.instances) {
+        if !InstanceGraph::native(&input)?.same(&input.instances, &input.types) {
             return Err(invalid("forged or incomplete instance graph"));
         }
-        if let Some(site) = input.instances.growing_sites().first() {
+        if let Some(site) = input.instances.growing_sites(&input.types).first() {
             return Err(invalid(format!(
                 "instance expansion grows through an implicit instance at {site:?} (spec #87)"
             )));

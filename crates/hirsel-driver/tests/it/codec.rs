@@ -59,10 +59,10 @@ fn rust_vectors_cross_source_in_both_directions() {
                 unreachable!()
             };
             let schema = serializable_schema(
-                &signature.types,
+                &engine.types().clone(),
                 function.result,
                 &GenericDeclarations::default(),
-                &mut |path| engine.item_signature(path).map(|s| Some(s.value)),
+                &mut |d| engine.item_signature(d.path()).map(|s| Some(s.value)),
             )
             .unwrap()
             .unwrap();

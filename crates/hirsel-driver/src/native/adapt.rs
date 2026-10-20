@@ -104,7 +104,9 @@ pub fn program(validated: &ValidatedNativeInput) -> Program {
                 None => continue,
             },
         };
-        owners.nominals.insert(hirsel_syntax::DefId::intern(path), owner);
+        owners
+            .nominals
+            .insert(hirsel_syntax::DefId::intern(path), owner);
     }
     Program {
         input: input_identity(input),

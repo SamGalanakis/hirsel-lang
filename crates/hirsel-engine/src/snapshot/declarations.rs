@@ -9,7 +9,9 @@
 //! signature normalization read (`Declarations`) is frozen from the rows once
 //! per revision, when a row or an explicit input changed.
 use crate::*;
-use hirsel_resolve::{DefinitionEntry, DependencyExposure, ManifestFixture, ManifestIndex, Namespace};
+use hirsel_resolve::{
+    DefinitionEntry, DependencyExposure, ManifestFixture, ManifestIndex, Namespace,
+};
 use hirsel_span::{Anchor, Span};
 use hirsel_syntax::{ItemKind, PackageId, TypeBody, Visibility};
 use hirsel_types::{DeclarationSite, DefinitionMetadata, Metadata};
@@ -88,7 +90,10 @@ impl Declarations {
     }
     /// Every declaration site of `path`, in occurrence order.
     pub fn sites(&self, path: &DefPath) -> Arc<[DeclarationSite]> {
-        self.sites.get(path).cloned().unwrap_or_else(|| Arc::from([]))
+        self.sites
+            .get(path)
+            .cloned()
+            .unwrap_or_else(|| Arc::from([]))
     }
 }
 
@@ -221,7 +226,12 @@ impl DeclarationIndex {
     }
     /// `file`'s items, given in DefPath then occurrence order, by position.
     fn set_file(&mut self, file: FileId, mut listed: Vec<Arc<ItemSyntax>>, sources: &SourceMap) {
-        listed.sort_by(|a, b| a.item.definition.cmp(&b.item.definition).then(a.occurrence.cmp(&b.occurrence)));
+        listed.sort_by(|a, b| {
+            a.item
+                .definition
+                .cmp(&b.item.definition)
+                .then(a.occurrence.cmp(&b.occurrence))
+        });
         listed.sort_by_key(|item| place(sources, item).2);
         if let Some(old) = self.files.get(&file) {
             for item in old.iter() {
@@ -243,10 +253,9 @@ impl DeclarationIndex {
         } else {
             snapshots.insert(file);
         }
-        let changed = self
-            .files
-            .get(&file)
-            .is_none_or(|old| old.len() != listed.len() || old.iter().zip(&listed).any(|(a, b)| !Arc::ptr_eq(a, b)));
+        let changed = self.files.get(&file).is_none_or(|old| {
+            old.len() != listed.len() || old.iter().zip(&listed).any(|(a, b)| !Arc::ptr_eq(a, b))
+        });
         if listed.is_empty() {
             self.files.remove(&file);
         } else {
@@ -256,7 +265,12 @@ impl DeclarationIndex {
             self.frozen = OnceLock::new();
         }
     }
-    fn set_row(&mut self, path: &DefPath, candidates: Option<&[Arc<ItemSyntax>]>, sources: &SourceMap) {
+    fn set_row(
+        &mut self,
+        path: &DefPath,
+        candidates: Option<&[Arc<ItemSyntax>]>,
+        sources: &SourceMap,
+    ) {
         let row = candidates.filter(|c| !c.is_empty()).map(|candidates| {
             work::count(work::Counter::ModuleDeclarationRows);
             let first = &candidates[0].item;
@@ -271,10 +285,17 @@ impl DeclarationIndex {
                     }
                 ),
             };
-            let headers: Arc<[ContentHash]> = candidates.iter().map(|c| header_hash(sources, c)).collect();
+            let headers: Arc<[ContentHash]> =
+                candidates.iter().map(|c| header_hash(sources, c)).collect();
             let mut parts = vec![(candidates.len() as u64).to_le_bytes().to_vec()];
             for (candidate, header) in candidates.iter().zip(headers.iter()) {
-                parts.push(place(sources, candidate).1.to_string_lossy().as_bytes().to_vec());
+                parts.push(
+                    place(sources, candidate)
+                        .1
+                        .to_string_lossy()
+                        .as_bytes()
+                        .to_vec(),
+                );
                 parts.push(header.0.to_vec());
             }
             let kind = match &first.kind {
@@ -342,7 +363,11 @@ impl DeclarationIndex {
     }
     /// The manifest identity: every definition's path, visibility and kind.
     pub fn identity(&self) -> ContentHash {
-        let bytes: Vec<u8> = self.identity.iter().flat_map(|lane| lane.to_le_bytes()).collect();
+        let bytes: Vec<u8> = self
+            .identity
+            .iter()
+            .flat_map(|lane| lane.to_le_bytes())
+            .collect();
         ContentHash::of_parts("hirsel.manifest.identities.v2", [bytes.as_slice()])
     }
     /// `DeclarationCandidates(path)`, or None for a definition with no item.
@@ -355,9 +380,7 @@ impl DeclarationIndex {
     }
     /// The frozen module input, built after a row or an input changed.
     pub fn frozen(&self) -> Arc<Declarations> {
-        self.frozen
-            .get_or_init(|| Arc::new(self.freeze()))
-            .clone()
+        self.frozen.get_or_init(|| Arc::new(self.freeze())).clone()
     }
     pub fn inputs(&self) -> &ModuleInputs {
         &self.inputs
@@ -380,14 +403,23 @@ impl DeclarationIndex {
         let mut entries = Vec::with_capacity(self.rows.len());
         for (path, row) in &self.rows {
             work::count(work::Counter::ModuleDeclarationRows);
-            metadata.definitions.insert(path.clone(), row.metadata.clone());
+            metadata
+                .definitions
+                .insert(path.clone(), row.metadata.clone());
             entries.push(row.entry.clone());
         }
         let registry = crate::registry::BuiltinRegistry::new();
         // Index core declarations alongside source metadata, so merged heads
         // resolve members through the same lookup and visibility path.
         entries.extend(registry.signatures().filter_map(|signature| {
-            if signature.definition.path().0.modules.iter().any(|m| m.starts_with('$')) {
+            if signature
+                .definition
+                .path()
+                .0
+                .modules
+                .iter()
+                .any(|m| m.starts_with('$'))
+            {
                 return None;
             }
             Some(DefinitionEntry {
@@ -408,7 +440,10 @@ impl DeclarationIndex {
             .collect();
         let complete_heads = |mut heads: Vec<DependencyExposure>| {
             for head in &core_heads {
-                if !heads.iter().any(|e| &e.head == head && !e.package.name_is("std")) {
+                if !heads
+                    .iter()
+                    .any(|e| &e.head == head && !e.package.name_is("std"))
+                {
                     heads.push(DependencyExposure {
                         head: head.clone(),
                         package: DefPath::core("Result").0.package,

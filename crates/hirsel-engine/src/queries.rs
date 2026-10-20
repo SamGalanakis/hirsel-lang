@@ -8,7 +8,7 @@ mod dependencies;
 pub(crate) mod generation;
 pub use generation::GeneratedSource;
 mod lowering;
-mod memos;
+pub(crate) mod memos;
 pub(crate) use memos::{Entry, Observed, Table};
 mod program_revision;
 pub use program_revision::ForeignUse;
@@ -34,14 +34,18 @@ use std::{
 pub trait SignaturePhase {
     fn signature_items(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         items: &[Arc<ItemSyntax>],
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let syntax = items.first().ok_or(QueryError::NotImplemented)?;
-        self.signature(syntax.clone(), provider)
+        self.signature(t, m, syntax.clone(), provider)
     }
     fn signature(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError>;
@@ -49,6 +53,8 @@ pub trait SignaturePhase {
     /// which another member reads; it publishes nothing.
     fn staged_signature(
         &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         _items: &[Arc<ItemSyntax>],
         _provider: &mut dyn SignatureProvider,
         _stage: hirsel_types::GroupStage,
@@ -157,7 +163,10 @@ pub struct QueryEngine {
     active: BTreeSet<(DefPath, QueryKind)>,
     /// The runtime types compile-time evaluation runs with, and the epoch of
     /// the signature snapshot they were built from.
-    comptime_runtime: Option<(crate::memo::Revision, Arc<hirsel_interp::aggregate::RuntimeTypes>)>,
+    comptime_runtime: Option<(
+        crate::memo::Revision,
+        Arc<hirsel_interp::aggregate::RuntimeTypes>,
+    )>,
     pub(crate) generic_verdict: Option<crate::generic_graph::Verdict>,
     /// The last signature snapshot and the inputs it was built from.
     pub(crate) snapshot: Option<(
@@ -165,8 +174,10 @@ pub struct QueryEngine {
         Arc<crate::snapshot::SignatureSnapshot>,
     )>,
     pub(crate) snapshot_epoch: crate::memo::Revision,
-    /// The session's one type interner (design §1(a)).
+    /// The session's one type interner (design §1(a)), over the core rows.
     pub(crate) types: Arc<hirsel_types::TypeInterner>,
+    /// The session's structural memo over `types`.
+    pub(crate) memo: Arc<hirsel_types::TypeMemo>,
     signature_stack: Vec<DefPath>,
     recomputes: BTreeMap<(DefPath, QueryKind), usize>,
     /// Dependency packages whose checked products come from a precheck.
@@ -234,6 +245,22 @@ impl QueryEngine {
     pub fn types(&self) -> &Arc<hirsel_types::TypeInterner> {
         &self.types
     }
+    /// The session's structural type memo over [`QueryEngine::types`].
+    pub fn type_memo(&self) -> &Arc<hirsel_types::TypeMemo> {
+        &self.memo
+    }
+    /// This engine over `types` instead of its own fresh interner, so
+    /// sessions that exchange type ids share one table. Only before the
+    /// first query: every memo is keyed by ids from one interner.
+    pub fn with_types(mut self, types: Arc<hirsel_types::TypeInterner>) -> Self {
+        assert!(
+            self.graph.is_empty(),
+            "an engine changes interner only before its first query"
+        );
+        self.types = types;
+        self.memo = Arc::new(hirsel_types::TypeMemo::new());
+        self
+    }
 }
 impl QueryEngine {
     /// Every indexed source definition.
@@ -271,7 +298,7 @@ impl QueryEngine {
                     .iter()
                     .map(|p| p.ty)
                     .chain([f.result])
-                    .any(|t| hirsel_types::mentions_compile_time_only(&signature.types, t))
+                    .any(|t| hirsel_types::mentions_compile_time_only(&self.types, t))
             {
                 compile_time.push(path.clone());
             }
@@ -286,7 +313,7 @@ impl QueryEngine {
     ) -> BTreeMap<DefPath, hirsel_types::SignatureRef> {
         self.registry
             .signatures()
-            .map(|s| (s.definition.clone(), s.clone()))
+            .map(|s| (s.definition.path().clone(), s.clone()))
             .chain(self.builtins.iter().map(|(p, s)| (p.clone(), s.clone())))
             .collect()
     }
@@ -297,7 +324,8 @@ impl QueryEngine {
         if self.definition_items(path).is_ok() {
             return Ok(None);
         }
-        self.registry.dictionary_value(path)
+        self.registry
+            .dictionary_value(&self.types, &self.memo, path)
     }
     pub(crate) fn prepare_materialization_environment(&mut self) {
         if let Some(state) = &self.adapters.compiler_state {
@@ -322,8 +350,8 @@ impl QueryEngine {
         let report = match self.verify {
             Verify::On => {
                 let snapshot = self.signature_snapshot();
-                let views = snapshot
-                    .validation_with(&definition.path.path().0.package, Arc::new(artifact));
+                let views =
+                    snapshot.validation_with(&definition.path.path().0.package, Arc::new(artifact));
                 let _timing = timings::phase(Phase::Verify);
                 timings::count(Count::VRuns);
                 hirsel_validate::validate(definition, snapshot.types(), &views, &mut vec![])
@@ -343,7 +371,7 @@ impl QueryEngine {
         }
     }
     pub fn new(mut environment: QueryEnvironment, adapters: PhaseAdapters) -> Self {
-        let registry = crate::registry::BuiltinRegistry::new();
+        let registry = crate::registry::BuiltinRegistry::shared();
         environment.builtin_signatures_hash = registry.revision();
         Self {
             verify: Verify::On,
@@ -385,7 +413,8 @@ impl QueryEngine {
             generic_verdict: None,
             snapshot: None,
             snapshot_epoch: crate::memo::Revision::from_u64(1).expect("a nonzero revision"),
-            types: hirsel_types::TypeInterner::new(None),
+            types: crate::registry::session_types(),
+            memo: Arc::new(hirsel_types::TypeMemo::new()),
             signature_stack: vec![],
             recomputes: BTreeMap::new(),
             prechecks: BTreeMap::new(),
@@ -557,8 +586,9 @@ impl QueryEngine {
             groups: BTreeMap::new(),
         };
         recorder.engine.signature_stack.push(definition.clone());
+        let (types, memo) = (recorder.engine.types.clone(), recorder.engine.memo.clone());
         let result = match adapter {
-            Some(adapter) => adapter.signature_items(&candidates, &mut recorder),
+            Some(adapter) => adapter.signature_items(&types, &memo, &candidates, &mut recorder),
             None => recorder.engine.missing(QueryKind::Signature),
         };
         recorder.engine.signature_stack.pop();
@@ -730,15 +760,16 @@ impl QueryEngine {
         // CT-5: a retired declaration's instances are made again from its new
         // text when a call selects them.
         for path in &owned {
-            self.instance_bodies.declarations.remove(path);
+            let id = DefId::intern(path);
+            self.instance_bodies.declarations.remove(&id);
             for (_, instance) in self
                 .instance_bodies
                 .instances
-                .remove(path)
+                .remove(&id)
                 .unwrap_or_default()
             {
-                self.items.remove(&instance.definition);
-                self.generated.remove(&instance.definition);
+                self.items.remove(instance.definition.path());
+                self.generated.remove(instance.definition.path());
             }
         }
         for path in &owned {
@@ -1010,8 +1041,9 @@ impl QueryEngine {
             reads: DependencyReads::default(),
             groups: BTreeMap::new(),
         };
+        let (types, memo) = (recorder.engine.types.clone(), recorder.engine.memo.clone());
         let result = match adapter {
-            Some(adapter) => adapter.resolve(snapshot.clone(), &mut recorder),
+            Some(adapter) => adapter.resolve(&types, &memo, snapshot.clone(), &mut recorder),
             None => recorder.engine.missing(QueryKind::Resolve),
         };
         let observed = recorder.observed;
@@ -1058,10 +1090,15 @@ impl QueryEngine {
                     reads,
                     groups: BTreeMap::new(),
                 };
+                let (types, memo) = (recorder.engine.types.clone(), recorder.engine.memo.clone());
                 let result = match adapter {
-                    Some(adapter) => {
-                        adapter.check_modes(checked.value.clone(), &signature.value, &mut recorder)
-                    }
+                    Some(adapter) => adapter.check_modes(
+                        &types,
+                        &memo,
+                        checked.value.clone(),
+                        &signature.value,
+                        &mut recorder,
+                    ),
                     None => recorder.engine.missing(QueryKind::Modes),
                 };
                 let observed = recorder.observed;
@@ -1127,8 +1164,11 @@ impl QueryEngine {
             reads: initial,
             groups: BTreeMap::new(),
         };
+        let (types, memo) = (recorder.engine.types.clone(), recorder.engine.memo.clone());
         let result = match adapter {
             Some(adapter) => adapter.check(
+                &types,
+                &memo,
                 snapshot.clone(),
                 resolution.value.clone(),
                 &signature.value,
@@ -1208,7 +1248,10 @@ impl QueryEngine {
             .collect();
         for path in self.items.keys().cloned().collect::<Vec<_>>() {
             let public = self.item_signature(&path)?.value;
-            views.push((self.body_signature(&path.0.package, public)?.0, ContentHash::default()));
+            views.push((
+                self.body_signature(&path.0.package, public)?.0,
+                ContentHash::default(),
+            ));
         }
         self.build_runtime_types(views, true)
     }
@@ -1230,27 +1273,29 @@ impl QueryEngine {
         for signature in signatures {
             if let hirsel_types::SignatureKind::Type(t) = &signature.kind {
                 if t.layout.flat {
-                    checked.flat.insert(signature.definition.clone());
+                    checked.flat.insert(signature.definition.path().clone());
                 }
                 if t.loop_source.is_some() {
                     checked
                         .operations
-                        .insert(signature.definition.clone(), signature.clone());
+                        .insert(signature.definition.path().clone(), signature.clone());
                 }
                 if t.destructor_allocation == hirsel_types::Allocation::NoAlloc {
-                    checked.noalloc_drop.insert(signature.definition.clone());
-                    checked.noalloc.insert(signature.definition.clone());
+                    checked
+                        .noalloc_drop
+                        .insert(signature.definition.path().clone());
+                    checked.noalloc.insert(signature.definition.path().clone());
                 }
             }
             let hirsel_types::SignatureKind::Function(function) = &signature.kind else {
                 continue;
             };
             if function.allocation == hirsel_types::Allocation::NoAlloc {
-                checked.noalloc.insert(signature.definition.clone());
+                checked.noalloc.insert(signature.definition.path().clone());
             }
             checked
                 .operations
-                .insert(signature.definition.clone(), signature);
+                .insert(signature.definition.path().clone(), signature);
         }
         if let Some(forget) = &runtime.forget {
             checked.noalloc.insert(forget.clone());
@@ -1302,7 +1347,7 @@ impl QueryEngine {
         {
             return view.map_or_else(|_| ContentHash::default(), |(_, digest)| digest.0);
         }
-        let view = match self.registry.get(path) {
+        let view = match self.registry.get(d) {
             Some(signature) => Ok(signature.clone()),
             None if self.items.contains_key(path) => self
                 .item_signature(path)
@@ -1310,9 +1355,10 @@ impl QueryEngine {
                 .map(|(view, _)| view),
             None => return ContentHash::default(),
         };
-        view.map_or_else(|_| ContentHash::default(), |view| {
-            hirsel_validate::digest(self.types(), &view).0
-        })
+        view.map_or_else(
+            |_| ContentHash::default(),
+            |view| hirsel_validate::digest(self.types(), &view).0,
+        )
     }
     /// Runtime types over `views` (each with the digest a reflection of it
     /// records). A program's run lowers each owned drop body; compile-time
@@ -1531,12 +1577,17 @@ impl DefinitionQueries for QueryEngine {
             .map(|c| c.detail.clone())
             .unwrap_or_default();
         reads.signatures.extend(modes.dependencies.clone());
-        let mut body = (*modes).clone();
         let mut observed = Observed::inheriting(previous.as_ref().map(|c| c.reads()));
         self.execution_stack.push(ReadsBuilder::new());
-        let prepared = self.prepare_comptime(&mut body.value, &signature.value);
-        let result = prepared.and_then(|()| match self.adapters.lowering.clone() {
-            Some(adapter) => adapter.lower(body.value, &signature.value),
+        let prepared = self.prepare_comptime(&modes.value, &signature.value);
+        let result = prepared.and_then(|comptime| match self.adapters.lowering.clone() {
+            Some(adapter) => adapter.lower(
+                &self.types,
+                &self.memo,
+                &modes.value,
+                &comptime,
+                &signature.value,
+            ),
             None => self.missing(QueryKind::Lower),
         });
         let mut result = result.map(shared_output);
@@ -1569,11 +1620,8 @@ impl DefinitionQueries for QueryEngine {
     }
 }
 impl SignatureProvider for QueryEngine {
-    fn signature(
-        &mut self,
-        definition: &DefPath,
-    ) -> Result<hirsel_types::SignatureRef, QueryError> {
-        self.signature_query(definition)
+    fn signature(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
+        self.signature_query(definition.path())
             .map(|output| output.value.clone())
     }
     fn lookup(
@@ -1646,7 +1694,7 @@ impl TirProvider for QueryEngine {
             .registry
             .signatures()
             .filter(|s| matches!(s.kind, hirsel_types::SignatureKind::Const { ty: _, .. }))
-            .map(|s| s.definition.clone())
+            .map(|s| s.definition.path().clone())
             .collect();
         paths.extend(declarations.into_iter().map(|(_, _, path)| path));
         let ranks: BTreeMap<_, _> = paths
@@ -1698,10 +1746,9 @@ impl TirProvider for QueryEngine {
     fn instance_body(
         &mut self,
         path: &DefPath,
-        types: &hirsel_types::TypeStore,
         arguments: &[hirsel_types::GenericArgument],
     ) -> Result<Option<DefPath>, QueryError> {
-        self.resolve_instance(path, types, arguments)
+        self.resolve_instance(path, arguments)
     }
 }
 struct Recorder<'a> {
@@ -1714,11 +1761,9 @@ struct Recorder<'a> {
     groups: BTreeMap<DefPath, Option<Rc<type_groups::TypeGroup>>>,
 }
 impl SignatureProvider for Recorder<'_> {
-    fn signature(
-        &mut self,
-        definition: &DefPath,
-    ) -> Result<hirsel_types::SignatureRef, QueryError> {
-        let result = self.engine.signature(definition);
+    fn signature(&mut self, id: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
+        let definition = id.path();
+        let result = self.engine.signature(id);
         if let Err(QueryError::Operational(error)) = &result {
             self.reads.operational_failure = Some(error.clone());
         }

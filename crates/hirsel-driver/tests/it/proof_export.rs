@@ -175,7 +175,9 @@ fn a_version_mismatch_is_refused_at_the_header() {
         let engine = engine(ADD);
         let mut expected = engine.proof_environment();
         expected.compiler_version.push_str("-other");
-        let error = hirsel_proof_export::import(&text, &expected, &hirsel_types::TypeInterner::new(None)).unwrap_err();
+        let error =
+            hirsel_proof_export::import(&text, &expected, &hirsel_types::TypeInterner::new(None))
+                .unwrap_err();
         assert_eq!(error.at, "header.environment", "{error}");
     });
 }
@@ -745,7 +747,7 @@ fn a_recursive_type_group_round_trips_with_its_group_keys() {
             let section = export
                 .signatures
                 .iter()
-                .find(|s| s.public.definition == named(name))
+                .find(|s| s.public.definition == hirsel_syntax::DefId::intern(&named(name)))
                 .unwrap_or_else(|| panic!("no signature for {name}"));
             assert!(section.public.metadata.recursive_group.is_some(), "{name}");
         }

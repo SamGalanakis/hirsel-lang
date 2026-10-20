@@ -33,7 +33,13 @@ fn published_index_matches_every_core_and_std_export() {
         let mut definitions = 0;
         for s in BuiltinRegistry::new().signatures().filter(|s| {
             s.metadata.visibility != Visibility::Private
-                && !s.definition.0.modules.iter().any(|m| m.starts_with('$'))
+                && !s
+                    .definition
+                    .path()
+                    .0
+                    .modules
+                    .iter()
+                    .any(|m| m.starts_with('$'))
         }) {
             exports.insert(s.definition.to_string());
             definitions += 1;
@@ -42,7 +48,9 @@ fn published_index_matches_every_core_and_std_export() {
             }
             if let SignatureKind::Type(t) = &s.kind {
                 if let Some(repr) = t.representation {
-                    if let TypeKind::Variant(variants) = &s.types.get(repr).unwrap().kind {
+                    if let TypeKind::Variant(variants) =
+                        &BuiltinRegistry::new().types().get(repr).unwrap().kind
+                    {
                         for variant in variants.iter() {
                             exports.insert(format!("{}#{}", s.definition, variant.name));
                         }

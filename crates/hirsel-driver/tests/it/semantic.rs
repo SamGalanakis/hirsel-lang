@@ -124,13 +124,17 @@ fn v20_signature_forms_reach_shared_semantics_through_real_adapters_on_compiler_
     let SignatureKind::Type(def) = &packet.kind else {
         panic!()
     };
-    let TypeKind::Record(fields) = &packet.types.get(def.representation.unwrap()).unwrap().kind
+    let TypeKind::Record(fields) = &engine
+        .types()
+        .get(def.representation.unwrap())
+        .unwrap()
+        .kind
     else {
         panic!()
     };
     assert!(fields[0].growable);
     assert_eq!(
-        packet.types.get(fields[0].ty).unwrap().drop_allocation,
+        engine.types().get(fields[0].ty).unwrap().drop_allocation,
         DropAllocation::NoAlloc
     );
     let token = engine.item_signature(&path("Token")).unwrap().value;

@@ -80,7 +80,10 @@ impl QueryEngine {
         let observed: Vec<_> = named
             .into_iter()
             .map(|d| {
-                let fingerprint = self.signature(&d.definition).ok().map(|s| s.fingerprint);
+                let fingerprint = self
+                    .signature(DefId::intern(&d.definition))
+                    .ok()
+                    .map(|s| s.fingerprint);
                 (
                     ReadKey::ExecutedSignature(DefId::intern(&d.definition)),
                     memos::signature_value(fingerprint),
@@ -98,7 +101,7 @@ impl QueryEngine {
     pub(crate) fn names_definition(&self, path: &DefPath) -> bool {
         self.items.contains_key(path)
             || self.staged_constants.contains_key(path)
-            || self.registry.get(path).is_some()
+            || self.registry.get(DefId::intern(path)).is_some()
             || self.builtins.contains_key(path)
     }
     /// Every open evaluation frame executed `path`'s body.

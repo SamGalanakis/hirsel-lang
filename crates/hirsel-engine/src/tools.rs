@@ -234,15 +234,22 @@ pub(crate) fn association_diagnostics(
                 .clone()
                 .ok_or(QueryError::NotImplemented)?;
             let span = attribute.origin.span;
+            let (types, memo) = (engine.types.clone(), engine.memo.clone());
             let result = engine
                 .item_signature(&source.definition)
                 .and_then(|signature| {
                     if name == "format" {
-                        phases.validate_format(&signature.value, span, engine)
+                        phases.validate_format(&types, &memo, &signature.value, span, engine)
                     } else if name == "serializable" {
-                        phases.validate_serializable_check(&signature.value, span, engine)
+                        phases.validate_serializable_check(
+                            &types,
+                            &memo,
+                            &signature.value,
+                            span,
+                            engine,
+                        )
                     } else {
-                        phases.validate_loop_source(&signature.value, span, engine)
+                        phases.validate_loop_source(&types, &memo, &signature.value, span, engine)
                     }
                 });
             match result {
@@ -466,10 +473,9 @@ impl<P: TirProvider> TirProvider for Closed<'_, P> {
     fn instance_body(
         &mut self,
         path: &DefPath,
-        types: &hirsel_types::TypeStore,
         arguments: &[hirsel_types::GenericArgument],
     ) -> Result<Option<DefPath>, QueryError> {
-        TirProvider::instance_body(self.engine, path, types, arguments)
+        TirProvider::instance_body(self.engine, path, arguments)
     }
 }
 /// Execute a checked program with explicitly simulated capabilities.

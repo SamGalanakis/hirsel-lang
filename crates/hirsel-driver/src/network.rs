@@ -2417,15 +2417,16 @@ mod tests {
         // Main admission disallows Test, so create its directory at the adapter
         // seam. It must retain Library's scripted identity beside a host Proc.
         let test = host.library.simulation.grant_test();
-        let mut types = hirsel_types::TypeStore::default();
-        let result_type = types.push(hirsel_types::Type::unit());
+        let types = hirsel_engine::registry::session_types();
+        let result_type = types.intern(hirsel_types::Type::unit());
+        let runtime = hirsel_interp::aggregate::RuntimeTypes::new(types.clone());
         let Some(OperationResult::Complete {
             value: directory, ..
         }) = host
             .library
             .call(
                 OperationCall {
-                    runtime: &Default::default(),
+                    runtime: &runtime,
                     path: &DefPath::core("test.dir"),
                     generics: &[],
                     arguments: &mut [test, sequence(BuiltinType::List, [])],

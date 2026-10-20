@@ -5,12 +5,13 @@ use hirsel_type_analysis::cleanup::{
     CleanupLeaf, cleanup_summary, declared_cleanup, parameter_cleanup,
 };
 
-pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
+pub(super) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRef> {
     let mut out = BTreeMap::new();
     // DROP-4 declares this intrinsic outside the core library ledger.
-    let mut forget = Builder::new("T");
+    let mut forget = Builder::new(types, "T");
     let signature = forget.function("take x: T", "()", true);
     publish(
+        types,
         forget.signature("forget", SignatureKind::Function(signature), false),
         &mut out,
     );
@@ -35,7 +36,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         "Test",
     ] {
         let scoped = matches!(name, "Scope" | "Arena" | "Test");
-        let b = Builder::new("").with_declarations(&out);
+        let b = Builder::new(types, "").with_declarations(&out);
         let mut t = type_definition(vec![], None);
         t.capability = Some(if scoped {
             CapabilityKind::Scoped
@@ -58,11 +59,15 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             ))]
             .into(),
         );
-        publish(b.signature(name, SignatureKind::Type(t), true), &mut out);
+        publish(
+            types,
+            b.signature(name, SignatureKind::Type(t), true),
+            &mut out,
+        );
     }
     // These inert, plain views/positions have intrinsic loop/brand rules (docs/spec/core-library.md).
     for name in ["Instant", "Path", "StrPos", "ScalarView", "PositionView"] {
-        let b = Builder::new("").with_declarations(&out);
+        let b = Builder::new(types, "").with_declarations(&out);
         let mut t = type_definition(vec![], None);
         t.bounds = vec![Bound::Copyable, Bound::Inert, Bound::NoallocDrop];
         if matches!(name, "Instant" | "Path" | "StrPos") {
@@ -86,17 +91,25 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 option: hirsel_syntax::DefPath::core("Option"),
             });
         }
-        publish(b.signature(name, SignatureKind::Type(t), true), &mut out);
+        publish(
+            types,
+            b.signature(name, SignatureKind::Type(t), true),
+            &mut out,
+        );
     }
     // Typed generation: a generated body for the function type `F`. Like a TypeShape it is
     // compile-time only and not data; it holds text, never authority.
-    let b = Builder::new("F").with_declarations(&out);
+    let b = Builder::new(types, "F").with_declarations(&out);
     let mut t = type_definition(b.generics.clone(), None);
     t.bounds = vec![Bound::Copyable, Bound::Inert, Bound::NoallocDrop];
-    publish(b.signature("Body", SignatureKind::Type(t), true), &mut out);
+    publish(
+        types,
+        b.signature("Body", SignatureKind::Type(t), true),
+        &mut out,
+    );
     // RUN-3: a reference to one top-level definition of callable type `F`. It names the
     // definition, never an implementation, so it holds no authority and is not data.
-    let b = Builder::new("F").with_declarations(&out);
+    let b = Builder::new(types, "F").with_declarations(&out);
     let mut t = type_definition(b.generics.clone(), None);
     t.bounds = vec![
         Bound::Plain,
@@ -105,7 +118,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         Bound::Sendable,
         Bound::NoallocDrop,
     ];
-    publish(b.signature("Entry", SignatureKind::Type(t), true), &mut out);
+    publish(
+        types,
+        b.signature("Entry", SignatureKind::Type(t), true),
+        &mut out,
+    );
     for (name, generic, variants) in [
         ("Result", "T,E", "Ok(T)|Error(E)"),
         (
@@ -224,7 +241,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "Record(List[FieldShape])|Choice(List[VariantShape])",
         ),
     ] {
-        variant(name, generic, variants, &mut out);
+        variant(types, name, generic, variants, &mut out);
     }
     for (name, generic, fields) in [
         ("Order", "T", "compare: fn(T,T) -> i32 uses {}"),
@@ -334,7 +351,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "address: String,port: u16,clients: List[NetClient]",
         ),
     ] {
-        let mut b = Builder::new(generic)
+        let mut b = Builder::new(types, generic)
             .with_declarations(&out)
             .with_schema(super::schema(name));
         let repr = b.record(fields);
@@ -370,10 +387,15 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             );
         }
         serializable_core(name, &mut t);
-        publish(b.signature(name, SignatureKind::Type(t), false), &mut out);
+        publish(
+            types,
+            b.signature(name, SignatureKind::Type(t), false),
+            &mut out,
+        );
     }
     // RUN-6: a runner call's outcome carries the callee's Failure.
     variant(
+        types,
         "RunError",
         "E",
         "NotRun(NotRunReason)|InDoubt(InDoubtReason)|Failed(E)|Faulted(Failure)|Canceled(CancelCause)",
@@ -385,7 +407,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ("Mapped", ""),
         ("Watcher", ""),
     ] {
-        let mut b = Builder::new("").with_declarations(&out);
+        let mut b = Builder::new(types, "").with_declarations(&out);
         let repr = (!fields.is_empty()).then(|| b.record(fields));
         let mut t = type_definition(vec![], repr);
         t.resource = true;
@@ -399,6 +421,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         );
         t.drop = Some(hirsel_syntax::DefPath::core(name));
         publish(
+            types,
             b.signature(name, SignatureKind::Type(t), fields.is_empty()),
             &mut out,
         );
@@ -414,7 +437,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ("Child", "Proc"),
         ("ChildGroup", "Proc"),
     ] {
-        let b = Builder::new("").with_declarations(&out);
+        let b = Builder::new(types, "").with_declarations(&out);
         let mut t = type_definition(vec![], None);
         t.resource = true;
         t.bounds = vec![Bound::Sendable, Bound::NoallocDrop];
@@ -426,13 +449,17 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             .into(),
         );
         t.drop = Some(hirsel_syntax::DefPath::core(name));
-        publish(b.signature(name, SignatureKind::Type(t), true), &mut out);
+        publish(
+            types,
+            b.signature(name, SignatureKind::Type(t), true),
+            &mut out,
+        );
     }
     // A scope's set of task handles (CONC-2): a noncopyable run-local resource holding its
     // members' await-or-detach obligations. Its drop releases the set; its members stay
     // children of their scope, joined at its exit.
     {
-        let b = Builder::new("R").with_declarations(&out);
+        let b = Builder::new(types, "R").with_declarations(&out);
         let mut t = type_definition(b.generics.clone(), None);
         t.resource = true;
         t.bounds = vec![Bound::NoallocDrop];
@@ -446,6 +473,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         );
         t.drop = Some(hirsel_syntax::DefPath::core("TaskSet"));
         publish(
+            types,
             b.signature("TaskSet", SignatureKind::Type(t), true),
             &mut out,
         );
@@ -471,7 +499,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ("Atomic", "A"),
         ("Ptr", "T"),
     ] {
-        let mut b = Builder::new(generic)
+        let mut b = Builder::new(types, generic)
             .with_declarations(&out)
             .with_schema(super::schema(name));
         let text = format!("{name}[{}]", b.names.join(","));
@@ -509,13 +537,17 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                     .collect(),
             ),
         };
-        publish(b.signature(name, SignatureKind::Type(t), false), &mut out);
+        publish(
+            types,
+            b.signature(name, SignatureKind::Type(t), false),
+            &mut out,
+        );
     }
     for name in [
         "bool", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "f32", "f64",
         "char", "String", "Bytes",
     ] {
-        let mut b = Builder::new("").with_declarations(&out);
+        let mut b = Builder::new(types, "").with_declarations(&out);
         let repr = b.ty(name, PassingMode::Take);
         let mut t = type_definition(vec![], Some(repr));
         t.bounds = vec![
@@ -532,11 +564,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         }
         let mut s = b.signature(name, SignatureKind::Type(t), false);
         s.metadata.alias = true;
-        publish(s, &mut out);
+        publish(types, s, &mut out);
         if name.starts_with(['u', 'i']) {
-            let mut b = Builder::new("").with_declarations(&out);
+            let mut b = Builder::new(types, "").with_declarations(&out);
             let ty = b.ty(&format!("Order[{name}]"), PassingMode::Take);
             publish(
+                types,
                 b.signature(
                     &format!("{name}.order"),
                     SignatureKind::Const {
@@ -549,12 +582,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             );
         }
     }
-    for signature in super::dictionaries::signatures()
+    for signature in super::dictionaries::signatures(types)
         .into_iter()
-        .chain(super::loops::signatures())
-        .chain(super::heap::signatures())
+        .chain(super::loops::signatures(types))
+        .chain(super::heap::signatures(types))
     {
-        publish(signature, &mut out);
+        publish(types, signature, &mut out);
     }
     // Existing @preserves_captures(p), @preserves_unique(p), then
     // @unretained(q, ..) naming the borrowed
@@ -577,7 +610,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             .split_once('[')
             .map_or((head, ""), |(n, g)| (n, g.strip_suffix(']').unwrap()));
         let closing = matching(text, opening);
-        let mut b = Builder::new(generics)
+        let mut b = Builder::new(types, generics)
             .with_declarations(&out)
             .with_schema(super::schema(name));
         let mut f = b.function(
@@ -598,7 +631,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 ]
                 .into(),
             ));
-            f.result = b.types.push(result);
+            f.result = b.types.intern(result);
         }
         if name == "iter.next" {
             f.state_promises = vec![StatePromise {
@@ -609,7 +642,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 unretained: Default::default(),
             }]
             .into();
-            apply_state_promises(&mut b.types, &mut f.parameters, &f.state_promises);
+            apply_state_promises(&b.types, &mut f.parameters, &f.state_promises);
         }
         let ordinal = |name: &str| {
             ParamId(
@@ -651,15 +684,15 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 });
             }
             f.state_promises = promises.into();
-            apply_state_promises(&mut b.types, &mut f.parameters, &f.state_promises);
+            apply_state_promises(&b.types, &mut f.parameters, &f.state_promises);
         }
         let mut signature = b.signature(name, SignatureKind::Function(f), false);
         signature.metadata.track_caller = matches!(name, "task.await_any" | "task.cancel_all");
-        publish(signature, &mut out);
+        publish(types, signature, &mut out);
     }
     // `net.read_into`'s compiled body passes its buffer's size to one fixed runtime
     // entry, which no size generic can name.
-    let mut b = Builder::new("k: size").with_declarations(&out);
+    let mut b = Builder::new(types, "k: size").with_declarations(&out);
     let mut f = b.function(
         "n: Net, mut s: Stream of n, mut buffer: Inline[u8, k], capacity: u64",
         "Result[u64, NetError]",
@@ -673,18 +706,20 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         unretained: Default::default(),
     }]
     .into();
-    apply_state_promises(&mut b.types, &mut f.parameters, &f.state_promises);
+    apply_state_promises(&b.types, &mut f.parameters, &f.state_promises);
     publish(
+        types,
         b.signature("$intrinsic.NetReadInto", SignatureKind::Function(f), false),
         &mut out,
     );
-    let mut b = Builder::new("k: size").with_declarations(&out);
+    let mut b = Builder::new(types, "k: size").with_declarations(&out);
     let f = b.function(
         "n: Net, mut r: ReadHalf of n, mut buffer: Inline[u8, k], capacity: u64",
         "Result[u64, NetError]",
         true,
     );
     publish(
+        types,
         b.signature(
             "$intrinsic.ReadHalfReadInto",
             SignatureKind::Function(f),
@@ -870,7 +905,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "List[u64]",
         ),
     ] {
-        let mut b = Builder::new(generics).with_declarations(&out);
+        let mut b = Builder::new(types, generics).with_declarations(&out);
         let f = b.function(params, result, false);
         let mut signature = b.signature(name, SignatureKind::Function(f), false);
         signature.metadata.track_caller = matches!(
@@ -881,7 +916,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 | "$intrinsic.TaskJoin"
                 | "$intrinsic.ChannelReceive"
         );
-        publish(signature, &mut out);
+        publish(types, signature, &mut out);
     }
     // All declaration snapshots exist before deriving structural properties.
     // This replaces the spelling-based plain/sendable allowlists in Builder.
@@ -900,60 +935,44 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         }
         let generics = GenericDeclarations::signature(&generics);
         let mut lookup =
-            |path: &DefPath| Ok::<_, hirsel_types::QueryError>(declarations.get(path).cloned());
+            |d: DefId| Ok::<_, hirsel_types::QueryError>(declarations.get(&d).cloned());
         match &mut normalized.kind {
             SignatureKind::Function(f) => {
                 for p in &mut f.parameters {
-                    p.ty = normalize_type_properties(
-                        &mut normalized.types,
-                        p.ty,
-                        &generics,
-                        &mut lookup,
-                    )
-                    .unwrap();
+                    p.ty = normalize_type_properties(types, p.ty, &generics, &mut lookup).unwrap();
                 }
-                f.result = normalize_type_properties(
-                    &mut normalized.types,
-                    f.result,
-                    &generics,
-                    &mut lookup,
-                )
-                .unwrap();
+                f.result =
+                    normalize_type_properties(types, f.result, &generics, &mut lookup).unwrap();
                 if let Some(error) = &mut f.error {
-                    *error = normalize_type_properties(
-                        &mut normalized.types,
-                        *error,
-                        &generics,
-                        &mut lookup,
-                    )
-                    .unwrap();
+                    *error =
+                        normalize_type_properties(types, *error, &generics, &mut lookup).unwrap();
                 }
             }
             SignatureKind::Type(t) => {
                 if let Some(repr) = &mut t.representation {
-                    *repr = normalize_type_properties(
-                        &mut normalized.types,
-                        *repr,
-                        &generics,
-                        &mut lookup,
-                    )
-                    .unwrap();
+                    *repr =
+                        normalize_type_properties(types, *repr, &generics, &mut lookup).unwrap();
                 }
             }
             SignatureKind::Const { ty: t, .. } => {
-                *t = normalize_type_properties(&mut normalized.types, *t, &generics, &mut lookup)
-                    .unwrap()
+                *t = normalize_type_properties(types, *t, &generics, &mut lookup).unwrap()
             }
         }
-        normalized.fingerprint = hirsel_types::encoding::fingerprint(&normalized, &[])
+        normalized.fingerprint = hirsel_types::encoding::fingerprint(types, &normalized, &[])
             .expect("normalized core signature");
         *signature = Arc::new(normalized);
     }
     out
 }
 /// Declare a core variant type `name[generic] = variants`.
-fn variant(name: &str, generic: &str, variants: &str, out: &mut BTreeMap<DefPath, SignatureRef>) {
-    let mut b = Builder::new(generic)
+fn variant(
+    types: &Arc<TypeInterner>,
+    name: &str,
+    generic: &str,
+    variants: &str,
+    out: &mut BTreeMap<DefId, SignatureRef>,
+) {
+    let mut b = Builder::new(types, generic)
         .with_declarations(out)
         .with_schema(super::schema(name));
     let variants = variants
@@ -1012,7 +1031,7 @@ fn variant(name: &str, generic: &str, variants: &str, out: &mut BTreeMap<DefPath
         t.bounds = shape_data_bounds();
     }
     serializable_core(name, &mut t);
-    publish(b.signature(name, SignatureKind::Type(t), false), out);
+    publish(types, b.signature(name, SignatureKind::Type(t), false), out);
 }
 /// CT-3 shape data holds only strings and lists of them: structurally
 /// copyable, data, key, inert and noalloc_drop, but neither plain nor sendable.
@@ -1112,11 +1131,11 @@ fn type_definition(
     }
 }
 pub(super) struct Builder {
-    pub types: TypeStore,
+    pub types: Arc<TypeInterner>,
     pub generics: Vec<GenericParameter>,
     names: Vec<String>,
     schema: Vec<SchemaConstraint>,
-    declarations: BTreeMap<DefPath, SignatureRef>,
+    declarations: BTreeMap<DefId, SignatureRef>,
     params: Vec<String>,
     outer_params: Vec<Vec<String>>,
     generic_depth: u32,
@@ -1124,7 +1143,7 @@ pub(super) struct Builder {
     siblings: Vec<String>,
 }
 impl Builder {
-    pub fn new(generics: &str) -> Self {
+    pub fn new(types: &Arc<TypeInterner>, generics: &str) -> Self {
         let generics: Vec<_> = split(generics, ',')
             .iter()
             .map(|s| {
@@ -1162,7 +1181,7 @@ impl Builder {
             })
             .collect();
         Self {
-            types: TypeStore::default(),
+            types: types.clone(),
             generics,
             names,
             schema: vec![],
@@ -1177,14 +1196,13 @@ impl Builder {
         self.schema = schema;
         self
     }
-    fn with_declarations(mut self, declarations: &BTreeMap<DefPath, SignatureRef>) -> Self {
+    fn with_declarations(mut self, declarations: &BTreeMap<DefId, SignatureRef>) -> Self {
         self.declarations = declarations.clone();
         self
     }
     pub fn signature(self, name: &str, kind: SignatureKind, opaque: bool) -> Signature {
         Signature {
-            definition: hirsel_syntax::DefPath::core(name),
-            types: self.types,
+            definition: DefId::intern(&hirsel_syntax::DefPath::core(name)),
             kind,
             fingerprint: ContentHash::default(),
             metadata: SignatureMetadata {
@@ -1219,11 +1237,10 @@ impl Builder {
             CleanupLeaf::Nominal(definition, arguments) => {
                 if let Some(Signature {
                     kind: SignatureKind::Type(declaration),
-                    types,
                     ..
-                }) = self.declarations.get(definition).map(|s| s.as_ref())
+                }) = self.declarations.get(&definition).map(|s| s.as_ref())
                 {
-                    declared_cleanup(declaration, types, arguments, component)
+                    declared_cleanup(declaration, &self.types, arguments, component)
                 } else {
                     // Compiler-private forward declarations compose their owned
                     // arguments before their snapshots are published.
@@ -1237,7 +1254,7 @@ impl Builder {
                 }
             }
         });
-        self.types.push(Type {
+        self.types.intern(Type {
             drop_allocation,
             ..Type::with_kind(kind)
         })
@@ -1300,7 +1317,7 @@ impl Builder {
                         let id = self.ty(base, passing);
                         let mut t = self.types.get(id).unwrap().clone();
                         t.modes.relation = Relation::environment();
-                        self.types.push(t)
+                        self.types.intern(t)
                     }
                     _ => self.ty(ty, passing),
                 };
@@ -1321,7 +1338,7 @@ impl Builder {
                 .filter_map(|(i, p)| match &self.types.get(p.ty).unwrap().kind {
                     TypeKind::Named { definition, .. }
                         if matches!(
-                            definition.0.name.as_str(),
+                            definition.path().0.name.as_str(),
                             "Io" | "Args"
                                 | "Env"
                                 | "Unsafe"
@@ -1354,10 +1371,12 @@ impl Builder {
             TypeKind::Named {
                 definition,
                 arguments,
-            } if *definition == hirsel_syntax::DefPath::core("Result") => match &arguments[1] {
-                GenericArgument::Type(t) => Some(*t),
-                _ => None,
-            },
+            } if *definition.path() == hirsel_syntax::DefPath::core("Result") => {
+                match &arguments[1] {
+                    GenericArgument::Type(t) => Some(*t),
+                    _ => None,
+                }
+            }
             _ => None,
         };
         self.params = self.outer_params.pop().unwrap();
@@ -1445,7 +1464,7 @@ impl Builder {
                 let id = self.ty(rest, passing);
                 let mut t = self.types.get(id).unwrap().clone();
                 set(&mut t);
-                return self.types.push(t);
+                return self.types.intern(t);
             }
         }
         let (base, qualifiers) = first_qualifier(text);
@@ -1521,7 +1540,7 @@ impl Builder {
                     TypeKind::Builtin { kind, arguments }
                 } else {
                     TypeKind::Named {
-                        definition: hirsel_syntax::DefPath::core(name),
+                        definition: DefId::intern(&hirsel_syntax::DefPath::core(name)),
                         arguments,
                     }
                 }
@@ -1532,7 +1551,7 @@ impl Builder {
         if passing != PassingMode::Take {
             t.modes.relation = Relation::environment();
         }
-        if matches!(&t.kind,TypeKind::Named{definition,..} if matches!(definition.0.name.as_str(),"Scope"|"Arena"|"Test"))
+        if matches!(&t.kind,TypeKind::Named{definition,..} if matches!(definition.path().0.name.as_str(),"Scope"|"Arena"|"Test"))
         {
             t.modes.relation = Relation::environment();
         }
@@ -1568,7 +1587,7 @@ impl Builder {
             }
             rest = tail.trim();
         }
-        self.types.push(t)
+        self.types.intern(t)
     }
 }
 

@@ -84,7 +84,8 @@ fn largest_std_bodies_validate_within_a_fixed_heap_budget() {
                 .unwrap_or_else(|| panic!("{name} is not in the program's closure"));
             let base = LIVE.load(Relaxed);
             PEAK.store(base, Relaxed);
-            let validation = hirsel_validate::validate(definition, signatures, &mut vec![]);
+            let validation =
+                hirsel_validate::validate(definition, &input.types, signatures, &mut vec![]);
             let peak = PEAK.load(Relaxed) - base;
             assert!(
                 validation.violations.is_empty(),

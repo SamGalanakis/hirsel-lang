@@ -471,11 +471,14 @@ fn http_progress_events(
     ticks: u64,
 ) -> Vec<hirsel_tir::CapabilityEvent> {
     let signature =
-        hirsel_types::SignatureProvider::signature(&mut program.engine, &run.entry).unwrap();
+        hirsel_types::SignatureProvider::signature(&mut program.engine, (&run.entry).into())
+            .unwrap();
     let runtime = program.engine.runtime_types().unwrap();
     let sources = program.engine.sources.clone();
     let mut library = hirsel_interp::library::Library::new(run, config).unwrap();
-    let arguments = library.entry_arguments(&signature).unwrap();
+    let arguments = library
+        .entry_arguments(program.engine.types(), &signature)
+        .unwrap();
     let mut operations = HttpClockProgress {
         library,
         ticks_per_read: ticks,

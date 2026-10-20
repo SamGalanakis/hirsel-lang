@@ -1,6 +1,6 @@
 //! GEN-5 is a program check, never a dependency on another definition's body
-//! inside a cached definition query. Every edge retains its owning type store
-//! and names the callee's lexical binder until collected. A strict edge on a
+//! inside a cached definition query. Every edge's arguments are session
+//! interner rows and name the callee's lexical binder until collected. A strict edge on a
 //! parameter cycle witnesses unbounded growth; resetting a parameter breaks
 //! that cycle. Size parameters are nodes too: a bare size argument is stable,
 //! and one nested in a type argument grows that type.
@@ -18,10 +18,10 @@ use hirsel_span::Span;
 use hirsel_syntax::{DefId, ExprId};
 use hirsel_tir::{Callee, CleanupAction, InstructionKind, Materialized, Rvalue, Terminator};
 use hirsel_types::{
-    GenericArgument, NameSite, SiteRef, SizeParamId, SizeParameterRef, TypeId,
-    TypeKind, TypeParamId, TypeParameterRef, TypeStore, UseKind,
+    GenericArgument, NameSite, SiteRef, SizeParamId, SizeParameterRef, TypeId, TypeInterner,
+    TypeKind, TypeParamId, TypeParameterRef, UseKind,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashSet};
 
 /// Why an owner's instance requires the callee's instance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -38,10 +38,10 @@ pub enum InstanceKind {
     /// A nominal reached from a value materialized into the owner.
     Materialized,
 }
-/// One instance requirement. `arguments` are rows of `types`, the owner's
-/// snapshot; argument `i` binds `BinderRef::Body { scope: binder, parameter: i }`
+/// One instance requirement. `arguments` are session interner rows;
+/// argument `i` binds `BinderRef::Body { scope: binder, parameter: i }`
 /// of `callee`. Free `Body` references in the arguments name the owner's
-/// parameters; when `owner_binder` is set (a signature-owned store), so do
+/// parameters; when `owner_binder` is set (a signature-owned root), so do
 /// `Bound` references at the owner's own depth.
 #[derive(Clone, Debug)]
 pub struct InstanceEdge {
@@ -51,7 +51,6 @@ pub struct InstanceEdge {
     pub kind: InstanceKind,
     pub callee: DefPath,
     pub binder: SiteRef,
-    pub types: TypeStore,
     pub arguments: Vec<GenericArgument>,
 }
 type Node = (DefPath, GenericParameterRef);
@@ -62,8 +61,8 @@ struct ParameterEdge {
     site: Span,
 }
 impl InstanceEdge {
-    /// Same requirement, comparing arguments structurally across stores.
-    pub fn same(&self, other: &Self) -> bool {
+    /// Same requirement, comparing type arguments semantically in `t`.
+    pub fn same(&self, other: &Self, t: &TypeInterner) -> bool {
         self.owner == other.owner
             && self.owner_binder == other.owner_binder
             && self.site == other.site
@@ -76,14 +75,12 @@ impl InstanceEdge {
                 .iter()
                 .zip(&other.arguments)
                 .all(|pair| match pair {
-                    (GenericArgument::Type(a), GenericArgument::Type(b)) => {
-                        hirsel_types::semantic_equal(&self.types, *a, &other.types, *b) == Ok(true)
-                    }
+                    (GenericArgument::Type(a), GenericArgument::Type(b)) => t.semantic_eq(*a, *b),
                     (GenericArgument::Size(a), GenericArgument::Size(b)) => a == b,
                     _ => false,
                 })
     }
-    fn parameter_edges(&self) -> Vec<ParameterEdge> {
+    fn parameter_edges(&self, t: &TypeInterner) -> Vec<ParameterEdge> {
         let mut edges = vec![];
         for (ordinal, argument) in self.arguments.iter().enumerate() {
             let to = match argument {
@@ -96,7 +93,7 @@ impl InstanceEdge {
                     SizeParamId(ordinal as u32),
                 )),
             };
-            for (parameter, grows) in parameters(&self.types, argument, self.owner_binder) {
+            for (parameter, grows) in parameters(t, argument, self.owner_binder) {
                 edges.push(ParameterEdge {
                     from: (self.owner.clone(), parameter),
                     to: (self.callee.clone(), to),
@@ -116,11 +113,11 @@ pub struct InstanceGraph {
 }
 impl InstanceGraph {
     /// Sites of growing edges that lie on a cycle, in source order.
-    pub fn growing_sites(&self) -> Vec<Span> {
+    pub fn growing_sites(&self, t: &TypeInterner) -> Vec<Span> {
         let edges: Vec<_> = self
             .edges
             .iter()
-            .flat_map(InstanceEdge::parameter_edges)
+            .flat_map(|edge| edge.parameter_edges(t))
             .map(|edge| {
                 (
                     (DefId::intern(&edge.from.0), edge.from.1),
@@ -133,9 +130,13 @@ impl InstanceGraph {
         crate::summary::growing_sites(&edges)
     }
     /// Same edges in the same order.
-    pub fn same(&self, other: &Self) -> bool {
+    pub fn same(&self, other: &Self, t: &TypeInterner) -> bool {
         self.edges.len() == other.edges.len()
-            && self.edges.iter().zip(&other.edges).all(|(a, b)| a.same(b))
+            && self
+                .edges
+                .iter()
+                .zip(&other.edges)
+                .all(|(a, b)| a.same(b, t))
     }
     /// What executing the selected snapshot instantiates, read only from the
     /// snapshot's own definitions, owners, representations and values.
@@ -157,7 +158,6 @@ impl InstanceGraph {
             let edge = Edge {
                 owner: path,
                 owner_binder: Some(owner.syntax.owner().site(NameSite::Item)),
-                types: &record.types,
                 site,
                 kind: InstanceKind::Representation,
             };
@@ -191,14 +191,13 @@ fn expression_site(owner: &NativeSource, expression: ExprId) -> Option<Span> {
 struct Edge<'a> {
     owner: &'a DefPath,
     owner_binder: Option<SiteRef>,
-    types: &'a TypeStore,
     site: Span,
     kind: InstanceKind,
 }
 struct Collector<'a> {
     input: &'a NativeInput,
     edges: Vec<InstanceEdge>,
-    /// First edge sharing the current owner store; cleanup chains repeat drops.
+    /// First edge of the current owner; cleanup chains repeat drops.
     store_start: usize,
 }
 impl Collector<'_> {
@@ -228,7 +227,6 @@ impl Collector<'_> {
             kind: edge.kind,
             callee: callee.clone(),
             binder,
-            types: edge.types.clone(),
             arguments: arguments.to_vec(),
         });
     }
@@ -236,12 +234,13 @@ impl Collector<'_> {
     /// another nominal's arguments: a nominal instance may drop its arguments.
     fn nominals(&mut self, edge: &Edge<'_>, roots: &[TypeId]) {
         let mut todo = roots.to_vec();
-        let mut seen = BTreeSet::new();
+        let types = self.input.types.clone();
+        let mut seen = HashSet::new();
         while let Some(ty) = todo.pop() {
             if !seen.insert(ty) {
                 continue;
             }
-            let Some(row) = edge.types.get(ty) else {
+            let Some(row) = types.get(ty) else {
                 continue;
             };
             match &row.kind {
@@ -250,7 +249,7 @@ impl Collector<'_> {
                     arguments,
                 } => {
                     if !arguments.is_empty() {
-                        self.push(edge, definition, arguments);
+                        self.push(edge, definition.path(), arguments);
                     }
                     todo.extend(type_arguments(arguments));
                 }
@@ -272,13 +271,11 @@ impl Collector<'_> {
         path: &DefPath,
         definition: &hirsel_tir::Definition,
     ) -> Result<(), QueryError> {
-        let types = &definition.types;
         self.store_start = self.edges.len();
         for body in &definition.bodies {
             let edge = |site, kind| Edge {
                 owner: path,
                 owner_binder: None,
-                types,
                 site,
                 kind,
             };
@@ -372,7 +369,6 @@ impl Collector<'_> {
         let edge = Edge {
             owner,
             owner_binder: None,
-            types: &value.types,
             site,
             kind: InstanceKind::Materialized,
         };

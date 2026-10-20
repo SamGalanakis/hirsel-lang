@@ -21,7 +21,7 @@ fn named_integer_dictionaries_materialize_declared_typed_records_on_compiler_thr
             panic!()
         };
         let value = engine.materialize_value(&path).unwrap();
-        assert!(semantic_equal(&value.types, value.root.ty, &declared.types, root).unwrap());
+        assert!(engine.types().semantic_eq(value.root.ty, root));
         let ValueKind::Construct {
             constructor: hirsel_tir::Constructor::Record(owner),
             fields,
@@ -33,14 +33,14 @@ fn named_integer_dictionaries_materialize_declared_typed_records_on_compiler_thr
         let [compare] = fields.as_slice() else {
             panic!()
         };
-        let TypeKind::Function(function) = &value.types.get(compare.ty).unwrap().kind else {
+        let TypeKind::Function(function) = &engine.types().get(compare.ty).unwrap().kind else {
             panic!()
         };
         assert_eq!(function.parameters.len(), 2);
         assert_eq!(function.allocation, Allocation::MayAllocate);
         assert_eq!(function.uses, Uses::Only(AuthoritySummary::inert()));
         assert!(matches!(
-            value.types.get(function.result).unwrap().kind,
+            engine.types().get(function.result).unwrap().kind,
             TypeKind::Primitive(Primitive::I32)
         ));
         let ValueKind::FunctionReference(helper) = &compare.kind else {

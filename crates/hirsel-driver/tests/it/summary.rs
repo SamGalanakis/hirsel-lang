@@ -3,8 +3,7 @@
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_types::{
-    ActualBindings, BinderRef, GenericArgument, NameSite, Size, SizeParameterRef,
-    TypeKind,
+    ActualBindings, BinderRef, GenericArgument, NameSite, Size, SizeParameterRef, TypeKind,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -80,7 +79,7 @@ fn generated_selections(
             .map(|(site, actuals)| {
                 (
                     *site,
-                    hirsel_tir::InstanceBodies::key(&actuals.types, &actuals.arguments),
+                    hirsel_tir::InstanceBodies::key(engine.types(), &actuals.arguments),
                 )
             })
             .collect();
@@ -90,14 +89,21 @@ fn generated_selections(
         let Some((summary, _)) = summaries.get(&owner) else {
             continue;
         };
-        let types = typed(engine, &owner).checked.types;
-        for call in summary.calls.iter().filter(|call| call.target_frame.is_none()) {
+        let types = engine.types().clone();
+        let memo = engine.type_memo().clone();
+        for call in summary
+            .calls
+            .iter()
+            .filter(|call| call.target_frame.is_none())
+        {
             let callee = call.callee.path().0.name.clone();
-            let actuals = hirsel_types::close_arguments(&types, &call.arguments, &bindings)
-                .unwrap();
-            let closed = hirsel_tir::InstanceBodies::key(&actuals.types, &actuals.arguments);
+            let actuals =
+                hirsel_types::close_arguments(&types, &memo, &call.arguments, &bindings).unwrap();
+            let closed = hirsel_tir::InstanceBodies::key(&types, &actuals.arguments);
             if callee == generated {
-                selected.extend(closed);
+                selected.extend(
+                    closed.map(|key| key.spellings().into_iter().map(String::from).collect()),
+                );
             } else if actuals.arguments.is_empty() {
                 pending.push((callee, BTreeMap::new()));
             } else if closed.is_some() {
@@ -141,7 +147,7 @@ pub fn main() -> Result[(), ()] {{
     assert_eq!(call.class, CallClass::Runtime);
     assert_eq!((call.owning_frame, call.target_frame), (0, None));
     // The argument stays open: forward's own parameter, not an actual.
-    let types = typed(&mut engine, "forward").checked.types;
+    let types = engine.types().clone();
     let [GenericArgument::Type(argument)] = &call.arguments[..] else {
         panic!("{:?}", call.arguments)
     };
@@ -149,19 +155,25 @@ pub fn main() -> Result[(), ()] {{
     else {
         panic!("closed argument")
     };
-    assert_eq!(*scope, forward.item_binder());
+    assert_eq!(scope, &forward.item_binder());
     // One stable edge forward.T -> width.T.
     let [(from, to, grows, _)] = &growth.edges[..] else {
         panic!("{:?}", growth.edges)
     };
     assert_eq!(
-        (from.0.path().0.name.as_str(), to.0.path().0.name.as_str(), *grows),
+        (
+            from.0.path().0.name.as_str(),
+            to.0.path().0.name.as_str(),
+            *grows
+        ),
         ("forward", "width", false)
     );
     let selected = generated_selections(&mut engine, &summaries, &["main"], "width");
     let names: BTreeSet<_> = selected.iter().map(|key| key.join(",")).collect();
     assert_eq!(names.len(), 2, "{names:?}");
-    assert!(names.iter().any(|n| n.ends_with("Point")) && names.iter().any(|n| n.ends_with("Box3")));
+    assert!(
+        names.iter().any(|n| n.ends_with("Point")) && names.iter().any(|n| n.ends_with("Box3"))
+    );
     // The same instances the checked bodies selected.
     let generated: Vec<_> = engine
         .generated_sources()
@@ -170,7 +182,10 @@ pub fn main() -> Result[(), ()] {{
         .collect();
     assert_eq!(generated.len(), 2, "{generated:?}");
     for name in ["Point", "Box3"] {
-        assert!(generated.iter().any(|text| text.contains(name)), "{generated:?}");
+        assert!(
+            generated.iter().any(|text| text.contains(name)),
+            "{generated:?}"
+        );
     }
 }
 
@@ -228,13 +243,22 @@ pub fn main() -> Result[(), ()] {
         panic!("{:?}", outer.staged)
     };
     assert_eq!(*site, outer.frames[2].site);
-    assert_eq!(BTreeSet::from_iter(inputs.iter().copied()), BTreeSet::from([n, m]));
+    assert_eq!(
+        BTreeSet::from_iter(inputs.iter().copied()),
+        BTreeSet::from([n, m])
+    );
     let [call] = &outer.calls[..] else {
         panic!("{:?}", outer.calls)
     };
     assert_eq!(call.target_frame, Some(1));
-    assert_eq!(call.binder, outer.item_binder().owner.site(outer.frames[1].site));
-    assert_eq!(&*call.arguments, &[GenericArgument::Size(Size::Parameter(n))]);
+    assert_eq!(
+        call.binder,
+        outer.item_binder().owner.site(outer.frames[1].site)
+    );
+    assert_eq!(
+        &*call.arguments,
+        &[GenericArgument::Size(Size::Parameter(n))]
+    );
     assert_eq!(call.class, CallClass::Runtime);
 
     // Staged selection over summaries: each size outer is called at selects
@@ -243,7 +267,13 @@ pub fn main() -> Result[(), ()] {
     let inputs: Vec<_> = inputs.to_vec();
     let expected: BTreeSet<_> = [2u64, 3]
         .into_iter()
-        .map(|k| (outer.owner, *site, inputs.iter().map(|_| k).collect::<Vec<_>>()))
+        .map(|k| {
+            (
+                outer.owner,
+                *site,
+                inputs.iter().map(|_| k).collect::<Vec<_>>(),
+            )
+        })
         .collect();
     assert_eq!(staged, expected);
 }
@@ -257,7 +287,11 @@ fn staged_selections(
     root: &str,
 ) -> BTreeSet<(hirsel_syntax::DefId, NameSite, Vec<u64>)> {
     let mut selected = BTreeSet::new();
-    let mut pending = vec![(root.to_string(), 0u32, BTreeMap::<SizeParameterRef, u64>::new())];
+    let mut pending = vec![(
+        root.to_string(),
+        0u32,
+        BTreeMap::<SizeParameterRef, u64>::new(),
+    )];
     let mut seen = BTreeSet::new();
     while let Some((owner, frame, bindings)) = pending.pop() {
         if !seen.insert((owner.clone(), frame, bindings.clone())) {
@@ -302,7 +336,10 @@ fn staged_selections(
                         Size::Parameter(p) => bindings[p],
                     };
                     actuals.insert(
-                        SizeParameterRef::body(call.binder, hirsel_types::SizeParamId(ordinal as u32)),
+                        SizeParameterRef::body(
+                            call.binder,
+                            hirsel_types::SizeParamId(ordinal as u32),
+                        ),
                         value,
                     );
                 }
@@ -319,8 +356,7 @@ fn a_generated_call_in_an_unexecuted_comptime_branch_is_selected_by_execution() 
         a_generated_call_in_an_unexecuted_comptime_branch_is_selected_by_execution_on_compiler_thread,
     );
 }
-fn a_generated_call_in_an_unexecuted_comptime_branch_is_selected_by_execution_on_compiler_thread()
-{
+fn a_generated_call_in_an_unexecuted_comptime_branch_is_selected_by_execution_on_compiler_thread() {
     let source = format!(
         "{WIDTH}
 fn pick() -> u64 uses {{}} {{

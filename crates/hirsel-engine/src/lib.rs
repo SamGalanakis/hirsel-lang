@@ -27,8 +27,8 @@ pub use diagnostics::*;
 pub use generic_graph::{InstanceEdge, InstanceGraph, InstanceKind};
 mod summary;
 pub use summary::{
-    CallClass, DefinitionSummary, Frame, FrameKind, GenericParameterRef, GrowthEdge, ParameterGrowth,
-    SummaryCall, growing_sites, summarize,
+    CallClass, DefinitionSummary, Frame, FrameKind, GenericParameterRef, GrowthEdge,
+    ParameterGrowth, SummaryCall, growing_sites, summarize,
 };
 mod semantic;
 mod snapshot;
@@ -56,9 +56,9 @@ use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::Symbol;
 pub use hirsel_interp::library::SimulationConfig;
 use hirsel_span::{FileId, SourceMap};
-pub use hirsel_syntax::DefPath;
 pub use hirsel_syntax::FileContext;
 use hirsel_syntax::{ContentHash, ItemSyntax, SyntaxFile, Token};
+pub use hirsel_syntax::{DefId, DefPath};
 pub use hirsel_tir::{CapabilityEvent, RunConfiguration, TirProvider};
 use hirsel_types::{CheckedBody, Resolution, Signature};
 pub use hirsel_types::{QueryError, QueryOutput, SignatureDependency, SignatureProvider};
@@ -265,6 +265,8 @@ pub trait FormatterPhase {
 pub trait ResolverPhase {
     fn resolve(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         syntax: std::sync::Arc<ItemSyntax>,
         signatures: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError>;
@@ -273,6 +275,8 @@ pub trait ResolverPhase {
 pub trait CheckerPhase {
     fn check(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         syntax: std::sync::Arc<ItemSyntax>,
         resolution: Resolution,
         signature: &Signature,
@@ -283,6 +287,8 @@ pub trait CheckerPhase {
 pub trait ModesPhase {
     fn check_modes(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         body: TypedBody,
         signature: &Signature,
         signatures: &mut dyn SignatureProvider,
@@ -292,14 +298,20 @@ pub trait ModesPhase {
 pub trait LoweringPhase {
     fn lower(
         &self,
-        body: AnalyzedBody,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
+        body: &AnalyzedBody,
+        comptime: &Comptime,
         signature: &Signature,
     ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError>;
     /// Lowers one checked subexpression as a zero-input compile-time initializer
     /// whose result is `result`; `constants` are its already materialized parts.
     fn lower_evaluation(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         body: &AnalyzedBody,
+        staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
         signature: &Signature,
         expression: hirsel_syntax::ExprId,
         result: hirsel_types::TypeId,

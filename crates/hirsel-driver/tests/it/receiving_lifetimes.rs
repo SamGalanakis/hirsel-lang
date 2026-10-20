@@ -17,7 +17,7 @@ fn a_fresh_global_replacement_keeps_fixed_local_storage_and_current_global_resul
         let definition = engine.lower_to_tir(&path).unwrap().value;
         let body = &definition.bodies[definition.entry.0 as usize];
         assert_eq!(
-            definition.types.get(body.result).unwrap().modes.relation,
+            engine.types().get(body.result).unwrap().modes.relation,
             hirsel_types::Relation::global()
         );
         let destination = body
@@ -30,8 +30,8 @@ fn a_fresh_global_replacement_keeps_fixed_local_storage_and_current_global_resul
             })
             .unwrap();
         assert_eq!(
-            definition
-                .types
+            engine
+                .types()
                 .get(body.locals[body.places[destination.0 as usize].root.0 as usize].ty)
                 .unwrap()
                 .modes

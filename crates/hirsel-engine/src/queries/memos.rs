@@ -99,7 +99,8 @@ fn diagnostics_value(parts: &mut Vec<Vec<u8>>, diagnostics: &[Diagnostic]) {
         parts.push(d.message.as_bytes().to_vec());
     }
 }
-fn provider_value(result: &Result<DefPath, QueryError>) -> ContentHash {
+/// The observed value of a provider lookup; a frozen provider records the same.
+pub(crate) fn provider_value(result: &Result<DefPath, QueryError>) -> ContentHash {
     let mut parts = vec![];
     match result {
         Ok(path) => parts.push(path.fingerprint().0.to_vec()),
@@ -199,11 +200,7 @@ impl QueryEngine {
     /// manifest revision when the caller set it rather than indexing. Indexing
     /// republishes it from the declarations, whose own changes are reads.
     fn build_inputs_revision(&self) -> Option<ContentHash> {
-        let revision = self
-            .adapters
-            .compiler_state
-            .as_ref()
-            .map(|s| s.borrow().manifest_revision)?;
+        let revision = self.declarations.inputs().manifest_revision;
         (Some(revision) != self.published_manifest).then_some(revision)
     }
     /// H(count, then (file path, header hash) for each candidate in occurrence order).
@@ -355,10 +352,10 @@ impl QueryEngine {
     pub(crate) fn observe(&mut self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
         Some(match *read {
             ReadKey::Signature(d) | ReadKey::ExecutedSignature(d) => {
-                signature_value(self.signature(d.path()).ok().map(|s| s.fingerprint))
+                signature_value(self.signature(d).ok().map(|s| s.fingerprint))
             }
             ReadKey::FailedSignature(d) => {
-                if self.signature(d.path()).is_ok() {
+                if self.signature(d).is_ok() {
                     tag("hirsel.read.signature-ok", &[])
                 } else {
                     self.failed_key_value(d.path())

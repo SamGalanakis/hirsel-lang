@@ -56,8 +56,9 @@ fn files_index_their_own_declarations_once() {
                 path
             };
             assert!(engine.resolve_definition(&path("f0_0")).is_ok());
-            let rows = hirsel_intern::work::read(hirsel_intern::work::Counter::ModuleDeclarationRows)
-                - before;
+            let rows =
+                hirsel_intern::work::read(hirsel_intern::work::Counter::ModuleDeclarationRows)
+                    - before;
             let items = 4 * files;
             assert!(
                 rows <= 3 * items,

@@ -5,7 +5,7 @@
 //! with the value it observed, so the memo the task produces can be verified
 //! by comparing observed values alone (design §1(b), "Typed reads").
 use super::SignatureSnapshot;
-use crate::memo::{LookupKey, ReadKey, ReadsBuilder};
+use crate::memo::{LookupKey, LookupSource, ReadKey, ReadsBuilder};
 use hirsel_syntax::{ContentHash, DefId, FileContext, PackageId, Path};
 use hirsel_types::{LookupOutput, QueryError, SignatureProvider, SignatureRef};
 use hirsel_validate::SignatureLookup;
@@ -17,18 +17,6 @@ fn failed(error: &QueryError) -> ContentHash {
         [format!("{error:?}").as_bytes()],
     )
 }
-/// The value a lookup read observes: its output, negative ones included.
-fn looked_up(output: &LookupOutput) -> ContentHash {
-    let result = match &output.result {
-        Ok(path) => path.fingerprint().0.to_vec(),
-        Err(error) => format!("{error:?}").into_bytes(),
-    };
-    ContentHash::of_parts(
-        "hirsel.read.lookup.v1",
-        [output.manifest.0.as_slice(), &[u8::from(output.result.is_ok())], &result],
-    )
-}
-
 /// A signature provider for bodies of `owner`'s package, reading `snapshot`.
 pub struct FrozenProvider<'a> {
     snapshot: &'a SignatureSnapshot,
@@ -36,7 +24,11 @@ pub struct FrozenProvider<'a> {
     reads: &'a mut ReadsBuilder,
 }
 impl<'a> FrozenProvider<'a> {
-    pub fn new(snapshot: &'a SignatureSnapshot, owner: PackageId, reads: &'a mut ReadsBuilder) -> Self {
+    pub fn new(
+        snapshot: &'a SignatureSnapshot,
+        owner: PackageId,
+        reads: &'a mut ReadsBuilder,
+    ) -> Self {
         Self {
             snapshot,
             owner,
@@ -64,7 +56,11 @@ impl<'a> FrozenProvider<'a> {
     /// V's digest of `d`'s view in the owner's universe, recording
     /// `ValidationView(d)`.
     pub fn validation_view(&mut self, d: DefId) -> Option<hirsel_validate::ValidationDigest> {
-        let digest = self.snapshot.validation(&self.owner).view(d).map(|(_, digest)| digest);
+        let digest = self
+            .snapshot
+            .validation(&self.owner)
+            .view(d)
+            .map(|(_, digest)| digest);
         self.reads.record(
             ReadKey::ValidationView(d),
             digest.map_or_else(ContentHash::default, |digest| digest.0),
@@ -79,7 +75,11 @@ impl<'a> FrozenProvider<'a> {
     }
     /// The owner universe's first heap role, recording `FirstHeap`.
     pub fn first_heap(&mut self) -> Option<DefId> {
-        let heap = self.snapshot.validation(&self.owner).first_heap().map(|(d, _)| d);
+        let heap = self
+            .snapshot
+            .validation(&self.owner)
+            .first_heap()
+            .map(|(d, _)| d);
         self.reads.record(
             ReadKey::FirstHeap,
             heap.map_or_else(ContentHash::default, |d| d.path().fingerprint()),
@@ -119,10 +119,19 @@ impl SignatureProvider for FrozenProvider<'_> {
     }
     fn lookup(&mut self, context: &FileContext, path: &Path) -> LookupOutput {
         let output = self.snapshot.lookup(context, path);
-        let segments: Vec<String> = path.segments.iter().map(|s| s.as_str().to_owned()).collect();
+        let segments: Vec<String> = path
+            .segments
+            .iter()
+            .map(|s| s.as_str().to_owned())
+            .collect();
         self.reads.record(
-            ReadKey::Lookup(LookupKey::of(context, path.package.as_ref(), &segments)),
-            looked_up(&output),
+            ReadKey::Lookup(LookupKey::of(
+                LookupSource::Provider,
+                context,
+                path.package.as_ref(),
+                &segments,
+            )),
+            crate::queries::memos::provider_value(&output.result),
         );
         output
     }

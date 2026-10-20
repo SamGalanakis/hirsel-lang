@@ -96,13 +96,10 @@ fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_ope
             producer.import_native_input(input.clone()).unwrap();
             let mut probe = entry_path(&default_context());
             probe.0.name = "probe".into();
-            let signatures: hirsel_validate::SignatureMap = input
-                .signatures
-                .iter()
-                .map(|(p, s)| (p.clone(), (**s).clone()))
-                .collect();
+            let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+            signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
             let definition = &input.definitions[&probe];
-            hirsel_validate::assert_valid(definition, &signatures);
+            hirsel_validate::assert_valid(definition, signatures.types(), &signatures);
             let mut forged = input.clone();
             let output = Arc::make_mut(forged.definitions.get_mut(&probe).unwrap());
             let mut count = 0;
@@ -122,7 +119,7 @@ fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_ope
             }
             assert_eq!(count, 1);
             assert!(
-                !hirsel_validate::validate(output, &signatures, &mut vec![])
+                !hirsel_validate::validate(output, &input.types, &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
@@ -227,11 +224,8 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
             }
             let mut probe = entry_path(&default_context());
             probe.0.name = "probe".into();
-            let signatures: hirsel_validate::SignatureMap = input
-                .signatures
-                .iter()
-                .map(|(p, s)| (p.clone(), (**s).clone()))
-                .collect();
+            let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+            signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
             let mut reordered = input.clone();
             let definition = Arc::make_mut(reordered.definitions.get_mut(&probe).unwrap());
             let child = &mut definition.bodies[definition.entry.0 as usize];
@@ -242,8 +236,8 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
                     let node = &child.cleanup_nodes[id.0 as usize];
                     if let CleanupAction::Drop { place, .. } = node.action {
                         let ty = child.places[place.0 as usize].ty;
-                        if matches!(&definition.types.get(ty).unwrap().kind,
-                            hirsel_types::TypeKind::Named { definition, .. } if definition.0.name == "Token") {
+                        if matches!(&&input.types.get(ty).unwrap().kind,
+                            hirsel_types::TypeKind::Named { definition, .. } if definition.path().0.name == "Token") {
                             drops.push(id);
                         }
                     }
@@ -256,7 +250,8 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
                 child.cleanup_nodes[chain[1].0 as usize].action.clone();
             child.cleanup_nodes[chain[1].0 as usize].action = first;
             let violations =
-                hirsel_validate::validate(definition, &signatures, &mut vec![]).violations;
+                hirsel_validate::validate(definition, &input.types, &signatures, &mut vec![])
+                    .violations;
             assert!(
                 violations.iter().any(|violation| matches!(
                     violation.kind,
@@ -285,7 +280,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
                 if let CleanupAction::Drop { place, .. } = &mut node.action {
                     let ty = child.places[place.0 as usize].ty;
                     if *place != moved
-                        && matches!(&definition.types.get(ty).unwrap().kind,hirsel_types::TypeKind::Named{definition,..} if definition.0.name=="Token")
+                        && matches!(&&input.types.get(ty).unwrap().kind,hirsel_types::TypeKind::Named{definition,..} if definition.path().0.name=="Token")
                     {
                         *place = moved;
                         changed += 1
@@ -294,7 +289,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
             }
             assert!(changed > 0);
             assert!(
-                !hirsel_validate::validate(definition, &signatures, &mut vec![])
+                !hirsel_validate::validate(definition, &input.types, &signatures, &mut vec![])
                     .violations
                     .is_empty()
             );
@@ -339,11 +334,8 @@ let xs:List[String]=["old\n"];probe(grant_stdout,unique xs);Ok(())}
         producer.import_native_input(input.clone()).unwrap();
         let mut probe = entry_path(&default_context());
         probe.0.name = "probe".into();
-        let signatures: hirsel_validate::SignatureMap = input
-            .signatures
-            .iter()
-            .map(|(path, signature)| (path.clone(), (**signature).clone()))
-            .collect();
+        let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+        signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
         let mut forged = input.clone();
         let definition = Arc::make_mut(forged.definitions.get_mut(&probe).unwrap());
         let body = &mut definition.bodies[definition.entry.0 as usize];
@@ -367,7 +359,9 @@ let xs:List[String]=["old\n"];probe(grant_stdout,unique xs);Ok(())}
         let mut source = source.clone();
         source.usage = hirsel_types::UseKind::Take;
         *value = hirsel_tir::Rvalue::Use(source);
-        let violations = hirsel_validate::validate(definition, &signatures, &mut vec![]).violations;
+        let violations =
+            hirsel_validate::validate(definition, &input.types, &signatures, &mut vec![])
+                .violations;
         assert!(
             violations.iter().any(|violation| matches!(
                 violation.kind,

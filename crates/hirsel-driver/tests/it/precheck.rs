@@ -23,6 +23,23 @@ impl Fixture {
         path
     }
 }
+/// `text`, a Debug rendering of a value, with each `TypeId(n)` that `serialize`
+/// writes named by that type's canonical table instead, so two sessions'
+/// interners compare.
+fn canonical_ids(
+    t: &hirsel_types::TypeInterner,
+    serialize: impl FnOnce() -> Vec<u8>,
+    mut text: String,
+) -> String {
+    let (_, ids) = hirsel_types::with_table_collection(serialize);
+    for id in ids {
+        let (table, _) = hirsel_types::encode_table(t, &[id]);
+        let content = hirsel_syntax::ContentHash::of_bytes(format!("{table:?}").as_bytes());
+        // The closing parenthesis keeps TypeId(1) from matching TypeId(12).
+        text = text.replace(&format!("{id:?}"), &format!("Type{content:?}"));
+    }
+    text
+}
 /// `Anchor(n)` in a Debug rendering, replaced by that anchor's file path and base.
 fn placed(sources: &hirsel_span::SourceMap, text: String) -> String {
     let mut out = String::new();
@@ -95,9 +112,22 @@ fn prechecked_std_products_equal_fresh_ones() {
             );
             // Anchors are process-unique, so each is named by its placement;
             // TypeId's Debug omits provenance.
+            // Each session interns its own rows: compare them by content.
+            let (types, value) = (prechecked.engine.types().clone(), &actual.value);
+            let actual_text = canonical_ids(
+                &types,
+                || serde_json::to_vec(value.as_ref()).unwrap(),
+                format!("{value:?}"),
+            );
+            let (types, value) = (reference.engine.types().clone(), &expected.value);
+            let expected_text = canonical_ids(
+                &types,
+                || serde_json::to_vec(value.as_ref()).unwrap(),
+                format!("{value:?}"),
+            );
             assert_eq!(
-                placed(&prechecked.engine.sources, format!("{:?}", actual.value)),
-                placed(&reference.engine.sources, format!("{:?}", expected.value)),
+                placed(&prechecked.engine.sources, actual_text),
+                placed(&reference.engine.sources, expected_text),
                 "{path}"
             );
             assert_eq!(actual.dependencies, expected.dependencies, "{path}");
@@ -108,12 +138,28 @@ fn prechecked_std_products_equal_fresh_ones() {
         let expected = reference.engine.export_native_input().unwrap();
         assert_eq!(actual.audits, expected.audits);
         assert_eq!(
-            format!("{:?}", actual.materialized),
-            format!("{:?}", expected.materialized)
+            canonical_ids(
+                &actual.types,
+                || serde_json::to_vec(&actual.materialized.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", actual.materialized)
+            ),
+            canonical_ids(
+                &expected.types,
+                || serde_json::to_vec(&expected.materialized.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", expected.materialized)
+            )
         );
         assert_eq!(
-            format!("{:?}", actual.constants),
-            format!("{:?}", expected.constants)
+            canonical_ids(
+                &actual.types,
+                || serde_json::to_vec(&actual.constants.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", actual.constants)
+            ),
+            canonical_ids(
+                &expected.types,
+                || serde_json::to_vec(&expected.constants.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", expected.constants)
+            )
         );
         prechecked.engine.import_native_input(actual).unwrap();
         for path in precheck.definitions() {
@@ -236,12 +282,28 @@ fn prechecked_native_products_equal_fresh_and_reject_forged_audits() {
         let expected = fresh.engine.export_native_input().unwrap();
         assert_eq!(actual.audits, expected.audits);
         assert_eq!(
-            format!("{:?}", actual.materialized),
-            format!("{:?}", expected.materialized)
+            canonical_ids(
+                &actual.types,
+                || serde_json::to_vec(&actual.materialized.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", actual.materialized)
+            ),
+            canonical_ids(
+                &expected.types,
+                || serde_json::to_vec(&expected.materialized.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", expected.materialized)
+            )
         );
         assert_eq!(
-            format!("{:?}", actual.constants),
-            format!("{:?}", expected.constants)
+            canonical_ids(
+                &actual.types,
+                || serde_json::to_vec(&actual.constants.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", actual.constants)
+            ),
+            canonical_ids(
+                &expected.types,
+                || serde_json::to_vec(&expected.constants.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", expected.constants)
+            )
         );
         for path in precheck.definitions() {
             for phase in [QueryKind::Check, QueryKind::Modes] {

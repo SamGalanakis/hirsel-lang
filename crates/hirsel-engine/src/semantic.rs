@@ -1,7 +1,7 @@
 //! Driver-owned syntax snapshots, header isolation and explicit manifest composition.
 use crate::*;
 use hirsel_types::DeclarationSite;
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub struct ResolverSnapshot {
@@ -38,20 +38,8 @@ impl CompilerState {
     }
 }
 fn resolver_expected() -> hirsel_resolve::ExpectedTypes {
-    let registry = crate::registry::BuiltinRegistry::new();
     hirsel_resolve::ExpectedTypes {
-        available_variants: registry
-            .signatures()
-            .flat_map(|s| {
-                s.types.iter().flat_map(|(_, t)| {
-                    if let hirsel_types::TypeKind::Variant(variants) = &t.kind {
-                        variants.iter().map(|v| v.name.clone()).collect::<Vec<_>>()
-                    } else {
-                        vec![]
-                    }
-                })
-            })
-            .collect(),
+        available_variants: crate::registry::variant_names().clone(),
         ..Default::default()
     }
 }
@@ -61,6 +49,8 @@ pub struct ResolverAdapter {
 impl ResolverPhase for ResolverAdapter {
     fn resolve(
         &self,
+        t: &hirsel_types::TypeInterner,
+        _: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError> {
@@ -73,6 +63,7 @@ impl ResolverPhase for ResolverAdapter {
             &siblings,
             hirsel_resolve::ResolveView::Item,
             &index,
+            t,
             provider,
             &resolver_expected(),
         );
@@ -96,6 +87,8 @@ pub struct SignatureAdapter {
 impl SignaturePhase for SignatureAdapter {
     fn signature_items(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         candidates: &[Arc<ItemSyntax>],
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
@@ -105,29 +98,42 @@ impl SignaturePhase for SignatureAdapter {
             .get(1)
             .or_else(|| candidates.first())
             .ok_or(QueryError::NotImplemented)?;
-        self.signature_with_candidates(syntax.clone(), provider, Some(candidates), None)
+        self.signature_with_candidates(t, m, syntax.clone(), provider, Some(candidates), None)
     }
     fn signature(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
-        self.signature_with_candidates(syntax, provider, None, None)
+        self.signature_with_candidates(t, m, syntax, provider, None, None)
     }
     fn staged_signature(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         candidates: &[Arc<ItemSyntax>],
         provider: &mut dyn SignatureProvider,
         stage: hirsel_types::GroupStage,
     ) -> Result<Signature, QueryError> {
         let syntax = candidates.first().ok_or(QueryError::NotImplemented)?;
-        self.signature_with_candidates(syntax.clone(), provider, Some(candidates), Some(stage))
-            .map(|output| output.value)
+        self.signature_with_candidates(
+            t,
+            m,
+            syntax.clone(),
+            provider,
+            Some(candidates),
+            Some(stage),
+        )
+        .map(|output| output.value)
     }
 }
 impl SignatureAdapter {
     fn signature_with_candidates(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
         candidates: Option<&[Arc<ItemSyntax>]>,
@@ -135,9 +141,9 @@ impl SignatureAdapter {
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let item = &syntax.item;
         if let Some(owner) = hirsel_check_protocol::fact::fact_owner(&item.definition) {
-            let owner = provider.signature(&owner)?;
+            let owner = provider.signature(DefId::intern(&owner))?;
             return Ok(QueryOutput {
-                value: hirsel_check_protocol::fact::fact_signature(&owner)?,
+                value: hirsel_check_protocol::fact::fact_signature(t, &owner)?,
                 diagnostics: vec![],
                 dependencies: hirsel_check_protocol::fact::fact_dependencies(&owner),
             });
@@ -173,6 +179,7 @@ impl SignatureAdapter {
                 &siblings,
                 hirsel_resolve::ResolveView::Header,
                 &index,
+                t,
                 provider,
                 &resolver_expected(),
             ))
@@ -202,6 +209,8 @@ impl SignatureAdapter {
         }
         let output = self.phases.normalize_signature(
             hirsel_check_protocol::header::Input {
+                types: t,
+                memo: m,
                 syntax: &syntax,
                 context: &context,
                 resolution: &resolution,

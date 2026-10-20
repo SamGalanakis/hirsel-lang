@@ -65,18 +65,21 @@ impl BuiltinRegistry {
     /// Lowered intrinsics disappear into TIR and have no executable operation row.
     pub fn operation_inventory(&self) -> BTreeMap<OperationKey, OperationRecord> {
         let dispatch = hirsel_interp::library::operation_dispatch();
+        let types = self.types();
         self.signatures()
             .filter_map(|signature| {
                 let SignatureKind::Function(function) = &signature.kind else {
                     return None;
                 };
-                if hirsel_types::core_roles::LoweredIntrinsic::for_definition(&signature.definition)
-                    .is_some()
+                if hirsel_types::core_roles::LoweredIntrinsic::for_definition(
+                    signature.definition.path(),
+                )
+                .is_some()
                 {
                     return None;
                 }
                 let key = OperationKey {
-                    definition: signature.definition.clone(),
+                    definition: signature.definition.path().clone(),
                     declaration_digest: signature.fingerprint,
                 };
                 let parameters: Vec<_> = function
@@ -86,16 +89,14 @@ impl BuiltinRegistry {
                     .map(|(ordinal, p)| OperationParameter {
                         ordinal: ParamId(ordinal as u32),
                         passing: p.passing,
-                        cleanup: signature
-                            .types
+                        cleanup: types
                             .get(p.ty)
                             .expect("declared parameter type")
                             .drop_allocation
                             .clone(),
                     })
                     .collect();
-                let result_cleanup = signature
-                    .types
+                let result_cleanup = types
                     .get(function.result)
                     .expect("declared result type")
                     .drop_allocation
@@ -119,7 +120,7 @@ impl BuiltinRegistry {
                         allocates,
                         observable: true,
                     },
-                    reference: dispatch.get(&signature.definition).copied(),
+                    reference: dispatch.get(signature.definition.path()).copied(),
                 };
                 Some((key, record))
             })

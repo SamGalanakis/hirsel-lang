@@ -112,10 +112,17 @@ fn core_entries(core_docs: &str) -> Vec<Entry> {
     let mut out = Vec::new();
     for s in registry.signatures().filter(|s| {
         s.metadata.visibility != Visibility::Private
-            && !s.definition.0.modules.iter().any(|m| m.starts_with('$'))
+            && !s
+                .definition
+                .path()
+                .0
+                .modules
+                .iter()
+                .any(|m| m.starts_with('$'))
     }) {
-        let name = short(&s.definition);
+        let name = short(s.definition.path());
         let printer = CorePrinter {
+            types: registry.types(),
             signature: s,
             generics: s.generics(),
             parameters: Vec::new(),
@@ -138,7 +145,7 @@ fn core_entries(core_docs: &str) -> Vec<Entry> {
                     None
                 } else {
                     t.representation
-                        .filter(|id| match &s.types.get(*id).unwrap().kind {
+                        .filter(|id| match &registry.types().row(*id).kind {
                             TypeKind::Builtin { kind, .. } => format!("{kind:?}") != name,
                             TypeKind::Primitive(_) => false,
                             _ => true,
@@ -206,7 +213,7 @@ fn core_entries(core_docs: &str) -> Vec<Entry> {
                 if let Some(Type {
                     kind: TypeKind::Variant(variants),
                     ..
-                }) = t.representation.and_then(|id| s.types.get(id))
+                }) = t.representation.and_then(|id| registry.types().get(id))
                 {
                     for variant in variants.iter() {
                         out.push(Entry {
@@ -630,6 +637,7 @@ pub fn render_json(entries: &[Entry]) -> String {
 }
 
 struct CorePrinter<'a> {
+    types: &'a hirsel_types::TypeInterner,
     signature: &'a Signature,
     generics: &'a [GenericParameter],
     /// The parameter names of the function being printed, which brands name (PROV-1).
@@ -699,6 +707,7 @@ impl CorePrinter<'_> {
     }
     fn function(&self, f: &FunctionType) -> String {
         let nested = CorePrinter {
+            types: self.types,
             signature: self.signature,
             generics: if f.generics.is_empty() {
                 self.generics
@@ -746,7 +755,7 @@ impl CorePrinter<'_> {
     /// The type with its brand, `siblings` naming the fields of the record it is a field of
     /// (PROV-5).
     fn branded(&self, id: TypeId, siblings: &[String]) -> String {
-        let t = self.signature.types.get(id).unwrap();
+        let t = self.types.row(id);
         let base = self.unbranded(t);
         if t.brand.alternatives.is_empty() {
             return base;
@@ -797,11 +806,11 @@ impl CorePrinter<'_> {
             TypeKind::Named {
                 definition,
                 arguments,
-            } => self.applied(&short(definition), arguments),
+            } => self.applied(&short(definition.path()), arguments),
             TypeKind::Builtin { kind, arguments } => self.applied(&format!("{kind:?}"), arguments),
             TypeKind::Box(id) => format!("box {}", self.ty(*id)),
             TypeKind::Record(fields) => {
-                let names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+                let names: Vec<String> = fields.iter().map(|f| f.name.to_string()).collect();
                 format!(
                     "{{ {} }}",
                     fields

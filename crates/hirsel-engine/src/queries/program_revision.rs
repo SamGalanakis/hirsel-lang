@@ -135,8 +135,12 @@ impl QueryEngine {
             .map(|d| d.definition.clone())
             .collect();
         let mut content = vec![
-            hirsel_types::encoding::canonical_encoding(&signature.value, &signature.dependencies)
-                .map_err(|e| operational(format!("signature encoding: {e:?}")))?,
+            hirsel_types::encoding::canonical_encoding(
+                &self.types,
+                &signature.value,
+                &signature.dependencies,
+            )
+            .map_err(|e| operational(format!("signature encoding: {e:?}")))?,
         ];
         if self.items.contains_key(path) {
             let analyzed = self.mode_query(path)?;

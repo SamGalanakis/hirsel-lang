@@ -113,8 +113,13 @@ impl QueryEngine {
         &mut self,
         owner: &DefPath,
         reads: &mut Recording,
-        step: impl FnOnce(&mut Recorder<'_>) -> Result<T, QueryError>,
+        step: impl FnOnce(
+            &hirsel_types::TypeInterner,
+            &hirsel_types::TypeMemo,
+            &mut Recorder<'_>,
+        ) -> Result<T, QueryError>,
     ) -> Result<T, QueryError> {
+        let (types, memo) = (self.types.clone(), self.memo.clone());
         let mut recorder = Recorder {
             owner: owner.clone(),
             private_shapes: true,
@@ -123,7 +128,7 @@ impl QueryEngine {
             reads: std::mem::take(&mut reads.reads),
             groups: BTreeMap::new(),
         };
-        let result = step(&mut recorder);
+        let result = step(&types, &memo, &mut recorder);
         reads.observed = recorder.observed;
         reads.reads = recorder.reads;
         result
@@ -363,30 +368,34 @@ impl QueryEngine {
         let (Some(signer), Some(resolver), Some(checker), Some(modes)) = adapters else {
             return Err(QueryError::NotImplemented);
         };
-        let constant = self.recorded(definition, reads, |r| signer.signature(file.clone(), r))?;
+        let constant = self.recorded(definition, reads, |t, m, r| {
+            signer.signature(t, m, file.clone(), r)
+        })?;
         if has_errors(&constant.diagnostics) {
             return Err(QueryError::Diagnostics(constant.diagnostics));
         }
         let mut constant = constant.value;
-        constant.fingerprint =
-            hirsel_types::encoding::fingerprint(&constant, &[]).map_err(|e| {
+        constant.fingerprint = hirsel_types::encoding::fingerprint(&self.types, &constant, &[])
+            .map_err(|e| {
                 QueryError::Operational(hirsel_types::OperationalFailure {
                     operation: "typed generation".into(),
                     message: format!("generator signature: {e:?}"),
                 })
             })?;
-        let resolution = self.recorded(definition, reads, |r| resolver.resolve(file.clone(), r))?;
+        let resolution = self.recorded(definition, reads, |t, m, r| {
+            resolver.resolve(t, m, file.clone(), r)
+        })?;
         if has_errors(&resolution.diagnostics) {
             return Err(QueryError::Diagnostics(resolution.diagnostics));
         }
-        let typed = self.recorded(definition, reads, |r| {
-            checker.check(file.clone(), resolution.value, &constant, r)
+        let typed = self.recorded(definition, reads, |t, m, r| {
+            checker.check(t, m, file.clone(), resolution.value, &constant, r)
         })?;
         if has_errors(&typed.diagnostics) {
             return Err(QueryError::Diagnostics(typed.diagnostics));
         }
-        let analyzed = self.recorded(definition, reads, |r| {
-            modes.check_modes(typed.value, &constant, r)
+        let analyzed = self.recorded(definition, reads, |t, m, r| {
+            modes.check_modes(t, m, typed.value, &constant, r)
         })?;
         if has_errors(&analyzed.diagnostics) {
             return Err(QueryError::Diagnostics(analyzed.diagnostics));
@@ -403,9 +412,9 @@ impl QueryEngine {
             .find(|r| r.expression == value)
             .map_or(ty, |r| r.ty);
         self.prepare_materialization_environment();
-        let constants = self.prepare_values(&analyzed, &constant)?;
-        let (result, _, _) =
-            self.run_evaluation(&analyzed, &constant, value, value, ty, &constants, &[])?;
+        let constants = self.prepare_values(&analyzed, &[], &constant)?;
+        let (result, _) =
+            self.run_evaluation(&analyzed, &[], &constant, value, value, ty, &constants, &[])?;
         let site = site.span;
         let unexpected = || {
             QueryError::Operational(hirsel_types::OperationalFailure {
@@ -554,16 +563,19 @@ impl QueryEngine {
         }
         let header = Arc::new(header);
         let literal = Arc::new(literal);
-        let normalized =
-            self.recorded(definition, reads, |r| signer.signature(literal.clone(), r))?;
+        let normalized = self.recorded(definition, reads, |t, m, r| {
+            signer.signature(t, m, literal.clone(), r)
+        })?;
         if has_errors(&normalized.diagnostics) {
             return Err(QueryError::Diagnostics(normalized.diagnostics));
         }
-        let declared = self.recorded(definition, reads, |r| signer.signature(header.clone(), r))?;
+        let declared = self.recorded(definition, reads, |t, m, r| {
+            signer.signature(t, m, header.clone(), r)
+        })?;
         if has_errors(&declared.diagnostics) {
             return Err(QueryError::Diagnostics(declared.diagnostics));
         }
-        if !same_function(&declared.value, &normalized.value) {
+        if !same_function(&self.types, &declared.value, &normalized.value) {
             return Err(diagnostic(
                 "LANG-7",
                 header_span,
@@ -621,13 +633,14 @@ impl QueryEngine {
             ],
         );
         let syntax = Arc::new(syntax);
-        let resolution =
-            self.recorded(definition, reads, |r| resolver.resolve(syntax.clone(), r))?;
+        let resolution = self.recorded(definition, reads, |t, m, r| {
+            resolver.resolve(t, m, syntax.clone(), r)
+        })?;
         if has_errors(&resolution.diagnostics) {
             return Err(QueryError::Diagnostics(resolution.diagnostics));
         }
-        self.recorded(definition, reads, |r| {
-            checker.check(syntax.clone(), resolution.value, signature, r)
+        self.recorded(definition, reads, |t, m, r| {
+            checker.check(t, m, syntax.clone(), resolution.value, signature, r)
         })
     }
 }
@@ -635,13 +648,16 @@ impl QueryEngine {
 /// Whether a literal's normalized header has the declared function type:
 /// passing modes, parameter types, result and `uses`. Names, labels,
 /// attributes and contracts belong to the declaration.
-fn same_function(declared: &Signature, literal: &Signature) -> bool {
+fn same_function(
+    t: &hirsel_types::TypeInterner,
+    declared: &Signature,
+    literal: &Signature,
+) -> bool {
     let (SignatureKind::Function(d), SignatureKind::Function(l)) = (&declared.kind, &literal.kind)
     else {
         return false;
     };
-    let equal =
-        |a, b| hirsel_types::semantic_equal(&declared.types, a, &literal.types, b) == Ok(true);
+    let equal = |a, b| t.semantic_eq(a, b);
     d.parameters.len() == l.parameters.len()
         && d.parameters
             .iter()
@@ -746,15 +762,15 @@ impl QueryEngine {
         });
         self.start(definition, QueryKind::Check)?;
         let result = self
-            .recorded(definition, &mut reads, |r| {
-                resolver.resolve(file.clone(), r)
+            .recorded(definition, &mut reads, |t, m, r| {
+                resolver.resolve(t, m, file.clone(), r)
             })
             .and_then(|resolution| {
                 if has_errors(&resolution.diagnostics) {
                     return Err(QueryError::Diagnostics(resolution.diagnostics));
                 }
-                self.recorded(definition, &mut reads, |r| {
-                    checker.check(file.clone(), resolution.value, &signature.value, r)
+                self.recorded(definition, &mut reads, |t, m, r| {
+                    checker.check(t, m, file.clone(), resolution.value, &signature.value, r)
                 })
             });
         let key = MemoKey::new(QueryKind::Check, id);
@@ -774,21 +790,21 @@ impl QueryEngine {
         actuals: &hirsel_types::Actuals,
         site: Span,
     ) -> Result<DefPath, QueryError> {
-        let key = hirsel_tir::InstanceBodies::key(&actuals.types, &actuals.arguments).ok_or_else(
-            || {
+        let key =
+            hirsel_tir::InstanceBodies::key(&self.types, &actuals.arguments).ok_or_else(|| {
                 QueryError::Operational(hirsel_types::OperationalFailure {
                     operation: "generated instance".into(),
                     message: format!("{declaration} selected at open arguments"),
                 })
-            },
-        )?;
+            })?;
+        let declaration_id = DefId::intern(declaration);
         if let Some(instance) = self
             .instance_bodies
             .instances
-            .get(declaration)
+            .get(&declaration_id)
             .and_then(|instances| instances.get(&key))
         {
-            return Ok(instance.definition.clone());
+            return Ok(instance.definition.path().clone());
         }
         let snapshot = self.snapshot(declaration)?;
         let source = &snapshot.item;
@@ -804,9 +820,10 @@ impl QueryEngine {
         let selected = self
             .instance_bodies
             .instances
-            .get(declaration)
+            .get(&declaration_id)
             .map_or(0, |instances| instances.len());
-        let instance_name = format!("{}[{}]", declaration, key.join(", "));
+        let spellings = key.spellings();
+        let instance_name = format!("{}[{}]", declaration, spellings.join(", "));
         if selected >= MAX_GENERATED_INSTANCES {
             let mut d = Diagnostic::error(
                 const { hirsel_diag::RuleId::of("CT-1") },
@@ -877,7 +894,7 @@ impl QueryEngine {
                 _ => None,
             };
             match parameter {
-                Some(p) => text.push_str(&key[p]),
+                Some(p) => text.push_str(spellings[p]),
                 None => text.push_str(spelling),
             }
         }
@@ -887,7 +904,7 @@ impl QueryEngine {
                 "instance${}",
                 ContentHash::of_parts(
                     "hirsel.generated-instance.v1",
-                    key.iter().map(|k| k.as_bytes())
+                    spellings.iter().map(|k| k.as_bytes())
                 )
                 .0[..8]
                     .iter()
@@ -936,19 +953,16 @@ impl QueryEngine {
         // readers; the signature snapshot now includes it.
         self.note_inputs([instance.clone()]);
         self.retire_snapshot();
-        self.instance_bodies
-            .declarations
-            .insert(declaration.clone());
+        self.instance_bodies.declarations.insert(declaration_id);
         self.instance_bodies
             .instances
-            .entry(declaration.clone())
+            .entry(declaration_id)
             .or_default()
             .insert(
                 key,
                 hirsel_tir::InstanceBody {
-                    types: (*actuals.types).clone(),
                     arguments: actuals.arguments.clone(),
-                    definition: instance.clone(),
+                    definition: DefId::intern(&instance),
                 },
             );
         // The instance's diagnostics also cite the call that selected it.
@@ -1002,7 +1016,7 @@ impl QueryEngine {
                 .map(|(site, actuals)| {
                     (
                         *site,
-                        hirsel_tir::InstanceBodies::key(&actuals.types, &actuals.arguments),
+                        hirsel_tir::InstanceBodies::key(&self.types, &actuals.arguments),
                     )
                 })
                 .collect();
@@ -1023,27 +1037,34 @@ impl QueryEngine {
             }
             let analyzed = self.mode_query(&path)?;
             let (summary, _) = crate::summary::summarize(self.types(), &analyzed.value.typed);
-            let types = analyzed.value.typed.checked.types.clone();
             // Calls that name a definition: written ones, then planned instances.
             let calls: Vec<_> = summary
                 .calls
                 .iter()
                 .filter(|call| call.target_frame.is_none())
-                .map(|call| (call.callee.path().clone(), call.binder, call.arguments.clone(), call.site))
+                .map(|call| {
+                    (
+                        call.callee.path().clone(),
+                        call.binder,
+                        call.arguments.clone(),
+                        call.site,
+                    )
+                })
                 .collect();
             for (callee, binder, arguments, site) in calls {
                 if !self.items.contains_key(&callee) {
                     continue;
                 }
-                let actuals = hirsel_types::close_arguments(&types, &arguments, &bindings)
-                    .map_err(|e| {
+                let actuals =
+                    hirsel_types::close_arguments(&self.types, &self.memo, &arguments, &bindings)
+                        .map_err(|e| {
                         QueryError::Operational(hirsel_types::OperationalFailure {
                             operation: "generated instance".into(),
                             message: format!("closing {callee} arguments: {e:?}"),
                         })
                     })?;
                 let closed =
-                    hirsel_tir::InstanceBodies::key(&actuals.types, &actuals.arguments).is_some();
+                    hirsel_tir::InstanceBodies::key(&self.types, &actuals.arguments).is_some();
                 if self.instance_bodied(&callee) {
                     if closed {
                         let instance = self.generated_instance(&callee, &actuals, site)?;
@@ -1067,14 +1088,12 @@ impl QueryEngine {
     pub(crate) fn resolve_instance(
         &mut self,
         path: &DefPath,
-        types: &hirsel_types::TypeStore,
         arguments: &[hirsel_types::GenericArgument],
     ) -> Result<Option<DefPath>, QueryError> {
         if !self.instance_bodied(path) {
             return Ok(None);
         }
         let actuals = hirsel_types::Actuals {
-            types: Arc::new(types.clone()),
             arguments: arguments.to_vec(),
         };
         let site = self.snapshot(path).map(|s| s.item.name_span)?;
@@ -1086,15 +1105,16 @@ impl QueryEngine {
     pub(crate) fn instance_bodies(&self, paths: &BTreeSet<DefPath>) -> hirsel_tir::InstanceBodies {
         let mut table = hirsel_tir::InstanceBodies::default();
         for path in paths.iter().filter(|p| self.instance_bodied(p)) {
-            table.declarations.insert(path.clone());
-            if let Some(instances) = self.instance_bodies.instances.get(path) {
-                let kept: BTreeMap<_, _> = instances
+            let id = DefId::intern(path);
+            table.declarations.insert(id);
+            if let Some(instances) = self.instance_bodies.instances.get(&id) {
+                let kept: std::collections::HashMap<_, _> = instances
                     .iter()
-                    .filter(|(_, i)| paths.contains(&i.definition))
-                    .map(|(k, i)| (k.clone(), i.clone()))
+                    .filter(|(_, i)| paths.contains(i.definition.path()))
+                    .map(|(k, i)| (*k, i.clone()))
                     .collect();
                 if !kept.is_empty() {
-                    table.instances.insert(path.clone(), kept);
+                    table.instances.insert(id, kept);
                 }
             }
         }

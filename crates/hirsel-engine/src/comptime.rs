@@ -3,7 +3,7 @@ use crate::memo::DepthEvidence;
 use crate::*;
 use hirsel_interp::Outcome;
 use hirsel_span::Span;
-use hirsel_syntax::{ExprId, ExprKind};
+use hirsel_syntax::{DefId, ExprId, ExprKind};
 use hirsel_tir::{Constant, DefinitionRef, TirProvider};
 use hirsel_tir::{Materialized, ValueKind};
 use hirsel_types::{
@@ -62,15 +62,14 @@ impl TirProvider for Evaluation<'_> {
     fn instance_body(
         &mut self,
         path: &DefPath,
-        types: &hirsel_types::TypeStore,
         arguments: &[hirsel_types::GenericArgument],
     ) -> Result<Option<DefPath>, QueryError> {
-        self.engine.resolve_instance(path, types, arguments)
+        self.engine.resolve_instance(path, arguments)
     }
 
     fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
         self.engine.read_implementation(path);
-        if *path == self.root.path {
+        if path == self.root.path.path() {
             Ok(self.root.clone())
         } else {
             let definition = self.engine.definition(path)?;
@@ -99,9 +98,11 @@ impl QueryEngine {
         Some(
             value
                 .executed
-                .representations
                 .iter()
-                .map(|(path, digest)| (path.clone(), *digest))
+                .filter_map(|(read, digest)| match read {
+                    crate::memo::ReadKey::Representation(d) => Some((d.path().clone(), *digest)),
+                    _ => None,
+                })
                 .collect(),
         )
     }
@@ -208,7 +209,7 @@ impl QueryEngine {
             let hirsel_syntax::ItemKind::Const { value, .. } = body.typed.syntax.item.kind else {
                 return Err(operational("constant artifact has a non-constant owner"));
             };
-            let constants = self.prepare_values(body, &signature)?;
+            let constants = self.prepare_values(body, &[], &signature)?;
             let constant = if let Some((_, constant)) = constants.iter().find(|(e, _)| *e == value)
             {
                 constant.clone()
@@ -221,7 +222,7 @@ impl QueryEngine {
                     .find(|r| r.expression == value)
                     .ok_or_else(|| operational("missing constant expression type"))?
                     .ty;
-                self.evaluate_value(body, &signature, value, value, ty, &constants)?
+                self.evaluate_value(body, &[], &signature, value, value, ty, &constants)?
             };
             let executed = self
                 .execution_stack
@@ -301,30 +302,38 @@ impl QueryEngine {
             None => DepthEvidence::leaf(limit),
         }
     }
-    pub(crate) fn prepare_comptime(
+    /// The compile-time products lowering `analyzed` reads.
+    pub fn prepare_comptime(
         &mut self,
-        analyzed: &mut AnalyzedBody,
+        analyzed: &AnalyzedBody,
         signature: &Signature,
-    ) -> Result<(), QueryError> {
+    ) -> Result<Comptime, QueryError> {
         self.prepare_materialization_environment();
-        self.prepare_staged_types(analyzed)?;
+        let staged = self.prepare_staged_types(analyzed)?;
         if self.adapters.compiler_state.is_none() {
-            return Ok(());
+            return Ok(Comptime {
+                materialized: vec![],
+                staged,
+            });
         }
-        if matches!(
+        let materialized = if matches!(
             signature.kind,
             hirsel_types::SignatureKind::Const { ty: _, .. }
         ) {
-            analyzed.materialized = self.evaluate_constant(&signature.definition)?.substitutions;
-            Ok(())
+            self.evaluate_constant(signature.definition.path())?
+                .substitutions
         } else {
-            analyzed.materialized = self.prepare_values(analyzed, signature)?;
-            Ok(())
-        }
+            self.prepare_values(analyzed, &staged, signature)?
+        };
+        Ok(Comptime {
+            materialized,
+            staged,
+        })
     }
     pub(crate) fn prepare_values(
         &mut self,
         analyzed: &AnalyzedBody,
+        staged: &[(ExprId, TypeId)],
         signature: &Signature,
     ) -> Result<Vec<(ExprId, Materialized)>, QueryError> {
         let file = &analyzed.typed.syntax;
@@ -349,8 +358,8 @@ impl QueryEngine {
                         .find(|r| r.expression == *expression)
                         .ok_or_else(|| operational("missing constant reference type"))?
                         .ty;
-                    value.root.ty = hirsel_types::import_type(&checked.types, ty, &mut value.types)
-                        .map_err(|e| operational(format!("constant reference import: {e:?}")))?;
+                    // One session interner: the reference has the checked type.
+                    value.root.ty = ty;
                     constants.push((*expression, value));
                 }
             }
@@ -373,11 +382,14 @@ impl QueryEngine {
             (s.end - s.start, s.start)
         });
         for (expression, child, ty) in expressions {
-            if !hirsel_check_protocol::body::comptime_inputs(file, checked, expression).is_empty() {
+            if !hirsel_check_protocol::body::comptime_inputs(&self.types, file, checked, expression)
+                .is_empty()
+            {
                 continue;
             }
-            let value =
-                self.evaluate_value(analyzed, signature, expression, child, ty, &constants)?;
+            let value = self.evaluate_value(
+                analyzed, staged, signature, expression, child, ty, &constants,
+            )?;
             constants.push((expression, value));
         }
         for repeat in &file.tree.repeats {
@@ -401,7 +413,7 @@ impl QueryEngine {
             let ValueKind::Constant(Constant::Integer(length)) = value.root.kind else {
                 return Err(operational("repeat count is not an evaluated u64"));
             };
-            let valid = match &checked.types.get(row.ty).unwrap().kind {
+            let valid = match &self.types.row(row.ty).kind {
                 hirsel_types::TypeKind::Builtin {
                     kind: hirsel_types::BuiltinType::Array,
                     ..
@@ -427,20 +439,33 @@ impl QueryEngine {
         Ok(constants)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn evaluate_value(
         &mut self,
         analyzed: &AnalyzedBody,
+        staged: &[(ExprId, TypeId)],
         signature: &Signature,
         expression: ExprId,
         child: ExprId,
         ty: TypeId,
         constants: &[(ExprId, Materialized)],
     ) -> Result<Materialized, QueryError> {
-        self.evaluate_sized_value(analyzed, signature, expression, child, ty, constants, &[])
+        self.evaluate_sized_value(
+            analyzed,
+            staged,
+            signature,
+            expression,
+            child,
+            ty,
+            constants,
+            &[],
+        )
     }
+    #[allow(clippy::too_many_arguments)]
     fn evaluate_sized_value(
         &mut self,
         analyzed: &AnalyzedBody,
+        staged: &[(ExprId, TypeId)],
         signature: &Signature,
         expression: ExprId,
         child: ExprId,
@@ -448,31 +473,32 @@ impl QueryEngine {
         constants: &[(ExprId, Materialized)],
         sizes: &[(SizeParameterRef, u64)],
     ) -> Result<Materialized, QueryError> {
-        let (value, types, ty) =
-            self.run_evaluation(analyzed, signature, expression, child, ty, constants, sizes)?;
+        let (value, ty) = self.run_evaluation(
+            analyzed, staged, signature, expression, child, ty, constants, sizes,
+        )?;
         self.reify_value(
-            &signature.definition.0.package,
+            &signature.definition.path().0.package,
             value,
-            &types,
             ty,
             analyzed.typed.syntax.tree.expressions[expression.0 as usize]
                 .origin
                 .span,
         )
     }
-    /// Run one checked compile-time expression to its interpreter value, with
-    /// its TIR type store and result type; evaluation failures are CT-1.
+    /// Run one checked compile-time expression to its interpreter value and
+    /// result type; evaluation failures are CT-1.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn run_evaluation(
         &mut self,
         analyzed: &AnalyzedBody,
+        staged: &[(ExprId, TypeId)],
         signature: &Signature,
         expression: ExprId,
         child: ExprId,
         ty: TypeId,
         constants: &[(ExprId, Materialized)],
         sizes: &[(SizeParameterRef, u64)],
-    ) -> Result<(hirsel_interp::Value, hirsel_types::TypeStore, TypeId), QueryError> {
+    ) -> Result<(hirsel_interp::Value, TypeId), QueryError> {
         let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Comptime);
         self.adapters
             .compiler_state
@@ -484,26 +510,32 @@ impl QueryEngine {
             .lowering
             .clone()
             .ok_or(QueryError::NotImplemented)?;
-        let mut definition =
-            lowering.lower_evaluation(analyzed, signature, child, ty, constants)?;
+        let mut definition = lowering.lower_evaluation(
+            &self.types,
+            &self.memo,
+            analyzed,
+            staged,
+            signature,
+            child,
+            ty,
+            constants,
+        )?;
         // This private initializer is a zero-input artifact, not the enclosing
         // definition's exported body. Its result is H/J's checked expression type.
-        definition.path = hirsel_check_protocol::body::comptime_path(
-            &signature.definition,
+        definition.path = DefId::intern(&hirsel_check_protocol::body::comptime_path(
+            signature.definition.path(),
             &analyzed.typed.checked,
             expression,
-        );
-        specialize_sizes(&mut definition, sizes)?;
+        ));
+        specialize_sizes(&self.types, &self.memo, &mut definition, sizes)?;
         let ty = definition.bodies[definition.entry.0 as usize].result;
-        let types = definition.types.clone();
         let mut artifact = signature.clone();
-        artifact.definition = definition.path.clone();
+        artifact.definition = definition.path;
         artifact.metadata = hirsel_types::SignatureMetadata {
             roles: signature.metadata.roles.clone(),
             unsafe_ffi: signature.metadata.unsafe_ffi,
             ..Default::default()
         };
-        artifact.types = types.clone();
         artifact.kind = hirsel_types::SignatureKind::Const {
             ty: ty,
             generics: Default::default(),
@@ -511,7 +543,7 @@ impl QueryEngine {
         self.validate_comptime(&definition, artifact)?;
         let sources = self.sources.clone();
         let configuration = RunConfiguration {
-            entry: definition.path.clone(),
+            entry: definition.path.path().clone(),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -539,7 +571,7 @@ impl QueryEngine {
             other => operational(format!("{other:?}")),
         })?;
         match execution.outcome {
-            Outcome::Returned { value, .. } => Ok((value, types, ty)),
+            Outcome::Returned { value, .. } => Ok((value, ty)),
             Outcome::Failed(failure) => {
                 let mut diagnostic = Diagnostic::error(
                     const { hirsel_diag::RuleId::of("CT-1") },
@@ -602,9 +634,13 @@ impl QueryEngine {
 }
 
 impl QueryEngine {
-    fn prepare_staged_types(&mut self, analyzed: &mut AnalyzedBody) -> Result<(), QueryError> {
-        let checked = &mut analyzed.typed.checked;
-        analyzed.staged.clear();
+    /// The shared reception type of each hidden size-generic constant in `analyzed`.
+    fn prepare_staged_types(
+        &mut self,
+        analyzed: &AnalyzedBody,
+    ) -> Result<Vec<(ExprId, TypeId)>, QueryError> {
+        let checked = &analyzed.typed.checked;
+        let mut staged = vec![];
         let expressions: Vec<_> = checked
             .expressions
             .iter()
@@ -613,6 +649,7 @@ impl QueryEngine {
                     analyzed.typed.syntax.tree.expressions[row.expression.0 as usize].kind,
                     ExprKind::Comptime(_)
                 ) && !hirsel_check_protocol::body::comptime_inputs(
+                    &self.types,
                     &analyzed.typed.syntax,
                     checked,
                     row.expression,
@@ -623,17 +660,18 @@ impl QueryEngine {
             .collect();
         for (expression, ty) in expressions {
             let generics = &checked.resolution.generic_declarations;
-            let mut lookup = |path: &DefPath| self.signature(path).map(Some);
+            let types = self.types.clone();
+            let mut lookup = |d: DefId| self.signature(d).map(Some);
             let plain = hirsel_types::structural_property(
-                &checked.types,
+                &types,
                 ty,
                 hirsel_types::StructuralProperty::Plain,
                 generics,
                 &mut lookup,
             )?;
-            let flat = hirsel_types::structural_flat(&checked.types, ty, generics, &mut lookup)?;
+            let flat = hirsel_types::structural_flat(&types, ty, generics, &mut lookup)?;
             let protected = matches!(
-                checked.types.get(ty).unwrap().kind,
+                types.row(ty).kind,
                 hirsel_types::TypeKind::Builtin {
                     kind: hirsel_types::BuiltinType::Shared,
                     ..
@@ -642,20 +680,16 @@ impl QueryEngine {
             let shared = if plain || flat || protected {
                 ty
             } else {
-                let mut row = checked.types.get(ty).unwrap().clone();
+                let mut row = types.row(ty).clone();
                 row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
-                let root = checked.types.push(row.clone());
-                row.modes.sendability = hirsel_types::sendability_after_sharing(
-                    &checked.types,
-                    root,
-                    generics,
-                    &mut lookup,
-                )?;
-                checked.types.push(row)
+                let root = types.intern(row.clone());
+                row.modes.sendability =
+                    hirsel_types::sendability_after_sharing(&types, root, generics, &mut lookup)?;
+                types.intern(row)
             };
-            analyzed.staged.push((expression, shared));
+            staged.push((expression, shared));
         }
-        Ok(())
+        Ok(staged)
     }
     pub(crate) fn register_staged(&mut self, analyzed: &AnalyzedBody) -> Result<(), QueryError> {
         let typed = &analyzed.typed;
@@ -667,6 +701,7 @@ impl QueryEngine {
                 continue;
             }
             let inputs = hirsel_check_protocol::body::comptime_inputs(
+                &self.types,
                 &typed.syntax,
                 &typed.checked,
                 row.expression,
@@ -678,13 +713,12 @@ impl QueryEngine {
             let path =
                 hirsel_check_protocol::body::comptime_path(&owner, &typed.checked, row.expression);
             let mut signature = self.item_signature(&owner)?.value.as_ref().clone();
-            signature.definition = path.clone();
+            signature.definition = DefId::intern(&path);
             signature.metadata = hirsel_types::SignatureMetadata {
                 roles: signature.metadata.roles.clone(),
                 unsafe_ffi: signature.metadata.unsafe_ffi,
                 ..Default::default()
             };
-            signature.types = typed.checked.types.clone();
             let replacements: Vec<_> = inputs
                 .iter()
                 .enumerate()
@@ -697,7 +731,7 @@ impl QueryEngine {
                     )
                 })
                 .collect();
-            let ty = substitute_sizes_type(&mut signature.types, row.ty, &replacements)?;
+            let ty = substitute_sizes_type(&self.types, &self.memo, row.ty, &replacements)?;
             signature.kind = SignatureKind::Const {
                 ty,
                 generics: inputs
@@ -709,8 +743,9 @@ impl QueryEngine {
                     .collect::<Vec<_>>()
                     .into(),
             };
-            signature.fingerprint = hirsel_types::encoding::fingerprint(&signature, &[])
-                .map_err(|e| operational(format!("staged signature: {e:?}")))?;
+            signature.fingerprint =
+                hirsel_types::encoding::fingerprint(&self.types, &signature, &[])
+                    .map_err(|e| operational(format!("staged signature: {e:?}")))?;
             if self.staged_constants.get(&path).is_some_and(|old| {
                 old.signature.fingerprint == signature.fingerprint && old.inputs == inputs
             }) {
@@ -763,8 +798,8 @@ impl QueryEngine {
                 return Ok(value);
             }
         }
-        let mut body = (*self.mode_query(&constant.owner)?).clone();
-        self.prepare_staged_types(&mut body.value)?;
+        let body = self.mode_query(&constant.owner)?;
+        let staged = self.prepare_staged_types(&body.value)?;
         let file = &body.value.typed.syntax;
         let instance = hirsel_tir::constant_instance_path(path, arguments);
         if self.comptime_stack.iter().any(|(p, _)| *p == instance) {
@@ -782,7 +817,7 @@ impl QueryEngine {
         self.read_execution_signatures(&body.dependencies);
         let result = (|| {
             let signature = self.item_signature(&constant.owner)?.value;
-            let constants = self.prepare_values(&body.value, &signature)?;
+            let constants = self.prepare_values(&body.value, &staged, &signature)?;
             let ExprKind::Comptime(child) =
                 file.tree.expressions[constant.expression.0 as usize].kind
             else {
@@ -805,6 +840,7 @@ impl QueryEngine {
                 .collect();
             let value = self.evaluate_sized_value(
                 &body.value,
+                &staged,
                 &signature,
                 constant.expression,
                 child,
@@ -838,7 +874,8 @@ impl QueryEngine {
 }
 
 fn substitute_sizes_type(
-    store: &mut hirsel_types::TypeStore,
+    t: &hirsel_types::TypeInterner,
+    m: &hirsel_types::TypeMemo,
     mut ty: TypeId,
     replacements: &[(SizeParameterRef, Size)],
 ) -> Result<TypeId, QueryError> {
@@ -873,10 +910,11 @@ fn substitute_sizes_type(
                 )
             })
             .collect();
-        ty = hirsel_types::substitute_type_in_place(
-            store,
+        ty = hirsel_types::substitute(
+            t,
+            m,
             ty,
-            hirsel_types::Substitution {
+            &hirsel_types::Substitution {
                 binder: Some(scope),
                 arguments: &arguments,
                 ..Default::default()
@@ -890,6 +928,8 @@ fn substitute_sizes_type(
 /// Specialize the private evaluation artifact, leaving published generic TIR
 /// shared. Only its selected size inputs change; ordinary calls still execute.
 fn specialize_sizes(
+    t: &hirsel_types::TypeInterner,
+    m: &hirsel_types::TypeMemo,
     definition: &mut hirsel_tir::Definition,
     sizes: &[(SizeParameterRef, u64)],
 ) -> Result<(), QueryError> {
@@ -900,12 +940,12 @@ fn specialize_sizes(
         .iter()
         .map(|(p, n)| (*p, Size::Constant(*n)))
         .collect();
-    let mut memo = std::collections::BTreeMap::new();
+    let mut memo = std::collections::HashMap::new();
     let mut ty = |root: &mut TypeId| -> Result<(), QueryError> {
         *root = match memo.get(root) {
             Some(mapped) => *mapped,
             None => {
-                let mapped = substitute_sizes_type(&mut definition.types, *root, &replacements)?;
+                let mapped = substitute_sizes_type(t, m, *root, &replacements)?;
                 memo.insert(*root, mapped);
                 mapped
             }
@@ -928,7 +968,7 @@ fn specialize_sizes(
         }
         Ok(())
     };
-    // Keep one memo for every rooted graph transported into the private store.
+    // Keep one memo for every rooted graph.
     for body in &mut definition.bodies {
         // These roots use the same substitution as call/type-directed operands.
         for root in body
@@ -978,6 +1018,8 @@ fn specialize_sizes(
             }
         }
     }
+    // The private artifact's persisted table is the closure of its new roots.
+    definition.types = hirsel_tir::definition_types(t, definition);
     Ok(())
 }
 

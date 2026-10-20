@@ -147,13 +147,15 @@ impl ParserPhase for Fake {
 impl ResolverPhase for Fake {
     fn resolve(
         &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError> {
         let item = &syntax.item;
         self.fail("resolve", item.origin.span)?;
         if item.definition == path("b") {
-            provider.signature(&path("a"))?;
+            provider.signature(DefId::intern(&path("a")))?;
         }
         if self.missing_lookup {
             let name = Symbol::intern("missing");
@@ -164,7 +166,7 @@ impl ResolverPhase for Fake {
                     segments: vec![name],
                 },
             );
-            let _ = provider.signature(&path("missing"));
+            let _ = provider.signature(DefId::intern(&path("missing")));
             return Err(error(item.origin.span));
         }
         Ok(out(Resolution::default()))
@@ -173,6 +175,8 @@ impl ResolverPhase for Fake {
 impl SignaturePhase for Fake {
     fn signature(
         &self,
+        t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
@@ -185,12 +189,10 @@ impl SignaturePhase for Fake {
             } => ContentHash::of_bytes(header.literal.as_bytes()),
             _ => unreachable!(),
         };
-        let mut types = TypeStore::default();
-        let unit = types.push(Type::with_kind(TypeKind::Tuple(vec![].into())));
+        let unit = t.intern(Type::with_kind(TypeKind::Tuple(vec![].into())));
         Ok(out(Signature {
             metadata: Default::default(),
-            definition: item.definition.clone(),
-            types,
+            definition: DefId::intern(&item.definition),
             kind: SignatureKind::Const {
                 ty: unit,
                 generics: Default::default(),
@@ -202,21 +204,22 @@ impl SignaturePhase for Fake {
 impl CheckerPhase for Fake {
     fn check(
         &self,
+        t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
         resolution: Resolution,
         _signature: &Signature,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<TypedBody>, QueryError> {
         self.fail("check", syntax.item.origin.span)?;
-        let mut types = _signature.types.clone();
         let unit = match _signature.kind {
             SignatureKind::Const { ty: unit, .. } => unit,
             SignatureKind::Function(ref f) => f.result,
             _ => unreachable!(),
         };
-        let boolean = types.push(Type {
+        let boolean = t.intern(Type {
             kind: TypeKind::Primitive(hirsel_types::Primitive::Bool),
-            ..types.get(unit).unwrap().clone()
+            ..t.row(unit).clone()
         });
         Ok(out(TypedBody {
             checked: CheckedBody {
@@ -226,8 +229,6 @@ impl CheckerPhase for Fake {
                 calls: vec![],
                 bindings: vec![],
                 patterns: vec![],
-
-                types,
                 resolution,
                 expressions: vec![],
                 instantiations: vec![],
@@ -243,6 +244,8 @@ impl CheckerPhase for Fake {
 impl ModesPhase for Fake {
     fn check_modes(
         &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         body: TypedBody,
         _signature: &Signature,
         _provider: &mut dyn SignatureProvider,
@@ -253,24 +256,25 @@ impl ModesPhase for Fake {
             ownership: Default::default(),
             results: vec![],
             call_allocations: vec![],
-            materialized: vec![],
-            staged: vec![],
         }))
     }
 }
 impl LoweringPhase for Fake {
     fn lower(
         &self,
-        body: AnalyzedBody,
+        t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
+        body: &AnalyzedBody,
+        _comptime: &Comptime,
         signature: &Signature,
     ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
         let syntax = &body.typed.syntax;
         self.fail("lower", syntax.item.origin.span)?;
-        Ok(out(hirsel_tir::Definition {
+        let mut definition = hirsel_tir::Definition {
             caller_bodies: vec![],
             protocol_associations: vec![],
-            types: signature.types.clone(),
-            path: signature.definition.clone(),
+            types: Arc::from([]),
+            path: signature.definition,
             signature_hash: signature.fingerprint,
             bodies: if self.reject == Some("invalid-tir") {
                 vec![]
@@ -279,11 +283,16 @@ impl LoweringPhase for Fake {
             },
             entry: hirsel_tir::BodyId(0),
             contracts: vec![],
-        }))
+        };
+        definition.types = hirsel_tir::definition_types(t, &definition);
+        Ok(out(definition))
     }
     fn lower_evaluation(
         &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         _: &AnalyzedBody,
+        _staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
         _: &Signature,
         _: ExprId,
         _: TypeId,
@@ -586,6 +595,8 @@ struct ContractSignatures;
 impl SignaturePhase for ContractSignatures {
     fn signature(
         &self,
+        t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
@@ -599,7 +610,7 @@ impl SignaturePhase for ContractSignatures {
         let mut fingerprint = ContentHash::of_bytes(header.literal.as_bytes());
         let mut contracts = vec![];
         if item.definition == path("a") {
-            let used = provider.signature(&path("contract"))?;
+            let used = provider.signature(DefId::intern(&path("contract")))?;
             fingerprint = ContentHash::of_parts(
                 "fixture.contract.signature",
                 [fingerprint.0.as_slice(), used.fingerprint.0.as_slice()],
@@ -610,16 +621,13 @@ impl SignaturePhase for ContractSignatures {
                 code_hash: fingerprint,
             });
         }
-        let mut types = TypeStore::default();
-        let result = types.push(hirsel_types::Type {
+        let result = t.intern(hirsel_types::Type {
             drop_allocation: hirsel_types::DropAllocation::MayAllocate,
             ..hirsel_types::Type::with_kind(TypeKind::Tuple(vec![].into()))
         });
         Ok(out(Signature {
             metadata: Default::default(),
-
-            definition: item.definition.clone(),
-            types,
+            definition: DefId::intern(&item.definition),
             fingerprint,
             kind: SignatureKind::Function(FunctionType {
                 state_promises: Default::default(),
@@ -699,6 +707,8 @@ struct ObserveDuplicates;
 impl SignaturePhase for ObserveDuplicates {
     fn signature(
         &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         _syntax: Arc<ItemSyntax>,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
@@ -706,6 +716,8 @@ impl SignaturePhase for ObserveDuplicates {
     }
     fn signature_items(
         &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
         candidates: &[Arc<ItemSyntax>],
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
@@ -782,8 +794,8 @@ fn provider_results_share_graphs_and_manifest_misses_have_revisions() {
 fn provider_results_share_graphs_and_manifest_misses_have_revisions_on_compiler_thread() {
     let (mut engine, _) = make_engine(None, false);
     parse(&mut engine, "fn a {}\n");
-    let a = engine.signature(&path("a")).unwrap();
-    let b = engine.signature(&path("a")).unwrap();
+    let a = engine.signature(DefId::intern(&path("a"))).unwrap();
+    let b = engine.signature(DefId::intern(&path("a"))).unwrap();
     assert!(std::sync::Arc::ptr_eq(&a, &b));
     let a = engine.definition(&path("a")).unwrap();
     let b = engine.definition(&path("a")).unwrap();
@@ -813,6 +825,8 @@ fn operational_signature_failures_retry_and_are_not_rejection_cache_entries_on_c
     impl SignaturePhase for Flaky {
         fn signature(
             &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
             syntax: Arc<ItemSyntax>,
             provider: &mut dyn SignatureProvider,
         ) -> Result<QueryOutput<Signature>, QueryError> {
@@ -823,7 +837,7 @@ fn operational_signature_failures_retry_and_are_not_rejection_cache_entries_on_c
                     message: "temporarily offline".into(),
                 }));
             }
-            self.original.signature(syntax, provider)
+            self.original.signature(t, m, syntax, provider)
         }
     }
     let (mut engine, _) = make_engine(None, false);
@@ -834,11 +848,11 @@ fn operational_signature_failures_retry_and_are_not_rejection_cache_entries_on_c
     engine.adapters.signature = Some(adapter.clone());
     parse(&mut engine, "fn a {}\n");
     assert!(matches!(
-        engine.signature(&path("a")),
+        engine.signature(DefId::intern(&path("a"))),
         Err(QueryError::Operational(_))
     ));
-    assert!(engine.signature(&path("a")).is_ok());
-    assert!(engine.signature(&path("a")).is_ok());
+    assert!(engine.signature(DefId::intern(&path("a"))).is_ok());
+    assert!(engine.signature(DefId::intern(&path("a"))).is_ok());
     assert_eq!(adapter.calls.get(), 2);
 }
 #[test]

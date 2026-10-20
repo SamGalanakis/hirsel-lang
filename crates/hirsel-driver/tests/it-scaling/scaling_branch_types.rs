@@ -26,9 +26,11 @@ fn unchanged_branch_bindings_do_not_multiply_type_rows() {
                 .unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
             let path = &parsed.value.items[0].item.definition;
+            // The rows checking this body adds to the session interner.
+            let before = engine.types().len();
             let output = engine.mode_definition(path).unwrap();
             assert!(output.diagnostics.is_empty());
-            let rows = output.value.typed.checked.types.len();
+            let rows = engine.types().len() - before;
             eprintln!("{count} bounded else-if nodes: {rows} type rows");
             assert!(
                 rows <= 24 * count + 128,

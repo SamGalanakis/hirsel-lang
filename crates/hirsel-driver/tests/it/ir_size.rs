@@ -147,7 +147,18 @@ fn measure(source: String) -> Size {
         nodes(&place.projections, &mut source_nodes);
     }
     let signature = engine.item_signature(&definition).unwrap();
-    let tir = lowerer.lower(checked.value, &signature.value).unwrap();
+    let comptime = engine
+        .prepare_comptime(&checked.value, &signature.value)
+        .unwrap();
+    let tir = lowerer
+        .lower(
+            engine.types(),
+            engine.type_memo(),
+            &checked.value,
+            &comptime,
+            &signature.value,
+        )
+        .unwrap();
     let d = &tir.value;
     let mut size = Size {
         types: d.types.len(),
@@ -157,7 +168,7 @@ fn measure(source: String) -> Size {
     size.arena_bytes += d.types.len() * size_of::<Type>();
     let mut slices = HashSet::new();
     let mut origins = HashSet::new();
-    for (_, ty) in d.types.iter() {
+    for ty in d.types.iter().map(|&id| engine.types().row(id)) {
         type_children(&mut size, ty, &mut slices, &mut origins);
     }
     arena(&mut size, &d.bodies);

@@ -13,11 +13,11 @@
 use super::*;
 use hirsel_syntax::PackageId;
 use hirsel_tir::Definition;
-use hirsel_types::{DecodedTypes, EncodedTypes};
+use hirsel_types::TypeTable;
 use serde::{Deserialize, Serialize};
-use std::{io::Write, ops::Range, path::Path, sync::Mutex};
+use std::{cell::RefCell, io::Write, ops::Range, path::Path};
 
-const MAGIC: &[u8; 8] = b"HIRPCHK3";
+const MAGIC: &[u8; 8] = b"HIRPCHK4";
 
 #[derive(Serialize, Deserialize)]
 struct Header {
@@ -51,8 +51,8 @@ pub(crate) struct PrecheckedDefinition {
     constant: Option<crate::comptime::EvaluatedConstant>,
 }
 
-/// A decoded precheck file. Records decode on first use and are shared by every
-/// engine in the process that adopts the precheck.
+/// A precheck file. Each record holds its canonical type table and decodes,
+/// on first use, into the interner of the engine that adopted the precheck.
 pub struct Precheck {
     key: ContentHash,
     package: PackageId,
@@ -61,7 +61,6 @@ pub struct Precheck {
     /// (manifest ordinal) at a base; an adopting engine places them.
     anchors: Vec<(hirsel_span::Anchor, u32, u32)>,
     bytes: Vec<u8>,
-    decoded: Mutex<(DecodedTypes, BTreeMap<DefPath, Arc<PrecheckedDefinition>>)>,
 }
 
 impl std::fmt::Debug for Precheck {
@@ -144,28 +143,26 @@ impl Precheck {
                 .map(|(ordinal, base)| (hirsel_span::Anchor::fresh(), ordinal, base))
                 .collect(),
             bytes,
-            decoded: Mutex::default(),
         })
     }
-    fn definition(&self, path: &DefPath) -> Result<Option<Arc<PrecheckedDefinition>>, QueryError> {
+    /// The record of `path`, its rows interned into `t`.
+    fn definition(
+        &self,
+        t: &hirsel_types::TypeInterner,
+        path: &DefPath,
+    ) -> Result<Option<PrecheckedDefinition>, QueryError> {
         let Some(range) = self.records.get(path) else {
             return Ok(None);
         };
-        let mut decoded = self.decoded.lock().unwrap();
-        if let Some(record) = decoded.1.get(path) {
-            return Ok(Some(record.clone()));
-        }
-        let (provenance, records) = &mut *decoded;
+        let (table, payload): (TypeTable, Vec<u8>) =
+            bincode::deserialize(&self.bytes[range.clone()]).map_err(corrupt)?;
+        let ids = hirsel_types::decode_table(t, &table);
         let mut anchors =
             hirsel_span::AnchorCodec::Decode(self.anchors.iter().map(|a| a.0).collect());
-        let record: PrecheckedDefinition = hirsel_types::decode_types(provenance, || {
-            hirsel_span::with_anchor_codec(&mut anchors, || {
-                bincode::deserialize(&self.bytes[range.clone()])
-            })
+        let record = hirsel_types::with_table_decoding(&ids, || {
+            hirsel_span::with_anchor_codec(&mut anchors, || bincode::deserialize(&payload))
         })
         .map_err(corrupt)?;
-        let record = Arc::new(record);
-        records.insert(path.clone(), record.clone());
         Ok(Some(record))
     }
 }
@@ -174,6 +171,8 @@ impl Precheck {
 pub(crate) struct AdoptedPrecheck {
     precheck: Arc<Precheck>,
     files: Vec<FileId>,
+    /// Records decoded into this engine's interner.
+    decoded: RefCell<BTreeMap<DefPath, Arc<PrecheckedDefinition>>>,
     lowered: BTreeMap<DefPath, hirsel_tir::DefinitionRef>,
 }
 
@@ -191,6 +190,7 @@ impl QueryEngine {
             AdoptedPrecheck {
                 precheck,
                 files,
+                decoded: RefCell::default(),
                 lowered: BTreeMap::new(),
             },
         );
@@ -207,10 +207,21 @@ impl QueryEngine {
         &self,
         path: &DefPath,
     ) -> Result<Option<Arc<PrecheckedDefinition>>, QueryError> {
-        match self.prechecks.get(&path.0.package) {
-            Some(adopted) => adopted.precheck.definition(path),
-            None => Ok(None),
+        let Some(adopted) = self.prechecks.get(&path.0.package) else {
+            return Ok(None);
+        };
+        if let Some(record) = adopted.decoded.borrow().get(path) {
+            return Ok(Some(record.clone()));
         }
+        let Some(record) = adopted.precheck.definition(&self.types, path)? else {
+            return Ok(None);
+        };
+        let record = Arc::new(record);
+        adopted
+            .decoded
+            .borrow_mut()
+            .insert(path.clone(), record.clone());
+        Ok(Some(record))
     }
     pub(super) fn prechecked_node(
         &self,
@@ -337,7 +348,7 @@ impl QueryEngine {
             .collect();
         for path in &paths {
             if let Some(record) = self.precheck_record(path)? {
-                writer.write(path, record, &self.sources)?;
+                writer.write(&self.types, path, record, &self.sources)?;
             }
         }
         writer.closed &= self.release_bodies(&paths, &writer.closure);
@@ -411,7 +422,6 @@ pub(crate) struct PrecheckWriter<W> {
     codec: hirsel_span::AnchorCodec,
     body: W,
     len: u64,
-    types: EncodedTypes,
     /// Each written record's byte range in the body.
     definitions: Vec<(DefPath, u64, u64)>,
     /// The definitions written or left out.
@@ -441,7 +451,6 @@ impl<W: Write> PrecheckWriter<W> {
             codec: hirsel_span::AnchorCodec::Encode(BTreeMap::new()),
             body,
             len: 0,
-            types: EncodedTypes::default(),
             definitions: vec![],
             seen: BTreeSet::new(),
             closed: true,
@@ -466,32 +475,44 @@ impl<W: Write> PrecheckWriter<W> {
             }
         }
     }
-    fn encode(&mut self, record: &PrecheckedDefinition) -> Option<Vec<u8>> {
-        let mut bytes = vec![];
+    /// The record's canonical table of every row it names, then the record
+    /// with its ids as positions in that table; None while a span's anchor
+    /// has no number.
+    fn encode(
+        &mut self,
+        t: &hirsel_types::TypeInterner,
+        record: &PrecheckedDefinition,
+    ) -> Option<Vec<u8>> {
         let codec = &mut self.codec;
-        hirsel_types::encode_types(&mut self.types, || {
-            hirsel_span::with_anchor_codec(codec, || bincode::serialize_into(&mut bytes, record))
+        let (written, roots) = hirsel_types::with_table_collection(|| {
+            hirsel_span::with_anchor_codec(codec, || bincode::serialize(record))
+        });
+        written.ok()?;
+        let (table, _) = hirsel_types::encode_table(t, &roots);
+        let payload = hirsel_types::with_table_encoding(t, &roots, || {
+            hirsel_span::with_anchor_codec(codec, || bincode::serialize(record))
         })
-        .ok()
-        .map(|()| bytes)
+        .ok()?;
+        bincode::serialize(&(table, payload)).ok()
     }
     /// Write `record`. TIR with a span outside the package's sources (a
     /// generated source) is left out, as is a record that still has one.
     fn write(
         &mut self,
+        t: &hirsel_types::TypeInterner,
         path: &DefPath,
         mut record: PrecheckedDefinition,
         sources: &hirsel_span::SourceMap,
     ) -> Result<(), QueryError> {
-        let bytes = match self.encode(&record) {
+        let bytes = match self.encode(t, &record) {
             Some(bytes) => bytes,
             None => {
                 self.number_anchors(sources);
-                match self.encode(&record) {
+                match self.encode(t, &record) {
                     Some(bytes) => bytes,
                     None if record.lowering.is_some() => {
                         record.lowering = None;
-                        match self.encode(&record) {
+                        match self.encode(t, &record) {
                             Some(bytes) => bytes,
                             None => return Ok(()),
                         }
@@ -569,8 +590,8 @@ impl QueryEngine {
                 .filter(|(p, _)| &p.0.package == package)
                 .all(|(_, value)| reads_closed(&value.executed, &inside))
     }
-    /// Release the checked, mode and lowered bodies of `paths` and the TIR V
-    /// remembers passing for them; a later read computes them again. Whether
+    /// Release the checked, mode and lowered bodies of `paths`; a later read
+    /// computes them again. Whether
     /// each released query read only inside `closure` (or core).
     fn release_bodies(&mut self, paths: &[DefPath], closure: &BTreeSet<PackageId>) -> bool {
         let inside = inside(closure);
@@ -593,7 +614,6 @@ impl QueryEngine {
                 self.forget(&MemoKey::new(kind, id));
             }
         }
-        self.forget_passed(paths);
         closed
     }
 }

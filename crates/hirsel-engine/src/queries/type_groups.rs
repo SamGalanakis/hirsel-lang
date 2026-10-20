@@ -200,7 +200,8 @@ impl Recorder<'_> {
         let mut members = vec![];
         for member in group.members.iter().filter(|m| *m != definition) {
             let candidates = self.engine.definition_items(member)?;
-            let signature = adapter.staged_signature(&candidates, self, stage)?;
+            let (types, memo) = (self.engine.types.clone(), self.engine.memo.clone());
+            let signature = adapter.staged_signature(&types, &memo, &candidates, self, stage)?;
             members.push(Arc::new(signature));
         }
         Ok(RecursiveGroup {

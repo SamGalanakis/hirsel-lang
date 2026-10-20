@@ -41,14 +41,14 @@ impl QueryEngine {
         }
         let mut errors = BTreeSet::new();
         let mut constructed = BTreeSet::new();
+        let types = self.types.clone();
         for definition in &bodies {
-            if let Ok(signature) = self.signature(definition)
+            if let Ok(signature) = self.signature(DefId::intern(definition))
                 && let SignatureKind::Function(f) = &signature.kind
                 && let Some(error) = f.error
-                && let Some(TypeKind::Named { definition, .. }) =
-                    signature.types.get(error).map(|t| &t.kind)
+                && let Some(TypeKind::Named { definition, .. }) = types.get(error).map(|t| &t.kind)
             {
-                errors.insert(definition.clone());
+                errors.insert(definition.path().clone());
             }
             let Ok(checked) = self.check_query(definition) else {
                 return vec![];
@@ -59,9 +59,9 @@ impl QueryEngine {
             let body = &checked.value;
             for plan in &body.plans.tries {
                 if let Some(TypeKind::Named { definition, .. }) =
-                    body.checked.types.get(plan.error_type).map(|t| &t.kind)
+                    types.get(plan.error_type).map(|t| &t.kind)
                 {
-                    errors.insert(definition.clone());
+                    errors.insert(definition.path().clone());
                 }
             }
             let mappers = body.plans.tries.iter().filter_map(|p| p.mapper.as_ref());

@@ -117,6 +117,11 @@ impl From<&DefPath> for DefId {
         DefId::intern(path)
     }
 }
+impl From<DefPath> for DefId {
+    fn from(path: DefPath) -> Self {
+        DefId::intern(&path)
+    }
+}
 
 impl Ord for DefId {
     fn cmp(&self, other: &Self) -> Ordering {

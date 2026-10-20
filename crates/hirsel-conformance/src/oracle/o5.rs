@@ -207,7 +207,8 @@ fn split_export(text: &str) -> Result<(String, String, Vec<DefPath>), String> {
         text,
         &header.environment,
         &hirsel_types::TypeInterner::new(None),
-    ).map_err(refused)?;
+    )
+    .map_err(refused)?;
     let mut input = export.to_input();
     let annotations = std::mem::take(&mut input.annotations);
     let roots = export

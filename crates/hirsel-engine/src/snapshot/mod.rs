@@ -15,9 +15,9 @@ use std::sync::Arc;
 mod declarations;
 mod provider;
 mod views;
-pub use provider::FrozenProvider;
 pub(crate) use declarations::header_hash;
 pub use declarations::{DeclarationIndex, Declarations, ModuleInputs};
+pub use provider::FrozenProvider;
 
 pub use views::{PackageViews, View, ViewTable};
 
@@ -260,18 +260,19 @@ impl QueryEngine {
             candidates: self
                 .items
                 .keys()
-                .filter_map(|path| {
-                    Some((DefId::intern(path), self.declarations.candidates(path)?))
-                })
+                .filter_map(|path| Some((DefId::intern(path), self.declarations.candidates(path)?)))
                 .collect(),
         };
-        let snapshot = Arc::new(SignatureSnapshot::new(
-            self.snapshot_epoch,
-            self.types.clone(),
-            signatures,
-            private,
-            previous.as_deref(),
-        ).with_lookup(lookup));
+        let snapshot = Arc::new(
+            SignatureSnapshot::new(
+                self.snapshot_epoch,
+                self.types.clone(),
+                signatures,
+                private,
+                previous.as_deref(),
+            )
+            .with_lookup(lookup),
+        );
         if complete {
             self.snapshot = Some((stamp, snapshot.clone()));
         }
@@ -371,7 +372,7 @@ mod tests {
             .map(|i| constant(&types, &format!("c{i}"), hirsel_types::Primitive::U64))
             .collect();
         let snapshot = Arc::new(SignatureSnapshot::new(
-            Revision::from_u64(1),
+            Revision::from_u64(1).unwrap(),
             types.clone(),
             signatures.iter().map(|s| (s.definition, Ok(s.clone()))),
             [],
@@ -410,7 +411,7 @@ mod tests {
         let present = constant(&types, "present", hirsel_types::Primitive::U32);
         let absent = constant(&types, "absent", hirsel_types::Primitive::U32);
         let snapshot = SignatureSnapshot::new(
-            Revision::from_u64(1),
+            Revision::from_u64(1).unwrap(),
             types,
             [(present.definition, Ok(present.clone()))],
             [],

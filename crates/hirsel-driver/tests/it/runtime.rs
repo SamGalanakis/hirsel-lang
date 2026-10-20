@@ -22,7 +22,7 @@ impl TirProvider for Fixture {
 
     fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
         (|| {
-            assert_eq!(path, &self.0.path);
+            assert_eq!(path, self.0.path.path());
             Ok(self.0.clone())
         })()
         .map(std::sync::Arc::new)
@@ -38,8 +38,8 @@ fn fixture(fail: bool) -> (Fixture, SourceMap, RunConfiguration) {
     let mut sources = SourceMap::default();
     let file = sources.add("runtime.hir", "\n\nfixture\n".into()).unwrap();
     let span = Span::new(sources.file_anchor(file), 2, 9).unwrap();
-    let mut types = TypeStore::default();
-    let unit = types.push(Type {
+    let types = hirsel_engine::registry::session_types();
+    let unit = types.intern(Type {
         drop_allocation: hirsel_types::DropAllocation::MayAllocate,
         ..Type::with_kind(TypeKind::Tuple(vec![].into()))
     });
@@ -94,16 +94,17 @@ fn fixture(fail: bool) -> (Fixture, SourceMap, RunConfiguration) {
         tail_sites: vec![],
         matches: vec![],
     };
-    let definition = Definition {
+    let mut definition = Definition {
         caller_bodies: vec![],
         protocol_associations: vec![],
-        types,
-        path: path.clone(),
+        types: std::sync::Arc::from([]),
+        path: hirsel_syntax::DefId::intern(&path),
         signature_hash: ContentHash::default(),
         bodies: vec![body],
         entry: BodyId(0),
         contracts: vec![],
     };
+    definition.types = hirsel_tir::definition_types(&types, &definition);
     (
         Fixture(definition),
         sources,
@@ -163,20 +164,21 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
     // This hand-built TIR fixture declares the registry's exact operation result.
     // Source normalizer/body compatibility is separately inventoried by conformance.
     let mut declared = (*signature).clone();
-    let result = import_type(&output.types, print.result, &mut declared.types).unwrap();
+    // The engine's interner extends the registry's base, so registry ids hold.
+    let result = print.result;
     let SignatureKind::Function(owner) = &mut declared.kind else {
         panic!()
     };
     owner.result = result;
-    declared.fingerprint = hirsel_types::encoding::fingerprint(&declared, &[]).unwrap();
+    declared.fingerprint =
+        hirsel_types::encoding::fingerprint(engine.types(), &declared, &[]).unwrap();
     let signature = std::sync::Arc::new(declared);
     let SignatureKind::Function(owner) = &signature.kind else {
         panic!()
     };
-    let mut types = signature.types.clone();
-    let text = import_type(&output.types, print.parameters[1].ty, &mut types).unwrap();
-    let projected = import_type(&stdout_signature.types, project.result, &mut types).unwrap();
-    let TypeKind::Named { arguments, .. } = &types.get(projected).unwrap().kind else {
+    let text = print.parameters[1].ty;
+    let projected = project.result;
+    let TypeKind::Named { arguments, .. } = &engine.types().row(projected).kind else {
         panic!()
     };
     let GenericArgument::Type(stdout) = arguments[0] else {
@@ -191,16 +193,16 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
             usage,
         },
     };
-    let definition = Definition {
+    let mut definition = Definition {
         caller_bodies: vec![],
         protocol_associations: vec![],
-        types,
-        path: signature.definition.clone(),
+        types: std::sync::Arc::from([]),
+        path: signature.definition,
         signature_hash: signature.fingerprint,
         entry: BodyId(0),
         contracts: vec![],
         bodies: vec![Body {
-            parameter_scope: hirsel_types::LexicalOwner::first(&signature.definition)
+            parameter_scope: hirsel_types::LexicalOwner::first(signature.definition.path())
                 .site(hirsel_types::NameSite::Item),
             locals: local_types
                 .iter()
@@ -411,15 +413,14 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
             }],
         }],
     };
-    let mut signatures: hirsel_validate::SignatureMap = registry
-        .signatures()
-        .map(|s| (s.definition.clone(), (**s).clone()))
-        .collect();
-    signatures.insert(signature.definition.clone(), (*signature).clone());
-    hirsel_validate::assert_valid(&definition, &signatures);
+    definition.types = hirsel_tir::definition_types(engine.types(), &definition);
+    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
+    signatures.extend_signatures(registry.signatures().map(|s| (**s).clone()));
+    signatures.insert(signature.definition, (*signature).clone());
+    hirsel_validate::assert_valid(&definition, engine.types(), &signatures);
     let runtime = engine.runtime_types().unwrap();
     let config = RunConfiguration {
-        entry: signature.definition.clone(),
+        entry: signature.definition.path().clone(),
         hash_seed: 0,
         inputs: vec![],
     };

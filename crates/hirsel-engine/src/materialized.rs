@@ -5,7 +5,7 @@ use hirsel_span::Span;
 use hirsel_tir::{Constant, Constructor};
 use hirsel_tir::{Materialized, ValueKind, ValueNode};
 use hirsel_type_analysis::cleanup::{CleanupLeaf, cleanup_summary};
-use hirsel_types::{GenericArgument, SignatureKind, Substitution, TypeId, TypeKind, TypeStore};
+use hirsel_types::{GenericArgument, SignatureKind, Substitution, TypeId, TypeKind};
 fn invalid(message: impl Into<String>) -> QueryError {
     QueryError::Operational(hirsel_types::OperationalFailure {
         operation: "compile-time materialization".into(),
@@ -31,22 +31,21 @@ impl QueryEngine {
         &mut self,
         package: &hirsel_syntax::PackageId,
         value: Value,
-        source: &TypeStore,
         ty: TypeId,
         site: Span,
     ) -> Result<Materialized, QueryError> {
-        let mut types = source.clone();
-        let root = self.reify_node(package, value, ty, &mut types, site)?;
-        Ok(Materialized { types, root })
+        let root = self.reify_node(package, value, ty, site)?;
+        Ok(Materialized { root })
     }
     fn reify_node(
         &mut self,
         package: &hirsel_syntax::PackageId,
         value: Value,
         ty: TypeId,
-        types: &mut TypeStore,
         site: Span,
     ) -> Result<ValueNode, QueryError> {
+        let types = self.types.clone();
+        let memo = self.memo.clone();
         enum Work {
             Enter(Option<Value>, TypeId),
             Construct {
@@ -106,10 +105,10 @@ impl QueryEngine {
                         arguments,
                     } = &root.kind
                     {
-                        let public = self.item_signature(definition)?.value;
+                        let public = self.item_signature(definition.path())?.value;
                         let (signature, revision) = self.body_signature(package, public)?;
                         if revision.is_some() {
-                            self.read_implementation(definition);
+                            self.read_implementation(definition.path());
                         }
                         let SignatureKind::Type(declaration) = &signature.kind else {
                             return Err(invalid("aggregate identity is not a type declaration"));
@@ -145,11 +144,11 @@ impl QueryEngine {
                             .iter()
                             .map(|_| hirsel_types::AuthoritySummary::Unknown)
                             .collect::<Vec<_>>();
-                        representation = hirsel_types::substitute_type(
-                            &signature.types,
+                        representation = hirsel_types::substitute(
+                            &types,
+                            &memo,
                             declared,
-                            types,
-                            Substitution {
+                            &Substitution {
                                 binder: Some(hirsel_types::GenericBinder::Bound(0)),
                                 roles: &signature.metadata.roles,
                                 arguments,
@@ -192,15 +191,18 @@ impl QueryEngine {
                             Value::Record { .. }
                         )
                     ) && !hirsel_types::structural_equality(
-                        types,
+                        &types,
                         ty,
                         hirsel_types::Bound::Data,
                         &hirsel_types::GenericDeclarations::default(),
-                        &mut |path| self.item_signature(path).map(|output| Some(output.value)),
+                        &mut |d| {
+                            self.item_signature(d.path())
+                                .map(|output| Some(output.value))
+                        },
                     )? {
                         return Err(non_data(site));
                     }
-                    let layout = types.get(representation).unwrap().kind.clone();
+                    let layout = types.row(representation).kind.clone();
                     let (constructor, values, field_types) = match (value, layout) {
                         (Value::Tuple(values), TypeKind::Tuple(fields)) => {
                             (Constructor::Tuple, values, fields)
@@ -252,7 +254,7 @@ impl QueryEngine {
                                 .collect();
                             (
                                 Constructor::Variant {
-                                    definition,
+                                    definition: definition.path().clone(),
                                     variant,
                                 },
                                 values,
@@ -284,21 +286,20 @@ impl QueryEngine {
                                 .ok_or_else(|| invalid("map entry type is missing"))?;
                             let kind = hirsel_types::TypeKind::Tuple(fields.to_vec().into());
                             let drop_allocation = cleanup_summary(&kind, |leaf| match leaf {
-                                CleanupLeaf::Component(t) => {
-                                    types.get(t).unwrap().drop_allocation.clone()
-                                }
+                                CleanupLeaf::Component(t) => types.row(t).drop_allocation.clone(),
                                 _ => unreachable!("tuple cleanup contains only components"),
                             });
-                            let entry = types.push(hirsel_types::Type {
+                            let entry = types.intern(hirsel_types::Type {
                                 drop_allocation,
                                 ..hirsel_types::Type::with_kind(kind)
                             });
                             let entry = hirsel_types::normalize_type_properties(
-                                types,
+                                &types,
                                 entry,
                                 &hirsel_types::GenericDeclarations::default(),
-                                &mut |path| {
-                                    self.item_signature(path).map(|output| Some(output.value))
+                                &mut |d| {
+                                    self.item_signature(d.path())
+                                        .map(|output| Some(output.value))
                                 },
                             )?;
                             // Removed entries are holes in the simulation's insertion
@@ -359,7 +360,7 @@ impl QueryEngine {
     }
 }
 fn require_identity(kind: &TypeKind, path: &DefPath) -> Result<(), QueryError> {
-    if matches!(kind, TypeKind::Named { definition, .. } if definition == path) {
+    if matches!(kind, TypeKind::Named { definition, .. } if definition.path() == path) {
         Ok(())
     } else {
         Err(invalid(

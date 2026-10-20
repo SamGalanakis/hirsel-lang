@@ -174,7 +174,7 @@ fn exported_instance_edges_keep_owner_store_binder_and_round_trip_on_compiler_th
         panic!("type argument")
     };
     assert!(matches!(
-        materialized.types.get(actual).unwrap().kind,
+        engine.types().get(actual).unwrap().kind,
         TypeKind::Primitive(_)
     ));
     // A size argument is an edge in the caller's own lexical binder.
@@ -184,8 +184,13 @@ fn exported_instance_edges_keep_owner_store_binder_and_round_trip_on_compiler_th
         [GenericArgument::Size(Size::Parameter(BinderRef::Body { scope, .. }))] if scope == item("sizes")
     ));
     let validated = engine.import_native_input(input.clone()).unwrap();
-    assert!(validated.snapshot().instances.same(&input.instances));
-    assert!(input.instances.growing_sites().is_empty());
+    assert!(
+        validated
+            .snapshot()
+            .instances
+            .same(&input.instances, &input.types)
+    );
+    assert!(input.instances.growing_sites(&input.types).is_empty());
 }
 
 #[test]
@@ -230,13 +235,12 @@ fn native_import_rejects_forged_and_dropped_instance_edges_on_compiler_thread() 
     // A forged argument: the same store's primitive row instead of `(T,T)`.
     let mut bad = base.clone();
     let at = index(&bad, "pairs", InstanceKind::Drop, "Holder");
-    let edge = &mut bad.instances.edges[at];
-    let primitive = edge
+    let primitive = bad
         .types
-        .iter()
-        .find(|(_, row)| matches!(row.kind, TypeKind::Primitive(_)))
-        .unwrap()
-        .0;
+        .intern(hirsel_types::Type::with_kind(TypeKind::Primitive(
+            hirsel_types::Primitive::U8,
+        )));
+    let edge = &mut bad.instances.edges[at];
     edge.arguments[0] = GenericArgument::Type(primitive);
     rejected(&mut engine, bad);
     // A forged binder, kind and owner.
@@ -392,7 +396,10 @@ fn finite_cycles_pass_and_growing_cycles_fail_over_every_partition_order_on_comp
                     );
                 }
             }
-            assert!(graph.growing_sites().is_empty(), "{program}: {partition:?}");
+            assert!(
+                graph.growing_sites(engine.types()).is_empty(),
+                "{program}: {partition:?}"
+            );
         }
         engine.import_native_input(input).unwrap();
     }
@@ -410,7 +417,7 @@ fn a_growing_finalizer_cycle_is_native_unavailable_over_every_partition_order_on
     assert!(source.is_empty());
     let mut engine = native_engine(FINALIZER_GROWING);
     let input = engine.export_native_input().unwrap();
-    let whole = site_texts(&engine, input.instances.growing_sites());
+    let whole = site_texts(&engine, input.instances.growing_sites(&input.types));
     assert!(whole.contains(&"h".to_string()), "{whole:?}");
     let mut owners: Vec<_> = input.instances.edges.iter().map(|e| &e.owner).collect();
     owners.sort();
@@ -428,7 +435,10 @@ fn a_growing_finalizer_cycle_is_native_unavailable_over_every_partition_order_on
                     .cloned(),
             );
         }
-        assert_eq!(site_texts(&engine, graph.growing_sites()), whole);
+        assert_eq!(
+            site_texts(&engine, graph.growing_sites(engine.types())),
+            whole
+        );
     }
     let error = engine.import_native_input(input).err().expect("rejected");
     assert!(format!("{error:?}").contains("#87"), "{error:?}");
@@ -463,7 +473,8 @@ mod verdict {
                 let before = read(Counter::CacheValidationRows);
                 assert_eq!(engine.generic_graph_diagnostics().unwrap(), first);
                 assert!(read(Counter::CacheValidationRows) > before);
-                engine.module_inputs_mut().manifest_revision = ContentHash::of_bytes(b"edited manifest");
+                engine.module_inputs_mut().manifest_revision =
+                    ContentHash::of_bytes(b"edited manifest");
                 let before = read(Counter::CacheValidationRows);
                 assert_eq!(engine.generic_graph_diagnostics().unwrap(), first);
                 assert!(read(Counter::CacheValidationRows) > before);

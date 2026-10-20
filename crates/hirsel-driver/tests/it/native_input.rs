@@ -171,18 +171,15 @@ fn independent_validation_compares_nested_set_keys_without_using_insertion_order
         "fn key(last:u64)->Set[u64]{let mut s:Set[u64]=set.empty();set.insert(mut s,1);set.insert(mut s,last);take s}\nfn build()->Map[Set[u64],u64]{let mut m:Map[Set[u64],u64]=map.empty();map.insert(mut m,key(2),10);map.insert(mut m,key(3),20);take m}\nconst M:Map[Set[u64],u64]=build()\npub fn main()->Result[(),()]{let m=comptime build();Ok(())}\n",
     );
     let input = engine.export_native_input().unwrap();
-    let signatures: hirsel_validate::SignatureMap = input
-        .signatures
-        .iter()
-        .map(|(p, s)| (p.clone(), (**s).clone()))
-        .collect();
+    let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+    signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
     let mut path = entry_path(&default_context());
     path.0.name = "M".into();
     let output = engine
         .lower_to_tir(&entry_path(&default_context()))
         .unwrap()
         .value;
-    hirsel_validate::assert_valid(&output, &signatures);
+    hirsel_validate::assert_valid(&output, engine.types(), &signatures);
     let mut forged = (*output).clone();
     let mut changed = 0;
     for body in &mut forged.bodies {
@@ -194,7 +191,8 @@ fn independent_validation_compares_nested_set_keys_without_using_insertion_order
         }
     }
     assert_eq!(changed, 1);
-    let report = hirsel_validate::validate(&forged, &signatures, &mut vec![]);
+    forged.types = hirsel_tir::definition_types(engine.types(), &forged);
+    let report = hirsel_validate::validate(&forged, engine.types(), &signatures, &mut vec![]);
     assert!(
         report
             .violations
@@ -701,7 +699,7 @@ fn borrowed_associations_and_scoped_promises_are_checked_at_native_import() {
     .into();
     assert!(engine.import_native_input(bad).is_err());
     let mut bad = base;
-    let nominal = bad.signatures.values_mut().find(|s| matches!(&s.kind,SignatureKind::Type(t) if t.loop_source.is_some() && !s.definition.0.package.name_is("core"))).unwrap();
+    let nominal = bad.signatures.values_mut().find(|s| matches!(&s.kind,SignatureKind::Type(t) if t.loop_source.is_some() && !s.definition.path().0.package.name_is("core"))).unwrap();
     let SignatureKind::Type(t) = &mut Arc::make_mut(nominal).kind else {
         panic!()
     };

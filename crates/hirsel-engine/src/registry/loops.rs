@@ -2,8 +2,8 @@
 use super::{build::Builder, *};
 use hirsel_syntax::Visibility;
 
-pub(super) fn signatures() -> Vec<Signature> {
-    let b = Builder::new("T");
+pub(super) fn signatures(types: &Arc<TypeInterner>) -> Vec<Signature> {
+    let b = Builder::new(types, "T");
     let cursor = TypeDefinition {
         loop_source: None,
         format: None,
@@ -33,7 +33,7 @@ pub(super) fn signatures() -> Vec<Signature> {
         SignatureKind::Type(cursor.clone()),
         true,
     )];
-    out.push(Builder::new("T").signature(
+    out.push(Builder::new(types, "T").signature(
         "$intrinsic.ViewCursor",
         SignatureKind::Type(cursor),
         true,
@@ -48,7 +48,7 @@ pub(super) fn signatures() -> Vec<Signature> {
         } else {
             "ViewCursor"
         };
-        let mut b = Builder::new(generics);
+        let mut b = Builder::new(types, generics);
         let mut f = b.function(
             &format!("source: {source}"),
             &format!("$intrinsic.{cursor_name}[{item}] in source uses {{source}}"),
@@ -72,13 +72,13 @@ pub(super) fn signatures() -> Vec<Signature> {
         }
         let mut result = b.types.get(f.result).unwrap().clone();
         result.drop_allocation = DropAllocation::NoAlloc;
-        f.result = b.types.push(result);
+        f.result = b.types.intern(result);
         out.push(b.signature(
             &format!("$intrinsic.{protocol}_open"),
             SignatureKind::Function(f),
             false,
         ));
-        let mut b = Builder::new("T");
+        let mut b = Builder::new(types, "T");
         let mut f = b.function(
             &format!("mut cursor: $intrinsic.{cursor_name}[T]"),
             "Option[T] in cursor uses {cursor}",
@@ -96,7 +96,7 @@ pub(super) fn signatures() -> Vec<Signature> {
             false,
         ));
     }
-    let mut b = Builder::new("T");
+    let mut b = Builder::new(types, "T");
     let representation = b.ty("Array[T]", PassingMode::Take);
     let owner = TypeDefinition {
         loop_source: None,
@@ -128,7 +128,7 @@ pub(super) fn signatures() -> Vec<Signature> {
         ("ListConsume", "T", "List[T]"),
         ("InlineConsume", "T,n:size", "Inline[T,n]"),
     ] {
-        let mut b = Builder::new(generics);
+        let mut b = Builder::new(types, generics);
         let mut f = b.function(
             &format!("take source: {source} in source"),
             "$intrinsic.OwnedCursor[T] in source uses {source}",
@@ -142,7 +142,7 @@ pub(super) fn signatures() -> Vec<Signature> {
             SignatureKind::Function(f),
             false,
         ));
-        let mut b = Builder::new("T");
+        let mut b = Builder::new(types, "T");
         let mut f = b.function(
             "mut cursor: $intrinsic.OwnedCursor[T]",
             "Option[T] in cursor uses {cursor}",
@@ -171,7 +171,7 @@ pub(super) fn signatures() -> Vec<Signature> {
             "$intrinsic.OwnedSortedMapCursor",
         ),
     ] {
-        let mut b = Builder::new(generics);
+        let mut b = Builder::new(types, generics);
         let representation = b.ty(source, PassingMode::Take);
         let owner = TypeDefinition {
             loop_source: None,
@@ -212,7 +212,7 @@ pub(super) fn signatures() -> Vec<Signature> {
                 "Option[(K,V)] in cursor uses {cursor}".to_owned(),
             ),
         ] {
-            let mut b = Builder::new(generics);
+            let mut b = Builder::new(types, generics);
             let mut f = b.function(&parameters, &result, true);
             if suffix == "len" {
                 f.uses = Uses::Only(AuthoritySummary::inert());
@@ -231,7 +231,7 @@ pub(super) fn signatures() -> Vec<Signature> {
             ));
         }
     }
-    let mut b = Builder::new("K: key,V");
+    let mut b = Builder::new(types, "K: key,V");
     let mut f = b.function("source: Map[K,V], index: u64", "u64", true);
     f.uses = Uses::Only(AuthoritySummary::inert());
     f.authority = AuthoritySummary::inert();
@@ -241,12 +241,13 @@ pub(super) fn signatures() -> Vec<Signature> {
         false,
     ));
     for signature in &mut out {
-        signature.metadata.visibility =
-            if signature.definition == hirsel_syntax::DefPath::core("$intrinsic.ViewCursor") {
-                Visibility::PublicOpaque
-            } else {
-                Visibility::Private
-            };
+        signature.metadata.visibility = if *signature.definition.path()
+            == hirsel_syntax::DefPath::core("$intrinsic.ViewCursor")
+        {
+            Visibility::PublicOpaque
+        } else {
+            Visibility::Private
+        };
     }
     out
 }

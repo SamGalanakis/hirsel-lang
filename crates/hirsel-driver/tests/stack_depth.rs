@@ -80,8 +80,17 @@ fn deepest_source_phases_fit_with_fourfold_stack_margin() {
             .checked
             .expressions
             .retain(|row| row.expression != hirsel_syntax::ExprId(0));
+        let comptime = engine.prepare_comptime(&analyzed, &signature).unwrap();
         let error = measured("lowering", || {
-            LowerAdapter.lower(analyzed, &signature).unwrap_err()
+            LowerAdapter
+                .lower(
+                    engine.types(),
+                    engine.type_memo(),
+                    &analyzed,
+                    &comptime,
+                    &signature,
+                )
+                .unwrap_err()
         });
         assert!(
             matches!(error, QueryError::Operational(ref failure) if failure.message.contains("missing expression decision"))

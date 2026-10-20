@@ -39,8 +39,8 @@ impl QueryEngine {
         roots: impl IntoIterator<Item = DefPath>,
     ) -> Result<DefinitionHashes, QueryError> {
         let contents = self.closure_contents(roots)?;
-        let hashes = hirsel_proof_export::definition_hashes(self.types(), &contents)
-            .map_err(operational)?;
+        let hashes =
+            hirsel_proof_export::definition_hashes(self.types(), &contents).map_err(operational)?;
         let mut call_sites = BTreeMap::new();
         for (path, content) in &contents {
             if let DefinitionContent::Body { tir: Some(tir), .. } = content {
@@ -128,7 +128,7 @@ impl QueryEngine {
                     Form::Named(content, reads)
                 }
             }
-        } else if self.registry.get(path).is_some()
+        } else if self.registry.get(DefId::intern(path)).is_some()
             || self.builtins.contains_key(path)
             || self.staged_constants.contains_key(path)
         {

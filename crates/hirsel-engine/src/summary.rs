@@ -88,7 +88,12 @@ pub struct DefinitionSummary {
     pub staged: Box<[(NameSite, Box<[SizeParameterRef]>)]>,
 }
 /// One `ParameterGrowth` edge: from an owner parameter to a callee parameter.
-pub type GrowthEdge = ((DefId, GenericParameterRef), (DefId, GenericParameterRef), bool, Span);
+pub type GrowthEdge = (
+    (DefId, GenericParameterRef),
+    (DefId, GenericParameterRef),
+    bool,
+    Span,
+);
 /// GEN-5's input: each owner parameter that flows into a callee parameter,
 /// whether it flows nested (strict growth), and the call site.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -142,7 +147,10 @@ pub fn summarize(t: &TypeInterner, typed: &TypedBody) -> (DefinitionSummary, Par
     }
     for row in &checked.expressions {
         if comptime(row.expression) {
-            sites.insert((NameSite::Expression(row.expression), FrameKind::ComptimeRegion));
+            sites.insert((
+                NameSite::Expression(row.expression),
+                FrameKind::ComptimeRegion,
+            ));
         }
     }
     let mut ordered: Vec<_> = sites
@@ -268,12 +276,8 @@ pub fn summarize(t: &TypeInterner, typed: &TypedBody) -> (DefinitionSummary, Par
         .iter()
         .filter(|row| comptime(row.expression))
         .filter_map(|row| {
-            let inputs = hirsel_check_protocol::body::comptime_inputs(
-                t,
-                syntax,
-                checked,
-                row.expression,
-            );
+            let inputs =
+                hirsel_check_protocol::body::comptime_inputs(t, syntax, checked, row.expression);
             (!inputs.is_empty()).then(|| (NameSite::Expression(row.expression), inputs.into()))
         })
         .collect();

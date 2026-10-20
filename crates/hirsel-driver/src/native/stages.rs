@@ -421,7 +421,9 @@ pub fn build_program(
         launches: program
             .signatures
             .iter()
-            .filter_map(|(p, s)| super::link::launch_kind(s).map(|k| (p.clone(), k)))
+            .filter_map(|(p, s)| {
+                super::link::launch_kind(&program.types, s).map(|k| (p.clone(), k))
+            })
             .collect(),
         input: program.input.clone(),
         target: target.clone(),

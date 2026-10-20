@@ -37,25 +37,32 @@ struct MalformedUnrelated(std::rc::Rc<dyn SignaturePhase>);
 impl SignaturePhase for MalformedUnrelated {
     fn signature_items(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         items: &[std::sync::Arc<hirsel_syntax::ItemSyntax>],
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<hirsel_types::Signature>, QueryError> {
-        let mut output = self.0.signature_items(items, provider)?;
-        if output.value.definition.0.name == "poison" {
-            // A malformed unreachable row must be checked even if the producer
+        let mut output = self.0.signature_items(t, m, items, provider)?;
+        if output.value.definition.path().0.name == "poison" {
+            // A malformed row must be checked even if the producer
             // incorrectly retains its original semantic fingerprint.
-            let mut row = output.value.types.iter().next().unwrap().1.clone();
+            let hirsel_types::SignatureKind::Function(function) = &mut output.value.kind else {
+                unreachable!()
+            };
+            let mut row = t.row(function.result).clone();
             row.kind = hirsel_types::TypeKind::Error;
-            output.value.types.push(row);
+            function.result = t.intern(row);
         }
         Ok(output)
     }
     fn signature(
         &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
         syntax: std::sync::Arc<hirsel_syntax::ItemSyntax>,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<hirsel_types::Signature>, QueryError> {
-        self.signature_items(&[syntax], provider)
+        self.signature_items(t, m, &[syntax], provider)
     }
 }
 fn poisoned_engine() -> QueryEngine {

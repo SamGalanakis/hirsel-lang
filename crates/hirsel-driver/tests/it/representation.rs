@@ -18,12 +18,12 @@ fn opaque_private_edits_invalidate_owner_record_without_changing_public_signatur
     let public = engine.item_signature(&path).unwrap().value;
     assert!(matches!(&public.kind, SignatureKind::Type(t) if t.representation.is_none()));
     assert!(
-        public.types.is_empty(),
+        hirsel_types::encoding::signature_types(engine.types(), &public).is_empty(),
         "public signatures retain no hidden rows"
     );
     let private = engine.owner_representation(&path, &path).unwrap();
     assert!(matches!(
-        private.types.get(private.private_shape).unwrap().kind,
+        engine.types().get(private.private_shape).unwrap().kind,
         TypeKind::Record(_)
     ));
     assert!(
@@ -169,7 +169,7 @@ fn owner_constant_materialization_tracks_private_shape_edits() {
                 panic!("record")
             };
             assert_eq!(
-                value.types.get(fields[0].ty).unwrap().kind,
+                engine.types().get(fields[0].ty).unwrap().kind,
                 TypeKind::Primitive(primitive)
             );
             assert_eq!(
@@ -243,7 +243,12 @@ fn opaque_package_controls_preserve_private_operations_and_diagnostic_sites() {
                 let snapshot = loaded.engine.export_native_input().unwrap();
                 for public in snapshot.signatures.values() {
                     if public.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque {
-                        assert!(public.types.is_empty(), "{:?}", public.definition);
+                        assert!(
+                            hirsel_types::encoding::signature_types(&snapshot.types, public)
+                                .is_empty(),
+                            "{:?}",
+                            public.definition
+                        );
                     }
                 }
                 loaded.engine.import_native_input(snapshot).unwrap();
@@ -353,7 +358,11 @@ fn constants_reflecting_an_opaque_type_through_a_helper_track_private_field_edit
         ] {
             let file = engine.sources.add("hidden.hir", source).unwrap();
             engine.parse_file(file, &default_context()).unwrap();
-            let public = engine.item_signature(&hidden_path).unwrap().value.fingerprint;
+            let public = engine
+                .item_signature(&hidden_path)
+                .unwrap()
+                .value
+                .fingerprint;
             assert_eq!(
                 engine.materialize_constant(&field).unwrap(),
                 hirsel_tir::Constant::String(spelling.into())
