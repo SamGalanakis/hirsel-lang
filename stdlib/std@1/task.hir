@@ -1,3 +1,8 @@
+// Structured failure follows golang/sync 1f920df1 errgroup/errgroup.go:55-61,69-101
+// (join every member, cancel on the first error) and CPython 114de198
+// Lib/asyncio/taskgroups.py:13-28,72-145,260-265 (cancel siblings and await exit).
+// Hirsel's CONC-2 completion order is replayed; all returns the first error rather
+// than Python's ExceptionGroup, and successes retain task-add order.
 // Await every member of `set` in completion order (CONC-2), which a replay reproduces. The
 // first `Error` to complete cancels the members still running, joins them and is returned;
 // otherwise the results are in add order.

@@ -1,0 +1,30 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 28
+// stdout: test log: counterexample: [0, 93, 0]
+// stdout: test failure: seed=0 case=389
+// entry: trial
+// minithesis b20e7e9 test_minithesis.py:591-610.
+// Invalid paths satisfy the law; weighted(0.0) is the constant false.
+fn generate(mut s: test.Source) -> List[u64] {
+  let zero = 0u64
+  let first = test.choice(mut s, 511)
+  let second = if first == 112 {
+    test.choice(mut s, 511)
+  } else {
+    0u64
+  }
+  [zero, first, second]
+}
+
+fn law(xs: List[u64]) -> bool uses {} {
+  !(xs[1] == 93 || xs[1] == 112 && (xs[2] == 124 || xs[2] == 93))
+}
+
+fn show(xs: List[u64]) -> String {
+  test.show_list(xs, u64.to_string)
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.property_cases(t, 1000, generate, law, show)
+  Ok(())
+}

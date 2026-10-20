@@ -14,6 +14,15 @@
 //! holds the context of the task that runs on it ([`Stack::context`]). Valgrind is told about each
 //! stack (`STACK_REGISTER`) so a switch is not mistaken for a huge frame.
 
+// Context-switch references (layout/ABI comparison, no assembly copied):
+// corosensei 4b5db484, src/arch/x86_64.rs:374-402,407-510 (initial frame,
+// switch-and-link, unwind linkage); src/arch/aarch64.rs:251-370 (AArch64 linkage).
+// Boost.Context fe719426, src/asm/jump_x86_64_sysv_elf_gas.S:50-83,105-144
+// saves MXCSR/x87 CW and the SysV callee-saved registers before exchanging RSP;
+// src/asm/jump_arm64_aapcs_elf_gas.S:79-128 saves x19-x30 and d8-d15.
+// Hirsel uses a scheduler-owned save slot and two entry words, not a parent-linked
+// coroutine or transfer_t. Cross-fiber unwinding/CFI is intentionally absent:
+// task failures settle through the scheduler rather than unwinding another stack.
 use crate::context::TaskCtx;
 use crate::environmental;
 

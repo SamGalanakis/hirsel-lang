@@ -1,3 +1,7 @@
+// Erlang/OTP cfe4f037: lib/stdlib/src/gen_server.erl:1218-1223,1811-1823,
+// 1835-1853 (call, cast, reply); vectors: lib/stdlib/test/gen_server_SUITE.erl:195-198,
+// 686-706,1258-1284. One task drains one FIFO inbox; call carries a reply endpoint.
+// Hirsel returns Closed (and preserves failed-send payloads) instead of process exits.
 /// A mailbox handle. Duplicate it with `actor.dup`; the actor owns its state
 /// and processes messages in FIFO order on one task.
 pub opaque resource type Actor[M]: sendable uses {Tasks, M} {

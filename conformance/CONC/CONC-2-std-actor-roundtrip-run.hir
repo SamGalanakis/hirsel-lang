@@ -3,6 +3,7 @@
 // stdout: handled
 // stdout: handled
 // stdout: actor ok
+// OTP cfe4f037 gen_server_SUITE.erl:686-706,1258-1284: cast then call.
 pub type Message = Add(u64) | Get(actor.Reply[u64])
 
 pub type AppError = Grant(GrantError) | Output(OutputError)
@@ -32,6 +33,14 @@ pub fn main(rt: Io) -> Result[(), AppError] {
       let mut original = take counter
       let other = actor.dup(tasks, original)
       let _ = actor.cast(tasks, mut original, Add(5))
+      let interim = actor.call(
+        tasks,
+        mut original,
+        fn(take r: actor.Reply[u64]) -> Message {
+          Get(take r)
+        }
+      )
+      failure.check(interim == Ok(5u64), Arithmetic())
       let producer = task.async(
         s,
         fn() {

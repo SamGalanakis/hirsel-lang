@@ -1,5 +1,5 @@
 // rule: CONC-2
-// expect: fail SEM-1 at line 53
+// expect: fail SEM-1 at line 58
 pub fn main(rt: Io) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?
   let empty: List[u64] = []

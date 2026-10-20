@@ -521,6 +521,8 @@ conformance/CLO/CLO-4-selected-callback-ok.hir
 conformance/CLO/CLO-4-spec-lazy-map.hir
 conformance/CLO/CLO-4-std-iter-fused-run.hir
 conformance/CLO/CLO-4-std-iter-run.hir
+conformance/CLO/CLO-4-std-iter-rust-vectors-run.hir
+conformance/CLO/CLO-4-std-stream-futures-vectors-run.hir
 conformance/CLO/CLO-4-std-stream-terminal-run.hir
 conformance/CLO/CLO-4-stored-borrowed-capture-bad.hir
 conformance/CLO/CLO-4-stored-borrowed-capture-ok.hir
@@ -2045,11 +2047,14 @@ conformance/LANG/LANG-9-testhelpers-property-case-fail.hir
 conformance/LANG/LANG-9-testhelpers-property-generator-fail.hir
 conformance/LANG/LANG-9-testhelpers-property-law-fail.hir
 conformance/LANG/LANG-9-testhelpers-property-run.hir
+conformance/LANG/LANG-9-testhelpers-property-shrink-hypothesis-1-fail.hir
+conformance/LANG/LANG-9-testhelpers-property-shrink-hypothesis-2-fail.hir
 conformance/LANG/LANG-9-testhelpers-property-shrink-length-fail.hir
 conformance/LANG/LANG-9-testhelpers-property-shrink-list-fail.hir
 conformance/LANG/LANG-9-testhelpers-property-shrink-pair-fail.hir
 conformance/LANG/LANG-9-testhelpers-property-shrink-pass-run.hir
 conformance/LANG/LANG-9-testhelpers-property-shrink-text-fail.hir
+conformance/LANG/LANG-9-testhelpers-property-shrink-workout-fail.hir
 conformance/LANG/LANG-9-tour-08-http-run.hir
 conformance/LANG/LANG-9-tour-09-files-bufio-run.hir
 conformance/LANG/LANG-9-tour-11-file-errors-run.hir

@@ -1,6 +1,7 @@
 // rule: CONC-2
 // expect: run
 // stdout: closed ok
+// OTP cfe4f037 gen_server_SUITE.erl:195-198: call after stop.
 pub type Message = Get(actor.Reply[u64]) | Put(u64)
 
 pub type AppError = Grant(GrantError) | Output(OutputError)
@@ -60,6 +61,16 @@ pub fn main(rt: Io) -> Result[(), AppError] {
     }
   )
   failure.check(outcome == Error(Closed()), Arithmetic())
+  // OTP gen_server late replies are discarded after caller termination;
+  // Hirsel's explicit reply endpoint returns the unsent payload instead.
+  let (tx, rx): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  {
+    let _ = take rx
+  }
+  match actor.reply(tasks, take tx, 73u64) {
+    Error((value, Closed())) => failure.check(value == 73, Arithmetic()),
+    _ => failure.check(false, Arithmetic()),
+  }
   out.print(stdout, "closed ok\n") ? Output
   Ok(())
 }

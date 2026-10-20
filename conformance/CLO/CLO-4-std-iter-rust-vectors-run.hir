@@ -1,0 +1,117 @@
+// rule: CLO-4
+// expect: run
+// Rust f6c1107f, library/coretests/tests/iter/adapters/:
+// filter.rs:5-28, take.rs:5-30,119-143,294-343,
+// enumerate.rs:5-11,77-92, zip.rs:6-21 (nth expressed as repeated next).
+type Cursor {
+  values: List[u64],
+  index: u64,
+}
+
+fn read(mut s: Cursor) -> Option[u64] {
+  if s.index == core@1/list.len(s.values) {
+    return None
+  }
+  let n = s.values[s.index]
+  s.index += 1
+  Some(n)
+}
+
+fn source(take values: List[u64]) -> Iter[u64] {
+  iter.from(Cursor(values: take values, index: 0), read)
+}
+
+fn even(n: u64) -> bool {
+  n % 2 == 0
+}
+
+fn no(n: u64) -> bool {
+  false
+}
+
+fn count(take n: u64, take item: u64) -> u64 {
+  n + 1
+}
+
+fn check_index(take n: u64, take pair: (u64, u64)) -> u64 {
+  let (index, value) = pair
+  failure.check(index == n && value == n, Bounds())
+  n + 1
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let xs: List[u64] = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+  failure.check(
+    iter.fold(iter.filter(source(copy xs), even), 0u64, count) == 5,
+    Bounds()
+  )
+  failure.check(
+    iter.collect(iter.filter(source(copy xs), even)) == [0u64, 2u64, 4u64, 6u64, 8u64],
+    Bounds()
+  )
+  failure.check(iter.collect(iter.filter(source(copy xs), no)) == [], Bounds())
+  failure.check(iter.collect(iter.filter(source([]), even)) == [], Bounds())
+  let values: List[u64] = [0, 1, 2, 3, 5, 13, 15, 16, 17, 19]
+  failure.check(
+    iter.collect(iter.take_n(source(copy values), 5)) == [0u64, 1u64, 2u64, 3u64, 5u64],
+    Bounds()
+  )
+  failure.check(
+    iter.collect(iter.take_n(source([0u64, 1u64, 2u64, 3u64]), 5)) == [
+      0u64,
+      1u64,
+      2u64,
+      3u64
+    ],
+    Bounds()
+  )
+  let limits: List[u64] = [0, 5, 10, 11, 0xffffffffffffffff]
+  for limit in limits {
+    let expected = if limit < 10 {
+      limit
+    } else {
+      10u64
+    }
+    failure.check(
+      iter.fold(iter.take_n(source(copy values), limit), 0u64, count) == expected,
+      Bounds()
+    )
+  }
+  let mut partial = iter.take_n(source(copy values), 5)
+  failure.check(iter.next(mut partial) == Some(0u64), Bounds())
+  failure.check(iter.next(mut partial) == Some(1u64), Bounds())
+  failure.check(iter.fold(take partial, 0u64, count) == 3, Bounds())
+  let mut en = iter.enumerate(source([0u64, 1u64, 2u64, 3u64, 4u64, 5u64]))
+  failure.check(iter.next(mut en) == Some((0u64, 0u64)), Bounds())
+  failure.check(iter.next(mut en) == Some((1u64, 1u64)), Bounds())
+  failure.check(iter.fold(take en, 2u64, check_index) == 6, Bounds())
+  failure.check(iter.collect(iter.enumerate(source([]))) == [], Bounds())
+  let directions: List[bool] = [true, false]
+  for left in directions {
+    let a: List[u64] = [0, 1, 2, 4, 5]
+    let b: List[u64] = [10, 11, 12]
+    let mut zipped = if left {
+      iter.zip(source(copy a), source(copy b))
+    } else {
+      iter.zip(source(copy b), source(copy a))
+    }
+    let expected = if left {
+      (0u64, 10u64)
+    } else {
+      (10u64, 0u64)
+    }
+    failure.check(iter.next(mut zipped) == Some(expected), Bounds())
+    let _ = iter.next(mut zipped)
+    let expected_last = if left {
+      (2u64, 12u64)
+    } else {
+      (12u64, 2u64)
+    }
+    failure.check(iter.next(mut zipped) == Some(expected_last), Bounds())
+    failure.check(iter.next(mut zipped) == None, Bounds())
+    failure.check(iter.next(mut zipped) == None, Bounds())
+  }
+  failure.check(iter.collect(iter.zip(source([]), source([1u64]))) == [], Bounds())
+  failure.check(iter.collect(iter.zip(source([1u64]), source([]))) == [], Bounds())
+  Ok(())
+}

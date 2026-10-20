@@ -1,3 +1,8 @@
+// Sequential fallible adapters also follow futures-rs 706e29b:
+// futures-util/src/stream/try_stream/{try_filter.rs,and_then.rs},
+// stream/stream/{try_fold.rs,try_for_each.rs}; vectors are in
+// conformance/CLO/CLO-4-std-stream-futures-vectors-run.hir with file:line citations.
+// Flow terminates after errors, predicates may fail, and polling is synchronous.
 // Pull composition follows Effect 4cddd3c Channel.pipeTo; terminal state is
 // explicit, like Rust Fuse. Unlike raw Result iterators, errors also end a Flow.
 /// An owned fallible cursor. Its source and callbacks stay owned until destruction.

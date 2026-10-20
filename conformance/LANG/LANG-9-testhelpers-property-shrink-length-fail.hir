@@ -3,7 +3,7 @@
 // stdout: test log: counterexample: [1001]
 // stdout: test failure: seed=0 case=0
 // entry: trial
-// minithesis test_finds_small_list_even_with_bad_lists: a drawn length, then that many
+// minithesis b20e7e9 test_minithesis.py:57-92; test_finds_small_list_even_with_bad_lists: a drawn length, then that many
 // elements, still shrinks to [1001] (sorting, then lowering the length).
 fn bad_list(mut s: test.Source) -> List[u64] {
   let n = test.choice(mut s, 10)

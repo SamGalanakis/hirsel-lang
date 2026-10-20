@@ -1,0 +1,95 @@
+// rule: CLO-4
+// expect: run
+// futures-rs 706e29b, futures-util/src/stream/try_stream/mod.rs:194-199,625-631; stream/stream/mod.rs:1162-1168,1200-1210;
+// futures/tests/stream_try_stream.rs:14-22 (error followed by more input).
+type Cursor {
+  values: List[Result[u64, u64]],
+  index: u64,
+}
+
+fn read(mut s: Cursor) -> Option[Result[u64, u64]] {
+  if s.index == core@1/list.len(s.values) {
+    return None
+  }
+  let value = s.values[s.index]
+  s.index += 1
+  Some(value)
+}
+
+fn source(take values: List[Result[u64, u64]]) -> stream.Flow[u64, u64] {
+  stream.from_results(iter.from(Cursor(values: take values, index: 0), read))
+}
+
+fn even(n: u64) -> Result[bool, u64] {
+  Ok(n % 2 == 0)
+}
+
+fn plus_two(take n: u64) -> Result[u64, u64] {
+  Ok(n + 2)
+}
+
+fn add(take n: u64, take x: u64) -> Result[u64, u64] {
+  Ok(n + x)
+}
+
+fn reject(take n: u64) -> Result[u64, u64] {
+  Error(n)
+}
+
+fn visit(take n: u64) -> Result[(), u64] {
+  failure.check(n <= 3, Bounds())
+  if n == 3 {
+    Error(3u64)
+  } else {
+    Ok(())
+  }
+}
+
+fn ended(mut s: stream.Flow[u64, u64]) -> () {
+  failure.check(stream.next(mut s) == None, Bounds())
+  failure.check(stream.next(mut s) == None, Bounds())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut mapped = stream.try_map(source([Ok(5u64), Error(0u64), Ok(9u64)]), plus_two)
+  failure.check(stream.next(mut mapped) == Some(Ok(7u64)), Bounds())
+  failure.check(stream.next(mut mapped) == Some(Error(0u64)), Bounds())
+  ended(mut mapped)
+  let mut filtered = stream.try_filter(
+    source([Ok(1u64), Ok(2u64), Ok(3u64), Error(17u64), Ok(4u64)]),
+    even
+  )
+  failure.check(stream.next(mut filtered) == Some(Ok(2u64)), Bounds())
+  failure.check(stream.next(mut filtered) == Some(Error(17u64)), Bounds())
+  ended(mut filtered)
+  failure.check(
+    stream.try_fold(source([Ok(1u64), Ok(2u64)]), 0u64, add) == Ok(3u64),
+    Bounds()
+  )
+  failure.check(
+    stream.try_fold(source([Ok(1u64), Error(2u64), Ok(1u64)]), 0u64, add) == Error(2u64),
+    Bounds()
+  )
+  failure.check(stream.try_fold(source([]), 7u64, add) == Ok(7u64), Bounds())
+  failure.check(
+    stream.try_for_each(source([Ok(1u64), Ok(2u64), Ok(3u64), Ok(4u64)]), visit) == Error(
+      3u64
+    ),
+    Bounds()
+  )
+  failure.check(stream.try_for_each(source([]), visit) == Ok(()), Bounds())
+  let mut failed = stream.try_map(source([Ok(1u64), Ok(2u64), Ok(3u64)]), reject)
+  failure.check(stream.next(mut failed) == Some(Error(1u64)), Bounds())
+  ended(mut failed)
+  failure.check(
+    iter.collect(
+      stream.to_iter(stream.take_n(source([Ok(1u64), Ok(2u64), Error(3u64)]), 2))
+    ) == [Ok(1u64), Ok(2u64)],
+    Bounds()
+  )
+  failure.check(
+    iter.collect(stream.to_iter(stream.take_n(source([Error(3u64)]), 0))) == [],
+    Bounds()
+  )
+  Ok(())
+}
