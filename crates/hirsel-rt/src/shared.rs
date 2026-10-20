@@ -124,6 +124,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_freeze(ctx: *mut TaskCtx, block: *mut Head
                 COUNT_IMMORTAL,
             );
         }
+        #[cfg(feature = "diagnostic")]
+        crate::root_trace::frozen(block);
     }
 }
 
@@ -146,5 +148,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_thaw(ctx: *mut TaskCtx, block: *mut Header
         if let Some(layout) = frozen_value(ctx, block) {
             thaw_value(ctx, layout, payload(block));
         }
+        #[cfg(feature = "diagnostic")]
+        crate::root_trace::retired(block);
     }
 }

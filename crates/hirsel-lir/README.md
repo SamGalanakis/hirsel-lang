@@ -289,7 +289,17 @@ Invariants:
   written), then replays holder
   credits exactly over normal and failure edges: joins must agree, nothing
   leaks at an exit, a holder outlives its loans, and a destructible value is
-  released only at Ready. A slot holds nothing owned once its content is
+  released only at Ready. RC-ROOT (S-14) keeps root-bearing content (whose
+  drop program reaches a `Shared` root, derived from the layout records
+  alone) at its cleanup anchor before Ready: a drop or release of it under a
+  TIR cleanup anchor sits in a `Cleanup` or `FailureCleanup` block, one under
+  a disposal or state-release anchor in a failure cleanup
+  (`RootOutsideAnchor`; a library body, which has no TIR cleanup chain, keeps
+  its drops where its operation's contract places them, and a displaced slot's
+  drop ends content that already left its place); a semantic copy of it
+  (`Share`) is never a moved-out value, i.e. a Dup cancelled against its
+  holder's release (`RootCopyCancelled`); and it is never region-placed
+  (`RootInRegion`). A slot holds nothing owned once its content is
   uninitialized or moved out whole, or once, on every path where it is
   initialized, every owning part of it (through inline fields, and through
   the fields of the variant a `VariantField` take showed active) is moved out

@@ -273,6 +273,28 @@ Cranelift does not is a row of
 failure without its row, a changed reason and a row whose case agrees fail. The run
 prints the rows its results imply, keeping rows of cases it did not select.
 
+`native --trace-roots` (on demand: `//:gate-native-trace-roots` filtered, and the whole
+corpus as `//:gate-native-trace-roots-shard-1` to `-96`, `--shard I/N` by path hash) is
+the root-anchor gate of S-14: every executable case of `conformance/passing.txt` runs
+in the interpreter, as an unoptimized LLVM x86-64 executable and as a Cranelift one,
+both on the diagnostic archive, each tracing every live `Shared` root's count at every
+scheduling point (`<task path> <ordinal>: <freeze ordinal>=<count> ...`, the root task's
+path spelled `root`). A scheduling point is the yield after an operation (a check that
+fails before the operation's effect does not yield), or a park that does not yield (a
+scope exit waiting for its children); a holding
+child's result that a detach or scope exit discards is dropped in the child's own turn,
+so its points are the child's. A configuration agrees only when its observation and its trace
+equal the interpreter's, line for line, so every engine has the same holders of every
+root at every operation. Exact rows of `native-tests/regressions/exclusions.tsv` are judged
+as the parity set's LLVM control is: an excluded case still runs, its reason must equal
+its row's, a row whose case now agrees is stale, and where the LLVM configuration is
+unavailable with an exact row, the case's Cranelift configurations are judged unavailable
+with it, as parity's are. The interpreter traces through
+`SimulationConfig::trace_roots`, a native launch through `HIRSEL_RT_TRACE_ROOTS`
+(`hirsel_rt::launch`). `DROP-2-root-copy-thaw-run` and `DROP-2-root-aggregate-thaw-run`
+are its two named examples; `CONC-2-detached-result-cleanup-run` checks where a discarded
+result's drop runs.
+
 Large library vectors can select a compiled-only stdout oracle:
 
 ```hirsel

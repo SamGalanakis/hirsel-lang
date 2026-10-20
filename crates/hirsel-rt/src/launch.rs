@@ -15,7 +15,9 @@
 //! here and never by a semantic kernel:
 //! `HIRSEL_RT_ROOT` (the fixture profile's read-write directory beside every Io projection;
 //! absent, the root Io grants no mount and no projection),
-//! `HIRSEL_RT_DIAGNOSTIC` (poisoning and header checks) and `HIRSEL_RT_OBSERVATION` (a file
+//! `HIRSEL_RT_DIAGNOSTIC` (poisoning and header checks; with it, in the diagnostic archive,
+//! `HIRSEL_RT_TRACE_ROOTS` names a file receiving every live `Shared` root's count at every
+//! scheduling point, `crate::root_trace`) and `HIRSEL_RT_OBSERVATION` (a file
 //! that receives the observation record below), `HIRSEL_RT_TAPE` (a file that receives the
 //! real Io completion tape) and `HIRSEL_RT_REPLAY` (a recorded tape: Io is then the
 //! simulated adapter, which accepts exactly the recorded requests in order, and a mismatch,
@@ -1842,6 +1844,13 @@ pub(crate) unsafe fn execute(
         Err(error) => return Err(error.to_string()),
     };
     let report_failures = observation.is_none();
+    #[cfg(feature = "diagnostic")]
+    if let Some(path) = std::env::var_os("HIRSEL_RT_TRACE_ROOTS") {
+        match prepare_tool_file(std::path::Path::new(&path)) {
+            Ok(file) => crate::root_trace::open(file),
+            Err(error) => return Err(error.to_string()),
+        }
+    }
     #[cfg(feature = "measurement")]
     let measurement_segments = std::env::var_os("HIRSEL_RT_MC_PROFILE").is_some()
         && std::env::var_os("HIRSEL_RT_MEASUREMENT").is_some();

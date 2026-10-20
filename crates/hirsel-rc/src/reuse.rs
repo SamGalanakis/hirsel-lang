@@ -307,8 +307,8 @@ fn heap_values<S: Stage>(ed: &Editor<S>, facts: &Facts) -> Vec<bool> {
 /// `(block, instruction)`: the slot's one reaching version, the layout of the
 /// environment the closure was built with (its static callable type may be
 /// erased) and the callable's type. The slot's content is definitely whole,
-/// came from an owned heap closure, and its environment is fixed-size
-/// without user-visible destruction.
+/// came from an owned heap closure, and its environment is fixed-size and
+/// not anchored: no user-visible destruction and no `Shared` root (S-14).
 fn closure_drops<S: Stage>(
     ed: &Editor<S>,
     facts: &Facts,
@@ -364,7 +364,7 @@ fn closure_drops<S: Stage>(
             };
             // Empty environments are static, even at a heap closure site.
             // They own no allocation that can donate storage.
-            if !lay.destructible(environment)
+            if !lay.anchored(environment)
                 && lay.0.layout(environment).is_some_and(|record| {
                     record.size != hirsel_lir::layout_types::SizeSpec::Fixed(0)
                 })

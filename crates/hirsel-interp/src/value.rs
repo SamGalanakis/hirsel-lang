@@ -73,6 +73,10 @@ impl SharedRoot {
     fn acquire(&self) {
         self.graph().roots += 1;
     }
+    /// The root count: the holders of this graph (0 once released or thawed).
+    pub(crate) fn count(&self) -> u64 {
+        self.graph().roots
+    }
     /// Give up this root: the last one hands back the graph for release.
     pub(crate) fn release(&self) -> Result<Option<Value>, crate::Error> {
         let mut graph = self.graph();
@@ -643,6 +647,20 @@ impl Value {
     pub(crate) fn copied(&self) -> Value {
         self.acquire_roots();
         self.clone()
+    }
+    /// Whether this value reaches the `Shared` root graph `id` (frozen contents excluded),
+    /// owned or borrowed.
+    pub(crate) fn reaches_root(&self, id: u64) -> bool {
+        let mut work = vec![self];
+        while let Some(value) = work.pop() {
+            match value {
+                Value::Shared(root) if root.id() == id => return true,
+                Value::Shared(_) => {}
+                Value::Closure { captures, .. } => work.extend(captures.iter().flatten()),
+                _ => work.extend(value.fields().into_iter().flatten().flatten()),
+            }
+        }
+        false
     }
     /// Add a root to every `Shared` root an owned copy of this value reaches.
     pub(crate) fn acquire_roots(&self) {

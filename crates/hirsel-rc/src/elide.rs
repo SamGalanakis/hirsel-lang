@@ -10,6 +10,10 @@
 //! payload (an element of a list) keeps its copy and the release, as its
 //! block's drop has no hole to skip.
 //!
+//! Insertion never releases an anchored slot early (S-14), so a copy of
+//! content that reaches a `Shared` root never cancels: its holder ends at its
+//! cleanup anchor, and the stage validator's RC-ROOT rule refuses the move.
+//!
 //! The pair must be adjacent, so no check, effect or failure edge lies
 //! between the Dup and the release it cancels. Only counted copies (`Dup`
 //! and `Fields` recipes) cancel; a flat byte copy into distinct storage is

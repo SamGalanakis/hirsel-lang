@@ -356,6 +356,14 @@ NATIVE_FULL_SHARDS = 8
 # The Cranelift parity set (about 3600 cases, each an LLVM and a Cranelift build and
 # launch) runs as shards by path hash, each well under the pool's 600 s action limit.
 CRANELIFT_SHARDS = 8
+# The root-anchor trace gate (S-14) builds each executable baseline case (about
+# 2700) as an unoptimized LLVM and a Cranelift executable on the diagnostic archive,
+# as the parity set does, shares its measured request (two jobs), and runs the
+# interpreter. On 2026-10-20 a loaded pool finished about 50 cases in 500 s per
+# shard, the std-heavy markdown, YAML, TOML and HTTP cases taking 40 to 90 s each
+# (one 235 s), so 96 shards of about 28 cases keep each under the pool's 600 s
+# action limit.
+TRACE_ROOTS_SHARDS = 96
 # The historical replay (tools/native-plants.py --history-only) runs every
 # protected source under the exhaustive matrix at one CPU; single sources take
 # up to 15 minutes, so 32 path-hash shards keep each under the gate's budget.
@@ -413,6 +421,16 @@ GATE_TESTS = [
            args=["--cranelift", "--aarch64", "--shard", f"{index}/{CRANELIFT_SHARDS}"],
            runtime_archives=RUNTIME_ARCHIVES, **GATE)
       for index in range(1, CRANELIFT_SHARDS + 1)),
+    # The root-anchor trace gate (S-14): every baseline case's `Shared` root trace in the
+    # interpreter, LLVM and Cranelift must be equal. On demand (`-c hirsel.full=true`), with
+    # a lane's `--test-arg=--filter --test-arg=<program>`; the shards are the whole corpus.
+    dict(name="gate-native-trace-roots", full=True, binary="//:hirsel-conformance-bin-native",
+         args=["--trace-roots"], runtime_archives=RUNTIME_ARCHIVES, measured_as="gate-native-cranelift",
+         **GATE),
+    *(dict(name=f"gate-native-trace-roots-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",
+           args=["--trace-roots", "--shard", f"{index}/{TRACE_ROOTS_SHARDS}"],
+           runtime_archives=RUNTIME_ARCHIVES, measured_as="gate-native-cranelift", **GATE)
+      for index in range(1, TRACE_ROOTS_SHARDS + 1)),
     dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"],
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
     dict(name="gate-conformance-hash-seed", full=True, binary="//:hirsel-conformance-bin-hirsel-conformance",

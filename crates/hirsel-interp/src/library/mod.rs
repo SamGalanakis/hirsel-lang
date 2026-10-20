@@ -19,6 +19,7 @@ pub use launch::{LaunchError, LaunchedExecution, core_runtime_types, launch, lau
 
 mod callbacks;
 pub mod race;
+mod root_trace;
 mod shared;
 mod slots;
 

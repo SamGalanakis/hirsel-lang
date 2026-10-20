@@ -18,9 +18,11 @@ use super::tokens;
 use super::{Cx, Report, Site, ViolationKind as K};
 use crate::ir::{
     AddressId, ArgumentValue, BlockId, BlockKind, CaptureUse, CleanupAnchorId, EdgeId, FailureId,
-    FlatFieldOp, Holding, Inst, LoanId, Placement, ScopeId, ScopeInfo, SlotId, SlotKind,
-    StorageOwner, Terminator, ValueId, ValueRepr,
+    FlatFieldOp, Holding, INSTRUCTION_DROP, Inst, LOOP_RELEASE, LoanId, Placement,
+    SCRATCH_DISPOSAL, STATE_RELEASE, ScopeId, ScopeInfo, SlotId, SlotKind, StorageOwner,
+    Terminator, UnitOrigin, ValueId, ValueRepr,
 };
+use crate::layout_types::LayoutId;
 use crate::persistent::{Element, PVec};
 use crate::stage::{Stage, StageKind};
 use hirsel_core_contract::Passing;
@@ -1902,6 +1904,36 @@ impl<S: Stage> Walker<'_, '_, S> {
         }
     }
 
+    /// RC-ROOT (S-14): before Ready, content that reaches a `Shared` root
+    /// ends at its cleanup anchor. A TIR cleanup action runs in a `Cleanup`
+    /// or `FailureCleanup` block, so a drop or release under a TIR anchor
+    /// elsewhere ended its holder early (at a last use, say). An instruction's
+    /// own drop and a loop release sit where TIR states them; a disposal or
+    /// state release cleans up after a failure only. A displaced slot's drop is not
+    /// checked: its content left its place when displaced. A library body has no TIR cleanup
+    /// chain: its drops sit where its operation's contract places them (a spawned task's
+    /// callable after its body returns, say).
+    fn root_anchor(&mut self, site: Site, b: BlockId, anchor: CleanupAnchorId, layout: LayoutId) {
+        if self.cx.stage >= StageKind::Ready
+            || self.cx.unit.header.origin == UnitOrigin::Library
+            || !self.cx.layouts.root_bearing(layout)
+        {
+            return;
+        }
+        let Some(cleanup) = self.cx.unit.tables.cleanup_anchors.get(anchor.index()) else {
+            return;
+        };
+        let kind = self.cx.unit.blocks[b.index()].kind;
+        let at_anchor = match cleanup.cleanup {
+            INSTRUCTION_DROP | LOOP_RELEASE => true,
+            SCRATCH_DISPOSAL | STATE_RELEASE => kind == BlockKind::FailureCleanup,
+            _ => kind != BlockKind::Body,
+        };
+        if !at_anchor {
+            self.err(site, K::RootOutsideAnchor(anchor));
+        }
+    }
+
     fn anchor_release(&mut self, site: Site, value: ValueId, anchor: CleanupAnchorId) {
         self.discharged.insert(anchor);
         // A block destroys its payload; an inline value its own content.
@@ -2095,7 +2127,18 @@ impl<S: Stage> Walker<'_, '_, S> {
                 self.write_block(site, st, address, version)
             }
             // A semantic copy's mark reads the value, which keeps its credits.
-            Inst::Share { value } => self.borrow(site, st, cr, value),
+            Inst::Share { value } => {
+                // RC-ROOT (S-14): a semantic copy of root-bearing content is a
+                // Dup; one made by a move cancelled that Dup against its
+                // holder's release, ending the holder away from its anchor.
+                if self.cx.stage < StageKind::Ready
+                    && self.facts.moved[value.index()]
+                    && self.cx.layouts.root_bearing(self.cx.value_layout(value))
+                {
+                    self.err(site, K::RootCopyCancelled(value));
+                }
+                self.borrow(site, st, cr, value)
+            }
             // A write of a builder's open element reads its operand (LIR
             // schema revision 24).
             Inst::FlatField {
@@ -2558,6 +2601,17 @@ impl<S: Stage> Walker<'_, '_, S> {
                 ..
             } => {
                 self.discharged.insert(anchor);
+                let dropped = unit.types[unit.addresses[address.index()].ty.index()].layout;
+                // A displaced slot's content left its place in the step that displaced it
+                // (an overwrite, or a unique write's copy that now holds what it held).
+                let displaced = matches!(
+                    self.place(address),
+                    Some((Root::Slot(slot), path))
+                        if path.is_empty() && unit.slots[slot.index()].kind == SlotKind::Displaced
+                );
+                if !displaced {
+                    self.root_anchor(site, b, anchor, dropped);
+                }
                 let Some((Root::Slot(slot), path)) = self.place(address) else {
                     return;
                 };
@@ -2659,6 +2713,7 @@ impl<S: Stage> Walker<'_, '_, S> {
                 ..
             } => {
                 self.anchor_release(site, value, anchor);
+                self.root_anchor(site, b, anchor, self.cx.value_layout(value));
                 if let Some(slot) = self.facts.taken_from[value.index()] {
                     self.observe(site, b, st, slot);
                 }
@@ -2675,6 +2730,7 @@ impl<S: Stage> Walker<'_, '_, S> {
             } => {
                 self.release_mask(site, st, value, layout, live);
                 self.anchor_release(site, value, anchor);
+                self.root_anchor(site, b, anchor, self.cx.value_layout(value));
                 if let Some(slot) = self.facts.taken_from[value.index()] {
                     self.observe(site, b, st, slot);
                 }

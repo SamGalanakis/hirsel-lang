@@ -210,6 +210,40 @@ pub(crate) struct Scheduler {
     constants: crate::constants::Constants,
     /// The dispatch forms of the bodies its frames run.
     codes: crate::code::Codes,
+    /// The ended frames of finished children holding a result nobody took yet, where a
+    /// discard drops it; pruned when the table doubles.
+    holding: std::collections::HashMap<u64, Frame>,
+    holding_mark: usize,
+    /// Tasks whose turn is handed to holding children dropping discarded results.
+    hand_offs: Vec<HandOff>,
+}
+/// A task's turn handed to the rests of its pending operation: the child in its rest, the
+/// rests after it, and the task's own stack, continued when the last rest returns.
+struct HandOff {
+    parent: u64,
+    frames: Vec<Frame>,
+    failures: Vec<crate::observation::FailureRecord>,
+    child: u64,
+    rests: std::collections::VecDeque<crate::TaskRest>,
+}
+/// Holding child `rest.child`'s stack for its rest: its ended frame, dropping the values.
+fn rest_stack(
+    holding: &mut std::collections::HashMap<u64, Frame>,
+    rest: crate::TaskRest,
+) -> Result<(u64, Vec<Frame>), Error> {
+    let mut frame = holding
+        .remove(&rest.child)
+        .ok_or_else(|| invalid("a discarded result's child holds no frame"))?;
+    frame.ending = Some(crate::resources::Ending::Return(Value::Unit));
+    let site = site_of(&frame)?;
+    for value in rest.values.into_iter().rev() {
+        frame.work.push_back(crate::resources::Work::Release(
+            value,
+            anchor(&frame, site),
+            frame.caller.clone(),
+        ));
+    }
+    Ok((rest.child, vec![frame]))
 }
 impl Scheduler {
     pub(crate) fn new(
@@ -227,6 +261,9 @@ impl Scheduler {
             frames: vec![frame],
             constants,
             codes: Default::default(),
+            holding: std::collections::HashMap::new(),
+            holding_mark: HOLDING_MARK,
+            hand_offs: vec![],
         }
     }
     /// The waits of its parked tasks, in suspension order (CONC-8).
@@ -247,6 +284,8 @@ pub(crate) enum Step {
     /// None of its tasks can proceed until a wait is ready.
     Idle,
 }
+/// The holding table's size before its first pruning.
+const HOLDING_MARK: usize = 32;
 pub(crate) fn execute_frames(
     provider: &mut (impl TirProvider + ?Sized),
     sources: &SourceMap,
@@ -269,6 +308,9 @@ pub(crate) fn execute_frames(
         mut frames,
         mut constants,
         mut codes,
+        mut holding,
+        mut holding_mark,
+        mut hand_offs,
     } = state
         .take()
         .ok_or_else(|| invalid("a finished run resumed"))?;
@@ -483,11 +525,35 @@ pub(crate) fn execute_frames(
                     frames,
                     constants,
                     codes,
+                    holding,
+                    holding_mark,
+                    hand_offs,
                 });
                 return Ok(Step::Idle);
             }
         }
 
+        // The pending operation discarded holding children's results: each child drops its
+        // own in its rest, and this task continues when the last returns, with no scheduling
+        // point between (detach, `detach_all`, `cancel_all`, scope exit; native `hand_off`).
+        if frames
+            .last()
+            .is_some_and(|f| f.work.is_empty() && f.operation.is_some())
+        {
+            let mut rests: std::collections::VecDeque<_> = operations.take_rests(task).into();
+            if let Some(first) = rests.pop_front() {
+                hand_offs.push(HandOff {
+                    parent: task,
+                    frames: std::mem::take(&mut frames),
+                    failures: std::mem::take(&mut execution.failures),
+                    child: first.child,
+                    rests,
+                });
+                (task, frames) = rest_stack(&mut holding, first)?;
+                operations.enter_task(task, false);
+                continue;
+            }
+        }
         let depth = frames.len();
         // Test before taking: moving the large empty slot on every step costs.
         let top = frames.last_mut().unwrap();
@@ -1125,8 +1191,11 @@ pub(crate) fn execute_frames(
                         }
                     }
                     if let Value::Shared(root) = &value {
-                        // The last root releases the frozen graph it held.
+                        let checking = frame.check.is_some();
                         let graph = root.release()?;
+                        if checking && graph.is_some() {
+                            anchored_root(&frames, root.id())?;
+                        }
                         operations.shared_released(
                             root.id(),
                             &mut OperationContext {
@@ -1138,12 +1207,11 @@ pub(crate) fn execute_frames(
                                 anchor: Some(&anchor),
                             },
                         );
+                        // The last root releases the frozen graph it held.
                         if let Some(graph) = graph {
-                            frame.work.push_front(crate::resources::Work::Release(
-                                graph,
-                                anchor,
-                                caller.clone(),
-                            ));
+                            frames.last_mut().unwrap().work.push_front(
+                                crate::resources::Work::Release(graph, anchor, caller.clone()),
+                            );
                         }
                         continue;
                     }
@@ -1336,6 +1404,30 @@ pub(crate) fn execute_frames(
                     continue;
                 }
             }
+        }
+        // A rest ended: the next rest of its hand-off runs, or the task that handed off
+        // continues with its pending operation.
+        if frames.len() == 1
+            && frames[0].ending.is_some()
+            && let Some(index) = hand_offs.iter().position(|h| h.child == task)
+        {
+            frames.clear();
+            operations.rest_finished(task, std::mem::take(&mut execution.failures))?;
+            let hand_off = &mut hand_offs[index];
+            if let Some(next) = hand_off.rests.pop_front() {
+                hand_off.child = next.child;
+                (task, frames) = rest_stack(&mut holding, next)?;
+            } else {
+                let hand_off = hand_offs.swap_remove(index);
+                task = hand_off.parent;
+                frames = hand_off.frames;
+                execution.failures = hand_off.failures;
+                if let Some(operation) = &mut frames.last_mut().unwrap().operation {
+                    operations.rests_returned(task, &mut operation.0);
+                }
+            }
+            operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
+            continue;
         }
         if frames.last().unwrap().ending.is_some()
             && let Some(ending) = frames.last_mut().unwrap().ending.take()
@@ -1553,6 +1645,10 @@ pub(crate) fn execute_frames(
                             released: vec![],
                         }
                     };
+                    let holds = matches!(
+                        &result,
+                        OperationResult::Complete { value, .. } if *value != Value::Unit
+                    );
                     operations.task_finished(
                         task,
                         result,
@@ -1565,6 +1661,17 @@ pub(crate) fn execute_frames(
                             anchor: Some(&anchor(&finished, site_of(&finished)?)),
                         },
                     )?;
+                    // A holding child keeps its ended frame, where a discard drops its result.
+                    if holds && operations.holds_result(task) {
+                        for value in finished.slots.drain(..).flatten() {
+                            value.discard();
+                        }
+                        holding.insert(task, finished);
+                        if holding.len() > holding_mark {
+                            holding.retain(|id, _| operations.holds_result(*id));
+                            holding_mark = (holding.len() * 2).max(HOLDING_MARK);
+                        }
+                    }
                     continue;
                 }
                 execution.outcome = if let Some(limit) = tooling {
@@ -1600,6 +1707,7 @@ pub(crate) fn execute_frames(
                     .iter()
                     .chain(runnable.iter().flat_map(|(_, stack, _)| stack))
                     .chain(parked.iter().flat_map(|(_, stack, _)| stack))
+                    .chain(hand_offs.iter().flat_map(|h| &h.frames))
                     .map(Frame::logical_bytes)
                     .fold(operations.retained_bytes(), u64::saturating_add);
                 budgets.run.measured(live).map_err(Error::BudgetExceeded)?;
@@ -2474,6 +2582,23 @@ fn terminator_cleanup(terminator: &Terminator) -> Option<CleanupId> {
         _ => None,
     }
 }
+/// The root anchor check of checked interpretation (S-14, RC-ROOT): a `Shared` root dies
+/// only when no live binding of the releasing task still reaches it. Every holder is
+/// released at its TIR cleanup action, after its binding gave the value up, so a binding
+/// still reaching a dead root is a holder dropped before its cleanup.
+fn anchored_root(frames: &[Frame], id: u64) -> Result<(), Error> {
+    let bound = frames
+        .iter()
+        .flat_map(|frame| frame.slots.iter().flatten())
+        .any(|value| value.reaches_root(id));
+    if bound {
+        return Err(invalid(format!(
+            "Shared#{id} lost its last root while a live binding still reaches it (S-14)"
+        )));
+    }
+    Ok(())
+}
+
 fn anchor(frame: &Frame, site: Span) -> crate::observation::Anchor {
     crate::observation::Anchor {
         definition: frame.definition.path.clone(),

@@ -195,6 +195,7 @@ fn wrong(output: &[u8]) -> Outcome {
         budget: None,
         output: output.to_vec(),
         failures: Vec::new(),
+        roots: Vec::new(),
     })
 }
 

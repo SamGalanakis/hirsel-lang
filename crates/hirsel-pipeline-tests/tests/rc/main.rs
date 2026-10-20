@@ -32,6 +32,7 @@ mod rc_packed_walk;
 mod rc_perceus;
 mod rc_placement;
 mod rc_reuse;
+mod rc_root_anchors;
 mod rc_scaling;
 mod rc_spare_push;
 mod rc_statics;

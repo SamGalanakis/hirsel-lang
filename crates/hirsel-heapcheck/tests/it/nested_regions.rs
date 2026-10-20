@@ -12,17 +12,30 @@ fn fails(b: &mut UnitBuilder<Rc>, target: BlockId) -> FailureId {
     b.failure(edge, None, &[])
 }
 
-fn nested(heap_child: bool, escape: bool) -> (Program<Rc>, ValueId) {
-    fixture(heap_child, escape, false)
+/// What the region-placed leaf construction holds besides its scalar.
+#[derive(Clone, Copy, PartialEq)]
+enum Leaf {
+    Plain,
+    /// A user finalizer.
+    Finalizer,
+    /// A `Shared` root field (RC-ROOT, S-14).
+    Root,
 }
 
-fn fixture(heap_child: bool, escape: bool, finalizer: bool) -> (Program<Rc>, ValueId) {
+fn nested(heap_child: bool, escape: bool) -> (Program<Rc>, ValueId) {
+    fixture(heap_child, escape, Leaf::Plain)
+}
+
+fn fixture(heap_child: bool, escape: bool, held: Leaf) -> (Program<Rc>, ValueId) {
     let mut l = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
     let n = l.scalar(ScalarKind::U64);
-    let leaf = if finalizer {
-        l.resource(&[n], Some(path("finalize")))
-    } else {
-        l.record(&[n])
+    let leaf = match held {
+        Leaf::Plain => l.record(&[n]),
+        Leaf::Finalizer => l.resource(&[n], Some(path("finalize"))),
+        Leaf::Root => {
+            let root = l.shared(n);
+            l.record(&[n, root])
+        }
     };
     let leaf_ref = l.block(leaf);
     let tuple = l.record(&[leaf_ref, n]);
@@ -225,11 +238,26 @@ fn an_inline_nested_value_still_cannot_escape_its_region() {
 fn a_region_payload_cannot_elide_user_finalization() {
     let (good, _) = nested(false, false);
     assert!(check(&good).is_empty(), "{:?}", check(&good));
-    let (bad, _) = fixture(false, false, true);
+    let (bad, _) = fixture(false, false, Leaf::Finalizer);
     assert!(
         check(&bad).contains(&hirsel_lir::validate::ViolationKind::Type(
             "region construction finalizer"
         )),
+        "{:?}",
+        check(&bad)
+    );
+}
+
+#[test]
+fn a_region_payload_cannot_hold_a_shared_root() {
+    // RC-ROOT (S-14): a region frees at its own end, not at the root's cleanup anchor.
+    let (good, _) = nested(false, false);
+    assert!(check(&good).is_empty(), "{:?}", check(&good));
+    let (bad, _) = fixture(false, false, Leaf::Root);
+    assert!(
+        check(&bad)
+            .iter()
+            .any(|k| matches!(k, hirsel_lir::validate::ViolationKind::RootInRegion(_))),
         "{:?}",
         check(&bad)
     );

@@ -202,7 +202,7 @@ impl Layouts {
         for fl in fields {
             let r = self.get(fl.layout);
             match r.kind {
-                LayoutKind::Block { .. } | LayoutKind::Box { .. } => {
+                LayoutKind::Block { .. } | LayoutKind::Box { .. } | LayoutKind::Shared { .. } => {
                     for step in &r.scan {
                         scan.push(match step {
                             ScanStep::Counted { .. } => ScanStep::Counted { offset: fl.offset },

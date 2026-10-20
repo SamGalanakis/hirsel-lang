@@ -1179,6 +1179,8 @@ impl Library {
         };
         let count = u64::try_from(count.bits()).map_err(|_| invalid("random.bytes count"))?;
         if count == 0 {
+            // No draw consults the provider, so the operation does not yield.
+            self.tasks.yield_now = false;
             return Ok(OperationResult::returned(ok(Value::Bytes(vec![]))));
         }
         let value = match self.simulation.random_bytes(count) {
@@ -1302,6 +1304,22 @@ impl Operations for Library {
     fn discard_task_result(&self, id: u64) -> bool {
         self.tasks.detached(id)
     }
+    fn holds_result(&self, id: u64) -> bool {
+        self.tasks.holds_result(id)
+    }
+    fn take_rests(&mut self, parent: u64) -> Vec<crate::TaskRest> {
+        self.tasks.take_rests(parent)
+    }
+    fn rest_finished(
+        &mut self,
+        child: u64,
+        failures: Vec<crate::observation::FailureRecord>,
+    ) -> Result<(), Error> {
+        self.tasks.rest_finished(child, failures)
+    }
+    fn rests_returned(&mut self, parent: u64, result: &mut OperationResult) {
+        self.tasks.rests_returned(parent, result)
+    }
     fn task_finished(
         &mut self,
         id: u64,
@@ -1337,7 +1355,11 @@ impl Operations for Library {
         }
     }
     fn take_yield(&mut self) -> bool {
-        std::mem::take(&mut self.tasks.yield_now)
+        let point = std::mem::take(&mut self.tasks.yield_now);
+        if point && let Some(trace) = &mut self.simulation.root_trace {
+            trace.point(self.tasks.path());
+        }
+        point
     }
     fn expire_deadlines(&mut self, context: &mut OperationContext<'_>) -> Result<(), Error> {
         self.expire_due(context)
@@ -1642,7 +1664,14 @@ primary_operations! { self, call, context, name, a, value;
         arg(a, 1)?.copied()
     },
     Primitive: "shared.freeze" | "shared.thaw" => {
-        return super::shared::call(name, a, &mut self.next_shared).map(Some);
+        let result = super::shared::call(name, a, &mut self.next_shared)?;
+        if let (Some(trace), OperationResult::Complete { value: Value::Shared(root), .. }) =
+            (&mut self.simulation.root_trace, &result)
+            && name == "shared.freeze"
+        {
+            trace.frozen(root);
+        }
+        return Ok(Some(result));
     },
     Primitive: "shared.with" => { return self.shared_with(a).map(Some); },
     Capability: "mapped.with" => {

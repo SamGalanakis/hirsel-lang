@@ -3,9 +3,10 @@ use super::dispatch::{arg, variant};
 use super::{Library, error, none, ok, some, u64_value};
 use crate::observation::{Anchor, FailureRecord};
 use crate::{
-    BlockedWait, Error, OperationCall, OperationContext, OperationResult, TaskStart, Value, invalid,
+    BlockedWait, Error, OperationCall, OperationContext, OperationResult, TaskRest, TaskStart,
+    Value, invalid,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
 pub(super) struct Tasks {
@@ -37,6 +38,25 @@ pub(super) struct Tasks {
     /// Cancellations so far, of a task, a scope or the root scope: a parked task's
     /// cancellation can change only when this does.
     pub cancellations: u64,
+    /// Holding children whose result an operation discarded, with that operation's task:
+    /// each child drops its result in a turn of its own (its rest) before the operation
+    /// returns, as native `hand_off` (detach, `detach_all`, `cancel_all`, scope exit).
+    rests: Vec<(u64, TaskRest)>,
+    /// The children in their rest: whose failure a dropped result raises belongs to them.
+    resting: BTreeMap<u64, Resting>,
+    /// Tasks whose operation yields once its rests return: the yield follows the hand-offs.
+    deferred_yield: BTreeSet<u64>,
+    /// Failures raised in the rests of a task's scope exit, by spawn path: they join its
+    /// result when the rests return (FAIL-2).
+    late: BTreeMap<u64, Vec<(Vec<u32>, Vec<FailureRecord>)>>,
+}
+/// A child in its rest, whose row is retired: its scope, spawn path and cancellation, and
+/// the task whose scope exit discarded its result, when a scope exit did.
+struct Resting {
+    scope: u64,
+    path: Vec<u32>,
+    canceled: Option<u32>,
+    exit: Option<u64>,
 }
 struct TaskSet {
     scope: u64,
@@ -138,6 +158,7 @@ impl Tasks {
         self.tasks
             .get(&task)
             .and_then(|t| t.canceled)
+            .or_else(|| self.resting.get(&task)?.canceled)
             .or_else(|| {
                 self.active_scopes
                     .get(&task)?
@@ -188,7 +209,9 @@ impl Tasks {
     pub fn path(&self) -> Vec<u32> {
         self.tasks
             .get(&self.current)
-            .map(|t| t.path.clone())
+            .map(|t| &t.path)
+            .or_else(|| self.resting.get(&self.current).map(|r| &r.path))
+            .cloned()
             .unwrap_or_default()
     }
     fn cancel(&mut self, task: u64, cause: u32) {
@@ -205,16 +228,57 @@ impl Tasks {
     pub fn detached(&self, task: u64) -> bool {
         self.tasks.get(&task).is_some_and(|child| child.detached)
     }
-    fn detach(&mut self, task: u64) -> Result<Vec<Value>, Error> {
+    /// Detach `task`: a holding child drops its result in its rest, before the operation
+    /// returns; a running one drops it at its completion.
+    fn detach(&mut self, task: u64) -> Result<(), Error> {
         let child = self
             .tasks
             .get_mut(&task)
             .ok_or_else(|| invalid("unknown detached task"))?;
         child.detached = true;
         if child.finished {
-            self.retire(task)
-        } else {
-            Ok(vec![])
+            let (scope, path, canceled) = (child.scope, child.path.clone(), child.canceled);
+            let values = self.retire(task)?;
+            self.rest(task, scope, path, canceled, values, false);
+        }
+        Ok(())
+    }
+    /// The running task's operation discarded holding child `task`'s `values`: the child
+    /// drops them in its rest.
+    fn rest(
+        &mut self,
+        task: u64,
+        scope: u64,
+        path: Vec<u32>,
+        canceled: Option<u32>,
+        values: Vec<Value>,
+        exit: bool,
+    ) {
+        if values.is_empty() {
+            return;
+        }
+        self.resting.insert(
+            task,
+            Resting {
+                scope,
+                path,
+                canceled,
+                exit: exit.then_some(self.current),
+            },
+        );
+        self.rests.push((
+            self.current,
+            TaskRest {
+                child: task,
+                values,
+            },
+        ));
+    }
+    /// The running task's operation yields after its rests, if it has any.
+    fn defer_yield(&mut self) {
+        if self.rests.iter().any(|(parent, _)| *parent == self.current) {
+            self.yield_now = false;
+            self.deferred_yield.insert(self.current);
         }
     }
     fn retire(&mut self, task: u64) -> Result<Vec<Value>, Error> {
@@ -269,6 +333,82 @@ impl Tasks {
     /// A dropped task set's members stay children of its scope, joined at its exit.
     pub fn drop_set(&mut self, set: u64) {
         self.sets.remove(&set);
+    }
+    /// Whether finished child `task` holds a result nobody took yet.
+    pub fn holds_result(&self, task: u64) -> bool {
+        self.tasks
+            .get(&task)
+            .is_some_and(|child| child.finished && child.result.is_some())
+    }
+    /// The rests the operation of `parent` queued, in hand-off order.
+    pub fn take_rests(&mut self, parent: u64) -> Vec<TaskRest> {
+        if self.rests.is_empty() {
+            return vec![];
+        }
+        let (mine, others) = std::mem::take(&mut self.rests)
+            .into_iter()
+            .partition::<Vec<_>, _>(|(task, _)| *task == parent);
+        self.rests = others;
+        mine.into_iter().map(|(_, rest)| rest).collect()
+    }
+    /// `task`'s rest ended, with the failures dropping its result raised. A detached child's
+    /// belong to its scope and cancel its siblings, as its completion's would (FAIL-2); a
+    /// scope exit's join that exit's result.
+    pub fn rest_finished(
+        &mut self,
+        task: u64,
+        mut failures: Vec<FailureRecord>,
+    ) -> Result<(), Error> {
+        let resting = self
+            .resting
+            .remove(&task)
+            .ok_or_else(|| invalid("an unknown rest ended"))?;
+        if failures.is_empty() {
+            return Ok(());
+        }
+        for failure in &mut failures {
+            if failure.spawn_path.is_empty() {
+                failure.spawn_path = resting.path.clone();
+            }
+        }
+        if let Some(parent) = resting.exit {
+            self.late
+                .entry(parent)
+                .or_default()
+                .push((resting.path, failures));
+            return Ok(());
+        }
+        let scope = resting.scope;
+        let Some(state) = self.scopes.get_mut(&scope) else {
+            return Err(invalid("a detached rest outlived its scope"));
+        };
+        state.failures.insert(resting.path, failures);
+        self.scope_canceled.entry(scope).or_insert(2);
+        for sibling in self.scopes[&scope].children.clone() {
+            self.cancel(sibling, 2);
+        }
+        Ok(())
+    }
+    /// The rests of `parent`'s operation returned to it with `result` pending: a scope exit's
+    /// rest failures join it, and a deferred yield follows.
+    pub fn rests_returned(&mut self, parent: u64, result: &mut OperationResult) {
+        if self.deferred_yield.remove(&parent) {
+            self.yield_now = true;
+        }
+        let Some(mut late) = self.late.remove(&parent) else {
+            return;
+        };
+        late.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut released = vec![];
+        for (_, chain) in late {
+            join_failure(result, &mut released, chain);
+        }
+        if let OperationResult::FailureChain {
+            released: pending, ..
+        } = result
+        {
+            pending.extend(released);
+        }
     }
     pub fn finished(&mut self, task: u64, mut result: OperationResult) -> Result<(), Error> {
         let child = self
@@ -511,11 +651,13 @@ impl Library {
                     self.tasks.cancel(task, 0);
                     OperationResult::returned(Value::Unit)
                 } else if name == "task.detach" {
+                    self.tasks.detach(task)?;
+                    self.tasks.defer_yield();
                     OperationResult::Complete {
                         value: Value::Unit,
                         arguments: vec![],
                         consumed: vec![1],
-                        released: self.tasks.detach(task)?,
+                        released: vec![],
                     }
                 } else if let Some(result) = self.tasks.tasks.get_mut(&task).unwrap().result.take()
                 {
@@ -587,6 +729,8 @@ impl Library {
                     .get_mut(index)
                     .and_then(Option::take);
                 let Some(task) = member else {
+                    // The check precedes the await: the failing operation does not yield.
+                    self.tasks.yield_now = false;
                     return Ok(OperationResult::Failed(super::dispatch::fail(
                         call,
                         context,
@@ -614,17 +758,17 @@ impl Library {
                     .into_iter()
                     .flatten()
                     .collect();
-                let mut released = vec![];
                 for &task in &members {
                     if name == "task.cancel_all" {
                         self.tasks.cancel(task, 0);
                     }
-                    released.extend(self.tasks.detach(task)?);
+                    self.tasks.detach(task)?;
                 }
+                self.tasks.defer_yield();
                 if name == "task.cancel_all" {
-                    self.drain(members, released, context)
+                    self.drain(members, vec![], context)
                 } else {
-                    drained(released)
+                    drained(vec![])
                 }
             }
             "task.check_canceled" => {
@@ -690,7 +834,15 @@ impl Library {
                     result,
                     released: vec![],
                 };
-                self.join_scope(pending, context)?
+                let joined = self.join_scope(pending, context)?;
+                // A scope exit that waits for its children parks: a scheduling point that is
+                // not a yield, as the native exit's `block`.
+                if matches!(joined, OperationResult::Park { .. })
+                    && let Some(trace) = &mut self.simulation.root_trace
+                {
+                    trace.point(self.tasks.path());
+                }
+                joined
             }
             _ => return Err(invalid("invalid task callback continuation")),
         })
@@ -729,6 +881,7 @@ impl Library {
             .map(|(path, failures)| {
                 (
                     path,
+                    None,
                     OperationResult::FailureChain {
                         failures,
                         released: vec![],
@@ -739,41 +892,30 @@ impl Library {
         for id in children {
             let child = self.tasks.tasks.remove(&id).unwrap();
             if let Some(result) = child.result {
-                completed.push((child.path, result));
+                completed.push((child.path, Some((id, child.canceled)), result));
             }
         }
         completed.sort_by(|a, b| a.0.cmp(&b.0));
-        for (_, child) in completed {
+        // Results nobody awaited: each holding child drops its own in its rest, the last
+        // spawned first.
+        let mut rests = vec![];
+        for (path, id, child) in completed {
             match child {
-                OperationResult::Complete { value, .. } => released.push(value),
+                OperationResult::Complete { value, .. } => match id {
+                    Some((id, canceled)) if value != Value::Unit => {
+                        rests.push((id, path, canceled, value))
+                    }
+                    _ => released.push(value),
+                },
                 OperationResult::FailureChain {
                     failures: chain, ..
-                } => {
-                    if let OperationResult::FailureChain {
-                        failures: primary, ..
-                    } = &mut result
-                    {
-                        if chain.first().map(|f| &f.spawn_path)
-                            < primary.first().map(|f| &f.spawn_path)
-                        {
-                            let mut earlier = chain;
-                            append_chain(&mut earlier, std::mem::take(primary));
-                            *primary = earlier;
-                        } else {
-                            append_chain(primary, chain);
-                        }
-                    } else {
-                        if let OperationResult::Complete { value, .. } = result {
-                            released.push(value);
-                        }
-                        result = OperationResult::FailureChain {
-                            failures: chain,
-                            released: vec![],
-                        };
-                    }
-                }
+                } => join_failure(&mut result, &mut released, chain),
                 _ => return Err(invalid("unfinished child result")),
             }
+        }
+        for (id, path, canceled, value) in rests.into_iter().rev() {
+            self.tasks
+                .rest(id, scope, path, canceled, vec![value], true);
         }
         self.tasks.scope_canceled.remove(&scope);
         // `task.scope_until`: `Finished(r)`, or `Expired(r)` when its deadline fired.
@@ -1036,6 +1178,37 @@ impl Library {
     }
 }
 /// `task.cancel_all` or `task.detach_all` done: the set was taken, the released results remain.
+/// Join a failed child's `chain` to a scope exit's `result`, the earliest spawn path leading
+/// (FAIL-2); a body result the failure displaces is `released`.
+fn join_failure(
+    result: &mut OperationResult,
+    released: &mut Vec<Value>,
+    chain: Vec<FailureRecord>,
+) {
+    if let OperationResult::FailureChain {
+        failures: primary, ..
+    } = result
+    {
+        if chain.first().map(|f| &f.spawn_path) < primary.first().map(|f| &f.spawn_path) {
+            let mut earlier = chain;
+            append_chain(&mut earlier, std::mem::take(primary));
+            *primary = earlier;
+        } else {
+            append_chain(primary, chain);
+        }
+    } else {
+        let displaced = std::mem::replace(
+            result,
+            OperationResult::FailureChain {
+                failures: chain,
+                released: vec![],
+            },
+        );
+        if let OperationResult::Complete { value, .. } = displaced {
+            released.push(value);
+        }
+    }
+}
 fn drained(released: Vec<Value>) -> OperationResult {
     OperationResult::Complete {
         value: Value::Unit,

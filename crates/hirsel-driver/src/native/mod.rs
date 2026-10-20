@@ -30,7 +30,7 @@ pub use coverage::backend_features;
 pub use differential::{
     Configuration, Engine, Fixture, MATRIX_VERSION, Outcome, Runtime, differential,
     differential_in, full_matrix, real_io_replay, real_io_replay_in, real_io_replay_with_config,
-    runner_oracle_in, runtime_builds, smoke_matrix, topology_matrix,
+    runner_oracle_in, runtime_builds, smoke_matrix, topology_matrix, trace_roots_matrix,
 };
 pub use emit::{
     Backend, KIND_BUG, check_runtime_calls, emit, emit_clif, emit_ir, failure_codes, failure_rules,

@@ -921,6 +921,11 @@ pub unsafe fn yield_now(ctx: &mut TaskCtx) {
 /// # Safety
 /// As for [`yield_now`].
 pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
+    #[cfg(feature = "diagnostic")]
+    // SAFETY: the context and its roots are live.
+    unsafe {
+        crate::root_trace::point(ctx)
+    };
     if ctx.run().tasks.is_none() {
         return Ok(());
     }
@@ -953,6 +958,11 @@ unsafe fn block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) {
 /// # Safety
 /// `ctx` is live; whatever `wait` names outlives the wait.
 unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> Stopped<()> {
+    #[cfg(feature = "diagnostic")]
+    // SAFETY: the context and its roots are live.
+    unsafe {
+        crate::root_trace::point(ctx)
+    };
     if yielded {
         // SAFETY: the context is live.
         unsafe { poll_parked(ctx) }?;

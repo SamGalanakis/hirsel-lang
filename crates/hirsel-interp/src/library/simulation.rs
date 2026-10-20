@@ -122,6 +122,9 @@ pub struct SimulationConfig {
     pub instance: [u8; 16],
     /// The callee entries the program names, by full versioned path (RUN-8, RUN-11).
     pub callees: std::sync::Arc<BTreeMap<String, hirsel_run_config::CalleeFacts>>,
+    /// Record every live `Shared` root's count at every scheduling point
+    /// (`--trace-roots`, S-14) into `ObservedSimulation::root_trace`.
+    pub trace_roots: bool,
 }
 impl Default for SimulationConfig {
     fn default() -> Self {
@@ -159,6 +162,7 @@ impl Default for SimulationConfig {
             fault_seed: 0,
             instance: [0; 16],
             callees: Default::default(),
+            trace_roots: false,
         }
     }
 }
@@ -268,6 +272,8 @@ pub struct Simulation {
     replay: Vec<CapabilityEvent>,
     replay_index: usize,
     pub(crate) last_monotonic: Option<u64>,
+    /// `--trace-roots` (S-14), when the configuration asks for it.
+    pub(super) root_trace: Option<super::root_trace::RootTrace>,
 }
 /// Final fake filesystem and surviving logical grants, including independent trees.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -275,6 +281,8 @@ pub struct ObservedSimulation {
     pub stderr: Vec<u8>,
     pub trees: BTreeMap<u64, (BTreeSet<String>, BTreeMap<String, Vec<u8>>)>,
     pub handles: BTreeMap<u64, ObservedGrant>,
+    /// `--trace-roots` (S-14): one line per scheduling point, empty unless asked for.
+    pub root_trace: Vec<String>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ObservedGrant {
@@ -436,6 +444,11 @@ impl Simulation {
             stderr: self.stderr.clone(),
             trees: self.trees.clone(),
             handles,
+            root_trace: self
+                .root_trace
+                .as_ref()
+                .map(|t| t.lines.clone())
+                .unwrap_or_default(),
         }
     }
     pub fn new(run: &RunConfiguration, mut config: SimulationConfig) -> Result<Self, Error> {
@@ -496,7 +509,9 @@ impl Simulation {
         let net_worlds = super::net::configured_world(config.net.as_ref())?;
         let (process_worlds, process_children) =
             super::process::configured_world(config.process.as_ref())?;
+        let root_trace = config.trace_roots.then(Default::default);
         let mut simulation = Self {
+            root_trace,
             net_worlds,
             net_streams: BTreeMap::new(),
             process_worlds,

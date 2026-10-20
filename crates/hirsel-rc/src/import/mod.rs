@@ -62,15 +62,7 @@ use hirsel_tir as tir;
 use hirsel_types::{GenericArgument, SignatureKind, TypeId, TypeStore, UseKind};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-/// Cleanup-anchor ordinals reserved for drops TIR states outside a cleanup chain.
-pub const INSTRUCTION_DROP: u32 = u32::MAX;
-/// The release of a self-tail loop's internal owned slot (LANG-10).
-pub const LOOP_RELEASE: u32 = u32::MAX - 1;
-/// The disposal of an owned value pending when an operation failed.
-pub const SCRATCH_DISPOSAL: u32 = u32::MAX - 2;
-/// A release derived from the state where TIR names no cleanup (an operation
-/// TIR cannot make fail: a prologue preparation or a match test).
-pub const STATE_RELEASE: u32 = u32::MAX - 3;
+pub use hirsel_lir::ir::{INSTRUCTION_DROP, LOOP_RELEASE, SCRATCH_DISPOSAL, STATE_RELEASE};
 
 mod build;
 mod byte_views;

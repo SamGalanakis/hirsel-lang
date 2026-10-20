@@ -37,6 +37,9 @@ pub struct Observation {
     pub output: Vec<u8>,
     /// The primary failure, then cleanup failures in order.
     pub failures: Vec<Failure>,
+    /// `--trace-roots` (S-14): every live `Shared` root's count at every scheduling point,
+    /// one line per point; empty unless the fixture traces roots.
+    pub roots: Vec<String>,
 }
 
 impl Observation {
@@ -58,6 +61,11 @@ impl Observation {
                     operation: f.operation.clone(),
                 })
                 .collect(),
+            roots: observable
+                .final_state
+                .as_ref()
+                .map(|state| state.root_trace.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -127,6 +135,9 @@ impl Observation {
                     operation.definition, operation.line, operation.column
                 );
             }
+        }
+        for line in &self.roots {
+            let _ = writeln!(out, "roots {line}");
         }
         out
     }

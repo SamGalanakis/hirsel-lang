@@ -1891,6 +1891,7 @@ fn observation(
                 Ok(failure)
             })
             .collect::<Result<_, _>>()?,
+        roots: Vec::new(),
     })
 }
 

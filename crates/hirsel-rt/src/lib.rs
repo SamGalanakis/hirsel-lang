@@ -70,6 +70,8 @@ mod memcheck;
 pub mod multicore_policy;
 pub mod region;
 pub mod release;
+#[cfg(feature = "diagnostic")]
+mod root_trace;
 pub mod shared;
 pub mod stop;
 mod sync;

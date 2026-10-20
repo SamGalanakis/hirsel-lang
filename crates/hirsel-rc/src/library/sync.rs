@@ -154,7 +154,7 @@ fn kill_failures(
     for failure in failures {
         let edge = b.ed.unit.tables.failures[failure.index()].cleanup;
         let target = b.ed.unit.tables.edges[edge.index()].target;
-        if killing.contains(&target) || b.ed.unit.tables.edges[edge.index()].arguments.len != 0 {
+        if kills(b, target, killing) || b.ed.unit.tables.edges[edge.index()].arguments.len != 0 {
             continue;
         }
         let block = b.block(BlockKind::FailureCleanup, &[]);
@@ -174,6 +174,24 @@ fn kill_failures(
         b.jump(target, &[]);
     }
     b.at(resume);
+}
+
+/// Whether failure cleanup from `target` reaches a block of `killing`, through the
+/// cleanup blocks a call puts before its failure (ending its loans, say): such a failure
+/// already kills the mutex once.
+fn kills(b: &Body<'_, '_>, mut target: BlockId, killing: &[BlockId]) -> bool {
+    loop {
+        if killing.contains(&target) {
+            return true;
+        }
+        if b.ed.unit.blocks[target.index()].kind != BlockKind::FailureCleanup {
+            return false;
+        }
+        let Terminator::Jump(edge) = b.ed.unit.terminators[target.index()] else {
+            return false;
+        };
+        target = b.ed.unit.tables.edges[edge.index()].target;
+    }
 }
 
 /// Move the payload out of the `Some` an entry wrote into the local `slot`, whose

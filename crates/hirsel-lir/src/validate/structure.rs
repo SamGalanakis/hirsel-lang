@@ -151,6 +151,8 @@ pub(super) struct Facts {
     pub regions: Vec<BTreeSet<RegionInstanceId>>,
     /// Values taken whole out of a slot.
     pub taken_from: Vec<Option<SlotId>>,
+    /// Values a `Take` read moved out of a place, whole or a part.
+    pub moved: Vec<bool>,
     /// Per declared parameter: its convention and its slot, if any.
     pub parameters: Vec<(Passing, Option<SlotId>)>,
     /// Values of program-lifetime static storage.
@@ -258,6 +260,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) -> Option<Fac
         backing: vec![Backing::None; unit.values.len()],
         regions: vec![BTreeSet::new(); unit.values.len()],
         taken_from: vec![None; unit.values.len()],
+        moved: vec![false; unit.values.len()],
         parameters,
         statics: vec![false; unit.values.len()],
         joins: vec![None; unit.values.len()],
@@ -1644,6 +1647,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                             }
                         }
                         self.fresh_holding(site, result);
+                        facts.moved[result.index()] = true;
                         if let Root::Slot(slot) = addr.root
                             && addr.path.is_empty()
                         {
@@ -3982,6 +3986,14 @@ impl<S: Stage> Checker<'_, '_, S> {
                         self.add(
                             Site::at(BlockId(b as u32), i as u32),
                             K::Type("region construction finalizer"),
+                        );
+                    }
+                    // RC-ROOT (S-14): a region frees at its own end, not at
+                    // the value's cleanup anchor.
+                    if regional && self.cx.layouts.root_bearing(c.layout) {
+                        self.add(
+                            Site::at(BlockId(b as u32), i as u32),
+                            K::RootInRegion(result),
                         );
                     }
                 }

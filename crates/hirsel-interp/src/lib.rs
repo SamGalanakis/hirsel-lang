@@ -258,6 +258,13 @@ pub enum Woken {
     Tokens(Vec<u64>),
 }
 
+/// A holding child's result an operation discarded: the child drops `values` in a turn of
+/// its own (its rest) before that operation returns (native `hand_off`).
+pub struct TaskRest {
+    pub child: u64,
+    pub values: Vec<Value>,
+}
+
 /// A transferred task environment, entered on its own evaluator stack.
 pub struct TaskStart {
     /// Actual spawn invocation, independent of inherited failure attribution.
@@ -315,6 +322,9 @@ operation_boundary! {
     fn wait_deadline(&self, _token: u64) -> Option<u64> { None }
     /// A detached result is destroyed on the child's stack before completion.
     fn discard_task_result(&self, _id: u64) -> bool { false }
+    /// Whether finished child `id` holds a result nobody took yet: the evaluator keeps its
+    /// frame, where a discard drops the result (`take_rests`).
+    fn holds_result(&self, _id: u64) -> bool { false }
     fn handles_failure(&self, _token: u64) -> bool {
         false
     }
@@ -380,6 +390,20 @@ operation_boundary! {
     fn take_yield(&mut self) -> bool {
         false
     }
+    /// The holding children whose results the pending operation of task `parent` discarded.
+    /// The evaluator hands `parent`'s turn to each child in order, which drops its values,
+    /// and continues `parent` when the last returns, with no scheduling point between.
+    fn take_rests(&mut self, _parent: u64) -> Vec<TaskRest> {
+        vec![]
+    }
+    /// Child `child`'s rest ended with the failures dropping its result raised.
+    fn rest_finished(&mut self,
+        _child: u64,
+        _failures: Vec<observation::FailureRecord>) -> Result<(), Error> {
+        Ok(())
+    }
+    /// The rests of `parent`'s pending operation returned; `result` is still pending.
+    fn rests_returned(&mut self, _parent: u64, _result: &mut OperationResult) {}
     /// The task of the operation that returned `Park { token }` parked: polled from the
     /// next scheduling point on.
     fn parked(&mut self, _token: u64) {}

@@ -334,7 +334,7 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
                     let site = &unit.tables.constructs[construct.index()];
                     let inline = unit.types[unit.values[result.index()].ty.index()].repr
                         == ValueRepr::Aggregate
-                        && !lay.destructible(site.layout);
+                        && !lay.anchored(site.layout);
                     if region_candidate(&unit, table, site, result) {
                         sources.insert(result);
                     } else if inline {
@@ -574,7 +574,9 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
 }
 
 /// A construction placement may move into the region: an inferred block of
-/// a non-destructible payload the layout lets a region hold.
+/// a payload that is not anchored (no user-visible destruction and no `Shared`
+/// root: a region frees at its own end, not at the value's cleanup anchor) and
+/// that the layout lets a region hold.
 fn region_candidate(
     unit: &LirUnit<Placed>,
     table: &LayoutTable,
@@ -593,7 +595,7 @@ fn region_candidate(
                 | ConstructorKind::Tuple
                 | ConstructorKind::Variant { .. }
         )
-        && !lay.destructible(site.layout)
+        && !lay.anchored(site.layout)
         && table
             .layout(site.layout)
             .is_some_and(|l| l.storage.contains(&StorageKind::LocalRegion))

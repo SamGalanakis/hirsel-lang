@@ -238,6 +238,31 @@ pub fn full_matrix() -> Vec<Configuration> {
     out
 }
 
+/// The `--trace-roots` matrix (S-14): the default passes as one unoptimized x86-64 LLVM
+/// executable and one Cranelift executable, both on the diagnostic archive, whose traces
+/// must equal the interpreter's. Root releases are runtime calls placed by the passes, which
+/// no LLVM optimization reorders, so the parity set's level checks them at its cost.
+pub fn trace_roots_matrix() -> Vec<Configuration> {
+    let x86 = TargetSpec::x86_64_unknown_linux_gnu();
+    vec![
+        Configuration {
+            options: Options::new(x86.clone()),
+            engine: Engine::Native {
+                opt: OptLevel::None,
+                partition: Partition::Whole,
+                runtime: Runtime::Diagnostic,
+            },
+        },
+        Configuration {
+            options: Options::new(x86),
+            engine: Engine::Cranelift {
+                partition: Partition::Whole,
+                runtime: Runtime::Diagnostic,
+            },
+        },
+    ]
+}
+
 /// Every archive variant `matrix`'s native configurations link, the
 /// diagnostic archive first (and alone when there are none).
 pub fn runtime_builds(matrix: &[Configuration]) -> Vec<RuntimeBuild> {
@@ -320,6 +345,10 @@ pub struct Fixture {
     /// (`// fault_seed:`).
     pub runners: Vec<hirsel_run_config::RunnerEntry>,
     pub fault_seed: Option<u64>,
+    /// `--trace-roots` (S-14): native launches on the diagnostic archive write every live
+    /// `Shared` root's count at every scheduling point into `Observation::roots`, to be
+    /// compared with the interpreter's trace.
+    pub trace_roots: bool,
 }
 
 /// Run `entry` under each configuration and compare with `reference`.
@@ -401,7 +430,15 @@ pub fn differential_in(
             },
             fixture,
         )?;
-        observe(&launched, program, &sites)
+        let mut observation = observe(&launched, program, &sites)?;
+        if fixture.trace_roots {
+            observation.roots = std::fs::read_to_string(dir.join(super::link::ROOT_TRACE))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect();
+        }
+        Ok(observation)
     };
     for configuration in configurations {
         let index = match built

@@ -1,0 +1,37 @@
+// rule: DROP-2
+// expect: run
+// stdout: Err
+// S-14 through a component: `pair` holds both roots until its scope's cleanup,
+// after its copy's left root is thawed, so that thaw finds two holders in every
+// engine.
+fn output_error[E](take e: E) -> () {}
+
+type Pair {
+  left: Shared[String],
+  right: Shared[String],
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let a: String = "left"
+  let b: String = "right"
+  let pair = Pair(left: shared.freeze(take a), right: shared.freeze(take b))
+  let Pair(left: l, right: r) = copy pair
+  let thawed = match shared.thaw(take l) {
+    Ok(text) => true,
+    Error(root) => false,
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if thawed {
+      "Ok\n"
+    } else {
+      "Err\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

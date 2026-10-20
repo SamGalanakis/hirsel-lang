@@ -1,0 +1,31 @@
+// rule: DROP-2
+// expect: run
+// stdout: Err
+// S-14: `s` holds its root until its scope's cleanup, after the thaw of its copy,
+// so the thaw finds two holders in every engine. No engine releases `s` at its
+// last use, the copy, and no engine turns that copy into a move.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let built: String = "value"
+  let s: Shared[String] = shared.freeze(take built)
+  let t = copy s
+  let thawed = match shared.thaw(take t) {
+    Ok(text) => true,
+    Error(root) => false,
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if thawed {
+      "Ok\n"
+    } else {
+      "Err\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

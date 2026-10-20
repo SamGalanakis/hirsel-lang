@@ -1383,6 +1383,26 @@ pub struct CleanupAnchor {
     pub site: SiteRange,
 }
 
+/// Cleanup-anchor ordinals reserved for drops TIR states outside a cleanup chain.
+pub const INSTRUCTION_DROP: u32 = u32::MAX;
+/// The release of a self-tail loop's internal owned slot (LANG-10).
+pub const LOOP_RELEASE: u32 = u32::MAX - 1;
+/// The disposal of an owned value pending when an operation failed.
+pub const SCRATCH_DISPOSAL: u32 = u32::MAX - 2;
+/// A release derived from the state where TIR names no cleanup (an operation
+/// TIR cannot make fail: a prologue preparation or a match test).
+pub const STATE_RELEASE: u32 = u32::MAX - 3;
+
+impl CleanupAnchor {
+    /// Whether this anchor names an action of a TIR cleanup chain, which runs
+    /// in a `Cleanup` or `FailureCleanup` block, rather than a reserved
+    /// ordinal (an instruction's own drop, a loop release, a disposal or a
+    /// state release).
+    pub fn names_tir_cleanup(&self) -> bool {
+        self.cleanup < STATE_RELEASE
+    }
+}
+
 /// A static initialized-field mask.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FieldMask {

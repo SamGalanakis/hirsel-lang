@@ -939,6 +939,19 @@ impl<S: Stage> Lir<S> {
         CleanupAnchorId(self.builder.unit.tables.cleanup_anchors.len() as u32 - 1)
     }
 
+    /// An anchor at the reserved ordinal of a drop TIR states as its own
+    /// instruction, which may sit in any block.
+    pub fn instruction_anchor(&mut self) -> CleanupAnchorId {
+        let anchors = &mut self.builder.unit.tables.cleanup_anchors;
+        anchors.push(CleanupAnchor {
+            body: 0,
+            cleanup: INSTRUCTION_DROP,
+            action: anchors.len() as u32,
+            site: SiteRange { start: 0, end: 1 },
+        });
+        CleanupAnchorId(anchors.len() as u32 - 1)
+    }
+
     pub fn payload(&self, value: ValueId) -> LayoutId {
         let ty = &self.builder.unit.types[self.builder.unit.values[value.index()].ty.index()];
         match self.table.layouts[ty.layout.0 as usize].kind {

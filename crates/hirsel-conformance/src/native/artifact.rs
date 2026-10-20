@@ -106,6 +106,7 @@ impl Probe for NativeProbe<'_> {
             source,
             self.source_path.as_deref(),
             self.configuration.options.launch.clone(),
+            false,
         )
         .ok()?;
         let outcomes = hirsel_driver::native::differential(

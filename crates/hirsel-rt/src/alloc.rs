@@ -1355,6 +1355,8 @@ impl Heap {
             memcheck::undefined(payload(block), self.capacity(block) as usize);
             ptr::write_bytes(payload(block), FREE_POISON, self.capacity(block) as usize);
             self.write_state(block, STATE_FREE);
+            #[cfg(feature = "diagnostic")]
+            crate::root_trace::retired(block);
         }
     }
     /// A bare system block's free is its one matching `free`; nothing lists it in production.

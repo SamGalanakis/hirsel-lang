@@ -263,6 +263,7 @@ Target names follow Cargo's targets, all in the root package:
 | a budgeted native agreement shard (`AGREE_NATIVE_FULL_SHARDS`, full suite only; `agree.py --native-full` runs and merges them) | `//:gate-agree-native-full-shard-<i>` |
 | a full native matrix shard (`NATIVE_FULL_SHARDS`, full suite only; `gate-native-full` stays whole for `--bless` and filtered runs) | `//:gate-native-full-shard-<i>` |
 | a historical native replay shard (`HISTORY_SHARDS`; `tools/native-plants.py --history-only` runs them) | `//:gate-native-history-shard-<i>` |
+| a root-anchor trace shard (`TRACE_ROOTS_SHARDS`, on demand; `gate-native-trace-roots` stays whole for filtered runs) | `//:gate-native-trace-roots-shard-<i>` |
 
 ## Instruction budgets
 

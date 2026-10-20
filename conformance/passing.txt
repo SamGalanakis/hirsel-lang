@@ -932,6 +932,8 @@ conformance/DROP/DROP-2-resource-beside-net-connect-try-run.hir
 conformance/DROP/DROP-2-return-exit.hir
 conformance/DROP/DROP-2-reverse-fields.hir
 conformance/DROP/DROP-2-reverse-locals.hir
+conformance/DROP/DROP-2-root-aggregate-thaw-run.hir
+conformance/DROP/DROP-2-root-copy-thaw-run.hir
 conformance/DROP/DROP-2-sequence-high-low.hir
 conformance/DROP/DROP-2-sorted-map-replaced-value.hir
 conformance/DROP/DROP-2-sorted-map-retained-key.hir

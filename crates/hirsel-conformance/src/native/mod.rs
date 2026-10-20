@@ -22,7 +22,7 @@ pub use scratch::{runtime_cache, scratch};
 
 use hirsel_driver::native::{
     Configuration, Engine, MATRIX_VERSION, NativeError, OBSERVATION_SCHEMA, Observation, Outcome,
-    StageName, Toolchain, differential, differential_in,
+    StageName, Toolchain, differential_in,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -52,6 +52,27 @@ impl Case {
             matrix,
             toolchain,
             dir,
+            false,
+        )
+    }
+
+    /// `--trace-roots` (S-14): run this case under `matrix` with every engine tracing its
+    /// `Shared` roots, so a configuration agrees only when its trace equals the
+    /// interpreter's line for line.
+    pub fn run_traced(
+        &self,
+        matrix: &[Configuration],
+        toolchain: &Toolchain,
+        dir: &Path,
+    ) -> CaseResult {
+        run_source_path(
+            &self.id,
+            &self.source,
+            self.path.as_deref(),
+            matrix,
+            toolchain,
+            dir,
+            true,
         )
     }
 }
@@ -326,7 +347,7 @@ fn checked(
     source: &str,
     path: Option<&Path>,
 ) -> Result<Prepared, String> {
-    checked_with_config(engine, id, source, path, Default::default())
+    checked_with_config(engine, id, source, path, Default::default(), false)
 }
 
 fn checked_with_config(
@@ -335,6 +356,7 @@ fn checked_with_config(
     source: &str,
     path: Option<&Path>,
     launch: hirsel_driver::native::LaunchInputs,
+    trace_roots: bool,
 ) -> Result<Prepared, String> {
     let expected = oracle::expected_stdout(id, source, path)?;
     let compiled_only = expected.is_some();
@@ -381,6 +403,7 @@ fn checked_with_config(
             hirsel_engine::SimulationConfig {
                 random_seed: launch.random_seed,
                 test_seed: launch.test_seed,
+                trace_roots,
                 ..crate::simulation(source)?
             },
         )
@@ -422,7 +445,7 @@ pub fn run_source(
     toolchain: &Toolchain,
     dir: &Path,
 ) -> CaseResult {
-    run_source_path(id, source, None, matrix, toolchain, dir)
+    run_source_path(id, source, None, matrix, toolchain, dir, false)
 }
 fn run_source_path(
     id: &str,
@@ -431,9 +454,10 @@ fn run_source_path(
     matrix: &[Configuration],
     toolchain: &Toolchain,
     dir: &Path,
+    trace_roots: bool,
 ) -> CaseResult {
     if source.lines().any(|line| line.trim() == "// expect: test") {
-        return run_test_suite(id, source, path, matrix, toolchain, dir);
+        return run_test_suite(id, source, path, matrix, toolchain, dir, trace_roots);
     }
     let mut engine = hirsel_engine::QueryEngine::new(
         hirsel_engine::default_environment(),
@@ -448,6 +472,7 @@ fn run_source_path(
             .first()
             .map(|c| c.options.launch.clone())
             .unwrap_or_default(),
+        trace_roots,
     )
     .and_then(|prepared| {
         if prepared.compiled_only
@@ -485,7 +510,10 @@ fn run_source_path(
                 &matrix,
                 toolchain,
                 dir,
-                &crate::fixture(source).unwrap(),
+                &hirsel_driver::native::Fixture {
+                    trace_roots,
+                    ..crate::fixture(source).unwrap()
+                },
             )
             .into_iter()
             .zip(&matrix)
@@ -510,6 +538,7 @@ fn run_test_suite(
     matrix: &[Configuration],
     toolchain: &Toolchain,
     dir: &Path,
+    trace_roots: bool,
 ) -> CaseResult {
     visit_test_suite(
         id,
@@ -520,18 +549,23 @@ fn run_test_suite(
             .first()
             .map(|c| c.options.launch.clone())
             .unwrap_or_default(),
+        trace_roots,
         |validated, test, reference, test_dir| {
             let mut configurations = matrix.to_vec();
             for c in &mut configurations {
                 c.options.launch.test_seed = test.seed;
             }
-            differential(
+            differential_in(
                 validated,
                 &test.entry,
                 reference,
                 &configurations,
                 toolchain,
                 test_dir,
+                &hirsel_driver::native::Fixture {
+                    trace_roots,
+                    ..Default::default()
+                },
             )
             .into_iter()
             .zip(matrix)
@@ -549,6 +583,7 @@ fn visit_test_suite(
     path: Option<&Path>,
     dir: &Path,
     launch: hirsel_driver::native::LaunchInputs,
+    trace_roots: bool,
     probe: impl Fn(
         &hirsel_engine::ValidatedNativeInput,
         &hirsel_driver::testing::Test,
@@ -599,6 +634,7 @@ fn visit_test_suite(
                 grants: Default::default(),
                 random_seed: launch.random_seed,
                 test_seed: test.seed,
+                trace_roots,
                 ..Default::default()
             };
             let execution =
@@ -666,6 +702,7 @@ pub fn replay_source_with_config(
             path,
             dir,
             launch.clone(),
+            false,
             |validated, test, reference, test_dir| {
                 let mut inputs = launch.clone();
                 inputs.test_seed = test.seed;
@@ -688,7 +725,7 @@ pub fn replay_source_with_config(
         hirsel_engine::default_environment(),
         hirsel_driver::compiler_adapters(),
     );
-    match checked_with_config(&mut engine, id, source, path, launch.clone()) {
+    match checked_with_config(&mut engine, id, source, path, launch.clone(), false) {
         Err(reason) => CaseResult {
             id: id.to_string(),
             snapshot: Some(reason),
@@ -772,6 +809,7 @@ pub fn oracle_source(
             path,
             dir,
             launch,
+            false,
             |validated, test, _, test_dir| {
                 let mut configurations = matrix.to_vec();
                 for c in &mut configurations {
@@ -785,7 +823,7 @@ pub fn oracle_source(
         hirsel_engine::default_environment(),
         hirsel_driver::compiler_adapters(),
     );
-    match checked_with_config(&mut engine, id, source, path, launch) {
+    match checked_with_config(&mut engine, id, source, path, launch, false) {
         Err(reason) => CaseResult {
             id: id.to_string(),
             snapshot: Some(reason),

@@ -83,14 +83,14 @@ fn only_a_library_thaws_a_root_into_its_frozen_value() {
     );
 }
 
-/// An owned root parameter released, naming `named`, or given another
-/// representation.
+/// An owned root parameter released by an instruction's own drop, naming
+/// `named`, or given another representation.
 fn release_root(named: Option<LayoutId>, repr: ValueRepr) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[(Passing::Take, l::SHARED)], None);
     let r = t.value_as(repr, l::SHARED, Holding::Owned);
     t.param(r);
     let failure = t.fails();
-    let anchor = t.cleanup_anchor();
+    let anchor = t.instruction_anchor();
     t.builder.push(
         ENTRY,
         Inst::Release {

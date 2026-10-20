@@ -236,7 +236,12 @@ names every program of a group);
   incoming paths disagree, after an early release, on whether a slot it or a
   later block drops is still full is first copied once per state they agree
   on, so each copy keeps or deletes the drop as one site's own chain would. Borrowed, `mut`, capture and return slots and
-  destructible content keep their TIR drops.
+  anchored content keep their TIR drops. Content is anchored (`Lay::anchored`)
+  when it is destructible or root-bearing: its drop program reaches a `Shared`
+  root at any depth (S-14), so every engine has the same holders of each root
+  at every operation. Placement makes no anchored construction an inline
+  region child or a region candidate, and reuse takes no anchored closure
+  environment as a donor; V's RC-ROOT rule checks the result.
 - `insert` first makes written storage unique (MEM-1, OWN-7): before an
   address that a store, replacement, mutable loan or `mut` argument writes
   through a counted block is prepared, each block on its path is tested with
@@ -257,7 +262,8 @@ names every program of a group);
   allocates nothing; its first reserve or growth allocates.
 - `elide::elide`: Rc to Rc. A copy immediately followed by insertion's release
   of the same slot cancels into a move (a partial copy into a partial move
-  plus the rest's drop). Flat copies stay; nothing allocates. It leaves
+  plus the rest's drop). Anchored content has no such release, so a copy of a
+  root never cancels. Flat copies stay; nothing allocates. It leaves
   every other count as insertion placed it, so the driver validates the Rc
   stage once, after elision, and a fault in insertion's output is still one
   in elision's.

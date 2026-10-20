@@ -1922,6 +1922,9 @@ fn launcher(
     })
 }
 
+/// The file under a launch's directory receiving its `--trace-roots` lines (S-14).
+pub(crate) const ROOT_TRACE: &str = "roots";
+
 /// Harness execution or a user launch with an explicit admitted run record.
 fn launch_impl(
     runnable: &Runnable,
@@ -1935,6 +1938,8 @@ fn launch_impl(
 ) -> Result<Launched, NativeError> {
     let root = dir.join("root");
     let record = dir.join("observation");
+    let roots = dir.join(ROOT_TRACE);
+    let _ = std::fs::remove_file(&roots);
     // Where the executable reports a launch it refused, instead of standard error.
     let refusal = dir.join("refusal");
     // Where a runner reports a failure before the program's code ran.
@@ -1963,6 +1968,9 @@ fn launch_impl(
     }
     if let Some(env) = &fixture.env {
         command.env("HIRSEL_RT_ENV", serde_json::to_string(env).unwrap());
+    }
+    if fixture.trace_roots {
+        command.env("HIRSEL_RT_TRACE_ROOTS", &roots);
     }
     // A live launch selects record and replay by flag; harness launches by environment.
     match tape {
@@ -2491,6 +2499,7 @@ pub fn observe_run(
                 budget: Some(kind),
                 output: launched.stdout.clone(),
                 failures,
+                roots: Vec::new(),
             },
             vec![],
         );
@@ -2508,6 +2517,7 @@ pub fn observe_run(
                 budget: None,
                 output: launched.stdout.clone(),
                 failures,
+                roots: Vec::new(),
             },
             waits.ok_or_else(|| bad("Blocked run has no wait report".into()))?,
         );
@@ -2531,6 +2541,7 @@ pub fn observe_run(
             budget: None,
             output: launched.stdout.clone(),
             failures,
+            roots: Vec::new(),
         },
         vec![],
     )

@@ -16,7 +16,9 @@
 //!   content is whole and definitely initialized, else a `drop?` of the slot;
 //!   the semantic drops it supersedes are deleted or made conditional.
 //!   Content with user-visible destruction keeps its drop at its anchor, and
-//!   borrowed, `mut` and capture slots are never released here.
+//!   so does content that reaches a `Shared` root (S-14: every engine then
+//!   has the same holders of each root at every operation; `Lay::anchored`).
+//!   Borrowed, `mut` and capture slots are never released here.
 //! - **Copies.** A semantic `Copy` is the Dup of a non-final owning consumer;
 //!   `elide` turns a final one into a move.
 //!
@@ -216,6 +218,80 @@ impl<'a> Lay<'a> {
                 .is_none_or(|c| self.destructible_in(c, seen)),
         })
     }
+    /// Whether a value of this layout keeps its semantic drop at its TIR
+    /// cleanup anchor (S-14): its destruction is user-visible or releases a
+    /// `Shared` root. Last-use release, copy-to-move elision, inline and
+    /// region placement and reuse donation all leave such values alone.
+    pub fn anchored(&self, id: LayoutId) -> bool {
+        self.destructible(id) || self.root_bearing(id)
+    }
+    /// Whether this layout's drop program reaches a `Shared` root at any
+    /// depth. An erased environment or iterator counts, as it may hold one.
+    pub fn root_bearing(&self, id: LayoutId) -> bool {
+        self.root_bearing_in(id, &mut BTreeSet::new())
+    }
+    fn root_bearing_in(&self, id: LayoutId, seen: &mut BTreeSet<LayoutId>) -> bool {
+        if !seen.insert(id) {
+            return false;
+        }
+        let Some(layout) = self.get(id) else {
+            return true;
+        };
+        match layout.kind {
+            LayoutKind::Shared { .. } => return true,
+            LayoutKind::Block { payload } | LayoutKind::Box { payload } => {
+                return self.root_bearing_in(payload, seen);
+            }
+            LayoutKind::Callable {
+                environment: Some(environment),
+            } => return self.root_bearing_in(environment, seen),
+            LayoutKind::Callable { environment: None } | LayoutKind::Iterator { .. } => {
+                return true;
+            }
+            _ => {}
+        }
+        self.steps_root_bearing(layout, &layout.drop, seen)
+    }
+    fn steps_root_bearing(
+        &self,
+        layout: &LayoutRecord,
+        steps: &[DropStep],
+        seen: &mut BTreeSet<LayoutId>,
+    ) -> bool {
+        steps.iter().any(|step| match step {
+            DropStep::Finalize | DropStep::CloseHandle { .. } => false,
+            DropStep::Thaw { .. } => true,
+            DropStep::Child { layout, .. }
+            | DropStep::ElementsReverse {
+                element: layout, ..
+            }
+            | DropStep::RepeatReverse {
+                element: layout, ..
+            } => self.root_bearing_in(*layout, seen),
+            DropStep::ColumnsReverse(columns) => columns
+                .columns
+                .iter()
+                .any(|c| self.root_bearing_in(c.layout, seen)),
+            DropStep::ActiveVariant { variants, .. } => variants
+                .iter()
+                .any(|(_, steps)| self.steps_root_bearing(layout, steps, seen)),
+            DropStep::Release { offset } | DropStep::Environment { offset } => {
+                let variants = layout.tag.iter().flat_map(|t| &t.variants);
+                let mut fields = layout
+                    .fields
+                    .iter()
+                    .chain(variants.flat_map(|v| &v.fields))
+                    .filter(|f| {
+                        f.offset <= *offset
+                            && self.get(f.layout).is_some_and(|child| {
+                                matches!(child.size, SizeSpec::Fixed(n) if *offset - f.offset < n)
+                            })
+                    })
+                    .peekable();
+                fields.peek().is_none() || fields.any(|f| self.root_bearing_in(f.layout, seen))
+            }
+        })
+    }
 }
 
 /// Whether a value of this type carries a holder credit (the validator's
@@ -245,6 +321,12 @@ pub(crate) fn value_layout<S>(unit: &LirUnit<S>, value: ValueId) -> LayoutId {
 /// Whether destroying this value's content is user-visible.
 pub(crate) fn destructible_type<S>(unit: &LirUnit<S>, lay: Lay<'_>, ty: LirTypeId) -> bool {
     lay.destructible(unit.types[ty.index()].layout)
+}
+
+/// Whether this value's content keeps its drop at its TIR cleanup anchor
+/// ([`Lay::anchored`]).
+pub(crate) fn anchored_type<S>(unit: &LirUnit<S>, lay: Lay<'_>, ty: LirTypeId) -> bool {
+    lay.anchored(unit.types[ty.index()].layout)
 }
 
 // ---------------------------------------------------------------------------
@@ -2929,8 +3011,9 @@ fn clone_cleanup(ed: &mut Editor<Rc>, b: BlockId) -> BlockId {
     c
 }
 
-/// Slots whose content insertion may release early: owned, without
-/// user-visible destruction, and owned by this frame.
+/// Slots whose content insertion may release early: owned, not anchored
+/// (no user-visible destruction and no `Shared` root, S-14), and owned by
+/// this frame.
 fn eligible<S>(unit: &LirUnit<S>, lay: Lay<'_>, facts: &Facts) -> Vec<bool> {
     unit.slots
         .iter()
@@ -2938,7 +3021,7 @@ fn eligible<S>(unit: &LirUnit<S>, lay: Lay<'_>, facts: &Facts) -> Vec<bool> {
         .map(|(s, slot)| {
             let id = SlotId(s as u32);
             owns_type(unit, lay, slot.ty)
-                && !destructible_type(unit, lay, slot.ty)
+                && !anchored_type(unit, lay, slot.ty)
                 && matches!(
                     slot.kind,
                     SlotKind::Local

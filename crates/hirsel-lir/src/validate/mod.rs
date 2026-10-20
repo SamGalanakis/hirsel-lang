@@ -233,6 +233,20 @@ pub enum ViolationKind {
     /// A value with user-visible destruction released before Ready lowered
     /// its semantic drop, i.e. away from its cleanup anchor.
     ResourceOutsideAnchor(ValueId),
+    /// RC-ROOT (S-14): before Ready, a drop or release of content that
+    /// reaches a `Shared` root under a TIR cleanup anchor away from that
+    /// anchor's cleanup (outside a `Cleanup` or `FailureCleanup` block), or
+    /// under a disposal or state-release anchor outside a failure cleanup.
+    RootOutsideAnchor(CleanupAnchorId),
+    /// RC-ROOT (S-14): a semantic copy (`Share`) of content that reaches a
+    /// `Shared` root made by moving it out of its holder: the copy's Dup was
+    /// cancelled against that holder's release, which moves the holder's end
+    /// away from its cleanup anchor.
+    RootCopyCancelled(ValueId),
+    /// RC-ROOT (S-14): a construction of content that reaches a `Shared` root
+    /// placed in a compiler-local region or arena, which frees it at its own
+    /// end rather than at the value's cleanup anchor.
+    RootInRegion(ValueId),
     /// A cleanup anchor no reachable operation discharges.
     SkippedAnchor(CleanupAnchorId),
     /// A release out of TIR's nested cleanup order.
@@ -727,6 +741,81 @@ impl<'a> Layouts<'a> {
                     // An environment or child we cannot see may finalize.
                     None => true,
                 }
+            }
+        })
+    }
+    /// Whether this layout's drop program reaches a `Shared` root at any
+    /// depth (RC-ROOT, S-14): a `Shared` root itself, or a payload,
+    /// environment, child, element, column or variant step that does. An
+    /// erased environment or an iterator may hold one. Derived from the
+    /// layout records alone, independently of the passes' answer.
+    pub fn root_bearing(&self, id: LayoutId) -> bool {
+        let mut seen = std::collections::BTreeSet::new();
+        self.root_bearing_in(id, &mut seen)
+    }
+    fn root_bearing_in(
+        &self,
+        id: LayoutId,
+        seen: &mut std::collections::BTreeSet<LayoutId>,
+    ) -> bool {
+        if !seen.insert(id) {
+            return false;
+        }
+        let Some(layout) = self.get(id) else {
+            return true;
+        };
+        match layout.kind {
+            LayoutKind::Shared { .. }
+            | LayoutKind::Callable { environment: None }
+            | LayoutKind::Iterator { .. } => true,
+            LayoutKind::Block { payload } | LayoutKind::Box { payload } => {
+                self.root_bearing_in(payload, seen)
+            }
+            LayoutKind::Callable {
+                environment: Some(environment),
+            } => self.root_bearing_in(environment, seen),
+            _ => self.steps_root_bearing(layout, &layout.drop, seen),
+        }
+    }
+    fn steps_root_bearing(
+        &self,
+        layout: &LayoutRecord,
+        steps: &[DropStep],
+        seen: &mut std::collections::BTreeSet<LayoutId>,
+    ) -> bool {
+        steps.iter().any(|step| match step {
+            DropStep::Finalize | DropStep::CloseHandle { .. } => false,
+            DropStep::Thaw { .. } => true,
+            DropStep::Child { layout, .. }
+            | DropStep::ElementsReverse {
+                element: layout, ..
+            }
+            | DropStep::RepeatReverse {
+                element: layout, ..
+            } => self.root_bearing_in(*layout, seen),
+            DropStep::ColumnsReverse(columns) => columns
+                .columns
+                .iter()
+                .any(|c| self.root_bearing_in(c.layout, seen)),
+            DropStep::ActiveVariant { variants, .. } => variants
+                .iter()
+                .any(|(_, steps)| self.steps_root_bearing(layout, steps, seen)),
+            DropStep::Release { offset } | DropStep::Environment { offset } => {
+                // Every field whose bytes cover the offset, of any variant: a
+                // lifted step names a word inside a child aggregate.
+                let variants = layout.tag.iter().flat_map(|t| &t.variants);
+                let mut covering = layout
+                    .fields
+                    .iter()
+                    .chain(variants.flat_map(|v| &v.fields))
+                    .filter(|f| {
+                        f.offset <= *offset
+                            && self
+                                .fixed_size(f.layout)
+                                .is_some_and(|size| *offset - f.offset < size)
+                    })
+                    .peekable();
+                covering.peek().is_none() || covering.any(|f| self.root_bearing_in(f.layout, seen))
             }
         })
     }
