@@ -725,7 +725,11 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
         ("TlsClientAuth", "Anonymous()|Request(Bytes)|Require(Bytes)"),
         (
             "TlsServer",
-            "{identities:List[TlsIdentity[]],clients:TlsClientAuth[]}",
+            "{identities:List[TlsIdentity[]],clients:TlsClientAuth[],alpn:List[String]}",
+        ),
+        (
+            "TlsClient",
+            "{roots:TlsRoots[],identity:Option[TlsIdentity[]],alpn:List[String]}",
         ),
         (
             "TlsFailure",
@@ -753,7 +757,7 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
         ),
         (
             "PeerTls",
-            "Plain()|Certificate(List[String])|Fails(TlsFailure[])|Presents(List[String],Bytes)|Serves(TlsServer[])",
+            "Plain()|Certificate(List[String])|Fails(TlsFailure[])|Presents(List[String],Bytes)|Serves(TlsServer[])|Offers(List[String],List[String])",
         ),
         (
             "NetConnection",
@@ -840,6 +844,7 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
         "net.accept",
         "tls.connect",
         "tls.connect_as",
+        "tls.connect_with",
         "tls.accept",
     ] {
         let signature = registry.get(&hirsel_syntax::DefPath::core(name)).unwrap();
@@ -874,6 +879,7 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
         "udp.close",
         "tls.connect",
         "tls.connect_as",
+        "tls.connect_with",
         "tls.accept",
         "tls.close",
     ] {

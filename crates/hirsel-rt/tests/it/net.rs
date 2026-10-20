@@ -158,16 +158,17 @@ impl NetProvider for Counting {
         name: &str,
         roots: &RootsDigest,
         identity: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
-    ) -> Provided<()> {
+        alpn: &[String],
+    ) -> Provided<Option<String>> {
         self.tick();
-        self.inner.tls_connect(tls, s, name, roots, identity)
+        self.inner.tls_connect(tls, s, name, roots, identity, alpn)
     }
     fn tls_accept(
         &mut self,
         tls: &dyn hirsel_rt::net_tls::TlsEngine,
         s: u64,
         server: &hirsel_run_schema::tls::Server,
-    ) -> Provided<()> {
+    ) -> Provided<Option<String>> {
         self.tick();
         self.inner.tls_accept(tls, s, server)
     }
@@ -228,6 +229,7 @@ fn denied_and_invalid_operations_issue_no_provider_call() {
             Completion::NetHandle(Err(e))
             | Completion::Listened(Err(e))
             | Completion::NetUnit(Err(e))
+            | Completion::Protocol(Err(e))
             | Completion::NetBytes(Err(e))
             | Completion::Addresses(Err(e))
             | Completion::Count(Err(e))
@@ -384,6 +386,7 @@ fn denied_and_invalid_operations_issue_no_provider_call() {
         server_name: "localhost".into(),
         roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
         identity: None,
+        alpn: vec![],
     });
     assert_eq!(denied(c), NetError::NotGranted);
     assert_eq!(calls.get(), 4, "a refused handshake sends no TLS byte");
@@ -718,6 +721,7 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
             server_name: "example.com".into(),
             roots: RootsDigest::WebPki("webpki-roots 1.0.9".into()),
             identity: None,
+            alpn: vec![],
         },
         Request::TlsConnect {
             net: 2,
@@ -725,6 +729,7 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
             server_name: "example.com".into(),
             roots: RootsDigest::Pem([0xab; 32]),
             identity: Some([0xcd; 32]),
+            alpn: vec![],
         },
         Request::TlsAccept {
             net: 2,
@@ -732,6 +737,7 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
             server: TlsServerDigest {
                 identities: vec![[1; 32], [2; 32]],
                 clients: ClientAuth::Require([3; 32]),
+                alpn: vec![],
             },
         },
         Request::TlsAccept {
@@ -740,6 +746,7 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
             server: TlsServerDigest {
                 identities: vec![],
                 clients: ClientAuth::Anonymous,
+                alpn: vec![],
             },
         },
         Request::TlsPeer { net: 2, stream: 3 },

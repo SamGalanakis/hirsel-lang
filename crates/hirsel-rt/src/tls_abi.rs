@@ -1,5 +1,5 @@
-//! TLS Hirsel ABI v2. Layouts are the ordinary core TlsRoots/TlsIdentity/TlsServer/Stream
-//! layouts; this adapter adds no TLS representation to the language.
+//! TLS Hirsel ABI v2. Layouts are the ordinary core TlsRoots/TlsIdentity/TlsServer/
+//! TlsClient/Stream layouts; this adapter adds no TLS representation to the language.
 use crate::io::{Binding, Completion, Request};
 use crate::net::{ClientAuth, RootsDigest};
 use crate::net_abi::{NetUnitResult, NetWordResult};
@@ -34,6 +34,7 @@ unsafe fn connect(
     name: (*mut Header, u64, u64),
     roots: *const TlsRootsAbi,
     identity: Option<*const TlsIdentityAbi>,
+    alpn: Vec<String>,
 ) -> u8 {
     unsafe { Binding::get(ctx) }.tls(crate::net_tls::engine());
     let stream = unsafe { s.read() };
@@ -54,9 +55,10 @@ unsafe fn connect(
         server_name,
         roots,
         identity,
+        alpn,
     };
     let done = match unsafe { crate::net_abi::call_recording(ctx, request) } {
-        Some(Completion::NetUnit(done)) => done.map(|()| stream),
+        Some(Completion::Protocol(done)) => done.map(|_| stream),
         Some(_) => crate::fault("TLS completion type mismatch"),
         None => return STATUS_FAILURE,
     };
@@ -89,6 +91,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_connect(
             (name_owner, name_start, name_len),
             roots,
             None,
+            Vec::new(),
         )
     }
 }
@@ -120,8 +123,78 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_connect_as(
             (name_owner, name_start, name_len),
             roots,
             Some(identity),
+            Vec::new(),
         )
     }
+}
+
+/// TlsClient = { roots: TlsRoots, identity: Option[TlsIdentity], alpn: List[String] }: the
+/// roots at 0, the TlsIdentity at 24, whose null chain owner word is `None` (its niche), and
+/// the ALPN list block at 72; 80 bytes.
+#[repr(C)]
+pub struct TlsClientAbi {
+    pub roots: TlsRootsAbi,
+    pub identity: TlsIdentityAbi,
+    pub alpn: *mut Header,
+}
+
+/// `tls.connect_with(n, take s, server_name, client) -> Result[Stream of n, NetError]`:
+/// `tls.connect` or `tls.connect_as` by the client's identity, offering its ALPN list.
+/// # Safety
+/// As `hirsel_rt_v2_tls_connect`; client readable and its list and slices live for the
+/// call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_tls_connect_with(
+    ctx: *mut TaskCtx,
+    _destination: *mut u8,
+    out: *mut NetWordResult,
+    n: *const u64,
+    s: *mut u64,
+    name_owner: *mut Header,
+    name_start: u64,
+    name_len: u64,
+    client: *const TlsClientAbi,
+) -> u8 {
+    let identity = (!unsafe { (*client).identity.chain.owner }.is_null())
+        .then(|| unsafe { &raw const (*client).identity });
+    let alpn = unsafe { strings((*client).alpn) };
+    unsafe {
+        connect(
+            ctx,
+            out,
+            n,
+            s,
+            (name_owner, name_start, name_len),
+            &raw const (*client).roots,
+            identity,
+            alpn,
+        )
+    }
+}
+
+/// A borrowed `List[String]` block's elements, in order.
+/// # Safety
+/// The list and every element's slice are live.
+unsafe fn strings(list: *mut Header) -> Vec<String> {
+    let payload = crate::alloc::payload(list);
+    let count = usize::try_from(unsafe { payload.cast::<u64>().read() })
+        .unwrap_or_else(|_| crate::fault("String list count overflow"));
+    let first = crate::alloc::sequence_elements_offset(8) as usize;
+    let size = std::mem::size_of::<crate::views::Slice>();
+    (0..count)
+        .map(|index| {
+            let slice = unsafe {
+                &*payload
+                    .add(first + index * size)
+                    .cast::<crate::views::Slice>()
+            };
+            std::str::from_utf8(unsafe {
+                crate::io::slice_bytes(slice.owner, slice.start, slice.length)
+            })
+            .unwrap_or_else(|_| crate::fault("invalid String in TLS ABI"))
+            .to_owned()
+        })
+        .collect()
 }
 
 /// TlsIdentity = { chain: Bytes, key: Bytes }: two borrowed slices.
@@ -153,18 +226,22 @@ pub struct TlsClientAuthAbi {
     pub pem: crate::views::Slice,
 }
 
-/// TlsServer = { identities: List[TlsIdentity], clients: TlsClientAuth }: the list block,
-/// then the client policy at 8.
+/// TlsServer = { identities: List[TlsIdentity], clients: TlsClientAuth, alpn: List[String] }:
+/// the list block, the client policy at 8 and the ALPN list block at 40; 48 bytes.
 #[repr(C)]
 pub struct TlsServerAbi {
     pub identities: *mut Header,
     pub clients: TlsClientAuthAbi,
+    pub alpn: *mut Header,
 }
+/// A borrowed `TlsServer`: its identities' `(chain, key)` PEM, its client policy's trust
+/// set and its ALPN list.
+pub(crate) type ServerParts<'a> = (Vec<(&'a [u8], &'a [u8])>, ClientAuth<&'a [u8]>, Vec<String>);
 impl TlsServerAbi {
-    /// The identities' `(chain, key)` PEM and the client policy's trust set, borrowed.
+    /// The server's parts, its PEM borrowed.
     /// # Safety
-    /// The list and every slice are live for `'a`.
-    pub(crate) unsafe fn parts<'a>(&'a self) -> (Vec<(&'a [u8], &'a [u8])>, ClientAuth<&'a [u8]>) {
+    /// The lists and every slice are live for `'a`.
+    pub(crate) unsafe fn parts<'a>(&'a self) -> ServerParts<'a> {
         let payload = crate::alloc::payload(self.identities);
         let count = usize::try_from(unsafe { payload.cast::<u64>().read() })
             .unwrap_or_else(|_| crate::fault("identity count overflow"));
@@ -183,7 +260,7 @@ impl TlsServerAbi {
             2 => ClientAuth::Require(trust()),
             _ => crate::fault("TlsClientAuth tag out of range"),
         };
-        (identities, clients)
+        (identities, clients, unsafe { strings(self.alpn) })
     }
 }
 
@@ -204,18 +281,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_accept(
 ) -> u8 {
     let stream = unsafe { s.read() };
     unsafe { s.write(0) };
-    let (identities, clients) = unsafe { (*server).parts() };
+    let (identities, clients, alpn) = unsafe { (*server).parts() };
     let binding = unsafe { Binding::get(ctx) };
     binding.tls(crate::net_tls::engine());
-    binding.tls_server(stream, &identities, clients);
-    let server = crate::net::TlsServerDigest::of(&identities, clients);
+    binding.tls_server(stream, &identities, clients, &alpn);
+    let server = crate::net::TlsServerDigest::of(&identities, clients, &alpn);
     let request = Request::TlsAccept {
         net: unsafe { n.read() },
         stream,
         server,
     };
     let done = match unsafe { crate::net_abi::call_recording(ctx, request) } {
-        Some(Completion::NetUnit(done)) => done.map(|()| stream),
+        Some(Completion::Protocol(done)) => done.map(|_| stream),
         Some(_) => crate::fault("TLS completion type mismatch"),
         None => return STATUS_FAILURE,
     };
@@ -252,6 +329,43 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_peer(
         Some(_) => crate::fault("TLS completion type mismatch"),
         None => return STATUS_FAILURE,
     };
+    unsafe { write_optional_bytes(ctx, out, value) };
+    STATUS_OK
+}
+
+/// `tls.negotiated_protocol(n, s) -> Result[Option[String], NetError]`: the protocol the
+/// stream's handshake negotiated, in `tls.peer`'s result image.
+/// # Safety
+/// ctx bound; n/s readable; out writable for NetChainResult.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_tls_negotiated_protocol(
+    ctx: *mut TaskCtx,
+    _destination: *mut u8,
+    out: *mut NetChainResult,
+    n: *const u64,
+    s: *const u64,
+) -> u8 {
+    let request = Request::TlsProtocol {
+        net: unsafe { n.read() },
+        stream: unsafe { s.read() },
+    };
+    let value = match unsafe { crate::net_abi::call(ctx, request) } {
+        Some(Completion::Protocol(value)) => value,
+        Some(_) => crate::fault("TLS completion type mismatch"),
+        None => return STATUS_FAILURE,
+    };
+    unsafe { write_optional_bytes(ctx, out, value.map(|p| p.map(String::into_bytes))) };
+    STATUS_OK
+}
+
+/// Write a `Result[Option[Bytes], NetError]` (or its `String` twin) result.
+/// # Safety
+/// ctx bound; out writable for NetChainResult.
+unsafe fn write_optional_bytes(
+    ctx: *mut TaskCtx,
+    out: *mut NetChainResult,
+    value: Result<Option<Vec<u8>>, crate::net::NetError>,
+) {
     // Initialize padding and inactive bytes without manufacturing a pointer from error bits.
     unsafe {
         out.cast::<u8>()
@@ -269,7 +383,6 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_peer(
                 .write(crate::net_abi::NetErrorAbi::of(error));
         },
     }
-    STATUS_OK
 }
 
 /// `tls.close(n, take s) -> Result[(), NetError]`: send close_notify, then

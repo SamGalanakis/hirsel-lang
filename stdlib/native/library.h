@@ -165,12 +165,16 @@ uint8_t hirsel_rt_v2_tls_connect(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word
 /* A TLS identity is the ordinary { chain: Bytes, key: Bytes } record of two slices. */
 typedef struct { hirsel_rt_v2_slice chain, key; } hirsel_rt_v2_tls_identity;
 uint8_t hirsel_rt_v2_tls_connect_as(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const hirsel_rt_v2_tls_roots*, const hirsel_rt_v2_tls_identity*);
+/* TlsClient: the roots, the identity (a null chain owner is None), then the ALPN list. */
+typedef struct { hirsel_rt_v2_tls_roots roots; hirsel_rt_v2_tls_identity identity; hirsel_rt_v2_header* alpn; } hirsel_rt_v2_tls_client;
+uint8_t hirsel_rt_v2_tls_connect_with(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const hirsel_rt_v2_tls_client*);
 typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice pem; } hirsel_rt_v2_tls_client_auth;
-typedef struct { hirsel_rt_v2_header* identities; hirsel_rt_v2_tls_client_auth clients; } hirsel_rt_v2_tls_server;
+typedef struct { hirsel_rt_v2_header* identities; hirsel_rt_v2_tls_client_auth clients; hirsel_rt_v2_header* alpn; } hirsel_rt_v2_tls_server;
 uint8_t hirsel_rt_v2_tls_accept(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, uint64_t*, const hirsel_rt_v2_tls_server*);
 /* Result[Option[Bytes], NetError]: the tag, then at 8 the Bytes (a null owner is None) or the NetError. */
 typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice value; } hirsel_rt_v2_net_chain_result;
 uint8_t hirsel_rt_v2_tls_peer(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_chain_result*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_tls_negotiated_protocol(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_chain_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_tls_close(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_unit_result*, const uint64_t*, uint64_t*);
 /* Structured tasks (hirsel-rt src/tasks.rs). Scope and Task are run-local handle words; a
    task's code is a compiled `once fn() -> ()` closure; results cross as whole Option images. */

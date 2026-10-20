@@ -41,7 +41,7 @@ fn client(i: u16, take tls: PeerTls) -> NetClient uses {} {
 }
 
 fn server(take clients: TlsClientAuth) -> TlsServer uses {} {
-  TlsServer(identities: [identity()], clients: clients)
+  TlsServer(identities: [identity()], clients: clients, alpn: [])
 }
 
 fn refusal(n: Net, take upgraded: Result[Stream of n, NetError]) -> Option[NetError] {
@@ -121,7 +121,11 @@ pub fn main(t: Test) -> Result[(), NetError] {
     t,
     refusal(
       n,
-      tls.accept(n, take none, TlsServer(identities: [], clients: Anonymous()))
+      tls.accept(
+        n,
+        take none,
+        TlsServer(identities: [], clients: Anonymous(), alpn: [])
+      )
     ) == Some(InvalidInput())
   )
   Ok(())

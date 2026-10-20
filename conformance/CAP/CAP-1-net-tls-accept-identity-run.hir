@@ -43,7 +43,8 @@ fn invalid(n: Net, mut listener: Listener of n, chain: Bytes, key: Bytes) -> Res
         take s,
         TlsServer(
           identities: [TlsIdentity(chain: chain, key: key)],
-          clients: Anonymous()
+          clients: Anonymous(),
+          alpn: []
         )
       )
     ) == Some(InvalidInput())
@@ -105,7 +106,7 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
   let mut secure = tls.accept(
     n,
     take s,
-    TlsServer(identities: [good], clients: Anonymous())
+    TlsServer(identities: [good], clients: Anonymous(), alpn: [])
   )?
   let mut buf: List[u8] = []
   test.check(t, net.read(n, mut secure, mut buf, 8u64)? == 2u64)

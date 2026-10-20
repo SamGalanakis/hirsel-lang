@@ -1543,7 +1543,9 @@ pub fn serve_tls(
   // A ListenTls stream allows options before its handshake.
   core@1/net.set_read_timeout(n, mut plain, rt) ? http_net_error
   core@1/net.set_write_timeout(n, mut plain, wt) ? http_net_error
-  let secure = core@1/tls.accept(n, take plain, server) ? http_net_error
+  // This server speaks HTTP/1.1 alone, so it selects that protocol whatever the caller lists.
+  let http1 = TlsServer(identities: server.identities, clients: server.clients, alpn: ["http/1.1"])
+  let secure = core@1/tls.accept(n, take plain, http1) ? http_net_error
   Ok(server_connection(tasks, n, take secure, config))
 }
 

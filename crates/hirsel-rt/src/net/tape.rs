@@ -110,6 +110,38 @@ fn parse_roots(word: &str) -> Result<RootsDigest, String> {
     }
 }
 
+/// An ALPN list word: `alpn:` and each protocol's hex, comma separated; absent when empty.
+fn alpn(list: &[String]) -> String {
+    if list.is_empty() {
+        return String::new();
+    }
+    format!(
+        " alpn:{}",
+        list.iter()
+            .map(|p| hex(p.as_bytes()))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+/// An absent word is the empty list, so `alpn:` is the list of one empty protocol (an
+/// invalid offer the request still records).
+fn parse_alpn(word: &str) -> Result<Vec<String>, String> {
+    let list = word.strip_prefix("alpn:").ok_or("bad tape ALPN list")?;
+    list.split(',').map(text).collect()
+}
+fn protocol(p: &Option<String>) -> String {
+    p.as_ref()
+        .map_or("none".into(), |p| format!("alpn:{}", hex(p.as_bytes())))
+}
+fn parse_protocol(word: &str) -> Result<Option<String>, String> {
+    match word {
+        "none" => Ok(None),
+        p => Ok(Some(text(
+            p.strip_prefix("alpn:").ok_or("bad tape protocol")?,
+        )?)),
+    }
+}
+
 const TLS: [(&str, TlsFailure); 10] = [
     ("unknown-issuer", TlsFailure::UnknownIssuer),
     ("expired", TlsFailure::Expired),
@@ -278,11 +310,13 @@ pub(crate) fn render_request(request: &Request) -> String {
             server_name,
             roots: r,
             identity,
+            alpn: a,
         } => format!(
-            "tls_connect {net} {stream} {} {}{}",
+            "tls_connect {net} {stream} {} {}{}{}",
             hex(server_name.as_bytes()),
             roots(r),
-            identity.map_or(String::new(), |d| format!(" pem:{}", hex(&d)))
+            identity.map_or(String::new(), |d| format!(" pem:{}", hex(&d))),
+            alpn(a)
         ),
         R::TlsAccept {
             net,
@@ -301,15 +335,17 @@ pub(crate) fn render_request(request: &Request) -> String {
                 ClientAuth::Require(d) => format!("require:{}", hex(&d)),
             };
             format!(
-                "tls_accept {net} {stream} {} {clients}",
+                "tls_accept {net} {stream} {} {clients}{}",
                 if identities.is_empty() {
                     "none"
                 } else {
                     &identities
-                }
+                },
+                alpn(&server.alpn)
             )
         }
         R::TlsPeer { net, stream } => format!("tls_peer {net} {stream}"),
+        R::TlsProtocol { net, stream } => format!("tls_protocol {net} {stream}"),
         R::TlsClose { net, stream } => format!("tls_close {net} {stream}"),
         R::Listen { net, addr } => format!("listen {net} {}", address(addr)),
         R::Accept { net, listener } => format!("accept {net} {listener}"),
@@ -347,6 +383,7 @@ pub(crate) fn render_completion(completion: &Completion) -> String {
                 .as_ref()
                 .map_or("none".into(), |der| format!("der:{}", hex(der))))
         ),
+        C::Protocol(v) => format!("protocol {}", outcome(v, protocol)),
         C::Address(v) => format!("address {}", outcome(v, address)),
         C::Accepted(v) => format!(
             "accepted {}",
@@ -441,20 +478,27 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             net: number(n)?,
             stream: number(s)?,
         },
-        ["tls_connect", n, s, name, r, identity @ ..] => R::TlsConnect {
-            net: number(n)?,
-            stream: number(s)?,
-            server_name: text(name)?,
-            roots: parse_roots(r)?,
-            identity: match identity {
-                [] => None,
-                [d] => Some(parse_digest(
-                    d.strip_prefix("pem:").ok_or("bad tape identity")?,
-                )?),
-                _ => return Err("bad tape tls_connect".into()),
-            },
-        },
-        ["tls_accept", n, s, identities, clients] => R::TlsAccept {
+        ["tls_connect", n, s, name, r, rest @ ..] => {
+            let (identity, rest) = match rest {
+                [d, rest @ ..] if d.starts_with("pem:") => {
+                    (Some(parse_digest(d.strip_prefix("pem:").unwrap())?), rest)
+                }
+                rest => (None, rest),
+            };
+            R::TlsConnect {
+                net: number(n)?,
+                stream: number(s)?,
+                server_name: text(name)?,
+                roots: parse_roots(r)?,
+                identity,
+                alpn: match rest {
+                    [] => vec![],
+                    [a] => parse_alpn(a)?,
+                    _ => return Err("bad tape tls_connect".into()),
+                },
+            }
+        }
+        ["tls_accept", n, s, identities, clients, rest @ ..] => R::TlsAccept {
             net: number(n)?,
             stream: number(s)?,
             server: TlsServerDigest {
@@ -471,9 +515,18 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
                     Some(("require", d)) => ClientAuth::Require(parse_digest(d)?),
                     _ => return Err("bad tape client auth".into()),
                 },
+                alpn: match rest {
+                    [] => vec![],
+                    [a] => parse_alpn(a)?,
+                    _ => return Err("bad tape tls_accept".into()),
+                },
             },
         },
         ["tls_peer", n, s] => R::TlsPeer {
+            net: number(n)?,
+            stream: number(s)?,
+        },
+        ["tls_protocol", n, s] => R::TlsProtocol {
             net: number(n)?,
             stream: number(s)?,
         },
@@ -539,6 +592,7 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
                 der.strip_prefix("der:").ok_or("bad tape chain")?,
             )?)),
         })?),
+        ["protocol", r @ ..] => C::Protocol(parse_outcome(r, |w| parse_protocol(one(w)?))?),
         ["address", r @ ..] => C::Address(parse_outcome(r, |w| parse_address(one(w)?))?),
         ["accepted", r @ ..] => C::Accepted(parse_outcome(r, |w| match w {
             [id, peer] => Ok((number(id)?, parse_address(peer)?)),

@@ -60,6 +60,7 @@ fn tls_record_with_roots(peer_tls: PeerTls, roots: RootsDigest, pem: Option<&[u8
             server_name: "localhost".into(),
             roots,
             identity: None,
+            alpn: vec![],
         })
         .unwrap();
     if completion == Completion::NetUnit(Ok(())) {
@@ -122,7 +123,7 @@ fn every_failing_peer_handshake_records_its_failure_and_replays_independently() 
         let io = tls_record(PeerTls::Fails(failure.into()));
         assert_eq!(
             handshake(&io),
-            Completion::NetUnit(Err(NetError::Tls(failure)))
+            Completion::Protocol(Err(NetError::Tls(failure)))
         );
         replay_interpreter(io.tape(), &tree, &tree, &io.handles().observed(), b"");
         // The interpreter reproduces the fixture's failure, not the comparison tape's.
@@ -131,7 +132,7 @@ fn every_failing_peer_handshake_records_its_failure_and_replays_independently() 
             .iter_mut()
             .find(|event| matches!(event.request, Request::TlsConnect { .. }))
             .unwrap()
-            .completion = Completion::NetUnit(Err(NetError::Tls(TlsFailure::AlertReceived(41))));
+            .completion = Completion::Protocol(Err(NetError::Tls(TlsFailure::AlertReceived(41))));
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 replay_interpreter_with_fixture(
@@ -204,9 +205,10 @@ fn a_truncate_step_fails_secured_reads_and_ends_plaintext_reads() {
                     server_name: "localhost".into(),
                     roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
                     identity: None,
+                    alpn: vec![],
                 })
                 .unwrap(),
-                Completion::NetUnit(Ok(()))
+                Completion::Protocol(Ok(None))
             );
         }
         let end = if tls {
@@ -321,14 +323,15 @@ fn certificate_names_are_merged_independently_of_tls_event_order() {
                     server_name: name.into(),
                     roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
                     identity: None,
+                    alpn: vec![],
                 })
                 .unwrap();
             let expected = if name == "localhost" {
-                Ok(())
+                Ok(None)
             } else {
                 Err(NetError::Tls(TlsFailure::NameMismatch))
             };
-            assert_eq!(result, Completion::NetUnit(expected.clone()));
+            assert_eq!(result, Completion::Protocol(expected.clone()));
             if expected.is_ok() {
                 assert_eq!(
                     io.call(Request::TlsClose { net, stream }).unwrap(),
@@ -340,7 +343,8 @@ fn certificate_names_are_merged_independently_of_tls_event_order() {
         // A fixed peer certificate cannot both accept and reject one name.
         let mut conflicting = io.tape().to_vec();
         for event in &mut conflicting {
-            if event.completion == Completion::NetUnit(Err(NetError::Tls(TlsFailure::NameMismatch)))
+            if event.completion
+                == Completion::Protocol(Err(NetError::Tls(TlsFailure::NameMismatch)))
             {
                 let Request::TlsConnect { server_name, .. } = &mut event.request else {
                     panic!()

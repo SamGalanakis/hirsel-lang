@@ -162,7 +162,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "PeerTls",
             "",
-            "Plain()|Certificate(List[String])|Fails(TlsFailure)|Presents(List[String],Bytes)|Serves(TlsServer)",
+            "Plain()|Certificate(List[String])|Fails(TlsFailure)|Presents(List[String],Bytes)|Serves(TlsServer)|Offers(List[String],List[String])",
         ),
         (
             "NetConnection",
@@ -247,7 +247,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "TlsServer",
             "",
-            "identities: List[TlsIdentity],clients: TlsClientAuth",
+            "identities: List[TlsIdentity],clients: TlsClientAuth,alpn: List[String]",
+        ),
+        (
+            "TlsClient",
+            "",
+            "roots: TlsRoots,identity: Option[TlsIdentity],alpn: List[String]",
         ),
         (
             "NetRule",

@@ -29,34 +29,43 @@ pub trait TlsEngine {
     fn valid_roots(&self, pem: &[u8]) -> bool;
     /// A client or server identity: its PEM chain and key, when valid and matching.
     fn identity(&self, chain: &[u8], key: &[u8]) -> Option<Arc<Identity>>;
-    /// A `TlsServer`: its identities and client policy, when the whole server is valid.
-    fn server(&self, identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>) -> Option<Server>;
+    /// A `TlsServer`: its identities, client policy and ALPN list, when the whole server is
+    /// valid.
+    fn server(
+        &self,
+        identities: &[(&[u8], &[u8])],
+        clients: ClientAuth<&[u8]>,
+        alpn: &[String],
+    ) -> Option<Server>;
     /// A client connection verifying `name` against `roots` (the Pem material in `pem`),
-    /// presenting `identity` when the server asks for a certificate.
+    /// presenting `identity` when the server asks for a certificate and offering the ALPN
+    /// protocols `alpn` in order.
     fn connect(
         &self,
         name: &str,
         roots: &RootsDigest,
         pem: Option<Vec<u8>>,
         identity: Option<&Arc<Identity>>,
+        alpn: &[String],
     ) -> Result<Box<dyn TlsSession>, NetError>;
     /// A server connection presenting the identity the client's SNI selects.
     fn accept(&self, server: &Server) -> Result<Box<dyn TlsSession>, NetError>;
-    /// A scripted client's answer to a server handshake
-    /// (`hirsel_run_schema::tls::scripted_accept`).
+    /// A scripted client's answer to a server handshake: the chain it presented and the
+    /// protocol negotiated (`hirsel_run_schema::tls::scripted_accept`).
     fn scripted_accept(
         &self,
         client: &hirsel_run_schema::PeerTls,
         server: &Server,
-    ) -> Result<Option<Vec<u8>>, hirsel_run_schema::TlsFailure>;
-    /// A scripted peer's answer to a client handshake, and the chain it presented
-    /// (`hirsel_run_schema::tls::scripted_connect`).
+    ) -> Result<hirsel_run_schema::tls::Handshake, hirsel_run_schema::TlsFailure>;
+    /// A scripted peer's answer to a client handshake offering `alpn`: the chain it
+    /// presented and the protocol negotiated (`hirsel_run_schema::tls::scripted_connect`).
     fn scripted_connect(
         &self,
         peer: &hirsel_run_schema::PeerTls,
         server_name: &str,
         identity: Option<&Identity>,
-    ) -> Result<Option<Vec<u8>>, hirsel_run_schema::TlsFailure>;
+        alpn: &[String],
+    ) -> Result<hirsel_run_schema::tls::Handshake, hirsel_run_schema::TlsFailure>;
 }
 
 /// An adapter's TLS engine, once a TLS entry handed it over. An engine holds no state, so
@@ -109,6 +118,9 @@ pub trait TlsSession {
     /// What `tls.peer` returns: the chain its peer presented and the handshake verified,
     /// the server's on a client and a client's, if any, on a server.
     fn peer(&self) -> Option<Vec<u8>>;
+    /// The ALPN protocol a finished handshake negotiated. Both sides only ever agree on a
+    /// protocol one of them listed, and every listed protocol is a String.
+    fn protocol(&self) -> Option<String>;
 }
 impl std::fmt::Debug for dyn TlsSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -132,8 +144,13 @@ impl TlsEngine for Rustls {
     fn identity(&self, chain: &[u8], key: &[u8]) -> Option<Arc<Identity>> {
         hirsel_run_schema::tls::identity(chain, key).map(Arc::new)
     }
-    fn server(&self, identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>) -> Option<Server> {
-        hirsel_run_schema::tls::server(identities, clients)
+    fn server(
+        &self,
+        identities: &[(&[u8], &[u8])],
+        clients: ClientAuth<&[u8]>,
+        alpn: &[String],
+    ) -> Option<Server> {
+        hirsel_run_schema::tls::server(identities, clients, alpn)
     }
     fn connect(
         &self,
@@ -141,8 +158,9 @@ impl TlsEngine for Rustls {
         roots: &RootsDigest,
         pem: Option<Vec<u8>>,
         identity: Option<&Arc<Identity>>,
+        alpn: &[String],
     ) -> Result<Box<dyn TlsSession>, NetError> {
-        client(name, roots, pem, identity).map(|c| Box::new(Connection::from(c)) as _)
+        client(name, roots, pem, identity, alpn).map(|c| Box::new(Connection::from(c)) as _)
     }
     fn accept(&self, server: &Server) -> Result<Box<dyn TlsSession>, NetError> {
         self::server(server).map(|c| Box::new(Connection::from(c)) as _)
@@ -151,7 +169,7 @@ impl TlsEngine for Rustls {
         &self,
         client: &hirsel_run_schema::PeerTls,
         server: &Server,
-    ) -> Result<Option<Vec<u8>>, hirsel_run_schema::TlsFailure> {
+    ) -> Result<hirsel_run_schema::tls::Handshake, hirsel_run_schema::TlsFailure> {
         hirsel_run_schema::tls::scripted_accept(client, server)
     }
     fn scripted_connect(
@@ -159,8 +177,9 @@ impl TlsEngine for Rustls {
         peer: &hirsel_run_schema::PeerTls,
         server_name: &str,
         identity: Option<&Identity>,
-    ) -> Result<Option<Vec<u8>>, hirsel_run_schema::TlsFailure> {
-        hirsel_run_schema::tls::scripted_connect(peer, server_name, identity)
+        alpn: &[String],
+    ) -> Result<hirsel_run_schema::tls::Handshake, hirsel_run_schema::TlsFailure> {
+        hirsel_run_schema::tls::scripted_connect(peer, server_name, identity, alpn)
     }
 }
 
@@ -223,6 +242,10 @@ impl TlsSession for Connection {
         self.peer_certificates()
             .map(hirsel_run_schema::tls::chain_der)
     }
+    fn protocol(&self) -> Option<String> {
+        self.alpn_protocol()
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+    }
 }
 
 /// Tape identity of the compiled Mozilla root set; update with Cargo.toml.
@@ -237,9 +260,6 @@ pub fn chain_digest(pem: &[u8]) -> [u8; 32] {
     Sha256::digest(pem).into()
 }
 
-/// The ALPN protocols a server handshake offers (docs/spec/core-library.md).
-pub const SERVER_ALPN: &[&[u8]] = &[b"http/1.1"];
-
 /// Presents the identity `tls::select` picks for the client's SNI.
 #[derive(Debug)]
 struct BySni(Vec<Arc<Identity>>);
@@ -250,8 +270,8 @@ impl rustls::server::ResolvesServerCert for BySni {
 }
 
 /// A server handshake with a server the shared argument checks loaded: the identity the
-/// client's SNI selects, and the client verifier of its trust set. No session cache or
-/// tickets.
+/// client's SNI selects, the client verifier of its trust set and its ALPN list, which
+/// rustls selects from in the server's order. No session cache or tickets.
 fn server(server: &Server) -> Result<ServerConnection, NetError> {
     let builder =
         ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
@@ -262,20 +282,25 @@ fn server(server: &Server) -> Result<ServerConnection, NetError> {
         None => builder.with_no_client_auth(),
     };
     let mut config = builder.with_cert_resolver(Arc::new(BySni(server.identities.clone())));
-    config.alpn_protocols = SERVER_ALPN.iter().map(|p| p.to_vec()).collect();
+    config.alpn_protocols = alpn(&server.alpn);
     config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
     config.send_tls13_tickets = 0;
     ServerConnection::new(Arc::new(config)).map_err(|e| NetError::Tls(failure(&e)))
 }
 
+fn alpn(protocols: &[String]) -> Vec<Vec<u8>> {
+    protocols.iter().map(|p| p.as_bytes().to_vec()).collect()
+}
+
 /// The host provider verifies with the trust anchors parsed by the shared argument checks,
-/// and presents `identity` when the server asks for a client certificate. No cached config
-/// enables resumption or ALPN.
+/// presents `identity` when the server asks for a client certificate and offers the ALPN
+/// protocols `protocols` in order. No cached config enables resumption.
 fn client(
     name: &str,
     roots: &RootsDigest,
     pem: Option<Vec<u8>>,
     identity: Option<&Arc<Identity>>,
+    protocols: &[String],
 ) -> Result<ClientConnection, NetError> {
     let roots = match roots {
         RootsDigest::WebPki(version) if version == WEBPKI_VERSION => RootCertStore {
@@ -305,6 +330,7 @@ fn client(
         None => builder.with_no_client_auth(),
     };
     config.resumption = rustls::client::Resumption::disabled();
+    config.alpn_protocols = alpn(protocols);
     ClientConnection::new(Arc::new(config), name).map_err(|e| NetError::Tls(failure(&e)))
 }
 

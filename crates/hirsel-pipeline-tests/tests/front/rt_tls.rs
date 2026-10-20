@@ -55,8 +55,9 @@ fn a_host_unknown_issuer_tape_replays_independently_in_the_interpreter() {
             server_name: "localhost".into(),
             roots: RootsDigest::WebPki(WEBPKI_VERSION.into()),
             identity: None,
+            alpn: vec![],
         }),
-        Ok(Completion::NetUnit(Err(NetError::Tls(
+        Ok(Completion::Protocol(Err(NetError::Tls(
             TlsFailure::UnknownIssuer
         ))))
     );
@@ -69,7 +70,7 @@ fn a_host_unknown_issuer_tape_replays_independently_in_the_interpreter() {
         TlsFailure::AlertReceived(48),
     ] {
         let mut tape = io.tape().to_vec();
-        tape.last_mut().unwrap().completion = Completion::NetUnit(Err(NetError::Tls(altered)));
+        tape.last_mut().unwrap().completion = Completion::Protocol(Err(NetError::Tls(altered)));
         assert!(refuses(&tape, &io), "{altered:?}");
     }
 }

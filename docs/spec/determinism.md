@@ -511,14 +511,18 @@ request records the server name and the identity of the root set: `webpki:` and 
 hex-encoded version of the compiled root store for `WebPki()`, or `pem:` and the SHA-256 of
 the original PEM bytes for `Pem(b)`, so replay under a different trust configuration
 refuses instead of succeeding; a `tls.connect_as` request also records the SHA-256 of its
-identity's certificate-chain PEM bytes. TLS records, keys, randomness and verification time
-are internal to the provider and never recorded. A `tls.accept` request records the SHA-256
-of each identity's certificate-chain PEM bytes, in order, and its client policy with the
-SHA-256 of the trust set's PEM bytes, and its completion the handshake outcome; a private
-key, and any digest of one, is never recorded. Replay re-derives the server's validity from
+identity's certificate-chain PEM bytes, and a `tls.connect_with` request records its
+identity's digest when it has one and the ALPN protocols it offers. TLS records, keys,
+randomness and verification time are internal to the provider and never recorded. A
+`tls.accept` request records the SHA-256 of each identity's certificate-chain PEM bytes, in
+order, its client policy with the SHA-256 of the trust set's PEM bytes, and its ALPN list; a
+private key, and any digest of one, is never recorded. The completion of every handshake is
+its outcome: the negotiated ALPN protocol or none, or the error. Replay refuses a recorded
+protocol that the request's own list could not select. Replay re-derives the server's validity from
 the material the program supplies again, and a different chain or trust set refuses. A
 `tls.peer` request records the stream, and its completion the DER chain it returned, which
-replay returns without cryptography. Recordings are secret-bearing: they hold plaintext
+replay returns without cryptography. A `tls.negotiated_protocol` request records the stream,
+and its completion the protocol, which replay re-derives from the recorded handshake. Recordings are secret-bearing: they hold plaintext
 and granted `Env` values.
 
 Replay returns recorded completions without sockets, name resolution or cryptography. Each

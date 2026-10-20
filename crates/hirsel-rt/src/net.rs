@@ -232,26 +232,30 @@ impl std::fmt::Debug for TlsIdentity {
 pub use hirsel_run_schema::tls::ClientAuth;
 
 /// What a `TlsAccept` request records of its `TlsServer`: the SHA-256 of each identity's
-/// certificate-chain PEM, in order, and of the client trust set's PEM. Keys never appear.
+/// certificate-chain PEM, in order, of the client trust set's PEM, and its ALPN list. Keys
+/// never appear.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TlsServerDigest {
     pub identities: Vec<[u8; 32]>,
     pub clients: ClientAuth<[u8; 32]>,
+    pub alpn: Vec<String>,
 }
 impl TlsServerDigest {
-    pub fn of(identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>) -> Self {
+    pub fn of(identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>, alpn: &[String]) -> Self {
         Self {
             identities: identities
                 .iter()
                 .map(|(chain, _)| crate::net_tls::chain_digest(chain))
                 .collect(),
             clients: clients.map(crate::net_tls::chain_digest),
+            alpn: alpn.to_vec(),
         }
     }
 }
 
 /// A `TlsServer` supplied outside the tape: its digest, and its material when the whole
-/// server is valid (a nonempty list of valid identities, and a valid nonempty trust set).
+/// server is valid (a nonempty list of valid identities, a valid nonempty trust set and a
+/// valid ALPN list).
 #[derive(Clone, Debug)]
 pub struct TlsServer {
     pub digest: TlsServerDigest,
@@ -269,9 +273,10 @@ impl TlsServer {
         tls: &dyn TlsEngine,
         identities: &[(&[u8], &[u8])],
         clients: ClientAuth<&[u8]>,
+        alpn: &[String],
     ) -> Self {
-        let digest = TlsServerDigest::of(identities, clients);
-        let loaded = tls.server(identities, clients);
+        let digest = TlsServerDigest::of(identities, clients, alpn);
+        let loaded = tls.server(identities, clients, alpn);
         Self { digest, loaded }
     }
 }
@@ -309,7 +314,8 @@ pub trait NetProvider {
     -> Provided<()>;
     fn peer_addr(&mut self, stream: u64) -> Provided<SocketAddr>;
     /// A client handshake through `tls`, presenting `identity` when the server asks for a
-    /// certificate.
+    /// certificate and offering the ALPN protocols `alpn`. Success is the protocol the server
+    /// selected.
     fn tls_connect(
         &mut self,
         tls: &dyn TlsEngine,
@@ -317,16 +323,17 @@ pub trait NetProvider {
         server_name: &str,
         roots: &RootsDigest,
         identity: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
-    ) -> Provided<()>;
+        alpn: &[String],
+    ) -> Provided<Option<String>>;
     /// A server handshake with a valid server: the identity selected by the client's SNI,
-    /// and its client-certificate policy. The policy layer closes the stream after a
-    /// failure, as for `tls_connect`.
+    /// its client-certificate policy and its ALPN list. Success is the protocol selected.
+    /// The policy layer closes the stream after a failure, as for `tls_connect`.
     fn tls_accept(
         &mut self,
         tls: &dyn TlsEngine,
         stream: u64,
         server: &hirsel_run_schema::tls::Server,
-    ) -> Provided<()>;
+    ) -> Provided<Option<String>>;
     /// The DER chain (leaf first, concatenated) a `tls_accept` stream's client presented and
     /// the handshake verified; `None` for any other stream.
     fn tls_peer(&mut self, stream: u64) -> Provided<Option<Vec<u8>>>;
@@ -394,7 +401,8 @@ impl NetProvider for NoNet {
         _: &str,
         _: &RootsDigest,
         _: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
-    ) -> Provided<()> {
+        _: &[String],
+    ) -> Provided<Option<String>> {
         Err(AdapterError::InvalidCompletion)
     }
     fn tls_accept(
@@ -402,7 +410,7 @@ impl NetProvider for NoNet {
         _: &dyn TlsEngine,
         _: u64,
         _: &hirsel_run_schema::tls::Server,
-    ) -> Provided<()> {
+    ) -> Provided<Option<String>> {
         Err(AdapterError::InvalidCompletion)
     }
     fn tls_peer(&mut self, _: u64) -> Provided<Option<Vec<u8>>> {
@@ -508,6 +516,7 @@ pub(crate) fn is_net_request(request: &crate::io::Request) -> bool {
             | R::TlsConnect { .. }
             | R::TlsAccept { .. }
             | R::TlsPeer { .. }
+            | R::TlsProtocol { .. }
             | R::TlsClose { .. }
             | R::Listen { .. }
             | R::Accept { .. }
@@ -553,9 +562,12 @@ impl crate::io::State {
         stream: u64,
         identities: &[(&[u8], &[u8])],
         clients: ClientAuth<&[u8]>,
+        alpn: &[String],
     ) {
-        self.tls_servers
-            .insert(stream, TlsServer::load(self.tls(), identities, clients));
+        self.tls_servers.insert(
+            stream,
+            TlsServer::load(self.tls(), identities, clients, alpn),
+        );
     }
 
     pub(crate) fn remember_tls_roots(&mut self, stream: u64, pem: &[u8]) {
@@ -641,10 +653,13 @@ impl crate::io::State {
         self.stdout.extend_from_slice(report.as_bytes());
         Some(crate::io::Completion::Checked(false))
     }
-    fn mark_tls(&mut self, stream: u64) {
-        if let Some(crate::handles::Grant::Stream { tls, .. }) = self.handles.rows.get_mut(&stream)
+    /// A successful handshake: the stream carries plaintext and its negotiated protocol.
+    fn mark_tls(&mut self, stream: u64, negotiated: Option<String>) {
+        if let Some(crate::handles::Grant::Stream { tls, protocol, .. }) =
+            self.handles.rows.get_mut(&stream)
         {
             *tls = true;
+            *protocol = negotiated;
         }
     }
     /// Program errors only: never consult or advance a provider (CONC-3).
@@ -755,6 +770,7 @@ impl crate::io::State {
             | R::SetTimeout { net, stream, .. }
             | R::PeerAddr { net, stream }
             | R::TlsPeer { net, stream }
+            | R::TlsProtocol { net, stream }
             | R::TlsConnect { net, stream, .. }
             | R::TlsAccept { net, stream, .. }
             | R::TlsClose { net, stream } => {
@@ -764,13 +780,16 @@ impl crate::io::State {
                         server_name,
                         roots,
                         identity,
+                        alpn,
                         ..
                     } => {
-                        identity.is_some_and(|digest| {
-                            self.tls_identities
-                                .get(stream)
-                                .is_none_or(|known| known.chain != digest || known.key.is_none())
-                        }) || !self.tls().valid_name(server_name)
+                        !hirsel_run_schema::tls::alpn_valid(alpn)
+                            || identity.is_some_and(|digest| {
+                                self.tls_identities.get(stream).is_none_or(|known| {
+                                    known.chain != digest || known.key.is_none()
+                                })
+                            })
+                            || !self.tls().valid_name(server_name)
                             || match roots {
                                 RootsDigest::WebPki(version) => {
                                     version != crate::net_tls::WEBPKI_VERSION
@@ -926,6 +945,7 @@ impl crate::io::State {
                             hirsel_run_schema::PeerTls::Certificate(_)
                             | hirsel_run_schema::PeerTls::Fails(_)
                             | hirsel_run_schema::PeerTls::Presents(..)
+                            | hirsel_run_schema::PeerTls::Offers(..)
                             | hirsel_run_schema::PeerTls::Serves(_) => NetOperation::ConnectTls,
                         },
                     })
@@ -1011,6 +1031,7 @@ impl crate::io::State {
                         port: *port,
                         operation,
                         tls: false,
+                        protocol: None,
                     })
                 })))
             }
@@ -1025,6 +1046,7 @@ impl crate::io::State {
                         port: 0,
                         operation: NetOperation::UnixConnect,
                         tls: false,
+                        protocol: None,
                     })
                 })))
             }
@@ -1056,6 +1078,7 @@ impl crate::io::State {
                         port: addr.port,
                         operation,
                         tls: false,
+                        protocol: None,
                     })
                 })))
             }
@@ -1107,12 +1130,21 @@ impl crate::io::State {
                 }
                 Ok(completion)
             }
+            R::TlsProtocol { net, stream } => {
+                // Handshake state only: no provider is consulted.
+                self.stream_grant(*net, *stream)?;
+                match self.handles.rows.get(stream) {
+                    Some(Grant::Stream { protocol, .. }) => Ok(C::Protocol(Ok(protocol.clone()))),
+                    _ => Err(AdapterError::InvalidHandle(*stream)),
+                }
+            }
             R::TlsConnect {
                 net,
                 stream,
                 server_name,
                 roots,
                 identity,
+                alpn,
             } => {
                 let grant = self.stream_grant(*net, *stream)?;
                 let key = match identity {
@@ -1132,18 +1164,26 @@ impl crate::io::State {
                     server_name,
                     roots,
                     key.as_ref(),
+                    alpn,
                 ))?;
                 self.pem_validity.remove(stream);
                 self.tls_identities.remove(stream);
-                if value.is_ok() {
-                    self.mark_tls(*stream);
-                } else {
-                    let closed = self.execute_net(host, &R::Close { handle: *stream })?;
-                    if matches!(closed, C::Checked(false)) {
-                        return Ok(closed);
+                // A server selects only a protocol the client offered.
+                if let Ok(Some(protocol)) = &value
+                    && !alpn.contains(protocol)
+                {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+                match &value {
+                    Ok(protocol) => self.mark_tls(*stream, protocol.clone()),
+                    Err(_) => {
+                        let closed = self.execute_net(host, &R::Close { handle: *stream })?;
+                        if matches!(closed, C::Checked(false)) {
+                            return Ok(closed);
+                        }
                     }
                 }
-                Ok(C::NetUnit(value))
+                Ok(C::Protocol(value))
             }
             R::TlsAccept { net, stream, .. } => {
                 let grant = self.stream_grant(*net, *stream)?;
@@ -1160,15 +1200,22 @@ impl crate::io::State {
                         .tls_accept(tls, *stream, &server),
                 )?;
                 self.tls_servers.remove(stream);
-                if value.is_ok() {
-                    self.mark_tls(*stream);
-                } else {
-                    let closed = self.execute_net(host, &R::Close { handle: *stream })?;
-                    if matches!(closed, C::Checked(false)) {
-                        return Ok(closed);
+                // A server selects only from its own list.
+                if let Ok(Some(protocol)) = &value
+                    && !server.alpn.contains(protocol)
+                {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+                match &value {
+                    Ok(protocol) => self.mark_tls(*stream, protocol.clone()),
+                    Err(_) => {
+                        let closed = self.execute_net(host, &R::Close { handle: *stream })?;
+                        if matches!(closed, C::Checked(false)) {
+                            return Ok(closed);
+                        }
                     }
                 }
-                Ok(C::NetUnit(value))
+                Ok(C::Protocol(value))
             }
             R::TlsClose { net, stream } => {
                 let grant = self.stream_grant(*net, *stream)?;
@@ -1219,6 +1266,7 @@ impl crate::io::State {
                         port: peer.port,
                         operation,
                         tls: false,
+                        protocol: None,
                     });
                     (id, peer)
                 })))

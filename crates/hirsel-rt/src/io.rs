@@ -496,6 +496,8 @@ pub enum Request {
         /// `tls.connect_as`: the SHA-256 of the client identity's certificate-chain PEM; the
         /// key never appears.
         identity: Option<[u8; 32]>,
+        /// `tls.connect_with`: the ALPN protocols offered, in order.
+        alpn: Vec<String>,
     },
     TlsAccept {
         net: u64,
@@ -503,6 +505,11 @@ pub enum Request {
         server: crate::net::TlsServerDigest,
     },
     TlsPeer {
+        net: u64,
+        stream: u64,
+    },
+    /// `tls.negotiated_protocol`: answered from the stream's recorded handshake.
+    TlsProtocol {
         net: u64,
         stream: u64,
     },
@@ -654,6 +661,9 @@ pub enum Completion {
     NetUnit(Result<(), NetError>),
     /// `tls.peer`: the verified client chain's DER certificates, concatenated.
     Certificates(Result<Option<Vec<u8>>, NetError>),
+    /// A TLS handshake's outcome, or `tls.negotiated_protocol`'s answer: the ALPN protocol
+    /// negotiated, if any.
+    Protocol(Result<Option<String>, NetError>),
     Address(Result<SocketAddr, NetError>),
     Accepted(Result<(u64, SocketAddr), NetError>),
     Process(hirsel_run_schema::ProcessOutcome),
@@ -2176,6 +2186,7 @@ pub trait Adapter {
         _stream: u64,
         _identities: &[(&[u8], &[u8])],
         _clients: crate::net::ClientAuth<&[u8]>,
+        _alpn: &[String],
     ) {
     }
     /// Confirmed replay output, used only when reporting a tool refusal.
@@ -2297,8 +2308,9 @@ impl Binding {
         stream: u64,
         identities: &[(&[u8], &[u8])],
         clients: crate::net::ClientAuth<&[u8]>,
+        alpn: &[String],
     ) {
-        self.adapter.tls_server(stream, identities, clients);
+        self.adapter.tls_server(stream, identities, clients, alpn);
     }
     pub fn new(adapter: impl Adapter + 'static) -> Self {
         Self {

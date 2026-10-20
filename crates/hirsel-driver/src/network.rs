@@ -223,10 +223,11 @@ impl HostIo {
         stream: u64,
         identities: &[(&[u8], &[u8])],
         clients: ClientAuth<&[u8]>,
+        alpn: &[String],
     ) {
         match self {
-            Self::Live(io) => io.tls_server(stream, identities, clients),
-            Self::Replay(io) => io.tls_server(stream, identities, clients),
+            Self::Live(io) => io.tls_server(stream, identities, clients, alpn),
+            Self::Replay(io) => io.tls_server(stream, identities, clients, alpn),
         }
     }
     fn stdout(&self) -> &[u8] {
@@ -1643,26 +1644,45 @@ impl HostLibrary {
                 net: self.id(&a[0])?,
                 stream: self.id(&a[1])?,
             },
-            "tls.connect" | "tls.connect_as" => {
+            "tls.connect" | "tls.connect_as" | "tls.connect_with" => {
                 let stream = self.id(&a[1])?;
                 self.io.tls();
-                let roots = match tag(&a[3])? {
+                // A TlsClient carries the roots, an optional identity and the ALPN offer.
+                let (roots, identity, alpn) = match name {
+                    "tls.connect" => (&a[3], None, vec![]),
+                    "tls.connect_as" => (&a[3], Some(&a[4]), vec![]),
+                    _ => {
+                        let client = fields(&a[3])?;
+                        let identity = match tag(client[1])? {
+                            0 => None,
+                            1 => Some(fields(client[1])?[0]),
+                            _ => return Err(invalid()),
+                        };
+                        let alpn = fields(client[2])?
+                            .into_iter()
+                            .map(text)
+                            .collect::<Result<Vec<_>, _>>()?;
+                        (client[0], identity, alpn)
+                    }
+                };
+                let roots = match tag(roots)? {
                     0 => RootsDigest::WebPki("webpki-roots@1.0.9".into()),
                     1 => {
                         use sha2::Digest;
-                        let pem = bytes(fields(&a[3])?[0])?;
+                        let pem = bytes(fields(roots)?[0])?;
                         self.io.tls_roots(stream, &pem);
                         RootsDigest::Pem(sha2::Sha256::digest(pem).into())
                     }
                     _ => return Err(invalid()),
                 };
-                let identity = if name == "tls.connect_as" {
-                    let identity = fields(&a[4])?;
-                    let (chain, key) = (bytes(identity[0])?, bytes(identity[1])?);
-                    self.io.tls_identity(stream, &chain, &key);
-                    Some(hirsel_rt::net_tls::chain_digest(&chain))
-                } else {
-                    None
+                let identity = match identity {
+                    Some(identity) => {
+                        let identity = fields(identity)?;
+                        let (chain, key) = (bytes(identity[0])?, bytes(identity[1])?);
+                        self.io.tls_identity(stream, &chain, &key);
+                        Some(hirsel_rt::net_tls::chain_digest(&chain))
+                    }
+                    None => None,
                 };
                 R::TlsConnect {
                     net: self.id(&a[0])?,
@@ -1670,6 +1690,7 @@ impl HostLibrary {
                     server_name: text(&a[2])?,
                     roots,
                     identity,
+                    alpn,
                 }
             }
             "tls.accept" => {
@@ -1696,16 +1717,24 @@ impl HostLibrary {
                     }
                     _ => return Err(invalid()),
                 };
+                let alpn = fields(server[2])?
+                    .into_iter()
+                    .map(text)
+                    .collect::<Result<Vec<_>, _>>()?;
                 let stream = self.id(&a[1])?;
                 self.io.tls();
-                self.io.tls_server(stream, &identities, clients);
+                self.io.tls_server(stream, &identities, clients, &alpn);
                 R::TlsAccept {
                     net: self.id(&a[0])?,
                     stream,
-                    server: hirsel_rt::net::TlsServerDigest::of(&identities, clients),
+                    server: hirsel_rt::net::TlsServerDigest::of(&identities, clients, &alpn),
                 }
             }
             "tls.peer" => R::TlsPeer {
+                net: self.id(&a[0])?,
+                stream: self.id(&a[1])?,
+            },
+            "tls.negotiated_protocol" => R::TlsProtocol {
                 net: self.id(&a[0])?,
                 stream: self.id(&a[1])?,
             },
@@ -1767,9 +1796,11 @@ impl HostLibrary {
                 sequence(BuiltinType::List, a.into_iter().map(address))
             }),
             C::Count(r) => result(r, u64_value),
-            C::NetUnit(r) if matches!(name, "tls.connect" | "tls.connect_as" | "tls.accept") => {
-                result(r, |()| a[1].clone())
-            }
+            C::Protocol(r) if name == "tls.negotiated_protocol" => result(r, |p| match p {
+                Some(p) => variant(1, vec![Value::String(p)]),
+                None => variant(0, vec![]),
+            }),
+            C::Protocol(r) => result(r, |_| a[1].clone()),
             C::Certificates(r) => result(r, |chain| match chain {
                 Some(chain) => variant(1, vec![Value::Bytes(chain)]),
                 None => variant(0, vec![]),
@@ -1806,7 +1837,12 @@ impl HostLibrary {
                 cx.stdout.extend_from_slice(&self.io.stdout()[printed..]);
                 if matches!(
                     name,
-                    "net.close" | "tls.close" | "tls.connect" | "tls.connect_as" | "tls.accept"
+                    "net.close"
+                        | "tls.close"
+                        | "tls.connect"
+                        | "tls.connect_as"
+                        | "tls.connect_with"
+                        | "tls.accept"
                 ) && let Value::Handle { id, .. } = a[1]
                 {
                     self.handles.remove(&id);
@@ -1821,8 +1857,10 @@ impl HostLibrary {
         if (name == "net.close"
             || name == "udp.close"
             || name == "tls.close"
-            || matches!(name, "tls.connect" | "tls.connect_as" | "tls.accept")
-                && matches!(value, Value::Variant { variant: 1, .. }))
+            || matches!(
+                name,
+                "tls.connect" | "tls.connect_as" | "tls.connect_with" | "tls.accept"
+            ) && matches!(value, Value::Variant { variant: 1, .. }))
             && let Value::Handle { id, .. } = a[1]
         {
             self.handles.remove(&id);
@@ -1834,6 +1872,7 @@ impl HostLibrary {
                 | "tls.close"
                 | "tls.connect"
                 | "tls.connect_as"
+                | "tls.connect_with"
                 | "tls.accept"
         ) {
             vec![1]

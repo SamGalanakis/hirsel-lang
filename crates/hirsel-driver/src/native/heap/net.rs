@@ -97,9 +97,13 @@ fn tls_failure(v: &OpValue) -> Option<TlsFailure> {
         _ => return None,
     })
 }
-/// A `TlsServer`: its identities' PEM chain and key, and its client policy.
+/// A `List[String]`'s elements, in order.
+fn strings(v: &OpValue) -> Option<Vec<String>> {
+    sequence(v)?.iter().map(text).collect()
+}
+/// A `TlsServer`: its identities' PEM chain and key, its client policy and its ALPN list.
 fn tls_server(v: &OpValue) -> Option<hirsel_run_schema::TlsServer> {
-    let [identities, clients] = fields(v)? else {
+    let [identities, clients, alpn] = fields(v)? else {
         return None;
     };
     let identities = sequence(identities)?
@@ -124,6 +128,7 @@ fn tls_server(v: &OpValue) -> Option<hirsel_run_schema::TlsServer> {
     Some(hirsel_run_schema::TlsServer {
         identities,
         clients,
+        alpn: strings(alpn)?,
     })
 }
 fn steps(v: &OpValue) -> Option<Vec<NetStep>> {
@@ -183,6 +188,12 @@ fn peer_tls(v: &OpValue) -> Option<PeerTls> {
             )
         }
         (4, server) => PeerTls::Serves(tls_server(server)?),
+        (5, offers) => {
+            let [names, alpn] = fields(offers)? else {
+                return None;
+            };
+            PeerTls::Offers(strings(names)?, strings(alpn)?)
+        }
         _ => return None,
     })
 }
@@ -462,7 +473,28 @@ impl Io {
                 net: self.network_id(n)?,
                 stream: self.network_id(s)?,
             },
-            (Some("tls"), "connect" | "connect_as", [n, s, host, roots, identity @ ..]) => {
+            (
+                Some("tls"),
+                "connect" | "connect_as" | "connect_with",
+                [n, s, host, roots, identity @ ..],
+            ) => {
+                // A TlsClient carries the roots, an optional identity and the ALPN offer.
+                let (roots, identity, alpn) = match (name, identity) {
+                    ("connect_with", []) => {
+                        let [roots, identity, alpn] = fields(roots)? else {
+                            return None;
+                        };
+                        let identity = match variant(identity)? {
+                            (0, _) => None,
+                            (1, identity) => Some(identity),
+                            _ => return None,
+                        };
+                        (roots, identity, strings(alpn)?)
+                    }
+                    ("connect", []) => (roots, None, vec![]),
+                    ("connect_as", [identity]) => (roots, Some(identity), vec![]),
+                    _ => return None,
+                };
                 let stream = self.network_id(s)?;
                 hirsel_rt::io::Adapter::tls(&mut self.network, hirsel_rt::net_tls::engine());
                 let roots = match variant(roots)? {
@@ -475,9 +507,9 @@ impl Io {
                     }
                     _ => return None,
                 };
-                let identity = match (name, identity) {
-                    ("connect", []) => None,
-                    ("connect_as", [identity]) => {
+                let identity = match identity {
+                    None => None,
+                    Some(identity) => {
                         let [chain, key] = fields(identity)? else {
                             return None;
                         };
@@ -490,7 +522,6 @@ impl Io {
                         );
                         Some(hirsel_rt::net_tls::chain_digest(&chain))
                     }
-                    _ => return None,
                 };
                 R::TlsConnect {
                     net: self.network_id(n)?,
@@ -498,6 +529,7 @@ impl Io {
                     server_name: text(host)?,
                     roots,
                     identity,
+                    alpn,
                 }
             }
             (Some("tls"), "accept", [n, s, server]) => {
@@ -510,14 +542,24 @@ impl Io {
                 let clients = server.clients.as_ref().map(Vec::as_slice);
                 let stream = self.network_id(s)?;
                 hirsel_rt::io::Adapter::tls(&mut self.network, hirsel_rt::net_tls::engine());
-                hirsel_rt::io::Adapter::tls_server(&mut self.network, stream, &identities, clients);
+                hirsel_rt::io::Adapter::tls_server(
+                    &mut self.network,
+                    stream,
+                    &identities,
+                    clients,
+                    &server.alpn,
+                );
                 R::TlsAccept {
                     net: self.network_id(n)?,
                     stream,
-                    server: hirsel_rt::net::TlsServerDigest::of(&identities, clients),
+                    server: hirsel_rt::net::TlsServerDigest::of(&identities, clients, &server.alpn),
                 }
             }
             (Some("tls"), "peer", [n, s]) => R::TlsPeer {
+                net: self.network_id(n)?,
+                stream: self.network_id(s)?,
+            },
+            (Some("tls"), "negotiated_protocol", [n, s]) => R::TlsProtocol {
                 net: self.network_id(n)?,
                 stream: self.network_id(s)?,
             },
@@ -581,9 +623,11 @@ impl Io {
                 }
                 Err(e) => error(e),
             },
-            C::NetUnit(r) if module == Some("tls") && name != "close" => {
-                result(r, |_| OpValue::TakenHandle { argument: 1 })
-            }
+            C::Protocol(r) if name == "negotiated_protocol" => result(r, |p| match p {
+                Some(p) => v(1, OpValue::ByteSequence(p.into_bytes())),
+                None => v(0, OpValue::Unit),
+            }),
+            C::Protocol(r) => result(r, |_| OpValue::TakenHandle { argument: 1 }),
             C::NetUnit(r) => result(r, |()| OpValue::Unit),
             C::Certificates(r) => result(r, |chain| match chain {
                 Some(chain) => v(1, OpValue::ByteSequence(chain)),
@@ -612,7 +656,7 @@ impl Io {
             _ => return Some(OpOutcome::Unsupported),
         };
         let consumed = module == Some("tls")
-            && name != "peer"
+            && !matches!(name, "peer" | "negotiated_protocol")
             && (name == "close" || matches!(value, OpValue::Variant { tag: 1, .. }))
             || matches!(module, Some("net" | "udp")) && name == "close";
         Some(if consumed {

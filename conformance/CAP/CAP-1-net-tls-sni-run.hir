@@ -36,7 +36,7 @@ fn handshake(n: Net, mut l: Listener of n) -> Result[Option[NetError], NetError]
   match tls.accept(
     n,
     take s,
-    TlsServer(identities: [alpha(), beta()], clients: Anonymous())
+    TlsServer(identities: [alpha(), beta()], clients: Anonymous(), alpn: [])
   ) {
     Ok(_) => Ok(None()),
     Error(e) => Ok(Some(e)),

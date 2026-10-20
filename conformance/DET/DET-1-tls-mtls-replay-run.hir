@@ -20,7 +20,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), NetError] {
     Ok(n) => n,
     Error(_) => return Ok(()),
   }
-  let server = TlsServer(identities: [identity()], clients: Require(client_ca()))
+  let server = TlsServer(
+    identities: [identity()],
+    clients: Require(client_ca()),
+    alpn: []
+  )
   let mut l = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16))?
   let (s, _) = net.accept(n, mut l)?
   let mut secure = tls.accept(n, take s, server)?

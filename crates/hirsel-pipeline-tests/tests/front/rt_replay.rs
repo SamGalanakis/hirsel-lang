@@ -320,6 +320,7 @@ pub fn replay_interpreter_with_fixture(
                 | Request::TlsConnect { .. }
                 | Request::TlsAccept { .. }
                 | Request::TlsPeer { .. }
+                | Request::TlsProtocol { .. }
                 | Request::TlsClose { .. }
                 | Request::Listen { .. }
                 | Request::UnixConnect { .. }
@@ -469,6 +470,7 @@ pub fn replay_interpreter_with_fixture(
                 | Completion::NetBytes(_)
                 | Completion::Count(_)
                 | Completion::NetUnit(_)
+                | Completion::Protocol(_)
                 | Completion::Address(_)
                 | Completion::Addresses(_) => network::decode(&event.completion, value, &arguments),
                 _ => decode(&event.completion, value),

@@ -469,7 +469,8 @@ impl NetProvider for ScriptNet {
         server_name: &str,
         _roots: &RootsDigest,
         identity: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
-    ) -> Provided<()> {
+        alpn: &[String],
+    ) -> Provided<Option<String>> {
         let s = self.connection(id)?;
         // Owner 385145: upgrading an already secured Stream consumes it with
         // InvalidInput, just as the host rustls provider does. State closes it.
@@ -494,13 +495,14 @@ impl NetProvider for ScriptNet {
             &self.peers[peer_index].tls,
             server_name,
             identity.map(|identity| &**identity),
+            alpn,
         );
         Ok(match verdict {
-            Ok(peer) => {
+            Ok((peer, protocol)) => {
                 let s = self.connection(id)?;
                 s.tls = true;
                 s.peer = peer;
-                Ok(())
+                Ok(protocol)
             }
             Err(failure) => Err(NetError::Tls(failure.into())),
         })
@@ -510,7 +512,7 @@ impl NetProvider for ScriptNet {
         tls: &dyn crate::net_tls::TlsEngine,
         id: u64,
         server: &hirsel_run_schema::tls::Server,
-    ) -> Provided<()> {
+    ) -> Provided<Option<String>> {
         let s = self.connection(id)?;
         if s.tls {
             return Ok(Err(NetError::InvalidInput));
@@ -540,11 +542,11 @@ impl NetProvider for ScriptNet {
             .ok_or(AdapterError::InvalidCompletion)?;
         let verdict = tls.scripted_accept(&client.tls, server);
         Ok(match verdict {
-            Ok(peer) => {
+            Ok((peer, protocol)) => {
                 let s = self.connection(id)?;
                 s.tls = true;
                 s.peer = peer;
-                Ok(())
+                Ok(protocol)
             }
             Err(failure) => Err(NetError::Tls(failure.into())),
         })
@@ -751,8 +753,10 @@ impl crate::io::Adapter for ScriptIo {
         stream: u64,
         identities: &[(&[u8], &[u8])],
         clients: crate::net::ClientAuth<&[u8]>,
+        alpn: &[String],
     ) {
-        self.state.remember_tls_server(stream, identities, clients);
+        self.state
+            .remember_tls_server(stream, identities, clients, alpn);
     }
     fn preflight(
         &self,

@@ -37,7 +37,7 @@ fn peer(port: u16, take clients: TlsClientAuth) -> NetPeer uses {} {
     address: "localhost",
     port: port,
     resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
-    tls: Serves(TlsServer(identities: [localhost()], clients: clients)),
+    tls: Serves(TlsServer(identities: [localhost()], clients: clients, alpn: [])),
     connections: [Open([Send(b"hi")]), Open([])]
   )
 }

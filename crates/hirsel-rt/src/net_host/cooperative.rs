@@ -199,7 +199,7 @@ impl CooperativeNet {
         &mut self,
         stream: u64,
         start: impl FnOnce() -> Result<Box<dyn crate::net_tls::TlsSession>, NetError>,
-    ) -> Provided<()> {
+    ) -> Provided<Option<String>> {
         let fd = match self.host.socket(stream) {
             Ok(fd) => fd,
             Err(e) => return Ok(Err(e)),
@@ -217,7 +217,7 @@ impl CooperativeNet {
             }
             let conn = self.host.tls.get_mut(&stream).unwrap();
             if !conn.is_handshaking() {
-                return Ok(Ok(()));
+                return Ok(Ok(conn.protocol()));
             }
             match conn.read_tls(fd) {
                 Ok(0) => return Ok(Err(NetError::Tls(crate::net::TlsFailure::Truncated))),
@@ -449,16 +449,17 @@ impl NetProvider for CooperativeNet {
         name: &str,
         roots: &RootsDigest,
         identity: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
-    ) -> Provided<()> {
+        alpn: &[String],
+    ) -> Provided<Option<String>> {
         let pem = self.host.pem.take();
-        self.handshake(stream, || tls.connect(name, roots, pem, identity))
+        self.handshake(stream, || tls.connect(name, roots, pem, identity, alpn))
     }
     fn tls_accept(
         &mut self,
         tls: &dyn crate::net_tls::TlsEngine,
         stream: u64,
         server: &hirsel_run_schema::tls::Server,
-    ) -> Provided<()> {
+    ) -> Provided<Option<String>> {
         self.handshake(stream, || tls.accept(server))
     }
     fn tls_peer(&mut self, stream: u64) -> Provided<Option<Vec<u8>>> {

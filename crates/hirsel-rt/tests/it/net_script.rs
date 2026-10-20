@@ -161,16 +161,37 @@ fn net_script_tls_checks_names_and_ignores_roots() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        net.tls_connect(hirsel_rt::net_tls::engine(), 1, "other.com", &roots, None),
+        net.tls_connect(
+            hirsel_rt::net_tls::engine(),
+            1,
+            "other.com",
+            &roots,
+            None,
+            &[]
+        ),
         Ok(Err(NetError::Tls(TlsFailure::NameMismatch)))
     );
     assert_eq!(
-        net.tls_connect(hirsel_rt::net_tls::engine(), 1, "example.com", &roots, None),
-        Ok(Ok(()))
+        net.tls_connect(
+            hirsel_rt::net_tls::engine(),
+            1,
+            "example.com",
+            &roots,
+            None,
+            &[]
+        ),
+        Ok(Ok(None))
     );
     let mut net = stream(vec![]);
     assert_eq!(
-        net.tls_connect(hirsel_rt::net_tls::engine(), 1, "example.com", &roots, None),
+        net.tls_connect(
+            hirsel_rt::net_tls::engine(),
+            1,
+            "example.com",
+            &roots,
+            None,
+            &[]
+        ),
         Ok(Err(NetError::Tls(TlsFailure::HandshakeFailure)))
     );
 }
@@ -240,15 +261,16 @@ fn repeated_tls_upgrade_is_invalid_and_consumes_the_script_stream() {
         server_name: "example.com".into(),
         roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
         identity: None,
+        alpn: vec![],
     };
-    assert_eq!(io.call(upgrade.clone()), Ok(C::NetUnit(Ok(()))));
+    assert_eq!(io.call(upgrade.clone()), Ok(C::Protocol(Ok(None))));
     let mut repeated = upgrade;
     if let R::TlsConnect { server_name, .. } = &mut repeated {
         *server_name = "other.com".into();
     }
     assert_eq!(
         io.call(repeated),
-        Ok(C::NetUnit(Err(NetError::InvalidInput)))
+        Ok(C::Protocol(Err(NetError::InvalidInput)))
     );
     assert_eq!(
         io.call(R::NetRead {
@@ -306,8 +328,9 @@ fn tls_only_script_can_set_timeouts_before_a_stalled_handshake() {
             server_name: "example.com".into(),
             roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
             identity: None,
+            alpn: vec![],
         }),
-        Ok(C::NetUnit(Err(NetError::TimedOut)))
+        Ok(C::Protocol(Err(NetError::TimedOut)))
     );
     assert!(!io.handles().observed().contains_key(&3));
 }

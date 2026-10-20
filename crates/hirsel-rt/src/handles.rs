@@ -21,13 +21,15 @@ pub enum Grant {
         world: crate::net::NetWorld,
     },
     /// Branded by its Net; `address`/`port` name the rule that authorized it, and a
-    /// ConnectTls stream carries plaintext only once `tls` is established.
+    /// ConnectTls stream carries plaintext only once `tls` is established. `protocol` is
+    /// the ALPN protocol its handshake negotiated.
     Stream {
         net: u64,
         address: String,
         port: u16,
         operation: crate::net::NetOperation,
         tls: bool,
+        protocol: Option<String>,
     },
     UdpSocket {
         net: u64,

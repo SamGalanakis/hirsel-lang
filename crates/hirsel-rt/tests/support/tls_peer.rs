@@ -103,6 +103,7 @@ pub fn connect(
             server_name: name.into(),
             roots,
             identity: None,
+            alpn: vec![],
         })
         .unwrap();
     (net, stream, done)
@@ -110,7 +111,7 @@ pub fn connect(
 
 pub fn exchange(io: &mut impl Adapter, port: u16, truncated: bool) {
     let (net, stream, done) = connect(io, port, "localhost", pem_digest(PEM));
-    assert_eq!(done, Completion::NetUnit(Ok(())));
+    assert_eq!(done, Completion::Protocol(Ok(None)));
     assert_eq!(
         io.call(Request::NetWriteAll {
             net,

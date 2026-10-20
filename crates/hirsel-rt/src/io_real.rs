@@ -523,8 +523,10 @@ impl Adapter for RealIo {
         stream: u64,
         identities: &[(&[u8], &[u8])],
         clients: crate::net::ClientAuth<&[u8]>,
+        alpn: &[String],
     ) {
-        self.state.remember_tls_server(stream, identities, clients);
+        self.state
+            .remember_tls_server(stream, identities, clients, alpn);
     }
     fn wants_issuer(&self) -> bool {
         self.journal.durable()

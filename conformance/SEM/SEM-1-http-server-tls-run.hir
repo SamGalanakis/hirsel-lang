@@ -64,7 +64,7 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
     test.tasks(t),
     n,
     take stream,
-    TlsServer(identities: [identity()], clients: Anonymous()),
+    TlsServer(identities: [identity()], clients: Anonymous(), alpn: ["http/1.1"]),
     http.default_config()
   )?
   let Some((current1, first)) = http.next_stream(mut connection, None())? else {
@@ -89,7 +89,7 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
     test.tasks(t),
     n,
     take plain,
-    TlsServer(identities: [identity()], clients: Anonymous()),
+    TlsServer(identities: [identity()], clients: Anonymous(), alpn: ["http/1.1"]),
     http.default_config()
   ) {
     Error(Net(Tls(HandshakeFailure()))) => (),
@@ -102,7 +102,7 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
     test.tasks(t),
     n,
     take unused,
-    TlsServer(identities: [broken], clients: Anonymous()),
+    TlsServer(identities: [broken], clients: Anonymous(), alpn: ["http/1.1"]),
     http.default_config()
   ) {
     Error(Net(InvalidInput())) => (),

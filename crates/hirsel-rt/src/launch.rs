@@ -119,8 +119,11 @@ impl<A: Adapter> Adapter for Shared<A> {
         stream: u64,
         identities: &[(&[u8], &[u8])],
         clients: crate::net::ClientAuth<&[u8]>,
+        alpn: &[String],
     ) {
-        self.0.borrow_mut().tls_server(stream, identities, clients);
+        self.0
+            .borrow_mut()
+            .tls_server(stream, identities, clients, alpn);
     }
     fn replay_stderr(&self) -> Vec<u8> {
         self.0.borrow().replay_stderr()

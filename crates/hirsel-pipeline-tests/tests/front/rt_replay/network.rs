@@ -141,12 +141,17 @@ pub fn fixture(tape: &[Event], granted: &BTreeSet<NetRule>) -> Result<NetGrant, 
                     server_name,
                     ..
                 },
-                C::NetUnit(result),
+                C::Protocol(result),
             ) => {
                 let &(p, _) = streams.get(stream).ok_or("TLS without a stream")?;
                 let identity = identities.entry(p).or_default();
                 match result {
-                    Ok(()) => {
+                    Ok(Some(protocol)) => {
+                        return Err(format!(
+                            "a Certificate peer cannot negotiate the protocol {protocol:?}"
+                        ));
+                    }
+                    Ok(None) => {
                         identity.names.insert(server_name.clone());
                     }
                     Err(NetError::Tls(TlsFailure::NameMismatch)) => {
@@ -320,11 +325,19 @@ fn peer_tls(tls: &PeerTls) -> Value {
                 4,
                 vec![record(
                     "TlsServer",
-                    vec![list(server.identities.iter().map(identity)), clients],
+                    vec![
+                        list(server.identities.iter().map(identity)),
+                        clients,
+                        strings(&server.alpn),
+                    ],
                 )],
             )
         }
+        PeerTls::Offers(names, alpn) => variant(5, vec![strings(names), strings(alpn)]),
     }
+}
+fn strings(list_of: &[String]) -> Value {
+    list(list_of.iter().cloned().map(Value::String))
 }
 fn peer(p: &NetPeer) -> Value {
     record(
@@ -525,6 +538,7 @@ pub fn arguments(event: &Event, fixture: super::ReplayFixture<'_>) -> (&'static 
             server_name,
             roots,
             identity,
+            alpn,
         } => {
             let roots = match roots {
                 RootsDigest::WebPki(version) => {
@@ -533,12 +547,16 @@ pub fn arguments(event: &Event, fixture: super::ReplayFixture<'_>) -> (&'static 
                 }
                 RootsDigest::Pem(digest) => variant(1, vec![Value::Bytes(trust(digest))]),
             };
-            let mut arguments = vec![
-                n(*net),
-                s(*stream),
-                Value::String(server_name.clone()),
-                roots,
-            ];
+            let mut arguments = vec![n(*net), s(*stream), Value::String(server_name.clone())];
+            if !alpn.is_empty() {
+                let identity = match identity {
+                    Some(digest) => variant(1, vec![tls_identity(digest)]),
+                    None => variant(0, vec![]),
+                };
+                arguments.push(record("TlsClient", vec![roots, identity, strings(alpn)]));
+                return ("tls.connect_with", arguments);
+            }
+            arguments.push(roots);
             if let Some(digest) = identity {
                 arguments.push(tls_identity(digest));
             }
@@ -568,12 +586,17 @@ pub fn arguments(event: &Event, fixture: super::ReplayFixture<'_>) -> (&'static 
                     s(*stream),
                     record(
                         "TlsServer",
-                        vec![list(server.identities.iter().map(tls_identity)), clients],
+                        vec![
+                            list(server.identities.iter().map(tls_identity)),
+                            clients,
+                            strings(&server.alpn),
+                        ],
                     ),
                 ],
             )
         }
         R::TlsPeer { net, stream } => ("tls.peer", vec![n(*net), s(*stream)]),
+        R::TlsProtocol { net, stream } => ("tls.negotiated_protocol", vec![n(*net), s(*stream)]),
         R::TlsClose { net, stream } => ("tls.close", vec![n(*net), s(*stream)]),
         R::Listen { net, addr } => ("net.listen", vec![n(*net), address(*addr)]),
         R::UnixConnect { net, path } => (
@@ -716,6 +739,20 @@ pub fn decode(schema: &C, value: Value, updates: &[(usize, Value)]) -> C {
             Value::Handle { kind, .. } if kind == "Stream" => (),
             _ => panic!("unit or upgraded Stream result"),
         })),
+        // A handshake returns its upgraded Stream, which carries no protocol: the
+        // recorded one stands, and `tls.negotiated_protocol` checks it.
+        C::Protocol(recorded) => C::Protocol(result(value).map(|v| match v {
+            Value::Handle { kind, .. } if kind == "Stream" => recorded.clone().ok().flatten(),
+            Value::Variant { variant: 0, .. } => None,
+            Value::Variant {
+                variant: 1,
+                mut fields,
+            } => match fields.remove(0) {
+                Some(Value::String(p)) => Some(p),
+                _ => panic!("negotiated protocol String"),
+            },
+            _ => panic!("upgraded Stream or Option[String] result"),
+        })),
         C::Address(_) => C::Address(result(value).map(addr)),
         C::Addresses(_) => C::Addresses(result(value).map(|v| {
             collection::elements(&v, BuiltinType::List)
@@ -751,6 +788,7 @@ pub fn fault(completion: &C) -> Option<hirsel_interp::library::simulation::Fault
         | C::NetBytes(Err(e))
         | C::Count(Err(e))
         | C::NetUnit(Err(e))
+        | C::Protocol(Err(e))
         | C::Address(Err(e)) => e,
         _ => return None,
     };

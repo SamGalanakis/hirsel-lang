@@ -285,6 +285,8 @@ tls.accept	8a7a2ee8ee62d963e90e59eff7d17b41f2ddea500f8c0cd3251c4f1c3ae50f38	0:b:
 tls.close	0099370f23ff0c1f046d176194fa84159f1b29f8335fe6e555164d6280682ee5	0:b:n;1:t:n->n
 tls.connect	2fb8c1b1f97cf99c4d7680e46146d0d4a298bb5669efabed648728e92e184d34	0:b:n;1:t:n;2:b:n;3:b:n->n
 tls.connect_as	319344862f7e6756c04e9e2f09e7c80071356eef2e03df0711ba758de40f5899	0:b:n;1:t:n;2:b:n;3:b:n;4:b:n->n
+tls.connect_with	1a6bb0ac4804f6055c1a0383769dec93de70cb6ce4bdffe45aa24f918ab02e27	0:b:n;1:t:n;2:b:n;3:b:n->n
+tls.negotiated_protocol	8a1144908862ce21be1c7ed082b19cc8c4450f567f459f0396a0c5b076d2199b	0:b:n;1:b:n->n
 tls.peer	c90660d5f7f5208f54f0190bdb43e7b56759b84ceb6efe777eeeb80e31ea47e4	0:b:n;1:b:n->n
 type_shape.info	a6e8f31aad6e0a80e83c769e610ac77523b2b58825ce576ee4cb65b3b7129ac1	0:b:n->n
 udp.close	df61c53c74fd54f235d2f39a3c1b30f9985ffad8416503d67fd49a1471c5e618	0:b:n;1:t:n->n

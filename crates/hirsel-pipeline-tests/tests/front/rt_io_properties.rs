@@ -679,6 +679,9 @@ fn net_completion(request: &Request, error: NetError) -> Completion {
         Request::UdpRecv { .. } => Completion::Datagram(Err(error)),
         Request::UdpSend { .. } | Request::NetWrite { .. } => Completion::Count(Err(error)),
         Request::NetRead { .. } => Completion::NetBytes(Err(error)),
+        Request::TlsConnect { .. } | Request::TlsAccept { .. } | Request::TlsProtocol { .. } => {
+            Completion::Protocol(Err(error))
+        }
         _ => Completion::NetUnit(Err(error)),
     }
 }
@@ -873,6 +876,7 @@ fn precedence_net_matrix() {
                     include_bytes!("../../../hirsel-rt/tests/it/tls-data/server.key"),
                 )],
                 ClientAuth::Anonymous,
+                &[],
             );
             if kind == 12 {
                 native.tls_server(
@@ -882,6 +886,7 @@ fn precedence_net_matrix() {
                         include_bytes!("../../../hirsel-rt/tests/it/tls-data/server.key"),
                     )],
                     ClientAuth::Anonymous,
+                    &[],
                 );
             }
             if conditions & 1 != 0 {
@@ -959,6 +964,7 @@ fn precedence_net_matrix() {
                     server_name: if invalid { "bad name" } else { "localhost" }.into(),
                     roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
                     identity: None,
+                    alpn: vec![],
                 },
                 12 => Request::TlsAccept {
                     net,
@@ -967,6 +973,7 @@ fn precedence_net_matrix() {
                         TlsServerDigest {
                             identities: vec![],
                             clients: ClientAuth::Anonymous,
+                            alpn: vec![],
                         }
                     } else {
                         server

@@ -37,7 +37,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {{
   out.print(output, std@1/u16.to_string(bound.port)) ? Output
   out.print(output, "\n") ? Output
   let (stream, _) = net.accept(n, mut listener) ? Network
-  let mut connection = http.serve_tls(io.tasks(rt) ? Grant, n, take stream, TlsServer(identities: [identity()], clients: Anonymous()), http.default_config()) ? Http
+  let mut connection = http.serve_tls(io.tasks(rt) ? Grant, n, take stream, TlsServer(identities: [identity()], clients: Anonymous(), alpn: ["http/1.1"]), http.default_config()) ? Http
   let Some((owned, request)) = http.next_stream(mut connection, None()) ? Http else {{ return Error(Http(Closed())) }}
   let mut responding = take owned
   http.respond(mut responding, 200u16, [], request.body, true) ? Http

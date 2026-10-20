@@ -60,7 +60,8 @@ pub struct NetClient {
     /// `Plain` never starts TLS; `Certificate(names)` accepts a server certificate valid
     /// for one of `names`, sending the first as SNI when it is a DNS name;
     /// `Presents(names, chain)` does the same and presents the PEM `chain` as its client
-    /// certificate; `Fails(f)` fails every server handshake with `Tls(f)`.
+    /// certificate; `Offers(names, alpn)` is `Certificate(names)` offering the ALPN
+    /// protocols `alpn`; `Fails(f)` fails every server handshake with `Tls(f)`.
     pub tls: PeerTls,
     pub steps: Vec<NetStep>,
 }
@@ -114,6 +115,15 @@ pub fn check_net_listeners(listeners: &[NetListener]) -> Result<(), String> {
         {
             return Err(format!(
                 "listener {index} has a client with serves, a scripted peer's TLS"
+            ));
+        }
+        if listener
+            .clients
+            .iter()
+            .any(|c| matches!(&c.tls, PeerTls::Offers(_, alpn) if !crate::tls::alpn_valid(alpn)))
+        {
+            return Err(format!(
+                "listener {index} has a client offering an invalid ALPN list"
             ));
         }
     }
@@ -185,6 +195,8 @@ pub enum PeerTls {
     /// A peer only: a server presenting the identity a client's SNI selects, which applies
     /// its client policy to the identity a `tls.connect_as` presents.
     Serves(TlsServer),
+    /// A client only: `Certificate(names)` that also offers the ALPN protocols, in order.
+    Offers(Vec<String>, Vec<String>),
 }
 
 /// A scripted peer's `TlsServer`: PEM identities, and its client policy, which canonical
@@ -195,6 +207,10 @@ pub struct TlsServer {
     pub identities: Vec<TlsIdentity>,
     #[serde(default, skip_serializing_if = "ClientAuth::is_anonymous")]
     pub clients: ClientAuth<Vec<u8>>,
+    /// The ALPN protocols it selects from, in preference order; canonical bytes omit an
+    /// empty list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alpn: Vec<String>,
 }
 
 /// A PEM certificate chain, leaf first, and the PEM private key of its leaf.
@@ -290,6 +306,9 @@ pub fn check_peer_address(peer: &NetPeer) -> Result<(), String> {
     match &peer.tls {
         PeerTls::Presents(..) => {
             return Err("presents is a scripted client's TLS, not a peer's".into());
+        }
+        PeerTls::Offers(..) => {
+            return Err("offers is a scripted client's TLS, not a peer's".into());
         }
         PeerTls::Serves(server) if !crate::tls::well_formed(server) => {
             return Err("a serves peer's server is not a valid TlsServer".into());

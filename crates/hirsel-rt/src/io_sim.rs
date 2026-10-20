@@ -160,8 +160,10 @@ impl Adapter for SimIo {
         stream: u64,
         identities: &[(&[u8], &[u8])],
         clients: crate::net::ClientAuth<&[u8]>,
+        alpn: &[String],
     ) {
-        self.state.remember_tls_server(stream, identities, clients);
+        self.state
+            .remember_tls_server(stream, identities, clients, alpn);
     }
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         self.state.preflight(request)
@@ -1370,6 +1372,12 @@ impl Recorded<'_> {
             _ => Err(AdapterError::InvalidCompletion),
         }
     }
+    fn protocol(&self) -> crate::net::Provided<Option<String>> {
+        match self.0 {
+            Completion::Protocol(value) => Ok(value.clone()),
+            _ => Err(AdapterError::InvalidCompletion),
+        }
+    }
     fn address(&self) -> crate::net::Provided<SocketAddr> {
         match self.0 {
             Completion::Address(value) => Ok(*value),
@@ -1455,16 +1463,17 @@ impl NetProvider for Recorded<'_> {
         _: &str,
         _: &RootsDigest,
         _: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
-    ) -> crate::net::Provided<()> {
-        self.unit()
+        _: &[String],
+    ) -> crate::net::Provided<Option<String>> {
+        self.protocol()
     }
     fn tls_accept(
         &mut self,
         _: &dyn crate::net_tls::TlsEngine,
         _: u64,
         _: &hirsel_run_schema::tls::Server,
-    ) -> crate::net::Provided<()> {
-        self.unit()
+    ) -> crate::net::Provided<Option<String>> {
+        self.protocol()
     }
     fn tls_peer(&mut self, _: u64) -> crate::net::Provided<Option<Vec<u8>>> {
         match self.0 {

@@ -220,13 +220,14 @@ fn io_result_records_match_derived_layouts_on_both_targets() {
 }
 
 /// The runtime images of variants whose `None` is a null String or Bytes owner word
-/// (layout version 5) are exactly the derived layouts, niche offset included.
+/// (layout version 5) are exactly the derived layouts, niche offset included, and so is the
+/// TlsClient record holding a niche-encoded `Option[TlsIdentity]`.
 #[test]
 fn niche_images_match_derived_layouts_on_both_targets() {
     use hirsel_layout::layout::{LayoutBuilder, Owners};
     use hirsel_lir::layout_types::{SizeSpec, TagForm, TargetSpec};
     use hirsel_rt::net_abi::NetErrorAbi;
-    use hirsel_rt::tls_abi::{NetChainResult, TlsRootsAbi};
+    use hirsel_rt::tls_abi::{NetChainResult, TlsClientAbi, TlsRootsAbi};
     use hirsel_types::{Primitive, TypeId};
     use std::mem::{align_of, offset_of, size_of};
     for target in [
@@ -251,9 +252,14 @@ fn niche_images_match_derived_layouts_on_both_targets() {
         let env = ty.variant(&[&[maybe_string], &[env_error]]);
         let chain = ty.variant(&[&[maybe_bytes], &[net_error]]);
         let roots = ty.variant(&[&[], &[bytes]]);
+        let identity = ty.record(&[bytes, bytes]);
+        let maybe_identity = ty.variant(&[&[], &[identity]]);
+        let alpn = ty.list(string);
+        let client = ty.record(&[roots, maybe_identity, alpn]);
         let owners = Owners::default();
         let mut builder = LayoutBuilder::new(&target, &owners);
-        let ids = [net_error, env, chain, roots].map(|t| builder.layout(&ty.store, t).unwrap());
+        let ids =
+            [net_error, env, chain, roots, client].map(|t| builder.layout(&ty.store, t).unwrap());
         let table = builder.finish();
         hirsel_lir::layout_validate::validate_table(&table, &target).unwrap();
         let record = |id| table.layout(id).unwrap();
@@ -304,6 +310,44 @@ fn niche_images_match_derived_layouts_on_both_targets() {
         assert_eq!(
             (tag.offset, tag.form, tag.variants[1].fields[0].offset),
             (0, none_is_null, offset_of!(TlsRootsAbi, pem) as u64)
+        );
+        let client = record(ids[4]);
+        assert_eq!(
+            (client.size.clone(), client.align),
+            (
+                SizeSpec::Fixed(size_of::<TlsClientAbi>() as u64),
+                align_of::<TlsClientAbi>() as u32
+            )
+        );
+        let offsets: Vec<u64> = client.fields.iter().map(|field| field.offset).collect();
+        assert_eq!(
+            offsets,
+            [
+                offset_of!(TlsClientAbi, roots),
+                offset_of!(TlsClientAbi, identity),
+                offset_of!(TlsClientAbi, alpn)
+            ]
+            .map(|offset| offset as u64)
+        );
+        let option = record(client.fields[1].layout).tag.as_ref().unwrap();
+        assert_eq!((option.offset, option.form), (0, none_is_null));
+    }
+    // The exports writing the chain image declare its niche size to the emitter.
+    for symbol in [
+        "hirsel_rt_v2_tls_peer",
+        "hirsel_rt_v2_tls_negotiated_protocol",
+    ] {
+        let export = hirsel_rt_operations::HIRSEL_ABI_EXPORTS
+            .iter()
+            .find(|export| export.symbol == symbol)
+            .unwrap();
+        assert_eq!(
+            export.result,
+            Some((
+                size_of::<NetChainResult>() as u64,
+                align_of::<NetChainResult>() as u32
+            )),
+            "{symbol}"
         );
     }
 }

@@ -50,7 +50,7 @@ fn webpki_unknown_issuer_and_pem_name_mismatch_consume_the_stream() {
         crate::support::host(&mut io);
         io.set_net_rules(rules(port));
         let (net, stream, done) = connect(&mut io, port, name, roots);
-        assert_eq!(done, Completion::NetUnit(Err(NetError::Tls(failure))));
+        assert_eq!(done, Completion::Protocol(Err(NetError::Tls(failure))));
         assert_eq!(
             io.call(Request::NetRead {
                 net,
@@ -128,7 +128,14 @@ fn pem_is_bound_to_its_digest_and_invalid_bundles_never_start_tls() {
         let (mut socket, _) = listener.accept().unwrap();
         host.tls_roots(material);
         assert_eq!(
-            host.tls_connect(hirsel_rt::net_tls::engine(), 1, "localhost", &digest, None),
+            host.tls_connect(
+                hirsel_rt::net_tls::engine(),
+                1,
+                "localhost",
+                &digest,
+                None,
+                &[]
+            ),
             Ok(Err(NetError::InvalidInput))
         );
         host.close(1);

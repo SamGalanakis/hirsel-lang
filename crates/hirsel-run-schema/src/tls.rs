@@ -85,26 +85,61 @@ impl<T> ClientAuth<T> {
     }
 }
 
-/// A loaded `TlsServer`: its identities, and the client verifier of a `Request` or
-/// `Require` trust set.
+/// A loaded `TlsServer`: its identities, the client verifier of a `Request` or `Require`
+/// trust set, and the ALPN protocols it selects from, in preference order.
 #[derive(Clone)]
 pub struct Server {
     pub identities: Vec<Arc<Identity>>,
     pub clients: Option<Arc<dyn ClientCertVerifier>>,
+    pub alpn: Vec<String>,
 }
 impl std::fmt::Debug for Server {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Server")
             .field("identities", &self.identities.len())
             .field("clients", &self.clients.is_some())
+            .field("alpn", &self.alpn)
             .finish()
     }
 }
 
-/// Load a `TlsServer` from its identities' PEM `(chain, key)` pairs and its client policy.
-/// An empty identity list, any invalid identity and an empty or malformed trust set are
-/// invalid.
-pub fn server(identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>) -> Option<Server> {
+/// A valid ALPN list (RFC 7301 section 3.1): each protocol 1 to 255 bytes, none twice.
+/// The empty list offers or selects nothing.
+pub fn alpn_valid(alpn: &[String]) -> bool {
+    alpn.iter()
+        .enumerate()
+        .all(|(i, protocol)| (1..=255).contains(&protocol.len()) && !alpn[..i].contains(protocol))
+}
+
+/// The protocol a server selecting from `server` negotiates with a client offering
+/// `client`: the first of the server's list that the client offers, as rustls selects it,
+/// or none when either list is empty. `Err` when both are nonempty and share none: the
+/// server then refuses with `no_application_protocol`.
+pub fn negotiate(server: &[String], client: &[String]) -> Result<Option<String>, ()> {
+    if server.is_empty() || client.is_empty() {
+        return Ok(None);
+    }
+    server
+        .iter()
+        .find(|protocol| client.contains(protocol))
+        .map(|protocol| Some(protocol.clone()))
+        .ok_or(())
+}
+
+/// The alert a server sends when no offered protocol is mutual (RFC 7301 section 3.2).
+pub const NO_APPLICATION_PROTOCOL: u8 = 120;
+
+/// Load a `TlsServer` from its identities' PEM `(chain, key)` pairs, its client policy and
+/// its ALPN list. An empty identity list, any invalid identity, an empty or malformed trust
+/// set and an invalid ALPN list are invalid.
+pub fn server(
+    identities: &[(&[u8], &[u8])],
+    clients: ClientAuth<&[u8]>,
+    alpn: &[String],
+) -> Option<Server> {
+    if !alpn_valid(alpn) {
+        return None;
+    }
     let identities = identities
         .iter()
         .map(|(chain, key)| identity(chain, key).map(Arc::new))
@@ -121,16 +156,18 @@ pub fn server(identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>) -> Opti
     Some(Server {
         identities,
         clients,
+        alpn: alpn.to_vec(),
     })
 }
 
 /// Whether a `TlsServer`'s data is well formed without loading it: a nonempty identity
-/// list whose chains are PEM certificates and whose keys are PEM private keys, and a
-/// trust set that parses as trust anchors. No crypto provider is consulted, so a key of an
+/// list whose chains are PEM certificates and whose keys are PEM private keys, a trust set
+/// that parses as trust anchors, and a valid ALPN list. No crypto provider is consulted, so a key of an
 /// unsupported type or one that does not match its leaf passes here and fails where the
 /// server is loaded (`load`), in its handshake.
 pub fn well_formed(server: &crate::TlsServer) -> bool {
     !server.identities.is_empty()
+        && alpn_valid(&server.alpn)
         && server.identities.iter().all(|identity| {
             chain(&identity.chain).is_some() && PrivateKeyDer::from_pem_slice(&identity.key).is_ok()
         })
@@ -147,7 +184,11 @@ pub fn load(server: &crate::TlsServer) -> Option<Server> {
         .iter()
         .map(|identity| (identity.chain.as_slice(), identity.key.as_slice()))
         .collect::<Vec<_>>();
-    self::server(&identities, server.clients.as_ref().map(Vec::as_slice))
+    self::server(
+        &identities,
+        server.clients.as_ref().map(Vec::as_slice),
+        &server.alpn,
+    )
 }
 
 /// Every PEM certificate of `pem`, in order; empty or malformed PEM is invalid.
@@ -236,63 +277,73 @@ pub fn issued(chain: &[CertificateDer<'_>]) -> UnixTime {
     UnixTime::since_unix_epoch(std::time::Duration::from_secs(latest))
 }
 
+/// What a successful handshake leaves for `tls.peer` and `tls.negotiated_protocol`: the
+/// verified chain the peer presented, and the negotiated ALPN protocol.
+pub type Handshake = (Option<Vec<u8>>, Option<String>);
+
 /// A scripted client's answer to a server handshake (docs/spec/core-library.md, scripted
-/// peers): the client verifies the identity its SNI selects by name, then the server
-/// verifies the chain it presents, if asked, at `issued`. Success carries what `tls.peer`
-/// returns.
-pub fn scripted_accept(
-    client: &crate::PeerTls,
-    server: &Server,
-) -> Result<Option<Vec<u8>>, TlsFailure> {
+/// peers): the server selects a protocol from the client's offer, the client verifies the
+/// identity its SNI selects by name, then the server verifies the chain it presents, if
+/// asked, at `issued`.
+pub fn scripted_accept(client: &crate::PeerTls, server: &Server) -> Result<Handshake, TlsFailure> {
     use crate::PeerTls;
-    let (names, presented) = match client {
+    let (names, presented, offered) = match client {
         // A peer's Serves, which no validated client has, runs no TLS client either.
         PeerTls::Plain | PeerTls::Serves(_) => return Err(TlsFailure::HandshakeFailure),
         PeerTls::Fails(failure) => return Err(*failure),
-        PeerTls::Certificate(names) => (names, None),
-        PeerTls::Presents(names, chain) => (names, Some(chain)),
+        PeerTls::Certificate(names) => (names, None, &[][..]),
+        PeerTls::Presents(names, chain) => (names, Some(chain), &[][..]),
+        PeerTls::Offers(names, alpn) => (names, None, &alpn[..]),
     };
+    // The server refuses an offer it shares no protocol with before it sends a certificate.
+    let protocol = negotiate(&server.alpn, offered).map_err(|()| TlsFailure::HandshakeFailure)?;
     let identity = select(&server.identities, names.first().and_then(|name| sni(name)));
     if !names.iter().any(|name| serves(identity, name)) {
         // A verifying client rejecting the certificate sends bad_certificate.
         return Err(TlsFailure::AlertReceived(42));
     }
     let Some(verifier) = server.clients.as_deref() else {
-        return Ok(None);
+        return Ok((None, protocol));
     };
     match presented {
         None if verifier.client_auth_mandatory() => Err(TlsFailure::CertificateRequired),
-        None => Ok(None),
+        None => Ok((None, protocol)),
         Some(pem) => {
             let chain = chain(pem).ok_or(TlsFailure::BadCertificate)?;
             verify_client(verifier, &chain, issued(&chain)).map_err(|e| failure(&e))?;
-            Ok(Some(chain_der(&chain)))
+            Ok((Some(chain_der(&chain)), protocol))
         }
     }
 }
 
 /// A scripted peer's answer to a client handshake for `server_name` presenting `identity`
-/// when asked (docs/spec/core-library.md, scripted peers). A `Serves` server presents the
-/// identity the SNI selects, which the client verifies by name alone, then verifies the
-/// client's chain, if it asks for one, at `issued`, refusing with the alert a rustls server
-/// sends. Success carries what `tls.peer` returns: the presented chain, and nothing for a
-/// `Certificate` peer, which sends no certificate bytes.
+/// when asked and offering the ALPN protocols `alpn` (docs/spec/core-library.md, scripted
+/// peers). A `Serves` server selects a protocol from the offer, refusing one it shares none
+/// with, presents the identity the SNI selects, which the client verifies by name alone,
+/// then verifies the client's chain, if it asks for one, at `issued`, refusing with the
+/// alert a rustls server sends. Success carries the presented chain, nothing for a
+/// `Certificate` peer, which sends no certificate bytes and selects no protocol.
 pub fn scripted_connect(
     peer: &crate::PeerTls,
     server_name: &str,
     identity: Option<&Identity>,
-) -> Result<Option<Vec<u8>>, TlsFailure> {
+    alpn: &[String],
+) -> Result<Handshake, TlsFailure> {
     use crate::PeerTls;
     let server = match peer {
-        // A client's Presents, which no validated peer has, runs no TLS server either.
-        PeerTls::Plain | PeerTls::Presents(..) => return Err(TlsFailure::HandshakeFailure),
+        // A client's Presents or Offers, which no validated peer has, runs no TLS server.
+        PeerTls::Plain | PeerTls::Presents(..) | PeerTls::Offers(..) => {
+            return Err(TlsFailure::HandshakeFailure);
+        }
         PeerTls::Fails(failure) => return Err(*failure),
         PeerTls::Certificate(names) if names.iter().any(|name| name == server_name) => {
-            return Ok(None);
+            return Ok((None, None));
         }
         PeerTls::Certificate(_) => return Err(TlsFailure::NameMismatch),
         PeerTls::Serves(server) => load(server).ok_or(TlsFailure::HandshakeFailure)?,
     };
+    let protocol = negotiate(&server.alpn, alpn)
+        .map_err(|()| TlsFailure::AlertReceived(NO_APPLICATION_PROTOCOL))?;
     let presented = select(&server.identities, sni(server_name));
     if !serves(presented, server_name) {
         return Err(TlsFailure::NameMismatch);
@@ -309,7 +360,7 @@ pub fn scripted_connect(
             return Err(TlsFailure::AlertReceived(refusal_alert(&error)));
         }
     }
-    Ok(Some(chain_der(&presented.cert)))
+    Ok((Some(chain_der(&presented.cert)), protocol))
 }
 
 /// Condense rustls Error/CertificateError into TLS failures.

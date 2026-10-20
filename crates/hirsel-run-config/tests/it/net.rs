@@ -767,12 +767,12 @@ fn a_serving_peer_is_a_well_formed_server_whose_anonymous_policy_is_absent_from_
     let run = validate(serves(OTHER_KEY, None)).unwrap();
     let peer = &run.net_grant().unwrap().peers.as_ref().unwrap()[0].tls;
     assert_eq!(
-        tls::scripted_connect(peer, "localhost", None),
+        tls::scripted_connect(peer, "localhost", None, &[]),
         Err(TlsFailure::HandshakeFailure)
     );
     let run = validate(serves(SERVER_KEY, None)).unwrap();
     let peer = &run.net_grant().unwrap().peers.as_ref().unwrap()[0].tls;
-    assert!(tls::scripted_connect(peer, "localhost", None).is_ok());
+    assert!(tls::scripted_connect(peer, "localhost", None, &[]).is_ok());
     let mut empty = serves(SERVER_KEY, None);
     empty["peers"][0]["tls"]["serves"]["identities"] = json!([]);
     invalid(empty, "io.net.peers.address");

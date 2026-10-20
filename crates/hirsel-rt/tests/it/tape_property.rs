@@ -126,6 +126,13 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
             }],
         }]
     };
+    // An invalid offer is recorded too: an empty protocol among them.
+    let alpn = match n % 4 {
+        0 => vec![],
+        1 => vec!["h2".to_owned()],
+        2 => vec![String::new()],
+        _ => vec!["h2".to_owned(), text.clone() + "#alpn", String::new()],
+    };
     requests! {
         Stdin { io: n.wrapping_add(12) },
         Stderr { io: n.wrapping_add(12) },
@@ -215,9 +222,10 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         Shutdown { net: n.wrapping_add(17), stream: n.wrapping_add(28), how: [ShutdownHow::Read, ShutdownHow::Write, ShutdownHow::Both][n as usize % 3] },
         SetTimeout { net: n.wrapping_add(17), stream: n.wrapping_add(28), which: if n % 2 == 0 { TimeoutKind::Read } else { TimeoutKind::Write }, timeout: timeout },
         PeerAddr { net: n.wrapping_add(17), stream: n.wrapping_add(28) },
-        TlsConnect { net: n.wrapping_add(17), stream: n.wrapping_add(28), server_name: if n == 0 { String::new() } else { format!("{text}#server_name") }, roots: roots.clone(), identity: (n % 2 != 0).then_some(digest) },
-        TlsAccept { net: n.wrapping_add(17), stream: n.wrapping_add(28), server: hirsel_rt::net::TlsServerDigest { identities: vec![digest], clients: match n % 3 { 0 => hirsel_rt::net::ClientAuth::Anonymous, 1 => hirsel_rt::net::ClientAuth::Request(digest), _ => hirsel_rt::net::ClientAuth::Require(digest) } } },
+        TlsConnect { net: n.wrapping_add(17), stream: n.wrapping_add(28), server_name: if n == 0 { String::new() } else { format!("{text}#server_name") }, roots: roots.clone(), identity: (n % 2 != 0).then_some(digest), alpn: alpn.clone() },
+        TlsAccept { net: n.wrapping_add(17), stream: n.wrapping_add(28), server: hirsel_rt::net::TlsServerDigest { identities: vec![digest], clients: match n % 3 { 0 => hirsel_rt::net::ClientAuth::Anonymous, 1 => hirsel_rt::net::ClientAuth::Request(digest), _ => hirsel_rt::net::ClientAuth::Require(digest) }, alpn: alpn.clone() } },
         TlsPeer { net: n.wrapping_add(17), stream: n.wrapping_add(28) },
+        TlsProtocol { net: n.wrapping_add(17), stream: n.wrapping_add(28) },
         TlsClose { net: n.wrapping_add(17), stream: n.wrapping_add(28) },
         Listen { net: n.wrapping_add(17), addr: addr },
         Accept { net: n.wrapping_add(17), listener: n.wrapping_add(13) },
@@ -315,6 +323,10 @@ fn completions(n: u64) -> Vec<Completion> {
         Completion::Count(result!(n, net_error.clone())),
         Completion::NetUnit(result!((), net_error.clone())),
         Completion::Certificates(result!(Some(bytes.clone()), net_error.clone())),
+        Completion::Protocol(result!(
+            (n % 4 == 0).then(|| text.clone()),
+            net_error.clone()
+        )),
         Completion::Address(result!(addr, net_error.clone())),
         Completion::Accepted(result!((n, addr), net_error)),
         Completion::Process(if n % 2 == 0 {
@@ -391,6 +403,7 @@ fn completions(n: u64) -> Vec<Completion> {
             Completion::Count(_) => (),
             Completion::NetUnit(_) => (),
             Completion::Certificates(_) => (),
+            Completion::Protocol(_) => (),
             Completion::Address(_) => (),
             Completion::Accepted(_) => (),
             Completion::Process(_) => (),

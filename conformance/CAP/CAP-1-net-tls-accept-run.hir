@@ -59,7 +59,7 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
   let mut secure = tls.accept(
     n,
     take first,
-    TlsServer(identities: [identity()], clients: Anonymous())
+    TlsServer(identities: [identity()], clients: Anonymous(), alpn: [])
   )?
   let mut buf: List[u8] = []
   test.check(t, net.read(n, mut secure, mut buf, 16u64)? == 4u64)
@@ -75,7 +75,7 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
       tls.accept(
         n,
         take second,
-        TlsServer(identities: [identity()], clients: Anonymous())
+        TlsServer(identities: [identity()], clients: Anonymous(), alpn: [])
       )
     ) == Some(Tls(AlertReceived(42u8)))
   )
@@ -88,7 +88,7 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
       tls.accept(
         n,
         take third,
-        TlsServer(identities: [identity()], clients: Anonymous())
+        TlsServer(identities: [identity()], clients: Anonymous(), alpn: [])
       )
     ) == Some(Tls(HandshakeFailure()))
   )
@@ -100,7 +100,7 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
       tls.accept(
         n,
         take fourth,
-        TlsServer(identities: [identity()], clients: Anonymous())
+        TlsServer(identities: [identity()], clients: Anonymous(), alpn: [])
       )
     ) == Some(Tls(AlertReceived(48u8)))
   )
@@ -110,7 +110,7 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
   let mut ip = tls.accept(
     n,
     take fifth,
-    TlsServer(identities: [identity()], clients: Anonymous())
+    TlsServer(identities: [identity()], clients: Anonymous(), alpn: [])
   )?
   test.check(t, net.read(n, mut ip, mut buf, 16u64)? == 2u64)
   test.check(t, net.read(n, mut ip, mut buf, 16u64) == Error(Tls(Truncated())))
@@ -120,7 +120,11 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
     t,
     upgrade_error(
       n,
-      tls.accept(n, take ip, TlsServer(identities: [identity()], clients: Anonymous()))
+      tls.accept(
+        n,
+        take ip,
+        TlsServer(identities: [identity()], clients: Anonymous(), alpn: [])
+      )
     ) == Some(InvalidInput())
   )
   Ok(())

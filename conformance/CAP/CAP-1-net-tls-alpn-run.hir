@@ -1,0 +1,123 @@
+// rule: CAP-1
+// expect: run
+// entry: main
+// ALPN (RFC 7301): tls.connect_with offers its client's protocols in order, and a server
+// selects the first protocol of its own list that the client offers. When both list
+// protocols and share none, the server refuses with no_application_protocol: the client
+// sees AlertReceived(120) and the server HandshakeFailure. When either list is empty no
+// protocol is selected. tls.negotiated_protocol reads the outcome on either side.
+// The self-signed P-256 identity of the server TLS tests, for localhost and 127.0.0.1; it
+// secures nothing.
+fn localhost() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn server(take alpn: List[String]) -> TlsServer uses {} {
+  TlsServer(identities: [localhost()], clients: Anonymous(), alpn: take alpn)
+}
+
+fn client(take alpn: List[String]) -> TlsClient uses {} {
+  TlsClient(roots: WebPki(), identity: None(), alpn: take alpn)
+}
+
+fn peer(port: u16, take alpn: List[String]) -> NetPeer uses {} {
+  NetPeer(
+    address: "localhost",
+    port: port,
+    resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+    tls: Serves(server(take alpn)),
+    connections: [Open([Send(b"hi")]), Open([]), Open([]), Open([]), Open([])]
+  )
+}
+
+fn incoming(port: u16, take tls: PeerTls) -> NetClient uses {} {
+  NetClient(
+    from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: port),
+    tls: tls,
+    steps: []
+  )
+}
+
+fn offers(take alpn: List[String]) -> PeerTls uses {} {
+  Offers(["localhost"], take alpn)
+}
+
+// The protocol a client handshake negotiates, or its error.
+fn connect(n: Net, port: u16, take alpn: List[String]) -> Result[
+  Option[String],
+  NetError
+] {
+  let s = net.connect(n, "localhost", port, Unbounded())?
+  let secure = tls.connect_with(n, take s, "localhost", client(take alpn))?
+  tls.negotiated_protocol(n, secure)
+}
+
+// The protocol a server handshake with the next client negotiates, or its error.
+fn accept(n: Net, mut l: Listener of n, take alpn: List[String]) -> Result[
+  Option[String],
+  NetError
+] {
+  let (s, _) = net.accept(n, mut l)?
+  let secure = tls.accept(n, take s, server(take alpn))?
+  tls.negotiated_protocol(n, secure)
+}
+
+pub fn main(t: Test) -> Result[(), NetError] {
+  let home = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16)
+  let n = test.net(
+    t,
+    [peer(443u16, ["h2", "http/1.1"]), peer(444u16, ["http/1.1"]), peer(445u16, [])],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: home.port,
+        clients: [
+          incoming(40001u16, offers(["http/1.1", "h2"])),
+          incoming(40002u16, offers(["http/1.1"])),
+          incoming(40003u16, offers(["h2"])),
+          incoming(40004u16, Certificate(["localhost"])),
+          incoming(40005u16, offers(["h2"]))
+        ]
+      )
+    ]
+  )
+  // The server's preference wins over the client's order, and plaintext follows.
+  let s = net.connect(n, "localhost", 443u16, Unbounded())?
+  test.check(t, tls.negotiated_protocol(n, s)? == None())
+  let mut secure = tls.connect_with(n, take s, "localhost", client(["http/1.1", "h2"]))?
+  test.check(t, tls.negotiated_protocol(n, secure)? == Some("h2"))
+  let mut buf: List[u8] = []
+  test.check(t, net.read(n, mut secure, mut buf, 8u64)? == 2u64)
+  // An h2 client falls back to http/1.1 when the server offers only that.
+  test.check(t, connect(n, 444u16, ["h2", "http/1.1"]) == Ok(Some("http/1.1")))
+  // No mutual protocol: the server refuses with no_application_protocol.
+  test.check(t, connect(n, 444u16, ["h2"]) == Error(Tls(AlertReceived(120u8))))
+  // A server listing none, or a client offering none, selects nothing.
+  test.check(t, connect(n, 445u16, ["h2"]) == Ok(None()))
+  let plain = net.connect(n, "localhost", 443u16, Unbounded())?
+  let none = tls.connect(n, take plain, "localhost", WebPki())?
+  test.check(t, tls.negotiated_protocol(n, none)? == None())
+  // An empty, overlong or repeated protocol is invalid input and consumes the stream.
+  let mut raw: List[u8] = []
+  for _ in 0u64..256u64 {
+    list.push(mut raw, 120u8)
+  }
+  let long = match string.from_bytes(bytes.from_list(take raw)) {
+    Ok(text) => text,
+    Error(_) => "",
+  }
+  test.check(t, connect(n, 445u16, [""]) == Error(InvalidInput()))
+  test.check(t, connect(n, 445u16, [long]) == Error(InvalidInput()))
+  test.check(t, connect(n, 445u16, ["h2", "h2"]) == Error(InvalidInput()))
+  // Server side: the server's preference, fallback, refusal and no offer.
+  let mut listener = net.listen(n, home)?
+  test.check(t, accept(n, mut listener, ["h2", "http/1.1"]) == Ok(Some("h2")))
+  test.check(t, accept(n, mut listener, ["h2", "http/1.1"]) == Ok(Some("http/1.1")))
+  test.check(t, accept(n, mut listener, ["http/1.1"]) == Error(Tls(HandshakeFailure())))
+  test.check(t, accept(n, mut listener, ["h2"]) == Ok(None()))
+  test.check(t, accept(n, mut listener, []) == Ok(None()))
+  Ok(())
+}

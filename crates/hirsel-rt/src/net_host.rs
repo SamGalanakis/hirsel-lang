@@ -57,15 +57,16 @@ impl HostNet {
         &mut self,
         stream: u64,
         start: impl FnOnce() -> Result<Box<dyn crate::net_tls::TlsSession>, NetError>,
-    ) -> Result<(), NetError> {
+    ) -> Result<Option<String>, NetError> {
         let fd = self.socket(stream)?;
         if self.tls.contains_key(&stream) {
             return Err(NetError::InvalidInput);
         }
         let mut conn = start()?;
         conn.complete_io(fd)?;
+        let protocol = conn.protocol();
         self.tls.insert(stream, conn);
-        Ok(())
+        Ok(protocol)
     }
     fn socket(&self, id: u64) -> Result<libc::c_int, NetError> {
         self.sockets
@@ -727,16 +728,17 @@ impl NetProvider for HostNet {
         name: &str,
         roots: &RootsDigest,
         identity: Option<&std::sync::Arc<hirsel_run_schema::tls::Identity>>,
-    ) -> Provided<()> {
+        alpn: &[String],
+    ) -> Provided<Option<String>> {
         let pem = self.pem.take();
-        Ok(self.handshake(stream, || tls.connect(name, roots, pem, identity)))
+        Ok(self.handshake(stream, || tls.connect(name, roots, pem, identity, alpn)))
     }
     fn tls_accept(
         &mut self,
         tls: &dyn crate::net_tls::TlsEngine,
         stream: u64,
         server: &hirsel_run_schema::tls::Server,
-    ) -> Provided<()> {
+    ) -> Provided<Option<String>> {
         Ok(self.handshake(stream, || tls.accept(server)))
     }
     fn tls_peer(&mut self, stream: u64) -> Provided<Option<Vec<u8>>> {

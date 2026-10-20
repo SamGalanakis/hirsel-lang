@@ -332,6 +332,7 @@ impl Registry {
             | R::TlsConnect { stream, .. }
             | R::TlsAccept { stream, .. }
             | R::TlsPeer { stream, .. }
+            | R::TlsProtocol { stream, .. }
             | R::TlsClose { stream, .. } => on(self, &mut keys, *stream, X),
             R::UdpSend { socket, .. } | R::UdpRecv { socket, .. } => {
                 on(self, &mut keys, *socket, X)

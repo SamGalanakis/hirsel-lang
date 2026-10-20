@@ -40,7 +40,7 @@ fn peer(take address: String, take tls: PeerTls) -> NetPeer uses {} {
 }
 
 fn serves(take identities: List[TlsIdentity]) -> PeerTls uses {} {
-  Serves(TlsServer(identities: identities, clients: Anonymous()))
+  Serves(TlsServer(identities: identities, clients: Anonymous(), alpn: []))
 }
 
 fn chain(n: Net, s: Stream of n) -> Result[Bytes, NetError] {

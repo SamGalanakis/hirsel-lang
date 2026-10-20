@@ -110,6 +110,7 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::TlsConnect { .. } => true,
             Request::TlsAccept { .. } => true,
             Request::TlsPeer { .. } => false,
+            Request::TlsProtocol { .. } => false,
             Request::TlsClose { .. } => true,
             Request::Listen { .. } => false,
             Request::Accept { .. } => true,

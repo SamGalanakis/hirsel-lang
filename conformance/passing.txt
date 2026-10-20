@@ -53,6 +53,7 @@ conformance/CAP/CAP-1-net-timeout-run.hir
 conformance/CAP/CAP-1-net-tls-accept-grant-run.hir
 conformance/CAP/CAP-1-net-tls-accept-identity-run.hir
 conformance/CAP/CAP-1-net-tls-accept-run.hir
+conformance/CAP/CAP-1-net-tls-alpn-run.hir
 conformance/CAP/CAP-1-net-tls-connect-as-run.hir
 conformance/CAP/CAP-1-net-tls-connect-peer-run.hir
 conformance/CAP/CAP-1-net-tls-mtls-run.hir
@@ -868,6 +869,7 @@ conformance/DET/DET-1-store-sim-crash-model-run.hir
 conformance/DET/DET-1-store-sim-fence-run.hir
 conformance/DET/DET-1-store-sim-recover-run.hir
 conformance/DET/DET-1-store-sim-transact-crash-run.hir
+conformance/DET/DET-1-tls-alpn-replay-run.hir
 conformance/DET/DET-1-tls-connect-as-replay-run.hir
 conformance/DET/DET-1-tls-mtls-replay-run.hir
 conformance/DET/DET-1-udp-replay-run.hir

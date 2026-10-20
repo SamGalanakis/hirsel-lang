@@ -104,6 +104,11 @@ fn client(port: u16, c: Client) -> std::thread::JoinHandle<Result<Vec<u8>, Strin
     })
 }
 
+/// The ALPN list these servers select from, as an HTTP/1.1 server's.
+fn http1() -> Vec<String> {
+    vec!["http/1.1".into()]
+}
+
 /// A server of the test chain and `key` that asks for no client certificate.
 fn single(
     key: &'static [u8],
@@ -159,12 +164,12 @@ fn accept(
         Ok(Completion::NetBytes(Err(NetError::NotGranted)))
     );
     let (identities, clients) = server;
-    io.tls_server(stream, &identities, clients);
+    io.tls_server(stream, &identities, clients, &http1());
     let done = io
         .call(Request::TlsAccept {
             net,
             stream,
-            server: TlsServerDigest::of(&identities, clients),
+            server: TlsServerDigest::of(&identities, clients, &http1()),
         })
         .unwrap();
     (net, stream, done)
@@ -177,7 +182,7 @@ fn serve(
     start: impl FnOnce(u16),
 ) -> Option<Vec<u8>> {
     let (net, stream, done) = accept(io, server, start);
-    assert_eq!(done, Completion::NetUnit(Ok(())));
+    assert!(matches!(done, Completion::Protocol(Ok(_))), "{done:?}");
     let mut received = vec![];
     while received.len() < 4 {
         let Ok(Completion::NetBytes(Ok(bytes))) = io.call(Request::NetRead {
@@ -227,7 +232,7 @@ fn server_handshake_records_plaintext_and_the_chain_digest_and_replays_without_a
             ))
         });
         assert_eq!(anonymous, None);
-        // The server offers only http/1.1, which the client then negotiated.
+        // The server selects only http/1.1, which the client then negotiated.
         assert_eq!(peer.unwrap().join().unwrap().unwrap(), b"http/1.1");
         let tape = real.tape().to_vec();
         let text = hirsel_rt::launch::render_tape(&tape).unwrap();
@@ -266,7 +271,7 @@ fn a_client_offering_no_shared_alpn_protocol_fails_the_server_handshake() {
     });
     assert_eq!(
         done,
-        Completion::NetUnit(Err(NetError::Tls(TlsFailure::HandshakeFailure)))
+        Completion::Protocol(Err(NetError::Tls(TlsFailure::HandshakeFailure)))
     );
     assert!(peer.unwrap().join().unwrap().is_err());
     // The failed handshake consumed the stream.
@@ -290,7 +295,7 @@ fn an_invalid_identity_is_invalid_input_and_never_starts_tls() {
         let (_, _, done) = accept(&mut io, single(key), |port| {
             socket = Some(std::net::TcpStream::connect(("127.0.0.1", port)).unwrap())
         });
-        assert_eq!(done, Completion::NetUnit(Err(NetError::InvalidInput)));
+        assert_eq!(done, Completion::Protocol(Err(NetError::InvalidInput)));
         // The stream closed without one TLS byte.
         let mut byte = [0];
         assert_eq!(socket.unwrap().read(&mut byte).unwrap(), 0);
@@ -378,7 +383,7 @@ fn a_missing_or_untrusted_client_certificate_is_refused() {
                 },
             ))
         });
-        assert_eq!(done, Completion::NetUnit(Err(NetError::Tls(expected))));
+        assert_eq!(done, Completion::Protocol(Err(NetError::Tls(expected))));
         // The client learns why: certificate_required or unknown_ca.
         let refused = peer.unwrap().join().unwrap().unwrap_err();
         assert!(
@@ -464,7 +469,7 @@ fn an_empty_identity_list_or_trust_set_is_invalid_input() {
         let (_, _, done) = accept(&mut io, server, |port| {
             socket = Some(std::net::TcpStream::connect(("127.0.0.1", port)).unwrap())
         });
-        assert_eq!(done, Completion::NetUnit(Err(NetError::InvalidInput)));
+        assert_eq!(done, Completion::Protocol(Err(NetError::InvalidInput)));
     }
 }
 
@@ -530,6 +535,7 @@ fn connect_as_presents_the_client_identity_to_a_requiring_server() {
             server_name: "alpha.hirsel.test".into(),
             roots: hirsel_rt::net_tls::pem_digest(ALPHA.0),
             identity: identity.map(|(chain, _)| chain_digest(chain)),
+            alpn: vec![],
         });
         // TLS 1.3 completes the client's handshake before the server checks its
         // certificate, so a refusal surfaces at the first exchange.
@@ -547,14 +553,14 @@ fn connect_as_presents_the_client_identity_to_a_requiring_server() {
         // The client's tls.peer is the server chain it verified, as rustls reports it.
         let peer = io.call(Request::TlsPeer { net, stream });
         if identity.is_some() {
-            assert_eq!(connected, Ok(Completion::NetUnit(Ok(()))));
+            assert_eq!(connected, Ok(Completion::Protocol(Ok(None))));
             assert_eq!(written, Ok(Completion::NetUnit(Ok(()))));
             assert_eq!(seen, Some(der(CLIENT)));
             assert_eq!(peer, Ok(Completion::Certificates(Ok(Some(der(ALPHA.0))))));
         } else {
             // The server refuses with certificate_required at the first exchange.
             assert_eq!(seen, None);
-            assert_eq!(connected, Ok(Completion::NetUnit(Ok(()))));
+            assert_eq!(connected, Ok(Completion::Protocol(Ok(None))));
             assert!(
                 written != Ok(Completion::NetUnit(Ok(())))
                     || read
