@@ -1,0 +1,34 @@
+// rule: SEM-3
+// expect: run
+// Inputs: Go src/internal/diff/testdata (golang/go ebe2feef) and fixed pairs.
+// Expected unified diffs are git 2.43.0's `git diff --no-index
+// --no-indent-heuristic -U<n> --diff-algorithm=<myers|patience>` output, with
+// names replaced and the function context after `@@` dropped; expected patch
+// results are GNU patch 2.7.6's `patch --fuzz=0 --forward` output and rejected
+// hunk numbers.
+fn contexts() -> List[(String, String, diff.Algorithm, u64, String)] uses {} {
+  [
+    (
+      "d0\na1\nc0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nb2\nc2\nf1\na0\nf0\nb0\na0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nc1\nf2\nb0\nc0\nd0\nf1\nd0\nd2\nd2\na1\nh2\nb2\nb1\na0\n",
+      "d0\na1\nb0\ne1\ne0\nc0\nf2\nc0\nc1\na1\nc1\nb2\nc2\nf1\nx2\nf0\nb0\ng1\nc0\nh2\ng2\nf2\nh1\nc1\nd1\nc1\nx2\nc1\nf2\nb0\nd0\nf1\nc2\nd0\na1\nd2\na1\nh2\nb2\nb1\na0\nc1\nz2\n",
+      Myers(),
+      0u64,
+      "--- old\n+++ new\n@@ -3 +3 @@\n-c0\n+b0\n@@ -10,0 +11 @@\n+c1\n@@ -14 +15 @@\n-a0\n+x2\n@@ -17 +17,0 @@\n-a0\n@@ -26,0 +27 @@\n+x2\n@@ -30 +30,0 @@\n-c0\n@@ -32,0 +33 @@\n+c2\n@@ -34 +35 @@\n-d2\n+a1\n@@ -40,0 +42,2 @@\n+c1\n+z2\n"
+    )
+  ]
+}
+
+pub fn main(t: Test) -> Result[(), diff.PatchError] {
+  let mut case: u64 = 41
+  for (old, new, algorithm, context, expected) in contexts() {
+    test.check_case(
+      t,
+      diff.unified("old", old, "new", new, algorithm, context) == expected,
+      case
+    )
+    let applied = diff.apply(old, expected)?
+    test.check_case(t, applied.text == new && list.len(applied.rejected) == 0, case)
+    case += 1
+  }
+  Ok(())
+}

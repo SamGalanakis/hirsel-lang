@@ -3440,3 +3440,56 @@ unsatisfiable comparator `<0.0.0-0` stands for its whole set, and so on); number
 are u64 rather than JavaScript's 2^53. `req_to_string` spells a `Req` as
 dtolnay/semver displays one: comparators joined by `, `, `*` for an empty set,
 sets joined by ` || `.
+
+## Line diffs and patches
+
+`std@1/diff` compares sequences of lines, prints unified diffs and applies them:
+
+```text
+Algorithm  = Myers | Patience
+Edit       = Keep(u64, u64, u64) | Delete(u64, u64, u64) | Insert(u64, u64, u64)
+Patched    = { text: String, rejected: List[u64] }
+PatchError = Malformed(u64)
+fn diff.split_lines(source: String) -> unique List[String] uses {}
+fn diff.edits(old: List[String], new: List[String], algorithm: Algorithm) -> unique List[Edit] uses {}
+fn diff.unified(old_name: String, old: String, new_name: String, new: String, algorithm: Algorithm, context: u64) -> unique String uses {}
+fn diff.apply(source: String, patch: String) -> Result[Patched, PatchError] uses {}
+```
+
+`split_lines` keeps each line's LF; a last line without one stays unterminated,
+so lines compare whole and a missing final newline is a change. An edit script
+is a sequence of runs `(old index, new index, count)` covering both sides in
+order; a replacement is a Delete then an Insert.
+
+`Myers()` is a minimal diff: Myers' O(ND) algorithm with the linear-space middle
+snake (Myers 1986, section 4b). As in GNU diff and git, lines with no
+counterpart on the other side are changed outright, and a line matching at
+least sqrt(lines) others is changed too when it sits among such lines; each
+group of changed lines is then slid down past equal lines, merging groups it
+meets, and back up to the last place it lines up with a change on the other
+side. `Patience()` matches lines that occur exactly once on each side, takes
+their longest increasing run (Go `internal/diff`'s Szymanski LCS) as anchors,
+extends each anchor over equal neighbours and diffs the gaps the same way,
+falling back to Myers in a gap with no unique shared line. The output equals
+`git diff --no-indent-heuristic` with the same algorithm whenever git stays
+exact (its Myers abandons minimality only past an edit cost of 256 per split);
+Myers here is always minimal, in O((N + M) D) time and O(N + M) memory.
+
+`unified` prints `--- old_name`, `+++ new_name` and hunks headed
+`@@ -start,count +start,count @@`, omitting a count of one and numbering an empty
+range by the line before it, with `context` lines around changes and changes at
+most `2 * context` lines apart sharing a hunk, as git does. A line without LF is
+followed by `\ No newline at end of file`. Equal texts give the empty string;
+there is no function-name context after `@@`.
+
+`apply` takes the hunks of one file's unified diff, skipping lines before the
+first `@@`, and applies them as GNU `patch --fuzz=0 --forward`: a hunk's old
+lines must match exactly, first at its stated place shifted by the previous
+applied hunk's offset, then at the nearest place not before the previous applied
+hunk, later before earlier. A hunk with less leading than trailing context that
+starts at line one applies only at the start of the file, one with less trailing
+context only at its end. Hunks that match nowhere are listed in `rejected` by
+their zero-based index and the rest apply. A body line other than ` `, `-`, `+`,
+`\` or an empty context line, a count mismatch or text after the last hunk is
+`Malformed` with its one-based patch line number. There is no fuzz, no reversed
+patch detection and no multi-file patch.

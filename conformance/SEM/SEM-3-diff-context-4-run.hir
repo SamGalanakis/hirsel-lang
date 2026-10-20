@@ -1,0 +1,41 @@
+// rule: SEM-3
+// expect: run
+// Inputs: Go src/internal/diff/testdata (golang/go ebe2feef) and fixed pairs.
+// Expected unified diffs are git 2.43.0's `git diff --no-index
+// --no-indent-heuristic -U<n> --diff-algorithm=<myers|patience>` output, with
+// names replaced and the function context after `@@` dropped; expected patch
+// results are GNU patch 2.7.6's `patch --fuzz=0 --forward` output and rejected
+// hunk numbers.
+fn contexts() -> List[(String, String, diff.Algorithm, u64, String)] uses {} {
+  [
+    (
+      "f2\nb0\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nh0\nd2\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      "f2\nb0\ny2\nh2\nx1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc2\nc1\nf0\nf1\nc2\nb1\nx0\na2\ng0\nc0\nh2\ne2\ne1\ne2\nb2\nh0\nd2\nd1\na1\ne2\nd0\nz1\nd1\ne0\nf0\nb1\nc2\ne2\nb2\ne0\n",
+      Patience(),
+      0u64,
+      "--- old\n+++ new\n@@ -2,0 +3 @@\n+y2\n@@ -4 +5 @@\n-e1\n+x1\n@@ -12,0 +14 @@\n+c2\n@@ -17,0 +20 @@\n+x0\n@@ -20 +23 @@\n-f1\n+c0\n@@ -26 +28,0 @@\n-c1\n@@ -32,0 +35 @@\n+z1\n@@ -36 +39 @@\n-g2\n+b1\n"
+    ),
+    (
+      "f2\nb0\nh2\ne1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc1\nf0\nf1\nc2\nb1\na2\ng0\nf1\nh2\ne2\ne1\ne2\nb2\nc1\nh0\nd2\nd1\na1\ne2\nd0\nd1\ne0\nf0\ng2\nc2\ne2\nb2\ne0\n",
+      "f2\nb0\ny2\nh2\nx1\na1\nc0\ne1\ne2\nf0\nb1\ne0\nh0\nc2\nc1\nf0\nf1\nc2\nb1\nx0\na2\ng0\nc0\nh2\ne2\ne1\ne2\nb2\nh0\nd2\nd1\na1\ne2\nd0\nz1\nd1\ne0\nf0\nb1\nc2\ne2\nb2\ne0\n",
+      Patience(),
+      1u64,
+      "--- old\n+++ new\n@@ -2,4 +2,5 @@\n b0\n+y2\n h2\n-e1\n+x1\n a1\n@@ -12,2 +13,3 @@\n h0\n+c2\n c1\n@@ -17,5 +19,6 @@\n b1\n+x0\n a2\n g0\n-f1\n+c0\n h2\n@@ -25,3 +28,2 @@\n b2\n-c1\n h0\n@@ -32,2 +34,3 @@\n d0\n+z1\n d1\n@@ -35,3 +38,3 @@\n f0\n-g2\n+b1\n c2\n"
+    )
+  ]
+}
+
+pub fn main(t: Test) -> Result[(), diff.PatchError] {
+  let mut case: u64 = 39
+  for (old, new, algorithm, context, expected) in contexts() {
+    test.check_case(
+      t,
+      diff.unified("old", old, "new", new, algorithm, context) == expected,
+      case
+    )
+    let applied = diff.apply(old, expected)?
+    test.check_case(t, applied.text == new && list.len(applied.rejected) == 0, case)
+    case += 1
+  }
+  Ok(())
+}

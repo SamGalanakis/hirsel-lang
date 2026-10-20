@@ -252,6 +252,11 @@ fn semver_is_ordinary_source() {
 }
 
 #[test]
+fn diff_is_ordinary_source() {
+    source_codec("diff-pairs-1", "diff", &["edits", "unified", "apply"]);
+}
+
+#[test]
 fn unicode_properties_are_ordinary_source() {
     source_codec(
         "unicode-properties",

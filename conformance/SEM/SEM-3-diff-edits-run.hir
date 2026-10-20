@@ -1,0 +1,60 @@
+// rule: SEM-3
+// expect: run
+// Inputs: Go src/internal/diff/testdata (golang/go ebe2feef) and fixed pairs.
+// Expected unified diffs are git 2.43.0's `git diff --no-index
+// --no-indent-heuristic -U<n> --diff-algorithm=<myers|patience>` output, with
+// names replaced and the function context after `@@` dropped; expected patch
+// results are GNU patch 2.7.6's `patch --fuzz=0 --forward` output and rejected
+// hunk numbers.
+pub fn main(t: Test) -> Result[(), diff.PatchError] {
+  // Edit scripts: Hunt and McIlroy's example (Go testdata basic) and the
+  // replacement order.
+  let old: List[String] = ["a\n", "b\n", "c\n", "d\n", "e\n", "f\n", "g\n"]
+  let new: List[String] = ["w\n", "a\n", "b\n", "x\n", "y\n", "z\n", "e\n"]
+  let expected: List[diff.Edit] = [
+    Insert(0, 0, 1),
+    Keep(0, 1, 2),
+    Delete(2, 3, 2),
+    Insert(4, 3, 3),
+    Keep(4, 6, 1),
+    Delete(5, 7, 2)
+  ]
+  test.equal(t, diff.edits(old, new, Myers()), expected)
+  test.equal(t, diff.edits(old, new, Patience()), expected)
+  let none: List[String] = []
+  test.equal(t, diff.edits(none, none, Myers()), [])
+  test.equal(t, diff.edits(old, old, Patience()), [Keep(0, 0, 7)])
+  test.equal(t, diff.edits(none, old, Myers()), [Insert(0, 0, 7)])
+  test.equal(t, diff.edits(old, none, Patience()), [Delete(0, 0, 7)])
+  test.equal(t, diff.unified("old", "same\n", "new", "same\n", Myers(), 3), "")
+  test.equal(t, diff.split_lines("a\nb\r\n\nc"), ["a\n", "b\r\n", "\n", "c"])
+  test.equal(t, diff.split_lines(""), [])
+  // Headers before the first hunk are skipped, and a hunk applies at the
+  // nearest offset when its stated place no longer matches.
+  let header = "diff --git a/f b/f\nindex 1..2\n--- a/f\n+++ b/f\n@@ -2,3 +2,3 @@\n b\n-c\n+C\n d\n"
+  test.equal(t, diff.apply("a\nb\nc\nd\ne\n", header)?.text, "a\nb\nC\nd\ne\n")
+  test.equal(
+    t,
+    diff.apply("0\n1\na\nb\nc\nd\ne\n", header)?.text,
+    "0\n1\na\nb\nC\nd\ne\n"
+  )
+  test.equal(t, diff.apply("b\nc\nd\n", header)?.text, "b\nC\nd\n")
+  test.equal(t, diff.apply("b\nX\nd\n", header)?.rejected, [0])
+  // No newline at end of file, on either side.
+  let strip = "--- a\n+++ b\n@@ -1,2 +1,2 @@\n a\n-b\n+b\n\\ No newline at end of file\n"
+  test.equal(t, diff.apply("a\nb\n", strip)?.text, "a\nb")
+  let add = "--- a\n+++ b\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+b\n"
+  test.equal(t, diff.apply("a\nb", add)?.text, "a\nb\n")
+  test.equal(t, diff.apply("x\n", "")?.text, "x\n")
+  // Malformed patches report the offending line.
+  test.equal(t, diff.apply("a\n", "@@ -1 +1 @@\n?a\n"), Error(Malformed(2)))
+  test.equal(t, diff.apply("a\n", "@@ -1,2 +1 @@\n a\n"), Error(Malformed(3)))
+  test.equal(t, diff.apply("a\n", "@@ +1 -1 @@\n a\n"), Error(Malformed(1)))
+  test.equal(t, diff.apply("a\n", "@@ -1 +1 @@\n a\nextra\n"), Error(Malformed(3)))
+  test.equal(
+    t,
+    diff.apply("a\n", "@@ -1 +1 @@\n\\ No newline at end of file\n"),
+    Error(Malformed(2))
+  )
+  Ok(())
+}

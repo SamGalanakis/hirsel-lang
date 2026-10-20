@@ -1,0 +1,1113 @@
+// Line diffs, unified output and patch application.
+// Myers: E. W. Myers, "An O(ND) Difference Algorithm and Its Variations"
+// (Algorithmica 1, 1986), section 4b's linear-space middle snake, with the
+// preprocessing GNU diff describes (lines without a counterpart are changed
+// outright; lines matching many lines are dropped among them) and its
+// boundary shifting. Patience: the unique-line anchoring and longest common
+// subsequence of Go src/internal/diff/diff.go (tgs, after Szymanski), golang/go
+// ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause), recursing between
+// anchors and falling back to Myers as Bram Cohen's patience diff does
+// (third-party/NOTICES.md). The output is checked against git diff
+// --no-indent-heuristic.
+pub type Algorithm = Myers | Patience
+
+/// One run of an edit script: `Keep(old, new, count)` keeps `count` lines from
+/// `old[old]` and `new[new]`; `Delete(old, new, count)` drops `old[old..old +
+/// count]` before `new[new]`; `Insert(old, new, count)` adds `new[new..new +
+/// count]` before `old[old]`. Runs cover both sequences in order, and a
+/// replacement is a Delete followed by an Insert.
+pub type Edit = Keep(u64, u64, u64) | Delete(u64, u64, u64) | Insert(u64, u64, u64)
+
+/// `apply`'s result: the patched text, and the zero-based indexes of the hunks
+/// that did not apply, in patch order.
+pub type Patched {
+  text: String,
+  rejected: List[u64],
+}
+
+/// `Malformed` carries the one-based line number of the first patch line that
+/// is not part of a well-formed unified diff.
+pub type PatchError = Malformed(u64)
+
+// --- Lines ----------------------------------------------------------------
+fn piece(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut i = start
+  while i < end {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+/// The lines of `text`, each with its LF; the last line lacks one when `text`
+/// does not end in LF. Empty text has no lines.
+pub fn split_lines(source: String) -> unique List[String] uses {} {
+  let data = core@1/string.as_bytes(source)
+  let size = core@1/bytes.len(data)
+  let mut out: List[String] = []
+  let mut start: u64 = 0
+  let mut i: u64 = 0
+  while i < size {
+    if data[i] == b'\n' {
+      core@1/list.push(mut out, piece(data, start, i + 1))
+      start = i + 1
+    }
+    i += 1
+  }
+  if start < size {
+    core@1/list.push(mut out, piece(data, start, size))
+  }
+  take out
+}
+
+// Numbers each distinct line, so the algorithms compare integers.
+fn numbered(old: List[String], new: List[String]) -> (
+  unique List[u64],
+  unique List[u64]
+) uses {} {
+  let mut ids: Map[String, u64] = core@1/map.empty()
+  let mut a: List[u64] = []
+  let mut b: List[u64] = []
+  for line in old {
+    core@1/list.push(mut a, id(mut ids, line))
+  }
+  for line in new {
+    core@1/list.push(mut b, id(mut ids, line))
+  }
+  (take a, take b)
+}
+
+fn id(mut ids: Map[String, u64], line: String) -> u64 uses {} {
+  match core@1/map.get(ids, line) {
+    Some(n) => return n,
+    None() => (),
+  }
+  let n = core@1/map.len(ids)
+  core@1/map.insert(mut ids, unique line, n)
+  n
+}
+
+fn flags(count: u64) -> List[bool] uses {} {
+  let mut out: List[bool] = []
+  core@1/list.reserve(mut out, count)
+  for _ in 0u64..count {
+    core@1/list.push(mut out, false)
+  }
+  take out
+}
+
+@noalloc
+fn wide(value: u64) -> i64 uses {} {
+  core@1/int.narrow(value)
+}
+
+@noalloc
+fn index(value: i64) -> u64 uses {} {
+  core@1/int.narrow(value)
+}
+
+// --- Myers ------------------------------------------------------------------
+// The integer square root estimate GNU diff and git use to bound how many
+// times a line may match before it counts as matching many.
+@noalloc
+fn rough_sqrt(count: u64) -> u64 uses {} {
+  let mut n = count
+  let mut root: u64 = 1
+  while n > 0 {
+    root = root << 1
+    n = n >> 2
+  }
+  root
+}
+
+fn counts(xs: List[u64]) -> unique Map[u64, u64] uses {} {
+  let mut out: Map[u64, u64] = core@1/map.empty()
+  for x in xs {
+    let seen = match core@1/map.get(out, x) {
+      Some(n) => n,
+      None() => 0,
+    }
+    core@1/map.insert(mut out, x, seen + 1)
+  }
+  take out
+}
+
+// 0: the line has no counterpart; 2: it matches at least sqrt(lines) others; 1: otherwise.
+fn classify(xs: List[u64], other: Map[u64, u64], start: u64, stop: u64) -> unique List[
+  u8
+] uses {} {
+  let mut limit = rough_sqrt(core@1/list.len(xs))
+  if limit > 1024 {
+    limit = 1024
+  }
+  let mut out: unique List[u8] = []
+  for i in 0u64..core@1/list.len(xs) {
+    let matched = match core@1/map.get(other, xs[i]) {
+      Some(n) => n,
+      None() => 0,
+    }
+    let class: u8 = if i < start || i >= stop || matched == 0 {
+      0
+    } else if matched >= limit {
+      2
+    } else {
+      1
+    }
+    core@1/list.push(mut out, class)
+  }
+  take out
+}
+
+// Whether a many-matching line sits inside a run of unmatched lines, within
+// 100 lines either way, dense enough that matching it would only scatter the
+// change.
+fn scattered(dis: List[u8], i: u64, start: u64, stop: u64) -> bool uses {} {
+  let mut low = start
+  if i - low > 100 {
+    low = i - 100
+  }
+  let mut high = stop
+  if high - 1 - i > 100 {
+    high = i + 101
+  }
+  let mut unmatched_low: u64 = 0
+  let mut many_low: u64 = 1
+  let mut r: u64 = 1
+  while r <= i - low {
+    let d = dis[i - r]
+    if d == 0 {
+      unmatched_low += 1
+    } else if d == 2 {
+      many_low += 1
+    } else {
+      break
+    }
+    r += 1
+  }
+  if unmatched_low == 0 {
+    return false
+  }
+  let mut unmatched_high: u64 = 0
+  let mut many_high: u64 = 1
+  r = 1
+  while i + r < high {
+    let d = dis[i + r]
+    if d == 0 {
+      unmatched_high += 1
+    } else if d == 2 {
+      many_high += 1
+    } else {
+      break
+    }
+    r += 1
+  }
+  if unmatched_high == 0 {
+    return false
+  }
+  let unmatched = unmatched_low + unmatched_high
+  let many = many_low + many_high
+  many * 4 < many + unmatched
+}
+
+// The indexes of the lines the search keeps; the others are marked changed.
+fn kept(dis: List[u8], start: u64, stop: u64, mut changed: List[bool]) -> unique List[
+  u64
+] uses {} {
+  let mut out: unique List[u64] = []
+  let mut i = start
+  while i < stop {
+    if dis[i] == 1 || dis[i] == 2 && !scattered(dis, i, start, stop) {
+      core@1/list.push(mut out, i)
+    } else {
+      changed[i] = true
+    }
+    i += 1
+  }
+  take out
+}
+
+@noalloc
+fn get(v: List[i64], d: i64, base: i64) -> i64 uses {} {
+  v[index(d + base)]
+}
+
+fn put(mut v: List[i64], d: i64, base: i64, value: i64) -> () uses {} {
+  v[index(d + base)] = value
+}
+
+@noalloc
+fn same(h1: List[u64], i: i64, h2: List[u64], j: i64) -> bool uses {} {
+  h1[index(i)] == h2[index(j)]
+}
+
+// Myers' middle snake of the box [off1, lim1) x [off2, lim2), searched from both
+// corners at once; returns the point where the paths meet.
+fn middle(
+  h1: List[u64],
+  h2: List[u64],
+  off1: i64,
+  lim1: i64,
+  off2: i64,
+  lim2: i64,
+  mut forward: List[i64],
+  mut backward: List[i64],
+  base: i64
+) -> (i64, i64) uses {} {
+  let dmin = off1 - lim2
+  let dmax = lim1 - off2
+  let fmid = off1 - off2
+  let bmid = lim1 - lim2
+  let odd = (fmid - bmid) % 2 != 0
+  let mut fmin = fmid
+  let mut fmax = fmid
+  let mut bmin = bmid
+  let mut bmax = bmid
+  put(mut forward, fmid, base, off1)
+  put(mut backward, bmid, base, lim1)
+  let far: i64 = 0x7fffffffffffffff
+  while true {
+    if fmin > dmin {
+      fmin -= 1
+      put(mut forward, fmin - 1, base, -1)
+    } else {
+      fmin += 1
+    }
+    if fmax < dmax {
+      fmax += 1
+      put(mut forward, fmax + 1, base, -1)
+    } else {
+      fmax -= 1
+    }
+    let mut d = fmax
+    while d >= fmin {
+      let mut i1 = if get(forward, d - 1, base) >= get(forward, d + 1, base) {
+        get(forward, d - 1, base) + 1
+      } else {
+        get(forward, d + 1, base)
+      }
+      let mut i2 = i1 - d
+      while i1 < lim1 && i2 < lim2 && same(h1, i1, h2, i2) {
+        i1 += 1
+        i2 += 1
+      }
+      put(mut forward, d, base, i1)
+      if odd && bmin <= d && d <= bmax && get(backward, d, base) <= i1 {
+        return (i1, i2)
+      }
+      d -= 2
+    }
+    if bmin > dmin {
+      bmin -= 1
+      put(mut backward, bmin - 1, base, far)
+    } else {
+      bmin += 1
+    }
+    if bmax < dmax {
+      bmax += 1
+      put(mut backward, bmax + 1, base, far)
+    } else {
+      bmax -= 1
+    }
+    d = bmax
+    while d >= bmin {
+      let mut i1 = if get(backward, d - 1, base) < get(backward, d + 1, base) {
+        get(backward, d - 1, base)
+      } else {
+        get(backward, d + 1, base) - 1
+      }
+      let mut i2 = i1 - d
+      while i1 > off1 && i2 > off2 && same(h1, i1 - 1, h2, i2 - 1) {
+        i1 -= 1
+        i2 -= 1
+      }
+      put(mut backward, d, base, i1)
+      if !odd && fmin <= d && d <= fmax && i1 <= get(forward, d, base) {
+        return (i1, i2)
+      }
+      d -= 2
+    }
+  }
+  (0, 0)
+}
+
+// A minimal diff of two numbered sequences: the changed flags of each side.
+fn myers(a: List[u64], b: List[u64]) -> (List[bool], List[bool]) uses {} {
+  let n1 = core@1/list.len(a)
+  let n2 = core@1/list.len(b)
+  let mut changed1 = flags(n1)
+  let mut changed2 = flags(n2)
+  let lim = if n1 < n2 {
+    n1
+  } else {
+    n2
+  }
+  let mut head: u64 = 0
+  while head < lim && a[head] == b[head] {
+    head += 1
+  }
+  let mut tail: u64 = 0
+  while tail < lim - head && a[n1 - 1 - tail] == b[n2 - 1 - tail] {
+    tail += 1
+  }
+  let dis1 = classify(a, counts(b), head, n1 - tail)
+  let dis2 = classify(b, counts(a), head, n2 - tail)
+  let rows1 = kept(dis1, head, n1 - tail, mut changed1)
+  let rows2 = kept(dis2, head, n2 - tail, mut changed2)
+  let mut h1: List[u64] = []
+  for i in rows1 {
+    core@1/list.push(mut h1, a[i])
+  }
+  let mut h2: List[u64] = []
+  for i in rows2 {
+    core@1/list.push(mut h2, b[i])
+  }
+  let m1 = wide(core@1/list.len(h1))
+  let m2 = wide(core@1/list.len(h2))
+  let base = m2 + 1
+  let mut forward: List[i64] = []
+  let mut backward: List[i64] = []
+  for _ in 0u64..index(m1 + m2 + 3) {
+    core@1/list.push(mut forward, 0)
+    core@1/list.push(mut backward, 0)
+  }
+  let mut boxes: List[(i64, i64, i64, i64)] = [(0, m1, 0, m2)]
+  while let Some((first1, last1, first2, last2)) = core@1/list.pop(mut boxes) {
+    let mut off1 = first1
+    let mut lim1 = last1
+    let mut off2 = first2
+    let mut lim2 = last2
+    while off1 < lim1 && off2 < lim2 && same(h1, off1, h2, off2) {
+      off1 += 1
+      off2 += 1
+    }
+    while off1 < lim1 && off2 < lim2 && same(h1, lim1 - 1, h2, lim2 - 1) {
+      lim1 -= 1
+      lim2 -= 1
+    }
+    if off1 == lim1 {
+      while off2 < lim2 {
+        changed2[rows2[index(off2)]] = true
+        off2 += 1
+      }
+    } else if off2 == lim2 {
+      while off1 < lim1 {
+        changed1[rows1[index(off1)]] = true
+        off1 += 1
+      }
+    } else {
+      let (s1, s2) = middle(
+        h1,
+        h2,
+        off1,
+        lim1,
+        off2,
+        lim2,
+        mut forward,
+        mut backward,
+        base
+      )
+      core@1/list.push(mut boxes, (s1, lim1, s2, lim2))
+      core@1/list.push(mut boxes, (off1, s1, off2, s2))
+    }
+  }
+  (take changed1, take changed2)
+}
+
+// --- Patience ---------------------------------------------------------------
+// Each unique line of a range's old side that is also unique on its new side,
+// in old order; the longest run of them increasing on the new side anchors
+// the diff, and the gaps between anchors are diffed in turn.
+fn patience(a: List[u64], b: List[u64]) -> (List[bool], List[bool]) uses {} {
+  let mut changed1 = flags(core@1/list.len(a))
+  let mut changed2 = flags(core@1/list.len(b))
+  let mut ranges: List[(u64, u64, u64, u64)] = [
+    (0, core@1/list.len(a), 0, core@1/list.len(b))
+  ]
+  while let Some((l1, c1, l2, c2)) = core@1/list.pop(mut ranges) {
+    if c1 == 0 || c2 == 0 {
+      for k in l1..l1 + c1 {
+        changed1[k] = true
+      }
+      for k in l2..l2 + c2 {
+        changed2[k] = true
+      }
+      continue
+    }
+    // Entry per distinct old line: its first old index, and its new index,
+    // -1 when absent and -2 when repeated on either side.
+    let mut entry: Map[u64, u64] = core@1/map.empty()
+    let mut old_at: List[u64] = []
+    let mut new_at: List[i64] = []
+    for i in l1..l1 + c1 {
+      match core@1/map.get(entry, a[i]) {
+        Some(e) => {
+          new_at[e] = -2
+        },
+        None() => {
+          core@1/map.insert(mut entry, a[i], core@1/list.len(old_at))
+          core@1/list.push(mut old_at, i)
+          core@1/list.push(mut new_at, -1)
+        },
+      }
+    }
+    let mut shared = false
+    for j in l2..l2 + c2 {
+      if let Some(e) = core@1/map.get(entry, b[j]) {
+        shared = true
+        if new_at[e] == -1 {
+          new_at[e] = wide(j)
+        } else {
+          new_at[e] = -2
+        }
+      }
+    }
+    if !shared {
+      for k in l1..l1 + c1 {
+        changed1[k] = true
+      }
+      for k in l2..l2 + c2 {
+        changed2[k] = true
+      }
+      continue
+    }
+    // Patience sorting: tails[k] ends the best increasing run of length k + 1.
+    let mut tails: List[u64] = []
+    let mut previous: List[i64] = []
+    for e in 0u64..core@1/list.len(old_at) {
+      core@1/list.push(mut previous, -1)
+      if new_at[e] < 0 {
+        continue
+      }
+      let mut low: i64 = -1
+      let mut high = wide(core@1/list.len(tails))
+      while low + 1 < high {
+        let mid = low + (high - low) / 2
+        if new_at[tails[index(mid)]] > new_at[e] {
+          high = mid
+        } else {
+          low = mid
+        }
+      }
+      if low >= 0 {
+        previous[e] = wide(tails[index(low)])
+      }
+      let slot = index(low + 1)
+      if slot == core@1/list.len(tails) {
+        core@1/list.push(mut tails, e)
+      } else {
+        tails[slot] = e
+      }
+    }
+    if core@1/list.len(tails) == 0 {
+      let mut sub1: List[u64] = []
+      for i in l1..l1 + c1 {
+        core@1/list.push(mut sub1, a[i])
+      }
+      let mut sub2: List[u64] = []
+      for j in l2..l2 + c2 {
+        core@1/list.push(mut sub2, b[j])
+      }
+      let (f1, f2) = myers(sub1, sub2)
+      for k in 0u64..c1 {
+        changed1[l1 + k] = f1[k]
+      }
+      for k in 0u64..c2 {
+        changed2[l2 + k] = f2[k]
+      }
+      continue
+    }
+    let mut chain1: List[u64] = []
+    let mut chain2: List[u64] = []
+    let mut at = wide(tails[core@1/list.len(tails) - 1])
+    while at >= 0 {
+      let e = index(at)
+      core@1/list.push(mut chain1, old_at[e])
+      core@1/list.push(mut chain2, index(new_at[e]))
+      at = previous[e]
+    }
+    std@1/list.reverse(mut chain1)
+    std@1/list.reverse(mut chain2)
+    // Grow each anchor into its run of equal lines, and queue the gaps.
+    let end1 = l1 + c1
+    let end2 = l2 + c2
+    let mut line1 = l1
+    let mut line2 = l2
+    let mut k: u64 = 0
+    let count = core@1/list.len(chain1)
+    let mut walking = true
+    while walking {
+      let mut next1 = end1
+      let mut next2 = end2
+      if k < count {
+        next1 = chain1[k]
+        next2 = chain2[k]
+        while next1 > line1 && next2 > line2 && a[next1 - 1] == b[next2 - 1] {
+          next1 -= 1
+          next2 -= 1
+        }
+      }
+      while line1 < next1 && line2 < next2 && a[line1] == b[line2] {
+        line1 += 1
+        line2 += 1
+      }
+      if next1 > line1 || next2 > line2 {
+        core@1/list.push(mut ranges, (line1, next1 - line1, line2, next2 - line2))
+      }
+      if k >= count {
+        walking = false
+      } else {
+        while k + 1 < count && chain1[k + 1] == chain1[k] + 1 && chain2[k + 1] == chain2[k] + 1 {
+          k += 1
+        }
+        line1 = chain1[k] + 1
+        line2 = chain2[k] + 1
+        k += 1
+      }
+    }
+  }
+  (take changed1, take changed2)
+}
+
+// --- Compaction -------------------------------------------------------------
+// Slides each group of changed lines of one side as far down as equal lines
+// allow, merging groups it meets, then back up to the last place it lines up
+// with a change on the other side, if it passed one.
+fn compact(xs: List[u64], mut changed: List[bool], other: List[bool]) -> () uses {} {
+  let n = core@1/list.len(xs)
+  let no = core@1/list.len(other)
+  let mut gs: u64 = 0
+  let mut ge: u64 = 0
+  while ge < n && changed[ge] {
+    ge += 1
+  }
+  let mut os: u64 = 0
+  let mut oe: u64 = 0
+  while oe < no && other[oe] {
+    oe += 1
+  }
+  while true {
+    if ge != gs {
+      let mut earliest = ge
+      let mut aligned: Option[u64] = None()
+      let mut size = ge - gs + 1
+      while size != ge - gs {
+        size = ge - gs
+        aligned = None()
+        // Up as far as possible.
+        while gs > 0 && xs[gs - 1] == xs[ge - 1] {
+          gs -= 1
+          changed[gs] = true
+          ge -= 1
+          changed[ge] = false
+          while gs > 0 && changed[gs - 1] {
+            gs -= 1
+          }
+          oe = os - 1
+          os = oe
+          while os > 0 && other[os - 1] {
+            os -= 1
+          }
+        }
+        earliest = ge
+        if oe > os {
+          aligned = Some(ge)
+        }
+        // Down as far as possible.
+        while ge < n && xs[gs] == xs[ge] {
+          changed[gs] = false
+          gs += 1
+          changed[ge] = true
+          ge += 1
+          while ge < n && changed[ge] {
+            ge += 1
+          }
+          os = oe + 1
+          oe = os
+          while oe < no && other[oe] {
+            oe += 1
+          }
+          if oe > os {
+            aligned = Some(ge)
+          }
+        }
+      }
+      if ge != earliest && aligned != None() {
+        while oe == os {
+          gs -= 1
+          changed[gs] = true
+          ge -= 1
+          changed[ge] = false
+          while gs > 0 && changed[gs - 1] {
+            gs -= 1
+          }
+          oe = os - 1
+          os = oe
+          while os > 0 && other[os - 1] {
+            os -= 1
+          }
+        }
+      }
+    }
+    if ge == n {
+      break
+    }
+    gs = ge + 1
+    ge = gs
+    while ge < n && changed[ge] {
+      ge += 1
+    }
+    os = oe + 1
+    oe = os
+    while oe < no && other[oe] {
+      oe += 1
+    }
+  }
+}
+
+fn changes(old: List[String], new: List[String], algorithm: Algorithm) -> (
+  List[bool],
+  List[bool]
+) uses {} {
+  let (a, b) = numbered(old, new)
+  let mut (f1, f2) = match algorithm {
+    Myers() => myers(a, b),
+    Patience() => patience(a, b),
+  }
+  compact(a, mut f1, f2)
+  compact(b, mut f2, f1)
+  (take f1, take f2)
+}
+
+/// The edit script turning `old` into `new`, as runs of kept, deleted and
+/// inserted lines (`Edit`). `Myers()` finds a minimal script by Myers'
+/// algorithm, after git: lines with no counterpart are changed outright, a line
+/// matching many others inside such changes is changed with them, and each
+/// change is slid down past equal lines, then back up to line up with a change
+/// on the other side. `Patience()` anchors the diff on lines that occur once
+/// on each side, as git's patience diff, falling back to Myers between anchors
+/// with none. Lines compare whole, terminators included. Unlike git, Myers
+/// never trades minimality for speed on costly inputs: time is O((N + M) D) and
+/// memory O(N + M) for N and M lines and D changed lines.
+pub fn edits(old: List[String], new: List[String], algorithm: Algorithm) -> unique List[
+  Edit
+] uses {} {
+  let (f1, f2) = changes(old, new, algorithm)
+  let n1 = core@1/list.len(old)
+  let n2 = core@1/list.len(new)
+  let mut out: unique List[Edit] = []
+  let mut i1: u64 = 0
+  let mut i2: u64 = 0
+  while i1 < n1 || i2 < n2 {
+    let s1 = i1
+    let s2 = i2
+    if i1 < n1 && f1[i1] {
+      while i1 < n1 && f1[i1] {
+        i1 += 1
+      }
+      core@1/list.push(mut out, Delete(s1, s2, i1 - s1))
+    } else if i2 < n2 && f2[i2] {
+      while i2 < n2 && f2[i2] {
+        i2 += 1
+      }
+      core@1/list.push(mut out, Insert(s1, s2, i2 - s2))
+    } else {
+      while i1 < n1 && i2 < n2 && !f1[i1] && !f2[i2] {
+        i1 += 1
+        i2 += 1
+      }
+      core@1/list.push(mut out, Keep(s1, s2, i1 - s1))
+    }
+  }
+  take out
+}
+
+// --- Unified output ---------------------------------------------------------
+// A run of changed lines: `deleted` old lines at `old` and `inserted` new
+// lines at `new`.
+type Change {
+  old: u64,
+  deleted: u64,
+  new: u64,
+  inserted: u64,
+}
+
+@preserves_unique(out)
+fn emit(mark: u8, line: String, mut out: List[u8]) -> () uses {} {
+  core@1/list.push(mut out, mark)
+  text.append(mut out, line)
+  if !std@1/string.ends_with(line, "\n") {
+    text.append(mut out, "\n\\ No newline at end of file\n")
+  }
+}
+
+@preserves_unique(out)
+fn range_into(start: u64, count: u64, mut out: List[u8]) -> () uses {} {
+  if count == 0 {
+    std@1/u64.format_into(start, mut out)
+  } else {
+    std@1/u64.format_into(start + 1, mut out)
+  }
+  if count != 1 {
+    core@1/list.push(mut out, b',')
+    std@1/u64.format_into(count, mut out)
+  }
+}
+
+/// A unified diff of `old` and `new`, as `git diff -U<context>
+/// --no-indent-heuristic` prints one: `--- old_name` and `+++ new_name`
+/// lines, then hunks of `@@ -start,count +start,count @@` (a count of one is
+/// omitted, and an empty range names the line before it) with `context` lines
+/// of context, merging changes at most 2 * context lines apart. A last line
+/// without LF is followed by `\ No newline at end of file`. Equal texts give
+/// the empty string. Names are written as given.
+pub fn unified(
+  old_name: String,
+  old: String,
+  new_name: String,
+  new: String,
+  algorithm: Algorithm,
+  context: u64
+) -> unique String uses {} {
+  let a = split_lines(old)
+  let b = split_lines(new)
+  if a == b {
+    return ""
+  }
+  let (f1, f2) = changes(a, b, algorithm)
+  let n1 = core@1/list.len(a)
+  let n2 = core@1/list.len(b)
+  let mut found: List[Change] = []
+  let mut i1: u64 = 0
+  let mut i2: u64 = 0
+  while i1 < n1 || i2 < n2 {
+    if i1 < n1 && f1[i1] || i2 < n2 && f2[i2] {
+      let s1 = i1
+      let s2 = i2
+      while i1 < n1 && f1[i1] {
+        i1 += 1
+      }
+      while i2 < n2 && f2[i2] {
+        i2 += 1
+      }
+      core@1/list.push(
+        mut found,
+        Change(old: s1, deleted: i1 - s1, new: s2, inserted: i2 - s2)
+      )
+    } else {
+      i1 += 1
+      i2 += 1
+    }
+  }
+  let mut out: List[u8] = []
+  text.append(mut out, "--- ")
+  text.append(mut out, old_name)
+  text.append(mut out, "\n+++ ")
+  text.append(mut out, new_name)
+  core@1/list.push(mut out, b'\n')
+  let total = core@1/list.len(found)
+  let mut k: u64 = 0
+  while k < total {
+    let mut j = k
+    while j + 1 < total && found[j + 1].old - (found[j].old + found[j].deleted) <= 2 * context {
+      j += 1
+    }
+    let s1 = std@1/u64.saturating_sub(found[k].old, context)
+    let s2 = std@1/u64.saturating_sub(found[k].new, context)
+    let mut e1 = found[j].old + found[j].deleted + context
+    if e1 > n1 {
+      e1 = n1
+    }
+    let mut e2 = found[j].new + found[j].inserted + context
+    if e2 > n2 {
+      e2 = n2
+    }
+    text.append(mut out, "@@ -")
+    range_into(s1, e1 - s1, mut out)
+    text.append(mut out, " +")
+    range_into(s2, e2 - s2, mut out)
+    text.append(mut out, " @@\n")
+    let mut p = s1
+    for m in k..j + 1 {
+      let c = found[m]
+      while p < c.old {
+        emit(b' ', a[p], mut out)
+        p += 1
+      }
+      for t in c.old..c.old + c.deleted {
+        emit(b'-', a[t], mut out)
+      }
+      for t in c.new..c.new + c.inserted {
+        emit(b'+', b[t], mut out)
+      }
+      p = c.old + c.deleted
+    }
+    while p < e1 {
+      emit(b' ', a[p], mut out)
+      p += 1
+    }
+    k = j + 1
+  }
+  text.finish_valid(take out)
+}
+
+// --- Applying patches -------------------------------------------------------
+// `leading` and `trailing` count the context lines before the first change
+// and after the last.
+type Hunk {
+  old_start: u64,
+  old: List[String],
+  new: List[String],
+  leading: u64,
+  trailing: u64,
+}
+
+fn number(data: Bytes, mut at: u64, line: u64) -> Result[u64, PatchError] uses {} {
+  let size = core@1/bytes.len(data)
+  let start = at
+  let mut value: u64 = 0
+  while at < size && std@1/ascii.is_digit(data[at]) {
+    let digit: u64 = core@1/int.widen(data[at] - b'0')
+    let Some(scaled) = std@1/u64.checked_mul(value, 10) else {
+      return Error(Malformed(line))
+    }
+    let Some(sum) = std@1/u64.checked_add(scaled, digit) else {
+      return Error(Malformed(line))
+    }
+    value = sum
+    at += 1
+  }
+  if at == start {
+    return Error(Malformed(line))
+  }
+  Ok(value)
+}
+
+// `-start[,count]` or `+start[,count]`; a missing count is one.
+fn side(data: Bytes, from: u64, sign: u8, line: u64) -> Result[(u64, u64), PatchError] uses {} {
+  let mut at = from
+  if at >= core@1/bytes.len(data) || data[at] != sign {
+    return Error(Malformed(line))
+  }
+  at += 1
+  let start = number(data, mut at, line)?
+  let mut count: u64 = 1
+  if at < core@1/bytes.len(data) && data[at] == b',' {
+    at += 1
+    count = number(data, mut at, line)?
+  }
+  Ok((start, count))
+}
+
+// Drops the LF of a hunk's last line on one side, for `\ No newline at end of file`.
+fn unterminate(mut lines: List[String]) -> () uses {} {
+  let count = core@1/list.len(lines)
+  if count == 0 {
+    return
+  }
+  let data = core@1/string.as_bytes(lines[count - 1])
+  let size = core@1/bytes.len(data)
+  if size > 0 && data[size - 1] == b'\n' {
+    let trimmed = piece(data, 0, size - 1)
+    lines[count - 1] = take trimmed
+  }
+}
+
+fn hunks(patch: String) -> Result[List[Hunk], PatchError] uses {} {
+  let lines = split_lines(patch)
+  let total = core@1/list.len(lines)
+  let mut out: List[Hunk] = []
+  let mut i: u64 = 0
+  // Header lines before the first hunk are skipped.
+  while i < total && !std@1/string.starts_with(lines[i], "@@ ") {
+    i += 1
+  }
+  while i < total {
+    let header = core@1/string.as_bytes(lines[i])
+    let number_of_line = i + 1
+    if !std@1/string.starts_with(lines[i], "@@ ") {
+      return Error(Malformed(number_of_line))
+    }
+    let (old_start, old_count) = side(header, 3, b'-', number_of_line)?
+    let mut at: u64 = 3
+    while at < core@1/bytes.len(header) && header[at] != b' ' {
+      at += 1
+    }
+    let (_, new_count) = side(header, at + 1, b'+', number_of_line)?
+    i += 1
+    let mut hunk = Hunk(old_start: old_start, old: [], new: [], leading: 0, trailing: 0)
+    let mut changed = false
+    let mut left = old_count
+    let mut right = new_count
+    // Which sides the previous line went to, for a following `\` line.
+    let mut last: u8 = 0
+    while i < total && (left > 0 || right > 0 || std@1/string.starts_with(
+      lines[i],
+      "\\"
+    )) {
+      let body = core@1/string.as_bytes(lines[i])
+      let size = core@1/bytes.len(body)
+      let mark = if size == 0 || body[0] == b'\n' {
+        b' '
+      } else {
+        body[0]
+      }
+      let rest = if size == 0 || body[0] == b'\n' {
+        "\n"
+      } else {
+        piece(body, 1, size)
+      }
+      if mark == b'\\' {
+        if last == 0 {
+          return Error(Malformed(i + 1))
+        }
+        if last != 2 {
+          unterminate(mut hunk.old)
+        }
+        if last != 1 {
+          unterminate(mut hunk.new)
+        }
+        last = 0
+      } else if mark == b' ' && left > 0 && right > 0 {
+        core@1/list.push(mut hunk.old, copy rest)
+        core@1/list.push(mut hunk.new, take rest)
+        left -= 1
+        right -= 1
+        last = 3
+        if changed {
+          hunk.trailing += 1
+        } else {
+          hunk.leading += 1
+        }
+      } else if mark == b'-' && left > 0 {
+        core@1/list.push(mut hunk.old, take rest)
+        left -= 1
+        last = 1
+        changed = true
+        hunk.trailing = 0
+      } else if mark == b'+' && right > 0 {
+        core@1/list.push(mut hunk.new, take rest)
+        right -= 1
+        last = 2
+        changed = true
+        hunk.trailing = 0
+      } else {
+        return Error(Malformed(i + 1))
+      }
+      i += 1
+    }
+    if left > 0 || right > 0 {
+      return Error(Malformed(i + 1))
+    }
+    core@1/list.push(mut out, take hunk)
+  }
+  Ok(take out)
+}
+
+fn fits(lines: List[String], at: u64, want: List[String]) -> bool uses {} {
+  let count = core@1/list.len(want)
+  if at + count > core@1/list.len(lines) {
+    return false
+  }
+  for k in 0u64..count {
+    if lines[at + k] != want[k] {
+      return false
+    }
+  }
+  true
+}
+
+/// Applies a unified diff of one file to `source`, as GNU `patch --fuzz=0
+/// --forward` does: lines before the first `@@` are skipped; each hunk's old
+/// lines (context and deletions) must match exactly, first where its header
+/// places them shifted by the offset the previous applied hunk needed, then at
+/// the nearest place not before the previous applied hunk, later before
+/// earlier at each distance. A hunk with fewer context lines before its
+/// changes than after them, starting at the first line, applies only at the
+/// start of the file; one with fewer after than before only at its end. A hunk
+/// that matches nowhere is rejected and the rest still apply.
+/// `\ No newline at end of file` drops the preceding line's LF.
+pub fn apply(source: String, patch: String) -> Result[Patched, PatchError] uses {} {
+  let lines = split_lines(source)
+  let parsed = hunks(patch)?
+  let total = core@1/list.len(lines)
+  let mut out: List[u8] = []
+  let mut rejected: List[u64] = []
+  // Lines before `done` are copied or replaced already.
+  let mut done: u64 = 0
+  let mut shift: i64 = 0
+  let mut h: u64 = 0
+  for hunk in parsed {
+    let count = core@1/list.len(hunk.old)
+    // An old range of zero lines starts after its line, not at it.
+    let stated = if count == 0 {
+      wide(hunk.old_start)
+    } else {
+      wide(hunk.old_start) - 1
+    }
+    let expected = stated + shift
+    let last_start = wide(total) - wide(count)
+    let mut place: Option[u64] = None()
+    let mut distance: i64 = 0
+    let lowest = wide(done)
+    // Less context on one side than the other marks a hunk at an end of the
+    // file, where it alone may apply.
+    let context = if hunk.leading > hunk.trailing {
+      hunk.leading
+    } else {
+      hunk.trailing
+    }
+    let mut searching = true
+    if hunk.leading < context && hunk.old_start <= 1 {
+      if (hunk.trailing >= context || count == total) && done == 0 && fits(
+        lines,
+        0,
+        hunk.old
+      ) {
+        place = Some(0)
+      }
+      searching = false
+    } else if hunk.trailing < context {
+      if last_start >= lowest && fits(lines, index(last_start), hunk.old) {
+        place = Some(index(last_start))
+      }
+      searching = false
+    }
+    while searching && place == None() && (expected - distance >= lowest || expected + distance <= last_start) {
+      let later = expected + distance
+      if later >= lowest && later <= last_start && fits(lines, index(later), hunk.old) {
+        place = Some(index(later))
+      } else {
+        let earlier = expected - distance
+        if distance > 0 && earlier >= lowest && earlier <= last_start && fits(
+          lines,
+          index(earlier),
+          hunk.old
+        ) {
+          place = Some(index(earlier))
+        }
+      }
+      distance += 1
+    }
+    match place {
+      Some(at) => {
+        while done < at {
+          text.append(mut out, lines[done])
+          done += 1
+        }
+        for line in hunk.new {
+          text.append(mut out, line)
+        }
+        done = at + count
+        shift = wide(at) - stated
+      },
+      None() => core@1/list.push(mut rejected, h),
+    }
+    h += 1
+  }
+  while done < total {
+    text.append(mut out, lines[done])
+    done += 1
+  }
+  Ok(Patched(text: text.finish_valid(take out), rejected: take rejected))
+}

@@ -987,6 +987,12 @@
       "module": [
         "semver"
       ]
+    },
+    {
+      "path": "diff.hir",
+      "module": [
+        "diff"
+      ]
     }
   ],
   "dependencies": []

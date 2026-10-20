@@ -185,6 +185,7 @@ the license named in its row; the license texts follow once each.
 | uuid | `src/builder.rs` from_random_bytes and from_unix_timestamp_millis layouts; `src/parser.rs` test_parse_valid and test_parse_invalid inputs; `src/v7.rs` test_new and test_sorting | `stdlib/std@1/uuid.hir`, `conformance/SEM/SEM-3-uuid-*` | uuid-rs/uuid `276c23628a669ca9fca637f3326c21b114e88049` | MIT |
 | semver | `src/{parse,eval,impls,display}.rs` version and requirement parsing, prerelease precedence, comparator matching and display; `tests/test_version.rs` and `tests/test_version_req.rs` vectors | `stdlib/std@1/semver.hir`, `conformance/SEM/SEM-3-semver-*` | dtolnay/semver `280ebcb6edac3aa4cdc545dbff8a26c5ac4861fe` | MIT |
 | node-semver | `classes/range.js` parseRange, replaceCaret, replaceTilde, replaceXRange, hyphenReplace and testSet; `test/fixtures/{range-include,range-exclude,range-parse,comparisons}.js` rows without loose or includePrerelease | `stdlib/std@1/semver.hir`, `conformance/SEM/SEM-3-semver-*` | npm/node-semver `6e05b7637396ac66522cff8731f07cfe0ef49a29` | ISC |
+| Go standard library | `src/internal/diff/diff.go` tgs unique-line anchoring and longest increasing subsequence; `testdata/*.txt` input pairs (expected output from git) | `stdlib/std@1/diff.hir`, `conformance/SEM/SEM-3-diff-*` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
