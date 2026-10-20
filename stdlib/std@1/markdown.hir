@@ -2160,29 +2160,10 @@ fn raw_html(s: String, mut out: List[u8], options: Options) -> () uses {} {
   }
 }
 
-fn render_node(
-  node: Node,
-  mut out: List[u8],
-  tight: bool,
-  cell_header: bool,
-  options: Options
-) -> () uses {} {
+// Keep extension rendering separate from the CommonMark walker so validation
+// memory follows each small body rather than one growing exhaustive match.
+fn render_footnote(node: Node, mut out: List[u8], options: Options) -> () uses {} {
   match node.kind {
-    Document() => {
-      let mut footnotes = false
-      for child in node.children {
-        if let FootnoteDefinition(_) = child.kind {
-          if !footnotes {
-            text.append(mut out, "<section class=\"footnotes\" data-footnotes>\n<ol>\n")
-            footnotes = true
-          }
-        }
-        render_node(child, mut out, false, false, options)
-      }
-      if footnotes {
-        text.append(mut out, "</ol>\n</section>\n")
-      }
-    },
     FootnoteDefinition(label) => {
       text.append(mut out, "<li id=\"fn-")
       escape_html(mut out, normalize_uri(label))
@@ -2227,6 +2208,36 @@ fn render_node(
         occurrence += 1
       }
     },
+    _ => (),
+  }
+}
+
+fn render_node(
+  node: Node,
+  mut out: List[u8],
+  tight: bool,
+  cell_header: bool,
+  options: Options
+) -> () uses {} {
+  match node.kind {
+    Document() => {
+      let mut footnotes = false
+      for child in node.children {
+        if let FootnoteDefinition(_) = child.kind {
+          if !footnotes {
+            text.append(mut out, "<section class=\"footnotes\" data-footnotes>\n<ol>\n")
+            footnotes = true
+          }
+        }
+        render_node(child, mut out, false, false, options)
+      }
+      if footnotes {
+        text.append(mut out, "</ol>\n</section>\n")
+      }
+    },
+    FootnoteDefinition(_) => render_footnote(node, mut out, options),
+    FootnoteReference(_, _, _) => render_footnote(node, mut out, options),
+    FootnoteBackrefs(_, _, _) => render_footnote(node, mut out, options),
     Text(s) => escape_html(mut out, s),
     SoftBreak() => core@1/list.push(mut out, 10u8),
     HardBreak() => text.append(mut out, "<br />\n"),
