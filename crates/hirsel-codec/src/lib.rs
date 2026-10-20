@@ -112,8 +112,11 @@ impl<C> Writer<C> {
     pub fn open(&mut self, tag: &str) {
         if self.depth > 0 {
             self.out.push('\n');
-            for _ in 0..self.depth {
-                self.out.push_str("  ");
+            let mut indent = 2 * self.depth;
+            while indent > 0 {
+                let run = indent.min(INDENT.len());
+                self.out.push_str(&INDENT[..run]);
+                indent -= run;
             }
         }
         self.out.push('(');
@@ -126,11 +129,14 @@ impl<C> Writer<C> {
     }
     pub fn uint(&mut self, n: u128) {
         self.separate();
-        let _ = write!(self.out, "{n}");
+        push_decimal(&mut self.out, n);
     }
     pub fn int(&mut self, n: i128) {
         self.separate();
-        let _ = write!(self.out, "{n}");
+        if n < 0 {
+            self.out.push('-');
+        }
+        push_decimal(&mut self.out, n.unsigned_abs());
     }
     pub fn text(&mut self, s: &str) {
         self.separate();
@@ -150,9 +156,45 @@ impl<C> Writer<C> {
     pub fn bytes(&mut self, b: &[u8]) {
         self.separate();
         self.out.push('#');
-        for byte in b {
-            let _ = write!(self.out, "{byte:02x}");
+        push_hex(&mut self.out, b);
+    }
+}
+
+/// Spaces the writer indents with, taken in runs.
+const INDENT: &str = "                                                                ";
+
+/// Append `n` in decimal, as `{n}` formats it, without `core::fmt`.
+fn push_decimal(out: &mut String, n: u128) {
+    let mut digits = [0u8; 39];
+    let mut at = digits.len();
+    if let Ok(mut small) = u64::try_from(n) {
+        loop {
+            at -= 1;
+            digits[at] = b'0' + (small % 10) as u8;
+            small /= 10;
+            if small == 0 {
+                break;
+            }
         }
+    } else {
+        let mut big = n;
+        while big != 0 {
+            at -= 1;
+            digits[at] = b'0' + (big % 10) as u8;
+            big /= 10;
+        }
+    }
+    // Only ASCII digits were written.
+    out.push_str(std::str::from_utf8(&digits[at..]).unwrap_or_default());
+}
+
+/// Append `bytes` as lowercase hex pairs, as `{byte:02x}` formats each, by table.
+pub fn push_hex(out: &mut String, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    out.reserve(2 * bytes.len());
+    for &byte in bytes {
+        out.push(HEX[usize::from(byte >> 4)] as char);
+        out.push(HEX[usize::from(byte & 0xf)] as char);
     }
 }
 
