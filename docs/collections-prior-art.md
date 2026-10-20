@@ -55,7 +55,8 @@ The following deviations preserve Hirsel's ownership and API semantics:
   cannot be expressed by a `uses {}` comparator; a pure reverse ordering
   checks consistent bound traversal instead. The exhaustive 200-key pair
   enumeration (ordinary and mutable observations), 200-key large-range and
-  1,000-key vectors run in unbounded Rust driver tests. Corpus counterparts
+  1,000-key vectors run in compiled Rust driver tests without an interpreter step limit. The exhaustive
+  interpreter run exceeded the executor's 600-second limit. Corpus counterparts
   use endpoint sampling, sixteen keys for the large bound matrix and 32 keys
   for the 1,000-key scenario to stay within their step budget; a separate
   32-key case still covers the B-tree root boundary.

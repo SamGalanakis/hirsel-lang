@@ -1,4 +1,4 @@
-//! Reference vectors too large for the corpus's one-million-step budget.
+//! Compiled reference vectors too large for the corpus interpreter budget.
 use hirsel_driver::*;
 use hirsel_engine::*;
 
@@ -33,15 +33,22 @@ fn run_expanded(case_name: &str, replacements: &[(&str, &str)]) {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
-        let outcome = run_path_with_step_budget(
+        let mut stdout = vec![];
+        let mut stderr = vec![];
+        let outcome = native::run_path_native_backend(
             &path,
-            SimulationConfig::default(),
+            HostLaunch::empty(),
             None,
+            native::Backend::Cranelift,
+            native::Output::Streams {
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+            },
             hirsel_engine::Verify::On,
-            &mut vec![],
-            &mut vec![],
         )
+        .unwrap()
         .unwrap();
+        assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
         assert_eq!(
             outcome,
             RunOutcome::Returned(hirsel_run_config::Returned::Ok)
