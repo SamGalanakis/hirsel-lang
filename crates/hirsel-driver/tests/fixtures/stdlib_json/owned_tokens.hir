@@ -1,0 +1,38 @@
+// Parsed short strings must not retain a large document backing block when a
+// decoder makes each token unique. The native test bounds physical copy bytes.
+pub fn main() -> Result[(), ()] {
+  let mut out: List[u8] = []
+  text.append(mut out, "{\"padding\":\"")
+  for i in 0u64..1024 {
+    text.append(
+      mut out,
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    )
+  }
+  text.append(mut out, "\",\"tokens\":[")
+  for i in 0u64..256 {
+    if i != 0 {
+      text.append(mut out, ",")
+    }
+    text.append(mut out, "\"t\"")
+  }
+  text.append(mut out, "]}")
+  let Ok(Object(fields)) = json.parse(text.finish_valid(take out)) else {
+    return Error(())
+  }
+  let Some(Array(tokens)) = map.get(fields, "tokens") else {
+    return Error(())
+  }
+  let mut owned: List[String] = []
+  for token in tokens {
+    let Text(value) = token else {
+      return Error(())
+    }
+    list.push(mut owned, unique value)
+  }
+  if list.len(owned) == 256 && owned[255] == "t" {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

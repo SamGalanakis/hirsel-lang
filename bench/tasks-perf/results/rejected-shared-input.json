@@ -1,0 +1,101 @@
+{
+  "seed": 20261020,
+  "rounds": 10,
+  "seconds": 1,
+  "server_cpu": 31,
+  "client_cpu": 7,
+  "binaries": {
+    "before": {
+      "path": "/workspace/code/hirsel-wt/tasks-rust/bench/apps/tasks/build/tasks-hirsel",
+      "sha256": "87ba3963024b41b6f7f6c58b5419b54ca4d722bb46df2d48d63fd031d3793477"
+    },
+    "after": {
+      "path": "/tmp/tasks-perf/tasks-after",
+      "sha256": "1ef01a685514cf927440d7860efe34e65d8e6a10e83024e290010b83f8f56294"
+    },
+    "rust": {
+      "path": "/workspace/code/hirsel-wt/tasks-rust/bench/apps/tasks/rust/target/release/tasks-rust",
+      "sha256": "66d755f25aee0596cb5bc001f172cfe9b1886dbc862726c0c88aac9af03231dc"
+    }
+  },
+  "samples": [
+    {
+      "kind": "hirsel",
+      "operation": "update",
+      "rate": 1,
+      "round": 0,
+      "first_ms": 67.208326,
+      "idle_rss": 39804928,
+      "binary_bytes": 8598472,
+      "sibling_before": {
+        "busy": 192077671,
+        "total": 553346848
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.001712234,
+      "requests_per_s": 0.9982906927340173,
+      "p50_us": 17727,
+      "p99_us": 17727,
+      "p999_us": 17727,
+      "max_us": 17727,
+      "perf": {
+        "task-clock": 16.52,
+        "cycles": 65931980.0,
+        "instructions": 143710160.0,
+        "cycles:u": 53907035.0,
+        "instructions:u": 136459245.0
+      },
+      "load_rss": 41357312,
+      "instructions_per_request": 143710160.0,
+      "cpu_s_per_request": 0.01652,
+      "sibling_after": {
+        "busy": 192077689,
+        "total": 553346951
+      },
+      "sibling_busy_share": 0.17475728155339806,
+      "participant": "before"
+    },
+    {
+      "kind": "rust",
+      "operation": "update",
+      "rate": 1,
+      "round": 0,
+      "first_ms": 14.5569,
+      "idle_rss": 7307264,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 192077695,
+        "total": 553346977
+      },
+      "completed": 1,
+      "errors": 0,
+      "elapsed_s": 1.00125287,
+      "requests_per_s": 0.9987486977190886,
+      "p50_us": 12487,
+      "p99_us": 12487,
+      "p999_us": 12487,
+      "max_us": 12487,
+      "perf": {
+        "task-clock": 11.2,
+        "cycles": 43934823.0,
+        "instructions": 51615219.0,
+        "cycles:u": 22217087.0,
+        "instructions:u": 41381651.0
+      },
+      "load_rss": 11460608,
+      "instructions_per_request": 51615219.0,
+      "cpu_s_per_request": 0.0112,
+      "sibling_after": {
+        "busy": 192077723,
+        "total": 553347082
+      },
+      "sibling_busy_share": 0.26666666666666666,
+      "participant": "rust"
+    }
+  ],
+  "ratios": [],
+  "status": "failed",
+  "error": "server startup: capped: peak 4096 MiB of 4G (systemd scope), 2.9 s, exit 137; memory limit 4G reached (HIRSEL_MEMORY_LIMIT): the kernel killed the command\n",
+  "diagnosis": "Candidate shared JSON input storage caused whole-backing-block copies during unique token extraction, reaching the 4 GiB cap on the 10k snapshot. Shared storage was reverted."
+}
