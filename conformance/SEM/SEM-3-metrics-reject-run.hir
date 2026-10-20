@@ -124,7 +124,7 @@ pub fn main() -> Result[(), std@1/metrics.MetricError] uses {} {
     std@1/results.error(
       std@1/metrics.check_measurement(
         std@1/metrics.Measurement(
-          descriptor: c,
+          descriptor: copy c,
           labels: [],
           value: Signed(-1),
           exemplar: None()
