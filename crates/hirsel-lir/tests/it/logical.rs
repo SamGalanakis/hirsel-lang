@@ -3,18 +3,21 @@
 use hirsel_layout::layout::{LayoutBuilder, OwnerRepresentation, Owners};
 use hirsel_lir::layout::{LogicalCharge, block_charge, logical_size};
 use hirsel_lir::layout_types::{LayoutKind, TargetSpec};
-use hirsel_syntax::{ContentHash, DefPath};
+use hirsel_syntax::{ContentHash, DefId, DefPath};
 use hirsel_tir::RepresentationRecord;
 use hirsel_type_analysis::logical::{LogicalNominal, logical_size as type_size};
 use hirsel_types::testing::Types as Ty;
 use hirsel_types::*;
 
 fn representation(
+    types: &std::sync::Arc<TypeInterner>,
     name: &str,
     generics: u32,
     shape: impl FnOnce(&mut Ty) -> TypeId,
 ) -> RepresentationRecord {
-    let mut t = Ty::default();
+    let mut t = Ty {
+        store: types.clone(),
+    };
     let private_shape = shape(&mut t);
     RepresentationRecord {
         definition: DefPath::core(name),
@@ -25,7 +28,6 @@ fn representation(
                 bounds: Vec::new().into(),
             })
             .collect(),
-        types: t.store,
         private_shape,
         layout_promises: Layout::default(),
         resource: false,
@@ -36,13 +38,14 @@ fn representation(
 
 #[test]
 fn layout_and_type_logical_sizes_agree() {
+    let mut t = crate::support::ty();
     let records = [
-        representation("Tree", 0, |t| {
+        representation(&t.store, "Tree", 0, |t| {
             let me = t.named(&DefPath::core("Tree"), vec![]);
             let child = t.boxed(me);
             t.variant(&[&[], &[child, child]])
         }),
-        representation("Pair", 1, |t| {
+        representation(&t.store, "Pair", 1, |t| {
             let first = t.param(0);
             let second = t.p(Primitive::U64);
             t.record(&[first, second])
@@ -51,22 +54,20 @@ fn layout_and_type_logical_sizes_agree() {
     let mut owners = Owners::default();
     for record in &records {
         owners.nominals.insert(
-            record.definition.clone(),
+            DefId::intern(&record.definition),
             OwnerRepresentation::Defined(record.clone()),
         );
     }
-    let resolve = |path: &DefPath| {
+    let resolve = |definition: DefId| {
         records
             .iter()
-            .find(|r| r.definition == *path)
+            .find(|r| r.definition == *definition.path())
             .map(|r| LogicalNominal::Representation {
-                types: &r.types,
                 shape: r.private_shape,
             })
     };
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let mut b = LayoutBuilder::new(&target, &owners);
-    let mut t = Ty::default();
     let byte = t.p(Primitive::U8);
     let short = t.p(Primitive::U16);
     let word = t.p(Primitive::U64);

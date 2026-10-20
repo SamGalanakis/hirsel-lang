@@ -9,7 +9,7 @@ use hirsel_lir::layout::*;
 use hirsel_lir::layout_types::*;
 use hirsel_lir::layout_validate::{Obligation, validate_table};
 use hirsel_lir::runtime_abi::HEADER_SIZE;
-use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId, PassingMode};
+use hirsel_syntax::{ContentHash, DefId, DefPath, ItemPath, PackageId, PassingMode};
 use hirsel_tir::{BodyId, RepresentationRecord};
 use hirsel_types::*;
 
@@ -28,6 +28,8 @@ fn path(name: &str) -> DefPath {
 
 use hirsel_types::testing::Types as Ty;
 
+use crate::support::ty;
+
 #[derive(Default)]
 struct OwnerSpec {
     generics: u32,
@@ -43,7 +45,7 @@ fn representation(
     spec: OwnerSpec,
     shape: impl FnOnce(&mut Ty) -> TypeId,
 ) -> RepresentationRecord {
-    let mut t = Ty::default();
+    let mut t = ty();
     let private_shape = shape(&mut t);
     RepresentationRecord {
         definition: path(name),
@@ -56,7 +58,6 @@ fn representation(
                 bounds: Vec::new().into(),
             })
             .collect(),
-        types: t.store,
         private_shape,
         layout_promises: spec.promises,
         resource: spec.resource,
@@ -76,7 +77,7 @@ fn owner(
     let record = representation(name, spec, shape);
     owners
         .nominals
-        .insert(path(name), OwnerRepresentation::Defined(record));
+        .insert(DefId::intern(&path(name)), OwnerRepresentation::Defined(record));
     path(name)
 }
 
@@ -199,7 +200,7 @@ fn run_drop(
 fn nested_mixed_inline_pointers_scan_and_drop_at_their_offsets() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (u8_, i64_, u16_, i32_, string) = (
         t.p(Primitive::U8),
         t.p(Primitive::I64),
@@ -286,7 +287,7 @@ fn packed_fields_are_unaligned_and_align_raises_alignment() {
         },
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let p = t.named(&packed, vec![]);
     let a = t.named(&aligned, vec![]);
     let pid = b.layout(&t.store, p).unwrap();
@@ -312,7 +313,7 @@ fn packed_fields_are_unaligned_and_align_raises_alignment() {
 fn variants_scan_and_drop_only_the_active_payload() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (u8_, i64_, string) = (
         t.p(Primitive::U8),
         t.p(Primitive::I64),
@@ -359,7 +360,7 @@ fn niche_table_for(target: &TargetSpec) -> (LayoutTable, LayoutId, LayoutId, Lay
         t.variant(&[&[], &[child, child]])
     });
     let mut b = LayoutBuilder::new(target, &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (i64_, string, f64_) = (
         t.p(Primitive::I64),
         t.p(Primitive::String),
@@ -446,7 +447,7 @@ fn variants_without_one_fieldless_and_one_nonnull_word_holding_variant_keep_a_u3
         },
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (u8_, u64_, string, f64_) = (
         t.p(Primitive::U8),
         t.p(Primitive::U64),
@@ -540,7 +541,7 @@ fn the_validator_rejects_an_unsound_niche() {
 fn nested_niche_table() -> (LayoutTable, [LayoutId; 5]) {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (u8_, u32_, u64_, string, f64_) = (
         t.p(Primitive::U8),
         t.p(Primitive::U32),
@@ -599,7 +600,7 @@ fn the_validator_rejects_a_nested_niche_word_that_may_be_null_uninitialized_or_m
     let (table, [entry, _, record, deep, guarded]) = nested_niche_table();
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (u8_, i128_, string) = (
         t.p(Primitive::U8),
         t.p(Primitive::I128),
@@ -703,7 +704,7 @@ fn resources_finalize_before_their_fields_high_to_low() {
         |t| t.p(Primitive::U64),
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let r1 = t.named(&res, vec![]);
     let tok = t.named(&bare, vec![]);
     let pair = t.record(&[r1, tok, r1]);
@@ -772,7 +773,7 @@ fn soa_sequences_drop_elements_high_to_low_and_fields_in_reverse() {
         },
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let p = t.named(&particle, vec![]);
     let list = t.list(p);
     let standalone = b.layout(&t.store, p).unwrap();
@@ -827,7 +828,7 @@ fn soa_sequences_drop_elements_high_to_low_and_fields_in_reverse() {
 fn empty_large_and_overflowing_inline_arrays() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (u8_, i64_, string) = (
         t.p(Primitive::U8),
         t.p(Primitive::I64),
@@ -862,7 +863,7 @@ fn empty_large_and_overflowing_inline_arrays() {
 fn simd_requires_positive_lanes_and_aligns_to_the_vector_width() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let f = t.p(Primitive::F32);
     let simd = |t: &mut Ty, n| {
         t.builtin(
@@ -889,7 +890,7 @@ fn simd_requires_positive_lanes_and_aligns_to_the_vector_width() {
 fn simd_admits_bool_lanes_of_one_byte_and_refuses_a_non_scalar_lane() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (bool_, string) = (t.p(Primitive::Bool), t.p(Primitive::String));
     let simd = |t: &mut Ty, lane| {
         t.builtin(
@@ -917,7 +918,7 @@ fn simd_admits_bool_lanes_of_one_byte_and_refuses_a_non_scalar_lane() {
 fn packed_variants_take_only_the_active_variant_extent() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (u8_, i64_) = (t.p(Primitive::U8), t.p(Primitive::I64));
     let v = t.variant(&[&[u8_], &[i64_, i64_], &[]]);
     let packed = t.builtin(BuiltinType::Packed, vec![GenericArgument::Type(v)]);
@@ -997,7 +998,7 @@ fn flat_v0_extents_follow_the_sequential_cursor() {
     let mut owners = Owners::default();
     let message = flat_message(&mut owners);
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let m = t.named(&message, vec![]);
     let body = b.flat(&t.store, m).unwrap();
     let value = b.layout(&t.store, m).unwrap();
@@ -1076,7 +1077,7 @@ fn recursion_terminates_only_through_an_explicit_block() {
         t.named(&path("Alias"), vec![])
     });
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (tr, co, ba, al) = (
         t.named(&tree, vec![]),
         t.named(&cons, vec![]),
@@ -1147,7 +1148,7 @@ fn opaque_containers_take_their_payload_from_the_owner() {
         ),
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (s, i) = (t.p(Primitive::String), t.p(Primitive::I64));
     let map = t.builtin(
         BuiltinType::Map,
@@ -1182,7 +1183,7 @@ fn opaque_containers_take_their_payload_from_the_owner() {
 fn closure_and_iterator_environments_carry_captures_and_sizes() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (i64_, string, f64_) = (
         t.p(Primitive::I64),
         t.p(Primitive::String),
@@ -1197,16 +1198,15 @@ fn closure_and_iterator_environments_carry_captures_and_sizes() {
         (string, hirsel_core_contract::Passing::Mut),
     ];
     let shape = |sizes: &'static [u64]| EnvironmentShape {
-        definition: &body,
+        definition: DefId::intern(&body),
         body: 3,
-        store: &t.store,
         captures: &captures,
         sizes,
         movable: &[],
     };
-    let env = b.environment(&shape(&[4])).unwrap();
-    let env5 = b.environment(&shape(&[5])).unwrap();
-    assert_eq!(b.environment(&shape(&[4])).unwrap(), env);
+    let env = b.environment(&t.store, &shape(&[4])).unwrap();
+    let env5 = b.environment(&t.store, &shape(&[5])).unwrap();
+    assert_eq!(b.environment(&t.store, &shape(&[4])).unwrap(), env);
     let many = b.closure(env, hirsel_lir::abi_types::CallMultiplicity::Many);
     let once = b.closure(env, hirsel_lir::abi_types::CallMultiplicity::Once);
     let f = t.function(&[(PassingMode::Borrow, i64_)], i64_, Multiplicity::Many, 0);
@@ -1252,21 +1252,21 @@ fn closure_and_iterator_environments_carry_captures_and_sizes() {
 fn handles_are_ids_and_resource_handles_close() {
     let mut owners = Owners::default();
     owners.nominals.insert(
-        path("MonotonicClock"),
+        DefId::intern(&path("MonotonicClock")),
         OwnerRepresentation::Handle {
             revision: ContentHash::of_bytes(b"clock"),
             resource: false,
         },
     );
     owners.nominals.insert(
-        path("Socket"),
+        DefId::intern(&path("Socket")),
         OwnerRepresentation::Handle {
             revision: ContentHash::of_bytes(b"socket"),
             resource: true,
         },
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (c, s) = (
         t.named(&path("MonotonicClock"), vec![]),
         t.named(&path("Socket"), vec![]),
@@ -1297,7 +1297,7 @@ fn relations_never_change_a_layout() {
         },
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let rel = |i| Modes {
         relation: Relation::parameters([BinderRef::bound(ParamId(i))]),
         uniqueness: if i == 0 {
@@ -1310,7 +1310,7 @@ fn relations_never_change_a_layout() {
     let s0 = t.add_with(TypeKind::Primitive(Primitive::String), rel(0));
     let mut qualified = t.store.get(s0).unwrap().clone();
     qualified.sendability_requirement = SendabilityRequirement::Sendable;
-    let s0 = t.store.push(qualified);
+    let s0 = t.store.intern(qualified);
     let s1 = t.add_with(TypeKind::Primitive(Primitive::String), rel(1));
     let p0 = t.named(&pair, vec![GenericArgument::Type(s0)]);
     let p1 = t.named(&pair, vec![GenericArgument::Type(s1)]);
@@ -1427,7 +1427,7 @@ fn incomplete_and_foreign_types_are_named() {
         },
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     for (name, _, _, issue) in &unavailable_cases {
         let ty = t.named(&path(name), vec![]);
         match b.layout(&t.store, ty) {
@@ -1511,7 +1511,7 @@ fn private_representation_changes_move_layout_keys() {
         owners
     };
     let (narrow, wide) = (build(Primitive::U32), build(Primitive::U64));
-    let mut t = Ty::default();
+    let mut t = ty();
     let id = t.named(&path("Id"), vec![]);
     let holder = t.record(&[id, id]);
     let key = |owners: &Owners| {
@@ -1542,7 +1542,7 @@ fn mutation_corpus() -> (LayoutTable, LayoutId, LayoutId, LayoutId) {
         },
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (u16_, string, i64_) = (
         t.p(Primitive::U16),
         t.p(Primitive::String),
@@ -1660,7 +1660,7 @@ fn golden_corpus(target: &TargetSpec) -> LayoutTable {
     });
     let c = c_records(&mut owners);
     let mut b = LayoutBuilder::new(target, &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (u8_, i128_, string, f64_) = (
         t.p(Primitive::U8),
         t.p(Primitive::I128),
@@ -1807,7 +1807,7 @@ fn c_probes_agree_on_both_targets() {
         let mut owners = Owners::default();
         let names = c_records(&mut owners);
         let mut b = LayoutBuilder::new(&target, &owners);
-        let mut t = Ty::default();
+        let mut t = ty();
         let mut probe = String::from("#include \"c_records.h\"\n");
         let mut ids = Vec::new();
         for name in &names {
@@ -1968,7 +1968,7 @@ fn recursive_layouts_do_not_depend_on_request_order() {
         let me = t.named(&path("Bad"), vec![]);
         t.record(&[me])
     });
-    let mut t = Ty::default();
+    let mut t = ty();
     let c = t.named(&cons, vec![]);
     let boxed_cons = t.boxed(c);
     let o = t.named(&odd, vec![]);
@@ -2031,7 +2031,7 @@ fn layout_keys_depend_on_content_alone() {
         });
         owners
     };
-    let mut t = Ty::default();
+    let mut t = ty();
     let cons = t.named(&path("Cons"), vec![]);
     let even = t.named(&path("Even"), vec![]);
     let odd = t.named(&path("Odd"), vec![]);
@@ -2111,7 +2111,7 @@ fn layout_keys_depend_on_content_alone() {
 fn a_borrowed_capture_field_is_scanned_uncounted_and_never_dropped() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let i64_ = t.p(Primitive::I64);
     let boxed = t.boxed(i64_);
     let body = path("main");
@@ -2120,10 +2120,9 @@ fn a_borrowed_capture_field_is_scanned_uncounted_and_never_dropped() {
         (boxed, hirsel_core_contract::Passing::Take),
     ];
     let env = b
-        .environment(&EnvironmentShape {
-            definition: &body,
+        .environment(&t.store, &EnvironmentShape {
+            definition: DefId::intern(&body),
             body: 1,
-            store: &t.store,
             captures: &captures,
             sizes: &[],
             movable: &[],
@@ -2164,7 +2163,7 @@ fn an_environment_descriptor_drops_only_its_taken_captures() {
     use hirsel_lir::rt_program::{StepKind, descriptor};
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let i64_ = t.p(Primitive::I64);
     let boxed = t.boxed(i64_);
     let body = path("main");
@@ -2181,10 +2180,9 @@ fn an_environment_descriptor_drops_only_its_taken_captures() {
         ],
     ] {
         let env = b
-            .environment(&EnvironmentShape {
-                definition: &body,
+            .environment(&t.store, &EnvironmentShape {
+                definition: DefId::intern(&body),
                 body: 1,
-                store: &t.store,
                 captures: &captures,
                 sizes: &[],
                 movable: &[],
@@ -2215,7 +2213,7 @@ fn an_environment_descriptor_drops_only_its_taken_captures() {
 fn every_sealed_table_holds_a_bool_layout() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let u64_ = t.p(Primitive::U64);
     let boxed = t.boxed(u64_);
     let before = b.layout(&t.store, boxed).unwrap();
@@ -2244,7 +2242,7 @@ fn a_borrowed_handle_holding_capture_contributes_no_descriptor_steps() {
     use hirsel_lir::rt_program::{DescriptorError, StepKind, descriptor};
     let mut owners = Owners::default();
     owners.nominals.insert(
-        path("Stdout"),
+        DefId::intern(&path("Stdout")),
         OwnerRepresentation::Handle {
             revision: ContentHash::of_bytes(b"stdout"),
             resource: false,
@@ -2264,17 +2262,16 @@ fn a_borrowed_handle_holding_capture_contributes_no_descriptor_steps() {
         },
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let tok = t.named(&token, vec![]);
     let i64_ = t.p(Primitive::I64);
     let boxed = t.boxed(i64_);
     let body = path("main");
     let captures = [(tok, Passing::Borrow), (boxed, Passing::Take)];
     let env = b
-        .environment(&EnvironmentShape {
-            definition: &body,
+        .environment(&t.store, &EnvironmentShape {
+            definition: DefId::intern(&body),
             body: 1,
-            store: &t.store,
             captures: &captures,
             sizes: &[],
             movable: &[],
@@ -2306,7 +2303,7 @@ fn bounded_packed_values_reserve_their_maximum_inside_ordinary_storage() {
     for target in [x86(), TargetSpec::aarch64_unknown_linux_gnu()] {
         let owners = Owners::default();
         let mut b = LayoutBuilder::new(&target, &owners);
-        let mut t = Ty::default();
+        let mut t = ty();
         let word = t.p(Primitive::U64);
         let choice = t.variant(&[&[word], &[word, word]]);
         let packed = t.builtin(BuiltinType::Packed, vec![GenericArgument::Type(choice)]);
@@ -2324,20 +2321,18 @@ fn bounded_packed_values_reserve_their_maximum_inside_ordinary_storage() {
             (word, Passing::Take),
         ];
         let env = b
-            .environment(&EnvironmentShape {
-                definition: &definition,
+            .environment(&t.store, &EnvironmentShape {
+                definition: DefId::intern(&definition),
                 body: 0,
-                store: &t.store,
                 captures: &captures,
                 sizes: &[],
                 movable: &[],
             })
             .unwrap();
         let movable = b
-            .environment(&EnvironmentShape {
-                definition: &definition,
+            .environment(&t.store, &EnvironmentShape {
+                definition: DefId::intern(&definition),
                 body: 1,
-                store: &t.store,
                 captures: &captures,
                 sizes: &[],
                 movable: &[0],
@@ -2385,12 +2380,12 @@ fn a_borrowed_cursor_may_be_noncopyable_without_owned_holders() {
     let mut owners = Owners::default();
     let cursor = path("Cursor");
     owners.nominals.insert(
-        cursor.clone(),
+        DefId::intern(&cursor.clone()),
         OwnerRepresentation::Cursor {
             revision: ContentHash::of_parts("test-cursor", [b"v1".as_slice()]),
         },
     );
-    let mut t = Ty::default();
+    let mut t = ty();
     let cursor_ty = t.named(&cursor, vec![]);
     let word = t.p(Primitive::U64);
     let plain = t.record(&[word]);
@@ -2426,7 +2421,7 @@ fn a_variant_owned_resource_field_is_distinct_from_a_borrowed_capture() {
             t.record(&[word])
         },
     );
-    let mut t = Ty::default();
+    let mut t = ty();
     let trace = t.named(&resource, vec![]);
     let option = t.variant(&[&[], &[trace]]);
     let mut b = LayoutBuilder::new(&x86(), &owners);
@@ -2434,10 +2429,9 @@ fn a_variant_owned_resource_field_is_distinct_from_a_borrowed_capture() {
     let body = path("main");
     let captures = [(trace, hirsel_core_contract::Passing::Borrow)];
     let environment = b
-        .environment(&EnvironmentShape {
-            definition: &body,
+        .environment(&t.store, &EnvironmentShape {
+            definition: DefId::intern(&body),
             body: 1,
-            store: &t.store,
             captures: &captures,
             sizes: &[],
             movable: &[],
@@ -2460,7 +2454,7 @@ fn byte_slices_and_source_byte_sequences_share_one_element_layout() {
     for target in TargetSpec::executed() {
         let owners = Owners::default();
         let mut b = LayoutBuilder::new(&target, &owners);
-        let mut types = Ty::default();
+        let mut types = ty();
         let byte = types.p(Primitive::U8);
         let bytes = types.p(Primitive::Bytes);
         let text = types.p(Primitive::String);
@@ -2509,7 +2503,7 @@ fn fixed_flat_values_and_elements_share_one_layout_in_every_request_order() {
     );
     for first in 0..3 {
         let mut b = LayoutBuilder::new(&x86(), &owners);
-        let mut t = Ty::default();
+        let mut t = ty();
         let ty = t.named(&fixed, vec![]);
         let boxed = t.boxed(ty);
         let list = t.list(ty);
@@ -2545,7 +2539,7 @@ fn fixed_flat_values_and_elements_share_one_layout_in_every_request_order() {
 fn a_flat_sequence_of_wide_scalars_marks_its_elements_unaligned() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let scalar = t.p(Primitive::U64);
     let list = t.list(scalar);
     let encoding = b.flat(&t.store, list).unwrap();
@@ -2559,7 +2553,7 @@ fn ordinary_environment_data_preserves_nested_borrowed_fields() {
     use hirsel_core_contract::Passing;
     let owners = Owners::default();
     let mut builder = LayoutBuilder::new(&x86(), &owners);
-    let mut types = Ty::default();
+    let mut types = ty();
     let text = types.p(Primitive::String);
     let text = builder.layout(&types.store, text).unwrap();
     let data = builder
@@ -2602,7 +2596,7 @@ fn a_borrow_without_runtime_holders_keeps_its_ordinary_field_copy_recipe() {
         },
         |t| t.p(Primitive::U64),
     );
-    let mut types = Ty::default();
+    let mut types = ty();
     let token = types.named(&token, vec![]);
     let mut builder = LayoutBuilder::new(&x86(), &owners);
     let token = builder.layout(&types.store, token).unwrap();
@@ -2623,7 +2617,7 @@ fn a_borrow_without_runtime_holders_keeps_its_ordinary_field_copy_recipe() {
 fn a_sequence_payload_holds_its_count_and_capacity_before_its_elements() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = ty();
     let (byte, wide) = (t.p(Primitive::U8), t.p(Primitive::U128));
     let (bytes, wides) = (t.list(byte), t.list(wide));
     let bytes = b.layout(&t.store, bytes).unwrap();
@@ -2656,7 +2650,7 @@ fn a_sequence_payload_holds_its_count_and_capacity_before_its_elements() {
 fn foreign_pointer_options_use_one_word_without_nested_option_collapse() {
     for target in TargetSpec::executed() {
         let owners = Owners::default();
-        let mut t = Ty::default();
+        let mut t = ty();
         let byte = t.p(Primitive::U8);
         let mut b = LayoutBuilder::new(&target, &owners);
         for kind in [BuiltinType::Ptr, BuiltinType::FnPtr] {
@@ -2713,7 +2707,7 @@ fn a_sequence_element_holding_its_owner_inline_waits_for_it() {
     let mut keys = vec![];
     for value_first in [true, false] {
         let mut b = LayoutBuilder::new(&x86(), &owners);
-        let mut t = Ty::default();
+        let mut t = ty();
         let (v, m) = (t.named(&value, vec![]), t.named(&member, vec![]));
         let (vid, mid) = if value_first {
             let vid = b.layout(&t.store, v).unwrap();
@@ -2736,7 +2730,7 @@ fn strings_and_bytes_share_physical_layouts_in_every_request_order() {
         for reverse in [false, true] {
             let owners = Owners::default();
             let mut b = LayoutBuilder::new(&target, &owners);
-            let mut types = Ty::default();
+            let mut types = ty();
             let text = types.p(Primitive::String);
             let bytes = types.p(Primitive::Bytes);
             assert_ne!(text, bytes);

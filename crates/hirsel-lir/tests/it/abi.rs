@@ -32,15 +32,14 @@ fn owner(
     promises: Layout,
     shape: impl FnOnce(&mut Ty) -> TypeId,
 ) {
-    let mut t = Ty::default();
+    let mut t = crate::support::ty();
     let private_shape = shape(&mut t);
     owners.nominals.insert(
-        path(name),
+        hirsel_syntax::DefId::intern(&path(name)),
         OwnerRepresentation::Defined(RepresentationRecord {
             definition: path(name),
             representation_revision: ContentHash::of_bytes(format!("{name}:{revision}").as_bytes()),
             generics: Vec::new(),
-            types: t.store,
             private_shape,
             layout_promises: promises,
             resource: false,
@@ -85,7 +84,7 @@ fn passing(abi: &FnAbi) -> Vec<(ParameterPassing, Vec<PhysicalSlot>, ScalarExten
 fn scalars_and_block_references_pass_by_value() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = crate::support::ty();
     let (i8_, u16_, b_, i128_, f64_, s, unit) = (
         t.p(Primitive::I8),
         t.p(Primitive::U16),
@@ -194,7 +193,7 @@ fn aggregates_and_nominals_pass_by_address_by_convention() {
         },
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = crate::support::ty();
     let (i64_, s) = (t.p(Primitive::I64), t.p(Primitive::String));
     let pair = t.record(&[i64_, s]);
     let meters = t.named(&path("Meters"), Vec::new());
@@ -264,7 +263,7 @@ fn aggregates_and_nominals_pass_by_address_by_convention() {
 fn thunks_take_an_environment_and_keep_multiplicity() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = crate::support::ty();
     let (i64_, unit) = (
         t.p(Primitive::I64),
         t.add(TypeKind::Tuple(Vec::new().into())),
@@ -305,7 +304,7 @@ fn thunks_take_an_environment_and_keep_multiplicity() {
 fn relations_never_change_an_fn_abi_but_conventions_do() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = crate::support::ty();
     let rel = |i| Modes {
         relation: Relation::parameters([BinderRef::bound(ParamId(i))]),
         uniqueness: if i == 0 {
@@ -323,7 +322,7 @@ fn relations_never_change_an_fn_abi_but_conventions_do() {
     let s0 = t.add_with(TypeKind::Primitive(Primitive::String), rel(0));
     let mut qualified = t.store.get(s0).unwrap().clone();
     qualified.sendability_requirement = hirsel_types::SendabilityRequirement::Sendable;
-    let s0 = t.store.push(qualified);
+    let s0 = t.store.intern(qualified);
     let s1 = t.add_with(TypeKind::Primitive(Primitive::String), rel(1));
     let r0 = t.record(&[s0]);
     let r1 = t.record(&[s1]);
@@ -350,7 +349,7 @@ fn relations_never_change_an_fn_abi_but_conventions_do() {
 /// One signature `fn(borrow Id, take List[Id]) -> Id` in a store whose rows
 /// are numbered differently, as an importer's public view would number them.
 fn signature(padding: usize) -> (Ty, TypeId) {
-    let mut t = Ty::default();
+    let mut t = crate::support::ty();
     for _ in 0..padding {
         t.p(Primitive::Bool);
     }
@@ -414,7 +413,7 @@ fn defining_and_public_views_agree_and_private_changes_move_only_layout_keys() {
 fn the_validator_rejects_abi_mutations() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = crate::support::ty();
     let (i32_, s) = (t.p(Primitive::I32), t.p(Primitive::String));
     let pair = t.record(&[i32_, s]);
     let f = t.function(
@@ -455,7 +454,7 @@ fn the_validator_rejects_abi_mutations() {
 fn direct_capture_parameters_have_no_hidden_environment_or_owned_result_loan() {
     let owners = Owners::default();
     let mut builder = LayoutBuilder::new(&x86(), &owners);
-    let mut types = Ty::default();
+    let mut types = crate::support::ty();
     let scalar = types.p(Primitive::U64);
     let text = types.p(Primitive::String);
     let callable = types.function(
@@ -495,7 +494,7 @@ fn direct_capture_parameters_have_no_hidden_environment_or_owned_result_loan() {
 fn extern_abis_take_no_context_and_return_a_scalar_or_nothing() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = crate::support::ty();
     let (i32_, s) = (t.p(Primitive::I32), t.p(Primitive::String));
     let plain = t.function(&[(PassingMode::Borrow, i32_)], i32_, Multiplicity::Many, 0);
     let text = t.function(&[], s, Multiplicity::Many, 0);
@@ -567,7 +566,7 @@ fn foreign_results_admit_one_pointer_niche_without_admitting_aggregates() {
             t.variant(&[&[], &[pointer]])
         });
         let mut b = LayoutBuilder::new(&target, &owners);
-        let mut t = Ty::default();
+        let mut t = crate::support::ty();
         let byte = t.p(Primitive::U8);
         let pointer = t.builtin(BuiltinType::Ptr, vec![GenericArgument::Type(byte)]);
         let option = t.named(&path("Optional"), vec![]);
@@ -611,7 +610,7 @@ fn callable_abis_retain_the_caller_site_carrier() {
     ] {
         let owners = Owners::default();
         let mut b = LayoutBuilder::new(&x86(), &owners);
-        let mut t = Ty::default();
+        let mut t = crate::support::ty();
         let unit = t.add(TypeKind::Tuple(Vec::new().into()));
         let f = t.function(&[], unit, Multiplicity::Many, 0);
         let id = b.fn_abi(&t.store, f, shape).unwrap();
@@ -632,7 +631,7 @@ fn callable_abis_retain_the_caller_site_carrier() {
 fn foreign_abis_have_no_caller_site_carrier() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
-    let mut t = Ty::default();
+    let mut t = crate::support::ty();
     let unit = t.add(TypeKind::Tuple(Vec::new().into()));
     let plain = t.function(&[], unit, Multiplicity::Many, 0);
     let mut row = t.store.get(plain).unwrap().clone();
@@ -644,7 +643,7 @@ fn foreign_abis_have_no_caller_site_carrier() {
         blocking: false,
         aliasing_contract: "No arguments or result.".into(),
     });
-    let foreign = t.store.push(row);
+    let foreign = t.store.intern(row);
     let id = b.fn_abi(&t.store, foreign, CallableShape::Foreign).unwrap();
     assert!(b.with_caller_site(id).is_err());
     let mut table = checked(b);

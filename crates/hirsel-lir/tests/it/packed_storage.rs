@@ -302,8 +302,8 @@ fn derive_packed_list(
     use hirsel_layout::layout::{LayoutBuilder, Owners};
 
     use hirsel_types::*;
-    let mut store = TypeStore::default();
-    let mut add = |kind| store.push(Type::with_kind(kind));
+    let store = crate::support::session();
+    let add = |kind| store.intern(Type::with_kind(kind));
     let u = add(TypeKind::Primitive(Primitive::U64));
     let x = add(TypeKind::Primitive(extra));
     let choice = add(TypeKind::Variant(

@@ -1587,16 +1587,16 @@ mod instance_keys {
     use hirsel_types::{
         Brand, GenericArgument, Modes, Origin, OriginRoot, ParamId, ParameterRef, Primitive, Reach,
         Relation, Sendability, Size, SizeParamId, SizeParameterRef, Type, TypeKind, TypeParamId,
-        TypeParameterRef, TypeStore, Uniqueness,
+        TypeInterner, TypeParameterRef, Uniqueness,
     };
 
-    fn element(store: &mut TypeStore, modes: Modes, brand: Brand) -> hirsel_types::TypeId {
-        let int = store.push(Type {
+    fn element(store: &TypeInterner, modes: Modes, brand: Brand) -> hirsel_types::TypeId {
+        let int = store.intern(Type {
             kind: TypeKind::Primitive(Primitive::I64),
             modes: modes.clone(),
             ..Type::unit()
         });
-        store.push(Type {
+        store.intern(Type {
             kind: TypeKind::Builtin {
                 kind: hirsel_types::BuiltinType::List,
                 arguments: vec![GenericArgument::Type(int)].into(),
@@ -1608,7 +1608,7 @@ mod instance_keys {
     }
 
     fn key(
-        store: &TypeStore,
+        store: &TypeInterner,
         actual: hirsel_types::TypeId,
         size: u64,
         binder: TypeParameterRef,
@@ -1635,15 +1635,15 @@ mod instance_keys {
 
     #[test]
     fn keys_erase_relation_brand_uniqueness_and_sendability_but_not_sizes_or_binders() {
-        let mut store = TypeStore::default();
+        let store = crate::support::session();
         let binder = TypeParameterRef::bound(TypeParamId(0));
-        let plain = element(&mut store, Modes::global(), Brand::default());
+        let plain = element(&store, Modes::global(), Brand::default());
         let place = Origin {
             root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
             fields: vec![].into(),
         };
         let related = element(
-            &mut store,
+            &store,
             Modes {
                 relation: Relation::new([Reach::Place(place.clone())]),
                 ..Modes::global()
@@ -1651,14 +1651,14 @@ mod instance_keys {
             Brand::default(),
         );
         let branded = element(
-            &mut store,
+            &store,
             Modes::global(),
             Brand {
                 alternatives: vec![place].into(),
             },
         );
         let unique = element(
-            &mut store,
+            &store,
             Modes {
                 uniqueness: Uniqueness::Unique,
                 ..Modes::global()
@@ -1666,7 +1666,7 @@ mod instance_keys {
             Brand::default(),
         );
         let sendable = element(
-            &mut store,
+            &store,
             Modes {
                 sendability: Sendability::Sendable,
                 ..Modes::global()
@@ -1675,7 +1675,7 @@ mod instance_keys {
         );
         let mut requirement = store.get(plain).unwrap().clone();
         requirement.sendability_requirement = hirsel_types::SendabilityRequirement::Sendable;
-        let requirement = store.push(requirement);
+        let requirement = store.intern(requirement);
         let base = key(&store, plain, 4, binder);
         for (label, actual) in [
             ("crossing requirement", requirement),
@@ -1688,9 +1688,9 @@ mod instance_keys {
             assert_eq!(base, other, "an actual's {label} changed the key");
             assert_eq!(base.digest(), other.digest());
         }
-        // Keys from an independent store with fresh TypeIds are equal too.
-        let mut fresh = TypeStore::default();
-        let again = element(&mut fresh, Modes::global(), Brand::default());
+        // Keys from an independent interner with fresh TypeIds are equal too.
+        let fresh = TypeInterner::new(None);
+        let again = element(&fresh, Modes::global(), Brand::default());
         assert_eq!(base, key(&fresh, again, 4, binder));
 
         assert_ne!(base, key(&store, plain, 5, binder), "size actual");
@@ -1726,7 +1726,7 @@ mod instance_keys {
             ),
             "binder scope"
         );
-        let int = store.push(Type {
+        let int = store.intern(Type {
             kind: TypeKind::Primitive(Primitive::I64),
             ..Type::unit()
         });
@@ -1735,8 +1735,8 @@ mod instance_keys {
 
     #[test]
     fn keys_reject_incomplete_mismatched_and_foreign_actuals() {
-        let mut store = TypeStore::default();
-        let open = store.push(Type {
+        let store = crate::support::session();
+        let open = store.intern(Type {
             kind: TypeKind::Parameter(TypeParameterRef::body(
                 hirsel_syntax::LexicalOwner::first(&path("f")).site(hirsel_types::NameSite::Item),
                 TypeParamId(0),
@@ -1744,7 +1744,7 @@ mod instance_keys {
             ..Type::unit()
         });
         let binder = ActualBinder::Type(TypeParameterRef::bound(TypeParamId(0)));
-        let make = |store: &TypeStore, binder, actual| {
+        let make = |store: &TypeInterner, binder, actual| {
             InstanceKey::new(&path("f"), 0, &[(binder, actual)], store, None, None)
         };
         assert_eq!(
@@ -1755,26 +1755,27 @@ mod instance_keys {
             make(&store, binder, GenericArgument::Size(Size::Constant(1))).unwrap_err(),
             InstanceKeyError::KindMismatch(0)
         );
-        let mut other = TypeStore::default();
-        let foreign = other.push(Type::unit());
-        let _ = other.push(Type::unit());
-        let foreign_second = other.id(1).unwrap();
+        // A TypeId with no row in the session interner.
         assert_eq!(
-            make(&store, binder, GenericArgument::Type(foreign_second)).unwrap_err(),
+            make(
+                &store,
+                binder,
+                GenericArgument::Type(hirsel_types::TypeId::DANGLING)
+            )
+            .unwrap_err(),
             InstanceKeyError::MissingType
         );
-        let _ = foreign;
     }
 
     #[test]
     fn instance_views_reject_foreign_type_ids_and_non_bijective_remaps() {
-        let mut store = TypeStore::default();
-        let unit_ty = store.push(Type::unit());
+        let store = crate::support::session();
+        let unit_ty = store.intern(Type::unit());
         let definition = std::sync::Arc::new(hirsel_tir::Definition {
             caller_bodies: vec![],
             protocol_associations: vec![],
-            types: store.clone(),
-            path: path("f"),
+            types: vec![unit_ty].into(),
+            path: hirsel_syntax::DefId::intern(&path("f")),
             signature_hash: hash("f signature"),
             bodies: vec![super::tir_coverage_body()],
             entry: hirsel_tir::BodyId(0),
@@ -1787,7 +1788,6 @@ mod instance_keys {
             body: hirsel_tir::BodyId(0),
             owner: CallableShape::Definition,
             substitution: Substitution {
-                store: store.clone(),
                 types: vec![(TypeParameterRef::bound(TypeParamId(0)), unit_ty)],
                 sizes: vec![(SizeParameterRef::bound(SizeParamId(0)), 8)],
             },
@@ -1809,24 +1809,23 @@ mod instance_keys {
             }],
             caller_destination: false,
         };
-        assert_eq!(view.check_identity(), Ok(()));
+        assert_eq!(view.check_identity(&store), Ok(()));
         let mut foreign = view.clone();
-        let mut other = TypeStore::default();
-        foreign.substitution.types[0].1 = other.push(Type::unit());
+        foreign.substitution.types[0].1 = hirsel_types::TypeId::DANGLING;
         assert!(matches!(
-            foreign.check_identity(),
+            foreign.check_identity(&store),
             Err(SchemaError::ForeignId { kind: "TypeId", .. })
         ));
         let mut not_bijective = view.clone();
         not_bijective.parameters[1].instance = 1;
         assert!(matches!(
-            not_bijective.check_identity(),
+            not_bijective.check_identity(&store),
             Err(SchemaError::Malformed(_))
         ));
         let mut wrong_body = view.clone();
         wrong_body.body = hirsel_tir::BodyId(4);
         assert!(matches!(
-            wrong_body.check_identity(),
+            wrong_body.check_identity(&store),
             Err(SchemaError::ForeignId { .. })
         ));
     }
@@ -1845,7 +1844,7 @@ fn tir_coverage_body() -> hirsel_tir::Body {
         cleanup_nodes: Vec::new(),
         entry: hirsel_tir::BlockId(0),
         parameters: Vec::new(),
-        result: hirsel_types::TypeStore::default().push(hirsel_types::Type::unit()),
+        result: crate::support::session().intern(hirsel_types::Type::unit()),
         tail_sites: Vec::new(),
         matches: Vec::new(),
     }

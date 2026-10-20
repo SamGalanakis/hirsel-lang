@@ -19,6 +19,32 @@ use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId};
 
 pub use hirsel_lir::validate::ViolationKind as K;
 
+thread_local! {
+    /// A test's session interner: every type row a test builds, owner shapes
+    /// and operation signatures included, lives in it, as in a compile session.
+    static SESSION: std::sync::Arc<hirsel_types::TypeInterner> =
+        hirsel_types::TypeInterner::new(None);
+}
+
+/// This test thread's session interner.
+pub fn session() -> std::sync::Arc<hirsel_types::TypeInterner> {
+    SESSION.with(|s| s.clone())
+}
+
+/// A type builder over this test thread's session interner.
+pub fn ty() -> hirsel_types::testing::Types {
+    hirsel_types::testing::Types { store: session() }
+}
+
+/// An operation registry over this test thread's session interner.
+pub fn registry() -> hirsel_layout::operation::OperationRegistry {
+    hirsel_layout::operation::OperationRegistry {
+        types: session(),
+        signatures: Default::default(),
+        owners: Default::default(),
+    }
+}
+
 /// The outermost scope every fixture unit has.
 pub const ROOT: ScopeId = ScopeId(0);
 
@@ -573,7 +599,7 @@ impl<S: Stage> Lir<S> {
         let mut lir = Self {
             builder: UnitBuilder::new(unit),
             table,
-            operations: Default::default(),
+            operations: registry(),
             manifest: manifest(Disposition::RuntimePrimitive("hirsel_rt_op".into())),
             types: Vec::new(),
             own: (params.to_vec(), result),
@@ -598,10 +624,11 @@ impl<S: Stage> Lir<S> {
         abi: FnAbiId,
     ) {
         let operation = OperationId {
-            definition: signature.definition.clone(),
+            definition: signature.definition.path().clone(),
             declaration_digest: signature.fingerprint,
         };
         self.operations = hirsel_layout::operation::OperationRegistry {
+            types: session(),
             signatures: [(operation.clone(), signature)].into(),
             owners,
         };
