@@ -82,7 +82,7 @@ impl Shapes {
                 pending.extend(children.into_iter().map(|c| (c, false)));
                 continue;
             }
-            work::count(Counter::EqualityRows);
+            work::count(Counter::TypeNormalRows);
             let height = children
                 .iter()
                 .map(|c| self.heights[c].expect("a valid graph's rows have heights"))

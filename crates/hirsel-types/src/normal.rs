@@ -107,15 +107,19 @@ pub(crate) fn validate(t: &TypeInterner, root: TypeId) -> Result<(), GraphError>
 
 /// Map a valid graph bottom-up: each row's normal form is `local` of the row
 /// with its edges replaced by their children's normal forms. Memoized in the
-/// slot `memo` selects; a normal-form row is its own normal form.
+/// slot `memo` selects; a normal-form row is its own normal form. `sem`
+/// selects the semantic form, the one `InternerStats` counts.
 fn normalize(
     t: &TypeInterner,
     root: TypeId,
     memo: fn(&Entry) -> &OnceLock<TypeId>,
     local: fn(&Type) -> Type,
+    sem: bool,
 ) -> TypeId {
     if let Some(id) = t.entry(root).and_then(|e| memo(e).get()) {
-        t.count_sem(true);
+        if sem {
+            t.count_sem(true);
+        }
         return *id;
     }
     if !t.valid(root) {
@@ -147,7 +151,10 @@ fn normalize(
                 .expect("children are normalized before their parent")
         });
         let normal = t.intern(row);
-        t.count_sem(false);
+        if sem {
+            t.count_sem(false);
+        }
+        hirsel_intern::work::count(hirsel_intern::work::Counter::TypeNormalRows);
         let _ = memo(entry).set(normal);
         if let Some(entry) = t.entry(normal) {
             let _ = memo(entry).set(normal);
@@ -212,11 +219,11 @@ fn shape_row(row: &Type) -> Type {
 }
 
 pub(crate) fn sem(t: &TypeInterner, id: TypeId) -> TypeId {
-    normalize(t, id, |e| &e.sem, semantic_row)
+    normalize(t, id, |e| &e.sem, semantic_row, true)
 }
 pub(crate) fn strip_modes(t: &TypeInterner, id: TypeId) -> TypeId {
-    normalize(t, id, |e| &e.strip_modes, modeless_row)
+    normalize(t, id, |e| &e.strip_modes, modeless_row, false)
 }
 pub(crate) fn shape(t: &TypeInterner, id: TypeId) -> TypeId {
-    normalize(t, id, |e| &e.shape, shape_row)
+    normalize(t, id, |e| &e.shape, shape_row, false)
 }

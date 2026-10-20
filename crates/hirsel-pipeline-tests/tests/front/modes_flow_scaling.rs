@@ -95,9 +95,9 @@ fn sendable_generic_calls_and_fresh_values_do_not_copy_the_body_type_store() {
     with_compiler_stack(|| {
         // The receiving view of each call and each fresh value's unique row
         // once copied every row of the body's store: calls times rows.
-        let [small] = measure_counters(sendable_calls(32), [Counter::CopiedTypeRows]);
-        let [large] = measure_counters(sendable_calls(128), [Counter::CopiedTypeRows]);
-        eprintln!("copied type rows: n=32 {small}, n=128 {large}");
+        let [small] = measure_counters(sendable_calls(32), [Counter::InternedTypeRows]);
+        let [large] = measure_counters(sendable_calls(128), [Counter::InternedTypeRows]);
+        eprintln!("new type rows: n=32 {small}, n=128 {large}");
         assert!(large <= 8 * small + 1024, "small {small}, large {large}");
     });
 }

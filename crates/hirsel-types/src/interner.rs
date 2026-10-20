@@ -152,8 +152,11 @@ pub struct InternerStats {
     pub row_bytes: u64,
     /// Nanoseconds spent waiting for a shard's write lock.
     pub lock_wait_ns: u64,
+    /// Rows whose semantic normal form was computed, and `sem` calls the
+    /// memo answered.
     pub sem_computed: u64,
     pub sem_hits: u64,
+    /// Graphs validated, and `validate` calls the memo answered.
     pub valid_computed: u64,
     pub valid_hits: u64,
 }
@@ -248,6 +251,7 @@ impl TypeInterner {
             .row_bytes
             .fetch_add(row_bytes(&row), Ordering::Relaxed);
         self.entries.set(local, Entry::new(row));
+        hirsel_intern::work::count(hirsel_intern::work::Counter::InternedTypeRows);
         TypeId::at(position)
     }
 

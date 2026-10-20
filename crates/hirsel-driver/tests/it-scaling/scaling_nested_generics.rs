@@ -19,17 +19,17 @@ fn nested_generic_instantiations_compare_structurally_once() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             let file = engine.sources.add("nested-generics.hir", source).unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
-            let before = hirsel_intern::work::read(hirsel_intern::work::Counter::EqualityRows);
+            let before = hirsel_intern::work::read(hirsel_intern::work::Counter::TypeNormalRows);
             let output = engine
                 .mode_definition(&parsed.value.items[2].item.definition)
                 .unwrap();
             assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-            hirsel_intern::work::read(hirsel_intern::work::Counter::EqualityRows) - before
+            hirsel_intern::work::read(hirsel_intern::work::Counter::TypeNormalRows) - before
         };
         let (half, full) = (work(32), work(64));
         assert!(
             full <= 5 * half,
-            "{half} equality rows at depth 32, {full} at depth 64"
+            "{half} normalized type rows at depth 32, {full} at depth 64"
         );
     });
 }

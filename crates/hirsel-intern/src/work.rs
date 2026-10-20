@@ -6,12 +6,13 @@ use std::cell::Cell;
 /// One measured kind of work, named for its owner and unit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Counter {
-    /// Type rows copied when a shared store detaches on append or truncate.
-    CopiedTypeRows,
+    /// Rows a session type interner adds: row content no earlier row had.
+    InternedTypeRows,
     /// Declaration rows copied into shared generic declaration snapshots.
     CopiedGenericDeclarationRows,
-    /// Row inspections by rooted semantic equality.
-    EqualityRows,
+    /// Rows normalized once for their semantic, mode-erased or shape normal
+    /// form, or given a nominal-expansion height.
+    TypeNormalRows,
     /// Private ownership-state rows copied by V's shared snapshots.
     ValidateCopiedRows,
     /// V's scope-index construction, search, selected-local and ordering work.

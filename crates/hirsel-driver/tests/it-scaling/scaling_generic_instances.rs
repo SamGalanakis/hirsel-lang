@@ -17,17 +17,17 @@ fn generic_instance_calls_copy_no_body_rows_per_call() {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             let file = engine.sources.add("generic-instances.hir", source).unwrap();
             let parsed = engine.parse_file(file, &default_context()).unwrap();
-            let before = hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows);
+            let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows);
             let output = engine
                 .mode_definition(&parsed.value.items[2].item.definition)
                 .unwrap();
             assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-            hirsel_intern::work::read(hirsel_intern::work::Counter::CopiedTypeRows) - before
+            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) - before
         };
         let (half, full) = (work(64), work(128));
         assert!(
             full <= 3 * half + 1024,
-            "{half} copied type rows for 64 calls, {full} for 128"
+            "{half} new type rows for 64 calls, {full} for 128"
         );
     });
 }
