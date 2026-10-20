@@ -808,6 +808,18 @@ impl Checker<'_, '_> {
                                     "{name} is not a variant of {type_name}; variants: {names}"
                                 ),
                             );
+                            if path.package.is_none() && path.segments.len() == 1 {
+                                let span = self.span(id);
+                                let name_span =
+                                    (span.end - span.start == name.len() as u32).then_some(span);
+                                hirsel_diag::suggest_names(
+                                    self.diagnostics.last_mut().unwrap(),
+                                    &name,
+                                    variants.into_iter().map(|v| v.name),
+                                    "",
+                                    name_span,
+                                );
+                            }
                             return Ok(self.error());
                         }
                     }

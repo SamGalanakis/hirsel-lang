@@ -290,6 +290,31 @@ impl ManifestIndex {
             })
     }
 
+    /// Accessible replacements for one path segment. Reuse real lookup so
+    /// dependency aliases, module precedence, ambiguity and privacy agree.
+    pub(crate) fn candidate_names(
+        &self,
+        context: &FileContext,
+        package: Option<&PackageId>,
+        segments: &[String],
+        segment: usize,
+    ) -> Vec<String> {
+        let mut names = BTreeSet::new();
+        for definition in self.entries.keys() {
+            names.insert(definition.0.name.clone());
+            names.extend(definition.0.modules.iter().cloned());
+        }
+        names.extend(self.heads.keys().cloned());
+        names
+            .into_iter()
+            .filter(|name| {
+                let mut candidate = segments.to_vec();
+                candidate[segment] = name.clone();
+                self.lookup_spelling(context, package, &candidate).is_ok()
+            })
+            .collect()
+    }
+
     pub fn lookup(&self, context: &FileContext, path: &Path) -> Result<DefPath, LookupError> {
         let segments: Vec<_> = path
             .segments

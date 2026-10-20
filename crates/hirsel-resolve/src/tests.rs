@@ -817,3 +817,76 @@ fn invalid_manifest_paths_have_a_prog1_diagnostic_at_the_manifest_site() {
     assert_eq!(diagnostics[0].rule.as_str(), "PROG-1");
     assert_eq!(diagnostics[0].primary, invalid.span);
 }
+
+#[test]
+fn near_miss_candidates_follow_exposure_visibility_and_module_precedence() {
+    let dep = package("library", "1");
+    let mut f = fixture(vec![
+        entry(own("length"), Namespace::Value, Visibility::Private),
+        entry(
+            definition(dep.clone(), &["text"], "len"),
+            Namespace::Value,
+            Visibility::Public,
+        ),
+        entry(
+            definition(dep.clone(), &["text"], "secret"),
+            Namespace::Value,
+            Visibility::Private,
+        ),
+        entry(
+            definition(dep.clone(), &["internal"], "hidden"),
+            Namespace::Value,
+            Visibility::Public,
+        ),
+        entry(
+            definition(dep.clone(), &["other"], "length"),
+            Namespace::Value,
+            Visibility::Public,
+        ),
+    ]);
+    f.exposures.push(DependencyExposure {
+        head: "words".into(),
+        package: dep.clone(),
+        modules: vec!["text".into()],
+    });
+    f.exposures.push(DependencyExposure {
+        head: "hidden".into(),
+        package: dep.clone(),
+        modules: vec!["internal".into()],
+    });
+    let (index, errors) = ManifestIndex::new(f);
+    assert!(errors.is_empty());
+    let context = FileContext {
+        package: package("test", "1"),
+        modules: vec![],
+    };
+    assert_eq!(
+        index.candidate_names(&context, None, &["words".into(), "lne".into()], 1),
+        ["len"]
+    );
+    assert_eq!(
+        index.candidate_names(&context, None, &["lne".into()], 0),
+        ["length"]
+    );
+    assert!(
+        index
+            .candidate_names(&context, None, &["hidden".into(), "hiden".into()], 1)
+            .is_empty()
+    );
+    let mut exposures = vec![DependencyExposure {
+        head: "words".into(),
+        package: dep,
+        modules: vec!["text".into()],
+    }];
+    exposures.push(DependencyExposure {
+        head: "words".into(),
+        package: package("other", "1"),
+        modules: vec![],
+    });
+    let ambiguous = index.with_exposures(&exposures);
+    assert!(
+        ambiguous
+            .candidate_names(&context, None, &["words".into(), "lne".into()], 1)
+            .is_empty()
+    );
+}

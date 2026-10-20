@@ -310,6 +310,124 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
         }
         result
     }
+    // Token tape, rather than the enclosing call/type span, proves the edit
+    // only replaces the misspelled identifier. Absent tape means help only.
+    fn name_span(&self, span: Span, name: Symbol, last: bool) -> Option<Span> {
+        let mut tokens = self.syntax.tree.tokens.iter().filter(|token| {
+            token.span.anchor == span.anchor
+                && token.span.start >= span.start
+                && token.span.end <= span.end
+                && token.kind == TokenKind::Ident(name)
+        });
+        if last {
+            tokens.next_back()
+        } else {
+            tokens.next()
+        }
+        .map(|t| t.span)
+    }
+    fn suggest_field(&mut self, span: Span, name: Symbol, candidates: Vec<String>, prefix: &str) {
+        let name_span = self.name_span(span, name, true);
+        let spelling = self.spelling(name);
+        if let Some(diagnostic) = self.output.query.diagnostics.last_mut() {
+            hirsel_diag::suggest_names(diagnostic, &spelling, candidates, prefix, name_span);
+        }
+    }
+    fn path_name_span(&self, path: &Path, span: Span, segment: usize) -> Option<Span> {
+        let tokens: Vec<_> = self
+            .syntax
+            .tree
+            .tokens
+            .iter()
+            .filter(|token| {
+                token.span.anchor == span.anchor
+                    && token.span.start >= span.start
+                    && token.span.end <= span.end
+                    && !matches!(token.kind, TokenKind::Trivia(_))
+            })
+            .collect();
+        let start = if path.package.is_some() {
+            tokens
+                .iter()
+                .position(|t| t.kind == TokenKind::Punct(Punct::Slash))?
+                + 1
+        } else {
+            let head = *path.segments.first()?;
+            tokens
+                .iter()
+                .position(|t| t.kind == TokenKind::Ident(head))?
+        };
+        for (i, name) in path.segments.iter().enumerate() {
+            if tokens.get(start + i * 2)?.kind != TokenKind::Ident(*name) {
+                return None;
+            }
+            if i > 0
+                && !matches!(
+                    tokens.get(start + i * 2 - 1)?.kind,
+                    TokenKind::Punct(Punct::Dot | Punct::Slash)
+                )
+            {
+                return None;
+            }
+        }
+        Some(tokens.get(start + segment * 2)?.span)
+    }
+    fn suggest_path(&mut self, path: &Path, span: Span) {
+        let segments: Vec<_> = path.segments.iter().map(|s| self.spelling(*s)).collect();
+        // Prefer a member typo; then try a misspelled module head.
+        for segment in (0..segments.len()).rev() {
+            let mut candidates = self.index.candidate_names(
+                &self.context,
+                path.package.as_ref(),
+                &segments,
+                segment,
+            );
+            if path.package.is_none() && segments.len() == 1 {
+                for scope in &self.scopes {
+                    candidates.extend(
+                        scope
+                            .values
+                            .keys()
+                            .chain(scope.generics.keys())
+                            .map(|s| self.spelling(*s)),
+                    );
+                }
+            }
+            let prefix = if let Some(package) = &path.package {
+                format!(
+                    "{}@{}/{}",
+                    package.name,
+                    package.version,
+                    segments[..segment]
+                        .iter()
+                        .map(|s| format!("{s}/"))
+                        .collect::<String>()
+                )
+            } else {
+                segments[..segment]
+                    .iter()
+                    .map(|s| format!("{s}."))
+                    .collect()
+            };
+            let name_span = self.path_name_span(path, span, segment);
+            if let Some(diagnostic) = self.output.query.diagnostics.last_mut() {
+                hirsel_diag::suggest_names(
+                    diagnostic,
+                    &segments[segment],
+                    candidates,
+                    &prefix,
+                    name_span,
+                );
+                if diagnostic
+                    .notes
+                    .iter()
+                    .any(|n| n.starts_with("help: did you mean"))
+                {
+                    break;
+                }
+            }
+        }
+    }
     fn lookup_diagnostic(&mut self, result: &LookupError, path: &Path, span: Span) {
         let segments = path
             .segments
@@ -382,6 +500,9 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 span,
                 "definition is not visible from this package/module",
             ),
+        }
+        if matches!(result, LookupError::Missing | LookupError::MissingMember(_)) {
+            self.suggest_path(path, span);
         }
     }
     fn signature(&mut self, definition: &DefPath) -> Option<ty::SignatureRef> {
@@ -1057,6 +1178,14 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 span,
                 "unresolved sibling field name",
             );
+            if let Some(name) = path.segments.first() {
+                let names = self
+                    .sibling_fields
+                    .keys()
+                    .map(|s| self.spelling(*s))
+                    .collect();
+                self.suggest_field(span, *name, names, "");
+            }
             return;
         };
         self.output.contextual.push((
@@ -1068,7 +1197,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             },
         ));
         let mut expected = self.syntax_expected(written_type);
-        for name in &path.segments[1..] {
+        for (segment, name) in path.segments.iter().enumerate().skip(1) {
             let ExpectedType::Named {
                 definition: owner,
                 arguments,
@@ -1078,6 +1207,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 return;
             };
             let shape = self.shape(&owner, &arguments);
+            let field_names: Vec<_> = shape.fields.iter().map(|(name, _)| name.clone()).collect();
             let Some((i, (_, field_type))) = shape
                 .fields
                 .into_iter()
@@ -1088,6 +1218,15 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                     const { RuleId::of("LANG-4") },
                     span,
                     "unresolved sibling projection field",
+                );
+                let name_span = self.path_name_span(path, span, segment);
+                let spelling = self.spelling(*name);
+                hirsel_diag::suggest_names(
+                    self.output.query.diagnostics.last_mut().unwrap(),
+                    &spelling,
+                    field_names,
+                    "",
+                    name_span,
                 );
                 return;
             };
@@ -1738,6 +1877,8 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                         return ExpectedType::Unknown;
                     }
                     let shape = self.shape(&owner, &arguments);
+                    let field_names: Vec<_> =
+                        shape.fields.iter().map(|(name, _)| name.clone()).collect();
                     if let Some((i, (_, field_type))) = shape
                         .fields
                         .into_iter()
@@ -1772,6 +1913,16 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                             span,
                             "unresolved field name",
                         );
+                        let prefix = self
+                            .dot_path(id)
+                            .map(|path| {
+                                path.segments[..path.segments.len() - 1]
+                                    .iter()
+                                    .map(|s| format!("{}.", self.spelling(*s)))
+                                    .collect::<String>()
+                            })
+                            .unwrap_or_default();
+                        self.suggest_field(span, field, field_names, &prefix);
                     }
                 } else {
                     self.defer(NameSite::Expression(id), field, span);
@@ -2045,6 +2196,31 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                         &format!("before `.`, `{head}` names a module; rename the local `{head}` to access its fields"));
                 } else {
                     self.lookup_diagnostic(&e, path, span);
+                    if path.package.is_none()
+                        && path.segments.len() == 1
+                        && matches!(e, LookupError::Missing)
+                        && let ExpectedType::Named {
+                            definition,
+                            arguments,
+                        } = &expected
+                        && self.representation_visible(definition, span)
+                    {
+                        let variants: Vec<_> = self
+                            .shape(definition, arguments)
+                            .variants
+                            .into_iter()
+                            .map(|(n, _)| n)
+                            .collect();
+                        let name_span = self.path_name_span(path, span, 0);
+                        let spelling = self.spelling(path.segments[0]);
+                        hirsel_diag::suggest_names(
+                            self.output.query.diagnostics.last_mut().unwrap(),
+                            &spelling,
+                            variants,
+                            "",
+                            name_span,
+                        );
+                    }
                 }
                 ExpectedType::Unknown
             }
@@ -2064,7 +2240,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             self.output.reference_scopes.push((site.clone(), owner));
         }
         let mut expected = binding.expected;
-        for field in &path.segments[1..] {
+        for (segment, field) in path.segments.iter().enumerate().skip(1) {
             if let ExpectedType::Named {
                 definition: owner,
                 arguments,
@@ -2074,6 +2250,8 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                     return Some((binding.name, ExpectedType::Unknown));
                 }
                 let shape = self.shape(&owner, &arguments);
+                let field_names: Vec<_> =
+                    shape.fields.iter().map(|(name, _)| name.clone()).collect();
                 if let Some((i, (_, ty))) = shape
                     .fields
                     .into_iter()
@@ -2109,6 +2287,19 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                         rule,
                         span,
                         "unresolved field name; methods are not supported",
+                    );
+                    let prefix = path.segments[..segment]
+                        .iter()
+                        .map(|s| format!("{}.", self.spelling(*s)))
+                        .collect::<String>();
+                    let name_span = self.path_name_span(path, span, segment);
+                    let spelling = self.spelling(*field);
+                    hirsel_diag::suggest_names(
+                        self.output.query.diagnostics.last_mut().unwrap(),
+                        &spelling,
+                        field_names,
+                        &prefix,
+                        name_span,
                     );
                     expected = ExpectedType::Unknown;
                 }
@@ -2490,6 +2681,31 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                                 );
                             } else {
                                 self.lookup_diagnostic(&e, &path, node.origin.span);
+                                if matches!(e, LookupError::Missing)
+                                    && path.package.is_none()
+                                    && path.segments.len() == 1
+                                    && let ExpectedType::Named {
+                                        definition,
+                                        arguments,
+                                    } = &expected
+                                    && self.representation_visible(definition, node.origin.span)
+                                {
+                                    let names: Vec<_> = self
+                                        .shape(definition, arguments)
+                                        .variants
+                                        .into_iter()
+                                        .map(|(n, _)| n)
+                                        .collect();
+                                    let name_span = self.path_name_span(&path, node.origin.span, 0);
+                                    let spelling = self.spelling(path.segments[0]);
+                                    hirsel_diag::suggest_names(
+                                        self.output.query.diagnostics.last_mut().unwrap(),
+                                        &spelling,
+                                        names,
+                                        "",
+                                        name_span,
+                                    );
+                                }
                             }
                         }
                     }
@@ -2517,6 +2733,24 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                             const { RuleId::of("LANG-4") },
                             node.origin.span,
                             "unresolved pattern field name",
+                        );
+                        let names: Vec<_> =
+                            field_types.iter().filter_map(|(n, _)| n.clone()).collect();
+                        let label = field.label.unwrap();
+                        let before = self.syntax.tree.patterns[field.pattern.0 as usize]
+                            .origin
+                            .span
+                            .start;
+                        let label_span =
+                            Span::new(node.origin.span.anchor, node.origin.span.start, before)
+                                .and_then(|span| self.name_span(span, label, true));
+                        let spelling = self.spelling(label);
+                        hirsel_diag::suggest_names(
+                            self.output.query.diagnostics.last_mut().unwrap(),
+                            &spelling,
+                            names,
+                            "",
+                            label_span,
                         );
                     }
                     self.pattern(

@@ -1,0 +1,8 @@
+// rule: LANG-4
+// expect: reject LANG-4 at line 7
+// twin: LANG/LANG-4-near-miss-variant-ok.hir
+type State = Ready | Waiting
+
+fn example() -> State {
+  Readyy
+}

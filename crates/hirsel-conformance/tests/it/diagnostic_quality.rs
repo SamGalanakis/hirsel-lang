@@ -144,3 +144,84 @@ fn diagnostic_json_has_a_help_note_and_no_unrendered_placeholder() {
         }
     });
 }
+
+#[test]
+fn near_miss_help_and_json_fixes_recheck_corpus() {
+    hirsel_engine::with_compiler_stack(|| {
+        for (kind, before, after, help) in [
+            (
+                "std",
+                "starts_wtih",
+                "starts_with",
+                "help: did you mean `string.starts_with`?",
+            ),
+            (
+                "field",
+                "lenght",
+                "length",
+                "help: did you mean `x.length`?",
+            ),
+            ("variant", "Readyy", "Ready", "help: did you mean `Ready`?"),
+        ] {
+            let case = format!("conformance/LANG/LANG-4-near-miss-{kind}-bad.hir");
+            let output = checked(&case);
+            let diagnostic = output.diagnostics.first().expect("rejected typo");
+            assert_eq!(
+                diagnostic.rule.as_str(),
+                "LANG-4",
+                "{case}: {:?}",
+                output.diagnostics
+            );
+            assert_eq!(diagnostic.notes, [help], "{case}");
+            assert!(diagnostic.render_human(&output.sources).contains(help));
+            let json = diagnostic.to_json(&output.sources);
+            assert_eq!(json["notes"], serde_json::json!([help]));
+            let fix = diagnostic.fix.as_ref().expect("one precise suggestion");
+            assert_eq!(output.sources.slice(fix.span), Some(before), "{case}");
+            assert_eq!(json["fix"]["replacement"], after);
+            let mut source = std::fs::read_to_string(root().join(&case)).unwrap();
+            let at = output.sources.resolve(fix.span);
+            source.replace_range(at.start as usize..at.end as usize, &fix.replacement);
+            let dir = std::env::temp_dir()
+                .join(format!("hirsel-near-miss-{}-{kind}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("repair.hir");
+            std::fs::write(&path, source).unwrap();
+            let sidecar = root().join(format!("{case}.json"));
+            if sidecar.exists() {
+                let mut manifest: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
+                manifest["sources"][0]["path"] = "repair.hir".into();
+                manifest["dependencies"][0]["manifest"] = root()
+                    .join("stdlib/std@1/hirsel.json")
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+                    .into();
+                std::fs::write(
+                    dir.join("repair.hir.json"),
+                    serde_json::to_vec(&manifest).unwrap(),
+                )
+                .unwrap();
+            }
+            let repaired = hirsel_driver::check_path(&path).unwrap();
+            assert!(
+                !repaired
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.severity == Severity::Error),
+                "{case}: {:?}",
+                repaired.diagnostics
+            );
+            let twin = checked(&case.replace("-bad.hir", "-ok.hir"));
+            assert!(
+                !twin
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.severity == Severity::Error)
+            );
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    });
+}

@@ -5,6 +5,7 @@ the license named in its row; the license texts follow once each.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| Rust compiler | restricted Damerau-Levenshtein distance and name matching thresholds (`compiler/rustc_span/src/edit_distance.rs:24-104,235-334`) and test vectors (`edit_distance/tests.rs`) | `crates/hirsel-diag/src/near_miss.rs` | rust-lang/rust `a7c37f9f0ee5e93396106e9de20f4a86b4154e63` | MIT (Rust) |
 | Go runtime | cgroup-v2 membership/mount/CPU-limit reader structure (`src/internal/runtime/cgroup/cgroup_linux.go:116-140,201-237`), quota parser and `TestParseV2Limit` vectors (`cgroup.go:72-107`, `cgroup_test.go:74-155`) | `crates/hirsel-run-config/src/managed_cores`, managed-core integration tests | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | hyper | HTTP/1 persistent dispatch, owned read buffer, keep-alive and pipelined-request vectors (`src/proto/h1/{dispatch,io}.rs`, `tests/server.rs`) | `stdlib/std@1/http_h2.hir`, `conformance/SEM/SEM-1-http-server-serial-handoff-run.hir` | hyperium/hyper `b07337878fe57b34b2065335ae8cae9ce5a780a0` | MIT (Copyright (c) 2014-2026 Sean McArthur) |
 | xsum | Signed overlapping small accumulator, deferred carries and complete one/two/three/ten-term tables | `stdlib/std@1/superacc.hir`, `native-tests/library/vectors/xsum.json` | radfordneal/xsum `b766b3e104cdbd6769c8df033fb430700fce32dd` | MIT, Copyright 2015, 2018, 2021, 2024 Radford M. Neal; full text in `native-tests/library/vectors/LICENSE.xsum` |
@@ -1423,3 +1424,33 @@ IMPLIED WARRANTIES OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
 
 The RFC 6070 code components use the Simplified BSD terms reproduced above.
 Copyright (c) 2011 IETF Trust and the persons identified as the document authors.
+
+## MIT (Rust)
+
+```text
+Copyright (c) The Rust Project Contributors
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```

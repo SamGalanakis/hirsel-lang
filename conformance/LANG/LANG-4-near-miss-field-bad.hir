@@ -1,0 +1,10 @@
+// rule: LANG-4
+// expect: reject LANG-4 at line 9
+// twin: LANG/LANG-4-near-miss-field-ok.hir
+type Record {
+  length: u64,
+}
+
+fn example(x: Record) -> u64 {
+  x.lenght
+}

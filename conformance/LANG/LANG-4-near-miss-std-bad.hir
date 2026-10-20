@@ -1,0 +1,6 @@
+// rule: LANG-4
+// expect: reject LANG-4 at line 5
+// twin: LANG/LANG-4-near-miss-std-ok.hir
+pub fn example() -> bool {
+  string.starts_wtih("abc", "a")
+}

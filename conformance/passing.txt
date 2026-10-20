@@ -1773,6 +1773,12 @@ conformance/LANG/LANG-4-local-shadow-ok.hir
 conformance/LANG/LANG-4-module-head-namespace.hir
 conformance/LANG/LANG-4-module-local-field-bad.hir
 conformance/LANG/LANG-4-module-local-field-ok.hir
+conformance/LANG/LANG-4-near-miss-field-bad.hir
+conformance/LANG/LANG-4-near-miss-field-ok.hir
+conformance/LANG/LANG-4-near-miss-std-bad.hir
+conformance/LANG/LANG-4-near-miss-std-ok.hir
+conformance/LANG/LANG-4-near-miss-variant-bad.hir
+conformance/LANG/LANG-4-near-miss-variant-ok.hir
 conformance/LANG/LANG-4-nested-builtin-variant-bad.hir
 conformance/LANG/LANG-4-nested-builtin-variant-run.hir
 conformance/LANG/LANG-4-nested-shadow-bad.hir

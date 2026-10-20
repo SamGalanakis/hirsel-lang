@@ -3,7 +3,9 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+mod near_miss;
 use hirsel_span::{SourceMap, Span};
+pub use near_miss::suggest_names;
 use std::{borrow::Cow, fmt};
 use unicode_width::UnicodeWidthStr;
 /// A syntactically valid specification ID (FAIL-1); membership is checked against the spec.

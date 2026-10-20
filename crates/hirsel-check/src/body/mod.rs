@@ -1504,6 +1504,28 @@ impl Checker<'_, '_> {
                             self.span(id),
                             "field is not available on this type",
                         );
+                        if let TypeKind::Record(fields) = self.kind(repr) {
+                            let span = self.span(id);
+                            // A field expression ends at its identifier token.
+                            let name_span =
+                                Span::new(span.anchor, span.end - name.len() as u32, span.end);
+                            let prefix =
+                                match &self.input.syntax.tree.expressions[base.0 as usize].kind {
+                                    ast::ExprKind::Path(path) => path
+                                        .segments
+                                        .iter()
+                                        .map(|s| format!("{}.", self.name(*s)))
+                                        .collect(),
+                                    _ => String::new(),
+                                };
+                            hirsel_diag::suggest_names(
+                                self.diagnostics.last_mut().unwrap(),
+                                &name,
+                                fields.into_iter().map(|f| f.name),
+                                &prefix,
+                                name_span,
+                            );
+                        }
                         self.error()
                     }
                 }

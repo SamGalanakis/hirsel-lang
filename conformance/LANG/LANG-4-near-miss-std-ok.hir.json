@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "std_names",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "LANG-4-near-miss-std-ok.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "example"
+  }
+}

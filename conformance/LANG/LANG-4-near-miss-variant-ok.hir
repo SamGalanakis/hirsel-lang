@@ -1,0 +1,7 @@
+// rule: LANG-4
+// expect: accept
+type State = Ready | Waiting
+
+fn example() -> State {
+  Ready
+}

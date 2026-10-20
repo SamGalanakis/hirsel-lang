@@ -153,8 +153,20 @@ impl QueryEngine {
                     package,
                     segments,
                     result,
-                    ..
-                } => self.lookup_result(context, package, segments) == *result,
+                    manifest,
+                } => {
+                    // A failed lookup's help reads the accessible name set.
+                    // Adding a near match changes that diagnostic even when
+                    // the original misspelling still fails to resolve.
+                    let candidates_unchanged = !matches!(
+                        result,
+                        Err(LookupError::Missing | LookupError::MissingMember(_))
+                    ) || self
+                        .manifest_index(&context.package)
+                        .is_some_and(|index| index.revision == *manifest);
+                    candidates_unchanged
+                        && self.lookup_result(context, package, segments) == *result
+                }
                 DependencyRead::ModuleHead {
                     context,
                     head,

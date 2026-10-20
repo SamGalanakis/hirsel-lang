@@ -125,6 +125,26 @@ A name is missing, ambiguous, or conflicts with an existing declaration.
 
 Typical fix: Use the exact declared name and module path. Disambiguate with a full `package@version/module/name` path; rename a conflicting binding and its references.
 
+Unresolved values, types, module members, fields and expected-type variants offer
+up to three closest accessible names, for example “help: did you mean `bytes.len`?”.
+Matching uses rustc's restricted Damerau-Levenshtein distance
+(including adjacent transpositions) with a maximum distance of one third of the
+misspelled name's character count, at least one. Case and underscore differences
+match first; the known rename `count` → `len` matches only if `len` is available.
+Reordered underscore-separated words are a fallback. Equally close names are
+shown in lexical order, with no fix when there is more than one candidate.
+
+When there is exactly one suggestion and an exact identifier span is available,
+JSON `fix` contains a machine-applicable replacement of that identifier. The
+module path, receiver, arguments and surrounding syntax remain intact. The
+existing schema version stays 1. Suggestions respect package exposure and
+visibility; ambiguous module heads still require explicit qualification.
+
+The algorithm and matching tests are ported from
+[rustc_span::edit_distance](https://github.com/rust-lang/rust/blob/a7c37f9f0ee5e93396106e9de20f4a86b4154e63/compiler/rustc_span/src/edit_distance.rs#L24)
+(MIT OR Apache-2.0), lines 24–104 and 235–334. Hirsel keeps up to three tied best
+matches, ignores underscores alongside case, and recognizes the rename above.
+
 ## LANG-13: Patterns
 
 The pattern is invalid, refutable in an irrefutable position, or unreachable.

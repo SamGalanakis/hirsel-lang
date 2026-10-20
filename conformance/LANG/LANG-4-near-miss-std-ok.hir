@@ -1,0 +1,5 @@
+// rule: LANG-4
+// expect: accept
+pub fn example() -> bool {
+  string.starts_with("abc", "a")
+}
