@@ -1557,6 +1557,7 @@ fi
 case $1 in
   log) [[ -f $3.results ]] && cat "$3.results"; exit 0 ;;
   uquery) query=$*; last=${*: -1}; [[ $last == @* ]] && query=$(cat "${last#@}")
+    [[ -n ${QUERY_TRACE:-} ]] && printf '%s\n' "$query" >> "$QUERY_TRACE"
     [[ $query == *'kind("^rust_'* ]] && echo 'root//:a-clippy' || echo 'root//:a'; exit "${FAIL_QUERY:-0}" ;;
   build)
     if [[ $* == *show-json-output* ]]; then
@@ -1600,6 +1601,9 @@ if __name__ == "__main__":
             print("{name}", held, file=log)
     with open(os.environ["COMMANDS"], "a") as log:
         print(" ".join(["{name}", *sys.argv[1:]]), file=log)
+    if os.environ.get("CONFIG_TRACE"):
+        with open(os.environ["CONFIG_TRACE"], "a") as log:
+            print("{name}", os.environ.get("HIRSEL_BUCK2_CONFIG", ""), file=log)
     sys.exit(int(os.environ.get("FAIL_{upper}", "0")))
 '''
 
@@ -1643,6 +1647,23 @@ if os.environ.get("FAIL_SCOPE"):
     sys.exit(137)
 os.execv(sys.argv[8], sys.argv[8:])
 '''
+
+
+class LandStats(unittest.TestCase):
+    def test_batches_report_green_and_red_time_and_the_red_checks_after_the_first(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            scratch_repo(root)
+            check = lambda passed, seconds: dict(tip='0' * 40, passed=passed, seconds=seconds)  # noqa: E731
+            batches = [dict(at='2026-10-20T01:00:00Z', seconds=600, checks=[check(True, 540)]),
+                       dict(at='2026-10-20T02:00:00Z', seconds=1800,
+                            checks=[check(False, 600), check(True, 300), check(False, 300), check(True, 480)]),
+                       dict(at='2026-10-20T03:00:00Z', seconds=300, checks=[check(True, 240)])]
+            (root / '.git/hirsel-land-batches.jsonl').write_text(''.join(json.dumps(b) + '\n' for b in batches))
+            result = subprocess.run([sys.executable, str(TOOLS / 'gate_land_stats.py')], cwd=root,
+                                    capture_output=True, text=True, check=True)
+        self.assertIn('batches: 3, median 10.0 min (green 7.5 min, red 30.0 min); 2.0 checks per batch; '
+                      '1 red spent 18.0 min on checks after their first', result.stdout)
 
 
 class Scripts(unittest.TestCase):
@@ -1984,10 +2005,10 @@ Local.start = traced_local_check
         self.assertEqual(git(self.origin, 'rev-parse', 'main'), git(self.root, 'rev-parse', 'HEAD'))
         self.assertEqual(git(self.origin, 'show', 'main:LICENSE'), 'MIT')
         # Build and Clippy in one Buck2 command, formatting and build files beside it; no test.
-        self.assertIn('build -c hirsel.clippy=true -c buck2.test_builds_targets=true --materializations none '
-                      'root//:a root//:a-clippy[clippy.txt]', logged)
+        self.assertIn('build -c hirsel.clippy=true -c buck2.test_builds_targets=true -c hirsel.priority=75 '
+                      '--materializations none root//:a root//:a-clippy[clippy.txt]', logged)
         self.assertIn('fmt.py --check', logged)
-        self.assertIn('sync.py --check', logged)
+        self.assertIn('sync.py --check --files-only', logged)
         self.assertFalse(any(c.startswith('test') for c in logged))
         self.assertNotIn('Regenerate the API index.', git(self.root, 'log', '--format=%s'))
         self.assertGreaterEqual(len(list((self.root / '.buck2/event-logs').glob('*.pb.zst'))), 2)
@@ -1997,6 +2018,27 @@ Local.start = traced_local_check
         self.assertGreater(timing['land_held_seconds'], 0)
         self.assertIn('after waiting', result.stdout)
         self.assertIn('held land lock for', result.stdout)
+
+    def test_land_builds_at_its_priority_in_one_daemon_state_without_the_std_precheck(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
+        configs, queries = self.root.parent / 'config-trace', self.root.parent / 'query-trace'
+        result, logged = self.run_tool('land', env={'CONFIG_TRACE': str(configs), 'QUERY_TRACE': str(queries)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        buck2 = [row for row in logged if row.split(' ')[0] in ('build', 'uquery', 'test')]
+        self.assertTrue(buck2)
+        for row in buck2:
+            self.assertIn('-c hirsel.clippy=true -c buck2.test_builds_targets=true -c hirsel.priority=75', row)
+        # fmt.py's query shares the build's configuration; sync.py runs no Buck2 command.
+        self.assertIn('fmt.py -c hirsel.clippy=true -c buck2.test_builds_targets=true -c hirsel.priority=75',
+                      configs.read_text().splitlines())
+        self.assertIn('sync.py --check --files-only', logged)
+        [build_set] = [query for query in queries.read_text().splitlines() if '_hirsel_precheck' in query]
+        self.assertTrue(build_set.endswith(' - rdeps(root//:, kind("_hirsel_precheck", root//:))'), build_set)
+        [row] = [json.loads(line) for line in (self.root / '.git/hirsel-land-batches.jsonl').read_text().splitlines()]
+        self.assertEqual((row['members'], row['outcomes'], row['rounds']), (['main'], {'main': 'landed'}, 1))
+        self.assertEqual([check['passed'] for check in row['checks']], [True])
+        self.assertEqual(row['pushed'], [git(self.origin, 'rev-parse', 'main')])
 
     def test_land_fetches_prepares_checks_and_pushes_inside_the_lock(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
@@ -2237,6 +2279,11 @@ os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *sys.argv[1:]])
         logged = self.commands.read_text().splitlines()
         self.assertEqual(sum(row.startswith('build ') and '--materializations none' in row for row in logged), 4, logged)
         self.assertNotEqual(git(red, 'rev-parse', 'HEAD'), git(self.origin, 'rev-parse', 'main'))
+        # The batch's row records each check, so the red member's cost is measured.
+        [row] = [json.loads(line) for line in (self.root / '.git/hirsel-land-batches.jsonl').read_text().splitlines()]
+        self.assertEqual(row['outcomes'], {'main': 'landed', 'poison': 'red', 'grammar': 'landed'})
+        self.assertEqual([check['passed'] for check in row['checks']], [False, True, False, True])
+        self.assertEqual(row['rounds'], 2)
 
     def test_append_only_and_generated_conflicts_resolve_and_others_stop_their_change(self):
         self.sibling_pushes({'third-party/NOTICES.md': '| Source | License |\n|---|---|\n| zig | MIT |\n',

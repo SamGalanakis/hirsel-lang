@@ -23,9 +23,11 @@ BATCH_MAX, as one batch in queue order, in a batch worktree beside the lock
 - after each change, regenerate BUCK with sync.py when the change touches it,
   and check that the rebased change keeps the identity tools/gate passed (a
   change it does not keep must be gated again);
-- build the workspace, run Clippy and check formatting and the build files
-  once, on the batch's tip; regenerate docs/api.md with the built CLI in its own
-  generated-only commit, 'Regenerate the API index.'; push once;
+- build the workspace (without the std precheck, a test), run Clippy and
+  check formatting and the build files once, on the batch's tip, every Buck2
+  command at pool priority LAND_PRIORITY in one daemon state; regenerate
+  docs/api.md with the built CLI in its own generated-only commit, 'Regenerate
+  the API index.'; push once;
 - on red, bisect the batch's prefixes for the first change that turns it red,
   push the green prefix, tell that change's lane, and land the rest in the
   next round. A push rejected because main moved repeats the round.
@@ -34,7 +36,7 @@ Each lane's land prints its outcome, moves its branch to main as pushed,
 prints what the gate ran for the change and why (its green record), and
 appends the push with that record and its batch to `hirsel-landings.jsonl` in
 the clone's common git directory, so a red main maps back to the push and to
-what it skipped.
+what it skipped. The batch appends its checks to `hirsel-land-batches.jsonl`.
 
 Land never runs tests. tools/gate runs them once, on the finished change, and
 records the change's identity when it passes (gating.change_identity: the
@@ -75,6 +77,15 @@ BATCH_MAX = 8
 REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
 CLI = 'root//:hirsel-cli-bin-hirsel'
 LANDINGS = 'hirsel-landings.jsonl'
+# One row per batch: its members, rounds, each check's tip, time and verdict.
+BATCHES = 'hirsel-land-batches.jsonl'
+# The batch is the one serial step every lane waits on: its Buck2 commands
+# queue on the pool above the gates' 50 (tools/buck2/platforms.bzl).
+LAND_PRIORITY = 75
+# The gate floor's build set without the std precheck and what bundles it: the
+# precheck runs the built compiler over std, a test the gate runs, and alone it
+# took 6-10 minutes of a batch's critical path.
+LAND_BUILD_SET = f'({gating.BUILD_SET}) - rdeps(root//:, kind("_hirsel_precheck", root//:))'
 LAND_LOCK_DIR = Path('/workspace/code/hirsel-briefs/locks/land')
 # origin/main's copies of the landing scripts, by commit, in the common git dir.
 MAIN_COPIES = 'hirsel-land-tools'
@@ -128,8 +139,10 @@ def checks():
 
     local = gating.Local()
     local.start('formatting', [PY, 'tools/buck2/fmt.py', '--check'])
-    local.start('Buck2 build files match Cargo', [PY, 'tools/buck2/sync.py', '--check'])
-    build = gating.uquery(gating.BUILD_SET)
+    # No Buck2 command beside the build: one with another configuration waits
+    # for it, or makes it wait (each gate checked its own test-cost coverage).
+    local.start('Buck2 build files match Cargo', [PY, 'tools/buck2/sync.py', '--check', '--files-only'])
+    build = gating.uquery(LAND_BUILD_SET)
     clippy = gating.uquery(gating.CLIPPY_SET)
     started = time.monotonic()
     result = gating.buck2('build', '--materializations', 'none', *build, *[t + '[clippy.txt]' for t in clippy],
@@ -281,12 +294,18 @@ def resolve_conflict(path):
     return run('git', 'add', '--', path).returncode == 0
 
 
+# This batch's rounds and checks, for its row in BATCHES.
+BATCH = dict(rounds=0, checks=[])
+
+
 def checked(tip, cache):
     """Whether the checks pass at `tip`, once per tip."""
     if tip not in cache:
         run('git', 'checkout', '-q', '--detach', tip)
         say(f'land: checking {tip[:12]}')
+        started = time.monotonic()
         cache[tip] = checks()
+        BATCH['checks'].append(dict(tip=tip, passed=cache[tip][0], seconds=round(time.monotonic() - started, 1)))
     return cache[tip]
 
 
@@ -340,6 +359,7 @@ def land_batch(members, results):
                 results[member['name']] = outcome('error', member, details=['git fetch failed', fetch.stderr.strip()])
             return
         main = tip = run('git', 'rev-parse', 'origin/main').stdout.strip()
+        BATCH['rounds'] = attempt
         say(f'land: round {attempt}: {len(pending)} changes onto {main[:12]}: '
             + ', '.join(member.get('branch') or member['name'] for member in pending))
         rebased = []
@@ -416,6 +436,10 @@ def run_batch(batch_file):
     batch = read_json(Path(batch_file))
     directory = Path(batch['directory'])
     results = {}
+    # Every Buck2 command here, fmt.py's query included, keeps one daemon state
+    # at land's priority.
+    gating.CONFIG.extend(['-c', f'hirsel.priority={LAND_PRIORITY}'])
+    os.environ['HIRSEL_BUCK2_CONFIG'] = ' '.join(gating.CONFIG)
     clean_tree()
     try:
         if run(PY, 'tools/buck2/prepare.py').returncode:
@@ -429,7 +453,22 @@ def run_batch(batch_file):
         (directory / 'results').mkdir(exist_ok=True)
         for name, result in results.items():
             write_json(directory / 'results' / f'{name}.json', dict(result, batch_seconds=time.time() - batch['at']))
+        log_batch(batch, results)
     return 0
+
+
+def log_batch(batch, results):
+    """Append the batch's members, outcomes, rounds and checks to BATCHES in the
+    clone's common git directory, so a red batch's cost is measured."""
+    common = Path(run('git', 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
+    names = {member['name']: member.get('branch') or member['name'] for member in batch['members']}
+    entry = dict(at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(batch['at'])),
+                 seconds=round(time.time() - batch['at'], 1), members=list(names.values()),
+                 outcomes={names[name]: result['status'] for name, result in results.items() if name in names},
+                 pushed=sorted({result['pushed'] for result in results.values() if result.get('pushed')}),
+                 **BATCH)
+    with open(common / BATCHES, 'a') as log:
+        log.write(json.dumps(entry, sort_keys=True) + '\n')
 
 
 def lead(directory, request):

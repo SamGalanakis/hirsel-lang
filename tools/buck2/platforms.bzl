@@ -12,7 +12,7 @@ CPU_CLASSES (tools/buck2/action_sizes_from_log.py) and the conformance shards
 shard runs on any worker.
 
 Every hirsel remote action, compile or test run, gate, focus or full, queues
-at priority 50: below the pool's lane and CI class (100), so that work
+at priority 50 (land's at 75, below): below the pool's lane and CI class (100), so that work
 dispatches first, and above its warming class (0), which never gets a
 reserved worker. It is one priority because the scheduler merges identical
 actions and keeps the first submitter's: a test run once sent at 0 held later
@@ -20,12 +20,20 @@ gates' runs of the same digest at 0 for up to 113 minutes. The scheduler reads t
 `CommandExecutorConfig`: a platform's for its actions, and a test's own
 `default_executor` (`test_executor`) for its run. The priority is not a platform
 property, so it is not part of an action key.
+
+`-c hirsel.priority=N` sets it for one invocation. tools/land builds at 75:
+its batch is the one serial step every lane waits on, and at 50 its few
+hundred compiles queued behind the gates' test runs for 85-94% of each build
+(2026-10-20). An action a gate already queued keeps the gate's 50 (the
+merge rule above); the batch's own combinations are new digests.
 """
 
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS", "POOL_BUDGETS")
 load(":test_sizes.bzl", "TEST_REQUESTS")
 
-PRIORITY = 50
+PRIORITY = int(read_root_config("hirsel", "priority", "50"))
+if PRIORITY < 0 or PRIORITY > 99:
+    fail("hirsel.priority must be from 0 to 99, below the pool's lane and CI class")
 
 # A pool test binary's request, `[cpu, memory_kb, cpu_class]`, is measured
 # from the workers' usage logs (TEST_REQUESTS, test_sizes_from_usage.py): one

@@ -19,7 +19,10 @@ references, plus the files an `include_str!(concat!("<prefix>", $arg))` macro
 names through the file's string literals.
 
 `--check` regenerates into a scratch directory and fails if any committed file
-differs, so a Cargo change that was not synced fails the gate.
+differs, so a Cargo change that was not synced fails the gate. It then lists
+the sharded test binaries on the pool for their test-cost coverage;
+`--check --files-only` (tools/land) compares the files alone, with no Buck2
+command beside land's build.
 """
 
 from __future__ import annotations
@@ -902,6 +905,9 @@ GENERATED = ["tools/buck2/workspace-metadata.json", "tools/native-toolchain/pins
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true", help="fail if a generated file is not what the Cargo workspace says")
+    parser.add_argument("--files-only", action="store_true",
+                        help="with --check, compare the generated files without the pool's test-cost inventory "
+                             "(tools/land: each change's gate checked its coverage)")
     args = parser.parse_args()
     if not REINDEER.is_file():
         raise SystemExit("run tools/buck2/bootstrap.py first (Reindeer is missing)")
@@ -916,6 +922,8 @@ def main() -> int:
     if stale:
         print("Buck2 build files are stale; run python3 tools/buck2/sync.py: " + ", ".join(stale), file=sys.stderr)
         return 1
+    if args.files_only:
+        return 0
     if errors := check_cost_coverage():
         print("\n".join(errors), file=sys.stderr)
         return 1

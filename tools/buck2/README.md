@@ -315,7 +315,9 @@ them into a shared directory.
   remote action, compile or test run, gate, focus or full, queues at priority
   50: below the pool's lane and CI class (100), above its warming class (0),
   which gets no reserved worker. One priority, since the scheduler merges
-  identical actions at the first submitter's priority. A test run carries its
+  identical actions at the first submitter's priority; `-c hirsel.priority=N`
+  overrides it per invocation, and only tools/land does, at 75, so the
+  batch every lane waits on does not queue behind the gates. A test run carries its
   own executor (`test_executor` in `platforms.bzl`): Buck2 runs tests with it,
   not with their platform's. The priority is not part of an action key. The
   platforms also include the invoking host for an explicit

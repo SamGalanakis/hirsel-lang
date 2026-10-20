@@ -891,7 +891,14 @@ changes queued behind it (up to 8, in queue order), in a batch worktree beside
 the lock (`batch-<clone>`, reused and prepared once). It fetches, rebases each
 change onto the one before, builds the workspace, runs Clippy, formatting and
 the build-file check once on the batch's tip, regenerates the API index and
-pushes once. Each waiting land reads its result from `results/`, moves its
+pushes once. Every Buck2 command of the batch runs with one configuration
+(`fmt.py`'s query included, and `sync.py --check --files-only` runs none), so
+no command waits for another's daemon state, and at pool priority 75, above
+the gates' 50 (`tools/buck2/platforms.bzl`): on 2026-10-20, at 50, a batch's
+compiles spent 85-94% of their remote time queued behind the gates' test runs.
+The build is the gate floor's build set without the std precheck and the
+toolchain bundle that holds it; the precheck runs the compiler over std, a
+test the gate runs, and took 6-10 minutes of a batch's critical path. Each waiting land reads its result from `results/`, moves its
 branch to main as pushed, and prints and logs its landing. When the batch's
 tip is red, land bisects its prefixes for the first change that turns it red,
 pushes the green prefix before it, tells that change's lane (with the failing
@@ -912,7 +919,10 @@ landed change with them and its batch to `hirsel-landings.jsonl` in the
 clone's common git directory, so a red main maps back to the push and to what
 it chose to skip. Each entry records `land_wait_seconds` (queued until landed
 or leading), `land_held_seconds` (leading), `batch_seconds`, `batch` and
-`batch_position`.
+`batch_position`. Each batch appends one row to `hirsel-land-batches.jsonl`
+beside it: its members and their outcomes, its rounds, and each check's tip,
+seconds and verdict. `tools/gate_land_stats.py` reports lands per hour, the
+waits, and batch time with what red batches spent after their first check.
 
 Land's index step runs the built `hirsel doc stdlib/std@1/hirsel.json` and commits a
 changed `docs/api.md` separately as `Regenerate the API index.` before pushing.
