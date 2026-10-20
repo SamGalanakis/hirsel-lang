@@ -32,8 +32,9 @@ pub fn main(t: Test) -> Result[(), ()] {
   let mut m: Map[Set[u64], u64] = map.empty()
   map.insert(mut m, copy removed, 7)
   failure.check(map.get(m, dense) == Some(7), Bounds())
-  let snapshot = copy removed
-  set.insert(mut removed, 0)
+  let mut shared: Set[u64] = take removed
+  let snapshot = copy shared
+  set.insert(mut shared, 0)
   failure.check(set.len(snapshot) == 16 && !set.contains(snapshot, 0), Bounds())
   Ok(())
 }
