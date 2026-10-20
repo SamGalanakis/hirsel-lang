@@ -108,10 +108,21 @@ pub fn check_ownership_with_clauses(
         properties::pattern_declarations(t, body, signature, &mut signatures)?;
     let field_loan_places =
         properties::field_loan_places(t, body, signature, &graphs, &mut signatures, &rows)?;
+    // The rows the body's store held when main classified it: the tables'
+    // rows and those the declaration-layout passes above derived.
     let derived = projection_lifetimes
         .values()
         .map(|p| p.physical)
         .chain(pattern_declarations.values().copied())
+        .chain(field_loan_places.values().map(|p| p.declared))
+        .chain(cfg::graph_types(&graphs))
+        .chain(results.iter().map(|(_, ty)| *ty))
+        .chain(clauses.iter().map(|(_, ty)| *ty))
+        .chain(
+            identity_fields
+                .iter()
+                .flat_map(|(_, _, _, parts)| parts.iter().map(|(_, ty)| *ty)),
+        )
         .collect::<Vec<_>>();
     let mut properties = properties::classify(t, body, derived, &mut signatures)?;
     // MODE-2: an error mapper's parameter mode is checked on the failure edge.

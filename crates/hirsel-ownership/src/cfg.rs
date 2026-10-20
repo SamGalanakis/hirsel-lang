@@ -2072,6 +2072,26 @@ pub(super) fn expression_type(
 }
 
 /// All checked ordinary operands, including contracts and finalizers outside the CFG.
+/// The rows the graphs name: frame results, call requirements and the
+/// declared parts constructors write.
+pub(super) fn graph_types(graphs: &[Graph]) -> Vec<TypeId> {
+    let mut out = vec![];
+    for graph in graphs {
+        out.extend(graph.result_ty);
+        for node in &graph.nodes {
+            if let Op::Call {
+                requirements,
+                parts,
+                ..
+            } = &node.op
+            {
+                out.extend(requirements.iter().flatten().map(|r| r.ty));
+                out.extend(parts.iter().flatten().copied());
+            }
+        }
+    }
+    out
+}
 pub(super) fn call_arguments(
     body: &CheckedBody,
     properties: &super::properties::PropertyTable,
