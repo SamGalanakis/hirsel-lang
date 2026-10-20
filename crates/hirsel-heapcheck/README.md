@@ -185,8 +185,9 @@ producer that differs changes this crate or the producer):
   span.
 - A variant's tag is read through its `TagForm`. A null-pointer niche's word
   is the dataful variant while it holds a data cell, or after a move took
-  exactly that one cell out (the native move leaves the bits, so the variant
-  stays readable), and the fieldless variant when its bytes are zero;
+  that cell out, alone or inside a larger part such as a String or tuple (the
+  native move leaves the bits, so the variant stays readable), and the
+  fieldless variant when its bytes are zero;
   constructing the fieldless variant writes the null word.
 - A `SlotKind::Capture(i)` slot names field `i` of the closure environment the
   callee was entered with; a zero-sized environment is no block, so each of its

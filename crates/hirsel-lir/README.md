@@ -105,10 +105,17 @@ Invariants:
   Allocation facts (capacity and physical alignment) live in slab/prefix/extent metadata; the header contains count and descriptor index/storage kind.
 - Variants carry an explicit u32 ordinal tag, except a null-pointer niche
   (layout version 2): a non-`@packed` variant of exactly two variants, one
-  without fields and one with a non-null pointer field (a counted block
-  reference, Ptr or FnPtr; pointer scalars since layout version 4), has no tag word; the first such field's word is null exactly when the fieldless
-  variant is active (`TagForm::Niche`). Every tag reader goes through the
-  form; `rt_program` lowers the niche's arm to `STEP_NONNULL`.
+  without fields and one whose inline payload holds an aligned non-null
+  pointer word, has no tag word; the first such word is null exactly when the
+  fieldless variant is active (`TagForm::Niche`). The word is found depth
+  first in declaration order: a counted block reference, Ptr or FnPtr (pointer
+  scalars since layout version 4), a String or Bytes slice's owner word, or
+  such a word in an aligned field of an inline Aggregate (nested since layout
+  version 5, so `None | Some((String, u64))` is 32 bytes). Variants,
+  environments, callables, sequences and `@packed` fields are never entered.
+  The validator re-proves the word along the same path and rejects a nullable,
+  uninitialized or misaligned one. Every tag reader goes through the form;
+  `rt_program` lowers the niche's arm to `STEP_NONNULL`.
 - Externs have the `Foreign` FnAbi shape and only they do (PROG-4): no run context,
   environment or destination, and a C scalar/nullable-pointer result or none.
   `Ptr` and `FnPtr` are non-null pointer scalars; their Options use the existing

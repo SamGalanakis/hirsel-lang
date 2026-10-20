@@ -1,0 +1,124 @@
+// rule: MEM-7
+// expect: run
+// stdout: word none
+// stdout: ann none
+// stdout: deep vacant
+// stdout: guarded bare
+// stdout: unset absent
+// stdout: renamed
+// stdout: 2 entries
+// Two-variant values whose only never-null word is nested in the payload: a String
+// in a tuple, a String in a record after a u8, a String two tuples deep and a box
+// after a nullable Option[box u64]. Each is built, matched, compared, replaced and
+// dropped on both arms. An Option[String] inside a tuple is no word of its own: the
+// outer Option keeps its tag.
+type Named {
+  flag: u8,
+  name: String,
+}
+
+type Slot = Vacant | Held((u64, (u32, String)))
+
+type Guarded = Bare | Pair(Option[box u64], box u64)
+
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn entry(e: Option[(String, u64)]) -> String {
+  match e {
+    Some((key, 7)) => if key == "word" {
+      "word"
+    } else {
+      "other"
+    },
+    Some(_) => "other",
+    None() => "none",
+  }
+}
+
+fn named(n: Option[Named]) -> String {
+  match n {
+    Some(Named(flag: 1, name: name)) => if name == "ann" {
+      "ann"
+    } else {
+      "other"
+    },
+    Some(_) => "other",
+    None() => "none",
+  }
+}
+
+fn slot(s: Slot) -> String {
+  match s {
+    Held((9, (2, text))) => if text == "deep" {
+      "deep"
+    } else {
+      "other"
+    },
+    Held(_) => "held",
+    Vacant() => "vacant",
+  }
+}
+
+fn guarded(g: Guarded) -> String {
+  match g {
+    Pair(None(), 5) => "guarded",
+    Pair(None(), _) => "other",
+    Pair(Some(_), _) => "inner",
+    Bare() => "bare",
+  }
+}
+
+fn nullable(t: Option[(u64, Option[String])]) -> String {
+  match t {
+    Some((_, Some(_))) => "set",
+    Some((_, None())) => "unset",
+    None() => "absent",
+  }
+}
+
+fn line(output: Stdout, first: String, second: String) -> Result[(), OutputError] {
+  out.print(output, first)?
+  out.print(output, " ")?
+  out.print(output, second)?
+  out.print(output, "\n")
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let word: Option[(String, u64)] = Some(("word", 7))
+  let missing: Option[(String, u64)] = None()
+  failure.check(word != missing, TextInvariant())
+  failure.check(word == Some(("word", 7)), TextInvariant())
+  line(output, entry(word), entry(missing)) ? Output
+  let ann: Option[Named] = Some(Named(flag: 1, name: "ann"))
+  line(output, named(ann), named(None())) ? Output
+  let deep: Slot = Held((9, (2, "deep")))
+  line(output, slot(deep), slot(Vacant())) ? Output
+  let pair: Guarded = Pair(None(), box 5u64)
+  line(output, guarded(pair), guarded(Bare())) ? Output
+  line(output, nullable(Some((1, None()))), nullable(None())) ? Output
+  let mut cell: Option[(String, u64)] = None()
+  failure.check(entry(cell) == "none", TextInvariant())
+  cell = Some(("first", 1))
+  cell = Some(("renamed", 8))
+  let renamed = match cell {
+    Some((key, 8)) => key == "renamed",
+    _ => false,
+  }
+  failure.check(renamed, TextInvariant())
+  out.print(output, "renamed\n") ? Output
+  let mut entries: List[Option[(String, u64)]] = []
+  list.push(mut entries, Some(("a", 1)))
+  list.push(mut entries, None())
+  list.push(mut entries, Some(("b", 2)))
+  let mut count: u64 = 0
+  for e in entries {
+    count += match e {
+      Some(_) => 1,
+      None() => 0,
+    }
+  }
+  failure.check(count == 2, TextInvariant())
+  out.print(output, "2 entries\n") ? Output
+  Ok(())
+}

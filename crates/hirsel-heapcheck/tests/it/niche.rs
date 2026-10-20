@@ -1,7 +1,8 @@
 //! Null-pointer niches (layout version 2) on the ledger: the word of the
 //! dataful variant's block reference is the tag, null for the fieldless
-//! variant, and a move that takes that reference out leaves its variant
-//! readable, as the native move leaves the word's bits in place.
+//! variant, and a move that takes that reference out, alone or inside a
+//! larger part (layout version 5), leaves its variant readable, as the native
+//! move leaves the word's bits in place.
 use crate::fixtures;
 
 use fixtures::*;
@@ -125,6 +126,99 @@ fn a_moved_niche_reference_leaves_its_variant_readable() {
 fn a_moved_niche_reference_is_not_released_again() {
     let run = execute(&moved_niche_field(false));
     let violation = run.result.expect_err("the moved box is released twice");
+    assert_eq!(
+        violation.kind,
+        ViolationKind::UninitializedScan,
+        "{violation}"
+    );
+}
+
+/// `Node((Box(5), 3), 7)` in a block of `Leaf | Node((Box[cell], u64), u64)`,
+/// whose niche word is the box nested in the pair. The whole pair is taken
+/// out, the u64 read through its variant's tag check, then the node is
+/// released with only that u64 live (fixed) or with every field (broken).
+fn moved_nested_niche_part(fixed: bool) -> Program<Rc> {
+    let mut l = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
+    let c = common(&mut l);
+    let pair = l.record(&[c.boxed, c.u64]);
+    let node = l.niche(0, &[pair, c.u64]);
+    let node_box = l.block(node);
+    let (target, table) = l.finish();
+    let mut f = F::<Rc>::new("main", c);
+    let five = f.int(5);
+    let a = f.boxed(five);
+    let three = f.int(3);
+    let tuple = inline(&mut f, pair, ConstructorKind::Tuple, &[a, three]);
+    let symbol = f.b.symbol(SymbolKind::Type, path("Node"));
+    let seven = f.int(7);
+    let node_k = f.b.construct(
+        ConstructorKind::Variant {
+            definition: symbol,
+            variant: 1,
+        },
+        node_box,
+        &[(0, tuple), (1, seven)],
+        HEAP,
+    );
+    let p = f.b.owned(BLOCK, node_box);
+    let failure = f.propagates();
+    f.inst(Inst::Construct {
+        result: p,
+        construct: node_k,
+        failure,
+    });
+    let at = f.b.address(
+        AddressBase::Value(p),
+        &[ProjectionStep::VariantField {
+            variant: 1,
+            field: 0,
+        }],
+        ValueRepr::Aggregate,
+        pair,
+    );
+    let failure = f.propagates();
+    f.inst(Inst::Address {
+        address: at,
+        failure,
+    });
+    let taken = f.b.owned(ValueRepr::Aggregate, pair);
+    f.inst(Inst::Read {
+        result: taken,
+        address: at,
+        reaching: p,
+        mode: ReadMode::Take,
+    });
+    let n = f.load(
+        p,
+        &[ProjectionStep::VariantField {
+            variant: 1,
+            field: 1,
+        }],
+        U64,
+        c.u64,
+    );
+    f.print(n);
+    let live = if fixed {
+        MaskRef::Static(f.b.mask(2, &[1]))
+    } else {
+        MaskRef::All
+    };
+    f.release_masked(p, node_box, live);
+    f.release(taken, pair);
+    f.ret(None);
+    let main = f.finish(&table);
+    program(target, table, vec![main])
+}
+
+#[test]
+fn a_moved_part_holding_the_niche_word_leaves_its_variant_readable() {
+    assert_eq!(output(&execute(&moved_nested_niche_part(true))), "7\n");
+}
+
+#[test]
+fn a_moved_part_holding_the_niche_word_is_not_released_again() {
+    let run = execute(&moved_nested_niche_part(false));
+    let violation = run.result.expect_err("the moved pair is released twice");
     assert_eq!(
         violation.kind,
         ViolationKind::UninitializedScan,

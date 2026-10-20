@@ -5,28 +5,23 @@ use crate::net::{ClientAuth, RootsDigest};
 use crate::net_abi::{NetUnitResult, NetWordResult};
 use crate::{Header, RunCtx, STATUS_FAILURE, STATUS_OK};
 
-/// TlsRoots = WebPki() | Pem(Bytes): u32 tag, padding, then a borrowed slice.
+/// TlsRoots = WebPki() | Pem(Bytes): the borrowed Pem slice, whose null owner word is
+/// `WebPki` (its niche).
 #[repr(C)]
 pub struct TlsRootsAbi {
-    pub tag: u32,
-    pub padding: u32,
     pub pem: crate::views::Slice,
 }
 
 /// The roots digest of a `TlsRoots` argument, supplying Pem material outside the request.
 /// WebPki's inactive payload need not be initialized.
 unsafe fn roots(ctx: *mut RunCtx, stream: u64, roots: *const TlsRootsAbi) -> RootsDigest {
-    match unsafe { (*roots).tag } {
-        0 => RootsDigest::WebPki(crate::net_tls::WEBPKI_VERSION.into()),
-        1 => {
-            // Read only the active Pem payload.
-            let pem = unsafe { &(*roots).pem };
-            let bytes = unsafe { crate::io::slice_bytes(pem.owner, pem.start, pem.length) };
-            unsafe { Binding::get(ctx) }.tls_roots(stream, bytes);
-            crate::net_tls::pem_digest(bytes)
-        }
-        _ => crate::fault("TlsRoots tag out of range"),
+    let pem = unsafe { &(*roots).pem };
+    if pem.owner.is_null() {
+        return RootsDigest::WebPki(crate::net_tls::WEBPKI_VERSION.into());
     }
+    let bytes = unsafe { crate::io::slice_bytes(pem.owner, pem.start, pem.length) };
+    unsafe { Binding::get(ctx) }.tls_roots(stream, bytes);
+    crate::net_tls::pem_digest(bytes)
 }
 
 /// A client handshake request. The taken handle transfers on every outcome; State closes
@@ -226,14 +221,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_accept(
     STATUS_OK
 }
 
-/// `Result[Option[Bytes], NetError]`: the tag, then at 8 either the Option (its tag, then the
-/// Bytes slice at 16) or the NetError words; 40 bytes, align 8.
+/// `Result[Option[Bytes], NetError]`: the tag, then at 8 either the Option, a Bytes slice
+/// whose null owner word is `None` (its niche), or the NetError words; 32 bytes, align 8.
 #[repr(C)]
 pub struct NetChainResult {
     pub tag: u32,
     pub padding: u32,
-    pub option: u32,
-    pub option_padding: u32,
     pub value: crate::views::Slice,
 }
 
@@ -265,17 +258,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_peer(
     match value {
         Ok(None) => {}
         Ok(Some(chain)) => unsafe {
-            (*out).option = 1;
             (*out).value = crate::text::allocate_bytes(ctx, &chain);
         },
         Err(error) => unsafe {
-            let e = crate::net_abi::NetErrorAbi::of(error);
             (*out).tag = 1;
-            (*out).option = e.tag;
-            (*out).option_padding = e.word;
             std::ptr::addr_of_mut!((*out).value)
-                .cast::<u32>()
-                .write(e.extra);
+                .cast::<crate::net_abi::NetErrorAbi>()
+                .write(crate::net_abi::NetErrorAbi::of(error));
         },
     }
     STATUS_OK

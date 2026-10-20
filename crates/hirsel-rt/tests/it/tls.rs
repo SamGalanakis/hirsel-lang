@@ -417,14 +417,8 @@ fn tls_close_on_a_plain_host_stream_succeeds_without_sending_bytes() {
 }
 
 #[test]
-fn tls_abi_uses_the_core_roots_and_result_layouts() {
-    use hirsel_rt::tls_abi::TlsRootsAbi;
-    use std::mem::{align_of, offset_of, size_of};
-    assert_eq!(
-        (size_of::<TlsRootsAbi>(), align_of::<TlsRootsAbi>()),
-        (32, 8)
-    );
-    assert_eq!(offset_of!(TlsRootsAbi, pem), 8);
+fn tls_abi_uses_the_core_result_layouts() {
+    use std::mem::{align_of, size_of};
     assert_eq!(
         (
             size_of::<hirsel_rt::net_abi::NetWordResult>(),

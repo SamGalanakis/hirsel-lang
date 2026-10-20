@@ -43,7 +43,7 @@ pub use stage::{
 /// (`QueryEnvironment.interface_version`). A change invalidates every artifact.
 pub const INTERFACE_VERSION: u32 = 11;
 pub const LIR_VERSION: u32 = 38;
-pub const LAYOUT_VERSION: u32 = 4;
+pub const LAYOUT_VERSION: u32 = 5;
 /// Hirsel cross-unit ABI v2.
 pub const ABI_VERSION: u32 = 2;
 /// `hirsel_rt_v2`.

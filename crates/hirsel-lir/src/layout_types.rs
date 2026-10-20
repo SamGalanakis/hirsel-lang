@@ -379,9 +379,11 @@ pub enum TagForm {
     Ordinal,
     /// A persistent environment live bit, decoded as zero or one.
     LiveBit { bit: u32 },
-    /// No tag word (layout version 2): the offset holds a counted block
-    /// reference field of variant `dataful`, which is never null, and a null
-    /// word there means the nullary variant `nullary` is active.
+    /// No tag word (layout version 2): the offset holds a pointer word inside
+    /// variant `dataful`'s payload that is never null while it is active (a
+    /// block reference, Ptr, FnPtr or slice owner, nested in inline aggregates
+    /// since layout version 5), and a null word there means the nullary
+    /// variant `nullary` is active.
     Niche { nullary: u32, dataful: u32 },
 }
 

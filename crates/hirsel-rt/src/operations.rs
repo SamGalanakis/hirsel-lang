@@ -806,7 +806,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         caller_site: false,
         symbol: "hirsel_rt_v2_tls_peer",
         destination: true,
-        result: Some((40, 8)),
+        result: Some((32, 8)),
         parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
@@ -1722,7 +1722,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         caller_site: false,
         symbol: "hirsel_rt_v2_env_get",
         destination: true,
-        result: Some((40, 8)),
+        result: Some((32, 8)),
         parameters: &[
             Physical::Pointer,
             Physical::Pointer,

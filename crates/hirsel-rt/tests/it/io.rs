@@ -387,6 +387,95 @@ fn io_result_records_match_derived_layouts_on_both_targets() {
     }
 }
 
+/// The runtime images of variants whose `None` is a null String or Bytes owner word
+/// (layout version 5) are exactly the derived layouts, niche offset included.
+#[test]
+fn niche_images_match_derived_layouts_on_both_targets() {
+    use hirsel_layout::layout::{LayoutBuilder, Owners};
+    use hirsel_lir::layout_types::{SizeSpec, TagForm, TargetSpec};
+    use hirsel_rt::net_abi::NetErrorAbi;
+    use hirsel_rt::tls_abi::{NetChainResult, TlsRootsAbi};
+    use hirsel_types::{Primitive, TypeId};
+    use std::mem::{align_of, offset_of, size_of};
+    for target in [
+        TargetSpec::x86_64_unknown_linux_gnu(),
+        TargetSpec::aarch64_unknown_linux_gnu(),
+    ] {
+        let mut ty = support::schema::Ty::default();
+        let (u8ty, u32ty) = (ty.p(Primitive::U8), ty.p(Primitive::U32));
+        let (string, bytes) = (ty.p(Primitive::String), ty.p(Primitive::Bytes));
+        let env_error = ty.variant(&[&[], &[]]);
+        let cancel = ty.variant(&[&[], &[], &[]]);
+        let mut tls: Vec<&[TypeId]> = vec![&[]; 10];
+        let alert = [u8ty];
+        tls[6] = &alert;
+        let tls_failure = ty.variant(&tls);
+        let mut net: Vec<&[TypeId]> = vec![&[]; 18];
+        let (canceled, failed, fault) = ([cancel], [tls_failure], [u32ty]);
+        (net[1], net[16], net[17]) = (&canceled, &failed, &fault);
+        let net_error = ty.variant(&net);
+        let maybe_string = ty.variant(&[&[], &[string]]);
+        let maybe_bytes = ty.variant(&[&[], &[bytes]]);
+        let env = ty.variant(&[&[maybe_string], &[env_error]]);
+        let chain = ty.variant(&[&[maybe_bytes], &[net_error]]);
+        let roots = ty.variant(&[&[], &[bytes]]);
+        let owners = Owners::default();
+        let mut builder = LayoutBuilder::new(&target, &owners);
+        let ids = [net_error, env, chain, roots].map(|t| builder.layout(&ty.store, t).unwrap());
+        let table = builder.finish();
+        hirsel_lir::layout_validate::validate_table(&table, &target).unwrap();
+        let record = |id| table.layout(id).unwrap();
+        let none_is_null = TagForm::Niche {
+            nullary: 0,
+            dataful: 1,
+        };
+        let error = record(ids[0]);
+        assert_eq!(
+            (error.size.clone(), error.align),
+            (
+                SizeSpec::Fixed(size_of::<NetErrorAbi>() as u64),
+                align_of::<NetErrorAbi>() as u32
+            )
+        );
+        for (id, size, align, value) in [
+            (
+                ids[1],
+                size_of::<EnvResult>(),
+                align_of::<EnvResult>(),
+                offset_of!(EnvResult, value),
+            ),
+            (
+                ids[2],
+                size_of::<NetChainResult>(),
+                align_of::<NetChainResult>(),
+                offset_of!(NetChainResult, value),
+            ),
+        ] {
+            let result = record(id);
+            assert_eq!(result.size, SizeSpec::Fixed(size as u64));
+            assert_eq!(result.align, align as u32);
+            let arms = &result.tag.as_ref().unwrap().variants;
+            assert_eq!(arms[0].fields[0].offset, value as u64);
+            assert_eq!(arms[1].fields[0].offset, value as u64);
+            let option = record(arms[0].fields[0].layout).tag.as_ref().unwrap();
+            assert_eq!((option.offset, option.form), (0, none_is_null));
+        }
+        let roots = record(ids[3]);
+        assert_eq!(
+            (roots.size.clone(), roots.align),
+            (
+                SizeSpec::Fixed(size_of::<TlsRootsAbi>() as u64),
+                align_of::<TlsRootsAbi>() as u32
+            )
+        );
+        let tag = roots.tag.as_ref().unwrap();
+        assert_eq!(
+            (tag.offset, tag.form, tag.variants[1].fields[0].offset),
+            (0, none_is_null, offset_of!(TlsRootsAbi, pem) as u64)
+        );
+    }
+}
+
 #[test]
 fn hirsel_abi_leaf_exports_consume_taken_bytes_and_handles_on_every_result() {
     use std::{cell::RefCell, rc::Rc};

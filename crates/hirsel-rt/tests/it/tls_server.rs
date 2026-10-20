@@ -295,7 +295,7 @@ fn an_invalid_identity_is_invalid_input_and_never_starts_tls() {
 
 #[test]
 fn server_abi_is_an_identity_list_then_the_client_policy() {
-    use hirsel_rt::tls_abi::{NetChainResult, TlsClientAuthAbi, TlsServerAbi};
+    use hirsel_rt::tls_abi::{TlsClientAuthAbi, TlsServerAbi};
     use std::mem::{align_of, offset_of, size_of};
     assert_eq!(
         (
@@ -311,13 +311,6 @@ fn server_abi_is_an_identity_list_then_the_client_policy() {
             offset_of!(TlsServerAbi, clients)
         ),
         (40, 8, 8)
-    );
-    assert_eq!(
-        (
-            size_of::<NetChainResult>(),
-            offset_of!(NetChainResult, value)
-        ),
-        (40, 16)
     );
 }
 

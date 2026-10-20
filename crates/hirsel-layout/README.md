@@ -21,7 +21,8 @@ way are complete, so it may hold one of them inline in any request order. The in
 Instance identity retains complete type structure, binders, size actuals,
 callable convention and environment layout, excluding implementation revisions.
 Operation schema tags convert exhaustively in both directions and preserve the
-canonical snapshot bytes. Nullable Ptr/FnPtr options use the null-pointer niche (layout version 4); the
+canonical snapshot bytes. Nullable Ptr/FnPtr options use the null-pointer niche (layout version 4), and a
+niche word nested in a String or an inline aggregate serves too (layout version 5); the
 internal aggregate ABI remains unchanged, while C adapters use one pointer word.
 Canonical snapshots retain explicit layout, ABI and LIR versions.
 

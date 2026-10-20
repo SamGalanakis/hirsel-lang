@@ -949,9 +949,9 @@ impl<'a> Validator<'a> {
         }
     }
 
-    /// A null-pointer niche (layout version 2): an ordinary in-memory variant
-    /// of two variants, `nullary` without fields and `dataful` with an aligned
-    /// non-null pointer field at the tag offset (block, Ptr or FnPtr).
+    /// A null-pointer niche (layout version 5): an ordinary in-memory variant
+    /// of two variants, `nullary` without fields and `dataful` whose payload
+    /// holds an aligned non-null pointer word at the tag offset (`nonnull_word`).
     fn niche(
         &mut self,
         s: &Subject,
@@ -993,23 +993,47 @@ impl<'a> Validator<'a> {
                 "the niche's null variant has fields",
             );
         }
-        let word = fields(dataful).iter().find(|f| f.offset == tag.offset);
-        let pointer = word.is_some_and(|f| {
-            !f.unaligned
-                && matches!(
-                    self.get(f.layout).kind,
-                    LayoutKind::Block { .. }
-                        | LayoutKind::Box { .. }
-                        | LayoutKind::Scalar(ScalarKind::Pointer)
-                )
-        });
-        if !pointer {
+        let align = u64::from(self.target.scalar_align(ScalarKind::Pointer));
+        if tag.offset % align != 0
+            || !self.nonnull_word(fields(dataful), tag.offset, self.table.layouts.len())
+        {
             self.fail(
                 s.clone(),
                 Obligation::Tag,
                 "the niche word is not an aligned non-null pointer of the other variant",
             );
         }
+    }
+
+    /// Whether the pointer word at `offset` among `fields` is never null while
+    /// they are live: it is a counted block reference, Ptr or FnPtr leaf, or a
+    /// String or Bytes slice's owner word, reached only through aligned fields
+    /// of inline Aggregates. A word inside a variant, environment, callable,
+    /// sequence or padding may be null or uninitialized. `fuel` bounds the walk
+    /// on a cyclic table.
+    fn nonnull_word(&self, fields: &[FieldLayout], offset: u64, fuel: usize) -> bool {
+        let Some(fuel) = fuel.checked_sub(1) else {
+            return false;
+        };
+        let holder = fields.iter().find(|f| {
+            self.in_range(f.layout)
+                && static_size(self.get(f.layout), false)
+                    .is_some_and(|size| f.offset <= offset && offset - f.offset < size)
+        });
+        let Some(f) = holder else {
+            return false;
+        };
+        let child = self.get(f.layout);
+        let within = offset - f.offset;
+        !f.unaligned
+            && match child.kind {
+                LayoutKind::Block { .. }
+                | LayoutKind::Box { .. }
+                | LayoutKind::Scalar(ScalarKind::Pointer)
+                | LayoutKind::Slice { .. } => within == 0,
+                LayoutKind::Aggregate => self.nonnull_word(&child.fields, within, fuel),
+                _ => false,
+            }
     }
 
     /// A flat record's extent with every length prefix zero is its static end.

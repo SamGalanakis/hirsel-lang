@@ -1925,18 +1925,21 @@ impl<'p, S: Stage> Machine<'p, S> {
             .active(at.offset, form, self.word)
     }
 
-    /// Move the `size` bytes of a part out of its place. A move that takes
-    /// exactly one data cell's word leaves the word vacated, as the native
-    /// move leaves its bits: a null-pointer niche there still reads as set.
+    /// Move the `size` bytes of a part out of its place. Every data cell's
+    /// word the move takes stays vacated, as the native move leaves its bits:
+    /// a null-pointer niche there, the part's own or one nested in a String or
+    /// an aggregate, still reads as set.
     fn take_part(&mut self, at: Ptr, size: u64, owned: &[Vec<ProjectionStep<u64>>]) -> Extent {
-        let word = self.word;
         let path = self.ledger.path(at);
         let extent = &mut self.ledger.get_mut(at.alloc).extent;
-        let held = matches!(extent.cells.get(&at.offset), Some(Cell::Data { .. }));
+        let held: Vec<u64> = extent
+            .cells
+            .range(at.offset..at.offset + size)
+            .filter(|(_, cell)| matches!(cell, Cell::Data { .. }))
+            .map(|(&offset, _)| offset)
+            .collect();
         let taken = extent.take(at.offset, size, UNINIT_POISON, Some((&path, owned)));
-        if held && size == word {
-            extent.vacated.insert(at.offset);
-        }
+        extent.vacated.extend(held);
         if taken.init.iter().all(|i| *i) {
             extent.ghosts.insert(at.offset, taken.bytes.to_vec());
         }

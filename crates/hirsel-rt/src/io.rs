@@ -3631,14 +3631,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_stdin_read(
     crate::STATUS_OK
 }
 
-/// Result[Option[String], EnvError]: nested Option starts at byte 8, String at byte 16.
+/// Result[Option[String], EnvError]: the tag, then at 8 either the Option, a String
+/// whose null owner word is `None` (its niche), or the EnvError ordinal; 32 bytes.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct EnvResult {
     pub tag: u32,
     pub padding: u32,
-    pub option: u32,
-    pub option_padding: u32,
     pub value: crate::views::Slice,
 }
 /// # Safety
@@ -3668,22 +3667,26 @@ pub unsafe extern "C" fn hirsel_rt_v2_env_get(
     }) else {
         return crate::STATUS_FAILURE;
     };
-    let mut result: EnvResult = unsafe { std::mem::zeroed() };
+    // Zero bytes are `Ok(None)`; an error ordinal never becomes a pointer value.
+    unsafe {
+        out.cast::<u8>()
+            .write_bytes(0, std::mem::size_of::<EnvResult>())
+    };
     match value {
-        Ok(Some(text)) => {
-            result.option = 1;
-            result.value = unsafe { crate::text::allocate_bytes(ctx, text.as_bytes()) };
-        }
+        Ok(Some(text)) => unsafe {
+            (*out).value = crate::text::allocate_bytes(ctx, text.as_bytes());
+        },
         Ok(None) => {}
-        Err(error) => {
-            result.tag = 1;
-            result.option = match error {
-                EnvError::NotGranted => 0,
-                EnvError::InvalidUtf8 => 1,
-            };
-        }
+        Err(error) => unsafe {
+            (*out).tag = 1;
+            std::ptr::addr_of_mut!((*out).value)
+                .cast::<u32>()
+                .write(match error {
+                    EnvError::NotGranted => 0,
+                    EnvError::InvalidUtf8 => 1,
+                });
+        },
     }
-    unsafe { out.write(result) };
     crate::STATUS_OK
 }
 

@@ -82,7 +82,8 @@ typedef struct { hirsel_rt_v2_header *owner; uint64_t start, length; } hirsel_rt
  * generated caller glue records the rule at the call site before cleanup. */
 extern const hirsel_rt_v2_layout hirsel_rt_v2_bytes_descriptor;
 typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice value; } hirsel_rt_v2_string_result;
-typedef struct { uint32_t tag, padding, option, option_padding; hirsel_rt_v2_slice value; } hirsel_rt_v2_env_result;
+/* Result[Option[String], EnvError]: the tag, then at 8 the String (a null owner is None) or the EnvError ordinal. */
+typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice value; } hirsel_rt_v2_env_result;
 uint8_t hirsel_rt_v2_io_stdin(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*);
 uint8_t hirsel_rt_v2_io_stderr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*);
 uint8_t hirsel_rt_v2_stdin_read(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, hirsel_rt_v2_header**, uint64_t);
@@ -152,8 +153,8 @@ uint8_t hirsel_rt_v2_net_udp_bind(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_wor
 uint8_t hirsel_rt_v2_udp_send_to(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const hirsel_rt_v2_socket_addr*);
 uint8_t hirsel_rt_v2_udp_recv_from(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_udp_received_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header**, uint64_t);
 uint8_t hirsel_rt_v2_udp_close(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
-/* TLS roots use the ordinary WebPki/Pem sum; only the active Pem slice is read. */
-typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice pem; } hirsel_rt_v2_tls_roots;
+/* TLS roots use the ordinary WebPki/Pem sum: the Pem slice, whose null owner is WebPki. */
+typedef struct { hirsel_rt_v2_slice pem; } hirsel_rt_v2_tls_roots;
 uint8_t hirsel_rt_v2_tls_connect(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const hirsel_rt_v2_tls_roots*);
 /* A TLS identity is the ordinary { chain: Bytes, key: Bytes } record of two slices. */
 typedef struct { hirsel_rt_v2_slice chain, key; } hirsel_rt_v2_tls_identity;
@@ -161,7 +162,8 @@ uint8_t hirsel_rt_v2_tls_connect_as(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_w
 typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice pem; } hirsel_rt_v2_tls_client_auth;
 typedef struct { hirsel_rt_v2_header* identities; hirsel_rt_v2_tls_client_auth clients; } hirsel_rt_v2_tls_server;
 uint8_t hirsel_rt_v2_tls_accept(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, uint64_t*, const hirsel_rt_v2_tls_server*);
-typedef struct { uint32_t tag, padding, option, option_padding; hirsel_rt_v2_slice value; } hirsel_rt_v2_net_chain_result;
+/* Result[Option[Bytes], NetError]: the tag, then at 8 the Bytes (a null owner is None) or the NetError. */
+typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice value; } hirsel_rt_v2_net_chain_result;
 uint8_t hirsel_rt_v2_tls_peer(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_chain_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_tls_close(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_unit_result*, const uint64_t*, uint64_t*);
 /* Structured tasks (hirsel-rt src/tasks.rs). Scope and Task are run-local handle words; a

@@ -340,22 +340,17 @@ impl Layouts {
         id
     }
 
-    /// A null-pointer niche (layout version 2): fieldless variant `nullary`
+    /// A null-pointer niche (layout version 5): fieldless variant `nullary`
     /// and variant `1 - nullary` with `fields`, whose first block reference
-    /// field's word is the tag, null for `nullary`.
+    /// word, directly or inside an inline record, is the tag, null for
+    /// `nullary`.
     pub fn niche(&mut self, nullary: u32, fields: &[LayoutId]) -> LayoutId {
         let dataful = 1 - nullary;
         let (fields, end, align) = self.lay_out(fields, 0);
         let word = fields
             .iter()
-            .find(|f| {
-                matches!(
-                    self.get(f.layout).kind,
-                    LayoutKind::Block { .. } | LayoutKind::Box { .. }
-                )
-            })
-            .expect("a niche needs a block reference field")
-            .offset;
+            .find_map(|f| Some(f.offset + self.reference_word(f.layout)?))
+            .expect("a niche needs a block reference word");
         let (scan, drop, copy) = self.programs(&fields);
         let size = end.div_ceil(u64::from(align)) * u64::from(align);
         let form = TagForm::Niche { nullary, dataful };
@@ -387,6 +382,20 @@ impl Layouts {
         }];
         r.copy = copy;
         id
+    }
+
+    /// The offset of the first block reference word of `layout`, through
+    /// inline records.
+    fn reference_word(&self, layout: LayoutId) -> Option<u64> {
+        let r = self.get(layout);
+        match r.kind {
+            LayoutKind::Block { .. } | LayoutKind::Box { .. } => Some(0),
+            LayoutKind::Aggregate => r
+                .fields
+                .iter()
+                .find_map(|f| Some(f.offset + self.reference_word(f.layout)?)),
+            _ => None,
+        }
     }
 
     /// A callable pair: code word, then environment reference.

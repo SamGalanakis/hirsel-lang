@@ -1989,7 +1989,7 @@ impl<'o> LayoutBuilder<'o> {
 
     /// Ordinary variants: an explicit u32 ordinal tag at offset 0, then the
     /// payload union at the largest variant alignment. The one exception is a
-    /// null-pointer niche (layout version 2): see `niche`.
+    /// null-pointer niche (layout version 5): see `niche`.
     fn variant<'s>(
         &mut self,
         walk: &mut Walk<'s>,
@@ -2010,10 +2010,10 @@ impl<'o> LayoutBuilder<'o> {
             }
             layouts.push(pieces);
         }
-        if let Some((nullary, dataful, field)) = self.niche(&layouts, packed) {
+        if let Some((nullary, dataful, field, within)) = self.niche(&layouts, packed) {
             let (fields, end, natural) = self.place(&layouts[dataful as usize], false, 0)?;
             let tag = TagEncoding {
-                offset: fields[field].offset,
+                offset: fields[field].offset + within,
                 form: TagForm::Niche { nullary, dataful },
                 variants: (0..2)
                     .map(|ordinal| VariantLayout {
@@ -2061,13 +2061,15 @@ impl<'o> LayoutBuilder<'o> {
         Ok(record)
     }
 
-    /// The null-pointer niche (layout version 2): a non-`@packed` variant of
-    /// exactly two variants, one without fields and one with a non-null pointer
-    /// field (a counted block reference, Ptr or FnPtr). It has no tag word: the first
-    /// such field's word is null exactly when the fieldless variant is active,
-    /// so `Leaf | Node(Box[T], Box[T])` is two words. Returns the fieldless
-    /// ordinal, the other ordinal and the index of its niche field.
-    fn niche(&self, variants: &[Vec<Piece>], packed: bool) -> Option<(u32, u32, usize)> {
+    /// The null-pointer niche (layout version 5): a non-`@packed` variant of
+    /// exactly two variants, one without fields and one that holds an aligned
+    /// non-null pointer word anywhere in its inline payload (`niche_word`). It
+    /// has no tag word: the first such word is null exactly when the fieldless
+    /// variant is active, so `Leaf | Node(Box[T], Box[T])` is two words and
+    /// `None | Some((String, u64))` is four. Returns the fieldless ordinal, the
+    /// other ordinal, the index of the field holding the word and the word's
+    /// offset inside that field.
+    fn niche(&self, variants: &[Vec<Piece>], packed: bool) -> Option<(u32, u32, usize, u64)> {
         let [first, second] = variants else {
             return None;
         };
@@ -2079,15 +2081,31 @@ impl<'o> LayoutBuilder<'o> {
         if packed {
             return None;
         }
-        let field = pieces.iter().position(|p| {
-            matches!(
-                self.record(p.layout).kind,
-                LayoutKind::Block { .. }
-                    | LayoutKind::Box { .. }
-                    | LayoutKind::Scalar(ScalarKind::Pointer)
-            )
-        })?;
-        Some((nullary, dataful, field))
+        pieces.iter().enumerate().find_map(|(field, p)| {
+            let within = self.niche_word(p.layout)?;
+            Some((nullary, dataful, field, within))
+        })
+    }
+
+    /// The offset of the first aligned non-null pointer word of `layout`, depth
+    /// first in declaration order: a counted block reference, Ptr or FnPtr
+    /// itself, a String or Bytes slice's owner word, or such a word inside an
+    /// aligned field of an Aggregate. Variants, environments, callables and
+    /// sequences are never entered: their words may be null or inactive.
+    fn niche_word(&self, layout: LayoutId) -> Option<u64> {
+        let record = self.record(layout);
+        match record.kind {
+            LayoutKind::Block { .. }
+            | LayoutKind::Box { .. }
+            | LayoutKind::Scalar(ScalarKind::Pointer)
+            | LayoutKind::Slice { .. } => Some(0),
+            LayoutKind::Aggregate => record
+                .fields
+                .iter()
+                .filter(|f| !f.unaligned)
+                .find_map(|f| Some(f.offset + self.niche_word(f.layout)?)),
+            _ => None,
+        }
     }
 
     fn adopt_variants(&self, record: &mut LayoutRecord, tag: TagEncoding, packed: bool) {

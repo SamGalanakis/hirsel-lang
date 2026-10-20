@@ -2568,6 +2568,7 @@ conformance/MEM/MEM-7-mutual-option-box-group-run.hir
 conformance/MEM/MEM-7-mutual-record-cycle-bad.hir
 conformance/MEM/MEM-7-mutual-record-cycle-ok.hir
 conformance/MEM/MEM-7-mutual-three-group-run.hir
+conformance/MEM/MEM-7-nested-niche-run.hir
 conformance/MEM/MEM-7-nested-option-field-bad.hir
 conformance/MEM/MEM-7-nested-option-field-run.hir
 conformance/MEM/MEM-7-packed.hir

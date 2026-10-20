@@ -345,7 +345,7 @@ fn variants_scan_and_drop_only_the_active_payload() {
 }
 
 /// `Leaf | Node(Box[Tree], Box[Tree])`, the binarytrees node, and `Node(i64, String,
-/// Box[f64]) | Leaf`, whose niche word follows two other fields.
+/// Box[f64]) | Leaf`, whose niche word is the String's owner after the i64.
 fn niche_table() -> (LayoutTable, LayoutId, LayoutId, LayoutId) {
     niche_table_for(&x86())
 }
@@ -416,7 +416,7 @@ fn a_fieldless_and_a_block_holding_variant_share_the_null_word_as_their_tag() {
     assert_eq!(
         (tag.offset, tag.form),
         (
-            32,
+            8,
             TagForm::Niche {
                 nullary: 1,
                 dataful: 0
@@ -426,7 +426,7 @@ fn a_fieldless_and_a_block_holding_variant_share_the_null_word_as_their_tag() {
 }
 
 #[test]
-fn variants_without_exactly_one_fieldless_and_one_block_holding_variant_keep_a_u32_tag() {
+fn variants_without_one_fieldless_and_one_nonnull_word_holding_variant_keep_a_u32_tag() {
     let mut owners = Owners::default();
     let packed = owner(
         &mut owners,
@@ -446,15 +446,27 @@ fn variants_without_exactly_one_fieldless_and_one_block_holding_variant_keep_a_u
     );
     let mut b = LayoutBuilder::new(&x86(), &owners);
     let mut t = Ty::default();
-    let (u8_, string, f64_) = (
+    let (u8_, u64_, string, f64_) = (
         t.p(Primitive::U8),
+        t.p(Primitive::U64),
         t.p(Primitive::String),
         t.p(Primitive::F64),
     );
     let bx = t.boxed(f64_);
+    let maybe_text = t.variant(&[&[], &[string]]);
+    let after_nullable = t.tuple(&[u64_, maybe_text]);
+    let words = t.tuple(&[u64_, f64_]);
     let cases = [
         ("three variants", t.variant(&[&[], &[], &[bx]])),
-        ("a slice owner is not a block", t.variant(&[&[], &[string]])),
+        (
+            "a nested variant's word may be null",
+            t.variant(&[&[], &[maybe_text]]),
+        ),
+        (
+            "a word only inside a nested variant",
+            t.variant(&[&[], &[after_nullable]]),
+        ),
+        ("no pointer word", t.variant(&[&[], &[words]])),
         ("no fieldless variant", t.variant(&[&[u8_], &[bx]])),
         ("one variant", t.variant(&[&[bx]])),
         ("@packed", t.named(&packed, vec![])),
@@ -519,6 +531,115 @@ fn the_validator_rejects_an_unsound_niche() {
     };
     *form = TagForm::Ordinal; // the drop program reads another encoding
     rejects(&m, Obligation::DropOrder);
+}
+
+/// `None | Some(T)` over payloads whose first non-null word is nested: a String in a
+/// tuple (the map entry `(String, u64)`) and after a u64, a String in a record after a
+/// u8, a String two tuples deep, and a Box after a nullable `Option[Box]`.
+fn nested_niche_table() -> (LayoutTable, [LayoutId; 5]) {
+    let owners = Owners::default();
+    let mut b = LayoutBuilder::new(&x86(), &owners);
+    let mut t = Ty::default();
+    let (u8_, u32_, u64_, string, f64_) = (
+        t.p(Primitive::U8),
+        t.p(Primitive::U32),
+        t.p(Primitive::U64),
+        t.p(Primitive::String),
+        t.p(Primitive::F64),
+    );
+    let bx = t.boxed(f64_);
+    let maybe_box = t.variant(&[&[], &[bx]]);
+    let entry = t.tuple(&[string, u64_]);
+    let late = t.tuple(&[u64_, string]);
+    let record = t.record(&[u8_, string]);
+    let inner = t.tuple(&[u32_, string]);
+    let deep = t.tuple(&[u64_, inner]);
+    let guarded = t.tuple(&[maybe_box, bx]);
+    let ids = [entry, late, record, deep, guarded].map(|payload| {
+        let option = t.variant(&[&[], &[payload]]);
+        b.layout(&t.store, option).unwrap()
+    });
+    (checked(b), ids)
+}
+
+#[test]
+fn a_nonnull_word_nested_in_a_string_tuple_or_record_is_the_niche() {
+    let (table, ids) = nested_niche_table();
+    // (size, niche offset): no variant grows past its payload.
+    let expected = [(32, 0), (32, 8), (32, 8), (40, 16), (16, 8)];
+    for (id, (size, offset)) in ids.into_iter().zip(expected) {
+        let r = rec(&table, id);
+        assert_eq!((fixed(r), r.align), (size, 8), "{offset}");
+        let tag = r.tag.as_ref().unwrap();
+        assert_eq!(
+            (tag.offset, tag.form),
+            (
+                offset,
+                TagForm::Niche {
+                    nullary: 0,
+                    dataful: 1
+                }
+            )
+        );
+        assert_eq!(offsets_of(&tag.variants[1].fields), [0]);
+        let mut bytes = vec![0u8; size as usize];
+        let mut events = Vec::new();
+        drop_events(&table, id, &bytes, 0, &mut events);
+        assert_eq!(events, [], "a null word is None");
+        let at = offset as usize;
+        bytes[at..at + 8].copy_from_slice(&0x7f00_0000_1000u64.to_le_bytes());
+        drop_events(&table, id, &bytes, 0, &mut events);
+        assert!(events.contains(&(offset, "release")), "{events:?}");
+    }
+}
+
+#[test]
+fn the_validator_rejects_a_nested_niche_word_that_may_be_null_uninitialized_or_misaligned() {
+    let (table, [entry, _, record, deep, guarded]) = nested_niche_table();
+    let owners = Owners::default();
+    let mut b = LayoutBuilder::new(&x86(), &owners);
+    let mut t = Ty::default();
+    let (u8_, i128_, string) = (
+        t.p(Primitive::U8),
+        t.p(Primitive::I128),
+        t.p(Primitive::String),
+    );
+    let padded = t.tuple(&[u8_, i128_, string]);
+    let option = t.variant(&[&[], &[padded]]);
+    let pid = b.layout(&t.store, option).unwrap();
+    let padded_table = checked(b);
+    fn tag(m: &mut LayoutTable, id: LayoutId) -> &mut TagEncoding {
+        m.layouts[id.0 as usize].tag.as_mut().unwrap()
+    }
+    fn moved(table: &LayoutTable, id: LayoutId, offset: u64) -> LayoutTable {
+        let mut m = table.clone();
+        tag(&mut m, id).offset = offset;
+        m
+    }
+
+    // Nullable: the entry's u64, a String's length word, the u32 beside a nested
+    // String, and the word of a nested `Option[Box]`.
+    rejects(&moved(&table, entry, 24), Obligation::Tag);
+    rejects(&moved(&table, entry, 8), Obligation::Tag);
+    rejects(&moved(&table, deep, 8), Obligation::Tag);
+    rejects(&moved(&table, guarded, 0), Obligation::Tag);
+    // Uninitialized: aligned padding between the u8 and the i128.
+    let p = rec(&padded_table, pid);
+    let tag_at = p.tag.as_ref().unwrap();
+    let tuple = rec(&padded_table, tag_at.variants[1].fields[0].layout);
+    assert_eq!((tag_at.offset, offsets(tuple)), (32, vec![0, 16, 32]));
+    rejects(&moved(&padded_table, pid, 8), Obligation::Tag);
+    // Misaligned: inside the record's String owner, and through an unaligned field.
+    rejects(&moved(&table, record, 12), Obligation::Tag);
+    let mut m = table.clone();
+    tag(&mut m, record).variants[1].fields[0].unaligned = true;
+    rejects(&m, Obligation::Tag);
+    let mut m = table.clone();
+    let r = tag(&mut m, record).variants[1].fields[0].layout.0 as usize;
+    let string = &mut m.layouts[r].fields[1];
+    assert_eq!(string.offset, 8);
+    string.unaligned = true;
+    rejects(&m, Obligation::Tag);
 }
 
 #[test]
@@ -1694,7 +1815,7 @@ fn c_probes_agree_on_both_targets() {
         }
         let table = checked(b);
         // The niche shapes: the dataful variant's fields are the whole value,
-        // and the niche word is its block reference field.
+        // and the niche word is a pointer word inside them.
         let (niches, tree, _, shifted) = niche_table_for(&target);
         for (name, id) in [("NicheTree", tree), ("NicheShifted", shifted)] {
             let r = rec(&niches, id);
