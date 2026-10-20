@@ -36,8 +36,8 @@ fn image_alt(node: Node, mut out: List[u8]) -> () uses {} {
     SoftBreak() => core@1/list.push(mut out, 10u8),
     HardBreak() => core@1/list.push(mut out, 10u8),
     _ => {
-      for child in node.children {
-        image_alt(child, mut out)
+      for descendant in node.children {
+        image_alt(descendant, mut out)
       }
     },
   }
@@ -101,8 +101,8 @@ fn render_footnote(node: Node, mut out: List[u8], options: Options) -> () uses {
       text.append(mut out, "<li id=\"fn-")
       escape_html(mut out, normalize_uri(label))
       text.append(mut out, "\">\n")
-      for child in node.children {
-        render_node(child, mut out, false, false, options)
+      for descendant in node.children {
+        render_node(descendant, mut out, false, false, options)
       }
       newline(mut out)
       text.append(mut out, "</li>\n")
@@ -155,14 +155,14 @@ fn render_node(
   match node.kind {
     Document() => {
       let mut footnotes = false
-      for child in node.children {
-        if let FootnoteDefinition(_) = child.kind {
+      for descendant in node.children {
+        if let FootnoteDefinition(_) = descendant.kind {
           if !footnotes {
             text.append(mut out, "<section class=\"footnotes\" data-footnotes>\n<ol>\n")
             footnotes = true
           }
         }
-        render_node(child, mut out, false, false, options)
+        render_node(descendant, mut out, false, false, options)
       }
       if footnotes {
         text.append(mut out, "</ol>\n</section>\n")
@@ -207,8 +207,8 @@ fn render_node(
         newline(mut out)
         text.append(mut out, "<p>")
       }
-      for child in node.children {
-        render_node(child, mut out, false, false, options)
+      for descendant in node.children {
+        render_node(descendant, mut out, false, false, options)
       }
       if !tight {
         text.append(mut out, "</p>\n")
@@ -217,16 +217,16 @@ fn render_node(
     Heading(level) => {
       newline(mut out)
       text.append(mut out, f"<h{level}>")
-      for child in node.children {
-        render_node(child, mut out, false, false, options)
+      for descendant in node.children {
+        render_node(descendant, mut out, false, false, options)
       }
       text.append(mut out, f"</h{level}>\n")
     },
     BlockQuote() => {
       newline(mut out)
       text.append(mut out, "<blockquote>\n")
-      for child in node.children {
-        render_node(child, mut out, false, false, options)
+      for descendant in node.children {
+        render_node(descendant, mut out, false, false, options)
       }
       newline(mut out)
       text.append(mut out, "</blockquote>\n")
@@ -245,8 +245,8 @@ fn render_node(
       } else {
         text.append(mut out, "<ul>\n")
       }
-      for child in node.children {
-        render_node(child, mut out, list_tight, false, options)
+      for descendant in node.children {
+        render_node(descendant, mut out, list_tight, false, options)
       }
       newline(mut out)
       text.append(
@@ -270,8 +270,8 @@ fn render_node(
           }
         )
       }
-      for child in node.children {
-        render_node(child, mut out, tight, false, options)
+      for descendant in node.children {
+        render_node(descendant, mut out, tight, false, options)
       }
       text.append(mut out, "</li>\n")
     },
@@ -288,8 +288,8 @@ fn render_node(
         core@1/list.push(mut out, 34u8)
       }
       core@1/list.push(mut out, 62u8)
-      for child in node.children {
-        render_node(child, mut out, false, false, options)
+      for descendant in node.children {
+        render_node(descendant, mut out, false, false, options)
       }
       text.append(mut out, "</a>")
     },
@@ -299,8 +299,8 @@ fn render_node(
         escape_html(mut out, dest)
       }
       text.append(mut out, "\" alt=\"")
-      for child in node.children {
-        image_alt(child, mut out)
+      for descendant in node.children {
+        image_alt(descendant, mut out)
       }
       core@1/list.push(mut out, 34u8)
       if title != "" {
@@ -312,22 +312,22 @@ fn render_node(
     },
     Emphasis() => {
       text.append(mut out, "<em>")
-      for child in node.children {
-        render_node(child, mut out, false, false, options)
+      for descendant in node.children {
+        render_node(descendant, mut out, false, false, options)
       }
       text.append(mut out, "</em>")
     },
     Strong() => {
       text.append(mut out, "<strong>")
-      for child in node.children {
-        render_node(child, mut out, false, false, options)
+      for descendant in node.children {
+        render_node(descendant, mut out, false, false, options)
       }
       text.append(mut out, "</strong>")
     },
     Strikethrough() => {
       text.append(mut out, "<del>")
-      for child in node.children {
-        render_node(child, mut out, false, false, options)
+      for descendant in node.children {
+        render_node(descendant, mut out, false, false, options)
       }
       text.append(mut out, "</del>")
     },
@@ -384,8 +384,8 @@ fn render_node(
         )
       }
       core@1/list.push(mut out, 62u8)
-      for child in node.children {
-        render_node(child, mut out, false, false, options)
+      for descendant in node.children {
+        render_node(descendant, mut out, false, false, options)
       }
       text.append(
         mut out,

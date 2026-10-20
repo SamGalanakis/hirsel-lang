@@ -52,6 +52,7 @@ Deviations and reasons:
 - Safety and tag filtering live in `Options` and pass through the recursive
   renderer rather than a JavaScript renderer object or C extension callback.
   Hirsel's owned AST and capability-free rendering use explicit values.
+  The renderer and footnote pass are separate sources in the same module.
 - Pathological repetition counts are reduced to fit the corpus interpreter's
   fixed step budget: JavaScript 1000/10000 become 12/24; title backslashes
   10/100/1000 become 10/20/30; cmark repeated patterns become 24, lists 12,
