@@ -5729,7 +5729,12 @@ conformance/SEM/SEM-3-wave2-starts_with-run.hir
 conformance/SEM/SEM-3-wave2-text-slice-run.hir
 conformance/SEM/SEM-3-wave2-trim-empty-run.hir
 conformance/SEM/SEM-3-wave2-trim-run.hir
+conformance/SEM/SEM-3-x509-der-run.hir
+conformance/SEM/SEM-3-x509-go-domains-run.hir
+conformance/SEM/SEM-3-x509-go-names-run.hir
+conformance/SEM/SEM-3-x509-go-strings-run.hir
 conformance/SEM/SEM-3-x509-run.hir
+conformance/SEM/SEM-3-x509-san-run.hir
 conformance/SEM/SEM-3-xchacha20poly1305-nonce-size-fail.hir
 conformance/SEM/SEM-3-xchacha20poly1305-nonce-size-run.hir
 conformance/SEM/SEM-3-xchacha20poly1305-run.hir

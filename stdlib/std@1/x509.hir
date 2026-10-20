@@ -1,5 +1,10 @@
-// The identity fields of X.509 certificates (RFC 5280 section 4.1) and their RFC 4514
-// subject strings, read from the DER chains core tls.peer returns.
+// Copyright 2011, 2021 The Go Authors. All rights reserved.
+// X.509 identity extraction, ported from Go ebe2feefc400f813aefdc8a036e66d2619da6649:
+// src/crypto/x509/parser.go:38-154,209-247,465-534,1395-1452 and
+// src/crypto/x509/pkix/pkix.go:28-104. DER headers follow vendored
+// golang.org/x/crypto/cryptobyte/asn1.go:755-835. BSD-3-Clause; third-party/NOTICES.md.
+// This extracts identities; certificate verification remains the TLS provider's job.
+// Port notes and deviations: docs/x509-prior-art.md.
 @serializable
 pub type X509Error = Malformed(u64)
 
@@ -19,10 +24,13 @@ type Element {
 
 // Definite DER lengths of at most four octets, inside [at, limit).
 fn element(der: Bytes, at: u64, limit: u64) -> Result[Element, X509Error] uses {} {
-  if at + 2 > limit {
+  if at > limit || limit > core@1/bytes.len(der) || limit - at < 2 {
     return Error(Malformed(at))
   }
   let tag = der[at]
+  if tag & 31u8 == 31u8 {
+    return Error(Malformed(at))
+  }
   let first: u64 = core@1/int.widen(der[at + 1])
   let mut body = at + 2
   let mut len: u64 = first
@@ -31,12 +39,18 @@ fn element(der: Bytes, at: u64, limit: u64) -> Result[Element, X509Error] uses {
     if count == 0 || count > 4 || body + count > limit {
       return Error(Malformed(at))
     }
+    if der[body] == 0u8 {
+      return Error(Malformed(at))
+    }
     len = 0
     let mut i: u64 = 0
     while i < count {
       let octet: u64 = core@1/int.widen(der[body + i])
       len = len * 256 + octet
       i += 1
+    }
+    if len < 128 {
+      return Error(Malformed(at))
     }
     body += count
   }
@@ -79,7 +93,7 @@ pub fn certificates(chain: Bytes) -> Result[List[Bytes], X509Error] uses {} {
   Ok(out)
 }
 
-// A certificate's subject as an RFC 4514 string, and its subject alternative names: DNS and
+// A certificate's subject as a Go pkix RDNSequence string, and its subject alternative names: DNS and
 // IP names in certificate order (IP addresses canonical, as std@1/net prints them), and URIs.
 pub fn parse(der: Bytes) -> Result[Certificate, X509Error] uses {} {
   let len = core@1/bytes.len(der)
@@ -140,19 +154,31 @@ fn alternative_names(
         let name = element(der, g, general.end)?
         let contents = core@1/bytes.slice(der, name.body, name.end)
         // dNSName [2], uniformResourceIdentifier [6] and iPAddress [7]; IA5String text.
-        if name.tag == 130u8 || name.tag == 134u8 {
+        if name.tag == 129u8 || name.tag == 130u8 || name.tag == 134u8 {
           let Some(text) = ia5(contents) else {
             return Error(Malformed(g))
           }
           if name.tag == 130u8 {
             core@1/list.push(mut names, take text)
-          } else {
+          } else if name.tag == 134u8 {
+            if !uri_valid(text) {
+              return Error(Malformed(g))
+            }
             core@1/list.push(mut uris, take text)
           }
         } else if name.tag == 135u8 {
           let ip: IpAddr = if core@1/bytes.len(contents) == 4 {
             V4([contents[0], contents[1], contents[2], contents[3]])
           } else if core@1/bytes.len(contents) == 16 {
+            let mut mapped = contents[10] == 255u8 && contents[11] == 255u8
+            let mut z: u64 = 0
+            while z < 10 {
+              mapped = mapped && contents[z] == 0u8
+              z += 1
+            }
+            if mapped {
+              return Error(Malformed(g))
+            }
             V6(
               [
                 contents[0],
@@ -214,9 +240,9 @@ fn rfc4514(der: Bytes, name: Element) -> Result[String, X509Error] uses {} {
       if a != rdn.body {
         core@1/list.push(mut out, 43u8)
       }
-      let short = attribute_type(der, kind, mut out)?
+      attribute_type(der, kind, mut out)?
       core@1/list.push(mut out, 61u8)
-      attribute_value(der, kind.end, value, short, mut out)
+      attribute_value(der, kind.end, value, mut out)?
       a = attribute.end
     }
     core@1/list.push(mut rdns, take out)
@@ -236,12 +262,8 @@ fn rfc4514(der: Bytes, name: Element) -> Result[String, X509Error] uses {} {
   Ok(text.finish_valid(take out))
 }
 
-// RFC 4514 section 3's short names, and the dotted-decimal OID of any other type; whether
-// the name is short.
-fn attribute_type(der: Bytes, kind: Element, mut out: List[u8]) -> Result[
-  bool,
-  X509Error
-] uses {} {
+// Go pkix.attributeTypeNames, then the dotted-decimal OID for other types.
+fn attribute_type(der: Bytes, kind: Element, mut out: List[u8]) -> Result[(), X509Error] uses {} {
   let oid = core@1/bytes.slice(der, kind.body, kind.end)
   let n = core@1/bytes.len(oid)
   if n == 3 && oid[0] == 85u8 && oid[1] == 4u8 {
@@ -259,23 +281,16 @@ fn attribute_type(der: Bytes, kind: Element, mut out: List[u8]) -> Result[
       "C"
     } else if oid[2] == 9u8 {
       "STREET"
+    } else if oid[2] == 5u8 {
+      "SERIALNUMBER"
+    } else if oid[2] == 17u8 {
+      "POSTALCODE"
     } else {
       ""
     }
     if short != "" {
       text.append(mut out, short)
-      return Ok(true)
-    }
-  }
-  // 0.9.2342.19200300.100.1.25 (DC) and .1 (UID).
-  if n == 10 && oid[0] == 9u8 && oid[1] == 146u8 && oid[2] == 38u8 && oid[3] == 137u8 && oid[4] == 147u8 && oid[5] == 242u8 && oid[6] == 44u8 && oid[7] == 100u8 && oid[8] == 1u8 {
-    if oid[9] == 25u8 {
-      text.append(mut out, "DC")
-      return Ok(true)
-    }
-    if oid[9] == 1u8 {
-      text.append(mut out, "UID")
-      return Ok(true)
+      return Ok(())
     }
   }
   // Base-128 arcs, the first octet's arc holding the first two components (X.690 8.19).
@@ -284,7 +299,7 @@ fn attribute_type(der: Bytes, kind: Element, mut out: List[u8]) -> Result[
   let mut i: u64 = 0
   while i < n {
     let octet: u64 = core@1/int.widen(oid[i])
-    if arc > 72057594037927935u64 || arc == 0 && octet == 128 {
+    if arc >= 16777216u64 || arc == 0 && octet == 128 {
       return Error(Malformed(kind.body + i))
     }
     arc = arc * 128 + octet % 128
@@ -310,36 +325,71 @@ fn attribute_type(der: Bytes, kind: Element, mut out: List[u8]) -> Result[
   if first || oid[n - 1] >= 128u8 {
     return Error(Malformed(kind.body))
   }
-  Ok(false)
+  Ok(())
 }
 
-// RFC 4514 section 2.4: a UTF8String, PrintableString or IA5String value of a short-named
-// type as escaped text; any other value, one that is not UTF-8, and every value of a
-// dotted-decimal type as '#' and the hex of its whole DER element.
-fn attribute_value(
-  der: Bytes,
-  start: u64,
-  value: Element,
-  short: bool,
-  mut out: List[u8]
-) -> () uses {} {
-  if short && (value.tag == 12u8 || value.tag == 19u8 || value.tag == 22u8) {
-    let mut raw: List[u8] = []
-    let mut i = value.body
-    while i < value.end {
-      core@1/list.push(mut raw, der[i])
-      i += 1
+// Go parseASN1String: string tags are validated even for unknown OIDs.
+fn asn1_string(der: Bytes, value: Element) -> Result[String, X509Error] uses {} {
+  let contents = core@1/bytes.slice(der, value.body, value.end)
+  let mut out: List[u8] = []
+  if value.tag == 20u8 {
+    // T61String is interpreted as Latin-1, as Go and BoringSSL do.
+    for b in contents {
+      std@1/char.format_into(std@1/char.from_u8(b), mut out)
     }
-    match text.finish(take raw) {
-      Ok(s) => {
-        escape(core@1/string.as_bytes(s), mut out)
-        return
-      },
-      Error(_) => (),
+  } else if value.tag == 30u8 {
+    let mut end = value.end
+    if (end - value.body) % 2 != 0 {
+      return Error(Malformed(value.body))
+    }
+    if end - value.body >= 2 && der[end - 1] == 0u8 && der[end - 2] == 0u8 {
+      end -= 2
+    }
+    let mut i = value.body
+    while i < end {
+      let high: u32 = core@1/int.widen(der[i])
+      let low: u32 = core@1/int.widen(der[i + 1])
+      let point = high * 256u32 + low
+      if point == 65534u32 || point == 65535u32 || point >= 64976u32 && point <= 65007u32 || point >= 55296u32 && point <= 57343u32 {
+        return Error(Malformed(i))
+      }
+      let Some(c) = core@1/char.from_u32(point) else {
+        return Error(Malformed(i))
+      }
+      std@1/char.format_into(c, mut out)
+      i += 2
+    }
+  } else {
+    for b in contents {
+      if value.tag == 19u8 && !printable(b) || value.tag == 22u8 && b >= 128u8 || value.tag == 18u8 && !(b >= 48u8 && b <= 57u8 || b == 32u8) {
+        return Error(Malformed(value.body))
+      }
+      core@1/list.push(mut out, b)
     }
   }
-  core@1/list.push(mut out, 35u8)
-  text.append(mut out, std@1/hex.encode(core@1/bytes.slice(der, start, value.end)))
+  match text.finish(take out) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error(Malformed(value.body)),
+  }
+}
+
+fn printable(b: u8) -> bool uses {} {
+  b >= 97u8 && b <= 122u8 || b >= 65u8 && b <= 90u8 || b >= 48u8 && b <= 57u8 || b >= 39u8 && b <= 41u8 || b >= 43u8 && b <= 47u8 || b == 32u8 || b == 58u8 || b == 61u8 || b == 63u8 || b == 42u8 || b == 38u8
+}
+
+fn attribute_value(der: Bytes, start: u64, value: Element, mut out: List[u8]) -> Result[
+  (),
+  X509Error
+] uses {} {
+  if value.tag == 12u8 || value.tag == 19u8 || value.tag == 22u8 || value.tag == 20u8 || value.tag == 30u8 || value.tag == 18u8 {
+    let s = asn1_string(der, value)?
+    escape(core@1/string.as_bytes(s), mut out)
+  } else {
+    // No dynamic Go `any` value: preserve non-string values as their exact DER.
+    core@1/list.push(mut out, 35u8)
+    text.append(mut out, std@1/hex.encode(core@1/bytes.slice(der, start, value.end)))
+  }
+  Ok(())
 }
 
 fn escape(value: Bytes, mut out: List[u8]) -> () uses {} {
@@ -347,16 +397,267 @@ fn escape(value: Bytes, mut out: List[u8]) -> () uses {} {
   let mut i: u64 = 0
   while i < n {
     let b = value[i]
-    if b == 0u8 {
-      text.append(mut out, "\\00")
-    } else {
-      let special = b == 34u8 || b == 43u8 || b == 44u8 || b == 59u8 || b == 60u8 || b == 62u8 || b == 92u8
-      let edge = i == 0 && (b == 32u8 || b == 35u8) || i == n - 1 && b == 32u8
-      if special || edge {
-        core@1/list.push(mut out, 92u8)
+    let special = b == 34u8 || b == 43u8 || b == 44u8 || b == 59u8 || b == 60u8 || b == 62u8 || b == 92u8
+    let edge = i == 0 && (b == 32u8 || b == 35u8) || i == n - 1 && b == 32u8
+    if special || edge {
+      core@1/list.push(mut out, 92u8)
+    }
+    core@1/list.push(mut out, b)
+    i += 1
+  }
+}
+
+// Go parser.go:1397 domainNameValid, including its compatibility length rules.
+// This checks name/constraint syntax, not hostname matching or trust.
+pub fn domain_name_valid(name: String, constraint: bool) -> bool uses {} {
+  let data = core@1/string.as_bytes(name)
+  let n = core@1/bytes.len(data)
+  if n == 0 {
+    return true
+  }
+  if data[n - 1] == 46u8 {
+    return false
+  }
+  let mut start: u64 = if constraint && data[0] == 46u8 {
+    1
+  } else {
+    0
+  }
+  let mut i = start
+  while i <= n {
+    if i < n && (data[i] < 33u8 || data[i] > 126u8) {
+      return false
+    }
+    if i == n || data[i] == 46u8 {
+      if i == start {
+        return false
       }
-      core@1/list.push(mut out, b)
+      start = i + 1
     }
     i += 1
   }
+  true
+}
+
+// SAN URI validation follows Go net/url/url.go:107-165,441-649,1293-1326. Keep the
+// original URI text in Certificate; no resolution or network authority is needed.
+fn uri_valid(value: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(value)
+  let n = core@1/bytes.len(data)
+  for b in data {
+    // url.Parse cuts off the fragment before parse checks control bytes.
+    if b == 35u8 {
+      break
+    }
+    if b < 32u8 || b == 127u8 {
+      return false
+    }
+  }
+  let mut start: u64 = 0
+  let mut i: u64 = 0
+  // getScheme: a colon in the first path segment must follow a valid scheme.
+  while i < n && data[i] != 47u8 && data[i] != 63u8 && data[i] != 35u8 {
+    if data[i] == 58u8 {
+      if i == 0 {
+        return false
+      }
+      let mut j: u64 = 0
+      while j < i {
+        let b = data[j]
+        let alpha = b >= 65u8 && b <= 90u8 || b >= 97u8 && b <= 122u8
+        if !alpha && (j == 0 || !(b >= 48u8 && b <= 57u8 || b == 43u8 || b == 45u8 || b == 46u8)) {
+          return false
+        }
+        j += 1
+      }
+      start = i + 1
+      break
+    }
+    i += 1
+  }
+  // Opaque URIs do not decode their opaque part; fragments still unescape.
+  let is_opaque = start > 0 && (start == n || data[start] != 47u8)
+  if !is_opaque && n - start >= 2 && data[start] == 47u8 && data[start + 1] == 47u8 && (start > 0 || n - start < 3 || data[start + 2] != 47u8) {
+    let mut end = start + 2
+    while end < n && data[end] != 47u8 && data[end] != 63u8 && data[end] != 35u8 {
+      end += 1
+    }
+    let mut host = start + 2
+    let mut j = host
+    while j < end {
+      if data[j] == 64u8 {
+        host = j + 1
+      }
+      j += 1
+    }
+    j = start + 2
+    while j + 1 < host {
+      if !userinfo_byte(data[j]) {
+        return false
+      }
+      j += 1
+    }
+    let scheme = core@1/bytes.slice(
+      data,
+      0,
+      if start == 0 {
+        0
+      } else {
+        start - 1
+      }
+    )
+    let http_scheme = ascii_equal(scheme, b"http") || ascii_equal(scheme, b"https")
+    if !uri_host_valid(core@1/bytes.slice(data, host, end), http_scheme) {
+      return false
+    }
+  }
+  i = start
+  let mut query = false
+  let mut fragment = false
+  while i < n {
+    let b = data[i]
+    if b == 35u8 {
+      fragment = true
+    } else if b == 63u8 && !fragment {
+      query = true
+    }
+    if b == 37u8 && (fragment || !is_opaque && !query) {
+      if n - i < 3 || !hex_digit(data[i + 1]) || !hex_digit(data[i + 2]) {
+        return false
+      }
+      i += 2
+    }
+    i += 1
+  }
+  true
+}
+
+fn hex_digit(b: u8) -> bool uses {} {
+  b >= 48u8 && b <= 57u8 || b >= 65u8 && b <= 70u8 || b >= 97u8 && b <= 102u8
+}
+
+// Go url.parseHost/validOptionalPort and unescape's encodeHost/encodeZone rules.
+fn uri_host_valid(host: Bytes, http_scheme: bool) -> bool uses {} {
+  let n = core@1/bytes.len(host)
+  let mut close = n
+  let mut colon = n
+  let mut i: u64 = 0
+  while i < n {
+    if host[i] == 91u8 && i != 0 {
+      return false
+    }
+    if host[i] == 93u8 {
+      close = i
+    }
+    if host[i] == 58u8 && (colon == n || !http_scheme) {
+      colon = i
+    }
+    i += 1
+  }
+  let bracket = n > 0 && host[0] == 91u8
+  if bracket {
+    if close == n {
+      return false
+    }
+    colon = close + 1
+    if colon < n && host[colon] != 58u8 {
+      return false
+    }
+  }
+  if colon < n {
+    i = colon + 1
+    while i < n {
+      if host[i] < 48u8 || host[i] > 57u8 {
+        return false
+      }
+      i += 1
+    }
+  }
+  let mut decoded: List[u8] = []
+  let mut zone = false
+  i = 0
+  while i < n {
+    let mut b = host[i]
+    if b == 37u8 {
+      if n - i < 3 || !hex_digit(host[i + 1]) || !hex_digit(host[i + 2]) {
+        return false
+      }
+      b = unhex(host[i + 1]) * 16u8 + unhex(host[i + 2])
+      if zone {
+        if b != 37u8 && b != 32u8 && !host_byte(b) {
+          return false
+        }
+      } else if b < 128u8 && b != 37u8 {
+        return false
+      }
+      if bracket && i < close && b == 37u8 {
+        zone = true
+      }
+      i += 2
+    } else if !host_byte(b) {
+      return false
+    }
+    core@1/list.push(mut decoded, b)
+    i += 1
+  }
+  let bytes = core@1/bytes.from_list(take decoded)
+  let Ok(domain) = core@1/string.from_bytes(copy bytes) else {
+    return false
+  }
+  if !domain_name_valid(domain, false) {
+    return false
+  }
+  if bracket {
+    let mut ip_end: u64 = 1
+    let end = core@1/bytes.len(bytes)
+    while ip_end < end && bytes[ip_end] != 37u8 && bytes[ip_end] != 93u8 {
+      ip_end += 1
+    }
+    let Ok(ip) = core@1/string.from_bytes(owned(bytes, 1, ip_end)) else {
+      return false
+    }
+    if let Error(_) = std@1/net.parse_ipv6(ip) {
+      return false
+    }
+    if ip_end < end && bytes[ip_end] == 37u8 && (ip_end + 1 == end || bytes[ip_end + 1] == 93u8) {
+      return false
+    }
+  }
+  true
+}
+
+fn unhex(b: u8) -> u8 uses {} {
+  9u8 * (b >> 6u8) + (b & 15u8)
+}
+
+fn host_byte(b: u8) -> bool uses {} {
+  std@1/ascii.is_alnum(b) || byte_in(b"!$&'()*+,;=:[]<>\"-_.~", b)
+}
+
+fn userinfo_byte(b: u8) -> bool uses {} {
+  std@1/ascii.is_alnum(b) || byte_in(b"-._:~!$&'()*+,;=%@", b)
+}
+
+fn byte_in(data: Bytes, b: u8) -> bool uses {} {
+  for value in data {
+    if value == b {
+      return true
+    }
+  }
+  false
+}
+
+fn ascii_equal(data: Bytes, lower: Bytes) -> bool uses {} {
+  let n = core@1/bytes.len(data)
+  if n != core@1/bytes.len(lower) {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < n {
+    if std@1/ascii.to_lower(data[i]) != lower[i] {
+      return false
+    }
+    i += 1
+  }
+  true
 }

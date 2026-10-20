@@ -1,0 +1,137 @@
+// rule: SEM-3
+// expect: run
+// Copyright 2011, 2021 The Go Authors. All rights reserved.
+// Go ebe2feefc400f813aefdc8a036e66d2619da6649; BSD-3-Clause.
+// See docs/x509-prior-art.md for source lines and envelope adaptations.
+pub fn main(t: Test) -> Result[(), x509.X509Error] {
+  // TestDomainNameValid 1/25: 254 char label, name.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "a.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aaaa",
+      false
+    ) == true
+  )
+  // TestDomainNameValid 2/25: 254 char label, constraint.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "a.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aaaa",
+      true
+    ) == true
+  )
+  // TestDomainNameValid 3/25: 253 char label, name.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "a.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aaa",
+      false
+    ) == true
+  )
+  // TestDomainNameValid 4/25: 253 char label, constraint.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "a.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aa.aaa",
+      true
+    ) == true
+  )
+  // TestDomainNameValid 5/25: 64 char single label, name.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      false
+    ) == true
+  )
+  // TestDomainNameValid 6/25: 64 char single label, constraint.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      true
+    ) == true
+  )
+  // TestDomainNameValid 7/25: 64 char label, name.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "a.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      false
+    ) == true
+  )
+  // TestDomainNameValid 8/25: 64 char label, constraint.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "a.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      true
+    ) == true
+  )
+  // TestDomainNameValid 9/25: empty name, constraint.
+  test.check(t, x509.domain_name_valid("", true) == true)
+  // TestDomainNameValid 10/25: empty label, name.
+  test.check(t, x509.domain_name_valid("a..a", false) == false)
+  // TestDomainNameValid 11/25: empty label, constraint.
+  test.check(t, x509.domain_name_valid("a..a", true) == false)
+  // TestDomainNameValid 12/25: period, name.
+  test.check(t, x509.domain_name_valid(".", false) == false)
+  // TestDomainNameValid 13/25: period, constraint.
+  test.check(t, x509.domain_name_valid(".", true) == false)
+  // TestDomainNameValid 14/25: valid, name.
+  test.check(t, x509.domain_name_valid("a.b.c", false) == true)
+  // TestDomainNameValid 15/25: valid, constraint.
+  test.check(t, x509.domain_name_valid("a.b.c", true) == true)
+  // TestDomainNameValid 16/25: leading period, name.
+  test.check(t, x509.domain_name_valid(".a.b.c", false) == false)
+  // TestDomainNameValid 17/25: leading period, constraint.
+  test.check(t, x509.domain_name_valid(".a.b.c", true) == true)
+  // TestDomainNameValid 18/25: trailing period, name.
+  test.check(t, x509.domain_name_valid("a.", false) == false)
+  // TestDomainNameValid 19/25: trailing period, constraint.
+  test.check(t, x509.domain_name_valid("a.", true) == false)
+  // TestDomainNameValid 20/25: bare label, name.
+  test.check(t, x509.domain_name_valid("a", false) == true)
+  // TestDomainNameValid 21/25: bare label, constraint.
+  test.check(t, x509.domain_name_valid("a", true) == true)
+  // TestDomainNameValid 22/25: 63 char single label, name.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      false
+    ) == true
+  )
+  // TestDomainNameValid 23/25: 63 char single label, constraint.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      true
+    ) == true
+  )
+  // TestDomainNameValid 24/25: 63 char label, name.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "a.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      false
+    ) == true
+  )
+  // TestDomainNameValid 25/25: 63 char label, constraint.
+  test.check(
+    t,
+    x509.domain_name_valid(
+      "a.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      true
+    ) == true
+  )
+  // Printable ASCII acceptance and byte-boundary rejection, as parser.go:1430.
+  test.check(t, x509.domain_name_valid("!~", false))
+  test.check(t, !x509.domain_name_valid("a b", false))
+  test.check(t, !x509.domain_name_valid("a\0b", false))
+  test.check(t, !x509.domain_name_valid("a\x7fb", false))
+  test.check(t, !x509.domain_name_valid("aé", false))
+  test.check(t, x509.domain_name_valid("", false))
+  Ok(())
+}

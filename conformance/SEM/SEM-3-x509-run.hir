@@ -27,10 +27,10 @@ fn parse_error(input: Bytes) -> Option[u64] uses {} {
 pub fn main(t: Test) -> Result[(), x509.X509Error] {
   let n = x509.parse(names())?
   // The RDNs last first; the multivalued RDN's attributes in DER order; a dotted type's
-  // value as hex; special, leading '#' and trailing space characters escaped.
+  // string value as text; special, leading '#' and trailing space characters escaped.
   test.check(
     t,
-    n.subject == "2.5.4.5=#13023432+CN=agent 7\\ ,OU=\\#ops \\<east\\>,O=Hirsel\\, Inc.,DC=hirsel,DC=test"
+    n.subject == "SERIALNUMBER=42+CN=agent 7\\ ,OU=\\#ops \\<east\\>,O=Hirsel\\, Inc.,0.9.2342.19200300.100.1.25=hirsel,0.9.2342.19200300.100.1.25=test"
   )
   test.check(t, n.names == ["agent-7.hirsel.test", "2001:db8::1", "192.0.2.7"])
   test.check(t, n.uris == ["spiffe://hirsel.test/agent/7"])
