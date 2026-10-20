@@ -3,11 +3,11 @@
 // Zig bff490a2 lib/std/deque.zig:517, 634+: fuzzAgainstArrayList.
 // Deterministic operation streams make failures replayable in the corpus.
 pub fn main(t: Test) -> Result[(), ()] {
-  for seed in 1u64..5u64 {
+  for seed in 1u64..3u64 {
     let mut q: unique deque.Deque[u64] = deque.empty()
     let mut oracle: unique List[u64] = []
     let mut state = seed
-    for i in 0u64..80u64 {
+    for i in 0u64..40u64 {
       state = (state * 1664525 + 1013904223) % 4294967296
       let op = state / 65536 % 6
       if op < 2 {

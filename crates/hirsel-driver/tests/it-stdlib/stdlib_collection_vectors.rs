@@ -64,8 +64,8 @@ fn zig_deque_long_fuzz_against_list() {
     run_expanded(
         "SEM-5-std-deque-oracle-run",
         &[
-            ("1u64..5u64", "1u64..9u64"),
-            ("0u64..80u64", "0u64..400u64"),
+            ("1u64..3u64", "1u64..9u64"),
+            ("0u64..40u64", "0u64..400u64"),
         ],
     );
 }
@@ -79,6 +79,34 @@ fn indexmap_long_keyed_model_against_ordered_map() {
             ("0u64..10u64", "0u64..200u64"),
             ("% 15", "% 31"),
             ("0u64..15u64", "0u64..31u64"),
+        ],
+    );
+}
+
+#[test]
+fn rust_btree_full_range_large_and_1000_vectors() {
+    run_expanded(
+        "SEM-5-std-ordered-map-range-large-run",
+        &[("let size: i32 = 16", "let size: i32 = 200")],
+    );
+    run_expanded(
+        "SEM-5-std-ordered-map-range-1000-run",
+        &[
+            ("make(0, 32)", "make(0, 1000)"),
+            ("0i32..32i32", "0i32..1000i32"),
+            ("Excluded(32)", "Excluded(1000)"),
+            ("Included(31)", "Included(999)"),
+        ],
+    );
+}
+
+#[test]
+fn rust_btree_exhaustive_200_key_mut_range_observations() {
+    run_expanded(
+        "SEM-5-std-ordered-map-range-mut-run",
+        &[
+            ("for i in vector_1", "for i in 0i32..200i32"),
+            ("for j in vector_2", "for j in i..200i32"),
         ],
     );
 }

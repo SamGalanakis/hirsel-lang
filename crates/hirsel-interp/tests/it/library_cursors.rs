@@ -160,7 +160,7 @@ fn mismatched_cursor_protocols_and_malformed_sources_are_tool_errors() {
     assert!(matches!(
         h.call(
             "$intrinsic.MapInsertionOrder_open",
-            &[Value::map(vec![None])]
+            &[Value::map(vec![Some(Value::Tuple(vec![None, None]))])]
         ),
         Err(Error::InvalidTir(_))
     ));

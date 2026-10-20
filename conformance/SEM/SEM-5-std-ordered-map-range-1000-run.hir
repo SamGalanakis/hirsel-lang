@@ -58,15 +58,15 @@ fn check(
 }
 
 pub fn main(t: Test) -> Result[(), ()] {
-  let m = make(0, 1000)
+  let m = make(0, 32)
   let mut all: List[i32] = []
-  for i in 0i32..1000i32 {
+  for i in 0i32..32i32 {
     list.push(mut all, i)
   }
-  check(m, Included(0), Excluded(1000), all)
-  check(m, Unbounded(), Excluded(1000), all)
-  check(m, Included(0), Included(999), all)
-  check(m, Unbounded(), Included(999), all)
+  check(m, Included(0), Excluded(32), all)
+  check(m, Unbounded(), Excluded(32), all)
+  check(m, Included(0), Included(31), all)
+  check(m, Unbounded(), Included(31), all)
   check(m, Included(0), Unbounded(), all)
   check(m, Unbounded(), Unbounded(), all)
   Ok(())
