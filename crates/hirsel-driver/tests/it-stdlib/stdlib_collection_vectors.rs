@@ -20,12 +20,14 @@ fn run_expanded(case_name: &str, replacements: &[(&str, &str)]) {
             serde_json::from_slice(&std::fs::read(case.with_extension("hir.json")).unwrap())
                 .unwrap();
         manifest["sources"][0]["path"] = "main.hir".into();
-        manifest["dependencies"][0]["manifest"] =
+        manifest["dependencies"][0]["manifest"] = std::fs::canonicalize(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../stdlib/std@1/hirsel.json")
-                .to_string_lossy()
-                .to_string()
-                .into();
+                .join("../../stdlib/std@1/hirsel.json"),
+        )
+        .unwrap()
+        .to_string_lossy()
+        .to_string()
+        .into();
         std::fs::write(
             path.with_extension("hir.json"),
             serde_json::to_vec(&manifest).unwrap(),
