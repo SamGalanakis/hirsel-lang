@@ -61,24 +61,32 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   let mut listener = net.listen(n, home()) ? http_net
   let (stream, _) = net.accept(n, mut listener) ? http_net
   let mut connection = http.serve_tls(
+    test.tasks(t),
     n,
     take stream,
     TlsServer(identities: [identity()], clients: Anonymous()),
     http.default_config()
   )?
-  let first = http.receive_request(mut connection, None())?
+  let Some((current1, first)) = http.next_stream(mut connection, None())? else {
+    return Error(Closed())
+  }
+  let mut exchange1 = take current1
   test.check(t, first.target == "/one" && first.keep_alive)
-  http.respond(mut connection, 200u16, [], b"one", false)?
-  let second = http.receive_request(mut connection, None())?
+  http.respond(mut exchange1, 200u16, [], b"one", false)?
+  let Some((current2, second)) = http.next_stream(mut connection, None())? else {
+    return Error(Closed())
+  }
+  let mut exchange2 = take current2
   test.check(t, second.target == "/two" && second.body == b"abc")
-  http.respond(mut connection, 200u16, [], second.body, true)?
-  match http.receive_request(mut connection, None()) {
-    Error(Closed()) => (),
+  http.respond(mut exchange2, 200u16, [], second.body, true)?
+  match http.next_stream(mut connection, None()) {
+    Ok(None()) => (),
     _ => test.check(t, false),
   }
   // A plaintext client fails the handshake; the stream is closed.
   let (plain, _) = net.accept(n, mut listener) ? http_net
   match http.serve_tls(
+    test.tasks(t),
     n,
     take plain,
     TlsServer(identities: [identity()], clients: Anonymous()),
@@ -91,6 +99,7 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   let (unused, _) = net.accept(n, mut listener) ? http_net
   let broken = TlsIdentity(chain: identity().chain, key: b"")
   match http.serve_tls(
+    test.tasks(t),
     n,
     take unused,
     TlsServer(identities: [broken], clients: Anonymous()),

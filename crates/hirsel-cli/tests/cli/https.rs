@@ -37,9 +37,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {{
   out.print(output, std@1/u16.to_string(bound.port)) ? Output
   out.print(output, "\n") ? Output
   let (stream, _) = net.accept(n, mut listener) ? Network
-  let mut connection = http.serve_tls(n, take stream, TlsServer(identities: [identity()], clients: Anonymous()), http.default_config()) ? Http
-  let request = http.receive_request(mut connection, None()) ? Http
-  http.respond(mut connection, 200u16, [], request.body, true) ? Http
+  let mut connection = http.serve_tls(io.tasks(rt) ? Grant, n, take stream, TlsServer(identities: [identity()], clients: Anonymous()), http.default_config()) ? Http
+  let Some((owned, request)) = http.next_stream(mut connection, None()) ? Http else {{ return Error(Http(Closed())) }}
+  let mut responding = take owned
+  http.respond(mut responding, 200u16, [], request.body, true) ? Http
   Ok(())
 }}
 "#,
@@ -68,7 +69,7 @@ impl Fixture {
         .unwrap();
         std::fs::write(
             root.join("grants.json"),
-            serde_json::json!({"io": {"stdout": "stdout.bytes@1", "dirs": [], "net": {
+            serde_json::json!({"io": {"stdout": "stdout.bytes@1", "tasks": "tasks.cooperative@1", "dirs": [], "net": {
                 "provider": "net.stream@1",
                 "rules": [{"address": "127.0.0.1", "service": "0", "operation": "listen_tls"}]
             }}, "args": []})

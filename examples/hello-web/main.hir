@@ -1,25 +1,26 @@
 pub type ServerError = Grant(GrantError) | Network(NetError) | Http(http.HttpError)
 
-fn serve(n: Net, mut listener: Listener of n) -> Result[(), ServerError] {
+fn serve(tasks: Tasks, n: Net, mut listener: Listener of n) -> Result[(), ServerError] {
   let mut (stream, _) = net.accept(n, mut listener) ? Network
   let mut config = http.default_config()
   config.max_head_bytes = 16384
   config.max_body_bytes = 1048576
-  let mut connection = http.server_connection(n, take stream, config)
-  match http.receive_request(mut connection, None()) {
-    Ok(_) => http.respond(
-      mut connection,
+  let mut connection = http.server_connection(tasks, n, take stream, config)
+  if let Ok(Some((owned, _))) = http.next_stream(mut connection, None()) {
+    let mut responding = take owned
+    http.respond(
+      mut responding,
       200u16,
       [http.Header(name: "Content-Type", value: "text/plain")],
       b"Hello, world",
       true
-    ) ? Http,
-    Error(_) => http.respond(mut connection, 400u16, [], b"Bad Request", true) ? Http,
+    ) ? Http
   }
   Ok(())
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
+  let tasks = io.tasks(rt) ? Grant
   let n = io.net(rt) ? Grant
   let mut listener = net.listen(
     n,
@@ -27,7 +28,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   ) ? Network
   // Accept connections until stopped.
   while true {
-    serve(n, mut listener)?
+    serve(tasks, n, mut listener)?
   }
   Ok(())
 }

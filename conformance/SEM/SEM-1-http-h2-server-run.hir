@@ -1,0 +1,161 @@
+// rule: SEM-1
+// expect: test
+// Go net/http's h2 bundle server vectors: requests share the connection while
+// handlers retain the ordinary streamed response operations.
+fn network(error: NetError) -> std@1/http.HttpError uses {} {
+  Net(error)
+}
+
+fn peer(t: Test, steps: List[NetStep]) -> Net {
+  test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open(unique steps)]
+      )
+    ],
+    []
+  )
+}
+
+fn config() -> std@1/http.Config {
+  let mut value = std@1/http.default_config()
+  value.http2_prior_knowledge = true
+  value
+}
+
+fn request() -> Bytes {
+  // Static indexed HPACK: GET, http, /; literal :authority example.com.
+  b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x10\x01\x05\x00\x00\x00\x01\x82\x86\x84\x01\x0bexample.com"
+}
+
+@test
+fn streamed(t: Test) -> Result[(), std@1/http.HttpError] {
+  let n = peer(
+    t,
+    [
+      Send(request()),
+      Expect(
+        b"\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x04\x01\x00\x00\x00\x00"
+      ),
+      Expect(
+        b"\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x02\x00\x00\x00\x00\x00\x01ok\x00\x00\x00\x00\x01\x00\x00\x00\x01"
+      ),
+      Close()
+    ]
+  )
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? network
+  let mut c = std@1/http.server_connection(test.tasks(t), n, take socket, config())
+  let Some((owned, incoming)) = std@1/http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  let mut stream = take owned
+  test.check(
+    t,
+    incoming.method == "GET" && incoming.target == "/" && incoming.version == Http2()
+  )
+  test.check(t, std@1/http.header(incoming.headers, "host") == Some("example.com"))
+  test.check(t, std@1/http.protocol(stream) == Http2())
+  match std@1/http.next_stream(mut c, None()) {
+    Error(OutOfOrder()) => (),
+    _ => test.check(t, false),
+  }
+  std@1/http.respond_head(mut stream, 200u16, [])?
+  std@1/http.write_response_body(mut stream, b"")?
+  std@1/http.write_response_body(mut stream, b"ok")?
+  std@1/http.end_response_body(mut stream)?
+  test.check(t, option.is_none(std@1/http.next_stream(mut c, None())?))
+  Ok(())
+}
+
+@test
+fn worker_handoff(t: Test) -> Result[(), std@1/http.HttpError] {
+  let n = peer(t, [Send(request()), Close()])
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? network
+  let tasks = test.tasks(t)
+  let mut c = std@1/http.server_connection(tasks, n, take socket, config())
+  let Some((owned, _)) = std@1/http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[(), std@1/http.HttpError] {
+      let child = task.async(
+        scope,
+        fn() -> Result[(), std@1/http.HttpError] {
+          let mut stream = take owned
+          std@1/http.respond(mut stream, 200u16, [], b"worker", false)
+        }
+      )
+      task.await(scope, take child)
+    }
+  )?
+  test.check(t, option.is_none(std@1/http.next_stream(mut c, None())?))
+  Ok(())
+}
+
+@test
+fn flow_credit_and_queued_request(t: Test) -> Result[(), std@1/http.HttpError] {
+  // The peer advertises a one-byte stream window. A second stream arrives
+  // before credit for the first: retaining it must not lose its request.
+  let n = peer(
+    t,
+    [
+      Send(
+        b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x10\x01\x05\x00\x00\x00\x01\x82\x86\x84\x01\x0bexample.com"
+      ),
+      Expect(
+        b"\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x04\x01\x00\x00\x00\x00\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x01\x00\x00\x00\x00\x00\x01a"
+      ),
+      Send(
+        b"\x00\x00\x10\x01\x05\x00\x00\x00\x03\x82\x86\x84\x01\x0bexample.com\x00\x00\x04\x08\x00\x00\x00\x00\x01\x00\x00\x00\x01"
+      ),
+      Expect(b"\x00\x00\x01\x00\x00\x00\x00\x00\x01b"),
+      Send(b"\x00\x00\x04\x08\x00\x00\x00\x00\x01\x00\x00\x00\x01"),
+      Expect(
+        b"\x00\x00\x01\x00\x00\x00\x00\x00\x01c\x00\x00\x00\x00\x01\x00\x00\x00\x01"
+      ),
+      Expect(
+        b"\x00\x00\x01\x01\x04\x00\x00\x00\x03\x88\x00\x00\x00\x00\x01\x00\x00\x00\x03"
+      ),
+      Close()
+    ]
+  )
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? network
+  let mut c = std@1/http.server_connection(test.tasks(t), n, take socket, config())
+  let Some((first, _)) = std@1/http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  let mut responding = take first
+  std@1/http.respond_head(mut responding, 200u16, [])?
+  std@1/http.write_response_body(mut responding, b"abc")?
+  std@1/http.end_response_body(mut responding)?
+  let Some((second, incoming)) = std@1/http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  test.check(t, incoming.method == "GET")
+  let mut next = take second
+  std@1/http.respond_head(mut next, 200u16, [])?
+  std@1/http.end_response_body(mut next)?
+  test.check(t, option.is_none(std@1/http.next_stream(mut c, None())?))
+  Ok(())
+}
+
+@test
+fn abandoned_exchange_closes(t: Test) -> Result[(), std@1/http.HttpError] {
+  let n = peer(t, [Send(request()), Stall()])
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? network
+  let mut c = std@1/http.server_connection(test.tasks(t), n, take socket, config())
+  {
+    let Some((owned, _)) = std@1/http.next_stream(mut c, None())? else {
+      return Error(Closed())
+    }
+    let unused = take owned
+  }
+  test.check(t, option.is_none(std@1/http.next_stream(mut c, None())?))
+  Ok(())
+}

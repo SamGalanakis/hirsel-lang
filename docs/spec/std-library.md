@@ -1345,11 +1345,12 @@ crosses the empty line into trailers, and stops on an empty name or an incomplet
 
 ## HTTP client
 
-`std@1/http` is an HTTP/1.1 client over the core network operations:
+`std@1/http` is an HTTP client over the core network operations, with HTTP/1.1
+and explicit prior-knowledge HTTP/2 transports:
 
 ```text
 Method       = Get | Head | Post | Put | Delete | Patch | Options
-Version      = Http10 | Http11
+Version      = Http10 | Http11 | Http2
 Header       = { name: String, value: String }
 Config       = { max_redirects: u32, connect_timeout: Option[Duration],
                  read_timeout: Option[Duration], write_timeout: Option[Duration],
@@ -1357,7 +1358,7 @@ Config       = { max_redirects: u32, connect_timeout: Option[Duration],
                  max_idle_connections: u64, max_idle_connections_per_host: u64,
                  max_headers: u64, user_agent: String,
                  roots: TlsRoots, status_as_error: bool, decompress: bool,
-                 unix_socket: Option[Path] }
+                 unix_socket: Option[Path], http2_prior_knowledge: bool }
 ResponseHead = { version: Version, status: u16, reason: String, headers: List[Header],
                  content_length: Option[u64], chunked: bool, keep_alive: bool,
                  location: Option[String], content_type: Option[String] }
@@ -1580,6 +1581,26 @@ reconstruct authority from a run record.
 `std@1/store`, an embedded transactional store written in Hirsel over a `Dir` grant, with
 typed tables, schema history and migrations, is specified in [storage](storage.md).
 
+### HTTP/2 through the HTTP API
+
+`Version` includes `Http2`. `Config.http2_prior_knowledge` defaults to false.
+Setting it true explicitly selects cleartext h2c, with the RFC 9113 connection preface;
+HTTP/1 Upgrade is never attempted. The client applies this option only to `http` URLs.
+`protocol(stream)` and `request_protocol(request)` expose the selected version, while
+parsed request/response heads carry their actual version. TLS negotiation requires
+`tls.connect_with` and `tls.negotiated_protocol` from the ALPN provider integration;
+until those APIs land, the default HTTPS path remains HTTP/1.1.
+
+The existing client operations, `Response`, `Body`, redirects, body bounds and content
+decoding work over h2c. Header names are lowercase on the wire; method, scheme, target
+and authority map to the HTTP/2 pseudo-fields. Server requests expose `:authority`
+through the ordinary `host` header lookup. `receive_head` skips informational heads.
+`write_request_body` and `write_response_body` flush DATA prefixes under stream and
+connection windows, reading WINDOW_UPDATE when blocked. End operations emit END_STREAM
+or a final trailer block. `read_body` returns available DATA prefixes and returns flow
+credit only after releasing a received fragment; trailers retain the same API. These
+provider reads and writes record/replay through Net exactly as HTTP/1 operations do.
+
 ## HTTP server
 
 The server shares the client's wire parser and error type:
@@ -1589,17 +1610,19 @@ RequestLine = { method_start: u64, method_end: u64, target_start: u64, target_en
 N fn http_wire.parse_request[k: size](buf: Bytes, mut line: RequestLine, mut headers: Inline[RawHeader, k], mut count: u64) -> Result[ParseStatus, HeadError] uses {}
 ServerRequest = { method: String, target: String, version: Version, headers: List[Header], body: Bytes, trailers: List[Header], keep_alive: bool }
 fn http.parse_server_request(buf: Bytes, config: Config) -> Result[Option[(ServerRequest, u64)], HttpError] uses {}
-fn http.server_connection(n: Net, take stream: Stream of n, config: Config) -> ServerConnection
-fn http.serve_tls(n: Net, take stream: Stream of n, server: TlsServer, config: Config) -> Result[ServerConnection, HttpError]
-fn http.receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[ServerRequest, HttpError]
-fn http.respond(mut c: ServerConnection, status: u16, headers: List[Header], body: Bytes, close: bool) -> Result[(), HttpError]
+fn http.server_connection(tasks: Tasks, n: Net, take stream: Stream of n, config: Config) -> ServerConnection
+fn http.serve_tls(tasks: Tasks, n: Net, take stream: Stream of n, server: TlsServer, config: Config) -> Result[ServerConnection, HttpError]
+fn http.next_stream(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[Option[(sendable ServerStream, unique ServerRequest)], HttpError]
+fn http.protocol(s: ServerStream) -> Version uses {}
+fn http.request_protocol(r: Request) -> Version uses {}
+fn http.respond(mut s: ServerStream, status: u16, headers: List[Header], body: Bytes, close: bool) -> Result[(), HttpError]
 ```
 
 `parse_request` follows httparse's strict request-line delimiters, accepts HTTP/1.0 and
 HTTP/1.1, and reuses `parse_headers`. Its initialized-header count and absolute consumed
 head offset follow `parse_response`. `parse_server_request` returns an owned request and
 the consumed head-plus-body byte count, or `None` for incomplete input. Both it and
-`receive_request` enforce `Config.max_headers` (100 by default), `max_head_bytes` and
+`next_stream` enforce `Config.max_headers` (100 by default), `max_head_bytes` and
 `max_body_bytes`, and read a Content-Length or chunked body (zero bytes when neither
 framing is present). The 16-entry parser scratch buffer is a batch size, never a
 message limit. Header counts and framing checks span every batch. Trailer blocks
@@ -1616,13 +1639,25 @@ The pure parser and socket receiver share one incremental body decoder. The rece
 consumes completed framing and payload as it progresses, retaining decoded data and
 only the unread wire suffix for pipelined requests.
 
-`ServerConnection` is a resource owning its branded stream and unread bytes. Its Config
-uses `max_head_bytes` and `max_body_bytes` (10 MiB by default), `read_timeout`,
+`ServerConnection` owns the transport between requests. `next_stream` yields an opaque,
+owned `ServerStream` and the decoded `ServerRequest`, or `None` at clean EOF. Responses
+are sent only on that stream. It is sendable, so a handler task may take it together
+with its request. The constructor takes the run's `Tasks` for the channel that returns
+completed transports; it creates no task. While a stream remains active, another
+`next_stream` on the connection returns `OutOfOrder`. Completing `respond` or
+`end_response_body` automatically returns the transport; it needs no explicit finish
+operation. Every response operation on an already completed stream is `OutOfOrder`.
+Dropping an unfinished stream closes the transport and makes `next_stream` return `None`.
+This includes HTTP/2 in this single-owner implementation; the split dispatcher will
+replace HTTP/2 connection closure with `RST_STREAM` for an abandoned exchange.
+
+Config uses `max_head_bytes`, `max_body_bytes` (10 MiB by default), `read_timeout`,
 `write_timeout`, and `idle_timeout` (30 seconds by default, `None` for unbounded).
-`receive_request` consumes exactly one request, retaining bytes already read for the
-next request. `respond` must complete before the next receive; a second receive or
-response out of order is `OutOfOrder`. Pipelined responses therefore stay in request
-order, with application handling sequential within one connection.
+HTTP/1 pipelined responses remain in request order. HTTP/2 frames for other streams
+are retained while the active exchange completes, bounded by `max_body_bytes` including
+queued event metadata. Concurrent dispatch requires the split transport provider.
+The single-owner adapter uses the granted Tasks provider only for transport return
+channels and state flags; scheduler choice remains run configuration policy.
 
 Persistence follows RFC 9112 section 9: HTTP/1.1 persists by default; HTTP/1.0 requires
 an explicit keep-alive token. Every Connection field contributes comma-separated,
@@ -1633,12 +1668,16 @@ For 204 and 304, it emits neither Content-Length nor payload, even when the supp
 body is nonempty. Complete and streaming responses share this body suppression rule.
 Statuses below 200 remain unsupported and return `Malformed(Status())` before writing.
 Its `close` argument lets the handler end a connection even when the request permits
-reuse. It emits Connection: keep-alive or close accordingly. A failed request permits
-one final error response, always closing. Any failed response ends reuse. A closed
+reuse. It emits Connection: keep-alive or close accordingly. Parse failures are answered by the endpoint before application handling, always closing
+HTTP/1: malformed or truncated requests use 400 with `Bad Request`, oversized bodies
+413 with `Payload Too Large`, oversized heads 431 with `Request Header Fields Too Large`,
+and invalid versions 505 with `HTTP Version Not Supported`. The returned `HttpError`
+still identifies the cause. A failure writing the rejection returns its network error.
+HTTP/2 uses its protocol stream or connection errors rather than an HTTP/1 reply. Any failed response ends reuse. A closed
 connection, clean EOF between requests, or an expired keep-alive idle wait returns
-`Closed`; EOF within a request is `Truncated`. Dropping the resource closes the socket.
+`None`; EOF within a request is `Truncated`. Dropping the resource closes the socket.
 For a server, `Config.read_timeout` bounds the whole request, including the head,
-Content-Length or chunked payload, and trailers. `receive_request` takes an explicit
+Content-Length or chunked payload, and trailers. `next_stream` takes an explicit
 `Some(clock)` for a finite bound; `None` needs no clock authority for an unbounded
 request. A finite bound without a clock is `Net(InvalidInput())` before any read.
 Clock failures are `Clock(ClockError)`; a deadline beyond the clock range is
@@ -1652,7 +1691,7 @@ receiver sends 408 with Connection: close and returns `RequestTimeout`; a failur
 writing that response propagates its network error. The connection cannot be
 reused or receive a second response. Dropping its resource closes the socket.
 
-Servers map malformed requests to a 400 response before application handling. The
+Servers answer malformed requests before application handling. The
 caller owns the listen/accept loop, routing and concurrency across connections.
 `ServerRequest.body` keeps its content codings; `decode_content` removes them.
 
@@ -1668,19 +1707,18 @@ The connection then behaves exactly as a plaintext one; the handshake offers ALP
 #### Streaming HTTP responses and EventSource framing
 
 ```text
-fn http.respond_head(mut c: ServerConnection, status: u16, headers: List[Header]) -> Result[(), HttpError]
-fn http.write_response_body(mut c: ServerConnection, bytes: Bytes) -> Result[(), HttpError]
-fn http.end_response_body(mut c: ServerConnection) -> Result[(), HttpError]
+fn http.respond_head(mut s: ServerStream, status: u16, headers: List[Header]) -> Result[(), HttpError]
+fn http.write_response_body(mut s: ServerStream, bytes: Bytes) -> Result[(), HttpError]
+fn http.end_response_body(mut s: ServerStream) -> Result[(), HttpError]
 SseError = EventLineBreak | IdLineBreak | IdNul
 fn http.sse_event(event: Option[String], data: List[String], id: Option[String], retry: Option[u64]) -> Result[unique Bytes, SseError] uses {}
 ```
 
-`respond_head` starts a response without a known length, after `receive_request`
-(or as the final response to a failed request). It accepts final statuses 200–599,
+`respond_head` starts a response without a known length, after `next_stream`. It accepts final statuses 200–599,
 validates headers, and reserves Content-Length, Transfer-Encoding and Connection
 just as `respond` does. It emits the validated request's HTTP version and no
-Content-Length. Before a head is validated, it falls back to HTTP/1.0 with close
-delimiting; neither version nor HEAD semantics carry over from a previous request.
+Content-Length. Malformed heads never yield a response handle; the endpoint sends its fixed rejection.
+Neither version nor HEAD semantics carry over from a previous request.
 Following [RFC 9112 sections 6.3 and 7.1](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3),
 HTTP/1.1 bodies use Transfer-Encoding: chunked; HTTP/1.0 bodies use close delimiting,
 with Connection: close even when the request asked for keep-alive. HEAD, 204 and 304
@@ -1787,8 +1825,8 @@ A failed write makes the connection unusable; EOF within a frame or preface is
 `Truncated`. Dropping the connection closes its owned stream.
 
 These explicit modules do not change `std@1/http`'s HTTP/1.1 client/server or
-negotiate ALPN. Automatic HTTPS selection and integration with that module's
-request/body types require the TLS ALPN observation API and connection adapter.
+negotiate ALPN. The `http` adapter supplies explicit h2c request/body integration; automatic HTTPS
+selection still requires the TLS ALPN provider integration.
 
 ## Unicode scalar properties and simple case
 

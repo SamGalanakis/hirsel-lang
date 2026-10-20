@@ -355,8 +355,8 @@ pub fn read_signals[T](
 /// one complete event and returns once it is flushed, so events arrive in call
 /// order. A failed write means the browser has gone; the generator is then of no
 /// further use. Dropping it closes the connection.
-pub opaque resource type ServerSentEventGenerator: noalloc_drop uses {Net} {
-  connection: http.ServerConnection,
+pub opaque resource type ServerSentEventGenerator: noalloc_drop uses {Net, Tasks} {
+  connection: http.ServerStream,
 }
 @noalloc drop(self) {}
 
@@ -364,7 +364,7 @@ pub opaque resource type ServerSentEventGenerator: noalloc_drop uses {Net} {
 /// 200 with `Cache-Control: no-cache` and `Content-Type: text/event-stream`, sent at
 /// once so the browser does not time out. HTTP/1.1 frames the body in chunks and
 /// keeps the connection; HTTP/1.0 ends it by closing.
-pub fn new_sse(take connection: http.ServerConnection) -> Result[
+pub fn new_sse(take connection: http.ServerStream) -> Result[
   ServerSentEventGenerator,
   SseError
 ] {
@@ -427,14 +427,11 @@ pub fn redirect(mut sse: ServerSentEventGenerator, url: String) -> Result[(), Ss
   send(mut sse, redirect_event(url))
 }
 
-/// Ends the response, which the browser sees as the stream closing, and returns the
-/// connection: after HTTP/1.1 it can receive the next request.
-pub fn close(take sse: ServerSentEventGenerator) -> Result[
-  http.ServerConnection,
-  SseError
-] {
+/// Ends the response and returns its transport to the HTTP connection, which
+/// can then yield the next request.
+pub fn close(take sse: ServerSentEventGenerator) -> Result[(), SseError] {
   let ServerSentEventGenerator(connection: connection) = take sse
   let mut c = take connection
   http.end_response_body(mut c) ? Http
-  Ok(take c)
+  Ok(())
 }

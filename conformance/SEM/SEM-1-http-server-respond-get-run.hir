@@ -36,13 +36,24 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   )
   let mut listener = net.listen(n, addr) ? http_net
   let (stream, _) = net.accept(n, mut listener) ? http_net
-  let mut c = http.server_connection(n, take stream, http.default_config())
-  let first = http.receive_request(mut c, None())?
+  let mut c = http.server_connection(
+    test.tasks(t),
+    n,
+    take stream,
+    http.default_config()
+  )
+  let Some((current1, first)) = http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  let mut exchange1 = take current1
   test.check(t, first.method == "GET")
-  http.respond(mut c, 200u16, [], b"hello", false)?
-  let next = http.receive_request(mut c, None())?
+  http.respond(mut exchange1, 200u16, [], b"hello", false)?
+  let Some((current2, next)) = http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  let mut exchange2 = take current2
   test.check(t, next.method == "GET" && next.target == "/next")
-  http.respond(mut c, 200u16, [], b"ok", false)?
-  test.check(t, http.receive_request(mut c, None()) == Error(Closed()))
+  http.respond(mut exchange2, 200u16, [], b"ok", false)?
+  test.check(t, option.is_none(http.next_stream(mut c, None())?))
   Ok(())
 }

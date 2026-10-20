@@ -518,13 +518,13 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
   let (stream, _) = net.accept(n, mut listener) ? Network
   let mut config = http.default_config()
   config.read_timeout = Some(duration.from_parts(0, 1000))
-  let mut connection = http.server_connection(n, take stream, config)
-  match http.receive_request(mut connection, Some(clock)) {
+  let mut connection = http.server_connection(io.tasks(rt) ? Grant, n, take stream, config)
+  match http.next_stream(mut connection, Some(clock)) {
     Error(RequestTimeout()) => (),
     _ => failure.check(false, Arithmetic()),
   }
-  match http.receive_request(mut connection, Some(clock)) {
-    Error(Closed()) => (),
+  match http.next_stream(mut connection, Some(clock)) {
+    Ok(None()) => (),
     _ => failure.check(false, Arithmetic()),
   }
   Ok(())
@@ -721,6 +721,20 @@ fn streaming_http_scripts_replay_writes_completion_and_drop() {
             "conformance/SEM/SEM-1-http-client-stream-run.hir",
             "conformance/SEM/SEM-1-http-headers-many-run.hir",
             "conformance/SEM/SEM-1-http-headers-limits-run.hir",
+        ] {
+            assert_http_script_replay(relative);
+        }
+    });
+}
+
+// The corpus checks headers and body semantics. Only the host observation API
+// can additionally verify that the same provider effects replay without IO.
+#[test]
+fn http2_adapter_scripts_record_and_replay() {
+    with_compiler_stack(|| {
+        for relative in [
+            "conformance/SEM/SEM-1-http-h2-client-run.hir",
+            "conformance/SEM/SEM-1-http-h2-server-run.hir",
         ] {
             assert_http_script_replay(relative);
         }

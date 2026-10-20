@@ -14,7 +14,7 @@ fn rule(take operation: NetOperation) -> NetRule uses {} {
   NetRule(address: "/tmp/hirsel-app.sock", port: 0u16, operation: operation)
 }
 
-fn serve(n: Net) -> Result[(), ServerError] {
+fn serve(tasks: Tasks, n: Net) -> Result[(), ServerError] {
   let socket = path.of("/tmp/hirsel-app.sock")
   let mut listener = net.unix_listen(n, socket) ? Network
   failure.check(net.local_addr(n, listener) == Ok(unnamed()), Arithmetic())
@@ -28,10 +28,18 @@ fn serve(n: Net) -> Result[(), ServerError] {
     from == unnamed() && net.peer_addr(n, stream) == Ok(unnamed()),
     Arithmetic()
   )
-  let mut connection = http.server_connection(n, take stream, http.default_config())
-  let request = http.receive_request(mut connection, None()) ? Http
+  let mut connection = http.server_connection(
+    tasks,
+    n,
+    take stream,
+    http.default_config()
+  )
+  let Some((current1, request)) = http.next_stream(mut connection, None()) ? Http else {
+    return Error(Http(Closed()))
+  }
+  let mut exchange1 = take current1
   failure.check(request.target == "/", Arithmetic())
-  http.respond(mut connection, 200u16, [], b"ok", true) ? Http
+  http.respond(mut exchange1, 200u16, [], b"ok", true) ? Http
   let done = match net.accept(n, mut listener) {
     Error(ConnectionAborted()) => true,
     _ => false,
@@ -41,6 +49,10 @@ fn serve(n: Net) -> Result[(), ServerError] {
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
+  let tasks = match io.tasks(rt) {
+    Ok(value) => value,
+    Error(_) => return Ok(()),
+  }
   let n = match io.net(rt) {
     Ok(n) => n,
     Error(_) => return Ok(()),
@@ -51,5 +63,5 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   }
   failure.check(connect, Arithmetic())
   let narrowed = net.narrow(n, [rule(UnixListen())]) ? Network
-  serve(narrowed)
+  serve(tasks, narrowed)
 }

@@ -1,5 +1,5 @@
 {
-  "io": {
+  "io": {"tasks": "tasks.cooperative@1",
     "stdout": "stdout.bytes@1",
     "net": {
       "provider": "net.stream@1",

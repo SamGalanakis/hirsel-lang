@@ -1057,7 +1057,7 @@ No stdout; exit 0 (all checks pass).
 For a real server, see [hello-web](../examples/hello-web/main.hir),
 [hello-web-concurrent](../examples/hello-web-concurrent/main.hir) and
 [todo-api](../examples/todo-api/main.hir). They show listen/accept,
-`http.receive_request` with head/body limits, `http.respond`, connection cleanup
+`http.next_stream` with head/body limits, `http.respond`, connection cleanup
 and application routing; [fetchjson](../examples/fetchjson/README.md) posts JSON over one
 Client. All of them also build natively.
 

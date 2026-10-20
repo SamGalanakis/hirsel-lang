@@ -73,7 +73,7 @@ pub fn main(t: Test) -> Result[(), uri.QueryError] {
   )
   let mut stream = match net.connect(n, "example.com", 80u16, Unbounded()) {
     Ok(stream) => take stream,
-    Error(_) => {
+    _ => {
       check(false)
       return Ok(())
     },
@@ -81,17 +81,18 @@ pub fn main(t: Test) -> Result[(), uri.QueryError] {
   let mut config = http.default_config()
   config.max_head_bytes = 1024
   config.max_body_bytes = 1024
-  let mut connection = http.server_connection(n, take stream, config)
-  let request = match http.receive_request(mut connection, None()) {
-    Ok(request) => take request,
-    Error(_) => {
+  let mut connection = http.server_connection(test.tasks(t), n, take stream, config)
+  let (owned, request) = match http.next_stream(mut connection, None()) {
+    Ok(Some(exchange)) => take exchange,
+    _ => {
       check(false)
       return Ok(())
     },
   }
+  let mut responding = take owned
   let form = match string.from_bytes(unique request.body) {
     Ok(form) => take form,
-    Error(_) => {
+    _ => {
       check(false)
       return Ok(())
     },
@@ -99,7 +100,7 @@ pub fn main(t: Test) -> Result[(), uri.QueryError] {
   let form_pairs = uri.query_pairs(form)?
   check(form_pairs == [("x", "one two"), ("x", "+")])
   let body = uri.encode_query(form_pairs)
-  match http.respond(mut connection, 200u16, [], string.as_bytes(body), true) {
+  match http.respond(mut responding, 200u16, [], string.as_bytes(body), true) {
     Ok(()) => (),
     Error(_) => check(false),
   }

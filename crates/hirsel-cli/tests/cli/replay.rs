@@ -29,9 +29,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   let mut config = std@1/http.default_config()
   config.max_head_bytes = 16384
   config.max_body_bytes = 1048576
-  let mut connection = std@1/http.server_connection(n, take stream, config)
-  let _ = std@1/http.receive_request(mut connection, None()) ? Http
-  std@1/http.respond(mut connection, 200u16, [], greeting, true) ? Http
+  let mut connection = std@1/http.server_connection(io.tasks(rt) ? Grant, n, take stream, config)
+  let Some((owned, _)) = std@1/http.next_stream(mut connection, None()) ? Http else { return Error(Http(Closed())) }
+  let mut responding = take owned
+  std@1/http.respond(mut responding, 200u16, [], greeting, true) ? Http
   let _ = out.print(output, "served ")
   let _ = out.print(output, name)
   Ok(())
@@ -59,7 +60,7 @@ impl Fixture {
         .unwrap();
         std::fs::write(
             root.join("grants.json"),
-            serde_json::json!({"io":{"stdout":"stdout.bytes@1","stdin":"stdin.bytes@1","dirs":[{"path":"data","host":root.join("data"),"access":"read"}],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"0","operation":"listen"}]}},"args":[]}).to_string(),
+            serde_json::json!({"io":{"stdout":"stdout.bytes@1","stdin":"stdin.bytes@1","tasks":"tasks.cooperative@1","dirs":[{"path":"data","host":root.join("data"),"access":"read"}],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"0","operation":"listen"}]}},"args":[]}).to_string(),
         )
         .unwrap();
         Self(root)

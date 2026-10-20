@@ -70,50 +70,61 @@ fn exercise(t: Test, modern: bool, keep: bool) -> Result[(), http.HttpError] {
     []
   )
   let stream = net.connect(n, "example.com", 80u16, Unbounded()) ? http_net
-  let mut c = http.server_connection(n, take stream, http.default_config())
-  match http.write_response_body(mut c, b"bad") {
+  let mut c = http.server_connection(
+    test.tasks(t),
+    n,
+    take stream,
+    http.default_config()
+  )
+  let Some((current1, _)) = http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  let mut exchange1 = take current1
+  match http.write_response_body(mut exchange1, b"bad") {
     Error(OutOfOrder()) => (),
     _ => test.check(t, false),
   }
-  match http.end_response_body(mut c) {
+  match http.end_response_body(mut exchange1) {
     Error(OutOfOrder()) => (),
     _ => test.check(t, false),
   }
-  let _ = http.receive_request(mut c, None())?
-  http.respond_head(mut c, 200u16, [])?
-  http.write_response_body(mut c, b"")?
-  http.write_response_body(mut c, b"hello, ")?
-  http.write_response_body(mut c, b"")?
-  match http.receive_request(mut c, None()) {
+  http.respond_head(mut exchange1, 200u16, [])?
+  http.write_response_body(mut exchange1, b"")?
+  http.write_response_body(mut exchange1, b"hello, ")?
+  http.write_response_body(mut exchange1, b"")?
+  match http.next_stream(mut c, None()) {
     Error(OutOfOrder()) => (),
     _ => test.check(t, false),
   }
-  match http.respond_head(mut c, 200u16, []) {
+  match http.respond_head(mut exchange1, 200u16, []) {
     Error(OutOfOrder()) => (),
     _ => test.check(t, false),
   }
-  match http.respond(mut c, 200u16, [], b"", false) {
+  match http.respond(mut exchange1, 200u16, [], b"", false) {
     Error(OutOfOrder()) => (),
     _ => test.check(t, false),
   }
-  http.write_response_body(mut c, b"world! 0123456789abcdef")?
-  http.write_response_body(mut c, b"")?
-  http.end_response_body(mut c)?
-  match http.write_response_body(mut c, b"bad") {
+  http.write_response_body(mut exchange1, b"world! 0123456789abcdef")?
+  http.write_response_body(mut exchange1, b"")?
+  http.end_response_body(mut exchange1)?
+  match http.write_response_body(mut exchange1, b"bad") {
     Error(OutOfOrder()) => (),
     _ => test.check(t, false),
   }
-  match http.end_response_body(mut c) {
+  match http.end_response_body(mut exchange1) {
     Error(OutOfOrder()) => (),
     _ => test.check(t, false),
   }
   if modern && keep {
-    let next = http.receive_request(mut c, None())?
+    let Some((current2, next)) = http.next_stream(mut c, None())? else {
+      return Error(Closed())
+    }
+    let mut exchange2 = take current2
     test.check(t, next.target == "/next")
-    http.respond(mut c, 200u16, [], b"ok", false)?
+    http.respond(mut exchange2, 200u16, [], b"ok", false)?
   } else {
-    match http.receive_request(mut c, None()) {
-      Error(Closed()) => (),
+    match http.next_stream(mut c, None()) {
+      Ok(None()) => (),
       _ => test.check(t, false),
     }
   }

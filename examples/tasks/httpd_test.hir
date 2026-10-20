@@ -117,11 +117,17 @@ fn send_frames_each_reply(t: Test) {
   let Ok((stream, _)) = net.accept(n, mut accepting) else {
     test.fail(t)
   }
-  let mut connection = http.server_connection(n, take stream, config(small(), false))
+  let mut connection = http.server_connection(
+    test.tasks(t),
+    n,
+    take stream,
+    config(small(), false)
+  )
   for _ in 0u64..3 {
-    let Ok(request) = http.receive_request(mut connection, None()) else {
+    let Ok(Some((exchange, request))) = http.next_stream(mut connection, None()) else {
       test.fail(t)
     }
+    let mut responding = take exchange
     let response = if request.method == "DELETE" {
       empty(204)
     } else {
@@ -129,7 +135,7 @@ fn send_frames_each_reply(t: Test) {
     }
     test.check(
       t,
-      results.is_ok(send(mut connection, response, request.method == "HEAD"))
+      results.is_ok(send(mut responding, response, request.method == "HEAD"))
     )
   }
 }

@@ -64,9 +64,7 @@ pub fn rejection(error: http.HttpError) -> Option[u16] uses {} {
 
 /// Sends `response` to the request `connection` last received. A HEAD request, a
 /// 204 and a 304 get the head alone.
-// GAP: http.respond writes the body after a HEAD request and a Content-Length on a
-// 204, so those go through respond_head and end_response_body.
-pub fn send(mut connection: http.ServerConnection, response: Reply, head: bool) -> Result[
+pub fn send(mut connection: http.ServerStream, response: Reply, head: bool) -> Result[
   (),
   http.HttpError
 ] {

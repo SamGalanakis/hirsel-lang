@@ -79,13 +79,19 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
       []
     )
     let stream = net.connect(n, "example.com", 80u16, Unbounded()) ? http_net
-    let mut c = http.server_connection(n, take stream, config)
-    let request = http.receive_request(mut c, None())?
+    let mut c = http.server_connection(test.tasks(t), n, take stream, config)
+    let Some((current1, request)) = http.next_stream(mut c, None())? else {
+      return Error(Closed())
+    }
+    let mut exchange1 = take current1
     test.check(t, list.len(request.headers) == 40)
-    http.respond(mut c, 200u16, [], b"", false)?
-    let next_request = http.receive_request(mut c, None())?
+    http.respond(mut exchange1, 200u16, [], b"", false)?
+    let Some((current2, next_request)) = http.next_stream(mut c, None())? else {
+      return Error(Closed())
+    }
+    let mut exchange2 = take current2
     test.check(t, next_request.target == "/next")
-    http.respond(mut c, 200u16, [], b"", false)?
+    http.respond(mut exchange2, 200u16, [], b"", false)?
   }
   Ok(())
 }
@@ -125,9 +131,12 @@ fn trailers_many(t: Test) -> Result[(), http.HttpError] {
   }
   let n = peer(t, chunked)
   let stream = net.connect(n, "example.com", 80u16, Unbounded()) ? http_net
-  let mut c = http.server_connection(n, take stream, config)
-  let request = http.receive_request(mut c, None())?
+  let mut c = http.server_connection(test.tasks(t), n, take stream, config)
+  let Some((current3, request)) = http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  let mut exchange3 = take current3
   test.check(t, list.len(request.trailers) == 40)
-  http.respond(mut c, 200u16, [], b"", true)?
+  http.respond(mut exchange3, 200u16, [], b"", true)?
   Ok(())
 }

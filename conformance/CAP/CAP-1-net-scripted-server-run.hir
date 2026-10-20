@@ -15,14 +15,20 @@ fn client(port: u16, take body: Bytes, take response: Bytes) -> NetClient uses {
   )
 }
 
-fn serve_one(n: Net, mut listener: Listener of n) -> Result[u16, ServerError] {
+fn serve_one(tasks: Tasks, n: Net, mut listener: Listener of n) -> Result[
+  u16,
+  ServerError
+] {
   let mut (stream, from) = net.accept(n, mut listener) ? Network
   let mut config = http.default_config()
   config.max_head_bytes = 1024
   config.max_body_bytes = 1024
-  let mut connection = http.server_connection(n, take stream, config)
-  let incoming = http.receive_request(mut connection, None()) ? Http
-  http.respond(mut connection, 200u16, [], incoming.body, true) ? Http
+  let mut connection = http.server_connection(tasks, n, take stream, config)
+  let Some((current1, incoming)) = http.next_stream(mut connection, None()) ? Http else {
+    return Error(Http(Closed()))
+  }
+  let mut exchange1 = take current1
+  http.respond(mut exchange1, 200u16, [], incoming.body, true) ? Http
   Ok(from.port)
 }
 
@@ -54,8 +60,8 @@ pub fn main(t: Test) -> Result[(), ServerError] {
     Ok(bound) => test.check(t, bound.port == 8080u16),
     Error(_) => test.check(t, false),
   }
-  let first = serve_one(n, mut listener)?
-  let second = serve_one(n, mut listener)?
+  let first = serve_one(test.tasks(t), n, mut listener)?
+  let second = serve_one(test.tasks(t), n, mut listener)?
   test.check(t, first == 40001u16 && second == 40002u16)
   match net.accept(n, mut listener) {
     Error(ConnectionAborted()) => (),

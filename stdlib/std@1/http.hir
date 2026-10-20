@@ -18,7 +18,7 @@
 pub type Method = Get | Head | Post | Put | Delete | Patch | Options
 
 @serializable
-pub type Version = Http10 | Http11
+pub type Version = Http10 | Http11 | Http2
 
 @serializable
 pub type Header {
@@ -43,6 +43,7 @@ pub type Config {
   status_as_error: bool,
   decompress: bool,
   unix_socket: Option[Path],
+  http2_prior_knowledge: bool,
 }
 
 @serializable
@@ -77,8 +78,7 @@ pub type HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.Hea
 // body_kind: EOF=0, content-length=1, chunked=2. chunk_suffix tracks the
 // mandatory CRLF after data separately from the following chunk size line.
 pub opaque resource type Request: noalloc_drop uses {Net} {
-  net: Net,
-  stream: Stream of .net,
+  transport: HttpTransport,
   config: Config,
   method: Method,
   uri: uri.Uri,
@@ -87,7 +87,6 @@ pub opaque resource type Request: noalloc_drop uses {Net} {
   redirects: u32,
   state: u8,
   sent_body: bool,
-  input: bufio.Reader,
   body_kind: u8,
   remaining: u64,
   chunk_suffix: bool,
@@ -95,6 +94,11 @@ pub opaque resource type Request: noalloc_drop uses {Net} {
   persistent: bool,
   reusable: bool,
   idle_since: u64,
+  stream_id: u32,
+  body_end: bool,
+  body_offset: u64,
+  body_data: Bytes,
+  body_credit: u32,
 }
 @noalloc drop(self) {}
 
@@ -114,7 +118,8 @@ pub fn default_config() -> Config uses {} {
     roots: WebPki(),
     status_as_error: true,
     decompress: false,
-    unix_socket: None()
+    unix_socket: None(),
+    http2_prior_knowledge: false
   )
 }
 
@@ -438,8 +443,13 @@ pub fn request(
   let s = http_open(n, config, parsed_uri)?
   Ok(
     Request(
-      net: n,
-      stream: take s,
+      transport: http_transport(
+        n,
+        take s,
+        config.http2_prior_knowledge && http_same(parsed_uri.scheme, "http"),
+        Client(),
+        config
+      ),
       config: unique config,
       method: method,
       uri: unique parsed_uri,
@@ -448,14 +458,18 @@ pub fn request(
       redirects: config.max_redirects,
       state: 0,
       sent_body: false,
-      input: bufio.new(4096),
       body_kind: 0,
       remaining: 0,
       chunk_suffix: false,
       response_trailers: [],
       persistent: false,
       reusable: false,
-      idle_since: 0
+      idle_since: 0,
+      stream_id: 0,
+      body_end: false,
+      body_offset: 0,
+      body_data: b"",
+      body_credit: 0
     )
   )
 }
@@ -473,7 +487,7 @@ fn http_method_text(method: Method) -> unique String uses {} {
 }
 
 fn http_write(mut r: Request, data: Bytes) -> Result[(), HttpError] {
-  core@1/net.write_all(r.net, mut r.stream, data) ? http_net_error
+  http_transport_write(mut r.transport, data)?
   Ok(())
 }
 
@@ -547,6 +561,9 @@ fn http_send_head(mut r: Request, framing_line: String) -> Result[(), HttpError]
 }
 
 pub fn send_bodiless(mut r: Request) -> Result[(), HttpError] {
+  if http_is_h2(r.transport) {
+    return http_h2_send(mut r, None(), true)
+  }
   if r.state != 0 {
     return Error(OutOfOrder())
   }
@@ -556,6 +573,9 @@ pub fn send_bodiless(mut r: Request) -> Result[(), HttpError] {
 }
 
 pub fn send_body(mut r: Request, body: Bytes) -> Result[(), HttpError] {
+  if http_is_h2(r.transport) {
+    return http_h2_send(mut r, Some(body), true)
+  }
   if r.state != 0 {
     return Error(OutOfOrder())
   }
@@ -587,6 +607,9 @@ fn http_begin_chunks(mut r: Request) -> Result[(), HttpError] {
 }
 
 pub fn write_request_body(mut r: Request, data: Bytes) -> Result[(), HttpError] {
+  if http_is_h2(r.transport) {
+    return http_h2_request_write(mut r, data)
+  }
   http_begin_chunks(mut r)?
   let len = core@1/bytes.len(data)
   if len == 0 {
@@ -620,6 +643,9 @@ pub fn end_request_body(mut r: Request, request_trailers: List[Header]) -> Resul
   (),
   HttpError
 ] {
+  if http_is_h2(r.transport) {
+    return http_h2_request_end(mut r, request_trailers)
+  }
   http_validate_headers(request_trailers)?
   for h in request_trailers {
     if http_same(h.name, "content-length") || http_same(h.name, "transfer-encoding") || http_same(
@@ -865,21 +891,20 @@ fn http_buffer_error(error: bufio.ReadError[NetError]) -> HttpError uses {} {
 }
 
 fn http_read_more(mut r: Request, max: u64) -> Result[u64, HttpError] {
-  let n = r.net
-  Ok(bufio.stream_read_more(n, mut r.stream, mut r.input, max) ? http_buffer_error)
+  http_transport_read_more(mut r.transport, max)
 }
 
 fn http_next_head(mut r: Request) -> Result[ResponseHead, HttpError] {
   while true {
-    let buf = bufio.contents(r.input)
+    let buf = bufio.contents(r.transport.input)
     if let Some((head, end)) = http_parse_head(buf, r.config)? {
       if end > r.config.max_head_bytes {
         return Error(HeadTooLarge())
       }
-      bufio.consume(mut r.input, end)
+      bufio.consume(mut r.transport.input, end)
       return Ok(take head)
     }
-    let have = bufio.buffered(r.input)
+    let have = bufio.buffered(r.transport.input)
     if have >= r.config.max_head_bytes {
       return Error(HeadTooLarge())
     }
@@ -939,7 +964,7 @@ fn http_redirect(mut r: Request, head: ResponseHead) -> Result[(), HttpError] {
     r.method
   }
   let next_url = uri.to_string(parsed_uri)
-  let mut fresh = request(r.net, r.config, next_method, next_url, headers)?
+  let mut fresh = request(r.transport.net, r.config, next_method, next_url, headers)?
   fresh.persistent = r.persistent
   fresh.redirects = r.redirects - 1
   r = take fresh
@@ -947,6 +972,9 @@ fn http_redirect(mut r: Request, head: ResponseHead) -> Result[(), HttpError] {
 }
 
 pub fn receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
+  if http_is_h2(r.transport) {
+    return http_h2_receive_head(mut r)
+  }
   if r.state != 2 {
     return Error(OutOfOrder())
   }
@@ -994,24 +1022,24 @@ pub fn receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
 // Zig Reader.State.body_remaining_chunk_len: head -> data -> suffix -> head.
 fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
   if r.chunk_suffix {
-    while bufio.buffered(r.input) < 2 {
+    while bufio.buffered(r.transport.input) < 2 {
       if http_read_more(mut r, 4096)? == 0 {
         return Error(Truncated())
       }
     }
-    let suffix = bufio.contents(r.input)
+    let suffix = bufio.contents(r.transport.input)
     if suffix[0] != 13 || suffix[1] != 10 {
       return Error(Chunk())
     }
-    bufio.consume(mut r.input, 2)
+    bufio.consume(mut r.transport.input, 2)
     r.chunk_suffix = false
   }
   while true {
-    let buf = bufio.contents(r.input)
+    let buf = bufio.contents(r.transport.input)
     match http_wire.parse_chunk_size(buf, 0) {
       Error(_) => return Error(Chunk()),
       Ok(Complete(consumed, size)) => {
-        bufio.consume(mut r.input, consumed)
+        bufio.consume(mut r.transport.input, consumed)
         r.remaining = size
         if size == 0 {
           http_read_trailers(mut r)?
@@ -1021,7 +1049,7 @@ fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
       },
       Ok(Partial()) => (),
     }
-    let have = bufio.buffered(r.input)
+    let have = bufio.buffered(r.transport.input)
     if have >= r.config.max_head_bytes {
       return Error(HeadTooLarge())
     }
@@ -1045,14 +1073,14 @@ fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
   let mut collected: List[u8] = []
   text.append(mut collected, "HTTP/1.1 200 OK\r\n")
   while true {
-    let count = bufio.buffered(r.input)
-    let unread = bufio.contents(r.input)
+    let count = bufio.buffered(r.transport.input)
+    let unread = bufio.contents(r.transport.input)
     let mut i: u64 = 0
     while i < count {
       core@1/list.push(mut collected, unread[i])
       i += 1
     }
-    bufio.consume(mut r.input, count)
+    bufio.consume(mut r.transport.input, count)
     let buf = core@1/bytes.from_list(copy collected)
     if let Some((head, end)) = http_parse_head(buf, r.config)? {
       if end - 17 > r.config.max_head_bytes {
@@ -1082,6 +1110,9 @@ fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
 
 @preserves_unique(out)
 pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError] {
+  if http_is_h2(r.transport) {
+    return http_h2_read_body(mut r, mut out, max)
+  }
   if max == 0 {
     return Error(http_net_error(InvalidInput()))
   }
@@ -1097,7 +1128,7 @@ pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, Htt
       return Ok(0)
     }
   }
-  if bufio.buffered(r.input) == 0 {
+  if bufio.buffered(r.transport.input) == 0 {
     if http_read_more(
       mut r,
       if max > 4096 {
@@ -1113,15 +1144,20 @@ pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, Htt
       return Ok(0)
     }
   }
-  let mut count = bufio.buffered(r.input)
+  let mut count = bufio.buffered(r.transport.input)
   if count > max {
     count = max
   }
   if r.body_kind != 0 && count > r.remaining {
     count = r.remaining
   }
-  let n = r.net
-  let _ = bufio.stream_read(n, mut r.stream, mut r.input, mut out, count) ? http_buffer_error
+  let data = bufio.contents(r.transport.input)
+  let mut i: u64 = 0
+  while i < count {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+  bufio.consume(mut r.transport.input, count)
   if r.body_kind != 0 {
     r.remaining -= count
     if r.remaining == 0 {
@@ -1293,6 +1329,11 @@ fn http_client_request(
   r.chunk_suffix = false
   r.response_trailers = []
   r.reusable = false
+  r.stream_id = 0
+  r.body_end = false
+  r.body_offset = 0
+  r.body_data = b""
+  r.body_credit = 0
   r.persistent = http_server_keep_alive(headers, Http11())
   Ok(take r)
 }
@@ -1327,7 +1368,9 @@ pub fn client_fetch(
     body: take data,
     url: unique r.url
   )
-  if r.reusable && r.body_kind != 0 && r.state == 4 && bufio.buffered(r.input) == 0 && c.config.max_idle_connections > 0 {
+  if r.reusable && r.body_kind != 0 && r.state == 4 && (http_is_h2(r.transport) || bufio.buffered(
+    r.transport.input
+  ) == 0) && !r.transport.draining && c.config.max_idle_connections > 0 {
     let mut same_host: u64 = 0
     for idle in c.idle {
       if http_same_origin(idle.uri, r.uri)? {
@@ -1416,39 +1459,58 @@ pub fn client_send(
 // must finish before the next request can be received (RFC 9112 section 9).
 // state: ready=0, response pending=1, closed=2, request failed=3,
 // chunked response=4, close-delimited response=5, bodyless response=6.
-pub opaque resource type ServerConnection: noalloc_drop uses {Net} {
-  net: Net,
-  stream: Stream of .net,
+resource type HttpExchange: noalloc_drop uses {Net, Tasks} {
+  tasks: Tasks,
+  active: Atomic[u8],
+  transport: HttpTransport,
   config: Config,
-  input: bufio.Reader,
   state: u8,
   keep_alive: bool,
   served: bool,
   version: Version,
   head_request: bool,
+  stream_id: u32,
 }
-@noalloc drop(self) {}
+@noalloc drop(self) {
+  core@1/atomic.store(self.tasks, self.active, 3u8)
+}
 
-pub fn server_connection(n: Net, take stream: Stream of n, config: Config) -> ServerConnection {
-  ServerConnection(
-    net: n,
-    stream: take stream,
+fn http_exchange(
+  tasks: Tasks,
+  take active: Atomic[u8],
+  n: Net,
+  take stream: Stream of n,
+  config: Config
+) -> HttpExchange {
+  HttpExchange(
+    tasks: tasks,
+    active: active,
+    transport: http_transport(
+      n,
+      take stream,
+      config.http2_prior_knowledge,
+      Server(),
+      config
+    ),
     config: unique config,
-    input: bufio.new(4096),
     state: 0,
     keep_alive: false,
     served: false,
     version: Http11(),
-    head_request: false
+    head_request: false,
+    stream_id: 0
   )
 }
 
 // The TLS twin of server_connection: a server handshake on an accepted stream,
 // bounded by the config's read and write timeouts, then the keep-alive server.
-pub fn serve_tls(n: Net, take stream: Stream of n, server: TlsServer, config: Config) -> Result[
-  ServerConnection,
-  HttpError
-] {
+pub fn serve_tls(
+  tasks: Tasks,
+  n: Net,
+  take stream: Stream of n,
+  server: TlsServer,
+  config: Config
+) -> Result[ServerConnection, HttpError] {
   let rt = http_timeout(config.read_timeout)?
   let wt = http_timeout(config.write_timeout)?
   let mut plain = take stream
@@ -1456,7 +1518,7 @@ pub fn serve_tls(n: Net, take stream: Stream of n, server: TlsServer, config: Co
   core@1/net.set_read_timeout(n, mut plain, rt) ? http_net_error
   core@1/net.set_write_timeout(n, mut plain, wt) ? http_net_error
   let secure = core@1/tls.accept(n, take plain, server) ? http_net_error
-  Ok(server_connection(n, take secure, config))
+  Ok(server_connection(tasks, n, take secure, config))
 }
 
 // All Connection fields contribute tokens; close wins regardless of order.
@@ -1870,18 +1932,17 @@ fn http_server_remaining(clock: Option[MonotonicClock], deadline: Option[u64]) -
   Ok(Nanos(end - now))
 }
 
-fn http_server_expired(mut c: ServerConnection) -> Result[u64, HttpError] {
-  respond(mut c, 408u16, [], b"Request Timeout", true)?
+fn http_server_expired(mut c: HttpExchange) -> Result[u64, HttpError] {
+  http_respond(mut c, 408u16, [], b"Request Timeout", true)?
   Error(RequestTimeout())
 }
 
 fn http_server_read_more(
-  mut c: ServerConnection,
+  mut c: HttpExchange,
   idle: bool,
   clock: Option[MonotonicClock],
   deadline: Option[u64]
 ) -> Result[u64, HttpError] {
-  let n = c.net
   let timeout = if idle {
     http_timeout(c.config.idle_timeout)?
   } else {
@@ -1891,17 +1952,17 @@ fn http_server_read_more(
       Error(error) => return Error(error),
     }
   }
-  core@1/net.set_read_timeout(n, mut c.stream, timeout) ? http_net_error
-  let count = match bufio.stream_read_more(n, mut c.stream, mut c.input, 4096) {
+  http_transport_read_timeout(mut c.transport, timeout)?
+  let count = match http_transport_read_more(mut c.transport, 4096) {
     Ok(count) => count,
-    Error(Source(TimedOut())) => {
+    Error(Net(TimedOut())) => {
       if idle {
         c.state = 2
         return Error(Closed())
       }
       return http_server_expired(mut c)
     },
-    Error(error) => return Error(http_buffer_error(error)),
+    Error(error) => return Error(error),
   }
   // A completion after the deadline cannot deliver a request to the handler.
   if !idle {
@@ -1916,10 +1977,13 @@ fn http_server_read_more(
 
 // Clean EOF and the keep-alive idle limit return Closed. An incomplete request
 // is Truncated. A failed read may receive one final error response, then closes.
-pub fn receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[
+fn http_receive_request(mut c: HttpExchange, clock: Option[MonotonicClock]) -> Result[
   ServerRequest,
   HttpError
 ] {
+  if http_is_h2(c.transport) {
+    return http_h2_receive_request(mut c, clock)
+  }
   if c.state == 2 {
     return Error(Closed())
   }
@@ -1931,7 +1995,7 @@ pub fn receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -
   // may carry over from the preceding request. HTTP/1.0 is the safe fallback.
   c.version = Http10()
   c.head_request = false
-  let mut idle = c.served && bufio.buffered(c.input) == 0
+  let mut idle = c.served && bufio.buffered(c.transport.input) == 0
   // Validate the configuration and clock even when the connection starts idle.
   let initial_deadline = http_server_deadline(clock, c.config.read_timeout)?
   let mut deadline: Option[u64] = if idle {
@@ -1940,17 +2004,17 @@ pub fn receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -
     initial_deadline
   }
   while true {
-    let buf = bufio.contents(c.input)
+    let buf = bufio.contents(c.transport.input)
     if let Some((parsed, frame, end)) = http_server_head(buf, c.config)? {
       let mut incoming = take parsed
       c.version = incoming.version
       c.head_request = incoming.method == "HEAD"
-      bufio.consume(mut c.input, end)
+      bufio.consume(mut c.transport.input, end)
       let mut body = http_server_body(frame, c.config.max_body_bytes)?
       while body.state != 5 {
-        let unread = bufio.contents(c.input)
+        let unread = bufio.contents(c.transport.input)
         let consumed = http_server_body_step(mut body, unread, c.config)?
-        bufio.consume(mut c.input, consumed)
+        bufio.consume(mut c.transport.input, consumed)
         if body.state != 5 && http_server_read_more(mut c, false, clock, deadline)? == 0 {
           return Error(Truncated())
         }
@@ -1963,7 +2027,7 @@ pub fn receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -
     }
     let count = http_server_read_more(mut c, idle, clock, deadline)?
     if count == 0 {
-      if bufio.buffered(c.input) == 0 {
+      if bufio.buffered(c.transport.input) == 0 {
         c.state = 2
         return Error(Closed())
       }
@@ -1983,20 +2047,22 @@ fn http_server_bodyless(head_request: bool, status: u16) -> bool uses {} {
 }
 
 // The writer owns framing: callers cannot inject a second length or encoding.
-pub fn respond(
-  mut c: ServerConnection,
+fn http_respond(
+  mut c: HttpExchange,
   status: u16,
   headers: List[Header],
   body: Bytes,
   close: bool
 ) -> Result[(), HttpError] {
+  if http_is_h2(c.transport) {
+    return http_h2_respond(mut c, status, headers, body, close)
+  }
   if c.state != 1 && c.state != 3 {
     return Error(OutOfOrder())
   }
   let keep = c.state == 1 && c.keep_alive && !close
   c.state = 2
-  let n = c.net
-  core@1/net.set_write_timeout(n, mut c.stream, http_timeout(c.config.write_timeout)?) ? http_net_error
+  http_transport_write_timeout(mut c.transport, http_timeout(c.config.write_timeout)?)?
   if status < 200 || status > 599 {
     return Error(Malformed(Status()))
   }
@@ -2028,10 +2094,10 @@ pub fn respond(
       core@1/list.push(mut out, body[i])
       i += 1
     }
-    core@1/net.write_all(n, mut c.stream, core@1/bytes.from_list(take out)) ? http_net_error
+    http_transport_write(mut c.transport, core@1/bytes.from_list(take out))?
   } else {
-    core@1/net.write_all(n, mut c.stream, core@1/bytes.from_list(take out)) ? http_net_error
-    core@1/net.write_all(n, mut c.stream, body) ? http_net_error
+    http_transport_write(mut c.transport, core@1/bytes.from_list(take out))?
+    http_transport_write(mut c.transport, body)?
   }
   c.served = true
   if keep {
@@ -2075,10 +2141,13 @@ fn http_server_response_head(version: Version, status: u16, headers: List[Header
 /// Sends and flushes a response head without a known body length. HTTP/1.1
 /// uses chunked framing; HTTP/1.0 bodies end by closing the connection.
 /// The connection cannot receive another request until end_response_body succeeds.
-pub fn respond_head(mut c: ServerConnection, status: u16, headers: List[Header]) -> Result[
+fn http_respond_head(mut c: HttpExchange, status: u16, headers: List[Header]) -> Result[
   (),
   HttpError
 ] {
+  if http_is_h2(c.transport) {
+    return http_h2_respond_head(mut c, status, headers)
+  }
   if c.state != 1 && c.state != 3 {
     return Error(OutOfOrder())
   }
@@ -2102,9 +2171,8 @@ pub fn respond_head(mut c: ServerConnection, status: u16, headers: List[Header])
       "Connection: close\r\n\r\n"
     }
   )
-  let n = c.net
-  core@1/net.set_write_timeout(n, mut c.stream, http_timeout(c.config.write_timeout)?) ? http_net_error
-  core@1/net.write_all(n, mut c.stream, core@1/bytes.from_list(take out)) ? http_net_error
+  http_transport_write_timeout(mut c.transport, http_timeout(c.config.write_timeout)?)?
+  http_transport_write(mut c.transport, core@1/bytes.from_list(take out))?
   c.state = if bodyless {
     6
   } else if chunked {
@@ -2119,10 +2187,10 @@ pub fn respond_head(mut c: ServerConnection, status: u16, headers: List[Header])
 /// the body. HEAD, 204 and 304 responses elide body bytes.
 // Go net/http/internal/chunked.go chunkedWriter.Write; no buffered writer
 // sits between write_all and the stream, so each call is already flushed.
-pub fn write_response_body(mut c: ServerConnection, bytes: Bytes) -> Result[
-  (),
-  HttpError
-] {
+fn http_write_response_body(mut c: HttpExchange, bytes: Bytes) -> Result[(), HttpError] {
+  if http_is_h2(c.transport) {
+    return http_h2_response_write(mut c, bytes)
+  }
   if c.state != 4 && c.state != 5 && c.state != 6 {
     return Error(OutOfOrder())
   }
@@ -2131,15 +2199,14 @@ pub fn write_response_body(mut c: ServerConnection, bytes: Bytes) -> Result[
   }
   let state = c.state
   c.state = 2
-  let n = c.net
   if state == 4 {
     let mut head: List[u8] = []
     text.append(mut head, f"{core@1/bytes.len(bytes):x}\r\n")
-    core@1/net.write_all(n, mut c.stream, core@1/bytes.from_list(take head)) ? http_net_error
+    http_transport_write(mut c.transport, core@1/bytes.from_list(take head))?
   }
-  core@1/net.write_all(n, mut c.stream, bytes) ? http_net_error
+  http_transport_write(mut c.transport, bytes)?
   if state == 4 {
-    core@1/net.write_all(n, mut c.stream, b"\r\n") ? http_net_error
+    http_transport_write(mut c.transport, b"\r\n")?
   }
   c.state = state
   Ok(())
@@ -2148,21 +2215,23 @@ pub fn write_response_body(mut c: ServerConnection, bytes: Bytes) -> Result[
 /// Finishes a streaming response. Chunked bodies emit the zero chunk and
 /// empty trailers; close-delimited bodies shut down the stream. Only a fully
 /// finished, persistent response permits another receive_request.
-pub fn end_response_body(mut c: ServerConnection) -> Result[(), HttpError] {
+fn http_end_response_body(mut c: HttpExchange) -> Result[(), HttpError] {
+  if http_is_h2(c.transport) {
+    return http_h2_response_end(mut c)
+  }
   if c.state != 4 && c.state != 5 && c.state != 6 {
     return Error(OutOfOrder())
   }
   let state = c.state
   c.state = 2
-  let n = c.net
   if state == 4 {
-    core@1/net.write_all(n, mut c.stream, b"0\r\n\r\n") ? http_net_error
+    http_transport_write(mut c.transport, b"0\r\n\r\n")?
   }
   c.served = true
   if c.keep_alive {
     c.state = 0
   } else {
-    core@1/net.shutdown(n, mut c.stream, Both()) ? http_net_error
+    http_transport_shutdown(mut c.transport)?
   }
   Ok(())
 }

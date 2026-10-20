@@ -143,14 +143,14 @@ References: [`core@1/List`](https://github.com/SamGalanakis/hirsel-lang/blob/mai
 
 <a id="def-datastar_401_2fdatastar_2fServerSentEventGenerator"></a>
 
-- `pub opaque resource type datastar.ServerSentEventGenerator: noalloc_drop uses {Net}`
+- `pub opaque resource type datastar.ServerSentEventGenerator: noalloc_drop uses {Net, Tasks}`
 
 An open `text/event-stream` response on an HTTP connection. Each operation writes
 one complete event and returns once it is flushed, so events arrive in call
 order. A failed write means the browser has gone; the generator is then of no
 further use. Dropping it closes the connection.
 
-References: [`core@1/Net`](https://github.com/SamGalanakis/hirsel-lang/blob/main/docs/api.md#def-core_401_2fNet)
+References: [`core@1/Net`](https://github.com/SamGalanakis/hirsel-lang/blob/main/docs/api.md#def-core_401_2fNet), [`core@1/Tasks`](https://github.com/SamGalanakis/hirsel-lang/blob/main/docs/api.md#def-core_401_2fTasks)
 
 <a id="def-datastar_401_2fdatastar_2fSignalsError"></a>
 
@@ -225,12 +225,12 @@ References: [`std@1/http/HttpError`](https://github.com/SamGalanakis/hirsel-lang
 
 <a id="def-datastar_401_2fdatastar_2fclose"></a>
 
-- `pub fn datastar.close(take sse: ServerSentEventGenerator) -> Result[ http.ServerConnection, SseError ]`
+- `pub fn datastar.close(take sse: ServerSentEventGenerator) -> Result[(), SseError]`
 
-Ends the response, which the browser sees as the stream closing, and returns the
-connection: after HTTP/1.1 it can receive the next request.
+Ends the response and returns its transport to the HTTP connection, which
+can then yield the next request.
 
-References: [`core@1/Result`](https://github.com/SamGalanakis/hirsel-lang/blob/main/docs/api.md#def-core_401_2fResult), [`datastar@1/datastar/ServerSentEventGenerator`](#def-datastar_401_2fdatastar_2fServerSentEventGenerator), [`datastar@1/datastar/SseError`](#def-datastar_401_2fdatastar_2fSseError), [`std@1/http/ServerConnection`](https://github.com/SamGalanakis/hirsel-lang/blob/main/docs/api.md#def-std_401_2fhttp_2fServerConnection)
+References: [`core@1/Result`](https://github.com/SamGalanakis/hirsel-lang/blob/main/docs/api.md#def-core_401_2fResult), [`datastar@1/datastar/ServerSentEventGenerator`](#def-datastar_401_2fdatastar_2fServerSentEventGenerator), [`datastar@1/datastar/SseError`](#def-datastar_401_2fdatastar_2fSseError)
 
 <a id="def-datastar_401_2fdatastar_2felements_5foptions"></a>
 
@@ -310,14 +310,14 @@ References: [`core@1/String`](https://github.com/SamGalanakis/hirsel-lang/blob/m
 
 <a id="def-datastar_401_2fdatastar_2fnew_5fsse"></a>
 
-- `pub fn datastar.new_sse(take connection: http.ServerConnection) -> Result[ ServerSentEventGenerator, SseError ]`
+- `pub fn datastar.new_sse(take connection: http.ServerStream) -> Result[ ServerSentEventGenerator, SseError ]`
 
 Starts the SSE response to the request `connection` has just received: status
 200 with `Cache-Control: no-cache` and `Content-Type: text/event-stream`, sent at
 once so the browser does not time out. HTTP/1.1 frames the body in chunks and
 keeps the connection; HTTP/1.0 ends it by closing.
 
-References: [`core@1/Result`](https://github.com/SamGalanakis/hirsel-lang/blob/main/docs/api.md#def-core_401_2fResult), [`datastar@1/datastar/ServerSentEventGenerator`](#def-datastar_401_2fdatastar_2fServerSentEventGenerator), [`datastar@1/datastar/SseError`](#def-datastar_401_2fdatastar_2fSseError), [`std@1/http/ServerConnection`](https://github.com/SamGalanakis/hirsel-lang/blob/main/docs/api.md#def-std_401_2fhttp_2fServerConnection)
+References: [`core@1/Result`](https://github.com/SamGalanakis/hirsel-lang/blob/main/docs/api.md#def-core_401_2fResult), [`datastar@1/datastar/ServerSentEventGenerator`](#def-datastar_401_2fdatastar_2fServerSentEventGenerator), [`datastar@1/datastar/SseError`](#def-datastar_401_2fdatastar_2fSseError), [`std@1/http/ServerStream`](https://github.com/SamGalanakis/hirsel-lang/blob/main/docs/api.md#def-std_401_2fhttp_2fServerStream)
 
 <a id="def-datastar_401_2fdatastar_2fpatch_5felements"></a>
 

@@ -224,11 +224,16 @@ fn a_generator_writes_the_head_then_each_event_in_order(t: Test) {
   let Ok((stream, _)) = net.accept(n, mut accepting) else {
     test.fail(t)
   }
-  let mut connection = http.server_connection(n, take stream, http.default_config())
-  let Ok(_) = http.receive_request(mut connection, None()) else {
+  let mut connection = http.server_connection(
+    test.tasks(t),
+    n,
+    take stream,
+    http.default_config()
+  )
+  let Ok(Some((exchange, _))) = http.next_stream(mut connection, None()) else {
     test.fail(t)
   }
-  let Ok(generator) = new_sse(take connection) else {
+  let Ok(generator) = new_sse(take exchange) else {
     test.fail(t)
   }
   let mut sse = take generator

@@ -14,7 +14,7 @@ Each line is a gap the app or the SDK met, with the message that routed it to
 ## Fixed on main, workarounds removed
 
 - #513862: a `@test` got no `Tasks`; `test.tasks` now runs the hub and the save-then-publish path as `@test`s.
-- #513128: std http could not stream a server response; the app now uses `http.receive_request`, `respond` and, for event streams, `respond_head`/`write_response_body`/`end_response_body`.
+- #513128: std http could not stream a server response; the app now uses `http.next_stream`, `respond` and, for event streams, `respond_head`/`write_response_body`/`end_response_body`.
 - #513667: std's server request parser took at most 16 headers; `http.Config.max_headers` now sets the limit.
 - #513157: native builds refused `String` literal patterns; the protocol-name parsers now `match` on literals.
 - #513475: a `unique` copy of part of a mutex payload and a record holding `Mutex`/`Shared` handles were not sendable; `Services` now carries the board and the static files.

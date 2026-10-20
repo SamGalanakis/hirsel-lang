@@ -1,0 +1,139 @@
+// rule: SEM-1
+// expect: test
+// Go net/http h2 bundle transport tests: DATA reads, trailers and early streaming.
+fn settings() -> Bytes {
+  b"\x00\x00\x00\x04\x00\x00\x00\x00\x00"
+}
+
+fn response() -> Bytes {
+  // Literal HPACK :status 200 (static index 8), then a DATA frame.
+  b"\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x05\x00\x01\x00\x00\x00\x01hello"
+}
+
+fn peer(t: Test, steps: List[NetStep]) -> Net {
+  test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open(unique steps)]
+      )
+    ],
+    []
+  )
+}
+
+fn config() -> std@1/http.Config {
+  let mut value = std@1/http.default_config()
+  value.http2_prior_knowledge = true
+  value
+}
+
+@test
+fn complete(t: Test) -> Result[(), std@1/http.HttpError] {
+  let n = peer(t, [Send(settings()), Send(response()), Close()])
+  let mut r = std@1/http.request(n, config(), Get(), "http://example.com/", [])?
+  test.check(t, std@1/http.request_protocol(r) == Http2())
+  std@1/http.send_bodiless(mut r)?
+  let head = std@1/http.receive_head(mut r)?
+  test.check(t, head.version == Http2() && head.status == 200 && !head.chunked)
+  test.check(t, std@1/http.read_all(mut r, 5)? == b"hello")
+  Ok(())
+}
+
+@test
+fn streaming_before_end(t: Test) -> Result[(), std@1/http.HttpError] {
+  let n = peer(
+    t,
+    [
+      Send(settings()),
+      Send(
+        b"\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x03\x00\x00\x00\x00\x00\x01abc"
+      ),
+      Stall()
+    ]
+  )
+  let mut r = std@1/http.request(n, config(), Get(), "http://example.com/", [])?
+  std@1/http.send_bodiless(mut r)?
+  let _ = std@1/http.receive_head(mut r)?
+  let mut data: List[u8] = []
+  test.check(t, std@1/http.read_body(mut r, mut data, 2)? == 2)
+  test.check(t, std@1/http.read_body(mut r, mut data, 2)? == 1)
+  test.check(t, bytes.from_list(take data) == b"abc")
+  Ok(())
+}
+
+@test
+fn fallback_default(t: Test) -> Result[(), std@1/http.HttpError] {
+  let n = peer(t, [Send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), Close()])
+  let mut r = std@1/http.request(
+    n,
+    std@1/http.default_config(),
+    Get(),
+    "http://example.com/",
+    []
+  )?
+  test.check(t, std@1/http.request_protocol(r) == Http11())
+  std@1/http.send_bodiless(mut r)?
+  test.check(t, std@1/http.receive_head(mut r)?.version == Http11())
+  test.check(t, std@1/http.read_all(mut r, 2)? == b"ok")
+  Ok(())
+}
+
+fn field(name: Bytes, value: Bytes) -> std@1/hpack.Field {
+  std@1/hpack.Field(name: unique name, value: unique value, sensitive: false)
+}
+
+fn outgoing() -> Bytes {
+  let mut client = std@1/http2.session(Client(), 65536)
+  let _ = std@1/http2.open(
+    mut client,
+    [
+      field(b":method", b"POST"),
+      field(b":scheme", b"http"),
+      field(b":path", b"/upload?q=1"),
+      field(b":authority", b"example.com"),
+      field(b"user-agent", b"hirsel-std/1"),
+      field(b"x-case", b"stream")
+    ],
+    false
+  )
+  std@1/http2.output(mut client)
+}
+
+@test
+fn request_stream_and_response_trailers(t: Test) -> Result[(), std@1/http.HttpError] {
+  let n = peer(
+    t,
+    [
+      Expect(outgoing()),
+      Expect(
+        b"\x00\x00\x02\x00\x00\x00\x00\x00\x01ab\x00\x00\x01\x00\x00\x00\x00\x00\x01c\x00\x00\x00\x00\x01\x00\x00\x00\x01"
+      ),
+      Send(settings()),
+      Send(
+        b"\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x02\x00\x00\x00\x00\x00\x01ok\x00\x00\x0c\x01\x05\x00\x00\x00\x01\x00\x05x-end\x04done"
+      ),
+      Close()
+    ]
+  )
+  let mut r = std@1/http.request(
+    n,
+    config(),
+    Post(),
+    "http://example.com/upload?q=1",
+    [std@1/http.Header(name: "X-Case", value: "stream")]
+  )?
+  std@1/http.write_request_body(mut r, b"ab")?
+  std@1/http.write_request_body(mut r, b"")?
+  std@1/http.write_request_body(mut r, b"c")?
+  std@1/http.end_request_body(mut r, [])?
+  let head = std@1/http.receive_head(mut r)?
+  test.check(t, head.status == 200)
+  test.check(t, std@1/http.read_all(mut r, 2)? == b"ok")
+  test.check(t, std@1/http.header(std@1/http.trailers(r), "x-end") == Some("done"))
+  Ok(())
+}

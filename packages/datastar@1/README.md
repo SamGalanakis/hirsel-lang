@@ -36,7 +36,7 @@ fn search_from_json(v: json.Value) -> Result[unique Search, String] uses {} = co
 
 // GET /search?datastar={"query":"hay"}, just received on `connection`: answer with
 // two events, then end the response.
-fn search(take connection: http.ServerConnection, request: http.ServerRequest) -> Result[
+fn search(take connection: http.ServerStream, request: http.ServerRequest) -> Result[
   (),
   datastar.SseError
 ] {
@@ -71,7 +71,7 @@ fn search(take connection: http.ServerConnection, request: http.ServerRequest) -
   `SignalsOptions` (`only_if_missing`, `event_id`, `retry_ms`) and
   `ScriptOptions` (`auto_remove`, `attributes`, `event_id`, `retry_ms`).
 - **The generator.** `new_sse(take connection)` starts the event stream on an
-  `http.ServerConnection` that has just received its request (`http.receive_request`).
+  `http.ServerStream` yielded together with its request by `http.next_stream`.
   It sends status 200 with `Content-Type: text/event-stream` and
   `Cache-Control: no-cache` at once. HTTP/1.1 frames the body in chunks; HTTP/1.0
   ends it by closing. `ServerSentEventGenerator` then writes events with

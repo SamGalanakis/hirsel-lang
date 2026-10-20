@@ -582,7 +582,7 @@ fn screen_of(request: http.ServerRequest, wall: Option[WallClock]) -> unique vie
 pub fn stream_updates(
   svc: Services,
   mut updates: Sender[hub.Command],
-  take connection: http.ServerConnection,
+  take connection: http.ServerStream,
   request: http.ServerRequest
 ) -> () {
   let screen = screen_of(request, svc.wall)
@@ -662,24 +662,16 @@ fn serve_requests(
   mut saves: Sender[SaveJob],
   mut updates: Sender[hub.Command],
   mut connection: http.ServerConnection
-) -> Option[http.ServerRequest] {
+) -> Option[(sendable http.ServerStream, http.ServerRequest)] {
   while true {
-    let request = match http.receive_request(mut connection, svc.clock) {
-      Ok(r) => take r,
-      Error(e) => {
-        if let Some(status) = httpd.rejection(e) {
-          let _ = httpd.send(
-            mut connection,
-            httpd.text_reply(status, "bad request\n"),
-            false
-          )
-        }
-        return None()
-      },
+    let (owned_stream, request) = match http.next_stream(mut connection, svc.clock) {
+      Ok(Some(exchange)) => take exchange,
+      _ => return None(),
     }
+    let mut responding = take owned_stream
     let target = route(request)
     if target == Updates() {
-      return Some(take request)
+      return Some((take responding, take request))
     }
     let response = handle(svc, mut saves, mut updates, take target, request)
     note(
@@ -693,7 +685,7 @@ fn serve_requests(
       ],
       svc.wall
     )
-    if results.is_error(httpd.send(mut connection, response, request.method == "HEAD")) || !request.keep_alive {
+    if results.is_error(httpd.send(mut responding, response, request.method == "HEAD")) || !request.keep_alive {
       return None()
     }
   }
@@ -712,6 +704,7 @@ pub fn serve_connection(
   take incoming: Stream of n
 ) -> () {
   let mut connection = http.server_connection(
+    svc.tasks,
     n,
     take incoming,
     httpd.config(svc.limits, option.is_some(svc.clock))
@@ -721,9 +714,9 @@ pub fn serve_connection(
   let mut finished = take done
   let opened = serve_requests(svc, mut save_to, mut notify, mut connection)
   let _ = channel.send(svc.tasks, mut finished, ())
-  if let Some(request) = opened {
+  if let Some((exchange, request)) = take opened {
     note(svc.logger, Info(), "stream", [("path", unique request.target)], svc.wall)
-    stream_updates(svc, mut notify, take connection, request)
+    stream_updates(svc, mut notify, take exchange, request)
   }
 }
 

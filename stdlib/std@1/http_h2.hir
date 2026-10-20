@@ -1,0 +1,1280 @@
+// HTTP adapter over the RFC 9113 Session. Header mapping and streaming follow
+// Go net/http/internal/http2/{transport,server}.go (ebe2feef), BSD-3-Clause
+// third-party/NOTICES.md.
+// Session owns protocol state
+// this adapter alone owns transport IO and buffers.
+resource type HttpTransport: noalloc_drop uses {Net} {
+  net: Net,
+  stream: Stream of .net,
+  input: bufio.Reader,
+  version: Version,
+  endpoint: Option[http2.Session],
+  needs_preface: bool,
+  pending: List[http2.Event],
+  pending_bytes: u64,
+  pending_limit: u64,
+  closed: bool,
+  draining: bool,
+}
+@noalloc drop(self) {}
+
+fn http_transport(
+  n: Net,
+  take stream: Stream of n,
+  h2: bool,
+  role: http2.Role,
+  config: Config
+) -> HttpTransport {
+  HttpTransport(
+    net: n,
+    stream: take stream,
+    input: bufio.new(4096),
+    version: if h2 {
+      Http2()
+    } else {
+      Http11()
+    },
+    endpoint: if h2 {
+      Some(http2.session(role, config.max_head_bytes))
+    } else {
+      None()
+    },
+    needs_preface: h2 && role == Server(),
+    pending: [],
+    pending_bytes: 0,
+    pending_limit: config.max_body_bytes,
+    closed: false,
+    draining: false
+  )
+}
+
+fn http_h2_endpoint[R](
+  mut t: HttpTransport,
+  body: fn(mut endpoint: http2.Session) -> R uses {}
+) -> Result[R, HttpError] uses {} {
+  let Some(endpoint) = replace(mut t.endpoint, None()) else {
+    return Error(Closed())
+  }
+  let mut current = take endpoint
+  let outcome = body(mut current)
+  t.endpoint = Some(take current)
+  Ok(take outcome)
+}
+
+@noalloc
+fn http_is_h2(t: HttpTransport) -> bool uses {} {
+  t.version == Http2()
+}
+
+fn http_transport_write(mut t: HttpTransport, data: Bytes) -> Result[(), HttpError] {
+  core@1/net.write_all(t.net, mut t.stream, data) ? http_net_error
+  Ok(())
+}
+
+fn http_transport_read_more(mut t: HttpTransport, max: u64) -> Result[u64, HttpError] {
+  Ok(bufio.stream_read_more(t.net, mut t.stream, mut t.input, max) ? http_buffer_error)
+}
+
+fn http_transport_read_timeout(mut t: HttpTransport, timeout: NetTimeout) -> Result[
+  (),
+  HttpError
+] {
+  core@1/net.set_read_timeout(t.net, mut t.stream, timeout) ? http_net_error
+  Ok(())
+}
+
+fn http_transport_write_timeout(mut t: HttpTransport, timeout: NetTimeout) -> Result[
+  (),
+  HttpError
+] {
+  core@1/net.set_write_timeout(t.net, mut t.stream, timeout) ? http_net_error
+  Ok(())
+}
+
+fn http_transport_shutdown(mut t: HttpTransport) -> Result[(), HttpError] {
+  core@1/net.shutdown(t.net, mut t.stream, Both()) ? http_net_error
+  Ok(())
+}
+
+fn http_h2_error(error: http2.Error) -> HttpError uses {} {
+  match error {
+    Net(e) => Net(e),
+    Truncated() => Truncated(),
+    Wire(ConnectionError(EnhanceYourCalm())) => HeadTooLarge(),
+    Closed() => Closed(),
+    _ => Malformed(HeaderValue()),
+  }
+}
+
+fn http_h2_flush(mut t: HttpTransport) -> Result[(), HttpError] {
+  if t.closed {
+    return Error(Closed())
+  }
+  let (prefix, frames) = http_h2_endpoint(
+    mut t,
+    fn(mut endpoint: http2.Session) -> (Bytes, List[http2_wire.Frame]) uses {} {
+      http2.drain_frames(mut endpoint)
+    }
+  )?
+  // Any failed write permanently poisons the connection, including cancellation.
+  t.closed = true
+  if core@1/bytes.len(prefix) != 0 {
+    http_transport_write(mut t, prefix)?
+  }
+  for frame in frames {
+    let encoded = http2_wire.encode(frame, 16777215) ? http_h2_frame_error
+    http_transport_write(mut t, encoded)?
+  }
+  t.closed = false
+  Ok(())
+}
+
+fn http_h2_frame_error(error: http2_wire.FrameError) -> HttpError uses {} {
+  Malformed(HeaderValue())
+}
+
+fn http_h2_next(mut t: HttpTransport) -> Result[http2.Event, HttpError] {
+  http_h2_next_until(mut t, None(), None())
+}
+
+fn http_h2_next_until(
+  mut t: HttpTransport,
+  clock: Option[MonotonicClock],
+  deadline: Option[u64]
+) -> Result[http2.Event, HttpError] {
+  http_h2_flush(mut t)?
+  while true {
+    let data = bufio.contents(t.input)
+    if t.needs_preface {
+      let expected = http2_wire.preface()
+      let have = core@1/bytes.len(data)
+      let count = if have < 24 {
+        have
+      } else {
+        24
+      }
+      let mut i: u64 = 0
+      while i < count {
+        if data[i] != expected[i] {
+          t.closed = true
+          return Error(Malformed(Version()))
+        }
+        i += 1
+      }
+      if have >= 24 {
+        bufio.consume(mut t.input, 24)
+        t.needs_preface = false
+        continue
+      }
+    } else {
+      match http2_wire.parse(data, 0, 16384) {
+        Error(error) => {
+          let code = match error {
+            ConnectionError(code) => code,
+            StreamError(_, code) => code,
+          }
+          let _ = http_h2_endpoint(
+            mut t,
+            fn(mut endpoint: http2.Session) -> () uses {} {
+              http2.goaway(mut endpoint, code)
+            }
+          )
+          let _ = http_h2_flush(mut t)
+          t.closed = true
+          return Error(Malformed(HeaderValue()))
+        },
+        Ok(Some((frame, end))) => {
+          bufio.consume(mut t.input, end)
+          let outcome = http_h2_endpoint(
+            mut t,
+            fn(mut endpoint: http2.Session) -> Result[http2.Event, http2.Error] uses {} {
+              http2.receive(mut endpoint, frame)
+            }
+          )?
+          let flushed = http_h2_flush(mut t)
+          if let Error(Wire(ConnectionError(_))) = outcome {
+            t.closed = true
+          }
+          match take outcome {
+            Ok(event) => {
+              flushed?
+              return Ok(take event)
+            },
+            Error(error) => return Error(http_h2_error(error)),
+          }
+        },
+        Ok(None()) => (),
+      }
+    }
+    let have = bufio.buffered(t.input)
+    if have >= 16393 {
+      t.closed = true
+      return Error(HeadTooLarge())
+    }
+    if option.is_some(deadline) {
+      http_transport_read_timeout(mut t, http_server_remaining(clock, deadline)?)?
+    }
+    t.closed = true
+    let count = http_transport_read_more(mut t, 16393 - have)?
+    if option.is_some(deadline) {
+      let _ = http_server_remaining(clock, deadline)?
+    }
+    t.closed = false
+    if count == 0 {
+      t.closed = true
+      return if have == 0 && !t.needs_preface {
+        Error(Closed())
+      } else {
+        Error(Truncated())
+      }
+    }
+  }
+  Error(Truncated())
+}
+
+@noalloc
+fn http_h2_event_id(event: http2.Event) -> u32 uses {} {
+  match event {
+    Headers(id, _, _) => id,
+    Data(id, _, _, _) => id,
+    Reset(id, _) => id,
+    _ => 0,
+  }
+}
+
+fn http_h2_event_size(event: http2.Event) -> u64 uses {} {
+  match event {
+    Headers(_, fields, _) => {
+      let mut count: u64 = 32
+      for field in fields {
+        count += core@1/bytes.len(field.name) + core@1/bytes.len(field.value) + 32
+      }
+      count
+    },
+    Data(_, data, _, _) => core@1/bytes.len(data) + 32,
+    _ => 32,
+  }
+}
+
+fn http_h2_pending(mut t: HttpTransport, take event: http2.Event) -> Result[
+  (),
+  HttpError
+] {
+  let size = http_h2_event_size(event)
+  if size > t.pending_limit - t.pending_bytes {
+    t.closed = true
+    return Error(BodyTooLarge())
+  }
+  t.pending_bytes += size
+  core@1/list.push(mut t.pending, take event)
+  Ok(())
+}
+
+// Only one exchange is checked out today. Other streams retain bounded events
+// while this exchange waits for credit or its body, without misrouting DATA.
+fn http_h2_for(mut t: HttpTransport, id: u32) -> Result[http2.Event, HttpError] {
+  http_h2_for_until(mut t, id, None(), None())
+}
+
+fn http_h2_for_until(
+  mut t: HttpTransport,
+  id: u32,
+  clock: Option[MonotonicClock],
+  deadline: Option[u64]
+) -> Result[http2.Event, HttpError] {
+  let backlog = replace(mut t.pending, [])
+  let mut selected: Option[http2.Event] = None()
+  for event in take backlog {
+    if option.is_none(selected) && (id == 0 || http_h2_event_id(event) == id) {
+      t.pending_bytes -= http_h2_event_size(event)
+      selected = Some(take event)
+    } else {
+      core@1/list.push(mut t.pending, take event)
+    }
+  }
+  if let Some(event) = take selected {
+    return Ok(take event)
+  }
+  while true {
+    let event = http_h2_next_until(mut t, clock, deadline)?
+    match event {
+      Goaway(last, _) => {
+        t.draining = true
+        if id == 0 || id > last {
+          return Error(Closed())
+        }
+      },
+      _ => (),
+    }
+    let stream = http_h2_event_id(event)
+    if stream != 0 {
+      if id == 0 || id == stream {
+        return Ok(take event)
+      }
+      http_h2_pending(mut t, take event)?
+    }
+  }
+  Error(Closed())
+}
+
+fn http_h2_body_write(mut t: HttpTransport, id: u32, data: Bytes, end: bool) -> Result[
+  (),
+  HttpError
+] {
+  let mut offset: u64 = 0
+  while true {
+    let remaining = core@1/bytes.slice(data, offset, core@1/bytes.len(data))
+    let outcome = http_h2_endpoint(
+      mut t,
+      fn(mut endpoint: http2.Session) -> Result[u64, http2.Error] uses {} {
+        http2.send_data(mut endpoint, id, remaining, end)
+      }
+    )?
+    let count = outcome ? http_h2_error
+    http_h2_flush(mut t)?
+    offset += count
+    if offset == core@1/bytes.len(data) {
+      return Ok(())
+    }
+    if count == 0 {
+      let event = http_h2_next(mut t)?
+      match event {
+        Reset(stream, _) => if stream == id {
+          return Error(Closed())
+        },
+        Goaway(last, _) => {
+          t.draining = true
+          if id > last {
+            return Error(Closed())
+          }
+        },
+        _ => (),
+      }
+      if http_h2_event_id(event) != 0 {
+        http_h2_pending(mut t, take event)?
+      }
+    }
+  }
+  Ok(())
+}
+
+fn http_h2_field(name: String, value: String) -> hpack.Field uses {} {
+  hpack.Field(
+    name: unique core@1/string.as_bytes(name),
+    value: unique core@1/string.as_bytes(value),
+    sensitive: http_same(name, "authorization") || http_same(name, "cookie")
+  )
+}
+
+fn http_h2_lower_name(name: String) -> unique String uses {} {
+  let mut out: List[u8] = []
+  for byte in core@1/string.as_bytes(name) {
+    core@1/list.push(mut out, http_lower(byte))
+  }
+  match text.finish(take out) {
+    Ok(lowered) => take lowered,
+    Error(_) => "",
+  }
+}
+
+fn http_h2_connection_field(name: String, headers: List[Header]) -> bool uses {} {
+  if name == "connection" || name == "keep-alive" || name == "proxy-connection" || name == "upgrade" || name == "transfer-encoding" {
+    return true
+  }
+  for h in headers {
+    if http_same(h.name, "connection") {
+      for token in string.split(unique h.value, ",") {
+        if http_same(name, string.trim(token)) {
+          return true
+        }
+      }
+    }
+  }
+  false
+}
+
+fn http_h2_fields(headers: List[Header]) -> Result[List[hpack.Field], HttpError] uses {} {
+  http_validate_headers(headers)?
+  let mut fields: List[hpack.Field] = []
+  for h in headers {
+    let name = http_h2_lower_name(h.name)
+    if http_h2_connection_field(name, headers) {
+      continue
+    }
+    core@1/list.push(mut fields, http_h2_field(name, string.trim(h.value)))
+  }
+  Ok(take fields)
+}
+
+fn http_h2_headers(fields: List[hpack.Field], config: Config) -> Result[
+  List[Header],
+  HttpError
+] uses {} {
+  let mut headers: List[Header] = []
+  for field in fields {
+    if field.name[0] != 58 {
+      if core@1/list.len(headers) >= config.max_headers {
+        return Error(HeadTooLarge())
+      }
+      core@1/list.push(
+        mut headers,
+        Header(
+          name: http_text(field.name, 0, core@1/bytes.len(field.name))?,
+          value: http_text(field.value, 0, core@1/bytes.len(field.value))?
+        )
+      )
+    }
+  }
+  Ok(take headers)
+}
+
+fn http_h2_value(fields: List[hpack.Field], name: Bytes) -> Result[String, HttpError] uses {} {
+  for field in fields {
+    if field.name == name {
+      return http_text(field.value, 0, core@1/bytes.len(field.value))
+    }
+  }
+  Ok("")
+}
+
+fn http_h2_send(mut r: Request, body: Option[Bytes], end: bool) -> Result[(), HttpError] {
+  if r.state != 0 {
+    return Error(OutOfOrder())
+  }
+  let mut path: List[u8] = []
+  let target_path = uri.component_encoded(r.uri.path, Path())
+  text.append(
+    mut path,
+    if target_path == "" {
+      "/"
+    } else {
+      target_path
+    }
+  )
+  if let Some(query) = r.uri.query {
+    text.append(mut path, "?")
+    text.append(mut path, uri.component_encoded(query, Query()))
+  }
+  let target = match text.finish(take path) {
+    Ok(value) => take value,
+    Error(_) => return Error(Url(UnexpectedCharacter())),
+  }
+  let mut authority_bytes: List[u8] = []
+  let host = http_host(r.uri)?
+  let ipv6 = string.contains(host, ":")
+  if ipv6 {
+    text.append(mut authority_bytes, "[")
+  }
+  text.append(mut authority_bytes, host)
+  if ipv6 {
+    text.append(mut authority_bytes, "]")
+  }
+  if let Some(port) = r.uri.port {
+    text.append(mut authority_bytes, ":")
+    u16.format_into(port, mut authority_bytes)
+  }
+  let authority = match text.finish(take authority_bytes) {
+    Ok(value) => take value,
+    Error(_) => return Error(Url(InvalidHostName())),
+  }
+  let mut fields: List[hpack.Field] = [
+    http_h2_field(":method", http_method_text(r.method)),
+    http_h2_field(":scheme", r.uri.scheme),
+    http_h2_field(":path", target),
+    http_h2_field(":authority", authority),
+    http_h2_field("user-agent", r.config.user_agent)
+  ]
+  let additional = http_h2_fields(r.headers)?
+  for field in additional {
+    if field.name != b"host" && field.name != b"user-agent" && field.name != b"content-length" {
+      core@1/list.push(mut fields, unique field)
+    }
+  }
+  let size = match body {
+    Some(data) => core@1/bytes.len(data),
+    None() => 0,
+  }
+  if option.is_some(body) {
+    core@1/list.push(mut fields, http_h2_field("content-length", f"{size}"))
+  }
+  r.state = 5
+  r.stream_id = http_h2_endpoint(
+    mut r.transport,
+    fn(mut endpoint: http2.Session) -> Result[u32, http2.Error] uses {} {
+      http2.open(mut endpoint, fields, end && option.is_none(body))
+    }
+  )? ? http_h2_error
+  http_h2_flush(mut r.transport)?
+  if let Some(data) = body {
+    http_h2_body_write(mut r.transport, r.stream_id, data, end)?
+  }
+  r.sent_body = option.is_some(body) || !end
+  r.state = if end {
+    2u8
+  } else {
+    1u8
+  }
+  Ok(())
+}
+
+fn http_h2_request_write(mut r: Request, data: Bytes) -> Result[(), HttpError] {
+  if r.state == 0 {
+    http_h2_send(mut r, None(), false)?
+  }
+  if r.state != 1 {
+    return Error(OutOfOrder())
+  }
+  r.state = 5
+  if core@1/bytes.len(data) != 0 {
+    http_h2_body_write(mut r.transport, r.stream_id, data, false)?
+  }
+  r.state = 1
+  Ok(())
+}
+
+fn http_h2_request_end(mut r: Request, request_trailers: List[Header]) -> Result[
+  (),
+  HttpError
+] {
+  for h in request_trailers {
+    if http_same(h.name, "content-length") || http_same(h.name, "host") || http_same(
+      h.name,
+      "transfer-encoding"
+    ) || http_same(h.name, "connection") {
+      return Error(Malformed(HeaderName()))
+    }
+  }
+  let fields = http_h2_fields(request_trailers)?
+  for field in fields {
+    if field.name == b"host" || field.name == b"content-length" {
+      return Error(Malformed(HeaderName()))
+    }
+  }
+  if r.state == 0 {
+    http_h2_send(mut r, None(), false)?
+  }
+  if r.state != 1 {
+    return Error(OutOfOrder())
+  }
+  let id = r.stream_id
+  r.state = 5
+  if core@1/list.len(fields) == 0 {
+    http_h2_body_write(mut r.transport, r.stream_id, b"", true)?
+  } else {
+    http_h2_endpoint(
+      mut r.transport,
+      fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
+        http2.headers(mut endpoint, id, fields, true)
+      }
+    )? ? http_h2_error
+    http_h2_flush(mut r.transport)?
+  }
+  r.state = 2
+  Ok(())
+}
+
+fn http_h2_receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
+  if r.state != 2 {
+    return Error(OutOfOrder())
+  }
+  r.state = 5
+  while true {
+    let event = http_h2_for(mut r.transport, r.stream_id)?
+    let Headers(_, fields, end) = event else {
+      return Error(Truncated())
+    }
+    let status_text = http_h2_value(fields, b":status")?
+    let status = match u16.parse(status_text) {
+      Ok(value) => value,
+      Error(_) => return Error(Malformed(Status())),
+    }
+    if status < 200 {
+      continue
+    }
+    let headers = http_h2_headers(fields, r.config)?
+    let length: Option[u64] = match header(headers, "content-length") {
+      None() => None(),
+      Some(value) => match u64.parse(value) {
+        Ok(size) => Some(size),
+        Error(_) => return Error(Malformed(ContentLength())),
+      },
+    }
+    let head = ResponseHead(
+      version: Http2(),
+      status: status,
+      reason: "",
+      headers: unique headers,
+      content_length: length,
+      chunked: false,
+      keep_alive: true,
+      location: header(headers, "location"),
+      content_type: header(headers, "content-type")
+    )
+    if status == 301 || status == 302 || status == 303 || status == 307 || status == 308 {
+      http_redirect(mut r, head)?
+      return receive_head(mut r)
+    }
+    r.body_end = end
+    r.state = if end {
+      4u8
+    } else {
+      3u8
+    }
+    r.body_kind = 3
+    r.reusable = r.persistent && !r.transport.draining
+    return Ok(take head)
+  }
+  Error(Truncated())
+}
+
+@preserves_unique(out)
+fn http_h2_read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[
+  u64,
+  HttpError
+] {
+  let id = r.stream_id
+  if max == 0 {
+    return Error(Net(InvalidInput()))
+  }
+  if r.state == 4 {
+    return Ok(0)
+  }
+  if r.state != 3 {
+    return Error(OutOfOrder())
+  }
+  while r.body_offset == core@1/bytes.len(r.body_data) {
+    r.body_data = b""
+    r.body_offset = 0
+    if r.body_end {
+      r.state = 4
+      return Ok(0)
+    }
+    match http_h2_for(mut r.transport, r.stream_id)? {
+      Data(_, data, credit, end) => {
+        r.body_data = unique data
+        r.body_credit = credit
+        r.body_end = end
+        if core@1/bytes.len(data) == 0 {
+          http_h2_endpoint(
+            mut r.transport,
+            fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
+              http2.consumed(mut endpoint, id, credit)
+            }
+          )? ? http_h2_error
+          http_h2_flush(mut r.transport)?
+          r.body_credit = 0
+        }
+      },
+      Headers(_, fields, true) => {
+        r.response_trailers = http_h2_headers(fields, r.config)?
+        r.body_end = true
+      },
+      _ => {
+        r.state = 5
+        return Error(Truncated())
+      },
+    }
+  }
+  let available = core@1/bytes.len(r.body_data) - r.body_offset
+  let count = if max < available {
+    max
+  } else {
+    available
+  }
+  let mut i: u64 = 0
+  while i < count {
+    core@1/list.push(mut out, r.body_data[r.body_offset + i])
+    i += 1
+  }
+  r.body_offset += count
+  if r.body_offset == core@1/bytes.len(r.body_data) {
+    let credit = r.body_credit
+    http_h2_endpoint(
+      mut r.transport,
+      fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
+        http2.consumed(mut endpoint, id, credit)
+      }
+    )? ? http_h2_error
+    http_h2_flush(mut r.transport)?
+    r.body_credit = 0
+    if r.body_end {
+      r.state = 4
+    }
+  }
+  Ok(count)
+}
+
+fn http_h2_receive_request(mut c: HttpExchange, clock: Option[MonotonicClock]) -> Result[
+  ServerRequest,
+  HttpError
+] {
+  if c.state == 2 {
+    return Error(Closed())
+  }
+  if c.state != 0 {
+    return Error(OutOfOrder())
+  }
+  c.state = 3
+  let deadline = http_server_deadline(clock, c.config.read_timeout)?
+  http_transport_read_timeout(mut c.transport, http_server_remaining(clock, deadline)?)?
+  let event = http_h2_for_until(mut c.transport, 0, clock, deadline)?
+  let Headers(id, fields, end) = event else {
+    return Error(Malformed(HeaderValue()))
+  }
+  c.stream_id = id
+  let headers = http_h2_headers(fields, c.config)?
+  let method = http_h2_value(fields, b":method")?
+  let mut incoming = ServerRequest(
+    method: unique method,
+    target: http_h2_value(fields, b":path")?,
+    version: Http2(),
+    headers: unique headers,
+    body: b"",
+    trailers: [],
+    keep_alive: true
+  )
+  // Expose :authority using the ordinary Host lookup, as Go's Request.Host mapping.
+  let authority = http_h2_value(fields, b":authority")?
+  if authority != "" && option.is_none(header(incoming.headers, "host")) {
+    core@1/list.push(mut incoming.headers, Header(name: "host", value: authority))
+  }
+  let mut ended = end
+  let mut body: List[u8] = []
+  while !ended {
+    http_transport_read_timeout(
+      mut c.transport,
+      http_server_remaining(clock, deadline)?
+    )?
+    match http_h2_for_until(mut c.transport, id, clock, deadline)? {
+      Data(_, data, credit, done) => {
+        if core@1/bytes.len(data) > c.config.max_body_bytes - core@1/list.len(body) {
+          let _ = http_h2_endpoint(
+            mut c.transport,
+            fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
+              http2.reset(mut endpoint, id, Cancel())
+            }
+          )?
+          let _ = http_h2_flush(mut c.transport)
+          return Error(BodyTooLarge())
+        }
+        for byte in data {
+          core@1/list.push(mut body, byte)
+        }
+        http_h2_endpoint(
+          mut c.transport,
+          fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
+            http2.consumed(mut endpoint, id, credit)
+          }
+        )? ? http_h2_error
+        http_h2_flush(mut c.transport)?
+        ended = done
+      },
+      Headers(_, trailer_fields, true) => {
+        incoming.trailers = http_h2_headers(trailer_fields, c.config)?
+        ended = true
+      },
+      _ => return Error(Truncated()),
+    }
+  }
+  let _ = http_server_remaining(clock, deadline)?
+  incoming.body = core@1/bytes.from_list(take body)
+  c.version = Http2()
+  c.head_request = method == "HEAD"
+  c.keep_alive = true
+  c.state = 1
+  Ok(take incoming)
+}
+
+fn http_h2_respond_head(mut c: HttpExchange, status: u16, headers: List[Header]) -> Result[
+  (),
+  HttpError
+] {
+  let id = c.stream_id
+  if c.state != 1 {
+    return Error(OutOfOrder())
+  }
+  if status < 200 || status > 599 {
+    return Error(Malformed(Status()))
+  }
+  // Framing fields belong to the writer for both protocols.
+  for h in headers {
+    if http_same(h.name, "content-length") || http_same(h.name, "transfer-encoding") || http_same(
+      h.name,
+      "connection"
+    ) {
+      return Error(Malformed(ContentLength()))
+    }
+  }
+  let mut fields: List[hpack.Field] = [http_h2_field(":status", f"{status}")]
+  for field in http_h2_fields(headers)? {
+    core@1/list.push(mut fields, unique field)
+  }
+  c.state = 2
+  http_transport_write_timeout(mut c.transport, http_timeout(c.config.write_timeout)?)?
+  http_h2_endpoint(
+    mut c.transport,
+    fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
+      http2.headers(mut endpoint, id, fields, false)
+    }
+  )? ? http_h2_error
+  http_h2_flush(mut c.transport)?
+  c.state = if http_server_bodyless(c.head_request, status) {
+    6u8
+  } else {
+    4u8
+  }
+  Ok(())
+}
+
+fn http_h2_response_write(mut c: HttpExchange, bytes: Bytes) -> Result[(), HttpError] {
+  if c.state != 4 && c.state != 6 {
+    return Error(OutOfOrder())
+  }
+  if c.state == 6 || core@1/bytes.len(bytes) == 0 {
+    return Ok(())
+  }
+  c.state = 2
+  http_h2_body_write(mut c.transport, c.stream_id, bytes, false)?
+  c.state = 4
+  Ok(())
+}
+
+fn http_h2_response_end(mut c: HttpExchange) -> Result[(), HttpError] {
+  if c.state != 4 && c.state != 6 {
+    return Error(OutOfOrder())
+  }
+  c.state = 2
+  http_h2_body_write(mut c.transport, c.stream_id, b"", true)?
+  c.served = true
+  if c.keep_alive {
+    c.state = 0
+  }
+  Ok(())
+}
+
+fn http_h2_respond(
+  mut c: HttpExchange,
+  status: u16,
+  headers: List[Header],
+  body: Bytes,
+  close: bool
+) -> Result[(), HttpError] {
+  let id = c.stream_id
+  if c.state != 1 {
+    return Error(OutOfOrder())
+  }
+  if status < 200 || status > 599 {
+    return Error(Malformed(Status()))
+  }
+  for h in headers {
+    if http_same(h.name, "content-length") || http_same(h.name, "transfer-encoding") || http_same(
+      h.name,
+      "connection"
+    ) {
+      return Error(Malformed(ContentLength()))
+    }
+  }
+  let mut fields: List[hpack.Field] = [http_h2_field(":status", f"{status}")]
+  for field in http_h2_fields(headers)? {
+    core@1/list.push(mut fields, unique field)
+  }
+  if !http_server_bodyless(false, status) {
+    core@1/list.push(
+      mut fields,
+      http_h2_field("content-length", f"{core@1/bytes.len(body)}")
+    )
+  }
+  c.state = 2
+  http_transport_write_timeout(mut c.transport, http_timeout(c.config.write_timeout)?)?
+  http_h2_endpoint(
+    mut c.transport,
+    fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
+      http2.headers(mut endpoint, id, fields, false)
+    }
+  )? ? http_h2_error
+  http_h2_flush(mut c.transport)?
+  c.state = if http_server_bodyless(c.head_request, status) {
+    6u8
+  } else {
+    4u8
+  }
+  http_h2_response_write(mut c, body)?
+  http_h2_response_end(mut c)?
+  if close {
+    http_h2_endpoint(
+      mut c.transport,
+      fn(mut endpoint: http2.Session) -> () uses {} {
+        http2.goaway(mut endpoint, NoError())
+      }
+    )?
+    http_h2_flush(mut c.transport)?
+    c.state = 2
+  }
+  Ok(())
+}
+
+/// Protocol selected for this request's transport, before sending its headers.
+pub fn request_protocol(r: Request) -> Version uses {} {
+  r.transport.version
+}
+
+/// Owns the connection between exchanges. An unfinished checked-out stream
+/// makes next_stream return OutOfOrder; abandoning it closes the connection.
+pub opaque resource type ServerConnection: noalloc_drop uses {Net, Tasks} {
+  tasks: Tasks,
+  exchange: Option[HttpExchange],
+  returned: Option[Receiver[HttpTransfer]],
+  active: Atomic[u8],
+}
+@noalloc drop(self) {}
+
+/// Construct an HTTP server over an accepted transport. Explicit prior knowledge
+/// enables cleartext h2c; otherwise this uses HTTP/1.1.
+pub fn server_connection(tasks: Tasks, n: Net, take stream: Stream of n, config: Config) -> ServerConnection {
+  let active = core@1/atomic.create(tasks, 0u8)
+  ServerConnection(
+    tasks: tasks,
+    exchange: Some(http_exchange(tasks, unique active, n, take stream, config)),
+    returned: None(),
+    active: active
+  )
+}
+
+/// An owned request/response exchange. A completed response returns the
+/// connection through its channel. Dropping an unfinished exchange closes it,
+/// without fabricating an application response. The next next_stream sees EOF.
+pub opaque resource type ServerStream: sendable + noalloc_drop uses {Net, Tasks} {
+  tasks: Tasks,
+  returned: Sender[HttpTransfer],
+  exchange: Option[HttpTransfer],
+  version: Version,
+}
+@noalloc drop(self) {}
+
+/// Protocol used by this exchange. The parsed request and response heads carry
+/// the same Http2 version when HTTP/2 is selected.
+pub fn protocol(s: ServerStream) -> Version uses {} {
+  s.version
+}
+
+/// Yield one owned exchange and its decoded request. While it remains open,
+/// this returns OutOfOrder. Dropping it unfinished ends reception.
+pub fn next_stream(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[
+  Option[(sendable ServerStream, unique ServerRequest)],
+  HttpError
+] {
+  let state = core@1/atomic.load(c.tasks, c.active)
+  if state == 1u8 {
+    return Error(OutOfOrder())
+  }
+  if state == 3u8 {
+    return Ok(None())
+  }
+  let mut exchange = match replace(mut c.exchange, None()) {
+    Some(current) => take current,
+    None() => {
+      let Some(receiver) = replace(mut c.returned, None()) else {
+        return Ok(None())
+      }
+      let mut returned = take receiver
+      match channel.receive(c.tasks, mut returned) {
+        Ok(current) => http_exchange_from_transfer(take current)?,
+        Error(Closed()) => return Ok(None()),
+        Error(Canceled(cause)) => return Error(Net(Canceled(cause))),
+      }
+    },
+  }
+  let incoming_request = match http_receive_request(mut exchange, clock) {
+    Ok(incoming) => take incoming,
+    Error(Closed()) => return Ok(None()),
+    Error(error) => {
+      http_server_reject(mut exchange, error)?
+      return Error(error)
+    },
+  }
+  core@1/atomic.store(c.tasks, c.active, 1u8)
+  let (sender, receiver): (Sender[HttpTransfer], Receiver[HttpTransfer]) = channel.open(
+    c.tasks
+  )
+  c.returned = Some(take receiver)
+  let stream = ServerStream(
+    tasks: unique c.tasks,
+    returned: take sender,
+    exchange: Some(http_exchange_transfer(take exchange)),
+    version: incoming_request.version
+  )
+  Ok(Some((take stream, unique incoming_request)))
+}
+
+fn http_stream_return(mut s: ServerStream, take exchange: HttpExchange) -> Result[
+  (),
+  HttpError
+] {
+  // Completing a response also relinquishes its transport: the handle cannot
+  // receive or send a second response after this call.
+  let active = unique exchange.active
+  match channel.send(s.tasks, mut s.returned, http_exchange_transfer(take exchange)) {
+    Ok(()) => {
+      core@1/atomic.store(s.tasks, active, 2u8)
+      Ok(())
+    },
+    Error(_) => Error(Closed()),
+  }
+}
+
+fn http_stream_state(s: ServerStream) -> u8 uses {} {
+  match s.exchange {
+    Some(exchange) => core@1/shared.with(
+      exchange.data,
+      fn(data: HttpExchangeData) -> u8 uses {} {
+        data.state
+      }
+    ),
+    None() => 255u8,
+  }
+}
+
+/// Send one complete reply and return the transport to its connection.
+pub fn respond(
+  mut s: ServerStream,
+  status: u16,
+  headers: List[Header],
+  body: Bytes,
+  close: bool
+) -> Result[(), HttpError] {
+  let state = http_stream_state(s)
+  if state != 1 {
+    return Error(OutOfOrder())
+  }
+  let Some(current) = replace(mut s.exchange, None()) else {
+    return Error(OutOfOrder())
+  }
+  let mut exchange = http_exchange_from_transfer(take current)?
+  http_respond(mut exchange, status, headers, body, close)?
+  http_stream_return(mut s, take exchange)
+}
+
+/// Begin a streaming reply. The stream remains checked out until completion.
+pub fn respond_head(mut s: ServerStream, status: u16, headers: List[Header]) -> Result[
+  (),
+  HttpError
+] {
+  let state = http_stream_state(s)
+  if state != 1 {
+    return Error(OutOfOrder())
+  }
+  let Some(current) = replace(mut s.exchange, None()) else {
+    return Error(OutOfOrder())
+  }
+  let mut exchange = http_exchange_from_transfer(take current)?
+  http_respond_head(mut exchange, status, headers)?
+  s.exchange = Some(http_exchange_transfer(take exchange))
+  Ok(())
+}
+
+/// Flush one fragment without ending the body; empty fragments are ignored.
+pub fn write_response_body(mut s: ServerStream, bytes: Bytes) -> Result[(), HttpError] {
+  let state = http_stream_state(s)
+  if state != 4 && state != 5 && state != 6 {
+    return Error(OutOfOrder())
+  }
+  let Some(current) = replace(mut s.exchange, None()) else {
+    return Error(OutOfOrder())
+  }
+  let mut exchange = http_exchange_from_transfer(take current)?
+  http_write_response_body(mut exchange, bytes)?
+  s.exchange = Some(http_exchange_transfer(take exchange))
+  Ok(())
+}
+
+/// Complete a streaming reply and automatically return its transport.
+pub fn end_response_body(mut s: ServerStream) -> Result[(), HttpError] {
+  let state = http_stream_state(s)
+  if state != 4 && state != 5 && state != 6 {
+    return Error(OutOfOrder())
+  }
+  let Some(current) = replace(mut s.exchange, None()) else {
+    return Error(OutOfOrder())
+  }
+  let mut exchange = http_exchange_from_transfer(take current)?
+  http_end_response_body(mut exchange)?
+  http_stream_return(mut s, take exchange)
+}
+
+// Parse failures belong to the protocol endpoint, before application dispatch.
+fn http_server_reject(mut c: HttpExchange, error: HttpError) -> Result[(), HttpError] {
+  let id = c.stream_id
+  if c.state != 3 {
+    return Ok(())
+  }
+  if http_is_h2(c.transport) {
+    if c.stream_id != 0 {
+      let _ = http_h2_endpoint(
+        mut c.transport,
+        fn(mut endpoint: http2.Session) -> Result[(), http2.Error] uses {} {
+          http2.reset(mut endpoint, id, Protocol())
+        }
+      )?
+      let _ = http_h2_flush(mut c.transport)
+    }
+    return Ok(())
+  }
+  let (status, body): (u16, Bytes) = match error {
+    Malformed(Version()) => (505u16, b"HTTP Version Not Supported"),
+    BodyTooLarge() => (413u16, b"Payload Too Large"),
+    HeadTooLarge() | Malformed(TooManyHeaders()) => (
+      431u16,
+      b"Request Header Fields Too Large"
+    ),
+    Malformed(_) | Chunk() | Truncated() | UnsupportedTransferEncoding() => (
+      400u16,
+      b"Bad Request"
+    ),
+    _ => return Ok(()),
+  }
+  http_respond(mut c, status, [], body, true)
+}
+
+// Only inert protocol state crosses through Shared. The branded socket moves;
+// opaque Reader/Session state needs no exposed representation or unchecked mode.
+type HttpExchangeData {
+  config: Config,
+  state: u8,
+  keep_alive: bool,
+  served: bool,
+  version: Version,
+  head_request: bool,
+  stream_id: u32,
+  input: bufio.Reader,
+  transport_version: Version,
+  endpoint: Option[http2.Session],
+  needs_preface: bool,
+  pending: List[http2.Event],
+  pending_bytes: u64,
+  pending_limit: u64,
+  closed: bool,
+  draining: bool,
+}
+
+resource type HttpTransfer: noalloc_drop uses {Net, Tasks} {
+  tasks: Tasks,
+  active: Atomic[u8],
+  net: Net,
+  stream: Stream of .net,
+  data: Shared[HttpExchangeData],
+}
+@noalloc drop(self) {
+  core@1/atomic.store(self.tasks, self.active, 3u8)
+}
+
+fn http_exchange_transfer(take exchange: HttpExchange) -> HttpTransfer {
+  let HttpExchange(
+    tasks: tasks,
+    active: active,
+    transport: transport,
+    config: config,
+    state: state,
+    keep_alive: keep_alive,
+    served: served,
+    version: version,
+    head_request: head_request,
+    stream_id: stream_id
+  ) = take exchange
+  let HttpTransport(
+    net: net,
+    stream: stream,
+    input: input,
+    version: transport_version,
+    endpoint: endpoint,
+    needs_preface: needs_preface,
+    pending: pending,
+    pending_bytes: pending_bytes,
+    pending_limit: pending_limit,
+    closed: closed,
+    draining: draining
+  ) = take transport
+  let data = HttpExchangeData(
+    config: unique config,
+    state: state,
+    keep_alive: keep_alive,
+    served: served,
+    version: version,
+    head_request: head_request,
+    stream_id: stream_id,
+    input: unique input,
+    transport_version: transport_version,
+    endpoint: unique endpoint,
+    needs_preface: needs_preface,
+    pending: unique pending,
+    pending_bytes: pending_bytes,
+    pending_limit: pending_limit,
+    closed: closed,
+    draining: draining
+  )
+  HttpTransfer(
+    tasks: unique tasks,
+    active: unique active,
+    net: unique net,
+    stream: take stream,
+    data: core@1/shared.freeze(take data)
+  )
+}
+
+fn http_exchange_from_transfer(take transfer: HttpTransfer) -> Result[
+  HttpExchange,
+  HttpError
+] {
+  let HttpTransfer(tasks: tasks, active: active, net: net, stream: stream, data: frozen) = take transfer
+  let snapshot = match core@1/shared.thaw(take frozen) {
+    Ok(data) => take data,
+    Error(_) => {
+      core@1/atomic.store(tasks, active, 3u8)
+      return Error(Closed())
+    },
+  }
+  let HttpExchangeData(
+    config: config,
+    state: state,
+    keep_alive: keep_alive,
+    served: served,
+    version: version,
+    head_request: head_request,
+    stream_id: stream_id,
+    input: input,
+    transport_version: transport_version,
+    endpoint: endpoint,
+    needs_preface: needs_preface,
+    pending: pending,
+    pending_bytes: pending_bytes,
+    pending_limit: pending_limit,
+    closed: closed,
+    draining: draining
+  ) = take snapshot
+  let transport = HttpTransport(
+    net: net,
+    stream: take stream,
+    input: take input,
+    version: transport_version,
+    endpoint: take endpoint,
+    needs_preface: needs_preface,
+    pending: take pending,
+    pending_bytes: pending_bytes,
+    pending_limit: pending_limit,
+    closed: closed,
+    draining: draining
+  )
+  Ok(
+    HttpExchange(
+      tasks: tasks,
+      active: active,
+      transport: take transport,
+      config: take config,
+      state: state,
+      keep_alive: keep_alive,
+      served: served,
+      version: version,
+      head_request: head_request,
+      stream_id: stream_id
+    )
+  )
+}
