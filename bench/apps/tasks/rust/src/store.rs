@@ -1,20 +1,37 @@
 use crate::model::Board;
-use std::{fs::{self, File, OpenOptions}, io::{self, Write}, path::PathBuf};
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{self, Write},
+    path::PathBuf,
+};
 
 pub trait Store: Send + Sync {
     fn load(&self) -> io::Result<Board>;
     fn save(&self, board: &Board) -> io::Result<()>;
 }
-pub struct Files { pub directory: PathBuf, pub durable: bool }
-fn name(revision: u64) -> String { format!("board-{revision:020}.json") }
+pub struct Files {
+    pub directory: PathBuf,
+    pub durable: bool,
+}
+fn name(revision: u64) -> String {
+    format!("board-{revision:020}.json")
+}
 impl Store for Files {
     fn load(&self) -> io::Result<Board> {
         let mut revisions = Vec::new();
         for entry in fs::read_dir(&self.directory)? {
             let entry = entry?;
-            let n = entry.file_name(); let n = n.to_string_lossy();
-            if let Some(s) = n.strip_prefix("board-").and_then(|s| s.strip_suffix(".json")) {
-                if s.len() == 20 { if let Ok(rev) = s.parse::<u64>() { revisions.push(rev); } }
+            let n = entry.file_name();
+            let n = n.to_string_lossy();
+            if let Some(s) = n
+                .strip_prefix("board-")
+                .and_then(|s| s.strip_suffix(".json"))
+            {
+                if s.len() == 20 {
+                    if let Ok(rev) = s.parse::<u64>() {
+                        revisions.push(rev);
+                    }
+                }
             }
         }
         revisions.sort_unstable();
@@ -22,7 +39,9 @@ impl Store for Files {
             let path = self.directory.join(name(*rev));
             let bytes = fs::read(&path)?;
             if let Ok(board) = serde_json::from_slice(&bytes) {
-                for old in revisions.iter().take(i.saturating_sub(1)) { fs::remove_file(self.directory.join(name(*old)))?; }
+                for old in revisions.iter().take(i.saturating_sub(1)) {
+                    fs::remove_file(self.directory.join(name(*old)))?;
+                }
                 return Ok(board);
             }
             fs::rename(&path, path.with_extension("json.corrupt"))?;
@@ -34,21 +53,34 @@ impl Store for Files {
         let path = self.directory.join(name(board.revision));
         // Hard-link publication is atomic and refuses replacement. The temporary
         // name is private to this process and is removed on every return path.
-        let temp = self.directory.join(format!(".snapshot-{}", std::process::id()));
+        let temp = self
+            .directory
+            .join(format!(".snapshot-{}", std::process::id()));
         let result = (|| {
-            let mut file = OpenOptions::new().write(true).create_new(true).open(&temp)?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp)?;
             file.write_all(&data)?;
-            if self.durable { file.sync_all()?; }
+            if self.durable {
+                file.sync_all()?;
+            }
             match fs::hard_link(&temp, &path) {
                 Ok(()) => (),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && fs::read(&path)? == data => (),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && fs::read(&path)? == data => {
+                    ()
+                }
                 Err(e) => return Err(e),
             }
             fs::remove_file(&temp)?;
-            if self.durable { File::open(&self.directory)?.sync_all()?; }
+            if self.durable {
+                File::open(&self.directory)?.sync_all()?;
+            }
             if board.revision >= 2 {
                 match fs::remove_file(self.directory.join(name(board.revision - 2))) {
-                    Ok(()) => (), Err(e) if e.kind() == io::ErrorKind::NotFound => (), Err(e) => return Err(e)
+                    Ok(()) => (),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+                    Err(e) => return Err(e),
                 }
             }
             Ok(())
@@ -60,6 +92,11 @@ impl Store for Files {
 #[derive(Default)]
 pub struct Memory(std::sync::Mutex<Board>);
 impl Store for Memory {
-    fn load(&self) -> io::Result<Board> { Ok(self.0.lock().unwrap().clone()) }
-    fn save(&self, board: &Board) -> io::Result<()> { *self.0.lock().unwrap() = board.clone(); Ok(()) }
+    fn load(&self) -> io::Result<Board> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+    fn save(&self, board: &Board) -> io::Result<()> {
+        *self.0.lock().unwrap() = board.clone();
+        Ok(())
+    }
 }

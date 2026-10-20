@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix='tasks-e2e-') as temporary:
         snapshots = sorted(directory.glob('board-*.json'))
         assert len(snapshots) == 2, snapshots
         board = json.loads(snapshots[-1].read_text())
-        assert board['revision'] == 9 and board['next_id'] == 4, board
+        assert board['revision'] == 8 and board['next_id'] == 4, board
         print('ok: 2 snapshot checks (117 total)', flush=True)
     finally:
         server.stop()

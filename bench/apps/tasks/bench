@@ -14,7 +14,11 @@ import statistics
 import subprocess
 import tempfile
 import time
+import sys
 from support import APP, CAPPED, ROOT, RUST, TOOLCHAIN, Server, free_port, line
+
+sys.path.insert(0, str(ROOT / 'bench/micro'))
+from measure import bootstrap_ratio, ratio, schedule, timing_lock, perf_counts
 
 EVENTS = 'task-clock,cycles,instructions,cycles:u,instructions:u'
 KINDS = ['hirsel', 'rust', 'rust-one-worker']
@@ -66,19 +70,8 @@ def fixture(directory, count):
 
 
 def counters(path):
-    output = {}
-    for raw in path.read_text().splitlines():
-        if raw.startswith('#'):
-            continue
-        parts = raw.split(';')
-        if len(parts) >= 3 and parts[2] in EVENTS.split(','):
-            try:
-                output[parts[2]] = float(parts[0])
-            except ValueError:
-                raise RuntimeError(f'counter unavailable: {raw}')
-    if set(output) != set(EVENTS.split(',')):
-        raise RuntimeError(f'incomplete perf counters: {path.read_text()}')
-    return output
+    counts, _ = perf_counts(path.read_text())
+    return counts
 
 
 class AttachedPerf:
@@ -113,7 +106,7 @@ class AttachedPerf:
         return counters(self.output)
 
 
-def sample(kind, operation, rate, args, directory, round_number):
+def sample(kind, operation, rate, args, directory, round_number, profile=False):
     directory.mkdir()
     data = directory / 'data'
     count = 0 if operation == 'cold' else 10000
@@ -124,9 +117,12 @@ def sample(kind, operation, rate, args, directory, round_number):
     server = Server(kind, data, port, args.binary, directory / 'server.log', timeout=900, perf=lifetime)
     client = None
     perf = None
+    recording = None
     try:
         marker = json.loads(server.marker.read_text())
         pid = marker['pid']
+        if lifetime:
+            pid = int(Path(f'/proc/{pid}/task/{pid}/children').read_text().split()[0])
         request(port)
         first_ms = (time.monotonic_ns() - marker['started_ns']) / 1e6
         idle_rss = rss(pid)
@@ -139,18 +135,28 @@ def sample(kind, operation, rate, args, directory, round_number):
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(directory / 'client.log', 'wb'), bufsize=0,
                 env=dict(os.environ, HIRSEL_JOBS='1'))
             assert line(client, 120) == 'ready'
+            if profile:
+                recording = subprocess.Popen(['perf', 'record', '-F', '199', '-g', '--call-graph', 'dwarf,8192', '-p', str(pid), '-o', str(directory / 'profile.data')], stderr=open(directory / 'record.log', 'wb'))
             perf = AttachedPerf(pid, directory)
+            before = sibling()
+            result['sibling_before'] = before
             perf.send('enable')
             client.stdin.write(b'go\n')
             client.stdin.flush()
             output, _ = client.communicate(timeout=600)
             perf.send('disable')
+            measured_after = sibling()
             result.update(json.loads(output))
             result['perf'] = perf.stop()
             perf = None
             if client.returncode:
                 raise RuntimeError((directory / 'client.log').read_text())
             result['load_rss'] = rss(pid)
+            if recording:
+                recording.send_signal(signal.SIGINT)
+                recording.wait(30)
+                recording = None
+                result['profile'] = subprocess.check_output(['perf', 'report', '-i', str(directory / 'profile.data'), '--stdio', '--no-children', '--sort', 'symbol', '--percent-limit', '1', '-F', 'overhead,symbol'], text=True)
             denominator = 1 if operation == 'sse' else result['completed']
             result['instructions_per_request'] = result['perf']['instructions'] / denominator
             result['cpu_s_per_request'] = result['perf']['task-clock'] / 1000 / denominator
@@ -159,7 +165,7 @@ def sample(kind, operation, rate, args, directory, round_number):
             result['perf'] = counters(lifetime)
             result['instructions_per_request'] = result['perf']['instructions']
             result['cpu_s_per_request'] = result['perf']['task-clock'] / 1000
-        after = sibling()
+        after = measured_after if operation not in ('cold', 'restart') else sibling()
         result['sibling_after'] = after
         result['sibling_busy_share'] = (after['busy'] - before['busy']) / max(1, after['total'] - before['total'])
         return result
@@ -167,6 +173,9 @@ def sample(kind, operation, rate, args, directory, round_number):
         if client and client.poll() is None:
             client.terminate()
             client.wait(30)
+        if recording and recording.poll() is None:
+            recording.send_signal(signal.SIGINT)
+            recording.wait(30)
         if perf:
             perf.stop()
         server.stop(check=False)
@@ -211,7 +220,12 @@ def report(document, path):
         keys = sorted(a.keys() & b.keys())
         if not keys:
             continue
-        ratios = [ci([a[n]['perf'][metric] / b[n]['perf'][metric] for n in keys], rng) for metric in ['instructions', 'cycles', 'task-clock']]
+        ratios = []
+        for metric in ['instructions', 'cycles', 'task-clock']:
+            left = [a[n]['perf'][metric] for n in keys]
+            right = [b[n]['perf'][metric] for n in keys]
+            low, high = bootstrap_ratio(left, right, document['seed'], draws=2000)
+            ratios.append(f'{ratio(left, right):.3f} [{low:.3f}, {high:.3f}]')
         ipc_a = statistics.median(a[n]['perf']['instructions'] / a[n]['perf']['cycles'] for n in keys)
         ipc_b = statistics.median(b[n]['perf']['instructions'] / b[n]['perf']['cycles'] for n in keys)
         text += [f"| {op} / {rate} | {' | '.join(ratios)} | {ipc_a:.3f} / {ipc_b:.3f} |"]
@@ -250,6 +264,7 @@ def main():
     parser.add_argument('--skip-build', action='store_true')
     parser.add_argument('--only', default='cold,restart,list,search,create,update,sse')
     args = parser.parse_args()
+    os.sched_setaffinity(0, {7})
     if args.rounds < 10:
         parser.error('measurement protocol requires at least 10 rounds')
     if args.seconds <= 0:
@@ -260,8 +275,7 @@ def main():
     args.binary.parent.mkdir(parents=True, exist_ok=True)
     if not args.skip_build:
         build(args.binary)
-    lock = open('/workspace/code/hirsel-briefs/locks/cpu31-timing.lock', 'a')
-    fcntl.flock(lock, fcntl.LOCK_EX)
+    lock = timing_lock(31)
     session = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     document = dict(session=session, git=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
                     rounds=args.rounds, seconds=args.seconds, rates=args.rates, seed=args.seed, samples=[], errors=[], profiles={})
@@ -272,23 +286,33 @@ def main():
     archive = APP / 'build' / session.replace(':', '')
     archive.mkdir(parents=True)
     failed = set()
-    for round_number in range(args.rounds):
-        order = [(kind, op, rate) for op, rate in cells for kind in KINDS]
-        rng.shuffle(order)
-        for kind, op, rate in order:
-            if (kind, op, rate) in failed:
-                continue
-            cell = f'{round_number}-{kind}-{op}-{rate}'
-            print(cell, flush=True)
+    names = [(kind, op, rate) for op, rate in cells for kind in KINDS]
+    for round_number, (kind, op, rate) in schedule(names, args.rounds, args.seed):
+        if (kind, op, rate) in failed:
+            continue
+        cell = f'{round_number}-{kind}-{op}-{rate}'
+        print(cell, flush=True)
+        try:
+            result = sample(kind, op, rate, args, archive / cell, round_number)
+            document['samples'].append(result)
+        except Exception as error:
+            document['errors'].append(dict(cell=cell, error=str(error)))
+            failed.add((kind, op, rate))
+            print(f'FAILED: {error}', flush=True)
+        (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
+        report(document, APP / 'RESULTS.md')
+    for op in operations:
+        if op in ('cold', 'restart'):
+            continue
+        rate = 100 if op == 'sse' else max(args.rates)
+        for kind in ('hirsel', 'rust'):
             try:
-                result = sample(kind, op, rate, args, archive / cell, round_number)
-                document['samples'].append(result)
+                profile = sample(kind, op, rate, args, archive / f'profile-{kind}-{op}', -1, profile=True)
+                document['profiles'][f'{kind}/{op}'] = profile['profile']
             except Exception as error:
-                document['errors'].append(dict(cell=cell, error=str(error)))
-                failed.add((kind, op, rate))
-                print(f'FAILED: {error}', flush=True)
-            (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
-            report(document, APP / 'RESULTS.md')
+                document['errors'].append(dict(cell=f'profile-{kind}-{op}', error=str(error)))
+    (APP / 'results.json').write_text(json.dumps(document, indent=2) + '\n')
+    report(document, APP / 'RESULTS.md')
     return 1 if document['errors'] else 0
 
 

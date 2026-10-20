@@ -53,10 +53,11 @@ class Server:
         else:
             command = [str(RUST), '--port', str(port)]
         self.marker = directory.parent / (directory.name + '-launch.json')
-        command = ['taskset', '-c', '31', sys.executable, str(APP / 'support.py'), str(self.marker), *command]
+        command = ['taskset', '-c', '31', *command]
         if perf:
             command = ['perf', 'stat', '-x', ';', '-o', str(perf), '-e',
                        'task-clock,cycles,instructions,cycles:u,instructions:u', *command]
+        command = [sys.executable, str(APP / 'support.py'), str(self.marker), *command]
         self.log = open(log, 'wb')
         self.started = time.monotonic()
         self.process = subprocess.Popen([str(CAPPED), *(['--long'] if timeout > 900 else []),
@@ -87,4 +88,4 @@ class Server:
 
 if __name__ == "__main__":
     Path(sys.argv[1]).write_text(json.dumps({"pid": os.getpid(), "started_ns": time.monotonic_ns()}))
-    os.execv(sys.argv[2], sys.argv[2:])
+    os.execvp(sys.argv[2], sys.argv[2:])
