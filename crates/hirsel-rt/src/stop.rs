@@ -129,8 +129,17 @@ pub(crate) unsafe fn raise(ctx: *mut TaskCtx, stop: Stop) -> ! {
         eprintln!("hirsel-rt: a run stopped inside a foreign call ({stop:?}); the process ends");
         std::process::abort();
     }
-    // SAFETY: the context is live.
-    let driver = unsafe { &mut (*ctx).run().driver };
+    // SAFETY: the context is live; a callee run's stop ends its execution, at the root's
+    // launcher (RUN-10).
+    let driver = unsafe {
+        let run = (*ctx).run_ptr();
+        let root = if (*run).root.is_null() {
+            run
+        } else {
+            (*run).root
+        };
+        &mut (*root).driver
+    };
     if driver.sp.is_null() {
         crate::environmental(&format!("a run stopped without a launcher: {stop:?}"));
     }

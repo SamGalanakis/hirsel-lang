@@ -26,6 +26,7 @@ pub mod map;
 pub mod mapped;
 pub mod net;
 pub mod owners;
+pub mod runners;
 pub mod shared;
 pub mod slots;
 pub mod sorted;
@@ -147,6 +148,13 @@ pub const BODIES: &[&LibraryBody] = &[
     // mapped (fs-watch-mmap): mapped.with over its view and check entries.
     &mapped::WITH,
     &isolate::ISOLATE,
+    // runners (native-runner-entry): runner calls over the runtime's runner entries.
+    &runners::COMPUTE,
+    &runners::CALL,
+    &runners::SPAWN,
+    &runners::GRANTS,
+    &runners::MAIN,
+    &runners::AWAIT,
     &channels::OPEN,
     &channels::SEND,
     &channels::RECEIVE,
@@ -263,7 +271,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 23;
+pub const REVISION: u32 = 24;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

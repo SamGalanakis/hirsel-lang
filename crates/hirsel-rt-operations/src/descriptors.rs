@@ -755,6 +755,22 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_isolate_line", Local),
     entry("hirsel_rt_v2_isolate_column", Local),
     entry("hirsel_rt_v2_isolate_spawn", Local),
+    // runners.rs: runner handles and calls reach the run's execution, its callee runs and
+    // their Io bindings.
+    ops("hirsel_rt_v2_io_runner", HOST),
+    ops("hirsel_rt_v2_test_runner", HOST),
+    ops("hirsel_rt_v2_runner_narrow", HOST),
+    ops("hirsel_rt_v2_runner_only", HOST),
+    ops("hirsel_rt_v2_runner_grants", HOST),
+    ops("hirsel_rt_v2_runner_entry_path", HOST),
+    ops("hirsel_rt_v2_runner_send", HOST),
+    ops("hirsel_rt_v2_runner_wait", HOST),
+    ops("hirsel_rt_v2_runner_take", HOST),
+    ops("hirsel_rt_v2_runner_entry", HOST),
+    ops("hirsel_rt_v2_runner_argument", HOST),
+    ops("hirsel_rt_v2_runner_io", HOST),
+    ops("hirsel_rt_v2_runner_tasks", HOST),
+    ops("hirsel_rt_v2_runner_reply", HOST),
     // launch.rs
     entry("hirsel_rt_v2_launch_zero", Admission),
     entry("hirsel_rt_v2_launch", Admission),

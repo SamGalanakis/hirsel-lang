@@ -70,8 +70,8 @@ pub(super) struct Intrinsic {
     pub(super) abi: FnAbiId,
     /// The actuals the operation's declared ABI is derived under.
     arguments: Vec<OperationArgument>,
-    store: hirsel_types::TypeStore,
-    callable: TypeId,
+    pub(super) store: hirsel_types::TypeStore,
+    pub(super) callable: TypeId,
 }
 
 pub(super) fn intrinsic(

@@ -16,15 +16,16 @@ mod grants;
 mod runners;
 pub use calls::{
     CallCause, CallForm, CallOutcome, CallRecord, CalleeFacts, CalleeOutcome, Cause,
-    RunnerCompletion, RunnerRequest, call_key, callee_instance, callee_seed, request_digest,
+    RunnerCompletion, RunnerRequest, call_key, callee_instance, callee_seed, callees_json,
+    parse_callees, request_digest,
 };
 pub use grants::{
-    GrantSet, NET_OPERATIONS, env_within, io_within, mount_within, narrow, net_operation_within,
-    net_rule_within, process_rule_within,
+    GrantSet, NET_OPERATIONS, allowlist_bytes, env_within, io_within, mount_within, narrow,
+    net_operation_within, net_rule_within, process_rule_within,
 };
 pub use runners::{
-    DEFAULT_QUEUE, DEFAULT_RECONNECT, DEFAULT_THREADS, Endpoint, FaultRate, PlaceAdmission, Retry,
-    Roots, RunnerEntry, SIM_FAULT_SITES, TlsFiles, sim_model_sites,
+    DEFAULT_QUEUE, DEFAULT_RECONNECT, DEFAULT_THREADS, Endpoint, FaultRate, PlaceAdmission,
+    PlaceState, Placed, Retry, Roots, RunnerEntry, SIM_FAULT_SITES, TlsFiles, sim_model_sites,
 };
 mod outcome;
 pub use outcome::{

@@ -202,3 +202,66 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
 fn fixed<const N: usize>(text: &str) -> Option<[u8; N]> {
     unhex(text)?.try_into().ok()
 }
+
+/// Callee facts as a launcher hands them to a native run: a JSON object keyed by entry path,
+/// each `{"program", "code", "fingerprint"}` in lowercase hex and `"reach"`, null for a safe
+/// callee or the path to its first escape.
+pub fn callees_json(facts: &std::collections::BTreeMap<String, CalleeFacts>) -> String {
+    let object: serde_json::Map<String, serde_json::Value> = facts
+        .iter()
+        .map(|(path, f)| {
+            let reach = match &f.reach {
+                crate::CodeReach::Safe => serde_json::Value::Null,
+                crate::CodeReach::Escapes(path) => serde_json::json!(path),
+            };
+            (
+                path.clone(),
+                serde_json::json!({
+                    "program": crate::hex(&f.program),
+                    "code": crate::hex(&f.code),
+                    "fingerprint": crate::hex(&f.fingerprint),
+                    "reach": reach,
+                }),
+            )
+        })
+        .collect();
+    serde_json::Value::Object(object).to_string()
+}
+/// [`callees_json`]'s inverse.
+pub fn parse_callees(
+    text: &str,
+) -> Result<std::collections::BTreeMap<String, CalleeFacts>, String> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let object = value.as_object().ok_or("callee facts are not an object")?;
+    let mut out = std::collections::BTreeMap::new();
+    for (path, facts) in object {
+        let word = |name: &str| -> Result<[u8; 32], String> {
+            facts
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .and_then(fixed)
+                .ok_or_else(|| format!("callee {path}: bad {name}"))
+        };
+        let reach = match facts.get("reach") {
+            Some(serde_json::Value::Null) => crate::CodeReach::Safe,
+            Some(serde_json::Value::Array(items)) => crate::CodeReach::Escapes(
+                items
+                    .iter()
+                    .map(|i| i.as_str().map(str::to_owned))
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| format!("callee {path}: bad reach"))?,
+            ),
+            _ => return Err(format!("callee {path}: bad reach")),
+        };
+        out.insert(
+            path.clone(),
+            CalleeFacts {
+                program: word("program")?,
+                code: word("code")?,
+                fingerprint: word("fingerprint")?,
+                reach,
+            },
+        );
+    }
+    Ok(out)
+}

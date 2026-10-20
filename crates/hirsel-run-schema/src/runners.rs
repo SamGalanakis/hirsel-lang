@@ -160,3 +160,124 @@ impl RunnerEntry {
         self.models.as_deref().unwrap_or(&self.provider)
     }
 }
+
+/// How a place met one call (RUN-5 to RUN-7): refused before its commit point with a
+/// `NotRunReason` ordinal, lost after it with an `InDoubtReason` ordinal, or sent, with the
+/// callee suspension after which `sim@1` crashes it and whether the reply is to be lost.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Placed {
+    NotRun(u32),
+    InDoubt(u32),
+    Sent {
+        crash_after: Option<u32>,
+        lose_reply: bool,
+    },
+}
+const UNREACHABLE: u32 = 2;
+const OVERLOADED: u32 = 3;
+const LOST: u32 = 0;
+
+/// `sim@1`'s crash points: a crash stops a callee before one of its first this many
+/// requests (or suspensions).
+pub const CRASH_POINTS: u64 = 32;
+
+/// One place's state in one run: the fault sites enabled at its first call, the callees
+/// sent and not yet answered, and whether it is partitioned. Both engines decide calls here.
+#[derive(Clone, Debug, Default)]
+pub struct PlaceState {
+    enabled: Option<std::collections::BTreeSet<String>>,
+    pub running: u64,
+    partitioned: bool,
+}
+
+/// The first eight bytes, little-endian, of a domain-separated hash of `parts`.
+fn draw(domain: &str, parts: &[&[u8]]) -> u64 {
+    let hash = crate::hash_parts(domain, parts.iter().copied());
+    u64::from_le_bytes(hash[..8].try_into().unwrap())
+}
+/// Whether a draw in parts per million falls under `rate`.
+fn fires(rate: u32, domain: &str, parts: &[&[u8]]) -> bool {
+    draw(domain, parts) % 1_000_000 < u64::from(rate)
+}
+
+impl PlaceState {
+    /// The place's contract for call `ordinal` of `entry`: capacity, `sim@1`'s faults drawn
+    /// from `fault_seed` and re-sends of a request refused before its commit point (RUN-7).
+    /// A sent call counts as running until [`PlaceState::answered`].
+    pub fn place(&mut self, entry: &RunnerEntry, fault_seed: u64, ordinal: u64) -> Placed {
+        let seed = fault_seed.to_le_bytes();
+        let enabled = self.enabled.get_or_insert_with(|| {
+            entry
+                .faults
+                .iter()
+                .filter(|(site, rate)| {
+                    fires(
+                        rate.enable,
+                        "hirsel.runner.fault.enable.v1",
+                        &[&seed, entry.name.as_bytes(), site.as_bytes()],
+                    )
+                })
+                .map(|(site, _)| site.clone())
+                .collect()
+        });
+        let fire = |site: &str, attempt: u32| {
+            enabled.contains(site)
+                && fires(
+                    entry.faults[site].fire,
+                    "hirsel.runner.fault.fire.v1",
+                    &[
+                        &seed,
+                        entry.name.as_bytes(),
+                        site.as_bytes(),
+                        &ordinal.to_le_bytes(),
+                        &attempt.to_le_bytes(),
+                    ],
+                )
+        };
+        let capacity = entry.threads() + entry.queue();
+        let mut attempt = 0;
+        let refusal = loop {
+            let refusal = if self.partitioned && !fire("partition", attempt) {
+                Some(UNREACHABLE)
+            } else if fire("partition", attempt) && !self.partitioned {
+                self.partitioned = true;
+                Some(UNREACHABLE)
+            } else if fire("refuse", attempt) {
+                Some(UNREACHABLE)
+            } else if self.running >= capacity || fire("overload", attempt) {
+                Some(OVERLOADED)
+            } else {
+                self.partitioned = false;
+                None
+            };
+            match refusal {
+                Some(_) if attempt < entry.attempts() => attempt += 1,
+                refusal => break refusal,
+            }
+        };
+        if let Some(reason) = refusal {
+            return Placed::NotRun(reason);
+        }
+        // The commit point: the request is sent.
+        if fire("lose_request", attempt) {
+            return Placed::InDoubt(LOST);
+        }
+        self.running += 1;
+        // The crash point: one of the callee's first 32 requests, or suspensions where it
+        // makes none; a callee that ends first has its outcome lost.
+        let crash_after = fire("crash", attempt).then(|| {
+            (draw(
+                "hirsel.runner.fault.crash.v1",
+                &[&seed, entry.name.as_bytes(), &ordinal.to_le_bytes()],
+            ) % CRASH_POINTS) as u32
+        });
+        Placed::Sent {
+            crash_after,
+            lose_reply: fire("lose_reply", attempt),
+        }
+    }
+    /// A sent call was answered: its place is free.
+    pub fn answered(&mut self) {
+        self.running = self.running.saturating_sub(1);
+    }
+}

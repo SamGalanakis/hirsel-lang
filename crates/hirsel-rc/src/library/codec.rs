@@ -123,6 +123,35 @@ fn checks(cx: &mut ImportCx<'_>, schema: &SerializableSchema) -> R<Vec<(DefPath,
     Ok(out)
 }
 
+/// The plan of a library body's `Encode` (`decode` None) or `Decode` of `ty`, a row of the
+/// body's store: values at `root`, bytes at `bytes`, and a decode's result and error layouts.
+/// A body's decode calls no checks, so a schema naming a checked type is unsupported.
+pub(super) fn body_plan(
+    cx: &super::builder::Cx<'_>,
+    ty: hirsel_types::TypeId,
+    root: LayoutId,
+    bytes: LayoutId,
+    decode: Option<(LayoutId, LayoutId)>,
+) -> R<CodecPlan> {
+    let signatures = &cx.program.signatures;
+    let schema = hirsel_types::serialization::serializable_schema(
+        &cx.store,
+        ty,
+        &hirsel_types::GenericDeclarations::default(),
+        &mut |path| Ok(signatures.get(path).cloned()),
+    )
+    .map_err(|e| PassError::Unsupported(format!("codec schema: {e:?}")))?
+    .ok_or_else(|| PassError::Malformed("a runner call over a type with no codec schema".into()))?;
+    let checked = schema
+        .nodes
+        .iter()
+        .any(|n| matches!(n, SchemaNode::Nominal { check: Some(_), .. }));
+    if decode.is_some() && checked {
+        return unsupported("a runner call's decode of a checked type");
+    }
+    Plan::new(cx.layouts.table(), &schema, decode.map(|_| vec![])).build(root, bytes, decode)
+}
+
 fn unsupported<T>(what: impl Into<String>) -> R<T> {
     Err(PassError::Unsupported(format!(
         "SER-2 codec: {}",

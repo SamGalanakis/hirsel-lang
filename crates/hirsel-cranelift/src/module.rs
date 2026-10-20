@@ -739,6 +739,9 @@ pub enum DescriptorField {
     Bytes(Vec<u8>),
     /// These bytes, in place.
     Inline(Vec<u8>),
+    /// The address of a private table of `{code, path, path length}` rows (ABI 30): each
+    /// imported function's address and a private constant of its path.
+    Entries(Vec<(String, Vec<u8>)>),
 }
 
 /// PROG-3's exit report of an entry's returned `Err`: the entry result's descriptor index,
@@ -905,6 +908,39 @@ pub fn named_launch_object(
                 constant.define(data.clone().into_boxed_slice());
                 constant.set_align(8);
                 module.define_data(id, &constant).map_err(refuse(&name))?;
+                let gv = module.declare_data_in_data(id, &mut description);
+                description.write_data_addr(at, gv, 0);
+                bytes.extend([0; 8]);
+            }
+            DescriptorField::Entries(rows) => {
+                let mut table = DataDescription::new();
+                let mut words = Vec::with_capacity(rows.len() * 24);
+                for (index, (function, path)) in rows.iter().enumerate() {
+                    let row = (index * 24) as u32;
+                    let code = module
+                        .declare_function(function, Linkage::Import, &ir::Signature::new(call_conv))
+                        .map_err(refuse(function))?;
+                    let code = module.declare_func_in_data(code, &mut table);
+                    table.write_function_addr(row, code);
+                    let name = format!("hirsel.program.{ordinal}.{index}");
+                    let id = module
+                        .declare_data(&name, Linkage::Local, false, false)
+                        .map_err(refuse(&name))?;
+                    let mut constant = DataDescription::new();
+                    constant.define(path.clone().into_boxed_slice());
+                    module.define_data(id, &constant).map_err(refuse(&name))?;
+                    let gv = module.declare_data_in_data(id, &mut table);
+                    table.write_data_addr(row + 8, gv, 0);
+                    words.extend([0; 16]);
+                    words.extend((path.len() as u64).to_le_bytes());
+                }
+                let name = format!("hirsel.program.{ordinal}");
+                let id = module
+                    .declare_data(&name, Linkage::Local, false, false)
+                    .map_err(refuse(&name))?;
+                table.define(words.into_boxed_slice());
+                table.set_align(8);
+                module.define_data(id, &table).map_err(refuse(&name))?;
                 let gv = module.declare_data_in_data(id, &mut description);
                 description.write_data_addr(at, gv, 0);
                 bytes.extend([0; 8]);

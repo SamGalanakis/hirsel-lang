@@ -767,9 +767,9 @@ impl<'a> Layouts<'a> {
             return true;
         };
         match layout.kind {
-            LayoutKind::Shared { .. }
-            | LayoutKind::Callable { environment: None }
-            | LayoutKind::Iterator { .. } => true,
+            LayoutKind::Shared { .. } | LayoutKind::Iterator { .. } => true,
+            // A static callable's (an Entry's) environment is never counted.
+            LayoutKind::Callable { environment: None } => !layout.drop.is_empty(),
             LayoutKind::Block { payload } | LayoutKind::Box { payload } => {
                 self.root_bearing_in(payload, seen)
             }

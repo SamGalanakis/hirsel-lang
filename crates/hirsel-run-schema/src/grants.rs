@@ -168,6 +168,70 @@ impl GrantSet {
     }
 }
 
+impl GrantSet {
+    /// The set's canonical codec bytes (serialization.md, codec version 1), as a runner
+    /// request's digest frames them (RUN-11): the six flags, then the `DirGrant`, `NetRule`
+    /// and `ProcessRule` lists. None when a net rule's service is not a port or its
+    /// operation is unknown.
+    pub fn canonical(&self) -> Option<Vec<u8>> {
+        let mut out = Vec::new();
+        for flag in [
+            self.stdout,
+            self.stderr,
+            self.tasks,
+            self.monotonic_clock,
+            self.wall_clock,
+            self.random,
+        ] {
+            out.push(u8::from(flag));
+        }
+        out.extend_from_slice(&(self.dirs.len() as u64).to_le_bytes());
+        for (path, access) in &self.dirs {
+            text(&mut out, path);
+            out.extend_from_slice(&u32::from(*access == Access::ReadWrite).to_le_bytes());
+        }
+        out.extend_from_slice(&(self.net.len() as u64).to_le_bytes());
+        for rule in &self.net {
+            text(&mut out, &rule.address);
+            out.extend_from_slice(&rule.service.parse::<u16>().ok()?.to_le_bytes());
+            let operation = NET_OPERATIONS.iter().position(|o| *o == rule.operation)?;
+            out.extend_from_slice(&(operation as u32).to_le_bytes());
+        }
+        out.extend_from_slice(&(self.process.len() as u64).to_le_bytes());
+        for rule in &self.process {
+            text(&mut out, &rule.program);
+            texts(&mut out, &rule.env);
+        }
+        Some(out)
+    }
+}
+
+/// An allowlist's canonical codec bytes, `Option[List[String]]`, as a runner request's
+/// digest frames them (RUN-11).
+pub fn allowlist_bytes(definitions: Option<&[String]>) -> Vec<u8> {
+    let mut out = Vec::new();
+    match definitions {
+        None => out.extend_from_slice(&0u32.to_le_bytes()),
+        Some(paths) => {
+            out.extend_from_slice(&1u32.to_le_bytes());
+            texts(&mut out, paths);
+        }
+    }
+    out
+}
+
+fn text(out: &mut Vec<u8>, text: &str) {
+    out.extend_from_slice(&(text.len() as u64).to_le_bytes());
+    out.extend_from_slice(text.as_bytes());
+}
+
+fn texts(out: &mut Vec<u8>, texts: &[String]) {
+    out.extend_from_slice(&(texts.len() as u64).to_le_bytes());
+    for t in texts {
+        text(out, t);
+    }
+}
+
 /// RUN-2 coverage: the grant set `grants` narrowed to exactly `keep`, when `grants` covers
 /// it; None otherwise. Flags are kept only where granted, mounts by their exact virtual path
 /// with equal or lesser access (sorted, unique), net rules under `net.narrow` coverage and
@@ -230,4 +294,69 @@ pub fn narrow(grants: &IoGrants, keep: &GrantSet) -> Option<IoGrants> {
         narrow.process = Some(process);
     }
     Some(narrow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn u64s(n: u64) -> Vec<u8> {
+        n.to_le_bytes().to_vec()
+    }
+
+    /// serialization.md codec version 1: bools as one byte, lists and strings behind a u64
+    /// count or length, variant ordinals as u32, a port as u16, all little-endian.
+    #[test]
+    fn a_grant_set_and_an_allowlist_encode_canonically() {
+        let set = GrantSet {
+            stdout: true,
+            stderr: false,
+            tasks: true,
+            monotonic_clock: false,
+            wall_clock: false,
+            random: true,
+            dirs: vec![("/d".into(), Access::ReadWrite)],
+            net: vec![NetRule {
+                address: "h".into(),
+                service: "443".into(),
+                operation: "connect_tls".into(),
+            }],
+            process: vec![ProcessRule {
+                program: "p".into(),
+                env: vec!["E".into()],
+            }],
+        };
+        let mut expected = vec![1, 0, 1, 0, 0, 1];
+        expected.extend(u64s(1));
+        expected.extend(u64s(2));
+        expected.extend(b"/d");
+        expected.extend(1u32.to_le_bytes());
+        expected.extend(u64s(1));
+        expected.extend(u64s(1));
+        expected.extend(b"h");
+        expected.extend(443u16.to_le_bytes());
+        expected.extend(1u32.to_le_bytes());
+        expected.extend(u64s(1));
+        expected.extend(u64s(1));
+        expected.extend(b"p");
+        expected.extend(u64s(1));
+        expected.extend(u64s(1));
+        expected.extend(b"E");
+        assert_eq!(set.canonical(), Some(expected));
+        let unknown = GrantSet {
+            net: vec![NetRule {
+                address: "h".into(),
+                service: "443".into(),
+                operation: "teleport".into(),
+            }],
+            ..set
+        };
+        assert_eq!(unknown.canonical(), None);
+        assert_eq!(allowlist_bytes(None), 0u32.to_le_bytes().to_vec());
+        let mut some = 1u32.to_le_bytes().to_vec();
+        some.extend(u64s(1));
+        some.extend(u64s(1));
+        some.extend(b"a");
+        assert_eq!(allowlist_bytes(Some(&["a".to_string()])), some);
+    }
 }

@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 29
+#define HIRSEL_RT_V2_ABI_VERSION 30
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 40
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_FOREIGN_THREADS_HOME 0
@@ -396,12 +396,19 @@ int32_t hirsel_rt_v2_launch(uint8_t (*entry)(hirsel_rt_v2_ctx *, uint8_t *, uint
  * The failure table (ABI 22) is little-endian: u32 site and rule counts, 32-byte site records
  * (u64 code, u32 line, u32 column, u32 offset and length of the definition path, then of the
  * file path) sorted by code, 8-byte rule records (u32 offset, length), then a UTF-8 string
- * pool; the runtime reads it in place. */
+ * pool; the runtime reads it in place. The entry rows (ABI 30, RUN-3) name each definition the
+ * program's units make an Entry value of: its function-reference code and full UTF-8 path. */
 typedef uint8_t (*hirsel_rt_v2_roots_entry)(hirsel_rt_v2_ctx *, uint8_t *, uint8_t *, uint64_t *);
 #define HIRSEL_RT_V2_PROGRAM_UNREPLAYABLE 1u
 #define HIRSEL_RT_V2_PROGRAM_STANDALONE 2u
 #define HIRSEL_RT_V2_PROGRAM_ESCAPES 4u
 #define HIRSEL_RT_V2_PROGRAM_FUELED 8u
+typedef struct {
+    const void *code;
+    const uint8_t *path;
+    uint64_t path_length;
+} hirsel_rt_v2_entry_row;
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_entry_row, 24);
 typedef struct {
     uint32_t abi_version, flags, roots, layout_count;
     hirsel_rt_v2_roots_entry entry;
@@ -413,8 +420,10 @@ typedef struct {
     uint64_t entry_name_length;
     uint8_t digest[32];
     hirsel_rt_v2_launch_config config;
+    const hirsel_rt_v2_entry_row *entries;
+    uint64_t entry_count;
 } hirsel_rt_v2_program_descriptor;
-HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_program_descriptor, 160);
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_program_descriptor, 176);
 /* Load the program and launch the run argv (argv[0] names the program) selects; returns the
  * exit status of its outcome. No other process arguments are read. */
 int32_t hirsel_rt_v2_main(const hirsel_rt_v2_program_descriptor *program, int32_t argc, const char *const *argv);

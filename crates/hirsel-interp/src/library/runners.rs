@@ -24,7 +24,7 @@ use hirsel_run_schema::{
 };
 use hirsel_types::serialization::SerializableSchema;
 use hirsel_types::{BuiltinType, GenericArgument};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// A runner handle's place and the authority its callees run under.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,7 +46,7 @@ pub(super) struct Runners {
     /// Requests made so far (RUN-11's request ordinals).
     requests: u64,
     /// Each place's state in this run, by runner name.
-    places: BTreeMap<String, Place>,
+    places: BTreeMap<String, hirsel_run_schema::PlaceState>,
 }
 impl Runners {
     /// Whether `token` is a sent call's wait.
@@ -93,15 +93,6 @@ struct Pending {
     forwarded: Option<u32>,
     completion: Option<RunnerCompletion>,
 }
-#[derive(Default)]
-struct Place {
-    /// The fault sites enabled for this run, decided at the place's first call.
-    enabled: Option<BTreeSet<String>>,
-    /// Callees sent and not yet answered.
-    running: u64,
-    partitioned: bool,
-}
-
 /// How a call ended before or instead of its callee's outcome.
 enum Refused {
     NotRun(u32),
@@ -109,12 +100,7 @@ enum Refused {
     Canceled(u32),
 }
 const DENIED: u32 = 0;
-const UNREACHABLE: u32 = 2;
-const OVERLOADED: u32 = 3;
 const REJECTED: u32 = 4;
-/// `sim@1`'s crash points: a crash stops a callee before one of its first this many
-/// requests (or suspensions).
-const CRASH_POINTS: u64 = 32;
 const LOST: u32 = 0;
 const ABANDONED: u32 = 2;
 
@@ -127,16 +113,6 @@ fn refused(outcome: Refused) -> RunnerCompletion {
         },
         callee: None,
     }
-}
-
-/// The first eight bytes, little-endian, of a domain-separated hash of `parts`.
-fn draw(domain: &str, parts: &[&[u8]]) -> u64 {
-    let hash = hirsel_run_schema::hash_parts(domain, parts.iter().copied());
-    u64::from_le_bytes(hash[..8].try_into().unwrap())
-}
-/// Whether a draw in parts per million falls under `rate`.
-fn fires(rate: u32, domain: &str, parts: &[&[u8]]) -> bool {
-    draw(domain, parts) % 1_000_000 < u64::from(rate)
 }
 
 /// The codec schema of a type graph over core types, whose first row is the root; the
@@ -569,76 +545,21 @@ impl Library {
         if entry.provider == "remote.tls@1" {
             return Ok(Ok((None, false)));
         }
-        let seed = self.simulation.config.fault_seed.to_le_bytes();
         let ordinal = cause.ordinal;
         let place = self.runners.places.entry(entry.name.clone()).or_default();
-        let enabled = place.enabled.get_or_insert_with(|| {
-            entry
-                .faults
-                .iter()
-                .filter(|(site, rate)| {
-                    fires(
-                        rate.enable,
-                        "hirsel.runner.fault.enable.v1",
-                        &[&seed, entry.name.as_bytes(), site.as_bytes()],
-                    )
-                })
-                .map(|(site, _)| site.clone())
-                .collect()
-        });
-        let fire = |site: &str, attempt: u32| {
-            enabled.contains(site)
-                && fires(
-                    entry.faults[site].fire,
-                    "hirsel.runner.fault.fire.v1",
-                    &[
-                        &seed,
-                        entry.name.as_bytes(),
-                        site.as_bytes(),
-                        &ordinal.to_le_bytes(),
-                        &attempt.to_le_bytes(),
-                    ],
-                )
-        };
-        let capacity = entry.threads() + entry.queue();
-        // A request refused before its commit point may be re-sent (RUN-7).
-        let mut attempt = 0;
-        let refusal = loop {
-            let refusal = if place.partitioned && !fire("partition", attempt) {
-                Some(UNREACHABLE)
-            } else if fire("partition", attempt) && !place.partitioned {
-                place.partitioned = true;
-                Some(UNREACHABLE)
-            } else if fire("refuse", attempt) {
-                Some(UNREACHABLE)
-            } else if place.running >= capacity || fire("overload", attempt) {
-                Some(OVERLOADED)
-            } else {
-                place.partitioned = false;
-                None
+        let (crash_after, lose_reply) =
+            match place.place(entry, self.simulation.config.fault_seed, ordinal) {
+                hirsel_run_schema::Placed::NotRun(reason) => {
+                    return Ok(Err(Refused::NotRun(reason)));
+                }
+                hirsel_run_schema::Placed::InDoubt(reason) => {
+                    return Ok(Err(Refused::InDoubt(reason)));
+                }
+                hirsel_run_schema::Placed::Sent {
+                    crash_after,
+                    lose_reply,
+                } => (crash_after, lose_reply),
             };
-            match refusal {
-                Some(_) if attempt < entry.attempts() => attempt += 1,
-                refusal => break refusal,
-            }
-        };
-        if let Some(reason) = refusal {
-            return Ok(Err(Refused::NotRun(reason)));
-        }
-        // The commit point: the request is sent.
-        if fire("lose_request", attempt) {
-            return Ok(Err(Refused::InDoubt(LOST)));
-        }
-        place.running += 1;
-        // The crash point: one of the callee's first 32 requests, or suspensions where it
-        // makes none; a callee that ends first has its outcome lost.
-        let crash_after = fire("crash", attempt).then(|| {
-            draw(
-                "hirsel.runner.fault.crash.v1",
-                &[&seed, entry.name.as_bytes(), &ordinal.to_le_bytes()],
-            ) % CRASH_POINTS
-        });
-        let lose_reply = fire("lose_reply", attempt);
         let key = hirsel_run_schema::call_key(&cause.instance, ordinal);
         let seed = |name: &str| hirsel_run_schema::callee_seed(&key, name);
         let configuration = hirsel_tir::RunConfiguration {
@@ -668,7 +589,7 @@ impl Library {
                 arguments,
                 operations: Box::new(callee),
                 budgets: RunBudgets::default(),
-                crash_after: crash_after.map(|k| k as u32),
+                crash_after,
                 call: CallStart {
                     runner: entry.clone(),
                     grants: runner.grants.clone(),
@@ -817,7 +738,7 @@ impl Library {
             return Err(invalid("a runner call completed twice"));
         }
         if let Some(place) = self.runners.places.get_mut(&pending.place) {
-            place.running = place.running.saturating_sub(1);
+            place.answered();
         }
         pending.completion = Some(completion);
         if pending.child {

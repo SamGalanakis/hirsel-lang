@@ -240,9 +240,10 @@ native programs run through the selected targets (`;` separates slices, `|` the 
 python3 tools/buck2/native.py <program> <program>  # cost-bounded shards, both backends
 ```
 
-Corpus cases with a `// runners:` header run only interpreted. Land checks
-only what breaks everyone; main's fast run tests main every 2 h and the full
-suite runs by hand before milestones.
+The checked heap executor (smoke's `heap+inject` configuration) has no model of runners,
+so a corpus case with a `// runners:` header fails there; judge it by the other
+configurations. Land checks only what breaks everyone; main's fast run tests main every
+2 h and the full suite runs by hand before milestones.
 
 ### Known failures
 
@@ -374,8 +375,9 @@ runnable corpus case (run, fail, blocked and test headers; about 2,560)
 natively and compares the full interpreter observation: stdout, exit status,
 failure rule and site, with headers and `.stdout` sidecars as further oracles.
 Every case runs on Cranelift; a 1/16 slice that rotates with the run's seed, and
-every case with a pending row, also run on LLVM O0. Cases whose header names
-`runners:` run interpreted only, and say so.
+every case with a pending row, also run on LLVM O0. A case whose header names
+`runners:` passes them, its `fault_seed:` and the launcher's callee facts to the
+executable, whose callee runs execute in its process as the interpreter's do.
 `native-tests/regressions/corpus-exclusions.tsv` names the cases never launched
 natively (MEM-12), and `corpus-pending.tsv` the failures still attempted on
 every run, each with its exact reason; an unlisted failure, a changed reason

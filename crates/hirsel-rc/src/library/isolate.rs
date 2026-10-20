@@ -31,7 +31,7 @@ pub static ISOLATE: LibraryBody = LibraryBody {
 /// `FailureKind`'s variants, by the ordinal `$intrinsic.IsolateKind` returns.
 const KINDS: u32 = 5;
 
-struct Entries {
+pub(super) struct Entries {
     begin: Intrinsic,
     count: Intrinsic,
     kind: Intrinsic,
@@ -43,7 +43,7 @@ struct Entries {
 }
 
 /// The layouts of a `Failure` record and its parts.
-struct Shape {
+pub(super) struct Shape {
     failure: LayoutId,
     kind: LayoutId,
     site: LayoutId,
@@ -72,32 +72,14 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .result
         .map(|r| r.layout)
         .ok_or_else(|| PassError::Malformed("task.isolate returns a Result".into()))?;
-    let mut entry = |name: &str| intrinsic(cx, name, Vec::new());
-    let entries = Entries {
-        begin: entry("IsolateBegin")?,
-        count: entry("IsolateCount")?,
-        kind: entry("IsolateKind")?,
-        rule: entry("IsolateRule")?,
-        definition: entry("IsolateDefinition")?,
-        line: entry("IsolateLine")?,
-        column: entry("IsolateColumn")?,
-        spawn: entry("IsolateSpawn")?,
-    };
+    let entries = entries(cx)?;
     let mut b = Body::new(cx)?;
     let &[tasks, body] = b.parameters.as_slice() else {
         return Err(PassError::Malformed("task.isolate parameters".into()));
     };
     let failure = payload(&b, returned, RESULT_ERROR)
         .ok_or_else(|| PassError::Malformed("task.isolate's Result has no error".into()))?;
-    let cause = field(&b, failure, 4)?;
-    let shape = Shape {
-        failure,
-        kind: field(&b, failure, 0)?,
-        site: field(&b, failure, 2)?,
-        cause,
-        boxed: payload(&b, cause, 1)
-            .ok_or_else(|| PassError::Malformed("a Failure cause holds no box".into()))?,
-    };
+    let shape = shape(&b, failure)?;
     let tasks = b.read_bits(tasks.address)?;
     let propagate = b.failure(None);
     let callee = operation(&mut b, &entries.begin);
@@ -156,6 +138,39 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     Ok(b.finish())
 }
 
+/// The caught chain's entries, under no actuals.
+pub(super) fn entries(cx: &mut Cx<'_>) -> R<Entries> {
+    let mut entry = |name: &str| intrinsic(cx, name, Vec::new());
+    Ok(Entries {
+        begin: entry("IsolateBegin")?,
+        count: entry("IsolateCount")?,
+        kind: entry("IsolateKind")?,
+        rule: entry("IsolateRule")?,
+        definition: entry("IsolateDefinition")?,
+        line: entry("IsolateLine")?,
+        column: entry("IsolateColumn")?,
+        spawn: entry("IsolateSpawn")?,
+    })
+}
+
+/// The parts of the `Failure` record at `failure`.
+pub(super) fn shape(b: &Body<'_, '_>, failure: LayoutId) -> R<Shape> {
+    let cause = field(b, failure, 4)?;
+    Ok(Shape {
+        failure,
+        kind: field(b, failure, 0)?,
+        site: field(b, failure, 2)?,
+        cause,
+        boxed: payload(b, cause, 1)
+            .ok_or_else(|| PassError::Malformed("a Failure cause holds no box".into()))?,
+    })
+}
+
+/// `IsolateBegin(tasks)`: the running task's failure record count, the start of a catch.
+pub(super) fn begin(b: &mut Body<'_, '_>, entries: &Entries, tasks: ValueId) -> R<ValueId> {
+    read(b, &entries.begin, tasks, None)
+}
+
 /// Call a runtime entry of the caught chain; its outcome propagates.
 fn read(
     b: &mut Body<'_, '_>,
@@ -180,7 +195,12 @@ fn read(
 }
 
 /// The caught chain as one `Failure`, built from its last record to its primary.
-fn chain(b: &mut Body<'_, '_>, entries: &Entries, shape: &Shape, tasks: ValueId) -> R<ValueId> {
+pub(super) fn chain(
+    b: &mut Body<'_, '_>,
+    entries: &Entries,
+    shape: &Shape,
+    tasks: ValueId,
+) -> R<ValueId> {
     let count = read(b, &entries.count, tasks, None)?;
     let none = option(b, shape.cause, 0, &[]);
     let (cause_slot, cause_address) = local(b, none)?;

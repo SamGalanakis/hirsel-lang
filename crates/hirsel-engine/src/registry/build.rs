@@ -938,6 +938,27 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "tasks: Tasks, index: u64",
             "List[u64]",
         ),
+        // Runner calls (RUN-4) behind the compiled bodies of `runner.compute`, `runner.call`
+        // and `runner.spawn`: the caller sends `f`'s call with its argument's codec bytes and
+        // the callee's `main`, a static `fn() -> ()` that runs in the callee run, then waits
+        // for the outcome code and takes its bytes (`hirsel-rt/src/runners.rs`). The callee's
+        // `main` reads its entry, argument and root Io, and replies with its outcome's bytes.
+        (
+            "F",
+            "$intrinsic.RunnerSend",
+            "r: Runner, f: Entry[F], argument: Bytes, main: fn() -> (), form: u64",
+            "u64",
+        ),
+        ("", "$intrinsic.RunnerWait", "ticket: u64", "u64"),
+        ("", "$intrinsic.RunnerTake", "ticket: u64", "Bytes"),
+        ("F", "$intrinsic.RunnerEntry", "", "F"),
+        ("", "$intrinsic.RunnerArgument", "", "Bytes"),
+        ("", "$intrinsic.RunnerIo", "", "Io"),
+        // The `Tasks` word the callee's `main` passes the isolation entries, which read none.
+        ("", "$intrinsic.RunnerTasks", "", "Tasks"),
+        ("", "$intrinsic.RunnerReply", "tag: u64, reply: Bytes", "()"),
+        // `runner.grants`' compiled body: the grant set's flags, one bit per field in order.
+        ("", "$intrinsic.RunnerGrants", "r: Runner", "u64"),
     ] {
         let mut b = Builder::new(generics).with_declarations(&out);
         let f = b.function(params, result, false);

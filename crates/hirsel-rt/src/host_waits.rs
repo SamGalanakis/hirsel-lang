@@ -86,6 +86,7 @@ pub(crate) unsafe fn kind(ctx: *mut TaskCtx, token: u64) -> &'static str {
         Some(Request::ChildWait { .. }) => "child.wait",
         Some(Request::GroupWait { .. }) => "proc.wait_group",
         Some(Request::WatchNext { .. }) => "watcher.next",
+        Some(Request::RunnerCall(_)) => "runner.call",
         _ => "provider request",
     }
 }
@@ -168,6 +169,78 @@ pub(crate) unsafe fn issue(
         .and_then(|parked| parked.completion)
         .unwrap_or_else(|| crate::fault("a host wait resumed without its completion"));
     Ok((completion, true))
+}
+
+/// The token the next parkable request is issued under.
+///
+/// # Safety
+/// `ctx` is live and its Binding bound.
+pub(crate) unsafe fn next_token(ctx: *mut TaskCtx) -> u64 {
+    unsafe { Binding::get(ctx) }.waits.next
+}
+
+/// Send a runner call's `request` for the running task without parking it (RUN-11): its
+/// completion when it completed at once (a refused call, or replay), otherwise its token,
+/// under which a task later waits for it ([`await_sent`]).
+///
+/// # Safety
+/// `ctx` is live, its Binding bound, and no borrow of the Binding or scheduler is held.
+pub(crate) unsafe fn send(ctx: *mut TaskCtx, request: Request) -> Stopped<Result<Completion, u64>> {
+    let binding = unsafe { Binding::get(ctx) };
+    let token = binding.waits.next;
+    binding.waits.next += 1;
+    binding.adapter.enter(token);
+    let retry = request.clone();
+    match binding.adapter.call(request) {
+        Err(AdapterError::Blocked) => {}
+        Ok(completion) => {
+            binding.adapter.finish(token);
+            return Ok(Ok(completion));
+        }
+        Err(error) => return Err(Stop::refusal(error)),
+    }
+    binding.waits.parked.insert(
+        token,
+        Parked {
+            request: retry,
+            task: None,
+            completion: None,
+        },
+    );
+    Ok(Err(token))
+}
+
+/// Park the running task on the runner call sent under `token` until its outcome arrives:
+/// its completion. A sent call is no cancellation point (RUN-9).
+///
+/// # Safety
+/// As for [`send`]; `token` was sent and no task waits on it yet.
+pub(crate) unsafe fn await_sent(ctx: *mut TaskCtx, token: u64) -> Stopped<Completion> {
+    // SAFETY: the context is live and nothing is borrowed across the park.
+    unsafe { crate::tasks::park_host(&mut *ctx, token, false) }?;
+    let binding = unsafe { Binding::get(ctx) };
+    match binding
+        .waits
+        .parked
+        .remove(&token)
+        .and_then(|parked| parked.completion)
+    {
+        Some(Ok(completion)) => Ok(completion),
+        Some(Err(error)) => Err(Stop::refusal(error)),
+        None => crate::fault("a runner wait resumed without its completion"),
+    }
+}
+
+/// Whether the parked request under `token` is a runner call.
+///
+/// # Safety
+/// The context and its binding are live.
+pub(crate) unsafe fn is_runner_call(ctx: *mut TaskCtx, token: u64) -> bool {
+    let binding = unsafe { Binding::get(ctx) };
+    matches!(
+        binding.waits.parked.get(&token).map(|p| &p.request),
+        Some(Request::RunnerCall(_))
+    )
 }
 
 /// Arm scope `scope`'s deadline: a timer wait for `at` on `clock` under a token of its own,
@@ -358,15 +431,18 @@ pub(crate) unsafe fn poll(
     ready: bool,
 ) -> Stopped<bool> {
     let binding = unsafe { Binding::get(ctx) };
-    // A request that already committed part of its effect completes with its own outcome.
-    let cause = cause.filter(|_| binding.adapter.cancellable(token));
-    if cause.is_none() && !ready {
-        return Ok(false);
-    }
     let request = match binding.waits.parked.get(&token) {
         Some(parked) => parked.request.clone(),
         None => crate::fault("a poll of an unknown host wait"),
     };
+    // A request that already committed part of its effect completes with its own outcome;
+    // a sent runner call waits for its callee's, a cancellation being forwarded (RUN-9).
+    let cause = cause.filter(|_| {
+        binding.adapter.cancellable(token) && !matches!(request, Request::RunnerCall(_))
+    });
+    if cause.is_none() && !ready {
+        return Ok(false);
+    }
     let completion = match cause {
         Some(cause) => {
             binding.adapter.finish(token);

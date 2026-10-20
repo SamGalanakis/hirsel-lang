@@ -738,6 +738,17 @@ impl Adapter for RealIo {
         }
         Ok(Ready::Tokens(tokens))
     }
+    fn runner_readiness(&mut self) -> Option<crate::readiness::Readiness> {
+        if self.cooperative.is_none() {
+            // A harness run's in-process callees keep virtual time from 0, as its own
+            // virtual clock would.
+            self.set_cooperative(crate::readiness::Readiness::virtual_clock(0));
+        }
+        self.readiness()
+    }
+    fn deliver(&mut self, token: u64, completion: hirsel_run_schema::RunnerCompletion) {
+        RealIo::deliver(self, token, completion);
+    }
     fn has_ready(&mut self) -> Result<bool, AdapterError> {
         if self.signal_delivered && !self.signal_waits.is_empty() {
             return Ok(true);

@@ -130,6 +130,10 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "task.isolate"
             | "task.check_canceled"
             | "mapped.with"
+            | "runner.compute"
+            | "runner.call"
+            | "runner.spawn"
+            | "runner.grants"
     ) || MAP_BODIES.contains(&name.as_str())
     {
         row.dispositions.native = Disposition::Body;
@@ -327,6 +331,20 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "$intrinsic.IsolateLine" => Some("hirsel_rt_v2_isolate_line".into()),
         "$intrinsic.IsolateColumn" => Some("hirsel_rt_v2_isolate_column".into()),
         "$intrinsic.IsolateSpawn" => Some("hirsel_rt_v2_isolate_spawn".into()),
+        // Runners (RUN-1..4, `runners.rs`): the grants and narrowings are runtime entries;
+        // the calls' compiled bodies send, wait and reply through the intrinsics.
+        "io.runner" | "test.runner" | "runner.narrow" | "runner.only" | "runner.entry_path" => {
+            Some(format!("hirsel_rt_v2_{}", name.replace('.', "_")))
+        }
+        "$intrinsic.RunnerSend" => Some("hirsel_rt_v2_runner_send".into()),
+        "$intrinsic.RunnerWait" => Some("hirsel_rt_v2_runner_wait".into()),
+        "$intrinsic.RunnerTake" => Some("hirsel_rt_v2_runner_take".into()),
+        "$intrinsic.RunnerEntry" => Some("hirsel_rt_v2_runner_entry".into()),
+        "$intrinsic.RunnerArgument" => Some("hirsel_rt_v2_runner_argument".into()),
+        "$intrinsic.RunnerIo" => Some("hirsel_rt_v2_runner_io".into()),
+        "$intrinsic.RunnerTasks" => Some("hirsel_rt_v2_runner_tasks".into()),
+        "$intrinsic.RunnerReply" => Some("hirsel_rt_v2_runner_reply".into()),
+        "$intrinsic.RunnerGrants" => Some("hirsel_rt_v2_runner_grants".into()),
         "$intrinsic.UnicodeScalars_open" => Some("hirsel_rt_v2_unicode_scalars_open".into()),
         "$intrinsic.UnicodeScalars_next" => Some("hirsel_rt_v2_unicode_scalars_next".into()),
         "$intrinsic.ScalarPositions_open" => Some("hirsel_rt_v2_scalar_positions_open".into()),
@@ -932,6 +950,123 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         destination: true,
         result: Some((8, 8)),
         parameters: &[Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_io_runner",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_test_runner",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_narrow",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_only",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_entry_path",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_send",
+        destination: false,
+        result: Some((8, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_wait",
+        destination: false,
+        result: Some((8, 8)),
+        parameters: &[Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_take",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_entry",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_argument",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_io",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_tasks",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_reply",
+        destination: false,
+        result: None,
+        parameters: &[
+            Physical::I64,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_runner_grants",
+        destination: false,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer],
     },
     AbiExport {
         caller_site: true,
@@ -2172,6 +2307,15 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.IsolateLine",
     "$intrinsic.IsolateColumn",
     "$intrinsic.IsolateSpawn",
+    "$intrinsic.RunnerSend",
+    "$intrinsic.RunnerWait",
+    "$intrinsic.RunnerTake",
+    "$intrinsic.RunnerEntry",
+    "$intrinsic.RunnerArgument",
+    "$intrinsic.RunnerIo",
+    "$intrinsic.RunnerTasks",
+    "$intrinsic.RunnerReply",
+    "$intrinsic.RunnerGrants",
     "$intrinsic.OrderCompare_i128",
     "$intrinsic.OrderCompare_i16",
     "$intrinsic.OrderCompare_i32",
@@ -2410,7 +2554,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     // CT-3: compile-time only; no run-time code holds a TypeShape or Body.
     "type_shape.info",
     "codegen.body",
-    // RUN-1..14: callee runs need separate native run contexts; unavailable natively.
+    // RUN-1..14: runner grants and calls (`hirsel-rt/src/runners.rs`).
     "io.runner",
     "runner.grants",
     "runner.narrow",

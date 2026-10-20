@@ -706,6 +706,10 @@ impl WaitLog {
     pub(crate) fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
+    /// The tokens of the waits blocked now.
+    pub(crate) fn tokens(&self) -> impl Iterator<Item = u64> + '_ {
+        self.rows.iter_unordered().map(|(token, _)| token)
+    }
     /// A new scheduling point.
     pub(crate) fn point(&mut self) {
         self.point += 1;

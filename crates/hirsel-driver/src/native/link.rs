@@ -1341,6 +1341,14 @@ done:
             F::U64(name.len() as u64),
             F::Inline(revision.digest().to_vec()),
             F::Inline(config_bytes),
+            F::Entries(
+                program
+                    .entries
+                    .iter()
+                    .map(|(thunk, path)| (thunk.clone(), path.as_bytes().to_vec()))
+                    .collect(),
+            ),
+            F::U64(program.entries.len() as u64),
         ];
         let words: Vec<u64> = roots.iter().map(|r| root_index(*r) as u64).collect();
         let report = hirsel_cranelift::ExitReport {
@@ -1367,13 +1375,34 @@ done:
                 .join(", ")
         };
         let text: String = table.iter().map(|b| format!("\\{b:02X}")).collect();
+        // Each Entry row: its function-reference thunk and its definition's full path.
+        let mut entry_ir = String::new();
+        let mut rows = Vec::new();
+        for (index, (thunk, path)) in program.entries.iter().enumerate() {
+            entry_ir.push_str(&format!(
+                "@hirsel.entry.path.{index} = private constant [{} x i8] [{}]\n\
+                 declare void @\"{thunk}\"()\n",
+                path.len(),
+                bytes(path.as_bytes())
+            ));
+            rows.push(format!(
+                "{{ ptr, ptr, i64 }} {{ ptr @\"{thunk}\", ptr @hirsel.entry.path.{index}, i64 {} }}",
+                path.len()
+            ));
+        }
+        entry_ir.push_str(&format!(
+            "@hirsel.entries = private constant [{} x {{ ptr, ptr, i64 }}] [{}]\n",
+            rows.len(),
+            rows.join(", ")
+        ));
         let program_ir = format!(
             "@hirsel.failure.table = private constant [{table_len} x i8] c\"{text}\"\n\
              @hirsel.entry.name = private constant [{name_len} x i8] [{name_bytes}]\n\
-             @hirsel.program = private constant {{ i32, i32, i32, i32, ptr, i64, ptr, ptr, i64, ptr, i64, [32 x i8], [56 x i8] }} \
+             {entry_ir}\
+             @hirsel.program = private constant {{ i32, i32, i32, i32, ptr, i64, ptr, ptr, i64, ptr, i64, [32 x i8], [56 x i8], ptr, i64 }} \
              {{ i32 {abi}, i32 {flags}, i32 {roots_mask}, i32 {layout_count}, ptr @hirsel.entry, i64 {result_size}, \
              ptr @\"{registry_symbol}\", ptr @hirsel.failure.table, i64 {table_len}, ptr @hirsel.entry.name, i64 {name_len}, \
-             [32 x i8] [{digest}], [56 x i8] [{config}] }}\n\
+             [32 x i8] [{digest}], [56 x i8] [{config}], ptr @hirsel.entries, i64 {entry_count} }}\n\
              declare i32 @hirsel_rt_v2_main(ptr, i32, ptr)\n",
             table_len = table.len(),
             name_len = name.len(),
@@ -1383,6 +1412,7 @@ done:
             registry_symbol = registry.symbol(),
             digest = bytes(&revision.digest()),
             config = bytes(&config_bytes),
+            entry_count = program.entries.len(),
         );
         let shim = format!(
             "target triple = \"{}\"\n{registry_declaration}\n{declaration}\n{program_ir}declare ptr @signal(i32, ptr)\ndefine i32 @{main_symbol}(i32 %argc, ptr %argv) {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n %r = call i32 @hirsel_rt_v2_main(ptr @hirsel.program, i32 %argc, ptr %argv)\n ret i32 %r\n}}\n",
@@ -1970,6 +2000,19 @@ fn launch_impl(
     }
     if let Some(signals) = &fixture.signals {
         command.env("HIRSEL_RT_SIGNALS", serde_json::to_string(signals).unwrap());
+    }
+    if !fixture.runners.is_empty() {
+        command.env(
+            "HIRSEL_RT_RUNNERS",
+            serde_json::to_string(&fixture.runners).unwrap(),
+        );
+        command.env(
+            "HIRSEL_RT_CALLEES",
+            hirsel_run_schema::callees_json(&fixture.callees),
+        );
+    }
+    if let Some(seed) = fixture.fault_seed {
+        command.env("HIRSEL_RT_FAULT_SEED", seed.to_string());
     }
     if let Some(env) = &fixture.env {
         command.env("HIRSEL_RT_ENV", serde_json::to_string(env).unwrap());

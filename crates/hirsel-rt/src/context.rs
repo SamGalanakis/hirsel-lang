@@ -235,6 +235,10 @@ pub(crate) struct RunShared {
     pub(crate) tasks: Option<Box<crate::tasks::Scheduler>>,
     /// Where a stop of the run returns (`crate::stop`).
     pub(crate) driver: crate::stop::Driver,
+    /// The root run's execution of runner calls and the callee runs they start (RUN-10).
+    pub(crate) runners: Option<Box<crate::runners::Execution>>,
+    /// A callee run's execution root, whose launcher a stop returns to; null for a root.
+    pub(crate) root: *mut RunShared,
     /// The running program's failure table (`crate::isolate`).
     pub(crate) failure_table: Option<crate::isolate::FailureTable>,
     /// The scheduler policy the run's tasks start with (`inputs.scheduler`).
@@ -664,6 +668,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         entry_result: None,
         tasks: None,
         driver: crate::stop::Driver::default(),
+        runners: None,
+        root: ptr::null_mut(),
         failure_table: None,
         schedule: Default::default(),
         free: None,

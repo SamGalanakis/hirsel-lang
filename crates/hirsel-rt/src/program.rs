@@ -45,6 +45,18 @@ pub struct ProgramDescriptor {
     pub digest: [u8; 32],
     /// The bound run's seeds and identity; zero for a [`STANDALONE`] program.
     pub config: Config,
+    /// The definitions the program's units name as Entry values (ABI 30, RUN-3): each one's
+    /// function-reference code and full path, which runner calls are made by.
+    pub entries: *const EntryRow,
+    pub entry_count: u64,
+}
+
+/// One row of [`ProgramDescriptor::entries`].
+#[repr(C)]
+pub struct EntryRow {
+    pub code: *const std::ffi::c_void,
+    pub path: *const u8,
+    pub path_length: u64,
 }
 
 /// How the runtime calls a program's entry.
@@ -89,6 +101,8 @@ pub struct Program {
     pub(crate) entry_name: String,
     pub(crate) flags: u32,
     pub(crate) config: Config,
+    /// Each Entry's code word and its definition's full path.
+    pub(crate) entries: Vec<(usize, String)>,
 }
 
 impl Program {
@@ -130,6 +144,18 @@ impl Program {
         let entry_name = std::str::from_utf8(bytes(d.entry_name, d.entry_name_length)?)
             .map_err(|_| "invalid entry name")?
             .to_owned();
+        let count = usize::try_from(d.entry_count).map_err(|_| "a descriptor length overflows")?;
+        if count != 0 && d.entries.is_null() {
+            return Err("a descriptor names null data".into());
+        }
+        let mut entries = Vec::with_capacity(count);
+        for index in 0..count {
+            // SAFETY: caller contract: `entry_count` rows are live.
+            let row = unsafe { &*d.entries.add(index) };
+            let path = std::str::from_utf8(bytes(row.path, row.path_length)?)
+                .map_err(|_| "invalid entry path")?;
+            entries.push((row.code as usize, path.to_owned()));
+        }
         Ok(Program {
             code: Code::Roots(d.entry, roots),
             result_size: d.result_size,
@@ -140,6 +166,7 @@ impl Program {
             entry_name,
             flags: d.flags,
             config: d.config,
+            entries,
         })
     }
 
@@ -161,6 +188,7 @@ impl Program {
             entry_name: String::new(),
             flags: 0,
             config,
+            entries: Vec::new(),
         }
     }
 

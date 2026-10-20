@@ -355,6 +355,17 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
         ),
     );
 
+    // A runner entry is its callable: code and the static empty environment (RUN-3).
+    let path = DefPath::core("Entry");
+    if let Some(signature) = signatures.get(&path) {
+        out.nominals.insert(
+            path,
+            OwnerRepresentation::Entry {
+                revision: revision("Entry", Some(signature)),
+            },
+        );
+    }
+
     // The borrowed cursor: three words for every `T`.
     let path = cursor();
     if let Some(signature) = signatures.get(&path) {

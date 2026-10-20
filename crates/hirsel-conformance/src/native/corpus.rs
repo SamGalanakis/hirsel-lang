@@ -51,12 +51,6 @@ pub fn cases(root: &Path) -> Result<Vec<Case>, String> {
         .collect()
 }
 
-/// A case naming runners: the native harness has no runner fixtures (sim
-/// nodes, threads), so it runs only interpreted (tools/buck2/impact.py).
-pub fn interpreter_only(case: &Case) -> bool {
-    crate::fixture(&case.source).is_ok_and(|f| !f.runners.is_empty())
-}
-
 pub fn omissions(text: &str, cases: &[Case]) -> Result<BTreeMap<String, String>, String> {
     let ids: BTreeSet<_> = cases.iter().map(|c| c.id.as_str()).collect();
     let mut rows = BTreeMap::new();

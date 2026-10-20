@@ -162,10 +162,10 @@ impl<'a> Lay<'a> {
                 return self.destructible_in(environment, seen);
             }
             // An erased environment's pointer is storage, not its payload
-            // type. It may own resources, so keep its scope-ordered drop.
-            LayoutKind::Callable { environment: None } | LayoutKind::Iterator { .. } => {
-                return true;
-            }
+            // type. It may own resources, so keep its scope-ordered drop; a
+            // static callable's (an Entry's) environment is never counted.
+            LayoutKind::Callable { environment: None } => return !layout.drop.is_empty(),
+            LayoutKind::Iterator { .. } => return true,
             _ => {}
         }
         self.steps_destructible(layout, &layout.drop, seen)
@@ -245,9 +245,8 @@ impl<'a> Lay<'a> {
             LayoutKind::Callable {
                 environment: Some(environment),
             } => return self.root_bearing_in(environment, seen),
-            LayoutKind::Callable { environment: None } | LayoutKind::Iterator { .. } => {
-                return true;
-            }
+            LayoutKind::Callable { environment: None } => return !layout.drop.is_empty(),
+            LayoutKind::Iterator { .. } => return true,
             _ => {}
         }
         self.steps_root_bearing(layout, &layout.drop, seen)

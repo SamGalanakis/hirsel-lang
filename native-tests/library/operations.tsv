@@ -43,6 +43,15 @@ $intrinsic.OrderCompare_u32	c39f88fce4261cb814174ced83a3baceececca69314c9cf2938c
 $intrinsic.OrderCompare_u64	0d0655f86ec2848c23dfa23844efba47799b40065e7a2b658cc388727ee187b9	0:b:n;1:b:n->n
 $intrinsic.OrderCompare_u8	ed8d73aea9b267429f8e791130cad1ee8da6f36863613043fff3bcedfc82cb64	0:b:n;1:b:n->n
 $intrinsic.ReadHalfReadInto	72914ae3df16365216e28dd162b3ee420837e804fdd08beaac67563a14ce706c	0:b:n;1:m:n;2:m:n;3:b:n->n
+$intrinsic.RunnerArgument	7f8ff3f5da907e179709ee17a26fd0f7facb729148816215f5b07d65a4436180	->n
+$intrinsic.RunnerEntry	66ffdc3b3cf4366e2a4f4f69002c13e24682395c0fd5e310eb50dc7a8c128aae	->[0]
+$intrinsic.RunnerGrants	873eaefe34f676e01185a12a06603b6578643dd21464697c6fff5d96d2e9d95b	0:b:n->n
+$intrinsic.RunnerIo	17218c99ef9d5a2308f65ae79a225de5ab21ea7d5c36030067e42af4f2ddd477	->n
+$intrinsic.RunnerReply	b1b60b71e6700eb42a2a8a81f8efc8fb8dbe6dbd48547851d4572d66aa21da25	0:b:n;1:b:n->n
+$intrinsic.RunnerSend	e60aa01a2ceecb84f7377e7d222811c22607275450cd899ef0d8b5ddf315cfdd	0:b:n;1:b:n;2:b:n;3:b:a;4:b:n->n
+$intrinsic.RunnerTake	45dc23fa0dc946b7fb44c16663d1ecc6365664f33168ec20d392cc6262ec2c07	0:b:n->n
+$intrinsic.RunnerTasks	d398cb44fefaf49bcfeecef1dc2a1ba815f726fff62bf8cf835cb9e370ea41a8	->n
+$intrinsic.RunnerWait	cbcfa5e6f7a4086a3ee8dea0d67d151e3d19d2bcd0ad672cffa1beabbef2f422	0:b:n->n
 $intrinsic.ScalarPositions_next	65842fd3b1ee1e90075f09a060800870db16dd8515fca3dd4fb41e09389f284f	0:m:[0]->[0]
 $intrinsic.ScalarPositions_open	f54e0735899ca3e2482c0e4a2834499607092bae02bc4ebf769938557c9abeb7	0:b:n->n
 $intrinsic.SetElements_next	113e6c1ed4d1b17ca0002aba3d4c68af1b71a58f519c050591b6b681d220da86	0:m:[0]->[0]

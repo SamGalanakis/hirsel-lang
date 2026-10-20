@@ -2406,6 +2406,14 @@ pub trait Adapter {
     fn has_ready(&mut self) -> Result<bool, AdapterError> {
         Ok(false)
     }
+    /// The cooperative readiness a runner call parks on and its callee runs share (RUN-12),
+    /// made at the first call of a live adapter that has none; None in replay, which starts
+    /// no callee.
+    fn runner_readiness(&mut self) -> Option<crate::readiness::Readiness> {
+        None
+    }
+    /// The outcome of the runner call parked under `token` arrived (`RealIo::deliver`).
+    fn deliver(&mut self, _token: u64, _completion: hirsel_run_schema::RunnerCompletion) {}
     /// With no runnable task, wait until some parked request may be ready. False when no
     /// source can make one ready.
     fn wait(&mut self) -> Result<bool, AdapterError> {

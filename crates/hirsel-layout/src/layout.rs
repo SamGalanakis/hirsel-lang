@@ -58,6 +58,9 @@ pub enum OwnerRepresentation {
     ViewCursor { revision: ContentHash },
     /// A core string view has exactly String's layout, including its copy recipe.
     StringView,
+    /// A runner entry `Entry[F]` (RUN-3) is a static callable: the named definition's code
+    /// and the static empty environment, never counted, copied as bits.
+    Entry { revision: ContentHash },
 }
 
 /// The library-owned opaque containers, whose private shapes come from owners.
@@ -1080,6 +1083,10 @@ impl<'o> LayoutBuilder<'o> {
                         Some(OwnerRepresentation::ViewCursor { revision }) => {
                             e.atom(&revision.0);
                             e.atom(&[0, 4]);
+                        }
+                        Some(OwnerRepresentation::Entry { revision }) => {
+                            e.atom(&revision.0);
+                            e.atom(&[0, 5]);
                         }
                         Some(OwnerRepresentation::StringView) => unreachable!("handled above"),
                         None => return Err(LayoutError::MissingOwner(describe(definition))),
@@ -2367,6 +2374,17 @@ impl<'o> LayoutBuilder<'o> {
                 let byte = self.byte();
                 self.sequence(walk, byte, false)?;
                 return Ok(self.slice_record(key, byte));
+            }
+            // A static callable: the definition's code and the static empty environment,
+            // never counted, so plain bits as the type's Plain bound says.
+            OwnerRepresentation::Entry { revision } => {
+                let mut entry =
+                    self.callable_record(key, None, hirsel_lir::abi_types::CallMultiplicity::Many);
+                entry.scan.clear();
+                entry.drop.clear();
+                entry.copy = CopyRecipe::Bits;
+                entry.key.owner_revision = Some(*revision);
+                return Ok(entry);
             }
             OwnerRepresentation::Defined(record) => record,
         };

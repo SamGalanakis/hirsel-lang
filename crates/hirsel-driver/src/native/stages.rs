@@ -153,6 +153,9 @@ pub struct ReadyProgram {
     pub inline_instances: std::collections::BTreeSet<ContentHash>,
     /// The definitions some unit names as a C callback (PROG-4).
     pub callbacks: BTreeSet<DefPath>,
+    /// The definitions some unit makes an Entry value of (RUN-3): each one's
+    /// function-reference thunk and full path, which the program descriptor lists.
+    pub entries: BTreeMap<String, String>,
     /// Per resource layout, the instance digest of its drop body's unit.
     pub finalizers: BTreeMap<LayoutId, ContentHash>,
     /// Instance digest of each non-generic function, for entry lookup.
@@ -402,8 +405,10 @@ pub fn build_program(
         .iter()
         .flat_map(|unit| callbacks(unit.unit()))
         .collect();
+    let entries = units.iter().flat_map(|unit| entries(unit.unit())).collect();
     Ok(ReadyProgram {
         callbacks,
+        entries,
         operations,
         launch: options.launch.clone(),
         revisions: BTreeMap::new(),
@@ -474,6 +479,28 @@ fn discharged(
         }
     }
     Ok(removed)
+}
+
+/// The definitions `unit` makes callable values of, an Entry's among them, with their
+/// thunks: `FunctionRef`s at any but a pointer scalar.
+fn entries(unit: &hirsel_lir::ir::LirUnit<Ready>) -> impl Iterator<Item = (String, String)> + '_ {
+    use hirsel_lir::ir::{Inst, ValueRepr};
+    unit.instructions.iter().filter_map(|inst| match *inst {
+        Inst::FunctionRef { result, symbol }
+            if unit.types[unit.values[result.index()].ty.index()].repr
+                != ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::Pointer) =>
+        {
+            let symbol = &unit.tables.symbols[symbol.index()];
+            Some((
+                hirsel_lir::emission::function_thunk_name(
+                    &symbol.definition,
+                    symbol.instance.as_ref(),
+                ),
+                symbol.definition.to_string(),
+            ))
+        }
+        _ => None,
+    })
 }
 
 /// The definitions `unit` names as C callbacks: `FunctionRef`s at a pointer scalar (PROG-4).

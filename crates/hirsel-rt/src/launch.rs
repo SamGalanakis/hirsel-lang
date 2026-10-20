@@ -85,7 +85,7 @@ fn tape_header(line: Option<&str>) -> bool {
 }
 
 /// An adapter the launcher still holds after binding it.
-struct Shared<A>(Rc<RefCell<A>>);
+pub(crate) struct Shared<A>(pub(crate) Rc<RefCell<A>>);
 
 impl<A: Adapter> Adapter for Shared<A> {
     fn print(
@@ -163,6 +163,15 @@ impl<A: Adapter> Adapter for Shared<A> {
     }
     fn ready(&mut self) -> Result<Ready, AdapterError> {
         self.0.borrow_mut().ready()
+    }
+    fn has_ready(&mut self) -> Result<bool, AdapterError> {
+        self.0.borrow_mut().has_ready()
+    }
+    fn runner_readiness(&mut self) -> Option<crate::readiness::Readiness> {
+        self.0.borrow_mut().runner_readiness()
+    }
+    fn deliver(&mut self, token: u64, completion: hirsel_run_schema::RunnerCompletion) {
+        self.0.borrow_mut().deliver(token, completion);
     }
     fn wait(&mut self) -> Result<bool, AdapterError> {
         self.0.borrow_mut().wait()
@@ -1664,6 +1673,59 @@ pub(crate) unsafe fn execute(
             }
         },
     };
+    // The harness's runners (`HIRSEL_RT_RUNNERS`, a JSON array as `io.runners` spells it),
+    // the seed `sim@1` draws faults from (`HIRSEL_RT_FAULT_SEED`) and the launcher's callee
+    // facts (`HIRSEL_RT_CALLEES`, `hirsel_run_schema::callees_json`). A run record's runners
+    // are not offered natively yet.
+    if requested
+        .as_ref()
+        .and_then(|run| run.record().io.as_ref())
+        .is_some_and(|io| !io.runners.is_empty())
+    {
+        return Err("runners run natively only under the harness launcher".into());
+    }
+    let harness_text = |name: &str| match std::env::var(name) {
+        Ok(text) if requested.is_none() => Ok(Some(text)),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is not UTF-8")),
+    };
+    let runners = match harness_text("HIRSEL_RT_RUNNERS")? {
+        Some(text) => hirsel_run_config::validate_runners(text.as_bytes())
+            .map_err(|error| format!("the runners: {error}"))?,
+        None => Vec::new(),
+    };
+    // Native places run in this process; another host's (remote.tls@1) is not offered.
+    if let Some(entry) = runners
+        .iter()
+        .find(|e| !matches!(e.provider.as_str(), "local.threads@1" | "sim@1"))
+    {
+        return Err(format!(
+            "runner {} names {}, which native code does not run",
+            entry.name, entry.provider
+        ));
+    }
+    // `runner.grants` compiles to the six flags and empty lists (RUN-2).
+    if let Some(entry) = runners.iter().find(|e| {
+        e.grants
+            .as_ref()
+            .is_some_and(|g| !g.dirs.is_empty() || g.net.is_some() || g.process.is_some())
+    }) {
+        return Err(format!(
+            "runner {} grants directories, network or processes, which native runners do not",
+            entry.name
+        ));
+    }
+    let fault_seed = match harness_text("HIRSEL_RT_FAULT_SEED")? {
+        Some(text) => text
+            .parse::<u64>()
+            .map_err(|_| "invalid harness fault seed".to_string())?,
+        None => 0,
+    };
+    let callees = match harness_text("HIRSEL_RT_CALLEES")? {
+        Some(text) => hirsel_run_schema::parse_callees(&text)
+            .map_err(|error| format!("the callee facts: {error}"))?,
+        None => Default::default(),
+    };
     // net.script@2 peers serve the root Net's world; the rules alone decide policy.
     let net_rules = net.as_ref().map(NetRule::from_config).unwrap_or_default();
     let net_script = net.and_then(|grant| Some((grant.peers?, grant.listeners)));
@@ -1953,6 +2015,24 @@ pub(crate) unsafe fn execute(
     if let Some(table) = program.failure_table {
         crate::isolate::attach(unsafe { &mut *ctx }, table);
     }
+    // SAFETY: the context was just created and runs nothing yet.
+    unsafe {
+        crate::runners::configure(
+            ctx,
+            crate::runners::Config {
+                runners,
+                fault_seed,
+                callees,
+                entries: program.entries.clone(),
+                tape: std::env::var_os("HIRSEL_RT_TAPE")
+                    .filter(|_| requested.is_none() && real.is_some())
+                    .map(std::path::PathBuf::from),
+                stdout: Some(sinks.stdout.clone()),
+                runtime: config,
+                failure_table: program.failure_table,
+            },
+        )
+    };
     // Zeroed and 16-aligned: the entry writes a result of any supported alignment.
     let mut result = [0u128; RESULT_MAX as usize / 16];
     let (mut rt, mut args) = (IO_HANDLE, ARGS_HANDLE);

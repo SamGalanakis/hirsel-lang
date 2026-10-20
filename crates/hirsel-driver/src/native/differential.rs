@@ -347,6 +347,9 @@ pub struct Fixture {
     /// (`// fault_seed:`).
     pub runners: Vec<hirsel_run_schema::RunnerEntry>,
     pub fault_seed: Option<u64>,
+    /// What the launcher found about each callee entry of a run with runners, by full path
+    /// (`hirsel_engine::callee_facts`).
+    pub callees: std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>,
     /// `--trace-roots` (S-14): native launches on the diagnostic archive write every live
     /// `Shared` root's count at every scheduling point into `Observation::roots`, to be
     /// compared with the interpreter's trace.
@@ -598,7 +601,11 @@ pub fn runner_oracle_in(
                         revocations: None,
                     },
                 )?;
-                let recorded = observe(&recorded, &program, &sites)?;
+                let mut recorded = observe(&recorded, &program, &sites)?;
+                // A run with runners replays without its callees, printing only its own.
+                if !fixture.runners.is_empty() {
+                    recorded.output = recorded_prints(&tape_events(&tape)?);
+                }
                 let replayed = launch(&paths[replayer], super::link::Tape::Replay(&tape))?;
                 let replayed = observe(&replayed, &program, &sites)?;
                 if replayed != recorded {
@@ -629,11 +636,44 @@ pub fn runner_oracle_in(
     out
 }
 
+/// The events of the Io tape at `tape`.
+fn tape_events(tape: &Path) -> Result<Vec<hirsel_rt::io::Event>, NativeError> {
+    let text = std::fs::read_to_string(tape)
+        .map_err(|e| NativeError::new(StageName::Launch, format!("the Io tape: {e}")))?;
+    hirsel_rt::launch::parse_recording(&text)
+        .map(|record| record.events)
+        .map_err(|e| NativeError::new(StageName::Launch, format!("the Io tape: {e}")))
+}
+
+/// What a tape's run printed, in order.
+fn recorded_prints(events: &[hirsel_rt::io::Event]) -> Vec<u8> {
+    let mut printed = Vec::new();
+    for event in events {
+        // Test log and snapshot records reach stdout through Test reporting, not Print;
+        // their bytes are re-rendered in order. An invalid snapshot name records nothing.
+        match &event.request {
+            hirsel_rt::io::Request::Print { bytes, .. } => printed.extend_from_slice(bytes),
+            hirsel_rt::io::Request::TestLog { text, .. } => {
+                printed.extend(hirsel_rt::kernels::report::log(text))
+            }
+            hirsel_rt::io::Request::TestSnapshot { name, text, .. }
+                if event.completion == hirsel_rt::io::Completion::Checked(true) =>
+            {
+                printed.extend(hirsel_rt::kernels::report::snapshot(name, text))
+            }
+            _ => {}
+        }
+    }
+    printed
+}
+
 /// Real Io replay: run the program as an optimized x86-64
 /// executable on real Io with its completion tape recorded, then run the same
 /// executable on simulated Io consuming exactly that tape. Both runs must
 /// observe what the reference does, and the tape's prints, in order, must be
-/// the reference's output. The first disagreement is the outcome.
+/// the reference's output. A run with runners replays without its callees (RUN-11): its
+/// replay observes the recorded run with only the tape's own prints. The first
+/// disagreement is the outcome.
 pub fn real_io_replay(
     validated: &ValidatedNativeInput,
     entry: &DefPath,
@@ -735,29 +775,19 @@ pub fn real_io_replay_in(
         let events = hirsel_rt::launch::parse_recording(&text)
             .map(|record| record.events)
             .map_err(|e| NativeError::new(StageName::Launch, format!("the Io tape: {e}")))?;
-        let mut printed = Vec::new();
-        for event in &events {
-            // Test log and snapshot records reach stdout through Test reporting, not Print;
-            // their bytes are re-rendered in order. An invalid snapshot name records nothing.
-            match &event.request {
-                hirsel_rt::io::Request::Print { bytes, .. } => printed.extend_from_slice(bytes),
-                hirsel_rt::io::Request::TestLog { text, .. } => {
-                    printed.extend(hirsel_rt::kernels::report::log(text))
-                }
-                hirsel_rt::io::Request::TestSnapshot { name, text, .. }
-                    if event.completion == hirsel_rt::io::Completion::Checked(true) =>
-                {
-                    printed.extend(hirsel_rt::kernels::report::snapshot(name, text))
-                }
-                _ => {}
-            }
-        }
+        let printed = recorded_prints(&events);
         // A Test report (a failed check, a scripted peer's or child's Expect) is no Print:
         // replay re-derives it, and the replayed observation must still be the reference.
         let reported = events
             .iter()
             .any(|e| e.completion == hirsel_rt::io::Completion::Checked(false));
-        if printed != reference.output && !(reported && reference.output.starts_with(&printed)) {
+        // A run with runners replays without its callees (RUN-11): its tape holds only its
+        // own prints, which its replay alone reproduces; each callee's are on its own tape.
+        let alone = !fixture.runners.is_empty();
+        if !alone
+            && printed != reference.output
+            && !(reported && reference.output.starts_with(&printed))
+        {
             return Err(NativeError::new(
                 StageName::Launch,
                 "the recorded prints are not the reference output",
@@ -772,7 +802,15 @@ pub fn real_io_replay_in(
             super::link::Tape::Replay(&tape),
             fixture,
         )?;
-        observe(&replayed, &program, &sites)
+        let replayed = observe(&replayed, &program, &sites)?;
+        if alone {
+            let expected = Observation {
+                output: printed,
+                ..real.clone()
+            };
+            return Ok(if replayed == expected { real } else { replayed });
+        }
+        Ok(replayed)
     };
     match run() {
         Ok(observation) if observation == *reference => Outcome::Agree,

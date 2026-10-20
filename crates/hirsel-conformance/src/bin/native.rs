@@ -554,10 +554,6 @@ fn run() -> Result<bool, String> {
                         println!("native corpus exclusion: {}: {reason}", c.id);
                         skipped += 1;
                         false
-                    } else if native::corpus::interpreter_only(c) {
-                        println!("native corpus exclusion: {}: names runners, which run only interpreted", c.id);
-                        skipped += 1;
-                        false
                     } else {
                         true
                     }

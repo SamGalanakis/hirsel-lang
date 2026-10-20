@@ -11,8 +11,12 @@ both under a simulation fixture and in a host launch. A host launch records link
 ([upgrade trials](#upgrade-trials)). The
 arrival check covers the definition allowlists and a runner entry's `admit.safe@1` code
 policy (RUN-8). An interpreted host launch calls `remote.tls@1` runners, and `hirsel serve`
-is their runner host (crate `hirsel-remote`). The native engines report the operations
-unavailable. Durable callee recording (RUN-14), fetching code from a code store at
+is their runner host (crate `hirsel-remote`). Native code runs `local.threads@1` and `sim@1`
+places under a launch that names its runners (the native corpus harness): an `Entry` is a
+static callable (its definition's code and the static empty environment), and each sent
+call's callee is a run of the same execution in the process, with the interpreter's place
+decisions, linked tapes and replay; a native host launch from a run record refuses
+runners. Durable callee recording (RUN-14), fetching code from a code store at
 arrival, and the `local.process@1` provider are planned. Items marked **Reserved** are
 designed here but have no implementation owner yet.
 

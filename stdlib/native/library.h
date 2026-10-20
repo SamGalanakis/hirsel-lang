@@ -248,6 +248,22 @@ uint8_t hirsel_rt_v2_isolate_definition(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_s
 uint8_t hirsel_rt_v2_isolate_line(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*, uint64_t);
 uint8_t hirsel_rt_v2_isolate_column(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*, uint64_t);
 uint8_t hirsel_rt_v2_isolate_spawn(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_header**, const uint64_t*, uint64_t);
+/* Runners (RUN-1..12): runner handles, the places' contracts and the callee runs of sent
+   calls; an entry is its definition's code word and the static empty environment. */
+uint8_t hirsel_rt_v2_io_runner(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_test_runner(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_runner_grants(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_runner_narrow(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*, const uint8_t*);
+uint8_t hirsel_rt_v2_runner_only(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*, hirsel_rt_v2_header*);
+uint8_t hirsel_rt_v2_runner_entry_path(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, const uintptr_t*);
+uint8_t hirsel_rt_v2_runner_send(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*, const uintptr_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const void*, const void*, uint64_t);
+uint8_t hirsel_rt_v2_runner_wait(hirsel_rt_v2_ctx*, uint64_t*, uint64_t);
+uint8_t hirsel_rt_v2_runner_take(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, uint64_t);
+uint8_t hirsel_rt_v2_runner_entry(hirsel_rt_v2_ctx*, void*, uintptr_t*);
+uint8_t hirsel_rt_v2_runner_argument(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*);
+uint8_t hirsel_rt_v2_runner_io(hirsel_rt_v2_ctx*, void*, uint64_t*);
+uint8_t hirsel_rt_v2_runner_tasks(hirsel_rt_v2_ctx*, void*, uint64_t*);
+uint8_t hirsel_rt_v2_runner_reply(hirsel_rt_v2_ctx*, uint64_t, hirsel_rt_v2_header*, uint64_t, uint64_t);
 #ifdef __cplusplus
 }
 #endif

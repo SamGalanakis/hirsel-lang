@@ -343,6 +343,8 @@ struct Prepared {
     entry: hirsel_engine::DefPath,
     reference: Observation,
     compiled_only: bool,
+    /// A run with runners: what the launcher found about each callee entry.
+    callees: std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>,
 }
 
 fn checked(
@@ -418,6 +420,11 @@ fn checked_with_config(
             .map(Observation::of_reference)
             .ok_or("reference: no observation")?
     };
+    let callees = if crate::fixture(source)?.runners.is_empty() {
+        Default::default()
+    } else {
+        hirsel_engine::callee_facts(engine, &entry).map_err(|e| format!("callee facts: {e:?}"))?
+    };
     let input = engine.export_native_input().map_err(|e| {
         let text = format!("{e:?}");
         let head = text.split("DefPath").next().unwrap_or(&text).to_string();
@@ -438,6 +445,7 @@ fn checked_with_config(
         entry,
         reference,
         compiled_only,
+        callees,
     })
 }
 
@@ -501,6 +509,7 @@ fn run_source_path(
             entry,
             reference,
             compiled_only,
+            callees,
         }) => {
             let matrix: Vec<_> = matrix
                 .iter()
@@ -516,6 +525,7 @@ fn run_source_path(
                 dir,
                 &hirsel_driver::native::Fixture {
                     trace_roots,
+                    callees,
                     ..crate::fixture(source).unwrap()
                 },
             )

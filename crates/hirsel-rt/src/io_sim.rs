@@ -14,6 +14,8 @@ pub struct SimIo {
     mount_pins: MountPins,
     /// The requests the tape records as `blocked`, parked again in replay.
     waits: crate::readiness::WaitLog,
+    /// The parked waits that are sent runner calls: only a callee's end delivers them.
+    runner_waits: std::collections::BTreeSet<u64>,
     /// The recorded run instance (RUN-11).
     pub(crate) instance: Option<[u8; 16]>,
 }
@@ -58,6 +60,7 @@ impl SimIo {
             position: 0,
             roots: Default::default(),
             waits: Default::default(),
+            runner_waits: Default::default(),
             instance: None,
         }
     }
@@ -180,6 +183,7 @@ impl Adapter for SimIo {
     }
     fn finish(&mut self, token: u64) {
         self.waits.finish(token);
+        self.runner_waits.remove(&token);
     }
     fn parked(&mut self, token: u64) {
         self.waits.parked(token);
@@ -246,6 +250,13 @@ impl Adapter for SimIo {
         let Some(Request::Ready { wait, points }) =
             self.tape.get(self.position).map(|event| &event.request)
         else {
+            // The recording ended with only sent runner calls parked: their callees never
+            // ended, so the replayed run blocks as the recorded one did (RUN-12).
+            if self.position == self.tape.len()
+                && self.waits.tokens().all(|t| self.runner_waits.contains(&t))
+            {
+                return Ok(false);
+            }
             return Err(AdapterError::MissingInput(self.position));
         };
         match self
@@ -283,6 +294,9 @@ impl Adapter for SimIo {
         if let Completion::Blocked { committed } = event.completion {
             self.position += 1;
             self.waits.park(committed);
+            if matches!(request, Request::RunnerCall(_)) {
+                self.runner_waits.insert(self.waits.current());
+            }
             return Err(AdapterError::Blocked);
         }
         // A runner call's recorded outcome stands in for its place; no callee runs.

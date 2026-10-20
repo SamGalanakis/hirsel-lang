@@ -671,6 +671,37 @@ fn create_scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
     }
 }
 
+/// The running task.
+pub(crate) fn current_task(ctx: *mut TaskCtx) -> u32 {
+    scheduler(ctx).current
+}
+
+/// `task`'s cancellation, with its own finalizer shield.
+pub(crate) fn task_canceled(ctx: *mut TaskCtx, task: u32) -> Option<u32> {
+    let s = scheduler(ctx);
+    let shield = s.task(task).shield();
+    s.canceled_task(task, shield)
+}
+
+/// RUN-9: a callee run's place forwards its caller's cancellation: the run's root task is
+/// canceled with `cause` and every other task with `Parent`, and the parked ones are polled.
+pub(crate) fn cancel_root(ctx: *mut TaskCtx, cause: u32) {
+    let s = scheduler(ctx);
+    let mut parked = Vec::new();
+    for (index, row) in s.tasks.iter_mut().enumerate() {
+        let Some(row) = row else { continue };
+        row.canceled.get_or_insert(if index == ROOT as usize {
+            cause
+        } else {
+            CANCEL_PARENT
+        });
+        parked.push(index as u32);
+    }
+    for task in parked {
+        s.wake(task);
+    }
+}
+
 /// Outstanding waits for the test runner. This is host reporting, outside program Io.
 pub(crate) fn test_waits(ctx: *mut TaskCtx) -> String {
     let s = scheduler(ctx);
@@ -1131,6 +1162,16 @@ unsafe fn pick(ctx: *mut TaskCtx) -> Stopped<Option<u32>> {
 unsafe fn next_task(ctx: *mut TaskCtx) -> Stopped<u32> {
     // SAFETY: the context is live.
     unsafe { poll_parked(ctx) }?;
+    if unsafe { crate::runners::driving(ctx) } {
+        // An execution of several runs: with nothing runnable here, the others run until
+        // this run is next, and only the execution is Blocked (RUN-12).
+        while scheduler(ctx).runnable.is_empty() {
+            unsafe {
+                crate::runners::idle(ctx)?;
+                poll_parked(ctx)?;
+            }
+        }
+    }
     // With nothing runnable, sleep until a parked host request may complete, then poll again.
     while scheduler(ctx).runnable.is_empty() && unsafe { crate::host_waits::wait(ctx) }? {
         unsafe { poll_parked(ctx) }?;
@@ -1146,7 +1187,7 @@ unsafe fn next_task(ctx: *mut TaskCtx) -> Stopped<u32> {
 ///
 /// # Safety
 /// `ctx` is live and no task can run.
-unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_schema::Wait> {
+pub(crate) unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_schema::Wait> {
     let table = unsafe { (*ctx).run().failure_table };
     let s = scheduler(ctx);
     let mut waits = Vec::new();
@@ -1187,6 +1228,10 @@ unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_schema::Wait> {
                     .map(|word| u64::from(*word as u32))
                     .collect(),
             ),
+            // SAFETY: the context and its binding are live.
+            Wait::Host { token } if unsafe { crate::host_waits::is_runner_call(ctx, token) } => {
+                ("runner.call", vec![])
+            }
             Wait::Host { token } => ("host request", vec![token]),
             Wait::Final => ("free.final", vec![]),
             Wait::Retry { .. } => ("free.retry", vec![]),
