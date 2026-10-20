@@ -25,6 +25,7 @@ pub fn io_within(a: &IoGrants, b: &IoGrants) -> bool {
             .all(|m| b.dirs.iter().any(|w| mount_within(m, w)))
         && optional(&a.net, &b.net, net_within)
         && optional(&a.process, &b.process, process_within)
+        && optional(&a.telemetry, &b.telemetry, |a, b| a == b)
 }
 
 /// A mount is within another when its virtual path and its host root extend the

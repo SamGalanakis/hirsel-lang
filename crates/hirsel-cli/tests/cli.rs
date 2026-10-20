@@ -40,6 +40,8 @@ mod split;
 mod store;
 #[path = "cli/tape_identity.rs"]
 mod tape_identity;
+#[path = "cli/telemetry.rs"]
+mod telemetry;
 #[path = "cli/testing.rs"]
 mod testing;
 #[path = "cli/timings.rs"]

@@ -1029,3 +1029,45 @@ fn budgets_name_a_provider_none_normalizes_away_and_limits_need_a_nonzero_bound(
         .is_err()
     );
 }
+
+#[test]
+fn telemetry_grants_name_a_provider_and_absent_ones_keep_their_bytes() {
+    let telemetry = |provider: &str, seed: Option<u64>, queue: Option<u64>| {
+        let mut record = empty();
+        record.io = Some(IoGrants {
+            telemetry: Some(TelemetryGrant {
+                provider: provider.into(),
+                seed,
+                queue,
+            }),
+            ..IoGrants::default()
+        });
+        record
+    };
+    let mut absent = empty();
+    absent.io = Some(IoGrants::default());
+    assert!(
+        !String::from_utf8(valid(&absent).canonical().to_vec())
+            .unwrap()
+            .contains("telemetry")
+    );
+    let run = valid(&telemetry("telemetry.null@1", Some(7), Some(2)));
+    assert!(run.io_projections().contains("telemetry"));
+    assert_eq!(
+        run.telemetry_provider(),
+        Some((ProviderContract::TelemetryNull, 7, Some(2)))
+    );
+    let run = valid(&telemetry("telemetry.capture@1", None, None));
+    assert_eq!(
+        run.telemetry_provider(),
+        Some((ProviderContract::TelemetryCapture, 0, None))
+    );
+    for refused_record in [
+        telemetry("telemetry.null@1", None, None),
+        telemetry("telemetry.capture@1", Some(1), None),
+        telemetry("telemetry.capture@1", None, Some(1)),
+        telemetry("telemetry.otlp@1", None, None),
+    ] {
+        refused(&refused_record);
+    }
+}

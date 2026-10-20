@@ -1,0 +1,98 @@
+// rule: CAP-2
+// expect: run
+// The default run grants Telemetry under telemetry.null@1 with seed 0: a root's trace ID
+// is the first two SplitMix64 words and its span ID the third, a child keeps its parent's
+// trace and draws the fourth, and Random's own stream is untouched. Expected values come
+// from the CAP-1 random vectors.
+fn hex_of(b: Bytes) -> String uses {} {
+  std@1/hex.encode(b)
+}
+
+fn spec(name: String, links: List[std@1/telemetry.TraceContext], sampled: bool) -> std@1/telemetry.SpanSpec uses {} {
+  match std@1/telemetry.span_spec(name, Internal(), [], links, sampled) {
+    Ok(s) => s,
+    Error(_) => {
+      failure.check(false, Bounds())
+      spec(name, [], sampled)
+    },
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let t = io.telemetry(rt)?
+  let root = match std@1/telemetry.begin(t, None(), spec("root", [], true)) {
+    Ok(s) => s,
+    Error(_) => return Error(NotGranted()),
+  }
+  let ctx = std@1/telemetry.context(t, root)
+  failure.check(
+    hex_of(bytes.from_inline(ctx.trace_id)) == "afcd1d7b39a820e2f465b9a16a9e786e",
+    Bounds()
+  )
+  failure.check(hex_of(bytes.from_inline(ctx.span_id)) == "4f450980185dc406", Bounds())
+  failure.check(ctx.sampled && !ctx.remote, Bounds())
+  // A remote parent with tracestate: the child keeps its trace, flags and tracestate.
+  let remote = std@1/telemetry.TraceContext(
+    trace_id: ctx.trace_id,
+    span_id: ctx.span_id,
+    sampled: false,
+    remote: true,
+    tracestate: [("vendor", "v1")]
+  )
+  let child = match std@1/telemetry.begin(
+    t,
+    Some(remote),
+    spec("child", [unique ctx], true)
+  ) {
+    Ok(s) => s,
+    Error(_) => return Error(NotGranted()),
+  }
+  let cctx = std@1/telemetry.context(t, child)
+  failure.check(cctx.trace_id == ctx.trace_id, Bounds())
+  failure.check(hex_of(bytes.from_inline(cctx.span_id)) == "ec814c72a8b88bf8", Bounds())
+  failure.check(!cctx.sampled && !cctx.remote, Bounds())
+  failure.check(core@1/list.len(cctx.tracestate) == 1, Bounds())
+  // An invalid raw parent is refused before any effect.
+  let zero = std@1/telemetry.TraceContext(
+    trace_id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    span_id: ctx.span_id,
+    sampled: false,
+    remote: false,
+    tracestate: []
+  )
+  match std@1/telemetry.begin(t, Some(zero), spec("bad", [], false)) {
+    Error(InvalidParent()) => {},
+    _ => failure.check(false, Bounds()),
+  }
+  // The raw operation refuses a mixed parent and an oversized spec.
+  let mut mixed: List[u8] = []
+  let mut i: u64 = 0
+  while i < 25 {
+    core@1/list.push(
+      mut mixed,
+      if i == 0 {
+        1
+      } else {
+        0
+      }
+    )
+    i += 1
+  }
+  match capture.begin(t, bytes.from_list(take mixed), b"") {
+    Error(InvalidParent()) => {},
+    _ => failure.check(false, Bounds()),
+  }
+  // Random's stream is separate: its first draw is still the first word.
+  let r = io.random(rt)?
+  match std@1/random.u64(r) {
+    Ok(value) => failure.check(value == 0xe220a8397b1dcdaf, Bounds()),
+    Error(_) => failure.check(false, Bounds()),
+  }
+  match std@1/telemetry.finish(t, take child, Success()) {
+    Ok(()) => {},
+    Error(_) => failure.check(false, Bounds()),
+  }
+  // The context outlives its span; the root drops unfinished here and is abandoned.
+  failure.check(cctx.trace_id == ctx.trace_id, Bounds())
+  Ok(())
+}

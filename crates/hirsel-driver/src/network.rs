@@ -330,6 +330,7 @@ impl HostLibrary {
             args: record.args.clone().unwrap_or_default(),
             env: record.env.clone().unwrap_or_default(),
             random_seed: record.inputs.random_seed,
+            telemetry_seed: admitted.telemetry_provider().map_or(0, |(_, seed, _)| seed),
             test_seed: record.inputs.test_seed,
             scheduler: record.inputs.scheduler.clone(),
             runners: record
@@ -438,6 +439,110 @@ impl HostLibrary {
             Ok(Overflow) => ok(variant(4, vec![])),
             Err(e) => file_error(e),
         }))
+    }
+    /// Telemetry on the run's host provider: the runtime checks, draws or replays span
+    /// identities and records every accepted observation. A refused payload issues nothing
+    /// and is no scheduling point; neither is reading a span's context.
+    fn host_telemetry(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
+        use hirsel_rt::telemetry::kernel;
+        let refused = |refusal: kernel::Refusal| error(variant(refusal.ordinal(), vec![]));
+        if name == "io.telemetry" {
+            if !matches!(a.first(), Some(Value::Handle { kind, .. }) if kind == "Io") {
+                return Err(invalid());
+            }
+            self.yield_now = true;
+            return Ok(OperationResult::returned(
+                match self.host(R::Telemetry { io: 1 })? {
+                    C::Handle(Ok(handle)) => ok(self.handle(handle, "Telemetry")),
+                    C::Handle(Err(hirsel_rt::io::IoError::NotGranted)) => error(variant(0, vec![])),
+                    _ => return Err(invalid()),
+                },
+            ));
+        }
+        let telemetry = self.id(&a[0])?;
+        let value = match name {
+            "capture.context" => {
+                let span = self.id(&a[1])?;
+                Value::Bytes(
+                    self.io
+                        .adapter()
+                        .telemetry_context(telemetry, span)
+                        .ok_or_else(invalid)?,
+                )
+            }
+            "capture.begin" => {
+                let (parent, spec) = (bytes(&a[1])?, bytes(&a[2])?);
+                if let Err(refusal) =
+                    kernel::bounded(&[&spec]).and_then(|()| kernel::parent(&parent).map(|_| ()))
+                {
+                    return Ok(OperationResult::returned(refused(refusal)));
+                }
+                self.yield_now = true;
+                let C::Span { handle, .. } = self.host(R::TelemetryBegin {
+                    telemetry,
+                    parent,
+                    spec,
+                })?
+                else {
+                    return Err(invalid());
+                };
+                ok(self.handle(handle, "Span"))
+            }
+            _ => {
+                let span = match name {
+                    "capture.event" | "capture.finish" => Some(self.id(&a[1])?),
+                    _ => None,
+                };
+                let payload = bytes(&a[if span.is_some() { 2 } else { 1 }])?;
+                let request = match (kernel::bounded(&[&payload]), name) {
+                    (Err(refusal), "capture.finish") => {
+                        // A refused status abandons the taken span, as its drop would.
+                        if self
+                            .io
+                            .adapter()
+                            .telemetry_context(telemetry, span.unwrap())
+                            .is_none()
+                        {
+                            return Err(invalid());
+                        }
+                        self.forget_handle(&a[1]);
+                        self.host(R::Close {
+                            handle: span.unwrap(),
+                        })?;
+                        return Ok(OperationResult::returned(refused(refusal)));
+                    }
+                    (Err(refusal), _) => return Ok(OperationResult::returned(refused(refusal))),
+                    (Ok(()), "capture.event") => R::TelemetryEvent {
+                        telemetry,
+                        span: span.unwrap(),
+                        payload,
+                    },
+                    (Ok(()), "capture.finish") => R::TelemetryFinish {
+                        telemetry,
+                        span: span.unwrap(),
+                        status: payload,
+                    },
+                    (Ok(()), "capture.log") => R::TelemetryLog { telemetry, payload },
+                    (Ok(()), "capture.measure") => R::TelemetryMeasure { telemetry, payload },
+                    _ => return Err(invalid()),
+                };
+                self.yield_now = true;
+                if self.host(request)? != C::Unit(Ok(())) {
+                    return Err(invalid());
+                }
+                if name == "capture.finish" {
+                    self.forget_handle(&a[1]);
+                }
+                ok(Value::Unit)
+            }
+        };
+        Ok(OperationResult::returned(value))
+    }
+    /// A taken host handle's mapping, once its runtime row is gone.
+    fn forget_handle(&mut self, v: &Value) {
+        if let Value::Handle { id, .. } = v {
+            self.handles.remove(id);
+        }
     }
     /// Every host request goes through here. A provider that would block parks the
     /// task; any other adapter error is a refusal (a replay divergence or host fault).
@@ -2266,6 +2371,12 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             if name == "random.bytes" {
                 return self.host_random(call, cx);
             }
+            if name == "io.telemetry"
+                || (name.starts_with("capture.")
+                    && call.arguments.first().is_some_and(|v| self.id(v).is_ok()))
+            {
+                return self.host_telemetry(&name, call.arguments).map(Some);
+            }
             if matches!(
                 name.as_str(),
                 "runner.compute" | "runner.call" | "runner.spawn"
@@ -2375,6 +2486,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 | "ChildGroup"
                 | "Mapped"
                 | "Watcher"
+                | "Span"
         ) && let Some(handle) = self.handles.remove(&id)
         {
             // Dropping a scripted child closes its input, which can leave an Expect unmet.

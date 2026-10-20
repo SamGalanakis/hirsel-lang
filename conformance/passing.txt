@@ -229,6 +229,7 @@ conformance/CAP/CAP-2-stream-bytes-net-authority-bad.hir
 conformance/CAP/CAP-2-stream-bytes-net-authority-ok.hir
 conformance/CAP/CAP-2-task-operation-bad.hir
 conformance/CAP/CAP-2-task-operation-ok.hir
+conformance/CAP/CAP-2-telemetry-ids-run.hir
 conformance/CAP/CAP-2-testhelpers-property-accept.hir
 conformance/CAP/CAP-2-testhelpers-property-reject.hir
 conformance/CAP/CAP-2-typed-heap-inert-bad.hir
@@ -716,6 +717,7 @@ conformance/CONC/CONC-8-await-channel-cycle-blocked.hir
 conformance/CONC/CONC-8-await-channel-cycle-run.hir
 conformance/CONC/CONC-8-held-sender-blocked.hir
 conformance/CONC/CONC-8-held-sender-run.hir
+conformance/CONC/CONC-8-telemetry-open-span-blocked.hir
 conformance/CONC/CONC-8-two-task-channel-blocked.hir
 conformance/CONC/CONC-8-two-task-channel-run.hir
 conformance/CONC/CONC-8-watch-injected-wake-run.hir
@@ -972,6 +974,7 @@ conformance/DROP/DROP-2-std-stream-prefix-run.hir
 conformance/DROP/DROP-2-std-stream-retained-run.hir
 conformance/DROP/DROP-2-std-stream-sink-run.hir
 conformance/DROP/DROP-2-stream-bytes-write-run.hir
+conformance/DROP/DROP-2-telemetry-cleanup-run.hir
 conformance/DROP/DROP-2-testhelpers-expect-error-ok-drop-fail.hir
 conformance/DROP/DROP-2-testhelpers-property-law-resource-fail.hir
 conformance/DROP/DROP-2-testhelpers-property-resource-fail.hir
@@ -3821,6 +3824,8 @@ conformance/OWN/OWN-2-scope-body-taken-let-mut-read-bad.hir
 conformance/OWN/OWN-2-spec-save.hir
 conformance/OWN/OWN-2-taken-block-capture-run.hir
 conformance/OWN/OWN-2-taken-direct-capture-run.hir
+conformance/OWN/OWN-2-telemetry-finish-twice-bad.hir
+conformance/OWN/OWN-2-telemetry-finish-twice-ok.hir
 conformance/OWN/OWN-2-testhelpers-equal-accept.hir
 conformance/OWN/OWN-2-testhelpers-equal-reject.hir
 conformance/OWN/OWN-2-wave1-concat-bad.hir
@@ -4312,6 +4317,8 @@ conformance/PROV/PROV-1-taken-branded-parameter.hir
 conformance/PROV/PROV-1-taken-directory-narrow-bad.hir
 conformance/PROV/PROV-1-taken-result-field-clause-bad.hir
 conformance/PROV/PROV-1-taken-result-root-clause-bad.hir
+conformance/PROV/PROV-1-telemetry-span-brand-bad.hir
+conformance/PROV/PROV-1-telemetry-span-brand-ok.hir
 conformance/PROV/PROV-1-top-level-identity-bad.hir
 conformance/PROV/PROV-1-top-level-identity-ok.hir
 conformance/PROV/PROV-1-udp-other-net-bad.hir

@@ -209,6 +209,14 @@ impl RealIo {
             _ => RandomSource::SplitMix64(seed),
         };
     }
+    /// The admitted Telemetry provider.
+    pub fn set_telemetry(&mut self, capture: crate::telemetry::Capture) {
+        self.state.telemetry = capture;
+    }
+    /// The run's Telemetry provider state: its simulated exporter's queue and drops.
+    pub fn telemetry(&self) -> &crate::telemetry::Capture {
+        &self.state.telemetry
+    }
     /// A Test grant is a typed launch input; no kernel reads ambient entropy.
     pub fn test_context(&mut self, seed: u64) {
         self.state.handles = Handles::test(seed);
@@ -648,6 +656,9 @@ impl Adapter for RealIo {
     fn injected_wait(&self, request: &Request) -> bool {
         self.state.injected_wait(request)
     }
+    fn telemetry_context(&self, telemetry: u64, span: u64) -> Option<Vec<u8>> {
+        self.state.telemetry_context(telemetry, span).ok()
+    }
     /// The tokens the Readiness finds ready, with the held requests a journal barrier
     /// released (which wait on no host interest), each recorded as its wait's `ready` event,
     /// in token (so ordinal) order, before any of them is re-issued.
@@ -837,6 +848,13 @@ impl RealIo {
                 };
                 self.state.sample(&request, Completion::Random(input))
             }
+            Request::TelemetryBegin { .. } => {
+                if fault.is_some() {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+                let input = self.state.telemetry_draw(&request)?;
+                self.state.sample(&request, input)
+            }
             Request::SleepUntil { clock, deadline } if self.state.test_clocks.contains(clock) => {
                 if !self.test_clock.as_ref().unwrap().timer(*deadline)? {
                     return Err(AdapterError::Blocked);
@@ -890,6 +908,7 @@ impl RealIo {
             Request::Monotonic { .. }
                 | Request::Wall { .. }
                 | Request::RandomBytes { .. }
+                | Request::TelemetryBegin { .. }
                 | Request::SleepUntil { .. }
         ) {
             fault = None;

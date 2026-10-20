@@ -36,6 +36,9 @@ struct Io {
     network_handles: BTreeMap<u64, u64>,
     /// `random.splitmix64@1` from the launch's Random seed, as the reference draws.
     random: hirsel_rt::io::RandomSource,
+    /// `telemetry.null@1` with seed 0, as the harness runtime draws span identities.
+    telemetry_ids: hirsel_rt::telemetry::NullIds,
+    telemetry_issued: hirsel_rt::telemetry::Issued,
     /// The last call was a capability operation (a scheduling point).
     yielded: bool,
     /// The virtual monotonic reading when the launch grants a monotonic clock. H owns what
@@ -123,6 +126,8 @@ impl Io {
             network: Default::default(),
             network_handles: BTreeMap::new(),
             random: hirsel_rt::io::RandomSource::SplitMix64(0),
+            telemetry_ids: hirsel_rt::telemetry::NullIds::new(0),
+            telemetry_issued: Default::default(),
             yielded: false,
             monotonic: None,
             script_clocks: BTreeMap::new(),
@@ -173,9 +178,12 @@ impl Operations for Io {
             };
         }
         match self.grants.remove(&handle) {
-            Some(IoGrant::File { .. } | IoGrant::Mapped { .. } | IoGrant::Watcher { .. }) => {
-                Ok(None)
-            }
+            Some(
+                IoGrant::File { .. }
+                | IoGrant::Mapped { .. }
+                | IoGrant::Watcher { .. }
+                | IoGrant::Span { .. },
+            ) => Ok(None),
             Some(IoGrant::Atomic {
                 tree,
                 temporary,
@@ -311,6 +319,9 @@ impl Operations for Io {
         if let Some(value) = instant(module, &path.name, args) {
             return OpOutcome::Value(value);
         }
+        if module == Some("capture") || (module == Some("io") && path.name == "telemetry") {
+            return self.telemetry(&path.name, args);
+        }
         // Everything below is a capability operation, as the runtime's Io entries are.
         self.yielded = true;
         if let Some(outcome) = self.net(module, &path.name, args, None) {
@@ -420,6 +431,12 @@ impl Operations for Io {
 
 #[derive(Clone)]
 enum IoGrant {
+    Telemetry,
+    /// A live span of Telemetry `telemetry` and its context.
+    Span {
+        telemetry: u64,
+        context: Vec<u8>,
+    },
     Monotonic,
     Stdin,
     Stderr,
@@ -575,6 +592,112 @@ impl Io {
             }
             Err(_) => Err(OpOutcome::Unsupported),
         }
+    }
+    /// Telemetry under the harness's `telemetry.null@1` (seed 0): a refused payload and a
+    /// context read are no scheduling points; every accepted observation is one.
+    fn telemetry(&mut self, name: &str, args: &[OpValue]) -> OpOutcome {
+        use hirsel_rt::telemetry::kernel;
+        let refusal = |refusal: kernel::Refusal| OpValue::Variant {
+            tag: 1,
+            value: Box::new(OpValue::Plain(refusal.ordinal().to_le_bytes().to_vec())),
+        };
+        let refused = |r: kernel::Refusal| OpOutcome::Value(refusal(r));
+        let span_of = |io: &Self, telemetry: &u64, span: &u64| match io.grants.get(span) {
+            Some(IoGrant::Span {
+                telemetry: owner,
+                context,
+            }) if owner == telemetry
+                && matches!(io.grants.get(telemetry), Some(IoGrant::Telemetry)) =>
+            {
+                Some(context.clone())
+            }
+            _ => None,
+        };
+        let value = match (name, args) {
+            ("telemetry", [OpValue::Handle(IO_HANDLE)]) => {
+                io_ok(OpValue::Handle(self.grant(IoGrant::Telemetry)))
+            }
+            ("context", [OpValue::Handle(telemetry), OpValue::Handle(span)]) => {
+                return match span_of(self, telemetry, span) {
+                    Some(context) => OpOutcome::Value(OpValue::ByteSequence(context)),
+                    None => OpOutcome::Fail("CAP-2".into()),
+                };
+            }
+            (
+                "begin",
+                [
+                    OpValue::Handle(telemetry),
+                    OpValue::Bytes(parent),
+                    OpValue::Bytes(spec),
+                ],
+            ) => {
+                if !matches!(self.grants.get(telemetry), Some(IoGrant::Telemetry)) {
+                    return OpOutcome::Fail("CAP-2".into());
+                }
+                let trace = match kernel::bounded(&[spec]).and_then(|()| kernel::parent(parent)) {
+                    Ok(trace) => trace,
+                    Err(refusal) => return refused(refusal),
+                };
+                let ids = &mut self.telemetry_ids;
+                let (id, span) = self.telemetry_issued.choose(trace, |n| ids.draw(n));
+                self.telemetry_issued.accept(trace, id, span);
+                let telemetry = *telemetry;
+                io_ok(OpValue::OpenHandle(self.grant(IoGrant::Span {
+                    telemetry,
+                    context: kernel::context(&id, &span, parent),
+                })))
+            }
+            (
+                "event" | "finish",
+                [
+                    OpValue::Handle(telemetry),
+                    OpValue::Handle(span),
+                    OpValue::Bytes(payload),
+                ],
+            ) => {
+                let owned = span_of(self, telemetry, span).is_some();
+                if name == "event" {
+                    if !owned {
+                        return OpOutcome::Fail("CAP-2".into());
+                    }
+                    if let Err(refusal) = kernel::bounded(&[payload]) {
+                        return refused(refusal);
+                    }
+                    io_ok(OpValue::Unit)
+                } else {
+                    // The span is taken on every outcome: finished, abandoned by a refused
+                    // status, or failed as another Telemetry's.
+                    let result = if !owned {
+                        Err("CAP-2".into())
+                    } else {
+                        self.grants.remove(span);
+                        match kernel::bounded(&[payload]) {
+                            Err(r) => Ok(refusal(r)),
+                            Ok(()) => {
+                                self.yielded = true;
+                                Ok(io_ok(OpValue::Unit))
+                            }
+                        }
+                    };
+                    return OpOutcome::Complete {
+                        result,
+                        consumed: vec![1],
+                    };
+                }
+            }
+            ("log" | "measure", [OpValue::Handle(telemetry), OpValue::Bytes(payload)]) => {
+                if !matches!(self.grants.get(telemetry), Some(IoGrant::Telemetry)) {
+                    return OpOutcome::Fail("CAP-2".into());
+                }
+                if let Err(refusal) = kernel::bounded(&[payload]) {
+                    return refused(refusal);
+                }
+                io_ok(OpValue::Unit)
+            }
+            _ => return OpOutcome::Unsupported,
+        };
+        self.yielded = true;
+        OpOutcome::Value(value)
     }
     fn grant(&mut self, grant: IoGrant) -> u64 {
         let id = self.next;

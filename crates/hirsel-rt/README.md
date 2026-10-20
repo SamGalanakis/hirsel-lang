@@ -405,6 +405,21 @@ rounding cannot reorder ties, and replay uses the same request deadlines. `State
 refuses a later monotonic sample below its deadline. `instant.checked_add` is pure. Tape
 forms are `random_bytes` and `sleep_until` requests and `random` and `wait` completions.
 
+## Telemetry capture
+
+`telemetry.rs` holds a run's `Capture`: where span identities come from (`Ids::Null`, the
+grant seed's SplitMix64 stream shared with the interpreter through `hirsel_kernels::telemetry`,
+or `Ids::Host`, the host's secure generator via `RandomSource::System`), the identities
+already `Issued`, and the null provider's never-draining `Exporter` queue. A begin is a
+sampled request: live, `telemetry_draw` chooses identities and `telemetry_sample` admits
+them; replay admits the recorded ones, so a forged trace, a zero or a reused ID refuses.
+Refused payloads (`TooLarge`, `InvalidParent`) return from the `hirsel_rt_v2_capture_*`
+export with no request. `capture.context` reads the span's stored context with no request.
+Event, finish, log and measure complete `unit ok`; the `close` of a dropped `Span` is its
+abandonment. Exporter congestion is counted, never observed. Tape forms are `telemetry`,
+`telemetry_begin`, `telemetry_event`, `telemetry_finish`, `telemetry_log` and
+`telemetry_measure` requests and the `span` completion.
+
 ## Bounded arenas
 
 `arena.bounded(cap, body)` (MEM-6) charges every block placed in its arena a logical size

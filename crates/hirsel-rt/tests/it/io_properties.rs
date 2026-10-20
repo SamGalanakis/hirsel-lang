@@ -31,6 +31,13 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::Wall { .. } => false,
             Request::Random { .. } => false,
             Request::RandomBytes { .. } => false,
+            // Telemetry capture is never a cancellation point (CONC-3).
+            Request::Telemetry { .. } => false,
+            Request::TelemetryBegin { .. } => false,
+            Request::TelemetryEvent { .. } => false,
+            Request::TelemetryFinish { .. } => false,
+            Request::TelemetryLog { .. } => false,
+            Request::TelemetryMeasure { .. } => false,
             Request::SleepUntil { .. } => true,
             Request::Tasks { .. } => false,
             Request::Net { .. } => false,

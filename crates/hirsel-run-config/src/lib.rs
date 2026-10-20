@@ -483,6 +483,7 @@ impl ValidatedRun {
             ("process", io.process.is_some()),
             ("random", io.random.is_some()),
             ("dir", !io.dirs.is_empty()),
+            ("telemetry", io.telemetry.is_some()),
         ]
         .into_iter()
         .filter(|(_, granted)| *granted)
@@ -497,6 +498,16 @@ impl ValidatedRun {
     /// The granted Random provider, if any.
     pub fn random_provider(&self) -> Option<ProviderContract> {
         ProviderContract::parse(self.record.io.as_ref()?.random.as_ref()?)
+    }
+    /// The granted Telemetry provider: its contract, identity seed and simulated exporter
+    /// capacity (`telemetry.null@1` only).
+    pub fn telemetry_provider(&self) -> Option<(ProviderContract, u64, Option<u64>)> {
+        let grant = self.record.io.as_ref()?.telemetry.as_ref()?;
+        Some((
+            ProviderContract::parse(&grant.provider)?,
+            grant.seed.unwrap_or(0),
+            grant.queue,
+        ))
     }
     /// Exact validated Net policy; peers supply data and never widen its rules.
     pub fn net_grant(&self) -> Option<&NetGrant> {
@@ -910,6 +921,18 @@ fn validate_io(io: &mut IoGrants, field: &str) -> Result<(), RunRefusal> {
         provider(&at("process.provider"), &process.provider)?;
         process::validate(process)?;
     }
+    if let Some(telemetry) = &io.telemetry {
+        provider(&at("telemetry.provider"), &telemetry.provider)?;
+        // The host provider draws its identities; only the null provider takes a seed
+        // and a simulated exporter.
+        let null = telemetry.provider == ProviderContract::TelemetryNull.name();
+        if null != telemetry.seed.is_some() || (!null && telemetry.queue.is_some()) {
+            return Err(invalid(
+                &at("telemetry"),
+                "telemetry.null@1 requires a seed and alone takes a queue",
+            ));
+        }
+    }
     Ok(())
 }
 /// Whether every provider of one `io` grant set, at `field`, is supported.
@@ -979,6 +1002,14 @@ fn supported_io(io: &IoGrants, field: &str) -> Result<(), RunRefusal> {
     {
         return Err(unsupported(&at("process.provider")));
     }
+    if let Some(telemetry) = &io.telemetry
+        && !matches!(
+            ProviderContract::parse(&telemetry.provider),
+            Some(ProviderContract::TelemetryCapture | ProviderContract::TelemetryNull)
+        )
+    {
+        return Err(unsupported(&at("telemetry.provider")));
+    }
     Ok(())
 }
 fn supported_providers(record: &RunConfig) -> Result<(), RunRefusal> {
@@ -1004,6 +1035,10 @@ fn supported_providers(record: &RunConfig) -> Result<(), RunRefusal> {
             }
             if let Some(grants) = &runner.grants {
                 supported_io(grants, "io.runners.grants")?;
+                // A callee run captures no telemetry of its own.
+                if grants.telemetry.is_some() {
+                    return Err(unsupported("io.runners.grants.telemetry"));
+                }
             }
         }
     }

@@ -8,4 +8,5 @@ pub mod integer;
 pub mod report;
 pub mod schedule;
 pub mod siphash;
+pub mod telemetry;
 pub mod unicode;

@@ -298,6 +298,9 @@ impl HostAuthority for HostGrants {
         if let Some(provider) = run.random_provider() {
             io.set_random(provider, run.config().random_seed());
         }
+        if let Some((provider, seed, queue)) = run.telemetry_provider() {
+            io.set_telemetry(crate::telemetry::Capture::of(provider, seed, queue));
+        }
         if record
             .io
             .as_ref()

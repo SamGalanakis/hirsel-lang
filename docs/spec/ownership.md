@@ -420,7 +420,7 @@ environment-local result specializes to global ([CLO-1](closures.md#clo-1-scoped
 
 ### MODE-6: Scoped capabilities
 
-A capability is either global (`Dir`, `MonotonicClock`, `WallClock`, `Net`, `Stdout`,
+A capability is either global (`Dir`, `MonotonicClock`, `WallClock`, `Net`, `Stdout`, `Telemetry`,
 `Tasks`, `Runner`) or scoped (`Tx`, `Scope`, `Arena`, `Test`; always local). Its declaration says
 which. A scoped capability received by a closure cannot be returned, stored or captured by
 an escaping closure, so it cannot leave the call that created it.

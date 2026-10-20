@@ -1,0 +1,233 @@
+// Live capture on an explicitly granted Telemetry (core capture.*, provider contract
+// telemetry.capture@1). Checked payloads are encoded here from explicit plain-data
+// projections; the runtime records them on the tape and never inspects them. Spans and
+// metadata are passed explicitly: there is no current span and no implicit context.
+
+/// A span's plain description. `sampled` is a root's sampling decision; a child keeps its
+/// explicit parent's.
+@serializable
+pub type SpanData {
+  name: String,
+  kind: SpanKind,
+  fields: List[Attribute],
+  links: List[TraceContext],
+  sampled: bool,
+}
+
+pub opaque type SpanSpec: copyable + inert + noalloc_drop uses {} {
+  data: SpanData,
+  encoded: Bytes,
+}
+
+/// A span event's plain description.
+@serializable
+pub type EventData {
+  name: String,
+  fields: List[Attribute],
+}
+
+pub opaque type CheckedEvent: copyable + inert + noalloc_drop uses {} {
+  data: EventData,
+  encoded: Bytes,
+}
+
+fn check_name(name: String) -> Result[(), EventError] uses {} {
+  if core@1/string.byte_len(name) == 0 || core@1/string.byte_len(name) > 128 {
+    return Error(KeyLimit())
+  }
+  Ok(())
+}
+
+/// Checks the name, fields (as `check_metadata`), at most 32 valid links and 16384
+/// encoded bytes.
+pub fn span_spec(
+  name: String,
+  kind: SpanKind,
+  fields: List[Attribute],
+  links: List[TraceContext],
+  sampled: bool
+) -> Result[SpanSpec, EventError] uses {} {
+  check_name(name)?
+  let metadata = check_metadata(Metadata(trace: None(), fields: unique fields))?
+  if core@1/list.len(links) > 32 {
+    return Error(AttributeLimit())
+  }
+  let mut i: u64 = 0
+  while i < core@1/list.len(links) {
+    match validate_trace(links[i]) {
+      Error(_) => return Error(InvalidContext()),
+      Ok(()) => (),
+    }
+    i += 1
+  }
+  let data = SpanData(
+    name: unique name,
+    kind: kind,
+    fields: unique metadata.fields,
+    links: unique links,
+    sampled: sampled
+  )
+  let encoded = core@1/codec.encode(data)
+  if core@1/bytes.len(encoded) > 16384 {
+    return Error(EventLimit())
+  }
+  Ok(SpanSpec(data: take data, encoded: take encoded))
+}
+
+/// Explicit plain-data projection; SpanSpec itself is opaque.
+pub fn span_data(spec: SpanSpec) -> SpanData uses {} {
+  unique spec.data
+}
+
+/// Checks the name, fields (as `check_metadata`) and 16384 encoded bytes.
+pub fn check_event(name: String, fields: List[Attribute]) -> Result[
+  CheckedEvent,
+  EventError
+] uses {} {
+  check_name(name)?
+  let metadata = check_metadata(Metadata(trace: None(), fields: unique fields))?
+  let data = EventData(name: unique name, fields: unique metadata.fields)
+  let encoded = core@1/codec.encode(data)
+  if core@1/bytes.len(encoded) > 16384 {
+    return Error(EventLimit())
+  }
+  Ok(CheckedEvent(data: take data, encoded: take encoded))
+}
+
+/// Explicit plain-data projection; CheckedEvent itself is opaque.
+pub fn event_data(event: CheckedEvent) -> EventData uses {} {
+  unique event.data
+}
+
+@serializable
+type TraceState {
+  entries: List[(String, String)],
+}
+
+/// The runtime's parent form: trace ID, span ID, the sampled flag, then the encoded
+/// tracestate. All-zero IDs begin a new root.
+fn parent_bytes(parent: Option[TraceContext], sampled: bool) -> Result[
+  Bytes,
+  ContextError
+] uses {} {
+  let mut out: List[u8] = []
+  match parent {
+    None() => {
+      let mut i: u64 = 0
+      while i < 24 {
+        core@1/list.push(mut out, 0)
+        i += 1
+      }
+      core@1/list.push(
+        mut out,
+        if sampled {
+          1
+        } else {
+          0
+        }
+      )
+      core@1/bytes.append(mut out, core@1/codec.encode(TraceState(entries: [])))
+    },
+    Some(ctx) => {
+      validate_trace(ctx)?
+      core@1/bytes.append(mut out, bytes.from_inline(ctx.trace_id))
+      core@1/bytes.append(mut out, bytes.from_inline(ctx.span_id))
+      core@1/list.push(
+        mut out,
+        if ctx.sampled {
+          1
+        } else {
+          0
+        }
+      )
+      core@1/bytes.append(
+        mut out,
+        core@1/codec.encode(TraceState(entries: unique ctx.tracestate))
+      )
+    },
+  }
+  Ok(core@1/bytes.from_list(take out))
+}
+
+/// Begins a span under an explicit parent (None for a new root, with the spec's sampling
+/// decision). An invalid raw parent is refused before any effect. The span's identities
+/// come from the Telemetry provider: fresh for a root, the parent's trace for a child.
+pub fn begin(t: Telemetry, parent: Option[TraceContext], spec: SpanSpec) -> Result[
+  Span of t,
+  ContextError
+] {
+  let encoded = parent_bytes(parent, spec.data.sampled)?
+  match core@1/capture.begin(t, encoded, spec.encoded) {
+    Ok(span) => Ok(span),
+    Error(_) => Error(InvalidParent()),
+  }
+}
+
+/// The span's identities and its parent's sampling and tracestate, as data: it stays
+/// usable after the span ends, grants nothing and emits nothing. Its `remote` is false.
+pub fn context(t: Telemetry, span: Span of t) -> TraceContext {
+  let data = core@1/capture.context(t, span)
+  let mut trace_id: Inline[u8, 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  let mut span_id: Inline[u8, 8] = [0, 0, 0, 0, 0, 0, 0, 0]
+  let mut i: u64 = 0
+  while i < 16 {
+    trace_id[i] = data[i]
+    i += 1
+  }
+  i = 0
+  while i < 8 {
+    span_id[i] = data[16 + i]
+    i += 1
+  }
+  let decoded: Result[TraceState, DecodeError] = core@1/codec.decode(
+    core@1/bytes.slice(data, 25, core@1/bytes.len(data))
+  )
+  let state: List[(String, String)] = match decoded {
+    Ok(TraceState(entries: entries)) => unique entries,
+    Error(_) => [],
+  }
+  TraceContext(
+    trace_id: trace_id,
+    span_id: span_id,
+    sampled: data[24] == 1,
+    remote: false,
+    tracestate: take state
+  )
+}
+
+/// Captures a checked event on the span. Accepted whatever the exporter does.
+pub fn span_event(t: Telemetry, span: Span of t, event: CheckedEvent) -> () {
+  match core@1/capture.event(t, span, event.encoded) {
+    Ok(()) => (),
+    Error(_) => core@1/failure.check(false, TextInvariant()),
+  }
+}
+
+/// Ends the span with an explicit status; its context remains usable. A status whose
+/// Error message exceeds 4096 bytes is refused and the span is abandoned, as its drop
+/// would. No outcome is inferred from a drop.
+pub fn finish(t: Telemetry, take span: Span of t, status: Status) -> Result[
+  (),
+  EventError
+] {
+  let too_long = match status {
+    Error(message) => core@1/string.byte_len(message) > 4096,
+    _ => false,
+  }
+  if too_long {
+    // The span drops here, which abandons it.
+    return Error(ValueLimit())
+  }
+  match core@1/capture.finish(t, take span, core@1/codec.encode(status)) {
+    Ok(()) => Ok(()),
+    Error(_) => Error(EventLimit()),
+  }
+}
+
+/// Captures a checked log record: its validated v1 JSON line (`render`).
+pub fn emit_log(t: Telemetry, record: CheckedLog) -> () {
+  match core@1/capture.log(t, core@1/string.as_bytes(record.encoded)) {
+    Ok(()) => (),
+    Error(_) => core@1/failure.check(false, TextInvariant()),
+  }
+}

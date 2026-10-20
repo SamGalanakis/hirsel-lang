@@ -1,0 +1,24 @@
+// rule: CONC-8
+// expect: blocked
+// stdout: begun
+// A run that ends Blocked with a live span leaves its begin with no finish: the span is
+// incomplete, and no outcome or abandonment is invented for it.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let t = io.telemetry(rt)?
+  let spec = match std@1/telemetry.span_spec("waiting", Consumer(), [], [], true) {
+    Ok(s) => s,
+    Error(_) => return Ok(()),
+  }
+  let span = match std@1/telemetry.begin(t, None(), spec) {
+    Ok(s) => s,
+    Error(_) => return Ok(()),
+  }
+  let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+  let mut rx = take receiver
+  let _ = out.print(stdout, "begun\n")
+  let _ = channel.receive(tasks, mut rx)
+  let _ = std@1/telemetry.finish(t, take span, Success())
+  Ok(())
+}

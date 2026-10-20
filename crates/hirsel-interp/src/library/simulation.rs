@@ -93,6 +93,8 @@ pub struct SimulationConfig {
     pub process: Option<hirsel_run_schema::ProcessGrant>,
     pub random_seed: u64,
     pub test_seed: u64,
+    /// The `telemetry.null@1` identity seed: a stream separate from Random's.
+    pub telemetry_seed: u64,
     /// The run's scheduler policy (`inputs.scheduler`); `None` is `fifo@1`.
     pub scheduler: Option<hirsel_run_schema::Scheduler>,
     pub grants: BTreeSet<String>,
@@ -134,6 +136,7 @@ impl Default for SimulationConfig {
             process: None,
             random_seed: 0,
             test_seed: 0,
+            telemetry_seed: 0,
             scheduler: None,
             grants: ["Io", "Args", "Env"]
                 .into_iter()
@@ -141,7 +144,15 @@ impl Default for SimulationConfig {
                 .collect(),
             mounts: BTreeMap::from([(String::new(), Access::ReadWrite)]),
             projections: [
-                "stdin", "stderr", "stdout", "tasks", "net", "process", "random", "dir",
+                "stdin",
+                "stderr",
+                "stdout",
+                "tasks",
+                "net",
+                "process",
+                "random",
+                "dir",
+                "telemetry",
             ]
             .into_iter()
             .map(str::to_owned)
@@ -241,6 +252,11 @@ pub(crate) enum Grant {
         recursive: bool,
         queue: super::watch::Queue,
     },
+    /// A live span of Telemetry `telemetry` and its context.
+    Span {
+        telemetry: u64,
+        context: Vec<u8>,
+    },
 }
 #[derive(Clone, Debug)]
 pub struct Simulation {
@@ -275,6 +291,11 @@ pub struct Simulation {
     pub(crate) next_id: u64,
     state: u64,
     supplied_random: Option<Result<Vec<u8>, ()>>,
+    /// `telemetry.null@1`'s identity stream and the identities delivered so far.
+    telemetry_ids: hirsel_kernels::telemetry::NullIds,
+    telemetry_issued: hirsel_kernels::telemetry::Issued,
+    /// A host provider's identities for the next begin (`supply_telemetry`).
+    supplied_telemetry: Option<([u8; 16], [u8; 8])>,
     replay: Vec<CapabilityEvent>,
     replay_index: usize,
     pub(crate) last_monotonic: Option<u64>,
@@ -350,6 +371,9 @@ pub enum ObservedGrant {
         directory: u64,
         length: u64,
         truncated: bool,
+    },
+    Span {
+        telemetry: u64,
     },
     Watcher {
         tree: u64,
@@ -453,6 +477,9 @@ impl Simulation {
                             root: root.clone(),
                             recursive: *recursive,
                         },
+                        Grant::Span { telemetry, .. } => ObservedGrant::Span {
+                            telemetry: *telemetry,
+                        },
                     },
                 )
             })
@@ -523,6 +550,7 @@ impl Simulation {
             return Err(invalid("simulation link collision"));
         }
         let random_seed = config.random_seed;
+        let telemetry_seed = config.telemetry_seed;
         let net_worlds = super::net::configured_world(config.net.as_ref())?;
         let (process_worlds, process_children) =
             super::process::configured_world(config.process.as_ref())?;
@@ -556,6 +584,9 @@ impl Simulation {
             next_id: 1,
             state: random_seed,
             supplied_random: None,
+            telemetry_ids: hirsel_kernels::telemetry::NullIds::new(telemetry_seed),
+            telemetry_issued: Default::default(),
+            supplied_telemetry: None,
             replay: run.inputs.clone(),
             replay_index: 0,
             last_monotonic: None,
@@ -982,6 +1013,7 @@ impl Simulation {
                 Some(Grant::Runner(_)) => kind == "Runner",
                 Some(Grant::Mapped { .. }) => kind == "Mapped",
                 Some(Grant::Watcher { .. }) => kind == "Watcher",
+                Some(Grant::Span { .. }) => kind == "Span",
                 None => false,
             }
         {
@@ -1120,6 +1152,29 @@ impl Simulation {
         Ok(bytes)
     }
     /// The next `random.bytes` outcome, from a host provider; `Err` is `Unavailable()`.
+    /// A begin's identities: a host provider's supplied ones, else the null provider's
+    /// stream, retrying zero and colliding draws.
+    pub(crate) fn telemetry_ids(
+        &mut self,
+        parent: Option<[u8; 16]>,
+    ) -> Result<([u8; 16], [u8; 8]), Error> {
+        let (trace, span) = match self.supplied_telemetry.take() {
+            Some(ids) => ids,
+            None => {
+                let ids = &mut self.telemetry_ids;
+                self.telemetry_issued.choose(parent, |n| ids.draw(n))
+            }
+        };
+        if !self.telemetry_issued.admits(parent, &trace, &span) {
+            return Err(invalid("inadmissible span identities"));
+        }
+        self.telemetry_issued.accept(parent, trace, span);
+        Ok((trace, span))
+    }
+    /// A host provider's identities for the next `capture.begin`.
+    pub fn supply_telemetry(&mut self, trace: [u8; 16], span: [u8; 8]) {
+        self.supplied_telemetry = Some((trace, span));
+    }
     pub fn supply_random(&mut self, draw: Result<Vec<u8>, ()>) {
         self.supplied_random = Some(draw);
     }

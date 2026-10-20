@@ -172,6 +172,14 @@ pub fn replay_interpreter_with_fixture(
                 | Request::ChildKill { .. } => {
                     panic!("process tapes replay through tests/it/process.rs")
                 }
+                Request::Telemetry { .. }
+                | Request::TelemetryBegin { .. }
+                | Request::TelemetryEvent { .. }
+                | Request::TelemetryFinish { .. }
+                | Request::TelemetryLog { .. }
+                | Request::TelemetryMeasure { .. } => {
+                    panic!("telemetry tapes replay through hirsel-rt tests/it/telemetry.rs")
+                }
                 Request::Ready { .. } | Request::Schedule { .. } => {
                     panic!("the interpreter oracle runs no cooperative host scheduler")
                 }
@@ -502,6 +510,12 @@ pub fn replay_interpreter_with_fixture(
                         }
                         hirsel_rt::handles::Grant::Random => ObservedGrant::Root("Random".into()),
                         hirsel_rt::handles::Grant::Tasks => ObservedGrant::Root("Tasks".into()),
+                        hirsel_rt::handles::Grant::Telemetry => {
+                            ObservedGrant::Root("Telemetry".into())
+                        }
+                        hirsel_rt::handles::Grant::Span { telemetry, .. } => ObservedGrant::Span {
+                            telemetry: *telemetry,
+                        },
                         hirsel_rt::handles::Grant::Net { rules, world } => ObservedGrant::Net {
                             world: match world {
                                 hirsel_rt::net::NetWorld::Host => 0,

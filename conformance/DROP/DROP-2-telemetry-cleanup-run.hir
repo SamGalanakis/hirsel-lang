@@ -1,0 +1,105 @@
+// rule: DROP-2
+// expect: run
+// stdout: canceled 1
+// Telemetry capture is no cancellation point and a dropped span claims no outcome: a span
+// left to `?` or to a failure's unwinding drops and is recorded as abandoned, and a
+// cancelled task still begins, logs and finishes a span with its cause.
+fn spec(name: String) -> std@1/telemetry.SpanSpec uses {} {
+  match std@1/telemetry.span_spec(name, Internal(), [], [], true) {
+    Ok(s) => s,
+    Error(_) => {
+      failure.check(false, Bounds())
+      spec(name)
+    },
+  }
+}
+
+fn early(t: Telemetry) -> Result[(), ()] {
+  let span = match std@1/telemetry.begin(t, None(), spec("early")) {
+    Ok(s) => s,
+    Error(_) => return Ok(()),
+  }
+  let refused: Result[(), ()] = Error(())
+  refused?
+  let _ = std@1/telemetry.finish(t, take span, Success())
+  Ok(())
+}
+
+fn record(name: String, ctx: std@1/telemetry.TraceContext) -> std@1/telemetry.CheckedLog uses {} {
+  let entry = std@1/telemetry.LogRecord(
+    level: Info(),
+    name: name,
+    message: "canceled",
+    metadata: std@1/telemetry.Metadata(trace: Some(ctx), fields: [])
+  )
+  match std@1/telemetry.check_log(entry) {
+    Ok(checked) => checked,
+    Error(_) => {
+      failure.check(false, Bounds())
+      record(name, ctx)
+    },
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let t = io.telemetry(rt)?
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  match early(t) {
+    Error(()) => {},
+    Ok(()) => failure.check(false, Bounds()),
+  }
+  let caught = task.isolate(
+    tasks,
+    fn() -> bool {
+      let span = match std@1/telemetry.begin(t, None(), spec("failing")) {
+        Ok(s) => s,
+        Error(_) => return false,
+      }
+      failure.check(false, Bounds())
+      let _ = std@1/telemetry.finish(t, take span, Success())
+      true
+    }
+  )
+  match caught {
+    Error(_) => {},
+    Ok(_) => failure.check(false, Bounds()),
+  }
+  let cause = task.scope(
+    tasks,
+    fn(s: Scope) -> u32 {
+      let h = task.async(
+        s,
+        fn() -> u32 {
+          task.scope(
+            tasks,
+            fn(inner: Scope) -> u32 {
+              // A scheduling point: the parent runs and cancels this task.
+              let span = match std@1/telemetry.begin(t, None(), spec("canceled")) {
+                Ok(started) => started,
+                Error(_) => return 0,
+              }
+              match task.check_canceled(inner) {
+                Error(Canceled(cause)) => {
+                  std@1/telemetry.emit_log(
+                    t,
+                    record("cancel", std@1/telemetry.context(t, span))
+                  )
+                  match std@1/telemetry.finish(t, take span, Canceled(cause)) {
+                    Ok(()) => 1,
+                    Error(_) => 0,
+                  }
+                },
+                Ok(()) => 0,
+              }
+            }
+          )
+        }
+      )
+      task.cancel(s, h)
+      task.await(s, take h)
+    }
+  )
+  let _ = out.print(out, f"canceled {cause}\n")
+  Ok(())
+}

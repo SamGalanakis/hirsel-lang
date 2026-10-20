@@ -122,6 +122,39 @@ pub enum Request {
         random: u64,
         count: u64,
     },
+    /// `io.telemetry`.
+    Telemetry {
+        io: u64,
+    },
+    /// `capture.begin`: a span under `parent` (all-zero IDs for a root) described by
+    /// `spec`; the provider supplies its identities.
+    TelemetryBegin {
+        telemetry: u64,
+        parent: Vec<u8>,
+        spec: Vec<u8>,
+    },
+    /// `capture.event`.
+    TelemetryEvent {
+        telemetry: u64,
+        span: u64,
+        payload: Vec<u8>,
+    },
+    /// `capture.finish`: the span ends with `status`.
+    TelemetryFinish {
+        telemetry: u64,
+        span: u64,
+        status: Vec<u8>,
+    },
+    /// `capture.log`.
+    TelemetryLog {
+        telemetry: u64,
+        payload: Vec<u8>,
+    },
+    /// `capture.measure`.
+    TelemetryMeasure {
+        telemetry: u64,
+        payload: Vec<u8>,
+    },
     /// `clock.sleep_until`; the deadline is the Instant's nanosecond ticks.
     SleepUntil {
         clock: u64,
@@ -705,6 +738,12 @@ pub enum Completion {
     View(MapView),
     /// `watcher.next`'s event, its paths relative to the watcher's Dir.
     Watch(Result<crate::watch::WatchEvent, IoError>),
+    /// `capture.begin`'s span: its handle and the identities its provider supplied.
+    Span {
+        handle: u64,
+        trace: [u8; 16],
+        span: [u8; 8],
+    },
 }
 /// The bytes a mapping lends `mapped.with`'s body. A host mapping that nothing records
 /// keeps them where they are mapped: `block` is then the address of the static block in
@@ -979,6 +1018,8 @@ pub(crate) struct State {
     pub(crate) capture_views: bool,
     /// The queue of each test tree's watcher, with its tree; `test.dir_event` fills them.
     fake_watches: BTreeMap<u64, (u64, crate::watch::WatchQueue)>,
+    /// The run's Telemetry provider, delivered identities and simulated exporter.
+    pub telemetry: crate::telemetry::Capture,
 }
 impl Default for State {
     fn default() -> Self {
@@ -1015,8 +1056,17 @@ impl Default for State {
             script_groups: BTreeMap::new(),
             capture_views: true,
             fake_watches: BTreeMap::new(),
+            telemetry: Default::default(),
             projections: [
-                "stdin", "stderr", "stdout", "tasks", "net", "process", "random", "dir",
+                "stdin",
+                "stderr",
+                "stdout",
+                "tasks",
+                "net",
+                "process",
+                "random",
+                "dir",
+                "telemetry",
             ]
             .into_iter()
             .map(str::to_owned)
@@ -1060,6 +1110,7 @@ impl State {
             Request::Net { .. } => "net",
             Request::Process { .. } => "process",
             Request::Random { .. } => "random",
+            Request::Telemetry { .. } => "telemetry",
             Request::Directory { .. } => "dir",
             _ => return false,
         };
@@ -1194,6 +1245,17 @@ impl State {
                 return Err(AdapterError::InvalidCompletion);
             }
             return self.execute_net(net, request);
+        }
+        // Telemetry observations are accepted, never faulted: capture is not delivery.
+        if matches!(request, Request::Telemetry { .. })
+            || crate::telemetry::is_telemetry(request)
+            || matches!(request, Request::Close { handle }
+                if matches!(self.handles.rows.get(handle), Some(Grant::Span { .. })))
+        {
+            if fault.is_some() {
+                return Err(AdapterError::InvalidCompletion);
+            }
+            return self.execute_telemetry(request);
         }
         // Process outcomes are provider inputs too; only a host adapter can spawn.
         if self.is_process(request) {
@@ -1359,6 +1421,9 @@ impl State {
                 if *count == 0 || value.as_ref().is_ok_and(|b| b.len() as u64 != *count) {
                     return Err(AdapterError::InvalidCompletion);
                 }
+            }
+            (Request::TelemetryBegin { .. }, Completion::Span { .. }) => {
+                return self.telemetry_sample(request, input);
             }
             // A completed wait proves the clock reached its deadline: a later
             // recorded sample below it is not a monotonic reading.
@@ -2265,6 +2330,11 @@ pub trait Adapter {
     /// `test.dir` tree's watcher): every scheduling point re-issues it, recording nothing.
     fn injected_wait(&self, _request: &Request) -> bool {
         false
+    }
+    /// Span `span`'s context when Telemetry `telemetry` began it: state its begin's
+    /// completion derived, read with no request.
+    fn telemetry_context(&self, _telemetry: u64, _span: u64) -> Option<Vec<u8>> {
+        None
     }
     /// A scheduling point with a parked request: the requests to re-issue now. A
     /// cooperative host answers the tokens whose interest is ready, in token order; the
@@ -3403,6 +3473,214 @@ grant_projection_export!(hirsel_rt_v2_io_stdin, Stdin);
 grant_projection_export!(hirsel_rt_v2_io_stderr, Stderr);
 grant_projection_export!(hirsel_rt_v2_io_stdout, Stdout);
 grant_projection_export!(hirsel_rt_v2_io_random, Random);
+grant_projection_export!(hirsel_rt_v2_io_telemetry, Telemetry);
+
+/// `Result[Span, TelemetryError]`: the Result tag at 0, then the Span handle or the
+/// error's ordinal at 8.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpanResult {
+    pub tag: u32,
+    pub padding: u32,
+    pub value: u64,
+}
+/// `Result[(), TelemetryError]`: the Result tag, then the error's ordinal.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TelemetryResult {
+    pub tag: u32,
+    pub error: u32,
+}
+impl TelemetryResult {
+    fn of(value: Result<(), hirsel_kernels::telemetry::Refusal>) -> Self {
+        match value {
+            Ok(()) => Self { tag: 0, error: 0 },
+            Err(refusal) => Self {
+                tag: 1,
+                error: refusal.ordinal(),
+            },
+        }
+    }
+}
+/// An accepted observation: a scheduling point with no cancellation check, whose
+/// completion carries nothing the program reads.
+unsafe fn telemetry_observe(ctx: *mut crate::TaskCtx, request: Request) -> u8 {
+    match unsafe { capability_call(ctx, request) } {
+        Ok(Completion::Unit(Ok(()))) => crate::STATUS_OK,
+        Ok(_) => crate::fault("telemetry completion mismatch"),
+        Err(()) => crate::STATUS_FAILURE,
+    }
+}
+/// # Safety
+/// Context bound, Telemetry readable, both Bytes live slices and out writable. A refused
+/// parent or an oversized payload issues no request.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn hirsel_rt_v2_capture_begin(
+    ctx: *mut crate::TaskCtx,
+    _destination: *mut u8,
+    out: *mut SpanResult,
+    telemetry: *const u64,
+    parent_owner: *mut crate::Header,
+    parent_start: u64,
+    parent_len: u64,
+    spec_owner: *mut crate::Header,
+    spec_start: u64,
+    spec_len: u64,
+) -> u8 {
+    use hirsel_kernels::telemetry as kernel;
+    let parent = unsafe { slice_bytes(parent_owner, parent_start, parent_len) };
+    let spec = unsafe { slice_bytes(spec_owner, spec_start, spec_len) };
+    let checked = kernel::bounded(&[spec]).and_then(|()| kernel::parent(parent));
+    let result = match checked {
+        Err(refusal) => SpanResult {
+            tag: 1,
+            padding: 0,
+            value: refusal.ordinal().into(),
+        },
+        Ok(_) => {
+            let request = Request::TelemetryBegin {
+                telemetry: unsafe { telemetry.read() },
+                parent: parent.to_vec(),
+                spec: spec.to_vec(),
+            };
+            let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
+                return crate::STATUS_FAILURE;
+            };
+            let Completion::Span { handle, .. } = completion else {
+                crate::fault("telemetry begin completion mismatch");
+            };
+            SpanResult {
+                tag: 0,
+                padding: 0,
+                value: handle,
+            }
+        }
+    };
+    unsafe { out.write(result) };
+    crate::STATUS_OK
+}
+/// # Safety
+/// Context bound, Telemetry and Span readable and the Bytes slot writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_capture_context(
+    ctx: *mut crate::TaskCtx,
+    _destination: *mut u8,
+    out: *mut crate::views::Slice,
+    telemetry: *const u64,
+    span: *const u64,
+) -> u8 {
+    let binding = unsafe { Binding::get(ctx) };
+    let Some(context) = binding
+        .adapter
+        .telemetry_context(unsafe { telemetry.read() }, unsafe { span.read() })
+    else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(crate::text::allocate_bytes(ctx, &context)) };
+    crate::STATUS_OK
+}
+/// # Safety
+/// Context bound, Telemetry and Span readable, payload a live slice, out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_capture_event(
+    ctx: *mut crate::TaskCtx,
+    _destination: *mut u8,
+    out: *mut TelemetryResult,
+    telemetry: *const u64,
+    span: *const u64,
+    owner: *mut crate::Header,
+    start: u64,
+    len: u64,
+) -> u8 {
+    let payload = unsafe { slice_bytes(owner, start, len) };
+    let checked = hirsel_kernels::telemetry::bounded(&[payload]);
+    if checked.is_ok() {
+        let request = Request::TelemetryEvent {
+            telemetry: unsafe { telemetry.read() },
+            span: unsafe { span.read() },
+            payload: payload.to_vec(),
+        };
+        if unsafe { telemetry_observe(ctx, request) } != crate::STATUS_OK {
+            return crate::STATUS_FAILURE;
+        }
+    }
+    unsafe { out.write(TelemetryResult::of(checked)) };
+    crate::STATUS_OK
+}
+/// # Safety
+/// Context bound, Telemetry readable, the taken Span readable, status a live slice and
+/// out writable. A refused status abandons the span, as its drop would.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_capture_finish(
+    ctx: *mut crate::TaskCtx,
+    _destination: *mut u8,
+    out: *mut TelemetryResult,
+    telemetry: *const u64,
+    span: *mut u64,
+    owner: *mut crate::Header,
+    start: u64,
+    len: u64,
+) -> u8 {
+    let (telemetry, span) = unsafe { (telemetry.read(), span.read()) };
+    let status = unsafe { slice_bytes(owner, start, len) };
+    let checked = hirsel_kernels::telemetry::bounded(&[status]);
+    let request = match checked {
+        Ok(()) => Request::TelemetryFinish {
+            telemetry,
+            span,
+            status: status.to_vec(),
+        },
+        Err(_) => {
+            // CAP-2 still precedes the refusal: only the span's own Telemetry abandons it.
+            if unsafe { Binding::get(ctx) }
+                .adapter
+                .telemetry_context(telemetry, span)
+                .is_none()
+            {
+                return crate::STATUS_FAILURE;
+            }
+            Request::Close { handle: span }
+        }
+    };
+    if unsafe { telemetry_observe(ctx, request) } != crate::STATUS_OK {
+        return crate::STATUS_FAILURE;
+    }
+    unsafe { out.write(TelemetryResult::of(checked)) };
+    crate::STATUS_OK
+}
+macro_rules! telemetry_record_export {
+    ($name:ident, $request:ident) => {
+        /// # Safety
+        /// Context bound, Telemetry readable, payload a live slice and out writable.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name(
+            ctx: *mut crate::TaskCtx,
+            _destination: *mut u8,
+            out: *mut TelemetryResult,
+            telemetry: *const u64,
+            owner: *mut crate::Header,
+            start: u64,
+            len: u64,
+        ) -> u8 {
+            let payload = unsafe { slice_bytes(owner, start, len) };
+            let checked = hirsel_kernels::telemetry::bounded(&[payload]);
+            if checked.is_ok() {
+                let request = Request::$request {
+                    telemetry: unsafe { telemetry.read() },
+                    payload: payload.to_vec(),
+                };
+                if unsafe { telemetry_observe(ctx, request) } != crate::STATUS_OK {
+                    return crate::STATUS_FAILURE;
+                }
+            }
+            unsafe { out.write(TelemetryResult::of(checked)) };
+            crate::STATUS_OK
+        }
+    };
+}
+telemetry_record_export!(hirsel_rt_v2_capture_log, TelemetryLog);
+telemetry_record_export!(hirsel_rt_v2_capture_measure, TelemetryMeasure);
 grant_projection_export!(hirsel_rt_v2_io_tasks, Tasks);
 grant_projection_export!(hirsel_rt_v2_io_net, Net);
 grant_projection_export!(hirsel_rt_v2_io_process, Process);

@@ -1,0 +1,7 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 6
+// twin: OWN/OWN-2-telemetry-finish-twice-ok.hir
+pub fn end(t: Telemetry, take s: Span of t) -> () {
+  let _ = std@1/telemetry.finish(t, take s, Success())
+  let _ = std@1/telemetry.finish(t, take s, Success())
+}

@@ -89,6 +89,15 @@ fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net
 fn test.process(t: Test, runs: List[ProcessScript], children: List[ChildScript]) -> Proc
 fn test.crash(t: Test, d: Dir, seed: u64) -> ()
 
+// CAP-1/2, DROP-2/3, CONC-1/3, DET-1
+N fn io.telemetry(rt: Io) -> Result[Telemetry, GrantError]
+fn capture.begin(t: Telemetry, parent: Bytes, spec: Bytes) -> Result[Span of t, TelemetryError]
+fn capture.context(t: Telemetry, s: Span of t) -> Bytes
+fn capture.event(t: Telemetry, s: Span of t, payload: Bytes) -> Result[(), TelemetryError]
+fn capture.finish(t: Telemetry, take s: Span of t, status: Bytes) -> Result[(), TelemetryError]
+fn capture.log(t: Telemetry, payload: Bytes) -> Result[(), TelemetryError]
+fn capture.measure(t: Telemetry, payload: Bytes) -> Result[(), TelemetryError]
+
 // CAP-1/2, PROV-1/2, DROP-2/4, DET-1
 fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
 @preserves_captures(f, buffer) fn file.read(d: Dir, mut f: File of d, mut buffer: List[u8], max: u64) -> Result[u64, FileError]
@@ -313,7 +322,7 @@ holds its written unknown captures.
 
 `Io`, `Args`, `Env`, `Unsafe` and the global projections, `Runner`
 ([runners](runners.md)) included, are plain capabilities; `Path` is
-an inert, plain, immutable path value. `File`, `AtomicFile`, `Mapped` and `Watcher` carry `Dir` authority, task
+an inert, plain, immutable path value. `File`, `AtomicFile`, `Mapped` and `Watcher` carry `Dir` authority, `Span` carries `Telemetry`, task
 handles `Scope`, and `Mutex`, `Atomic` and channel handles `Tasks`. The latter use run-time
 scheduling-domain affinity, not an implicit static `of tasks` brand; an operation with
 another domain fails [CAP-2](capabilities.md#cap-2-charged-at-use) before any effect. The
@@ -332,6 +341,7 @@ OutputError   = OutputFault(u32) | Canceled(CancelCause)
 ClockError    = Unavailable() | OutOfRange()
 WaitError     = Clock(ClockError) | Canceled(CancelCause)
 RandomError   = Unavailable()
+TelemetryError = TooLarge() | InvalidParent()
 EnvError      = NotGranted() | InvalidUtf8()
 ArgError      = MissingArgument() | InvalidUtf8()
 FloatIntError = NotFinite | OutOfRange
@@ -636,6 +646,39 @@ draw is a recorded capability input. The provider is chosen at launch
 simulation, predictable from the run's Random seed, and never protects a secret;
 `random.system@1` reads the host's cryptographically secure generator.
 `std@1/random` builds integer and bounded draws on this one operation.
+
+### Telemetry capture
+
+`io.telemetry(rt)` projects the run's `Telemetry` grant, a global plain capability whose
+provider is chosen at launch (`telemetry.capture@1` or `telemetry.null@1`,
+[providers](determinism.md#run-configuration)). A `Span of t` is a live span: a resource
+retaining its Telemetry, with no other authority. Capture accepts an observation; it is not
+delivery to any backend, and nothing a provider or exporter does changes what a program
+observes. `std@1/telemetry` is the checked interface over these raw operations.
+
+Each payload is at most 65536 bytes; a larger one returns `TooLarge()` before any request,
+and so is no scheduling point. `capture.begin(t, parent, spec)` takes the parent as 25 bytes
+(a 16-byte trace ID, an 8-byte span ID and a flags byte) followed by an opaque tail: all-zero
+IDs begin a new root, two nonzero IDs a child, anything else (or a shorter parent) is
+`InvalidParent()`. The provider supplies nonzero identities: a root's trace ID is new to the
+run, a child keeps its parent's, and every span ID is new to the run; a provider retries a
+zero or colliding draw before it delivers. `spec` is opaque. `capture.context(t, s)` returns
+the span's own IDs followed by its parent's flags and tail, a valid parent for the next
+span; it issues no request and is no scheduling point.
+
+`capture.event(t, s, payload)`, `capture.log(t, payload)` and `capture.measure(t, payload)`
+record an opaque observation. `capture.finish(t, take s, status)` ends the span with an
+opaque status; a `TooLarge()` status abandons it. A dropped live span is abandoned: its
+noalloc drop records the abandonment and claims no outcome, neither success nor failure
+nor cancellation ([DROP-2](failure.md#drop-2-resources)). A parent's end does not end its
+children. A span or Telemetry of another identity fails
+[CAP-2](capabilities.md#cap-2-charged-at-use) before any effect.
+
+Every accepted request is a scheduling point after its effect, as other capability
+operations are ([CONC-1](concurrency.md#conc-1-runtime)). None is a cancellation point
+([CONC-3](concurrency.md#conc-3-cancellation)): a cancelled or failing task's shielded
+cleanup can still finish its spans and log why. No telemetry operation waits for an
+exporter, reads a clock or touches the network.
 
 `err.print` and `out.print` write exactly the supplied UTF-8 bytes, with no newline. `Canceled` means no
 output or effect happened; another output or file error may follow partial effects.

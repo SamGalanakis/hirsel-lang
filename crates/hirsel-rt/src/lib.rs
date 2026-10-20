@@ -50,6 +50,7 @@ pub mod program;
 pub mod readiness;
 pub mod runner;
 mod standalone;
+pub mod telemetry;
 pub mod test_net_abi;
 pub mod text;
 pub mod tls_abi;

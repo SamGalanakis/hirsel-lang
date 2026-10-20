@@ -1,0 +1,10 @@
+// rule: PROV-1
+// expect: accept
+pub fn note(
+  t: Telemetry,
+  other: Telemetry,
+  s: Span of t,
+  e: std@1/telemetry.CheckedEvent
+) -> () {
+  std@1/telemetry.span_event(t, s, e)
+}

@@ -91,7 +91,9 @@ and only then observes deadlines and provider outcomes (including resets, I/O er
   seek bounds, and a child's explicitly closed stdin.
 
 Nonblocking grant projections and clock sampling introduce no cancellation check and use
-their stated grant or source error variants. Joins (`task.await`, `task.await_any`,
+their stated grant or source error variants. Telemetry capture is never a cancellation
+point either: an accepted observation is a scheduling point after its effect, so shielded
+cleanup can still finish spans ([telemetry capture](core-library.md#telemetry-capture)). Joins (`task.await`, `task.await_any`,
 `task.await_at`, `task.cancel_all`) and mutex acquisition are not cancellation points: a
 cancelled scope cancels its children, so a join waits only for them. `channel.send` is not
 a cancellation point: it succeeds or returns `Closed` with its value whatever its scope's

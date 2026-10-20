@@ -1082,6 +1082,12 @@
       "module": [
         "table"
       ]
+    },
+    {
+      "path": "telemetry_capture.hir",
+      "module": [
+        "telemetry"
+      ]
     }
   ],
   "dependencies": []

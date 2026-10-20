@@ -13,7 +13,7 @@
 //!   link of the same inode, or against output to a redirected stdout file, with nothing
 //!   resolved.
 //! - **Sockets** take their own key; listen, bind and connect take their Net's port key.
-//! - **Clocks, random, test worlds:** one key per grant. **Env reads:** none.
+//! - **Clocks, random, telemetry, test worlds:** one key per grant. **Env reads:** none.
 //! - **Processes:** a spawn takes the process grant's key, the namespace exclusively and the
 //!   run's sink keys, for the spawn call only; child stream ops and waits take the child's key.
 //! - **Runner calls:** the place's key. **An adapter without keys:** [`KeySet::coupled`].
@@ -227,7 +227,8 @@ impl Registry {
             | R::Random { .. }
             | R::Tasks { .. }
             | R::Net { .. }
-            | R::Process { .. } => keys.push((ROOT, S)),
+            | R::Process { .. }
+            | R::Telemetry { .. } => keys.push((ROOT, S)),
             R::EnvGet { .. } | R::EnvNarrow { .. } | R::Ready { .. } | R::Schedule { .. } => {}
             R::Print { stdout: h, .. } | R::PrintStderr { stderr: h, .. } => {
                 on(self, &mut keys, *h, X)
@@ -237,6 +238,12 @@ impl Registry {
                 on(self, &mut keys, *clock, X)
             }
             R::RandomBytes { random, .. } => on(self, &mut keys, *random, X),
+            // A Telemetry's observations are ordered on it; its spans are its own state.
+            R::TelemetryBegin { telemetry, .. }
+            | R::TelemetryEvent { telemetry, .. }
+            | R::TelemetryFinish { telemetry, .. }
+            | R::TelemetryLog { telemetry, .. }
+            | R::TelemetryMeasure { telemetry, .. } => on(self, &mut keys, *telemetry, X),
             R::TestProcess { test, .. }
             | R::TestCheck { test, .. }
             | R::TestCheckCase { test, .. }

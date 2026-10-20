@@ -69,7 +69,7 @@ zero. Process snapshots contribute to the admitted run identity like any other i
 | `entry`, `launch` | The entry's full versioned definition path, and `main` or `test`; planned: `call` for a callee run ([RUN-10](runners.md#run-10-callee-runs)). |
 | `call` | Planned. Present exactly when `launch` is `call`: the call form; the cause (the caller's run instance, request ordinal and request digest); and the argument bytes as lowercase hexadecimal. |
 | `inputs` | `hash_seed`, `random_seed` and `test_seed`, each an explicit `u64`; and, for a simulation, a separate scheduler algorithm, version and seed; planned: `fault_seed`, the seed of simulated providers' fault decisions. |
-| `io` | Absent or null, or a closed grant record: stdout sink, Tasks provider, monotonic clock, wall clock, Random provider, directory mounts, network grant and process grant; planned: runners (`runners`, [providers](runners.md#providers)). Each absent projection is denied. |
+| `io` | Absent or null, or a closed grant record: stdout sink, Tasks provider, monotonic clock, wall clock, Random provider, directory mounts, network grant and process grant, and optionally the Telemetry provider (`telemetry`, absent from canonical bytes when absent); planned: runners (`runners`, [providers](runners.md#providers)). Each absent projection is denied. |
 | `args` | Absent or null, or the exact ordered UTF-8 snapshot, explicit empty included. |
 | `env` | Absent or null, or exact key-to-value entries, with null for a granted key that is unset; denied keys are distinguishable from granted unset keys. |
 | `unsafe` | Boolean explicit root grant, false by default. |
@@ -106,8 +106,8 @@ or set by a `Command`; `env` may be omitted for none. For example
 **Providers** name versioned observable contracts, identical for real hosts, simulation
 and replay: `stdout.bytes@1`, `random.splitmix64@1`, `random.system@1`,
 `clock.monotonic.ns@1`, `clock.wall.unix_ns@1`, `tasks.cooperative@1`, `tasks.free@1`,
-`net.stream@1`, `net.script@2`, `process.spawn@1`, `process.script@1`, `budgets.none@1`
-and `budgets.limits@2`. Planned: the runner providers `local.threads@1`,
+`net.stream@1`, `net.script@2`, `process.spawn@1`, `process.script@1`,
+`telemetry.capture@1`, `telemetry.null@1`, `budgets.none@1` and `budgets.limits@2`. Planned: the runner providers `local.threads@1`,
 `local.process@1`, `sim@1` and `remote.tls@1` and the code stores `code.none@1`,
 `code.dir@1`, `code.object@1` and `code.sim@1`. Each is a seam under
 [RUN-13](runners.md#run-13-provider-seams): its choice changes cost, latency and crash
@@ -133,6 +133,15 @@ ordinal). Host requests are ordered per logical host resource in shared and excl
 epochs, and host handles are named by (creating task path, its handle ordinal). A replay
 re-executes the recorded cut, which is causally closed. A record naming both
 `tasks.free@1` and `inputs.scheduler` refuses.
+
+**Telemetry grants** name a provider: `{"provider": "telemetry.capture@1"}` draws span
+identities from the host's cryptographically secure generator, a stream separate from the
+run's Random, and takes no other member. `{"provider": "telemetry.null@1", "seed": s}`
+draws them from SplitMix64 of `s`, advanced and consumed exactly as `random.splitmix64@1`
+draws, and may add `"queue": n`: a simulated exporter of capacity `n` that never drains, so
+later observations are dropped from its copy. Neither provider retains anything beyond the
+recording, and neither queue pressure nor identities change acceptance, results or
+scheduling. A runner's grant set takes no Telemetry.
 
 `random.splitmix64@1` is a deterministic simulation of randomness
 on every host: a draw of `n` bytes takes successive SplitMix64 outputs (state starting at
@@ -449,6 +458,21 @@ continuation: continuation is refused, since no provider supports reacquisition.
 ([Durability](core-library.md#durability)): a crash keeps each file's last synchronized bytes and each
 directory's last synchronized listing, and the last unsynced write survives as a prefix
 chosen by the crash seed when everything before it in its file is durable.
+
+### Telemetry recording
+
+Every accepted telemetry request is recorded with its exact payload bytes: `telemetry io`,
+`telemetry_begin t parent spec` with its completion `span handle trace span`, then
+`telemetry_event t span payload`, `telemetry_finish t span status`, `telemetry_log t
+payload` and `telemetry_measure t payload`, each completing `unit ok`. An abandoned span is
+the `close span` of its drop. Payloads are lowercase hexadecimal. Replay validates each
+request against the recording and returns the recorded identities without drawing,
+exporting or reading a clock; a changed attribute, measurement, status or parent refuses
+replay. A refused payload issues no request and records nothing. A run that ends Blocked
+or stops with an open span leaves a recorded begin with no finish: an incomplete span, not a
+claimed outcome. `recording: none` keeps no observation and still performs every one.
+Recorded observations are never sampled away. Capture records no time: original timing
+comes from a separate sidecar or an explicit clock read.
 
 ### Mapped file recording
 

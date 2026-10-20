@@ -146,6 +146,12 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         Wall { clock: n.wrapping_add(3) },
         Random { io: n.wrapping_add(12) },
         RandomBytes { random: n.wrapping_add(23), count: n.wrapping_add(5) },
+        Telemetry { io: n.wrapping_add(31) },
+        TelemetryBegin { telemetry: n, parent: bytes.clone(), spec: bytes.clone() },
+        TelemetryEvent { telemetry: n, span: n.wrapping_add(1), payload: bytes.clone() },
+        TelemetryFinish { telemetry: n, span: n.wrapping_add(2), status: bytes.clone() },
+        TelemetryLog { telemetry: n, payload: bytes.clone() },
+        TelemetryMeasure { telemetry: n, payload: bytes.clone() },
         SleepUntil { clock: n.wrapping_add(3), deadline: n.wrapping_add(6) },
         Tasks { io: n.wrapping_add(12) },
         Net { io: n.wrapping_add(12) },
@@ -379,6 +385,11 @@ fn completions(n: u64) -> Vec<Completion> {
         Completion::Blocked {
             committed: n % 2 == 0,
         },
+        Completion::Span {
+            handle: n,
+            trace: [n as u8; 16],
+            span: [!(n as u8); 8],
+        },
         Completion::Ready,
     ];
     // Adding a completion variant must add a specimen, just like requests.
@@ -425,6 +436,7 @@ fn completions(n: u64) -> Vec<Completion> {
             Completion::Watch(_) => (),
             Completion::Blocked { .. } => (),
             Completion::Ready => (),
+            Completion::Span { .. } => (),
         }
     }
     values

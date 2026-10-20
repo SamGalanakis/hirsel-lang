@@ -1,0 +1,5 @@
+// rule: OWN-2
+// expect: accept
+pub fn end(t: Telemetry, take s: Span of t) -> () {
+  let _ = std@1/telemetry.finish(t, take s, Success())
+}

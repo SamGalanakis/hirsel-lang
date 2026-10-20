@@ -113,6 +113,28 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         },
         Request::Schedule { count, choice } => format!("schedule {count} {choice}"),
         Request::RandomBytes { random, count } => format!("random_bytes {random} {count}"),
+        Request::Telemetry { io } => format!("telemetry {io}"),
+        Request::TelemetryBegin {
+            telemetry,
+            parent,
+            spec,
+        } => format!("telemetry_begin {telemetry} {} {}", hex(parent), hex(spec)),
+        Request::TelemetryEvent {
+            telemetry,
+            span,
+            payload,
+        } => format!("telemetry_event {telemetry} {span} {}", hex(payload)),
+        Request::TelemetryFinish {
+            telemetry,
+            span,
+            status,
+        } => format!("telemetry_finish {telemetry} {span} {}", hex(status)),
+        Request::TelemetryLog { telemetry, payload } => {
+            format!("telemetry_log {telemetry} {}", hex(payload))
+        }
+        Request::TelemetryMeasure { telemetry, payload } => {
+            format!("telemetry_measure {telemetry} {}", hex(payload))
+        }
         Request::SleepUntil { clock, deadline } => format!("sleep_until {clock} {deadline}"),
         Request::TestProcess {
             test,
@@ -234,6 +256,11 @@ pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
         Completion::Input(Err(InputError::InvalidUtf8)) => "input invalid_utf8".into(),
         Completion::Env(Ok(Some(value))) => format!("env some {}", hex(value.as_bytes())),
         Completion::Env(Ok(None)) => "env none".into(),
+        Completion::Span {
+            handle,
+            trace,
+            span,
+        } => format!("span {handle} {} {}", hex(trace), hex(span)),
         Completion::Blocked { committed } => format!("blocked {}", u8::from(*committed)),
         Completion::Runner(completion) => {
             use hirsel_run_schema::CallOutcome::*;
@@ -510,6 +537,30 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             random: number(random)?,
             count: number(count)?,
         },
+        ["telemetry", io] => Request::Telemetry { io: number(io)? },
+        ["telemetry_begin", telemetry, parent, spec] => Request::TelemetryBegin {
+            telemetry: number(telemetry)?,
+            parent: bytes(parent)?,
+            spec: bytes(spec)?,
+        },
+        ["telemetry_event", telemetry, span, payload] => Request::TelemetryEvent {
+            telemetry: number(telemetry)?,
+            span: number(span)?,
+            payload: bytes(payload)?,
+        },
+        ["telemetry_finish", telemetry, span, status] => Request::TelemetryFinish {
+            telemetry: number(telemetry)?,
+            span: number(span)?,
+            status: bytes(status)?,
+        },
+        ["telemetry_log", telemetry, payload] => Request::TelemetryLog {
+            telemetry: number(telemetry)?,
+            payload: bytes(payload)?,
+        },
+        ["telemetry_measure", telemetry, payload] => Request::TelemetryMeasure {
+            telemetry: number(telemetry)?,
+            payload: bytes(payload)?,
+        },
         ["sleep_until", clock, deadline] => Request::SleepUntil {
             clock: number(clock)?,
             deadline: number(deadline)?,
@@ -656,6 +707,11 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
         ["input", "invalid_utf8"] => Completion::Input(Err(InputError::InvalidUtf8)),
         ["env", "some", s] => Completion::Env(Ok(Some(text(s)?))),
         ["env", "none"] => Completion::Env(Ok(None)),
+        ["span", handle, trace, span] => Completion::Span {
+            handle: number(handle)?,
+            trace: fixed(trace)?,
+            span: fixed(span)?,
+        },
         ["blocked", "0"] => Completion::Blocked { committed: false },
         ["blocked", "1"] => Completion::Blocked { committed: true },
         ["ready"] => Completion::Ready,

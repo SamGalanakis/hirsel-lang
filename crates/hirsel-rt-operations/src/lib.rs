@@ -223,6 +223,13 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "proc.wait_group"
         | "test.process"
         | "random.bytes"
+        | "io.telemetry"
+        | "capture.begin"
+        | "capture.context"
+        | "capture.event"
+        | "capture.finish"
+        | "capture.log"
+        | "capture.measure"
         | "clock.sleep_until"
         | "instant.checked_add" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
         // A ChildGroup's streams and kill are a Child's entries on its handle.
@@ -333,6 +340,13 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "clock.sleep_until"
             | "io.random"
             | "random.bytes"
+            | "io.telemetry"
+            | "capture.begin"
+            | "capture.context"
+            | "capture.event"
+            | "capture.finish"
+            | "capture.log"
+            | "capture.measure"
             | "io.stdin"
             | "io.stderr"
             | "stdin.read"
@@ -565,6 +579,85 @@ pub struct AbiExport {
 }
 
 pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_io_telemetry",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_capture_begin",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_capture_context",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_capture_event",
+        destination: true,
+        result: Some((8, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_capture_finish",
+        destination: true,
+        result: Some((8, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_capture_log",
+        destination: true,
+        result: Some((8, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_capture_measure",
+        destination: true,
+        result: Some((8, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
     AbiExport {
         caller_site: false,
         symbol: "hirsel_rt_v2_task_scope_enter",
@@ -2151,6 +2244,13 @@ pub const NATIVE_PATHS: &[&str] = &[
     "proc.run",
     "proc.pipeline",
     "random.bytes",
+    "io.telemetry",
+    "capture.begin",
+    "capture.context",
+    "capture.event",
+    "capture.finish",
+    "capture.log",
+    "capture.measure",
     "clock.sleep_until",
     "instant.checked_add",
     "test.process",

@@ -158,6 +158,9 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn injected_wait(&self, request: &Request) -> bool {
         self.0.borrow().injected_wait(request)
     }
+    fn telemetry_context(&self, telemetry: u64, span: u64) -> Option<Vec<u8>> {
+        self.0.borrow().telemetry_context(telemetry, span)
+    }
     fn ready(&mut self) -> Result<Ready, AdapterError> {
         self.0.borrow_mut().ready()
     }

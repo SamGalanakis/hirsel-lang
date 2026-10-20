@@ -26,6 +26,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         "MonotonicClock",
         "WallClock",
         "Random",
+        "Telemetry",
         "Tasks",
         "Net",
         "Proc",
@@ -203,6 +204,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ("OutputError", "", "OutputFault(u32)|Canceled(CancelCause)"),
         ("ClockError", "", "Unavailable()|OutOfRange()"),
         ("RandomError", "", "Unavailable()"),
+        ("TelemetryError", "", "TooLarge()|InvalidParent()"),
         ("WaitError", "", "Clock(ClockError)|Canceled(CancelCause)"),
         ("ArgError", "", "MissingArgument()|InvalidUtf8()"),
         ("FloatIntError", "", "NotFinite()|OutOfRange()"),
@@ -402,6 +404,22 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             b.signature(name, SignatureKind::Type(t), fields.is_empty()),
             &mut out,
         );
+    }
+    // A live span retains its Telemetry; its noalloc drop records an abandonment.
+    {
+        let b = Builder::new("").with_declarations(&out);
+        let mut t = type_definition(vec![], None);
+        t.resource = true;
+        t.bounds = vec![Bound::NoallocDrop];
+        t.destructor_allocation = Allocation::NoAlloc;
+        t.authority = AuthoritySummary::Known(
+            vec![AuthorityTerm::Capability(hirsel_syntax::DefPath::core(
+                "Telemetry",
+            ))]
+            .into(),
+        );
+        t.drop = Some(hirsel_syntax::DefPath::core("Span"));
+        publish(b.signature("Span", SignatureKind::Type(t), true), &mut out);
     }
     // Core library network and process resources have their capability's authority and a
     // noalloc close finalizer.
@@ -1063,6 +1081,7 @@ fn serializable_core(name: &str, t: &mut TypeDefinition) {
             | "OutputError"
             | "ClockError"
             | "RandomError"
+            | "TelemetryError"
             | "WaitError"
             | "ArgError"
             | "FloatIntError"
@@ -1332,6 +1351,7 @@ impl Builder {
                                 | "MonotonicClock"
                                 | "WallClock"
                                 | "Random"
+                                | "Telemetry"
                                 | "Tasks"
                                 | "Net"
                                 | "Proc"

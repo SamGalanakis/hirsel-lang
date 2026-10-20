@@ -27,6 +27,7 @@ mod roots;
 mod support;
 mod tape_property;
 mod tasks;
+mod telemetry;
 mod test_reporting;
 mod text;
 mod tls;

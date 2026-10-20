@@ -14,6 +14,12 @@ pub enum Grant {
     MonotonicClock,
     WallClock,
     Random,
+    Telemetry,
+    /// A live span of Telemetry `telemetry` and its context (`hirsel_kernels::telemetry`).
+    Span {
+        telemetry: u64,
+        context: Vec<u8>,
+    },
     Tasks,
     /// A rule set and the world that serves it.
     Net {

@@ -1545,6 +1545,9 @@ impl Operations for Library {
             )?;
             return Ok(());
         }
+        if kind == "Span" {
+            return self.abandon(id, context);
+        }
         if matches!(kind, "Stream" | "Listener" | "UdpSocket") {
             let open = if kind == "Stream" {
                 self.simulation.net_streams.contains_key(&id)
@@ -1810,6 +1813,13 @@ primary_operations! { self, call, context, name, a, value;
         return self.network_call(name, &call, context).map(Some);
     },
     Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.SharedThawTurn" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
+    Capability: "io.telemetry" | "capture.begin" | "capture.context" | "capture.event" | "capture.finish" | "capture.log" | "capture.measure" => {
+        // A rejected replay never publishes effects or delivers identities.
+        let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
+        let result = self.telemetry_call(name, &call, context);
+        if result.is_err() && let Some(saved) = saved { self.simulation = saved; }
+        return result.map(Some);
+    },
     Capability: "watcher.next" | "test.dir_event" => {
         // A rejected replay never publishes effects or consumes an event.
         let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());

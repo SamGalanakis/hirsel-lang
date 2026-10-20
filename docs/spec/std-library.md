@@ -3945,7 +3945,59 @@ nonempty, one tracestate in supplied order. It omits remote and baggage.
 Applications explicitly choose whether to start a new root after extraction
 fails. Context remains usable after its originating span ends and carries no
 output, deadline or task authority. `SpanKind` and `Status` provide inert domain
-vocabulary; live spans and capture are defined separately.
+vocabulary; live spans and capture are below.
+
+#### Live capture (`telemetry_capture.hir`)
+
+Capture needs an explicit `Telemetry` from `io.telemetry(rt)` and is defined by the core
+[telemetry capture](core-library.md#telemetry-capture) operations. There is no current span:
+a span, its context and metadata are passed explicitly, and a pure helper needs none.
+
+```text
+pub fn span_spec(name: String, kind: SpanKind, fields: List[Attribute],
+  links: List[TraceContext], sampled: bool) -> Result[SpanSpec, EventError] uses {}
+pub fn span_data(spec: SpanSpec) -> SpanData uses {}
+pub fn check_event(name: String, fields: List[Attribute]) -> Result[CheckedEvent, EventError] uses {}
+pub fn event_data(event: CheckedEvent) -> EventData uses {}
+pub fn begin(t: Telemetry, parent: Option[TraceContext], spec: SpanSpec)
+  -> Result[Span of t, ContextError]
+pub fn context(t: Telemetry, span: Span of t) -> TraceContext
+pub fn span_event(t: Telemetry, span: Span of t, event: CheckedEvent) -> ()
+pub fn finish(t: Telemetry, take span: Span of t, status: Status) -> Result[(), EventError]
+pub fn emit_log(t: Telemetry, record: CheckedLog) -> ()
+```
+
+`SpanSpec` and `CheckedEvent` are opaque checked payloads with plain projections
+`SpanData {name, kind, fields, links, sampled}` and `EventData {name, fields}`. Names are
+1–128 bytes; fields follow `check_metadata`; a spec has at most 32 links, each validated
+with `validate_trace`; an encoded spec or event is at most 16384 bytes. The capture payload
+is `codec.encode` of the plain projection, never of the opaque wrapper; a log's payload is
+its validated v1 JSON line (`render`), and a status's `codec.encode(status)`. A checked
+measurement is captured through core `capture.measure` with the `codec.encode` of its plain
+projection.
+
+`begin(t, None(), spec)` starts a root whose sampling decision is `spec`'s; `begin(t,
+Some(parent), spec)` starts a child that keeps the parent's trace ID, sampled flag and
+tracestate. A parent that fails `validate_trace` returns its `ContextError` before any
+effect, so an invalid context is never normalized. Links are data in the spec; channels
+and other message paths carry an explicit context or link, and task ancestry implies
+nothing. `context` returns the span's `TraceContext` (`remote` false); it stays usable after
+the span ends and grants nothing. `finish` ends the span with the explicit `Status`; an
+`Error` message over 4096 bytes returns `ValueLimit()` and abandons the span. A span left
+to drop, by `?`, failure or cancellation, is recorded as abandoned and claims no outcome.
+`span_event` and `emit_log` are infallible for checked payloads. Every accepted
+call is a scheduling point and none is a cancellation point.
+
+```text
+fn handle(t: Telemetry, parent: Option[telemetry.TraceContext], order: Order)
+  -> Result[Receipt, OrderError] {
+  let span = telemetry.begin(t, parent, order_span()?)?
+  let result = price(order)                       // pure: no context to forward
+  telemetry.span_event(t, span, priced_event(telemetry.context(t, span))?)
+  telemetry.finish(t, take span, order_status(result))?
+  result
+}
+```
 
 ## Typed tables
 

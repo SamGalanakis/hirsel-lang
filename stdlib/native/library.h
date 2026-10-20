@@ -60,6 +60,7 @@ uint8_t hirsel_rt_v2_instant_checked_add(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_
 /* Result[(), WaitError]: error 0 is Clock(ClockError), 1 is Canceled(CancelCause); the payload ordinal follows. */
 uint8_t hirsel_rt_v2_clock_sleep_until(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_io_random(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*);
+uint8_t hirsel_rt_v2_io_telemetry(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*);
 uint8_t hirsel_rt_v2_test_check(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t);
 uint8_t hirsel_rt_v2_test_check_case(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t, uint64_t);
 uint8_t hirsel_rt_v2_test_fail(hirsel_rt_v2_ctx*, const uint64_t*);
@@ -107,6 +108,13 @@ uint8_t hirsel_rt_v2_mapped_check(hirsel_rt_v2_ctx*, uint32_t*, const uint64_t*,
 uint8_t hirsel_rt_v2_file_watch(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, const uint64_t*, uint8_t);
 uint8_t hirsel_rt_v2_watcher_next(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, uint64_t*);
 uint8_t hirsel_rt_v2_test_dir_event(hirsel_rt_v2_ctx*, const uint64_t*, const uint64_t*, const uint64_t*);
+typedef struct { uint32_t tag, error; } hirsel_rt_v2_telemetry_result;
+uint8_t hirsel_rt_v2_capture_begin(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, hirsel_rt_v2_header*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_capture_context(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_capture_event(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_telemetry_result*, const uint64_t*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_capture_finish(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_telemetry_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_capture_log(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_telemetry_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_capture_measure(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_telemetry_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_file_walk(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_walk_result*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_walk_step(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*, void*, hirsel_rt_v2_walk_option*);
 typedef struct { hirsel_rt_v2_slice view; uint64_t position; } hirsel_rt_v2_view_cursor;

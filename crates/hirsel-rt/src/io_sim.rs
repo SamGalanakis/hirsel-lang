@@ -199,6 +199,9 @@ impl Adapter for SimIo {
     fn injected_wait(&self, request: &Request) -> bool {
         self.state.injected_wait(request)
     }
+    fn telemetry_context(&self, telemetry: u64, span: u64) -> Option<Vec<u8>> {
+        self.state.telemetry_context(telemetry, span).ok()
+    }
     /// The waits the recording re-issued at this scheduling point: the `ready` events at
     /// the tape's head whose wait has waited through exactly the recorded points.
     fn ready(&mut self) -> Result<Ready, AdapterError> {
@@ -333,6 +336,7 @@ impl Adapter for SimIo {
                 | Request::Wall { .. }
                 | Request::ReadStdin { .. }
                 | Request::RandomBytes { .. }
+                | Request::TelemetryBegin { .. }
                 | Request::SleepUntil { .. }
         ) {
             if event.fault.is_some() {

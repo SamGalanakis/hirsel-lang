@@ -79,6 +79,7 @@ mod tasks;
 mod timers;
 
 mod channels;
+mod telemetry;
 mod watch;
 
 mod free;

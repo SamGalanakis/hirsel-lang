@@ -82,7 +82,9 @@ A `resource type` declares `drop(x) { .. }`. Lifetimes are strict: a resource is
 when its owner replaces it, or at the end of the scope that owns it, in reverse declaration
 order (fields in reverse order, sequences from high index to low), on every exit path:
 normal exit, `?`, `return`, cancellation and failure. Taking a resource moves it; it does
-not drop it.
+not drop it. A dropped live telemetry `Span` records only its abandonment, from its stored
+`Telemetry`; it claims no outcome, which needs an explicit `capture.finish`
+([telemetry capture](core-library.md#telemetry-capture)).
 
 A value whose destruction releases a `Shared` root, directly or through any component,
 holds that root until its cleanup point (its scope's cleanup or its consumption, on normal

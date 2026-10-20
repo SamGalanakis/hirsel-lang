@@ -9,8 +9,8 @@ Whether a capability is global or scoped is fixed by
 
 ### CAP-1: Authority
 
-Directories, network, processes, clocks, randomness, tasks, standard output, environment
-variables, runners, allocation placement and `Unsafe` arrive only as typed parameters. `Io` is projected only
+Directories, network, processes, clocks, randomness, telemetry capture, tasks, standard
+output, environment variables, runners, allocation placement and `Unsafe` arrive only as typed parameters. `Io` is projected only
 into the grants the run configuration selects ([PROG-3](programs.md#prog-3-entry)); each
 projection requires an actual grant and cannot widen its resource restrictions. A path
 designates something within a grant and does not itself grant host access. An operation

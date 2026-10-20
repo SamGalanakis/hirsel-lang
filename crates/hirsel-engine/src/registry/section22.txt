@@ -51,6 +51,15 @@ fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net
 fn test.process(t: Test, runs: List[ProcessScript], children: List[ChildScript]) -> Proc
 fn test.crash(t: Test, d: Dir, seed: u64) -> ()
 
+// CAP-1/2, DROP-2/3, CONC-1/3, DET-1
+N fn io.telemetry(rt: Io) -> Result[Telemetry, GrantError]
+fn capture.begin(t: Telemetry, parent: Bytes, spec: Bytes) -> Result[Span of t, TelemetryError]
+fn capture.context(t: Telemetry, s: Span of t) -> Bytes
+fn capture.event(t: Telemetry, s: Span of t, payload: Bytes) -> Result[(), TelemetryError]
+fn capture.finish(t: Telemetry, take s: Span of t, status: Bytes) -> Result[(), TelemetryError]
+fn capture.log(t: Telemetry, payload: Bytes) -> Result[(), TelemetryError]
+fn capture.measure(t: Telemetry, payload: Bytes) -> Result[(), TelemetryError]
+
 // CAP-1/2, PROV-1/2, DROP-2/4, DET-1
 fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
 @preserves_captures(f, buffer) fn file.read(d: Dir, mut f: File of d, mut buffer: List[u8], max: u64) -> Result[u64, FileError]

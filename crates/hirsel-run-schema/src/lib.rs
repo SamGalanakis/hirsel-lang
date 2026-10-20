@@ -76,6 +76,8 @@ pub enum ProviderContract {
     BudgetsLimits,
     RunnerLocalThreads,
     RunnerSim,
+    TelemetryCapture,
+    TelemetryNull,
 }
 impl ProviderContract {
     pub const ALL: &[Self] = &[
@@ -98,6 +100,8 @@ impl ProviderContract {
         Self::StdoutBytes,
         Self::TasksCooperative,
         Self::TasksFree,
+        Self::TelemetryCapture,
+        Self::TelemetryNull,
     ];
     pub const fn name(self) -> &'static str {
         match self {
@@ -120,6 +124,8 @@ impl ProviderContract {
             Self::BudgetsLimits => "budgets.limits@1",
             Self::RunnerLocalThreads => "local.threads@1",
             Self::RunnerSim => "sim@1",
+            Self::TelemetryCapture => "telemetry.capture@1",
+            Self::TelemetryNull => "telemetry.null@1",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -229,6 +235,22 @@ pub struct IoGrants {
     /// canonical bytes when there are none, so records without runners keep their identity.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runners: Vec<RunnerEntry>,
+    /// The Telemetry capture provider; absent from canonical bytes when absent, so
+    /// records without telemetry keep their identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<TelemetryGrant>,
+}
+/// `io.telemetry`: `telemetry.capture@1` (span identities from the host's secure
+/// generator) or `telemetry.null@1` (identities from `seed`, and, with `queue`, a simulated
+/// exporter of that capacity that never drains). Neither changes what a program observes.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryGrant {
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue: Option<u64>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
