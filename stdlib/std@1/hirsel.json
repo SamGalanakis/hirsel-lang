@@ -1031,6 +1031,18 @@
       "module": [
         "list"
       ]
+    },
+    {
+      "path": "markdown_render.hir",
+      "module": [
+        "markdown"
+      ]
+    },
+    {
+      "path": "markdown_footnotes.hir",
+      "module": [
+        "markdown"
+      ]
     }
   ],
   "dependencies": []

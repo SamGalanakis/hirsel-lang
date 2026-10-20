@@ -1,0 +1,80 @@
+// CommonMark/cmark-gfm rendering adapted from the pinned references.
+// Copyright (c) 2014 John MacFarlane. BSD-2-Clause third-party/NOTICES.md.
+// See docs/prior-art/markdown.md for exact reference locations and deviations.
+
+// cmark-gfm src/blocks.c:465-546: collect definitions, assign indices in
+// document order, resolve references, then append only used definitions.
+fn process_footnotes(mut nodes: List[Entry]) -> () uses {} {
+  let count = core@1/list.len(nodes)
+  let mut definitions: Map[String, u64] = core@1/map.empty()
+  let mut id: u64 = 1
+  while id < count {
+    if nodes[id].kind == 22 {
+      let label = normalize_label(nodes[id].value)
+      if core@1/map.get(definitions, label) == None() {
+        core@1/map.insert(mut definitions, take label, id)
+      }
+    }
+    id += 1
+  }
+  let mut used: List[u64] = []
+  id = nodes[0].first
+  while id != 0 {
+    if nodes[id].kind == 23 {
+      let label = normalize_label(nodes[id].value)
+      if let Some(definition) = core@1/map.get(definitions, label) {
+        if nodes[definition].number == 0 {
+          core@1/list.push(mut used, definition)
+          nodes[definition].number = core@1/list.len(used)
+        }
+        nodes[definition].fence += 1
+        nodes[id].value = unique nodes[definition].value
+        nodes[id].number = nodes[definition].number
+        nodes[id].fence = nodes[definition].fence
+      } else {
+        let value = f"[^{nodes[id].value}]"
+        nodes[id].kind = 9
+        nodes[id].value = value
+      }
+    }
+    if nodes[id].first != 0 {
+      id = nodes[id].first
+    } else {
+      while id != 0 && nodes[id].next == 0 {
+        id = nodes[id].parent
+      }
+      if id != 0 {
+        id = nodes[id].next
+      }
+    }
+  }
+  id = 1
+  while id < count {
+    if nodes[id].kind == 22 {
+      unlink(mut nodes, id)
+    }
+    id += 1
+  }
+  for definition in used {
+    // Reattach without unlinking an already detached node.
+    let last = nodes[0].last
+    nodes[definition].parent = 0
+    nodes[definition].prev = last
+    if last == 0 {
+      nodes[0].first = definition
+    } else {
+      nodes[last].next = definition
+    }
+    nodes[0].last = definition
+    let mut paragraph = nodes[definition].last
+    if paragraph != 0 && nodes[paragraph].kind == 1 {
+      let _ = text_node(mut nodes, paragraph, " ", 9)
+    } else {
+      paragraph = definition
+    }
+    let backref = new_child(mut nodes, paragraph, 24)
+    nodes[backref].value = unique nodes[definition].value
+    nodes[backref].number = nodes[definition].number
+    nodes[backref].fence = nodes[definition].fence
+  }
+}
