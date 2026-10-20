@@ -150,11 +150,11 @@ fn bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Out
     });
     let mut timeout_state = String::new();
     if timed_out {
-        // Distinguish an executing child from an exited child whose pipes
-        // are still held open, and retain the kernel wait state before killing.
+        // The stat state distinguishes an executing child from a zombie
+        // whose pipes are still held open. Do not reap it before kill: the
+        // child's PID must remain reserved while we address its process group.
         timeout_state = format!(
-            "child {:?}; stat {:?}; wchan {:?}",
-            child.try_wait(),
+            "stat {:?}; wchan {:?}",
             std::fs::read_to_string(format!("/proc/{}/stat", child.id())),
             std::fs::read_to_string(format!("/proc/{}/wchan", child.id())),
         );
