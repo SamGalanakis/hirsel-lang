@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1489 exported definitions; 526 variants.
+1533 exported definitions; 555 variants.
 
 ## Types and roots
 
@@ -3755,6 +3755,144 @@ References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_4
 - `pub fn derive.parsed[N, E](take value: Result[N, E], ty: String) -> Result[N, String] uses {value}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString)
+
+
+## diff
+
+<a id="def-std_401_2fdiff_2fAlgorithm"></a>
+
+- `pub type diff.Algorithm = Myers | Patience`
+
+<a id="def-std_401_2fdiff_2fAlgorithm_23Myers"></a>
+
+- `Myers -> diff.Algorithm`
+
+Variant of diff.Algorithm.
+
+<a id="def-std_401_2fdiff_2fAlgorithm_23Patience"></a>
+
+- `Patience -> diff.Algorithm`
+
+Variant of diff.Algorithm.
+
+<a id="def-std_401_2fdiff_2fEdit"></a>
+
+- `pub type diff.Edit = Keep(u64, u64, u64) | Delete(u64, u64, u64) | Insert(u64, u64, u64)`
+
+One run of an edit script: `Keep(old, new, count)` keeps `count` lines from
+`old[old]` and `new[new]`; `Delete(old, new, count)` drops `old[old..old +
+count]` before `new[new]`; `Insert(old, new, count)` adds `new[new..new +
+count]` before `old[old]`. Runs cover both sequences in order, and a
+replacement is a Delete followed by an Insert.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fdiff_2fEdit_23Delete"></a>
+
+- `Delete(u64, u64, u64) -> diff.Edit`
+
+Variant of diff.Edit.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fdiff_2fEdit_23Insert"></a>
+
+- `Insert(u64, u64, u64) -> diff.Edit`
+
+Variant of diff.Edit.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fdiff_2fEdit_23Keep"></a>
+
+- `Keep(u64, u64, u64) -> diff.Edit`
+
+Variant of diff.Edit.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fdiff_2fPatchError"></a>
+
+- `pub type diff.PatchError = Malformed(u64)`
+
+`Malformed` carries the one-based line number of the first patch line that
+is not part of a well-formed unified diff.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fdiff_2fPatchError_23Malformed"></a>
+
+- `Malformed(u64) -> diff.PatchError`
+
+Variant of diff.PatchError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fdiff_2fPatched"></a>
+
+- `pub type diff.Patched { text: String, rejected: List[u64], }`
+
+`apply`'s result: the patched text, and the zero-based indexes of the hunks
+that did not apply, in patch order.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fdiff_2fapply"></a>
+
+- `pub fn diff.apply(source: String, patch: String) -> Result[Patched, PatchError] uses {}`
+
+Applies a unified diff of one file to `source`, as GNU `patch --fuzz=0
+--forward` does: lines before the first `@@` are skipped; each hunk's old
+lines (context and deletions) must match exactly, first where its header
+places them shifted by the offset the previous applied hunk needed, then at
+the nearest place not before the previous applied hunk, later before
+earlier at each distance. A hunk with fewer context lines before its
+changes than after them, starting at the first line, applies only at the
+start of the file; one with fewer after than before only at its end. A hunk
+that matches nowhere is rejected and the rest still apply.
+`\ No newline at end of file` drops the preceding line's LF.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/diff/PatchError`](#def-std_401_2fdiff_2fPatchError), [`std@1/diff/Patched`](#def-std_401_2fdiff_2fPatched)
+
+<a id="def-std_401_2fdiff_2fedits"></a>
+
+- `pub fn diff.edits(old: List[String], new: List[String], algorithm: Algorithm) -> unique List[ Edit ] uses {}`
+
+The edit script turning `old` into `new`, as runs of kept, deleted and
+inserted lines (`Edit`). `Myers()` finds a minimal script by Myers'
+algorithm, after git: lines with no counterpart are changed outright, a line
+matching many others inside such changes is changed with them, and each
+change is slid down past equal lines, then back up to line up with a change
+on the other side. `Patience()` anchors the diff on lines that occur once
+on each side, as git's patience diff, falling back to Myers between anchors
+with none. Lines compare whole, terminators included. Unlike git, Myers
+never trades minimality for speed on costly inputs: time is O((N + M) D) and
+memory O(N + M) for N and M lines and D changed lines.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`std@1/diff/Algorithm`](#def-std_401_2fdiff_2fAlgorithm), [`std@1/diff/Edit`](#def-std_401_2fdiff_2fEdit)
+
+<a id="def-std_401_2fdiff_2fsplit_5flines"></a>
+
+- `pub fn diff.split_lines(source: String) -> unique List[String] uses {}`
+
+The lines of `text`, each with its LF; the last line lacks one when `text`
+does not end in LF. Empty text has no lines.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fdiff_2funified"></a>
+
+- `pub fn diff.unified( old_name: String, old: String, new_name: String, new: String, algorithm: Algorithm, context: u64 ) -> unique String uses {}`
+
+A unified diff of `old` and `new`, as `git diff -U<context>
+--no-indent-heuristic` prints one: `--- old_name` and `+++ new_name`
+lines, then hunks of `@@ -start,count +start,count @@` (a count of one is
+omitted, and an empty range names the line before it) with `context` lines
+of context, merging changes at most 2 * context lines apart. A last line
+without LF is followed by `\ No newline at end of file`. Equal texts give
+the empty string. Names are written as given.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/diff/Algorithm`](#def-std_401_2fdiff_2fAlgorithm)
 
 
 ## digest
@@ -8461,6 +8599,233 @@ Variant of scalar.ParseError.
 Variant of scalar.ParseError.
 
 
+## semver
+
+<a id="def-std_401_2fsemver_2fComparator"></a>
+
+- `pub type semver.Comparator { op: Op, major: u64, minor: Option[u64], patch: Option[u64], pre: String, }`
+
+One comparator of a requirement: an operator and a version whose minor and
+patch may be absent (`^1`, `~1.2`, `>=1.*`). `pre` is empty unless the patch
+is present.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/semver/Op`](#def-std_401_2fsemver_2fOp)
+
+<a id="def-std_401_2fsemver_2fOp"></a>
+
+- `pub type semver.Op = Exact | Greater | GreaterEq | Less | LessEq | Tilde | Caret | Wildcard`
+
+A comparator's operator; `Wildcard` is a requirement such as `1.*`.
+
+<a id="def-std_401_2fsemver_2fOp_23Caret"></a>
+
+- `Caret -> semver.Op`
+
+Variant of semver.Op.
+
+<a id="def-std_401_2fsemver_2fOp_23Exact"></a>
+
+- `Exact -> semver.Op`
+
+Variant of semver.Op.
+
+<a id="def-std_401_2fsemver_2fOp_23Greater"></a>
+
+- `Greater -> semver.Op`
+
+Variant of semver.Op.
+
+<a id="def-std_401_2fsemver_2fOp_23GreaterEq"></a>
+
+- `GreaterEq -> semver.Op`
+
+Variant of semver.Op.
+
+<a id="def-std_401_2fsemver_2fOp_23Less"></a>
+
+- `Less -> semver.Op`
+
+Variant of semver.Op.
+
+<a id="def-std_401_2fsemver_2fOp_23LessEq"></a>
+
+- `LessEq -> semver.Op`
+
+Variant of semver.Op.
+
+<a id="def-std_401_2fsemver_2fOp_23Tilde"></a>
+
+- `Tilde -> semver.Op`
+
+Variant of semver.Op.
+
+<a id="def-std_401_2fsemver_2fOp_23Wildcard"></a>
+
+- `Wildcard -> semver.Op`
+
+Variant of semver.Op.
+
+<a id="def-std_401_2fsemver_2fReq"></a>
+
+- `@format(format_req_into) pub type semver.Req { sets: List[List[Comparator]], }`
+
+A requirement: a version matches when it matches every comparator of any
+one set. A Cargo requirement has one set; an npm range has one per `||`
+alternative. An empty set matches every version without a prerelease.
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/semver/Comparator`](#def-std_401_2fsemver_2fComparator), [`std@1/semver/format_req_into`](#def-std_401_2fsemver_2fformat_5freq_5finto)
+
+<a id="def-std_401_2fsemver_2fSemverError"></a>
+
+- `pub type semver.SemverError = Empty | Syntax(u64) | LeadingZero(u64) | Overflow(u64)`
+
+Offsets are byte positions in the parsed text.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fsemver_2fSemverError_23Empty"></a>
+
+- `Empty -> semver.SemverError`
+
+Variant of semver.SemverError.
+
+<a id="def-std_401_2fsemver_2fSemverError_23LeadingZero"></a>
+
+- `LeadingZero(u64) -> semver.SemverError`
+
+Variant of semver.SemverError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fsemver_2fSemverError_23Overflow"></a>
+
+- `Overflow(u64) -> semver.SemverError`
+
+Variant of semver.SemverError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fsemver_2fSemverError_23Syntax"></a>
+
+- `Syntax(u64) -> semver.SemverError`
+
+Variant of semver.SemverError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fsemver_2fVersion"></a>
+
+- `@format(format_into) pub type semver.Version { major: u64, minor: u64, patch: u64, pre: String, build: String, }`
+
+A SemVer 2.0 version. `pre` and `build` are the dot-separated identifiers
+after `-` and `+`, empty when absent.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/semver/format_into`](#def-std_401_2fsemver_2fformat_5finto)
+
+<a id="def-std_401_2fsemver_2fcompare"></a>
+
+- `@noalloc pub fn semver.compare(a: Version, b: Version) -> i32 uses {}`
+
+SemVer 2.0 precedence: -1, 0 or 1. Major, minor and patch compare
+numerically, then prereleases by `compare_pre`; build metadata is ignored,
+so versions differing only in it compare 0 though `==` tells them apart.
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/semver/Version`](#def-std_401_2fsemver_2fVersion)
+
+<a id="def-std_401_2fsemver_2fcompare_5fpre"></a>
+
+- `@noalloc pub fn semver.compare_pre(a: String, b: String) -> i32 uses {}`
+
+Compares prerelease strings by SemVer 2.0 precedence: an empty prerelease
+(a release) is greatest; identifiers compare in turn, numeric ones by value
+and below alphanumeric ones, which compare in ASCII order; a longer list of
+otherwise equal identifiers is greater.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/i32`](#def-core_401_2fi32)
+
+<a id="def-std_401_2fsemver_2fformat_5finto"></a>
+
+- `@preserves_unique(out) pub fn semver.format_into(v: Version, mut out: List[u8]) -> () uses {}`
+
+Appends `major.minor.patch`, then `-pre` and `+build` when present.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8), [`std@1/semver/Version`](#def-std_401_2fsemver_2fVersion)
+
+<a id="def-std_401_2fsemver_2fformat_5freq_5finto"></a>
+
+- `@preserves_unique(out) pub fn semver.format_req_into(req: Req, mut out: List[u8]) -> () uses {}`
+
+Appends the requirement as dtolnay/semver displays one: comparators joined
+by `, `, `*` for an empty set, and sets joined by ` || `.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8), [`std@1/semver/Req`](#def-std_401_2fsemver_2fReq)
+
+<a id="def-std_401_2fsemver_2fmatches"></a>
+
+- `pub fn semver.matches(req: Req, v: Version) -> bool uses {}`
+
+Whether `v` matches every comparator of some set of `req`. A version with a
+prerelease matches a set only when one of its comparators has a prerelease
+and the same major, minor and patch, so `^1.2.3` excludes `1.3.0-beta`.
+Build metadata is ignored.
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/semver/Req`](#def-std_401_2fsemver_2fReq), [`std@1/semver/Version`](#def-std_401_2fsemver_2fVersion)
+
+<a id="def-std_401_2fsemver_2fparse"></a>
+
+- `pub fn semver.parse(spelling: String) -> Result[Version, SemverError] uses {}`
+
+Parses a SemVer 2.0 version, `major.minor.patch` with an optional
+`-prerelease` and `+build`, as dtolnay/semver `Version::parse`: no leading
+`v`, whitespace, or leading zero in a number or numeric prerelease
+identifier; numbers fit in u64.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/semver/SemverError`](#def-std_401_2fsemver_2fSemverError), [`std@1/semver/Version`](#def-std_401_2fsemver_2fVersion)
+
+<a id="def-std_401_2fsemver_2fparse_5fcargo"></a>
+
+- `pub fn semver.parse_cargo(spelling: String) -> Result[Req, SemverError] uses {}`
+
+Parses a Cargo version requirement, as dtolnay/semver `VersionReq::parse`:
+comparators separated by commas, each an optional `=`, `>`, `>=`, `<`, `<=`,
+`~` or `^` (the default) and a version whose minor and patch may be omitted
+or `*`, `x` or `X`, with spaces allowed around operators and commas. A lone
+wildcard is the requirement matching every release, and must be the only
+comparator. Build metadata is accepted and ignored.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/semver/Req`](#def-std_401_2fsemver_2fReq), [`std@1/semver/SemverError`](#def-std_401_2fsemver_2fSemverError)
+
+<a id="def-std_401_2fsemver_2fparse_5fnpm"></a>
+
+- `pub fn semver.parse_npm(spelling: String) -> Result[Req, SemverError] uses {}`
+
+Parses an npm range, as node-semver `new Range(text)` without the loose and
+includePrerelease options: `||` separates alternatives, each a hyphen range
+`a - b` or blank-separated comparators: `<`, `<=`, `>`, `>=`, `=` or none
+before an x-range version (`1`, `1.2`, `1.x`, `*`, `1.2.3-pre`), `~` or `~>`,
+or `^`. A version may start with `v`; build metadata is ignored. Each
+alternative desugars to primitive comparators exactly as node-semver's do,
+and an empty alternative matches every release.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/semver/Req`](#def-std_401_2fsemver_2fReq), [`std@1/semver/SemverError`](#def-std_401_2fsemver_2fSemverError)
+
+<a id="def-std_401_2fsemver_2freq_5fto_5fstring"></a>
+
+- `pub fn semver.req_to_string(req: Req) -> unique String uses {}`
+
+The requirement's spelling, as `format_req_into`.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/semver/Req`](#def-std_401_2fsemver_2fReq)
+
+<a id="def-std_401_2fsemver_2fto_5fstring"></a>
+
+- `pub fn semver.to_string(v: Version) -> unique String uses {}`
+
+The version's spelling.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/semver/Version`](#def-std_401_2fsemver_2fVersion)
+
+
 ## sender
 
 <a id="def-core_401_2fsender_2fdup"></a>
@@ -8996,6 +9361,73 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/shake256/State`](#d
 <a id="def-core_401_2fshared_2fwith"></a>
 
 - `@noalloc fn shared.with[T, R](s: Shared[T], body: fn(v: T) -> R) -> R`
+
+
+## shlex
+
+<a id="def-std_401_2fshlex_2fSplitError"></a>
+
+- `pub type shlex.SplitError = UnclosedQuote(u64) | TrailingEscape(u64)`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fshlex_2fSplitError_23TrailingEscape"></a>
+
+- `TrailingEscape(u64) -> shlex.SplitError`
+
+Variant of shlex.SplitError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fshlex_2fSplitError_23UnclosedQuote"></a>
+
+- `UnclosedQuote(u64) -> shlex.SplitError`
+
+Variant of shlex.SplitError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fshlex_2fjoin"></a>
+
+- `pub fn shlex.join(words: List[String]) -> unique String uses {}`
+
+Quotes each word and joins them with single spaces, as Python `shlex.join`;
+`split` of the result returns the words.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fshlex_2fquote"></a>
+
+- `pub fn shlex.quote(word: String) -> unique String uses {}`
+
+Quotes a word for a POSIX shell, as Python `shlex.quote`: a nonempty word of
+ASCII letters, digits and `%+,-./:=@_` is unchanged; any other word is
+enclosed in single quotes, each `'` written as `'"'"'`.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fshlex_2fsplit"></a>
+
+- `pub fn shlex.split(line: String) -> Result[unique List[String], SplitError] uses {}`
+
+Splits a command line into words as POSIX shells do, as Python
+`shlex.split(line)`: space, tab, CR and LF separate words; single quotes keep
+their contents literally; inside double quotes a backslash escapes only `"`
+and `\`; elsewhere a backslash escapes the next character. Adjacent quoted
+and unquoted parts join into one word, and `""` is an empty word. There is no
+expansion of any kind, and `#` is an ordinary character.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/shlex/SplitError`](#def-std_401_2fshlex_2fSplitError)
+
+<a id="def-std_401_2fshlex_2fsplit_5fcomments"></a>
+
+- `pub fn shlex.split_comments(line: String) -> Result[unique List[String], SplitError] uses {}`
+
+`split`, except that an unquoted, unescaped `#` starts a comment through the
+end of its line, ending any word in progress, as Python
+`shlex.split(line, comments=True)`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/shlex/SplitError`](#def-std_401_2fshlex_2fSplitError)
 
 
 ## simd
@@ -11736,6 +12168,213 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/uri/Uri`](#def-st
 - `pub fn utf8.decode_lossy(data: Bytes) -> unique String uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+
+## uuid
+
+<a id="def-std_401_2fuuid_2fUuid"></a>
+
+- `@format(format_into) pub type uuid.Uuid { bits: u128, }`
+
+A UUID's 128 bits, most significant first: byte 0 of the RFC 9562 layout is
+the top byte of `bits`, so comparing `bits` orders version 7 UUIDs by time.
+
+References: [`core@1/u128`](#def-core_401_2fu128), [`std@1/uuid/format_into`](#def-std_401_2fuuid_2fformat_5finto)
+
+<a id="def-std_401_2fuuid_2fUuidError"></a>
+
+- `pub type uuid.UuidError = Length(u64) | Char(u64)`
+
+`Length` carries the byte length of text that is none of the four spellings;
+`Char` the byte offset of the first character that does not fit the
+spelling its length selects.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fuuid_2fUuidError_23Char"></a>
+
+- `Char(u64) -> uuid.UuidError`
+
+Variant of uuid.UuidError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fuuid_2fUuidError_23Length"></a>
+
+- `Length(u64) -> uuid.UuidError`
+
+Variant of uuid.UuidError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fuuid_2fV7Error"></a>
+
+- `pub type uuid.V7Error = Clock(ClockError) | Random(RandomError) | BeforeEpoch`
+
+Version 7 generation fails when the clock or the random source fails, or
+when the wall clock reads before the Unix epoch.
+
+References: [`core@1/ClockError`](#def-core_401_2fClockError), [`core@1/RandomError`](#def-core_401_2fRandomError)
+
+<a id="def-std_401_2fuuid_2fV7Error_23BeforeEpoch"></a>
+
+- `BeforeEpoch -> uuid.V7Error`
+
+Variant of uuid.V7Error.
+
+<a id="def-std_401_2fuuid_2fV7Error_23Clock"></a>
+
+- `Clock(ClockError) -> uuid.V7Error`
+
+Variant of uuid.V7Error.
+
+References: [`core@1/ClockError`](#def-core_401_2fClockError)
+
+<a id="def-std_401_2fuuid_2fV7Error_23Random"></a>
+
+- `Random(RandomError) -> uuid.V7Error`
+
+Variant of uuid.V7Error.
+
+References: [`core@1/RandomError`](#def-core_401_2fRandomError)
+
+<a id="def-std_401_2fuuid_2fVariant"></a>
+
+- `pub type uuid.Variant = Ncs | Rfc9562 | Microsoft | Future`
+
+The RFC 9562 variant field: `Ncs` (0xxx), `Rfc9562` (10xx, the variant of
+versions 1 through 8), `Microsoft` (110x) and `Future` (111x).
+
+<a id="def-std_401_2fuuid_2fVariant_23Future"></a>
+
+- `Future -> uuid.Variant`
+
+Variant of uuid.Variant.
+
+<a id="def-std_401_2fuuid_2fVariant_23Microsoft"></a>
+
+- `Microsoft -> uuid.Variant`
+
+Variant of uuid.Variant.
+
+<a id="def-std_401_2fuuid_2fVariant_23Ncs"></a>
+
+- `Ncs -> uuid.Variant`
+
+Variant of uuid.Variant.
+
+<a id="def-std_401_2fuuid_2fVariant_23Rfc9562"></a>
+
+- `Rfc9562 -> uuid.Variant`
+
+Variant of uuid.Variant.
+
+<a id="def-std_401_2fuuid_2fformat_5finto"></a>
+
+- `@preserves_unique(out) pub fn uuid.format_into(id: Uuid, mut out: List[u8]) -> () uses {}`
+
+Appends the lowercase hyphenated spelling.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid)
+
+<a id="def-std_401_2fuuid_2ffrom_5fbytes"></a>
+
+- `pub fn uuid.from_bytes(data: Bytes) -> Option[Uuid] uses {}`
+
+The UUID of 16 bytes in RFC 9562 order, or `None()` for any other length.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid)
+
+<a id="def-std_401_2fuuid_2fparse"></a>
+
+- `pub fn uuid.parse(spelling: String) -> Result[Uuid, UuidError] uses {}`
+
+Parses `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, the same in braces, the same
+after `urn:uuid:` (in any case), or 32 hex digits, with hex digits in either
+case.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid), [`std@1/uuid/UuidError`](#def-std_401_2fuuid_2fUuidError)
+
+<a id="def-std_401_2fuuid_2fto_5fbytes"></a>
+
+- `pub fn uuid.to_bytes(id: Uuid) -> unique Bytes uses {}`
+
+The 16 bytes in RFC 9562 order.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid)
+
+<a id="def-std_401_2fuuid_2fto_5fstring"></a>
+
+- `pub fn uuid.to_string(id: Uuid) -> unique String uses {}`
+
+The lowercase hyphenated spelling, `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid)
+
+<a id="def-std_401_2fuuid_2funix_5fms"></a>
+
+- `@noalloc pub fn uuid.unix_ms(id: Uuid) -> Option[u64] uses {}`
+
+A version 7 UUID's Unix timestamp in milliseconds, its top 48 bits;
+`None()` for any other version or variant.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid)
+
+<a id="def-std_401_2fuuid_2fv4"></a>
+
+- `pub fn uuid.v4(r: Random) -> Result[Uuid, RandomError]`
+
+A version 4 UUID of 122 bits drawn from `r`.
+
+References: [`core@1/Random`](#def-core_401_2fRandom), [`core@1/RandomError`](#def-core_401_2fRandomError), [`core@1/Result`](#def-core_401_2fResult), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid)
+
+<a id="def-std_401_2fuuid_2fv4_5ffrom"></a>
+
+- `pub fn uuid.v4_from(random: Bytes) -> Option[Uuid] uses {}`
+
+The version 4 UUID of 16 random bytes: the version and variant fields
+replace six of their bits, as RFC 9562 section 5.4. Other lengths are
+`None()`.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid)
+
+<a id="def-std_401_2fuuid_2fv7"></a>
+
+- `pub fn uuid.v7(clock: WallClock, r: Random) -> Result[Uuid, V7Error]`
+
+A version 7 UUID of the wall clock's Unix millisecond, rounded down, and 74
+bits drawn from `r`. Two UUIDs of the same millisecond are unordered: no
+counter is kept between calls.
+
+References: [`core@1/Random`](#def-core_401_2fRandom), [`core@1/Result`](#def-core_401_2fResult), [`core@1/WallClock`](#def-core_401_2fWallClock), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid), [`std@1/uuid/V7Error`](#def-std_401_2fuuid_2fV7Error)
+
+<a id="def-std_401_2fuuid_2fv7_5ffrom"></a>
+
+- `pub fn uuid.v7_from(millis: u64, random: Bytes) -> Option[Uuid] uses {}`
+
+The version 7 UUID of a Unix millisecond timestamp below 2^48 and 10
+random bytes, as RFC 9562 section 5.7: the timestamp fills the top 48
+bits and the bytes the remaining 80, the version and variant fields
+replacing the top four bits of the first byte and the top two of the third.
+A larger timestamp or another length is `None()`.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid)
+
+<a id="def-std_401_2fuuid_2fvariant"></a>
+
+- `@noalloc pub fn uuid.variant(id: Uuid) -> Variant uses {}`
+
+The variant field, the top bits of byte 8.
+
+References: [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid), [`std@1/uuid/Variant`](#def-std_401_2fuuid_2fVariant)
+
+<a id="def-std_401_2fuuid_2fversion"></a>
+
+- `@noalloc pub fn uuid.version(id: Uuid) -> u8 uses {}`
+
+The version field, the top four bits of byte 6, whatever the variant.
+
+References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/uuid/Uuid`](#def-std_401_2fuuid_2fUuid)
 
 
 ## x509
