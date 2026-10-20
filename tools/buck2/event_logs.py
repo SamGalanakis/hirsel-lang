@@ -221,8 +221,9 @@ def commands(paths):
                            cpu=int(props.get('cpu_count', 1)), memory_kb=int(props.get('memory_kb', 0)))
 
 
-# Buck2's TestStatus (buck2_data.proto).
+# Buck2's TestStatus (app/buck2_data/data.proto).
 PASS, FAIL, SKIP, OMITTED, FATAL, TIMED_OUT = 1, 2, 3, 4, 5, 6
+INFRA_FAILURE = 11
 
 
 def test_results(event_log, *, history=None):

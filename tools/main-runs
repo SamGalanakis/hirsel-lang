@@ -17,7 +17,9 @@ none, that tools/known-failures.tsv does not explain. The report
 ($HIRSEL_MAIN_RUNS/reports/, latest.md) names each red's likely culprit: of
 the commits since the last run of its stage, the one that changed most under the red's
 crate or its failing corpus cases, with its lane from hirsel-landings.jsonl.
-New reds go to that lane (`sluice tool say`), else to the orchestrator. Then
+New code reds go to that lane (`sluice tool say`), else to the orchestrator.
+Infrastructure reds have no culprit or lane; each run reports them separately
+and batches them to the orchestrator. Only code reds enter lane-blame history. Then
 docs/api.md is regenerated and, after a full run, the instruction budgets
 ratchet down to what gate-perf-counts measured, each pushed straight to main
 when it changed.
@@ -38,6 +40,7 @@ TREE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TREE / 'tools/buck2'))
 sys.dont_write_bytecode = True
 import event_logs  # noqa: E402
+from run_failures import infra_reason  # noqa: E402
 
 PY = sys.executable
 RUNS = Path(os.environ.get('HIRSEL_MAIN_RUNS') or Path.home() / '.local/state/hirsel/main-runs')
@@ -177,10 +180,16 @@ def run_stages(directory, log, tier):
                else os.environ | {'HIRSEL_BUCK2_LOG_DIR': str(logs)})
         log.write(f'\n== {name}\n')
         log.flush()
+        offset = log.tell()
         started = time.monotonic()
         status = subprocess.run(command, cwd=TREE, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
         say(f'{"pass" if status == 0 else "FAIL"}  {name} ({time.monotonic() - started:.0f} s)')
-        failed = False
+        reason = None
+        if status:
+            with open(log.name, errors='replace') as output:
+                output.seek(offset)
+                reason = infra_reason(status) or next((r for line in output if (r := infra_reason(details=line))), None)
+        failed, infra = False, False
         for events in sorted(logs.glob('*.pb.zst')):
             for target, result in event_logs.test_results(events).items():
                 if target == 'gate-perf-counts' and result['status'] == event_logs.PASS:
@@ -190,11 +199,16 @@ def run_stages(directory, log, tier):
                     continue
                 failed = True
                 ids = failing_ids(target, result['details'])
-                if not ({target, re.sub(r'-shard-\d+$', '', target)} & known.keys()
+                test_reason = ('Buck2 Infra Failure' if result['status'] == event_logs.INFRA_FAILURE else
+                               infra_reason(details=result['details'], timed_out=result['status'] == event_logs.TIMED_OUT))
+                test_reason = test_reason or (reason if not result['details'].strip() else None)
+                infra |= test_reason is not None
+                if test_reason or not ({target, re.sub(r'-shard-\d+$', '', target)} & known.keys()
                         or ids and all(i in known for i in ids)):
-                    reds[f'{name}: {target}'] = dict(stage=name, target=target, ids=ids[:20])
-        if status and not failed:
-            reds[f'stage: {name}'] = dict(stage=name, target=None, ids=[])
+                    reds[f'{name}: {target}'] = dict(stage=name, target=target, ids=ids[:20],
+                                                    kind='infra' if test_reason else 'code', reason=test_reason)
+        if status and (not failed or reason and not infra):
+            reds[f'stage: {name}'] = dict(stage=name, target=None, ids=[], kind='infra' if reason else 'code', reason=reason)
     stages(stage, tier)
     return reds, ran, skipped, perf[0] if len(perf) == 1 else None
 
@@ -237,19 +251,26 @@ def tell(to, body):
 
 
 def describe(key, red):
+    if red.get('kind') == 'infra':
+        return f'- {key}: infrastructure ({red["reason"]})'
     return (f'- {key}: culprit {(red["culprit"] or "unknown")[:12]}' + (f' ({red["lane"]})' if red['lane'] else '')
             + f', red since {red["since"][:12]}' + (f'; failing {", ".join(red["ids"][:5])}' if red['ids'] else ''))
 
 
 def route(sha, reds, history, report):
-    """Name each red's likely culprit and lane; tell each lane its new reds.
+    """Route code reds to likely lanes and batch infrastructure reds to the orchestrator.
 
     A red is compared with the last run that ran its stage (a row without a
-    stage list ran them all): a red it had keeps its culprit, a new one's
-    culprit is among the commits since it."""
+    stage list ran them all): a code red it had keeps its culprit, a new one's
+    culprit is among the commits since it. Infra never carries lane blame."""
     messages = {}
     for key, red in sorted(reds.items()):
         previous = next((r for r in reversed(history) if red['stage'] in r.get('stages', [red['stage']])), None)
+        kind = red.get('kind', 'code')
+        if kind == 'infra':
+            red.update(culprit=None, lane=None, since=sha)
+            messages.setdefault((ORCHESTRATOR, kind), []).append(describe(key, red))
+            continue
         if old := (previous or {}).get('reds', {}).get(key):
             red.update(culprit=old.get('culprit'), lane=old.get('lane'), since=old.get('since', previous['sha']))
             continue
@@ -257,10 +278,10 @@ def route(sha, reds, history, report):
         changed = {c: git('diff-tree', '--no-commit-id', '--name-only', '-r', c).split() for c in commits}
         found = culprit(red, commits, changed)
         red.update(culprit=found, lane=lanes(commits).get(found), since=sha)
-        messages.setdefault(red['lane'] or ORCHESTRATOR, []).append(describe(key, red))
-    for to, lines in messages.items():
-        body = (f'main-runs: new reds on origin/main {sha[:12]}. Fix forward, or add a row '
-                f'to tools/known-failures.tsv. Report: {report}\n' + '\n'.join(lines))
+        messages.setdefault((red['lane'] or ORCHESTRATOR, kind), []).append(describe(key, red))
+    for (to, kind), lines in messages.items():
+        action = 'Fix forward, or add a row to tools/known-failures.tsv. ' if kind == 'code' else ''
+        body = f'main-runs: new {kind} reds on origin/main {sha[:12]}. {action}Report: {report}\n' + '\n'.join(lines)
         if not tell(to, body) and to != ORCHESTRATOR:
             tell(ORCHESTRATOR, body)
 
@@ -315,16 +336,22 @@ def run(sha, tier):
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, KeyError, ValueError) as error:
             pushed.append(f'{name} failed: {error}')
     minutes = (time.time() - start) / 60
-    lines = [f'# {tier} main run {sha[:12]}: {len(reds)} reds', '',
+    infra = sum(red.get('kind') == 'infra' for red in reds.values())
+    lines = [f'# {tier} main run {sha[:12]}: {len(reds) - infra} code reds, {infra} infra reds', '',
              f'{time.strftime("%Y-%m-%d %H:%M", time.gmtime(start))}Z, {minutes:.0f} min; log {directory / "run.log"}', '']
-    lines += [describe(key, red) for key, red in sorted(reds.items())]
+    for kind, title in (('code', 'Code reds'), ('infra', 'Infrastructure reds')):
+        lines += [f'## {title}', ''] + [describe(key, red) for key, red in sorted(reds.items())
+                                         if red.get('kind', 'code') == kind] + ['']
     lines += [f'- skipped: {row[0]}: {row[1]} (owner {row[2]}, since {row[3]})' for row in skipped]
     lines += [f'- pushed: {line}' for line in pushed]
     report.parent.mkdir(exist_ok=True)
     report.write_text('\n'.join(lines) + '\n')
     (RUNS / 'latest.md').write_text(report.read_text())
+    # Keep the existing lane-blame history schema; infra details live in the report.
+    code_reds = {key: {k: v for k, v in red.items() if k not in ('kind', 'reason')}
+                 for key, red in reds.items() if red.get('kind', 'code') == 'code'}
     with open(ROWS, 'a') as out:
-        out.write(json.dumps(dict(sha=sha, tier=tier, stages=ran, start=start, minutes=round(minutes), reds=reds, report=str(report))) + '\n')
+        out.write(json.dumps(dict(sha=sha, tier=tier, stages=ran, start=start, minutes=round(minutes), reds=code_reds, report=str(report))) + '\n')
     say(f'{tier} {sha[:12]}: {len(reds)} reds in {minutes:.0f} min; report {report}')
     return 0
 
