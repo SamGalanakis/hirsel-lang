@@ -1,0 +1,11 @@
+// rule: CLO-2
+// expect: accept
+// The conservative prototype keeps this signature unrestricted.
+fn scoped(tasks: Tasks, action: fn() -> ()) {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      action()
+    }
+  )
+}

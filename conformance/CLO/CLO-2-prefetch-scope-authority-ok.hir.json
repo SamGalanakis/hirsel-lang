@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "prefetch_cases",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "CLO-2-prefetch-scope-authority-ok.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "scoped"
+  }
+}

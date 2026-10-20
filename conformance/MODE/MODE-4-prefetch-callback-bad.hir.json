@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "prefetch_cases",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "MODE-4-prefetch-callback-bad.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../packages/fixtures/prefetch_spike@1/hirsel.json",
+      "package": {
+        "name": "prefetch_spike",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "spike",
+          "module": [
+            "prototype"
+          ]
+        }
+      ]
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "example"
+  }
+}

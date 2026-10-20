@@ -1,0 +1,16 @@
+// rule: MODE-4
+// expect: accept
+type Payload {
+  bytes: unique List[u8],
+}
+
+fn example(tasks: Tasks, take flow: sendable stream.Flow[Payload, u8]) {
+  let _ = spike.prefetch_for_each(
+    tasks,
+    take flow,
+    1,
+    fn(take value: Payload) -> Result[spike.Control, u8] {
+      Ok(Continue())
+    }
+  )
+}

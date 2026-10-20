@@ -1,0 +1,67 @@
+// rule: CONC-6
+// expect: run
+// Both success and terminal error transport own counted data, not just scalars.
+type Payload {
+  bytes: unique List[u8],
+}
+
+resource type OwnedInput {
+  next: u8,
+  tasks: Tasks,
+  released: Atomic[bool],
+}
+drop(cursor) {
+  atomic.store(cursor.tasks, cursor.released, true)
+}
+
+fn owned_read(mut cursor: OwnedInput) -> Option[Result[Payload, Payload]] {
+  cursor.next += 1
+  if cursor.next == 1 {
+    return Some(Ok(Payload(bytes: unique [7u8, 9u8])))
+  }
+  Some(Error(Payload(bytes: unique [11u8, 13u8])))
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let released = atomic.create(tasks, false)
+  let flow = stream.from_results(
+    iter.from(OwnedInput(next: 0, tasks: tasks, released: copy released), owned_read)
+  )
+  let done = spike.prefetch_for_each(
+    tasks,
+    take flow,
+    1,
+    fn(take item: Payload) -> Result[spike.Control, Payload] {
+      failure.check(item.bytes == [7u8, 9u8], Arithmetic())
+      Ok(Continue())
+    }
+  )
+  let error_transferred = match take done {
+    Error(Source(error)) => error.bytes == [11u8, 13u8],
+    _ => false,
+  }
+  failure.check(error_transferred, Arithmetic())
+  failure.check(atomic.load(tasks, released), Arithmetic())
+  atomic.store(tasks, released, false)
+  let prefix = stream.from_results(
+    iter.from(OwnedInput(next: 0, tasks: tasks, released: copy released), owned_read)
+  )
+  let stopped = spike.prefetch_for_each(
+    tasks,
+    take prefix,
+    1,
+    fn(take item: Payload) -> Result[spike.Control, Payload] {
+      Ok(Stop())
+    }
+  )
+  failure.check(
+    match take stopped {
+      Ok(()) => true,
+      Error(_) => false,
+    },
+    Arithmetic()
+  )
+  failure.check(atomic.load(tasks, released), Arithmetic())
+  Ok(())
+}

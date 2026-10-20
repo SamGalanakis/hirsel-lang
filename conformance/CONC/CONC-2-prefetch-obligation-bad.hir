@@ -1,0 +1,9 @@
+// rule: CONC-2
+// expect: reject CONC-2 at line 7
+// twin: CONC/CONC-2-prefetch-obligation-ok.hir
+// Hiding a producer in generic state does not consume its lexical obligation.
+fn hide[T](take state: T) {}
+
+fn finish(s: Scope, take producer: Task[()] of s) {
+  hide(take producer)
+}

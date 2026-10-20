@@ -1,0 +1,6 @@
+// rule: CONC-2
+// expect: accept
+fn finish(s: Scope, take producer: Task[()] of s) {
+  task.cancel(s, producer)
+  task.await(s, take producer)
+}

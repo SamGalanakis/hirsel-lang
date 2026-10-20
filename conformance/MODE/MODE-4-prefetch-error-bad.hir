@@ -1,0 +1,14 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+// twin: MODE/MODE-4-prefetch-error-ok.hir
+// Terminal E crosses the data channel even if all successful T are plain.
+fn example(tasks: Tasks, take flow: sendable stream.Flow[u64, List[u8]]) {
+  let _ = spike.prefetch_for_each(
+    tasks,
+    take flow,
+    1,
+    fn(take value: u64) -> Result[spike.Control, List[u8]] {
+      Ok(Continue())
+    }
+  )
+}

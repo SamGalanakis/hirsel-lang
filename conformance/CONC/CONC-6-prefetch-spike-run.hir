@@ -1,0 +1,100 @@
+// rule: CONC-6
+// expect: run
+// Tokio ce685ee tokio/tests/sync_mpsc.rs:48-71 send_recv_with_buffer:
+// FIFO delivery, draining, clean end. Also terminal errors and early stop.
+
+type Input {
+  next: u64,
+  end: u64,
+  fail: bool,
+  tasks: Tasks,
+  pulled: Atomic[u64],
+}
+
+// Each counter has one writer; the other task only observes it.
+fn increment(tasks: Tasks, counter: Atomic[u64]) -> u64 {
+  let previous = atomic.load(tasks, counter)
+  atomic.store(tasks, counter, previous + 1)
+  previous
+}
+
+fn read(mut cursor: Input) -> Option[Result[u64, u8]] {
+  let _ = increment(cursor.tasks, cursor.pulled)
+  if cursor.next == cursor.end {
+    if cursor.fail {
+      return Some(Error(7u8))
+    }
+    return None
+  }
+  cursor.next += 1
+  Some(Ok(cursor.next))
+}
+
+fn source(tasks: Tasks, take pulled: Atomic[u64], end: u64, fail: bool) -> sendable stream.Flow[
+  u64,
+  u8
+] {
+  stream.from_results(
+    iter.from(Input(next: 0, end: end, fail: fail, tasks: tasks, pulled: pulled), read)
+  )
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  for slots in 1u64..4u64 {
+    let pulled = atomic.create(tasks, 0u64)
+    let visited = atomic.create(tasks, 0u64)
+    let done = spike.prefetch_for_each(
+      tasks,
+      source(tasks, copy pulled, 3, false),
+      slots,
+      fn(take value: u64) -> Result[spike.Control, u8] {
+        let previous = increment(tasks, visited)
+        failure.check(value == previous + 1, Arithmetic())
+        Ok(Continue())
+      }
+    )
+    failure.check(done == Ok(()), Arithmetic())
+    failure.check(atomic.load(tasks, visited) == 3, Arithmetic())
+    failure.check(atomic.load(tasks, pulled) == 4, Arithmetic())
+  }
+  let pulled = atomic.create(tasks, 0u64)
+  let visited = atomic.create(tasks, 0u64)
+  let expected: List[u64] = [1, 2]
+  let failed = spike.prefetch_for_each(
+    tasks,
+    source(tasks, copy pulled, 2, true),
+    1,
+    fn(take value: u64) -> Result[spike.Control, u8] {
+      let previous = increment(tasks, visited)
+      failure.check(value == expected[previous], Arithmetic())
+      Ok(Continue())
+    }
+  )
+  failure.check(failed == Error(Source(7u8)), Arithmetic())
+  failure.check(atomic.load(tasks, visited) == 2, Arithmetic())
+  failure.check(atomic.load(tasks, pulled) == 3, Arithmetic())
+  let stopped = spike.prefetch_for_each(
+    tasks,
+    source(tasks, copy pulled, 10, false),
+    1,
+    fn(take value: u64) -> Result[spike.Control, u8] {
+      // Holding the sole reservation must prevent the second upstream pull.
+      failure.check(atomic.load(tasks, pulled) == 4, Arithmetic())
+      Ok(Stop())
+    }
+  )
+  failure.check(stopped == Ok(()), Arithmetic())
+  failure.check(atomic.load(tasks, pulled) == 4, Arithmetic())
+  let rejected = spike.prefetch_for_each(
+    tasks,
+    source(tasks, copy pulled, 10, false),
+    1,
+    fn(take value: u64) -> Result[spike.Control, u8] {
+      Error(9u8)
+    }
+  )
+  failure.check(rejected == Error(Callback(9u8)), Arithmetic())
+  failure.check(atomic.load(tasks, pulled) == 5, Arithmetic())
+  Ok(())
+}

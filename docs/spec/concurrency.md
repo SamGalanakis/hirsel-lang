@@ -184,6 +184,13 @@ fn pipe(tasks: Tasks) -> Result[u64, ChannelError] {
 }
 ```
 
+The [scoped prefetch spike](std-library.md#scoped-prefetch-signature-spike)
+uses private credits before upstream pulls while retaining ordinary unbounded
+channels. Its direct Receiver capture is legal; erasing a Receiver into a Flow
+does not make it sendable. Its task obligation remains lexical through explicit
+cancel and await. This is a source-library prototype, not a new channel or
+cancellation operation.
+
 ### CONC-7: Atomics
 
 `Atomic[T]` holds scalars only, is sequentially consistent, and is created and operated

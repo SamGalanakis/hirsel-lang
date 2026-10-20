@@ -1,0 +1,54 @@
+// rule: CONC-3
+// expect: run
+// Cancel before the terminal call: credit/data receive observes cancellation,
+// no source pull or visit occurs, and the producer is joined before return.
+resource type Source {
+  tasks: Tasks,
+  released: Atomic[bool],
+}
+drop(cursor) {
+  atomic.store(cursor.tasks, cursor.released, true)
+}
+
+fn read(mut cursor: Source) -> Option[Result[u64, u8]] {
+  failure.check(false, Arithmetic())
+  None
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let released = atomic.create(tasks, false)
+  task.scope(
+    tasks,
+    fn(parent: Scope) {
+      let (wake, sleep): (Sender[()], Receiver[()]) = channel.open(tasks)
+      let child = task.async(
+        parent,
+        fn() -> bool {
+          let mut gate = take sleep
+          let _ = channel.receive(tasks, mut gate)
+          let flow = stream.from_results(
+            iter.from(Source(tasks: tasks, released: released), read)
+          )
+          match spike.prefetch_for_each(
+            tasks,
+            take flow,
+            1,
+            fn(take value: u64) -> Result[spike.Control, u8] {
+              failure.check(false, Arithmetic())
+              Ok(Continue())
+            }
+          ) {
+            Error(Channel(Canceled(_))) => true,
+            _ => false,
+          }
+        }
+      )
+      task.cancel(parent, child)
+      failure.check(task.await(parent, take child), Arithmetic())
+      let _ = wake
+    }
+  )
+  failure.check(atomic.load(tasks, released), Arithmetic())
+  Ok(())
+}

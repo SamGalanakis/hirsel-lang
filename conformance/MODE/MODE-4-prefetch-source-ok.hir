@@ -1,0 +1,17 @@
+// rule: MODE-4
+// expect: accept
+fn step(mut state: u64) -> Option[Result[u64, u8]] {
+  None
+}
+
+fn example(tasks: Tasks) {
+  let flow = stream.from_results(iter.from(0u64, step))
+  let _ = spike.prefetch_for_each(
+    tasks,
+    take flow,
+    1,
+    fn(take value: u64) -> Result[spike.Control, u8] {
+      Ok(Continue())
+    }
+  )
+}

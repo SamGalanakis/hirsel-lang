@@ -2760,6 +2760,76 @@ Consuming a prefix or returning a sink error must not cause an extra upstream
 read. An HTTP parser may already hold its documented lookahead; replay retains
 the original core reads rather than inventing one read per output row.
 
+### Scoped prefetch signature spike
+
+Prefetch is not a public std operation yet. The checked prototype is
+[`prefetch_spike@1/prototype`](../../packages/fixtures/prefetch_spike@1/prototype.hir),
+with this real signature (the prototype's `slots` must be positive):
+
+```text
+fn prefetch_for_each[T: sendable, E: sendable](tasks: Tasks,
+  take source: sendable stream.Flow[T, E], slots: u64,
+  visit: fn(take T) -> Result[Control, E]) -> Result[(), PrefetchError[E]]
+type Control = Continue | Stop
+type PrefetchError[E] = Source(E) | Callback(E) | Channel(ChannelError)
+```
+
+Source crossing evidence and both payload bounds are separate requirements.
+A sendable source does not establish that its emitted `T` or `E` can cross.
+Owned records containing unique counted data pass; unqualified counted items,
+errors, source state and receiver-backed erased flows fail MODE-4. The consumer
+callback runs in the calling task and needs no sendable promise. The prototype
+moves the private credit Receiver directly into the producer closure, using
+CONC-6's capture exception. It never treats a Receiver-containing Flow as
+sendable and never captures a parent Scope. Its producer handle stays lexical
+and is consumed by `task.await`; generic storage cannot discharge that obligation.
+
+The prototype seeds exactly `slots` private credits. Before every source pull,
+the producer receives one credit, an existing cancellation point. A successful
+item holds that reservation through queueing and the callback; only Continue
+after callback consumption returns it. EOF or source error sends one terminal
+envelope and exits without sending replacement credit. Stop and callback error
+stop admission, destroy the data Receiver and credit Sender, then cancel and
+explicitly await the producer before returning. Teardown never sends or waits
+for credit. Send never checks cancellation (CONC-3): a canceled producer may
+still enqueue between pull and send; receiver closure handles teardown and
+failed send retains ownership of its payload. No `Canceled` send result is
+assumed. Source/callback failure exits retain ordinary scope cancellation/join.
+Pure work within one source or callback remains cooperative.
+
+This establishes the ownership/crossing shape, not the full prefetch acceptance
+campaign. Generic items have only an outstanding-success count bound; any byte
+claim must additionally bound complete backing allocations, terminal error
+payloads, source/parser lookahead and callback scratch, and require callbacks
+to consume/drop rather than retain items. The public operation still needs the
+full ledger, blocked-I/O, failure/cancellation, destruction-order and replay
+campaign. `channel.open` remains an unbounded FIFO.
+
+There is also a concrete authority-contract gap before the design sketch can
+be exported with its exact `uses {tasks, source, visit}` promise. This smaller
+program is rejected CLO-2 at the `task.scope` call:
+
+```hirsel
+fn scoped(tasks: Tasks, action: fn() -> ()) uses {tasks, action} {
+  task.scope(tasks, fn(s: Scope) { action() })
+}
+```
+
+The unrestricted core scope call does not forward the selected callback
+receipt through this nested closure. The prototype follows std `task.map_all`
+and keeps its authority signature conservative and unrestricted. Accepted and
+rejected conformance twins preserve this boundary; no checking rule is weakened.
+Resolving that narrow authority-forwarding contract is separate from the
+successful source/item/error sendability and direct-receiver spike.
+
+The reservation structure adapts Tokio `ce685ee`'s
+`tokio/src/sync/mpsc/bounded.rs:1265-1269` and explicit producer/queue teardown
+from Effect `4cddd3c`'s `packages/effect/src/Channel.ts:7284-7300`. The runnable
+FIFO/drain vector ports Tokio `tokio/tests/sync_mpsc.rs:48-71`; the one-slot
+Stop/error cases strengthen its reservation test at `:75-109` by holding credit
+through callback consumption rather than releasing it at dequeue. The owned
+payload case also checks that source destruction completes before return.
+
 ## Bounded byte streams
 
 The `stream` namespace also provides owned byte adapters over `Flow`:

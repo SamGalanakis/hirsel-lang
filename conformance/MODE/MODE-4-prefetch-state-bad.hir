@@ -1,0 +1,18 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 10
+// twin: MODE/MODE-4-prefetch-state-ok.hir
+fn step(mut state: List[u8]) -> Option[Result[u64, u8]] {
+  None
+}
+
+fn example(tasks: Tasks, take data: List[u8]) {
+  let flow = stream.from_results(iter.from(take data, step))
+  let _ = spike.prefetch_for_each(
+    tasks,
+    take flow,
+    1,
+    fn(take value: u64) -> Result[spike.Control, u8] {
+      Ok(Continue())
+    }
+  )
+}

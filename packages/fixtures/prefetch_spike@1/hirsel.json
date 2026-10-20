@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "prefetch_spike",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "prototype.hir",
+      "module": [
+        "prototype"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 11
+// twin: MODE/MODE-4-prefetch-source-ok.hir
+// Receiver's direct task capture exception does not apply to erased Flow state.
+fn step(mut state: Receiver[u64]) -> Option[Result[u64, u8]] {
+  None
+}
+
+fn example(tasks: Tasks, take receiver: Receiver[u64]) {
+  let flow = stream.from_results(iter.from(take receiver, step))
+  let _ = spike.prefetch_for_each(
+    tasks,
+    take flow,
+    1,
+    fn(take value: u64) -> Result[spike.Control, u8] {
+      Ok(Continue())
+    }
+  )
+}

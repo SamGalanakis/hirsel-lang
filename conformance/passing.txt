@@ -414,6 +414,8 @@ conformance/CLO/CLO-2-nested-uses-subsumed-run.hir
 conformance/CLO/CLO-2-nominal-argument-callable-bad.hir
 conformance/CLO/CLO-2-nominal-argument-callable-run.hir
 conformance/CLO/CLO-2-parameter-derived-capability-run.hir
+conformance/CLO/CLO-2-prefetch-scope-authority-bad.hir
+conformance/CLO/CLO-2-prefetch-scope-authority-ok.hir
 conformance/CLO/CLO-2-seal-raw-authority-bad.hir
 conformance/CLO/CLO-2-seal-raw-authority-ok.hir
 conformance/CLO/CLO-2-spec-map.hir
@@ -577,6 +579,8 @@ conformance/CONC/CONC-2-nested-handle-capture-bad.hir
 conformance/CONC/CONC-2-nested-handle-capture-ok.hir
 conformance/CONC/CONC-2-nested-sender-capture-ok.hir
 conformance/CONC/CONC-2-option-result-joins-run.hir
+conformance/CONC/CONC-2-prefetch-obligation-bad.hir
+conformance/CONC/CONC-2-prefetch-obligation-ok.hir
 conformance/CONC/CONC-2-scope-owned-capture.hir
 conformance/CONC/CONC-2-sizes-example.hir
 conformance/CONC/CONC-2-std-actor-closed-run.hir
@@ -649,6 +653,7 @@ conformance/CONC/CONC-3-clock-sleep-order-run.hir
 conformance/CONC/CONC-3-clock-tied-timers-run.hir
 conformance/CONC/CONC-3-explicit-cancellation-check.hir
 conformance/CONC/CONC-3-http-client-deadline-run.hir
+conformance/CONC/CONC-3-prefetch-canceled-run.hir
 conformance/CONC/CONC-3-process-pipeline-canceled-run.hir
 conformance/CONC/CONC-3-process-run-canceled-run.hir
 conformance/CONC/CONC-3-schedule-cancel-run.hir
@@ -701,6 +706,8 @@ conformance/CONC/CONC-6-last-sender-closes-receive.hir
 conformance/CONC/CONC-6-open-receiver-payload-bad.hir
 conformance/CONC/CONC-6-open-receiver-payload-ok.hir
 conformance/CONC/CONC-6-owned-record-payload-run.hir
+conformance/CONC/CONC-6-prefetch-spike-owned-run.hir
+conformance/CONC/CONC-6-prefetch-spike-run.hir
 conformance/CONC/CONC-6-receiver-child-capture.hir
 conformance/CONC/CONC-6-receiver-copy-bad.hir
 conformance/CONC/CONC-6-receiver-copy-ok.hir
@@ -3470,6 +3477,16 @@ conformance/MODE/MODE-4-parametric-result-send-run.hir
 conformance/MODE/MODE-4-plain-function-pointer-send-ok.hir
 conformance/MODE/MODE-4-plain-pointer-send-ok.hir
 conformance/MODE/MODE-4-plain.hir
+conformance/MODE/MODE-4-prefetch-callback-bad.hir
+conformance/MODE/MODE-4-prefetch-callback-ok.hir
+conformance/MODE/MODE-4-prefetch-error-bad.hir
+conformance/MODE/MODE-4-prefetch-error-ok.hir
+conformance/MODE/MODE-4-prefetch-item-bad.hir
+conformance/MODE/MODE-4-prefetch-item-ok.hir
+conformance/MODE/MODE-4-prefetch-source-bad.hir
+conformance/MODE/MODE-4-prefetch-source-ok.hir
+conformance/MODE/MODE-4-prefetch-state-bad.hir
+conformance/MODE/MODE-4-prefetch-state-ok.hir
 conformance/MODE/MODE-4-receiver-bad.hir
 conformance/MODE/MODE-4-receiver-ok.hir
 conformance/MODE/MODE-4-record-field-callable-bad.hir

@@ -1,0 +1,14 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+// twin: MODE/MODE-4-prefetch-item-ok.hir
+// Sendability of the source does not imply sendability of its emitted T.
+fn example(tasks: Tasks, take flow: sendable stream.Flow[List[u8], u8]) {
+  let _ = spike.prefetch_for_each(
+    tasks,
+    take flow,
+    1,
+    fn(take value: List[u8]) -> Result[spike.Control, u8] {
+      Ok(Continue())
+    }
+  )
+}

@@ -1,0 +1,91 @@
+// Type/ownership spike, deliberately outside the public std surface.
+// Reservation before production: Tokio ce685ee sync/mpsc/bounded.rs:1265-1269.
+// Explicit scope child and queue teardown: Effect 4cddd3c Channel.ts:7284-7300.
+// Credits stay charged through visit, stronger than Tokio's dequeue release.
+// task.scope has unrestricted authority; do not claim a narrower uses promise.
+pub type Control = Continue | Stop
+
+pub type PrefetchError[E] = Source(E) | Callback(E) | Channel(ChannelError)
+
+fn discard[T](take value: T) -> () uses {value} {}
+
+pub fn prefetch_for_each[T: sendable, E: sendable](
+  tasks: Tasks,
+  take source: sendable stream.Flow[T, E],
+  slots: u64,
+  visit: fn(take T) -> Result[Control, E]
+) -> Result[(), PrefetchError[E]] {
+  failure.check(slots > 0, Arithmetic())
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[(), PrefetchError[E]] {
+      let (data_tx, data_rx): (
+        Sender[Option[Result[T, E]]],
+        Receiver[Option[Result[T, E]]]
+      ) = channel.open(tasks)
+      let (credit_tx, credit_rx): (Sender[()], Receiver[()]) = channel.open(tasks)
+      let mut credits = take credit_tx
+      let mut i = 0u64
+      while i < slots {
+        let _ = channel.send(tasks, mut credits, ())
+        i += 1
+      }
+      let producer = task.async(
+        scope,
+        fn() -> () {
+          let mut input = take source
+          let mut credit = take credit_rx
+          let mut data = take data_tx
+          while true {
+            match channel.receive(tasks, mut credit) {
+              Ok(()) => {},
+              Error(_) => return,
+            }
+            let item = stream.next(mut input)
+            let terminal = match item {
+              None => true,
+              Some(value) => match value {
+                Ok(_) => false,
+                Error(_) => true,
+              },
+            }
+            match channel.send(tasks, mut data, take item) {
+              Ok(()) => {},
+              Error(_) => return,
+            }
+            if terminal {
+              return
+            }
+          }
+        }
+      )
+      let mut data = take data_rx
+      let outcome: Result[(), PrefetchError[E]] = 'consume: {
+        while true {
+          match channel.receive(tasks, mut data) {
+            Ok(item) => match take item {
+              None => break 'consume Ok(()),
+              Some(received) => match take received {
+                Error(e) => break 'consume Error(Source(take e)),
+                Ok(value) => match visit(take value) {
+                  Ok(Continue()) => {
+                    let _ = channel.send(tasks, mut credits, ())
+                  },
+                  Ok(Stop()) => break 'consume Ok(()),
+                  Error(e) => break 'consume Error(Callback(take e)),
+                },
+              },
+            },
+            Error(e) => break 'consume Error(Channel(e)),
+          }
+        }
+        Ok(())
+      }
+      discard(take data)
+      discard(take credits)
+      task.cancel(scope, producer)
+      task.await(scope, take producer)
+      take outcome
+    }
+  )
+}

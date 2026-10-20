@@ -1,0 +1,23 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 15
+// twin: MODE/MODE-4-prefetch-callback-ok.hir
+// The callback environment is part of source sendability, independently of T/E.
+fn example(tasks: Tasks, take data: List[u8]) {
+  let flow = stream.from_results(
+    iter.from(
+      0u64,
+      fn(mut state: u64) -> Option[Result[u64, u8]] {
+        let viewed = copy data
+        None
+      }
+    )
+  )
+  let _ = spike.prefetch_for_each(
+    tasks,
+    take flow,
+    1,
+    fn(take value: u64) -> Result[spike.Control, u8] {
+      Ok(Continue())
+    }
+  )
+}
