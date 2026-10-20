@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1474 exported definitions; 526 variants.
+1484 exported definitions; 526 variants.
 
 ## Types and roots
 
@@ -9278,6 +9278,87 @@ References: [`std@1/store/Snapshot`](#def-std_401_2fstore_2fSnapshot), [`std@1/s
 The commit a snapshot reflects: every commit up to it, no later one.
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/store/Snapshot`](#def-std_401_2fstore_2fSnapshot)
+
+
+## stream
+
+<a id="def-std_401_2fstream_2fFlow"></a>
+
+- `@captures(inner) pub opaque type stream.Flow[T, E]: () uses {}`
+
+An owned fallible cursor. Its source and callbacks stay owned until destruction.
+
+<a id="def-std_401_2fstream_2ffrom"></a>
+
+- `@captures(state, step) pub fn stream.from[S, T, E]( take state: S, take step: @preserves_captures(cursor) fn(mut cursor: S) -> Result[Option[T], E] ) -> Flow[T, E] uses {state, step}`
+
+Own state and its preserving callback without pulling. Error or EOF ends it.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2ffrom_5fresults"></a>
+
+- `@captures(input) pub fn stream.from_results[T, E](take input: Iter[Result[T, E]]) -> Flow[T, E] uses {input}`
+
+Normalize a raw result iterator, ending at its first error or EOF.
+
+References: [`core@1/Iter`](#def-core_401_2fIter), [`core@1/Result`](#def-core_401_2fResult), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2fnext"></a>
+
+- `@advance_only(flow) pub fn stream.next[T, E](mut flow: Flow[T, E]) -> Option[Result[T, E]] uses {flow}`
+
+Advance once. An error is reported once; later calls return None.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2ftake_5fn"></a>
+
+- `@captures(input) pub fn stream.take_n[T, E](take input: Flow[T, E], count: u64) -> Flow[T, E] uses {input}`
+
+Own at most count upstream pulls; zero performs no work.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2fto_5fiter"></a>
+
+- `@captures(input) pub fn stream.to_iter[T, E](take input: Flow[T, E]) -> Iter[Result[T, E]] uses {input}`
+
+Leave the error-aware namespace explicitly, retaining terminal pull behavior.
+
+References: [`core@1/Iter`](#def-core_401_2fIter), [`core@1/Result`](#def-core_401_2fResult), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2ftry_5ffilter"></a>
+
+- `@captures(input, predicate) pub fn stream.try_filter[T, E]( take input: Flow[T, E], take predicate: fn(T) -> Result[bool, E] ) -> Flow[T, E] uses {input, predicate}`
+
+Test successful items in order, dropping rejections; errors end the flow.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2ftry_5ffold"></a>
+
+- `pub fn stream.try_fold[T, A, E]( take input: Flow[T, E], take initial: A, take step: fn(take A, take T) -> Result[A, E] ) -> Result[A, E] uses {input, initial, step}`
+
+Consume through the first error or clean end, releasing the owned pipeline.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2ftry_5ffor_5feach"></a>
+
+- `pub fn stream.try_for_each[T, E]( take input: Flow[T, E], take visit: fn(take T) -> Result[(), E] ) -> Result[(), E] uses {input, visit}`
+
+Visit successful items in order and release the pipeline before returning.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
+
+<a id="def-std_401_2fstream_2ftry_5fmap"></a>
+
+- `@captures(input, f) pub fn stream.try_map[T, U, E](take input: Flow[T, E], take f: fn(take T) -> Result[U, E]) -> Flow[ U, E ] uses {input, f}`
+
+Transform successful items in order; source and callback errors end the flow.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
 
 
 ## string
