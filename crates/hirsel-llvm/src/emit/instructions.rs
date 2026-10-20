@@ -917,6 +917,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let comparator = match compare::comparator(
                     self.module,
                     self.inputs.layouts,
+                    self.inputs.keys,
                     layout,
                     matches!(op, CompareOp::Eq | CompareOp::Ne),
                 ) {
@@ -1459,8 +1460,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     None
                 };
                 let update = self.runtime(RuntimeEntry::HashUpdate)?;
-                let hasher = match compare::hasher(self.module, self.inputs.layouts, layout, update)
-                {
+                let hasher = match compare::hasher(
+                    self.module,
+                    self.inputs.layouts,
+                    self.inputs.keys,
+                    layout,
+                    update,
+                ) {
                     Ok(hasher) => hasher,
                     Err(CompareError::Unsupported(what)) => return self.unsupported(what),
                     Err(CompareError::Invalid(what)) => return self.invalid(what),

@@ -2,7 +2,7 @@
 //! comparator or hash function per layout, defined once per object, as `hirsel-llvm`'s
 //! `compare` generates them.
 //!
-//! A comparator `hirsel.compare.<layout>[.eq](left, right, depth, context) -> i8` reads two
+//! A comparator `hirsel.compare.<layout key>[.eq](left, right, depth, context) -> i8` reads two
 //! values of its layout at the given addresses and returns one of the `ORDER_*` codes: the
 //! interpreter's order, the first unequal pair deciding, variant ordinals before payloads,
 //! sequences element by element then by length, String and Bytes bytewise then by length,
@@ -79,7 +79,7 @@ impl Emitter<'_> {
     fn declare_comparator(&mut self, layout: LayoutId, equality: bool) -> Emitted<FuncId> {
         let name = format!(
             "hirsel.compare.{}{}",
-            layout.0,
+            self.inputs.keys.key(layout).hex(),
             if equality { ".eq" } else { "" }
         );
         let sig = self.comparator_signature();
@@ -87,7 +87,7 @@ impl Emitter<'_> {
     }
 
     fn declare_hasher(&mut self, layout: LayoutId) -> Emitted<FuncId> {
-        let name = format!("hirsel.hash.{}", layout.0);
+        let name = format!("hirsel.hash.{}", self.inputs.keys.key(layout).hex());
         let sig = self.hasher_signature();
         self.helper(&name, &sig, |_| Helper::Hash { layout })
     }

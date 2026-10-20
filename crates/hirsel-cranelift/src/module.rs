@@ -160,9 +160,9 @@ fn c_type(ty: CType) -> Option<(ir::Type, bool)> {
 
 /// A helper function a body asked for, defined once the units are.
 pub(crate) enum Helper {
-    /// `hirsel.compare.<layout>[.eq]`.
+    /// `hirsel.compare.<layout key>[.eq]`.
     Compare { layout: LayoutId, equality: bool },
-    /// `hirsel.hash.<layout>`.
+    /// `hirsel.hash.<layout key>`.
     Hash { layout: LayoutId },
     /// `hirsel.drop.<layout>`, calling the drop body `body`.
     Drop { body: FuncId, caller_site: bool },

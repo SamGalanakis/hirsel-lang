@@ -126,13 +126,21 @@ impl GlueCodec {
         table: &LayoutTable,
         keys: &LayoutKeys,
     ) -> Result<Self, String> {
+        Self::of(plan, &unit.tables.symbols, table, keys)
+    }
+
+    /// The codec of `plan`, whose checks index `symbols`, keyed by content.
+    pub fn of(
+        plan: &CodecPlan,
+        symbols: &[Symbol],
+        table: &LayoutTable,
+        keys: &LayoutKeys,
+    ) -> Result<Self, String> {
         let checks = plan
             .checks
             .iter()
             .map(|check: &CodecCheck| {
-                let symbol = unit
-                    .tables
-                    .symbols
+                let symbol = symbols
                     .get(check.symbol.index())
                     .ok_or("a codec check outside the symbol table")?;
                 Ok(GlueCheck {

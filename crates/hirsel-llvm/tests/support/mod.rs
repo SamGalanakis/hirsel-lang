@@ -165,15 +165,40 @@ impl Default for Schema {
     }
 }
 
+thread_local! {
+    static DECOYS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Builds the fixtures `f` makes with unrelated layouts requested before theirs, so
+/// every layout the program names has another `LayoutId` than without.
+pub fn with_decoys<T>(f: impl FnOnce() -> T) -> T {
+    DECOYS.with(|d| d.set(true));
+    let result = f();
+    DECOYS.with(|d| d.set(false));
+    result
+}
+
 impl Schema {
     pub fn new() -> Self {
-        Self {
+        let mut schema = Self {
             types: session_types(),
             owners: Owners::default(),
             named: Vec::new(),
             signatures: Vec::new(),
             environments: Vec::new(),
+        };
+        if DECOYS.with(|d| d.get()) {
+            let t = &mut schema.types;
+            let (u16_, f32_, u8_) = (t.p(Primitive::U16), t.p(Primitive::F32), t.p(Primitive::U8));
+            // Records of scalar types only: a sequence or box brings its own count and
+            // header layouts, which fixtures that find a scalar by kind would pick up.
+            let record = t.record(&[u16_, f32_]);
+            let other = t.record(&[u8_, u16_, u8_]);
+            schema
+                .named
+                .extend([("decoy record", record), ("decoy other", other)]);
         }
+        schema
     }
     /// Declares the environment of closure body `definition` capturing `captures`.
     pub fn environment(
@@ -239,7 +264,12 @@ impl Schema {
                 sizes: &[],
                 movable,
             };
-            layouts.insert(*name, builder.environment(&self.types.store, &shape).expect("an environment"));
+            layouts.insert(
+                *name,
+                builder
+                    .environment(&self.types.store, &shape)
+                    .expect("an environment"),
+            );
         }
         let mut abis = BTreeMap::new();
         for &(name, ty, shape) in &self.signatures {

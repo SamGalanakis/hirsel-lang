@@ -75,9 +75,10 @@ fn owner(
     shape: impl FnOnce(&mut Ty) -> TypeId,
 ) -> DefPath {
     let record = representation(name, spec, shape);
-    owners
-        .nominals
-        .insert(DefId::intern(&path(name)), OwnerRepresentation::Defined(record));
+    owners.nominals.insert(
+        DefId::intern(&path(name)),
+        OwnerRepresentation::Defined(record),
+    );
     path(name)
 }
 
@@ -2120,13 +2121,16 @@ fn a_borrowed_capture_field_is_scanned_uncounted_and_never_dropped() {
         (boxed, hirsel_core_contract::Passing::Take),
     ];
     let env = b
-        .environment(&t.store, &EnvironmentShape {
-            definition: DefId::intern(&body),
-            body: 1,
-            captures: &captures,
-            sizes: &[],
-            movable: &[],
-        })
+        .environment(
+            &t.store,
+            &EnvironmentShape {
+                definition: DefId::intern(&body),
+                body: 1,
+                captures: &captures,
+                sizes: &[],
+                movable: &[],
+            },
+        )
         .unwrap();
     let table = checked(b);
     let e = env.0 as usize;
@@ -2180,13 +2184,16 @@ fn an_environment_descriptor_drops_only_its_taken_captures() {
         ],
     ] {
         let env = b
-            .environment(&t.store, &EnvironmentShape {
-                definition: DefId::intern(&body),
-                body: 1,
-                captures: &captures,
-                sizes: &[],
-                movable: &[],
-            })
+            .environment(
+                &t.store,
+                &EnvironmentShape {
+                    definition: DefId::intern(&body),
+                    body: 1,
+                    captures: &captures,
+                    sizes: &[],
+                    movable: &[],
+                },
+            )
             .unwrap();
         let table = b.table().clone();
         let r = &table.layouts[env.0 as usize];
@@ -2269,13 +2276,16 @@ fn a_borrowed_handle_holding_capture_contributes_no_descriptor_steps() {
     let body = path("main");
     let captures = [(tok, Passing::Borrow), (boxed, Passing::Take)];
     let env = b
-        .environment(&t.store, &EnvironmentShape {
-            definition: DefId::intern(&body),
-            body: 1,
-            captures: &captures,
-            sizes: &[],
-            movable: &[],
-        })
+        .environment(
+            &t.store,
+            &EnvironmentShape {
+                definition: DefId::intern(&body),
+                body: 1,
+                captures: &captures,
+                sizes: &[],
+                movable: &[],
+            },
+        )
         .unwrap();
     let table = checked(b);
     let r = &table.layouts[env.0 as usize];
@@ -2321,22 +2331,28 @@ fn bounded_packed_values_reserve_their_maximum_inside_ordinary_storage() {
             (word, Passing::Take),
         ];
         let env = b
-            .environment(&t.store, &EnvironmentShape {
-                definition: DefId::intern(&definition),
-                body: 0,
-                captures: &captures,
-                sizes: &[],
-                movable: &[],
-            })
+            .environment(
+                &t.store,
+                &EnvironmentShape {
+                    definition: DefId::intern(&definition),
+                    body: 0,
+                    captures: &captures,
+                    sizes: &[],
+                    movable: &[],
+                },
+            )
             .unwrap();
         let movable = b
-            .environment(&t.store, &EnvironmentShape {
-                definition: DefId::intern(&definition),
-                body: 1,
-                captures: &captures,
-                sizes: &[],
-                movable: &[0],
-            })
+            .environment(
+                &t.store,
+                &EnvironmentShape {
+                    definition: DefId::intern(&definition),
+                    body: 1,
+                    captures: &captures,
+                    sizes: &[],
+                    movable: &[0],
+                },
+            )
             .unwrap();
         let table = checked(b);
         for id in &ids[..2] {
@@ -2429,13 +2445,16 @@ fn a_variant_owned_resource_field_is_distinct_from_a_borrowed_capture() {
     let body = path("main");
     let captures = [(trace, hirsel_core_contract::Passing::Borrow)];
     let environment = b
-        .environment(&t.store, &EnvironmentShape {
-            definition: DefId::intern(&body),
-            body: 1,
-            captures: &captures,
-            sizes: &[],
-            movable: &[],
-        })
+        .environment(
+            &t.store,
+            &EnvironmentShape {
+                definition: DefId::intern(&body),
+                body: 1,
+                captures: &captures,
+                sizes: &[],
+                movable: &[],
+            },
+        )
         .unwrap();
     let table = checked(b);
     let variant = rec(&table, variant);
@@ -2769,4 +2788,155 @@ fn strings_and_bytes_share_physical_layouts_in_every_request_order() {
             checked(b);
         }
     }
+}
+
+/// Codec keys (design §1e): a codec plan names its layouts by content, so the plan of
+/// one value over a table whose layouts are numbered apart, because unrelated layouts
+/// were requested first, has the same `CodecKey` for text, boxes, sequences, maps, sets
+/// and Path. Editing a layout the plan reaches changes the key.
+#[test]
+fn codec_keys_survive_unrelated_layouts() {
+    use hirsel_lir::codec::{CodecNode, CodecNodeId, CodecPlan};
+    use hirsel_lir::glue::GlueCodec;
+    let owners = |set_index: Primitive| {
+        let mut owners = Owners::default();
+        let container = |name: &str, generics, index: Primitive| {
+            representation(
+                name,
+                OwnerSpec {
+                    generics,
+                    ..OwnerSpec::default()
+                },
+                move |t| {
+                    let (k, u64_, index) = (t.param(0), t.p(Primitive::U64), t.p(index));
+                    let entry = if generics == 2 {
+                        let v = t.param(1);
+                        t.tuple(&[k, v])
+                    } else {
+                        k
+                    };
+                    let key = t.inline(u64_, 2);
+                    let entries = t.list(entry);
+                    let index = t.list(index);
+                    t.record(&[key, entries, index])
+                },
+            )
+        };
+        owners
+            .containers
+            .insert(Container::Map, container("Map", 2, Primitive::U32));
+        owners
+            .containers
+            .insert(Container::Set, container("Set", 1, set_index));
+        owners.nominals.insert(
+            DefId::intern(&DefPath::core("Path")),
+            OwnerRepresentation::Handle {
+                revision: ContentHash::of_bytes(b"Path"),
+                resource: false,
+            },
+        );
+        owners
+    };
+    let mut t = ty();
+    let (u64_, string, bytes) = (
+        t.p(Primitive::U64),
+        t.p(Primitive::String),
+        t.p(Primitive::Bytes),
+    );
+    let boxed = t.boxed(u64_);
+    let list = t.list(u64_);
+    let map = t.builtin(
+        BuiltinType::Map,
+        vec![GenericArgument::Type(string), GenericArgument::Type(u64_)],
+    );
+    let set = t.builtin(BuiltinType::Set, vec![GenericArgument::Type(u64_)]);
+    let path_ = t.named(&DefPath::core("Path"), vec![]);
+    let root = t.record(&[string, boxed, list, map, set, path_]);
+    let (i16_, f32_) = (t.p(Primitive::I16), t.p(Primitive::F32));
+    let other = t.list(f32_);
+    let unrelated = [t.record(&[i16_, other]), other, t.boxed(i16_)];
+    let key = |owners: &Owners, first: &[TypeId]| {
+        let mut b = LayoutBuilder::new(&x86(), owners);
+        for ty in first {
+            b.layout(&t.store, *ty).unwrap();
+        }
+        let [
+            u64_l,
+            string_l,
+            bytes_l,
+            boxed_l,
+            list_l,
+            map_l,
+            set_l,
+            path_l,
+            root_l,
+        ] = [u64_, string, bytes, boxed, list, map, set, path_, root]
+            .map(|ty| b.layout(&t.store, ty).unwrap());
+        let table = checked(b);
+        let u8_l = LayoutId(
+            table
+                .layouts
+                .iter()
+                .position(|l| l.kind == LayoutKind::Scalar(ScalarKind::U8))
+                .expect("a byte sequence's element") as u32,
+        );
+        let storage = hirsel_lir::emission::slice_storage(&table, u8_l).expect("byte storage");
+        let n = |i: u32| CodecNodeId(i);
+        let nodes = vec![
+            CodecNode::Scalar(u64_l),
+            CodecNode::Text {
+                layout: string_l,
+                storage,
+                utf8: true,
+            },
+            CodecNode::Box {
+                layout: boxed_l,
+                payload: n(0),
+            },
+            CodecNode::Sequence {
+                layout: list_l,
+                element: n(0),
+            },
+            CodecNode::Map {
+                layout: map_l,
+                key: n(1),
+                value: n(0),
+            },
+            CodecNode::Set {
+                layout: set_l,
+                element: n(0),
+            },
+            CodecNode::Path(path_l),
+            CodecNode::Fields {
+                layout: root_l,
+                fields: (1..7).map(n).collect(),
+            },
+            CodecNode::Text {
+                layout: bytes_l,
+                storage,
+                utf8: false,
+            },
+        ];
+        let plan = CodecPlan {
+            descriptor: b"fixture schema".to_vec(),
+            nodes,
+            root: n(7),
+            bytes: n(8),
+            result: None,
+            checks: Vec::new(),
+        };
+        let keys = hirsel_lir::LayoutKeys::new(&table);
+        let codec = GlueCodec::of(&plan, &[], &table, &keys).unwrap();
+        (codec.key, set_l)
+    };
+    let plain = owners(Primitive::U32);
+    let (base, base_set) = key(&plain, &[]);
+    let (shifted, shifted_set) = key(&plain, &unrelated);
+    assert_ne!(
+        base_set, shifted_set,
+        "unrelated layouts renumber the table"
+    );
+    assert_eq!(base, shifted);
+    let (edited, _) = key(&owners(Primitive::U16), &unrelated);
+    assert_ne!(base, edited, "the Set's representation is in the key");
 }
