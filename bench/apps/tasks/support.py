@@ -41,7 +41,7 @@ def grants(directory, port):
 
 
 class Server:
-    def __init__(self, kind, directory, port, hirsel_binary, log, timeout=300, perf=None, record=None):
+    def __init__(self, kind, directory, port, hirsel_binary, log, timeout=300, perf=None, record=None, heap=None):
         environment = dict(os.environ, TASKS_DATA=str(directory),
                            TASKS_STATIC=str(ROOT / 'examples/tasks/static'),
                            TASKS_WALL_CLOCK='off', TASKS_LOG_LEVEL='error',
@@ -51,6 +51,9 @@ class Server:
             command = [str(hirsel_binary), '--hirsel-grants', json.dumps(grants(directory, port)), '--port', str(port), '--log-level', 'error']
         else:
             command = [str(RUST), '--port', str(port)]
+        if heap:
+            command = ['env', 'LD_PRELOAD=/usr/lib/heaptrack/libheaptrack_preload.so',
+                       'DUMP_HEAPTRACK_OUTPUT=' + str(heap), *command]
         self.marker = directory.parent / (directory.name + '-launch.json')
         command = ['taskset', '-c', '31', str(APP / 'rust/target/release/launch'), str(self.marker), *command]
         if record:
