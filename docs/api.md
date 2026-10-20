@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1629 exported definitions; 628 variants.
+1654 exported definitions; 640 variants.
 
 ## Types and roots
 
@@ -232,11 +232,17 @@ Variant of ClockError.
 
 <a id="def-core_401_2fDecodeError"></a>
 
-- `type DecodeError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Version() | SchemaMismatch() | Truncated() | Trailing() | Scalar() | Utf8() | Tag() | Length() | Duplicate() | Order()`
+- `type DecodeError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Version() | SchemaMismatch() | Truncated() | Trailing() | Scalar() | Utf8() | Tag() | Length() | Duplicate() | Order() | Invalid()`
 
 <a id="def-core_401_2fDecodeError_23Duplicate"></a>
 
 - `Duplicate() -> DecodeError`
+
+Variant of DecodeError.
+
+<a id="def-core_401_2fDecodeError_23Invalid"></a>
+
+- `Invalid() -> DecodeError`
 
 Variant of DecodeError.
 
@@ -3728,9 +3734,9 @@ References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_4
 
 <a id="def-std_401_2fderive_2fhash"></a>
 
-- `pub fn derive.hash[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] uses {}`
+- `pub fn derive.hash[T](s: TypeShape[T]) -> Result[ Body[fn(T, mut siphash.State) -> () uses {}], String ] uses {}`
 
-References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
+References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
 
 <a id="def-std_401_2fderive_2fjson_5fbool"></a>
 
@@ -3760,6 +3766,18 @@ directly from a record or choice. Nested nominal types supply their own
 
 References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
 
+<a id="def-std_401_2fderive_2fjson_5finvalid_5ftype"></a>
+
+- `pub fn derive.json_invalid_type(value: json.Value, expected: String) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fderive_2fjson_5flength"></a>
+
+- `pub fn derive.json_length(length: u64, count: u64, expected: String) -> Result[(), String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
+
 <a id="def-std_401_2fderive_2fjson_5fnumber"></a>
 
 - `pub fn derive.json_number(value: json.Value) -> Result[unique String, String] uses {}`
@@ -3772,6 +3790,12 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
+<a id="def-std_401_2fderive_2fjson_5funexpected"></a>
+
+- `pub fn derive.json_unexpected(value: json.Value) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
 <a id="def-std_401_2fderive_2fjson_5fvalue"></a>
 
 - `pub fn derive.json_value[T](s: TypeShape[T]) -> Result[ Body[fn(T) -> json.Value uses {}], String ] uses {}`
@@ -3783,6 +3807,12 @@ References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_4
 - `pub fn derive.parsed[N, E](take value: Result[N, E], ty: String) -> Result[N, String] uses {value}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fderive_2funknown_5fvariant"></a>
+
+- `pub fn derive.unknown_variant(tag: String, expected: String) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString)
 
 
 ## diff
@@ -7438,9 +7468,9 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_4
 
 <a id="def-std_401_2flog_2fField"></a>
 
-- `@serializable pub type log.Field { name: String, value: String, }`
+- `@serializable pub type log.Field { name: String, value: Value, }`
 
-References: [`core@1/String`](#def-core_401_2fString)
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/log/Value`](#def-std_401_2flog_2fValue)
 
 <a id="def-std_401_2flog_2fLevel"></a>
 
@@ -7469,6 +7499,98 @@ Variant of log.Level.
 - `Warn -> log.Level`
 
 Variant of log.Level.
+
+<a id="def-std_401_2flog_2fValue"></a>
+
+- `@serializable pub type log.Value = Null | Text(String) | Int(i64) | Uint(u64) | Float(f64) | Bool(bool) | Duration( time.Duration ) | Timestamp(time.Timestamp) | Json(json.Value) | Failure(String) | Severity(Level)`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/f64`](#def-core_401_2ff64), [`core@1/i64`](#def-core_401_2fi64), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/log/Level`](#def-std_401_2flog_2fLevel), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
+
+<a id="def-std_401_2flog_2fValue_23Bool"></a>
+
+- `Bool(bool) -> log.Value`
+
+Variant of log.Value.
+
+References: [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2flog_2fValue_23Duration"></a>
+
+- `Duration( time.Duration ) -> log.Value`
+
+Variant of log.Value.
+
+References: [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
+
+<a id="def-std_401_2flog_2fValue_23Failure"></a>
+
+- `Failure(String) -> log.Value`
+
+Variant of log.Value.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2flog_2fValue_23Float"></a>
+
+- `Float(f64) -> log.Value`
+
+Variant of log.Value.
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2flog_2fValue_23Int"></a>
+
+- `Int(i64) -> log.Value`
+
+Variant of log.Value.
+
+References: [`core@1/i64`](#def-core_401_2fi64)
+
+<a id="def-std_401_2flog_2fValue_23Json"></a>
+
+- `Json(json.Value) -> log.Value`
+
+Variant of log.Value.
+
+References: [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2flog_2fValue_23Null"></a>
+
+- `Null -> log.Value`
+
+Variant of log.Value.
+
+<a id="def-std_401_2flog_2fValue_23Severity"></a>
+
+- `Severity(Level) -> log.Value`
+
+Variant of log.Value.
+
+References: [`std@1/log/Level`](#def-std_401_2flog_2fLevel)
+
+<a id="def-std_401_2flog_2fValue_23Text"></a>
+
+- `Text(String) -> log.Value`
+
+Variant of log.Value.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2flog_2fValue_23Timestamp"></a>
+
+- `Timestamp(time.Timestamp) -> log.Value`
+
+Variant of log.Value.
+
+References: [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
+
+<a id="def-std_401_2flog_2fValue_23Uint"></a>
+
+- `Uint(u64) -> log.Value`
+
+Variant of log.Value.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2flog_2fto_5fstring"></a>
 
@@ -10044,6 +10166,121 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_4
 - `@noalloc fn simd.splat[A, n: size](value: A) -> Simd[A, n]`
 
 
+## siphash
+
+<a id="def-std_401_2fsiphash_2fState"></a>
+
+- `pub opaque type siphash.State: plain + inert uses {}`
+
+<a id="def-std_401_2fsiphash_2fdigest"></a>
+
+- `@noalloc pub fn siphash.digest(k0: u64, k1: u64, data: Bytes) -> u64 uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fsiphash_2ffinish"></a>
+
+- `@noalloc pub fn siphash.finish(state: State) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2ffresh"></a>
+
+- `@noalloc pub fn siphash.fresh(state: State) -> State uses {}`
+
+References: [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fhash_5fone"></a>
+
+- `pub fn siphash.hash_one[T](value: T, writer: fn(T, mut State) -> () uses {}, k0: u64, k1: u64) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fnew"></a>
+
+- `@noalloc pub fn siphash.new(k0: u64, k1: u64) -> State uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite"></a>
+
+- `@noalloc pub fn siphash.write(mut s: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fbool"></a>
+
+- `@noalloc pub fn siphash.write_bool(mut s: State, value: bool) -> () uses {}`
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fi128"></a>
+
+- `@noalloc pub fn siphash.write_i128(mut s: State, value: i128) -> () uses {}`
+
+References: [`core@1/i128`](#def-core_401_2fi128), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fi16"></a>
+
+- `@noalloc pub fn siphash.write_i16(mut s: State, value: i16) -> () uses {}`
+
+References: [`core@1/i16`](#def-core_401_2fi16), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fi32"></a>
+
+- `@noalloc pub fn siphash.write_i32(mut s: State, value: i32) -> () uses {}`
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fi64"></a>
+
+- `@noalloc pub fn siphash.write_i64(mut s: State, value: i64) -> () uses {}`
+
+References: [`core@1/i64`](#def-core_401_2fi64), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fi8"></a>
+
+- `@noalloc pub fn siphash.write_i8(mut s: State, value: i8) -> () uses {}`
+
+References: [`core@1/i8`](#def-core_401_2fi8), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fstr"></a>
+
+- `@noalloc pub fn siphash.write_str(mut s: State, text: String) -> () uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fu128"></a>
+
+- `@noalloc pub fn siphash.write_u128(mut s: State, value: u128) -> () uses {}`
+
+References: [`core@1/u128`](#def-core_401_2fu128), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fu16"></a>
+
+- `@noalloc pub fn siphash.write_u16(mut s: State, value: u16) -> () uses {}`
+
+References: [`core@1/u16`](#def-core_401_2fu16), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fu32"></a>
+
+- `@noalloc pub fn siphash.write_u32(mut s: State, value: u32) -> () uses {}`
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fu64"></a>
+
+- `@noalloc pub fn siphash.write_u64(mut s: State, value: u64) -> () uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+<a id="def-std_401_2fsiphash_2fwrite_5fu8"></a>
+
+- `@noalloc pub fn siphash.write_u8(mut s: State, value: u8) -> () uses {}`
+
+References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/siphash/State`](#def-std_401_2fsiphash_2fState)
+
+
 ## slots
 
 <a id="def-core_401_2fslots_2fempty"></a>
@@ -11107,8 +11344,8 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_
 
 Go Reader.Next: skips the rest of the current entry and returns the next
 entry's header, or None after the end-of-archive marker or at the end of
-the input at a block boundary. PAX `x` records and GNU long names apply to
-the entry that follows them; a PAX global header is returned as a `Global`
+the input after an entry's data (including inside its padding). PAX `x`
+records and GNU long names apply to the entry that follows them; a PAX global header is returned as a `Global`
 entry. Entry names are returned as stored: `extract` refuses unsafe ones.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader), [`std@1/tar/Header`](#def-std_401_2ftar_2fHeader), [`std@1/tar/ReadError`](#def-std_401_2ftar_2fReadError), [`std@1/tar/Reader`](#def-std_401_2ftar_2fReader)
@@ -11750,7 +11987,7 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/char`](#def-core_401
 
 <a id="def-std_401_2ftime_2fBrokenDownTime"></a>
 
-- `pub type time.BrokenDownTime { datetime: DateTime, offset: Option[i32], }`
+- `@serializable pub type time.BrokenDownTime { datetime: DateTime, offset: Option[i32], }`
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime)
 
@@ -11772,13 +12009,13 @@ Variant of time.CalendarError.
 
 <a id="def-std_401_2ftime_2fDate"></a>
 
-- `@format(date.format_into) pub opaque type time.Date: plain + key + sendable + inert + noalloc_drop uses {}`
+- `@format(date.format_into) @serializable(check = decoded_date) pub opaque type time.Date: plain + key + sendable + inert + noalloc_drop uses {}`
 
 References: [`std@1/date/format_into`](#def-std_401_2fdate_2fformat_5finto)
 
 <a id="def-std_401_2ftime_2fDateTime"></a>
 
-- `@format(date_time.format_into) pub type time.DateTime { date: Date, time: TimeOfDay, }`
+- `@format(date_time.format_into) @serializable pub type time.DateTime { date: Date, time: TimeOfDay, }`
 
 References: [`std@1/date_time/format_into`](#def-std_401_2fdate_5ftime_2fformat_5finto), [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
 
@@ -11896,7 +12133,7 @@ Variant of time.TimeError.
 
 <a id="def-std_401_2ftime_2fTimeOfDay"></a>
 
-- `@format(time_of_day.format_into) pub opaque type time.TimeOfDay: plain + key + sendable + inert + noalloc_drop uses {}`
+- `@format(time_of_day.format_into) @serializable(check = decoded_time) pub opaque type time.TimeOfDay: plain + key + sendable + inert + noalloc_drop uses {}`
 
 References: [`std@1/time_of_day/format_into`](#def-std_401_2ftime_5fof_5fday_2fformat_5finto)
 
@@ -12184,7 +12421,7 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2ftoml_2fMoment"></a>
 
-- `pub type toml.Moment = OffsetDateTime(time.DateTime, i32) | LocalDateTime(time.DateTime) | LocalDate( time.Date ) | LocalTime(time.TimeOfDay)`
+- `@serializable pub type toml.Moment = OffsetDateTime(time.DateTime, i32) | LocalDateTime(time.DateTime) | LocalDate( time.Date ) | LocalTime(time.TimeOfDay)`
 
 References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
 
@@ -13528,6 +13765,12 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 - `pub fn x509.certificates(chain: Bytes) -> Result[List[Bytes], X509Error] uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/x509/X509Error`](#def-std_401_2fx509_2fX509Error)
+
+<a id="def-std_401_2fx509_2fdomain_5fname_5fvalid"></a>
+
+- `pub fn x509.domain_name_valid(name: String, constraint: bool) -> bool uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
 
 <a id="def-std_401_2fx509_2fparse"></a>
 
