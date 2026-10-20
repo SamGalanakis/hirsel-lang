@@ -1214,7 +1214,7 @@ fn http_exchange_transfer(take exchange: HttpExchange) -> HttpTransfer {
   HttpTransfer(
     tasks: unique tasks,
     active: unique active,
-    net: unique net,
+    net: net,
     stream: take stream,
     data: core@1/shared.freeze(take data)
   )
