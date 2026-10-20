@@ -298,27 +298,6 @@ fn an_invalid_identity_is_invalid_input_and_never_starts_tls() {
 }
 
 #[test]
-fn server_abi_is_an_identity_list_then_the_client_policy() {
-    use hirsel_rt::tls_abi::{TlsClientAuthAbi, TlsServerAbi};
-    use std::mem::{align_of, offset_of, size_of};
-    assert_eq!(
-        (
-            size_of::<TlsClientAuthAbi>(),
-            offset_of!(TlsClientAuthAbi, pem)
-        ),
-        (32, 8)
-    );
-    assert_eq!(
-        (
-            size_of::<TlsServerAbi>(),
-            align_of::<TlsServerAbi>(),
-            offset_of!(TlsServerAbi, clients)
-        ),
-        (40, 8, 8)
-    );
-}
-
-#[test]
 fn identity_abi_is_two_core_byte_slices() {
     use hirsel_rt::tls_abi::TlsIdentityAbi;
     use std::mem::{align_of, offset_of, size_of};

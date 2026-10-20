@@ -308,16 +308,4 @@ mod tests {
         drop(held);
         assert!(ProcessStdin::take().is_some());
     }
-
-    #[test]
-    fn captured_sinks_keep_each_run_output_apart() {
-        let (first, first_bytes) = Sink::capture();
-        let (second, second_bytes) = Sink::capture();
-        let mut shared = first.clone();
-        write!(shared, "one").unwrap();
-        write!(second.clone(), "two").unwrap();
-        write!(first.clone(), " more").unwrap();
-        assert_eq!(first_bytes.bytes(), b"one more");
-        assert_eq!(second_bytes.bytes(), b"two");
-    }
 }

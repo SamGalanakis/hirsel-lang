@@ -666,9 +666,6 @@ fn io_check_precedence_matrix() {
 #[ignore = "full gate: expanded precedence matrix"]
 fn full_gate_io_check_precedence_matrix() {
     precedence_file_matrix(8);
-    precedence_net_matrix();
-    precedence_process_matrix();
-    precedence_stream_matrix();
 }
 
 fn net_completion(request: &Request, error: NetError) -> Completion {

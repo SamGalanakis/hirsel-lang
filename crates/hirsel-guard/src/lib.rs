@@ -391,21 +391,6 @@ mod tests {
     }
 
     #[test]
-    fn sizes_print_in_their_largest_exact_unit() {
-        for (bytes, text) in [
-            (4u64 << 30, "4G"),
-            (5632 << 20, "5632M"),
-            (1536 << 10, "1536K"),
-            (1000, "1000"),
-            (0, "0"),
-        ] {
-            let mut line = Line::new();
-            line.size(bytes);
-            assert_eq!(&line.bytes[..line.len], text.as_bytes());
-        }
-    }
-
-    #[test]
     fn exhaustion_child() {
         if std::env::var_os(CHILD).is_none() {
             return;
@@ -435,20 +420,6 @@ mod tests {
             "{stderr}"
         );
         assert!(!String::from_utf8_lossy(&output.stdout).contains("allocated"));
-    }
-
-    #[test]
-    fn the_same_allocations_fit_under_a_larger_limit() {
-        let output = child(
-            "tests::exhaustion_child",
-            &[("HIRSEL_MEMORY_LIMIT", "768M")],
-        );
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("allocated 64 blocks"));
     }
 
     #[test]

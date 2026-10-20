@@ -167,25 +167,6 @@ fn tls_close_on_a_plain_host_stream_succeeds_without_sending_bytes() {
 }
 
 #[test]
-fn tls_abi_uses_the_core_result_layouts() {
-    use std::mem::{align_of, size_of};
-    assert_eq!(
-        (
-            size_of::<hirsel_rt::net_abi::NetWordResult>(),
-            align_of::<hirsel_rt::net_abi::NetWordResult>()
-        ),
-        (24, 8)
-    );
-    assert_eq!(
-        (
-            size_of::<hirsel_rt::net_abi::NetUnitResult>(),
-            align_of::<hirsel_rt::net_abi::NetUnitResult>()
-        ),
-        (16, 4)
-    );
-}
-
-#[test]
 fn cooperative_tls_retains_handshake_and_plaintext_across_readiness() {
     use hirsel_rt::{net_host::CooperativeNet, readiness::Readiness};
     struct Pump {

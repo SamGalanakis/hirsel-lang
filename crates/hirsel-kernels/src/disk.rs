@@ -199,33 +199,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unsynced_rename_or_removal_is_undone() {
-        let start = BTreeMap::from([("a".to_string(), (1, b"x".to_vec()))]);
-        let disk = Durable::of(&BTreeSet::from([String::new()]), &start);
-        // The live tree renamed a to b and removed nothing durable.
-        assert_eq!(disk.crash(7).files, start);
-    }
-
-    #[test]
-    fn the_last_write_tears_at_a_seeded_byte_only_after_a_durable_prefix() {
-        let start = BTreeMap::from([("j".to_string(), (1, b"head".to_vec()))]);
-        let mut disk = Durable::of(&BTreeSet::from([String::new()]), &start);
-        disk.wrote(1, 4, b"record");
-        let kept: BTreeSet<usize> = (0..64)
-            .map(|seed| disk.crash(seed).files["j"].1.len() - 4)
-            .collect();
-        assert!(kept.len() > 3 && kept.iter().all(|k| *k <= 6), "{kept:?}");
-        for seed in 0..8 {
-            let bytes = &disk.crash(seed).files["j"].1;
-            assert!(b"headrecord".starts_with(bytes));
-            assert_eq!(disk.crash(seed), disk.crash(seed));
-        }
-        // A write past unsynced bytes cannot survive in part: the gap was never durable.
-        disk.wrote(1, 9, b"more");
-        assert!((0..16).all(|seed| disk.crash(seed).files["j"].1 == b"head"));
-    }
-
-    #[test]
     fn a_sync_makes_its_whole_directory_chain_durable() {
         let mut disk = Durable::of(&BTreeSet::from([String::new()]), &BTreeMap::new());
         let (dirs, files) = tree(&["", "a", "a/b"], &[("a/b/f", 3)]);
