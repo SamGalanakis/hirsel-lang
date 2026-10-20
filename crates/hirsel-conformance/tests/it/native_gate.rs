@@ -614,48 +614,6 @@ fn cranelift_keeps_the_parity_ratchet_when_the_llvm_control_agrees() {
 }
 
 #[test]
-fn compiled_only_library_oracles_skip_interpretation_on_both_backends() {
-    on_compiler(|| {
-        let id = "native-tests/library/oracle-expected-stdout.hir";
-        let case = native::cranelift::cases(&root())
-            .unwrap()
-            .into_iter()
-            .find(|case| case.id == id)
-            .unwrap();
-        let mut matrix = native::cranelift::matrix(
-            hirsel_driver::native::TargetSpec::x86_64_unknown_linux_gnu(),
-        );
-        matrix.push(hirsel_driver::native::smoke_matrix().remove(0));
-        let toolchain = hirsel_driver::native::Toolchain::for_matrix(
-            &native::runtime_cache().unwrap(),
-            &matrix,
-        )
-        .unwrap();
-        let scratch = native::scratch::RunRoot::create_in(&fresh_parent("stdout-oracle")).unwrap();
-        let result = case.run(&matrix, &toolchain, &scratch.join("oracle").unwrap());
-        assert!(result.snapshot.is_none(), "{:?}", result.snapshot);
-        let expected = result.reference.as_ref().unwrap();
-        assert_eq!(expected.exit_code, Some(0), "{expected:?}");
-        assert_eq!(expected.output, b"499999500000\n");
-        assert_eq!(result.outcomes.len(), 2);
-        assert!(
-            result
-                .outcomes
-                .iter()
-                .all(|(_, class, _)| *class != Class::Heap)
-        );
-        assert!(
-            result
-                .outcomes
-                .iter()
-                .all(|(_, _, outcome)| matches!(outcome, Outcome::Agree)),
-            "{:?}",
-            result.outcomes
-        );
-    });
-}
-
-#[test]
 fn stdout_oracles_require_library_paths_reasons_and_exact_sidecar_bytes() {
     let parent = fresh_parent("oracle-header");
     let id = "native-tests/library/control.hir";

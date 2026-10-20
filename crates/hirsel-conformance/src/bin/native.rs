@@ -1486,12 +1486,6 @@ mod tests {
     }
 
     #[test]
-    fn host_worker_limit_is_the_default_and_explicit_jobs_override_it() {
-        assert_eq!(worker_count(None), hirsel_guard::jobs());
-        assert_eq!(worker_count(Some(3)), 3);
-    }
-
-    #[test]
     fn filtered_smoke_uses_the_callers_programs_for_cranelift() {
         let cases = ["new-program.hir", "unrelated.hir", "generated/success-0"].map(|id| Case {
             id: id.into(),

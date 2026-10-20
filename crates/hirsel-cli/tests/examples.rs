@@ -1721,7 +1721,27 @@ fn check_example_tests(name: &str, source: &str, count: u64) {
 
 /// `hirsel test` on a package manifest, interpreted, with LLVM and with Cranelift.
 fn check_package_tests(name: &str, manifest: &std::path::Path, count: u64) {
-    for backend in [None, Some("llvm"), Some("cranelift")] {
+    check_package_tests_on(
+        name,
+        manifest,
+        count,
+        &[None, Some("llvm"), Some("cranelift")],
+    );
+}
+
+/// A package's own tests on the interpreter and LLVM only: Cranelift parity is gated by
+/// testing.rs's native_test_engines_match_interpreted_* and the Cranelift campaign.
+fn check_interpreted_and_llvm_package_tests(name: &str, manifest: &std::path::Path, count: u64) {
+    check_package_tests_on(name, manifest, count, &[None, Some("llvm")]);
+}
+
+fn check_package_tests_on(
+    name: &str,
+    manifest: &std::path::Path,
+    count: u64,
+    backends: &[Option<&str>],
+) {
+    for &backend in backends {
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
         command.args(["test", "--json"]);
         if let Some(backend) = backend {
@@ -2068,7 +2088,7 @@ fn repository_manifest(path: &str) -> PathBuf {
 // relative path.
 #[test]
 fn datastar_package_tests() {
-    check_package_tests(
+    check_interpreted_and_llvm_package_tests(
         "datastar",
         &repository_manifest("packages/datastar@1/hirsel.json"),
         7,
@@ -2092,7 +2112,7 @@ fn datastar_api_reference_is_current() {
 
 #[test]
 fn protobuf_package_tests() {
-    check_package_tests(
+    check_interpreted_and_llvm_package_tests(
         "protobuf",
         &repository_manifest("packages/protobuf@1/hirsel.json"),
         5,
@@ -2101,7 +2121,7 @@ fn protobuf_package_tests() {
 
 #[test]
 fn grpc_package_tests() {
-    check_package_tests(
+    check_interpreted_and_llvm_package_tests(
         "grpc",
         &repository_manifest("packages/grpc@1/hirsel.json"),
         6,
@@ -2181,7 +2201,7 @@ fn protoc_regenerates_the_greeter() {
 
 #[test]
 fn tasks_package_tests() {
-    check_package_tests(
+    check_interpreted_and_llvm_package_tests(
         "tasks",
         &repository_manifest("examples/tasks/hirsel.json"),
         22,
@@ -2249,6 +2269,27 @@ impl Drop for Running {
 /// The client runs its `first` phase, holds a stream open while the server stops on
 /// stdin EOF (`watch`), and runs `second` after a restart on the same port over the
 /// same data directory.
+/// examples/tasks built once per test process with LLVM, shared by the native tests
+/// that launch the server.
+fn tasks_llvm() -> &'static PathBuf {
+    static EXE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    EXE.get_or_init(|| {
+        let dir =
+            std::env::temp_dir().join(format!("hirsel-example-{}-tasks-llvm", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("tasks");
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["build", "--backend", "llvm"])
+            .arg(repository_manifest("examples/tasks/hirsel.json"))
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "build tasks: {output:?}");
+        exe
+    })
+}
+
 fn tasks_end_to_end(native: bool) {
     let dir = std::env::temp_dir().join(format!(
         "hirsel-example-{}-{}-tasks-e2e",
@@ -2261,18 +2302,7 @@ fn tasks_end_to_end(native: bool) {
     let client = repository_manifest("examples/tasks/e2e/hirsel.json");
     // The server is built once and launched directly; the client always runs
     // interpreted, since natively it would build std's HTTP client too.
-    let built: Option<PathBuf> = native.then(|| {
-        let exe = dir.join("tasks");
-        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .args(["build", "--backend", "llvm"])
-            .arg(&server)
-            .arg("-o")
-            .arg(&exe)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "build tasks: {output:?}");
-        exe
-    });
+    let built: Option<PathBuf> = native.then(|| tasks_llvm().clone());
     let launch =
         |manifest: &PathBuf, exe: Option<&PathBuf>, grants: &serde_json::Value, args: &[&str]| {
             let path = dir.join(format!(
@@ -2580,15 +2610,7 @@ fn tasks_event_streams_hold_no_board_llvm() {
         serde_json::json!({"next_id": TASKS + 1, "revision": 1, "tasks": tasks}).to_string(),
     )
     .unwrap();
-    let exe = dir.join("tasks");
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .args(["build", "--backend", "llvm"])
-        .arg(repository_manifest("examples/tasks/hirsel.json"))
-        .arg("-o")
-        .arg(&exe)
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "build tasks: {output:?}");
+    let exe = tasks_llvm().clone();
     let port = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .unwrap()
         .local_addr()

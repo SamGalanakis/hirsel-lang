@@ -33,7 +33,20 @@ fn source_codec(name: &str, module: &str, functions: &[&str]) {
                 .unwrap_or_else(|| panic!("missing {module}/{function}"));
             assert_eq!(unit.unit().header.origin, UnitOrigin::Source);
         }
-        let outcome = run_path(&path, &mut Vec::new()).unwrap();
+        // A corpus suite may raise its step budget with a `// steps:` header.
+        let steps = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .find_map(|line| line.strip_prefix("// steps: ")?.parse().ok());
+        let outcome = run_path_with_step_budget(
+            &path,
+            SimulationConfig::default(),
+            steps,
+            Verify::On,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert!(
             matches!(
                 outcome,
@@ -248,7 +261,7 @@ fn x509_is_ordinary_source() {
 
 #[test]
 fn shlex_is_ordinary_source() {
-    source_codec("shlex-quote", "shlex", &["split", "quote", "join"]);
+    source_codec("shlex-posix-1", "shlex", &["split", "quote", "join"]);
 }
 
 #[test]
@@ -300,7 +313,7 @@ fn uuid_v7_reads_the_wall_clock() {
 #[test]
 fn semver_is_ordinary_source() {
     source_codec(
-        "semver-npm-match-1",
+        "semver-version",
         "semver",
         &["parse", "parse_npm", "matches"],
     );

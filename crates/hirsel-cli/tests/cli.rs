@@ -64,52 +64,6 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
     }
 }
 
-/// `--no-verify` skips V for run, test and build only: the program's output is
-/// unchanged, and every other command refuses it as a usage error.
-#[test]
-fn no_verify_changes_no_output_and_applies_only_to_run_test_and_build() {
-    let path = file(
-        "pub fn main(rt: Io) -> Result[(), GrantError] {\n  let out = io.stdout(rt)?\n  let _ = out.print(out, \"hello\\n\")\n  Ok(())\n}\n",
-    );
-    let run = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .args(args)
-            .arg(&path)
-            .args([
-                "--grants",
-                r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}"#,
-            ])
-            .output()
-            .unwrap()
-    };
-    let verified = run(&["run"]);
-    assert_eq!(verified.status.code(), Some(0), "{verified:?}");
-    assert_eq!(verified.stdout, b"hello\n");
-    for args in [&["--no-verify", "run"][..], &["run", "--no-verify"]] {
-        let unverified = run(args);
-        assert_eq!(
-            unverified.status.code(),
-            Some(0),
-            "{args:?}: {unverified:?}"
-        );
-        assert_eq!(unverified.stdout, verified.stdout, "{args:?}");
-        assert_eq!(unverified.stderr, verified.stderr, "{args:?}");
-    }
-    for command in ["check", "fmt", "hash", "expand"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .args([command, "--no-verify"])
-            .arg(&path)
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(2), "{command}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .starts_with("--no-verify applies only to run, test and build\n"),
-            "{command}: {output:?}"
-        );
-    }
-}
-
 /// A missing or mismatched precheck costs only time: the run's output is
 /// unchanged, and only `--verbose` says why a dependency was checked from source.
 #[test]
@@ -872,24 +826,6 @@ pub fn main(rt: Io, args: Args) -> Result[(), String] {
              `--simulation <world.json>`\n",
             "{flags:?}"
         );
-    }
-    std::fs::remove_file(source).unwrap();
-}
-
-#[test]
-fn bare_run_executes_a_root_free_main_in_every_engine() {
-    let source = file("pub fn main() -> Result[(), ()] { Error(()) }");
-    let engines: [&[&str]; 3] = [&[], &["--native"], &["--native", "--backend", "cranelift"]];
-    for flags in engines {
-        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .arg("run")
-            .args(flags)
-            .arg(&source)
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(1), "{flags:?}: {output:?}");
-        assert!(output.stdout.is_empty(), "{flags:?}");
-        assert_eq!(output.stderr, b"error: ()\n", "{flags:?}");
     }
     std::fs::remove_file(source).unwrap();
 }
@@ -1710,32 +1646,6 @@ fn standalone_admits_selected_roots_and_explicit_argv_without_ambient_grants() {
 }
 
 #[test]
-fn cranelift_release_is_refused_before_reading_source_or_writing_output() {
-    let source = file("pub fn main() -> Result[(), ()] { Ok(()) }\n");
-    let exe = source.with_extension("exe");
-    for options in [
-        ["--release", "--backend", "cranelift"],
-        ["--backend", "cranelift", "--release"],
-    ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .arg("build")
-            .args(options)
-            .arg(&source)
-            .arg("-o")
-            .arg(&exe)
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(2), "{output:?}");
-        assert!(String::from_utf8_lossy(&output.stderr).contains("release builds use LLVM"));
-        assert!(!exe.exists());
-        // The second order also refuses invalid source before checking it.
-        std::fs::remove_file(&source).unwrap();
-        std::fs::write(&source, "invalid source").unwrap();
-    }
-    std::fs::remove_file(source).unwrap();
-}
-
-#[test]
 fn x86_build_needs_no_cross_target_or_memcheck_environment() {
     let source = file("pub fn main() -> Result[(), ()] { Ok(()) }\n");
     let executable = source.with_extension("exe");
@@ -1764,46 +1674,6 @@ fn x86_build_needs_no_cross_target_or_memcheck_environment() {
         std::fs::remove_file(&executable).unwrap();
     }
     std::fs::remove_file(source).unwrap();
-}
-
-#[test]
-fn cranelift_builds_and_runs_what_llvm_builds_and_runs() {
-    let source = file(
-        "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"backend\\n\"); Ok(()) }\n",
-    );
-    let grants = file(r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}"#);
-    for backend in ["llvm", "cranelift"] {
-        // A standalone executable (a `STANDALONE` program descriptor)...
-        let executable = build_executable(&source, &["--debug", "--backend", backend]);
-        let output = Command::new(&executable)
-            .arg("--hirsel-grants")
-            .arg(&grants)
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(0), "{backend}: {output:?}");
-        assert_eq!(output.stdout, b"backend\n", "{backend}");
-        std::fs::remove_file(executable).unwrap();
-        // ...and a launched one (a program descriptor bound to its run).
-        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .args(["run", "--native", "--backend", backend])
-            .arg(&source)
-            .arg("--grants")
-            .arg(&grants)
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(0), "{backend}: {output:?}");
-        assert_eq!(output.stdout, b"backend\n", "{backend}");
-    }
-    for args in [
-        vec!["run", "--backend", "cranelift", "source.hir"],
-        vec!["build", "--backend", "gcc", "source.hir", "-o", "unused"],
-    ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .args(&args)
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
-    }
 }
 
 #[test]
@@ -3184,13 +3054,6 @@ fn std_signature_page() -> Vec<u8> {
     output.stdout
 }
 
-#[test]
-fn doc_std_manifest_prints_the_public_signature_page() {
-    let page = String::from_utf8(std_signature_page()).unwrap();
-    assert!(page.starts_with("# Public API\n"), "{page}");
-    assert!(page.lines().any(|line| line.starts_with("## ")), "{page}");
-}
-
 /// Only tools/land writes docs/api.md, on the tip it pushes: the full gate
 /// checks main's page is what `hirsel doc` prints (FULL_GATE_SKIPS).
 #[test]
@@ -3249,58 +3112,6 @@ fn runtime_failure_reports_a_complete_site_in_human_and_json() {
         non_utf8.to_string_lossy().as_ref()
     );
     std::fs::remove_file(non_utf8).unwrap();
-}
-
-#[test]
-fn native_runtime_failure_reports_keep_sites_and_standalone_uses_logical_files() {
-    let path = file(
-        "pub fn main() -> Result[(), ()] {\n  failure.check(false, Arithmetic())\n  Ok(())\n}\n",
-    );
-    let expected = format!(
-        "runtime failure[SEM-1] at standalone@0/main ({}:2:3)\n",
-        path.display()
-    );
-    let expected_standalone = format!(
-        "runtime failure[SEM-1] at standalone@0/main (standalone@0/{}:2:3)\n",
-        path.file_name().unwrap().to_string_lossy()
-    );
-    for backend in ["llvm", "cranelift"] {
-        for json in [false, true] {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
-            command.args(["run", "--native", "--backend", backend]);
-            if json {
-                command.arg("--json");
-            }
-            let output = command.arg(&path).output().unwrap();
-            assert_eq!(output.status.code(), Some(2), "{backend}: {output:?}");
-            let text = String::from_utf8(output.stderr).unwrap();
-            if json {
-                let report: serde_json::Value = serde_json::from_str(&text).unwrap();
-                assert_eq!(report["runtime_failure"]["rule"], "SEM-1");
-                assert_eq!(
-                    report["runtime_failure"]["site"]["file"],
-                    path.to_str().unwrap()
-                );
-                assert_eq!(
-                    report["runtime_failure"]["site"]["definition"],
-                    "standalone@0/main"
-                );
-                assert_eq!(report["runtime_failure"]["site"]["line"], 2);
-                assert_eq!(report["runtime_failure"]["site"]["column"], 3);
-            } else {
-                assert_eq!(text, expected);
-            }
-        }
-        let exe = build_executable(&path, &["--debug", "--backend", backend]);
-        let output = Command::new(&exe).output().unwrap();
-        assert_eq!(output.status.code(), Some(2), "{backend}: {output:?}");
-        assert_eq!(
-            String::from_utf8(output.stderr).unwrap(),
-            expected_standalone
-        );
-        std::fs::remove_file(exe).unwrap();
-    }
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

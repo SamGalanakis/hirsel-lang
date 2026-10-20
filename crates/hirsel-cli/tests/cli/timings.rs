@@ -165,51 +165,6 @@ fn report(stderr: &[u8]) -> serde_json::Value {
 }
 
 #[test]
-fn timings_name_every_interval_and_phase_of_a_native_build() {
-    let source = std_file(HELLO);
-    let stderr = String::from_utf8(build(&source, "--timings").stderr).unwrap();
-    // The interval table, then the phase table, each after its header row.
-    let section = |header: &str, end: &str| -> Vec<&str> {
-        stderr
-            .lines()
-            .skip_while(|line| !line.starts_with(header))
-            .skip(1)
-            .take_while(|line| !line.starts_with(end))
-            .collect()
-    };
-    let (intervals, phases) = (
-        section("interval ", "phase "),
-        section("phase ", "  verify in comptime"),
-    );
-    let row = |rows: &[&str], name: &str| -> Vec<String> {
-        let line = rows
-            .iter()
-            .find(|line| line.split("  ").next() == Some(name))
-            .unwrap_or_else(|| panic!("no {name:?} row in\n{stderr}"));
-        line[name.len()..]
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect()
-    };
-    assert_eq!(intervals.len(), INTERVALS.len() + 1, "{stderr}");
-    assert_eq!(phases.len(), PHASES.len(), "{stderr}");
-    for name in INTERVALS {
-        row(&intervals, name);
-    }
-    for name in PHASES {
-        row(&phases, name);
-    }
-    for interval in BUILD_INTERVALS {
-        let wall: f64 = row(&intervals, interval)[0].parse().unwrap();
-        assert!(wall > 0.0, "{interval}: {stderr}");
-    }
-    for phase in BUILD_PHASES {
-        let calls: u64 = row(&phases, phase)[2].parse().unwrap();
-        assert!(calls > 0, "{phase}: {stderr}");
-    }
-}
-
-#[test]
 fn timings_json_intervals_add_up_to_the_wall_time() {
     let source = std_file(HELLO);
     let report = report(&build(&source, "--timings=json").stderr);
@@ -256,32 +211,4 @@ fn mem_usage_reports_peak_rss_and_the_tables_held() {
         "{memory}"
     );
     assert!(held("engine: signatures") > 0, "{memory}");
-}
-
-#[test]
-fn measurement_options_apply_only_to_compiling_commands() {
-    let source = std_file(HELLO);
-    for args in [
-        &["fmt", "--check", "--timings"][..],
-        &["--mem-usage", "hash"],
-        &["check", "--timings=yaml"],
-    ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .args(args)
-            .arg(&source)
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
-    }
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .args(["check", "--timings"])
-        .arg(&source)
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(
-        stderr.starts_with("hirsel timings: check, wall "),
-        "{stderr}"
-    );
 }

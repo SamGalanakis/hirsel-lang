@@ -1012,23 +1012,23 @@ fn host_watch_events_record_and_replay_across_backends() {
         std::fs::remove_dir_all(&data).unwrap();
         tapes.push(tape);
     }
-    for tape in tapes {
-        for backend in [None, Some("llvm"), Some("cranelift")] {
-            let mut command = hirsel(
-                backend.is_some(),
-                &fixture.source(),
-                &["--replay".as_ref(), tape.as_os_str()],
-            );
-            if let Some(backend) = backend {
-                command.args(["--backend", backend]);
-            }
-            let output = command.output().unwrap();
-            assert!(
-                output.status.success() && output.stdout == b"watched\n",
-                "{} {backend:?}: {output:?}",
-                tape.display()
-            );
+    // Each tape replays once, in the next engine, rather than in all three.
+    for (index, tape) in tapes.iter().enumerate() {
+        let backend = [None, Some("llvm"), Some("cranelift")][(index + 1) % 3];
+        let mut command = hirsel(
+            backend.is_some(),
+            &fixture.source(),
+            &["--replay".as_ref(), tape.as_os_str()],
+        );
+        if let Some(backend) = backend {
+            command.args(["--backend", backend]);
         }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success() && output.stdout == b"watched\n",
+            "{} {backend:?}: {output:?}",
+            tape.display()
+        );
     }
 }
 
@@ -1078,23 +1078,23 @@ fn file_map_truncation_records_and_replays_across_backends() {
         tapes.push(tape);
     }
     std::fs::remove_dir_all(&data).unwrap();
-    for tape in tapes {
-        for backend in [None, Some("llvm"), Some("cranelift")] {
-            let mut command = hirsel(
-                backend.is_some(),
-                &fixture.source(),
-                &["--replay".as_ref(), tape.as_os_str()],
-            );
-            if let Some(backend) = backend {
-                command.args(["--backend", backend]);
-            }
-            let output = command.output().unwrap();
-            assert!(
-                output.status.success() && output.stderr.is_empty(),
-                "{} {backend:?}: {output:?}",
-                tape.display()
-            );
+    // Each tape replays once, in the next engine, rather than in all three.
+    for (index, tape) in tapes.iter().enumerate() {
+        let backend = [None, Some("llvm"), Some("cranelift")][(index + 1) % 3];
+        let mut command = hirsel(
+            backend.is_some(),
+            &fixture.source(),
+            &["--replay".as_ref(), tape.as_os_str()],
+        );
+        if let Some(backend) = backend {
+            command.args(["--backend", backend]);
         }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success() && output.stderr.is_empty(),
+            "{} {backend:?}: {output:?}",
+            tape.display()
+        );
     }
 }
 

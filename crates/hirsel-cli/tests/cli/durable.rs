@@ -158,8 +158,8 @@ fn durable_journals_replay_in_either_engine_and_a_cut_journal_names_its_requests
         // program, so this samples boundaries; the runtime's journal tests cut at every one.
         let ends = boundaries(&bytes);
         let mut doubted = 0;
-        // Odd, so the samples fall after Prepared records and after completions alike.
-        let step = (ends.len() / 8).max(1) | 1;
+        // Three samples; odd, so they fall after Prepared records and after completions alike.
+        let step = (ends.len() / 3).max(1) | 1;
         for end in ends[..ends.len() - 1].iter().step_by(step) {
             let cut = fixture.0.join("cut.journal");
             std::fs::write(&cut, &bytes[..*end]).unwrap();

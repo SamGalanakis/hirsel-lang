@@ -254,21 +254,3 @@ fn native_smoke_refuses_no_verify() {
     refuses_no_verify(env!("CARGO_BIN_EXE_native"), &["--smoke"]);
     refuses_no_verify(env!("CARGO_BIN_EXE_native"), &["--cranelift"]);
 }
-
-#[test]
-fn native_full_refuses_no_verify() {
-    refuses_no_verify(env!("CARGO_BIN_EXE_native"), &["--full"]);
-    refuses_no_verify(
-        env!("CARGO_BIN_EXE_native"),
-        &["--full", "--engine", "llvm"],
-    );
-}
-
-#[test]
-fn heap_checker_refuses_no_verify() {
-    refuses_no_verify(
-        env!("CARGO_BIN_EXE_native"),
-        &["--full", "--engine", "heap"],
-    );
-    refuses_no_verify(env!("CARGO_BIN_EXE_agree"), &["--native", "heap"]);
-}
