@@ -679,8 +679,9 @@ snapshot_enum!(SchemaConstraint {
     NoallocDrop(p)
 } in Cx);
 /// A recursive type group member's key follows the schema only when present,
-/// so every other signature, and every definition hash over one, encodes as
-/// before the field existed.
+/// so every other signature encodes as before the field existed. A content
+/// hash encoding never writes it: the key is over the members' paths and
+/// source text, and LANG-6 hashes a recursive group together instead.
 impl Snapshot<Cx> for SignatureMetadata {
     fn write(&self, w: &mut Writer<Cx>) {
         w.open("SignatureMetadata");
@@ -691,7 +692,9 @@ impl Snapshot<Cx> for SignatureMetadata {
         self.wrapper.write(w);
         self.roles.write(w);
         self.schema.write(w);
-        if let Some(group) = &self.recursive_group {
+        if let Some(group) = &self.recursive_group
+            && w.context.content.is_none()
+        {
             group.write(w);
         }
         w.close();

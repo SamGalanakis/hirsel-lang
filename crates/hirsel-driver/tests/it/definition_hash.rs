@@ -310,3 +310,28 @@ fn call_sites_record_each_callee_hash() {
         assert_eq!(kinds.len(), 2, "{:?}", result.call_sites[&main]);
     });
 }
+
+#[test]
+fn a_recursive_type_group_hashes_its_meaning_not_its_text() {
+    with_compiler_stack(|| {
+        let base = "type Tree = Leaf | Node(List[Entry])\n\ntype Entry {\n  key: u64,\n  children: Tree,\n}\nfn size(t: Tree) -> u64 { 0u64 }\n";
+        let names = ["Tree", "Entry", "size"];
+        let before = hashes(base, &names);
+        // Layout, a comment and a rename change no member's hash or a user's.
+        assert_eq!(before, hashes(&format!("\n  {base}"), &names));
+        assert_eq!(
+            before,
+            hashes(
+                &base.replacen("type Entry", "/* c */ type Entry", 1),
+                &names
+            )
+        );
+        assert_eq!(
+            before,
+            hashes(&base.replace("Entry", "Item"), &["Tree", "Item", "size"])
+        );
+        // A member's edit moves the group and its user.
+        let edited = hashes(&base.replacen("key: u64", "key: u32", 1), &names);
+        assert!(before.iter().zip(&edited).all(|(a, b)| a != b));
+    });
+}
