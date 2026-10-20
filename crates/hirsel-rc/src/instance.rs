@@ -25,14 +25,15 @@ use hirsel_lir::layout::LayoutError;
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::InputIdentity;
 use hirsel_span::Span;
-use hirsel_syntax::{ContentHash, DefPath};
+use hirsel_syntax::{ContentHash, DefId, DefPath};
 use hirsel_tir::{BodyId, DefinitionRef, Rvalue, Storage};
 use hirsel_types::{
     AuthoritySummary, BinderRef, FunctionType, GenericArgument, GenericBinder, GraphError,
     Multiplicity, SignatureKind, SignatureRef, SiteRef, Size, SizeParamId, SizeParameterRef, Type,
-    TypeId, TypeKind, TypeParamId, TypeParameterRef, TypeStore, UseKind,
+    TypeId, TypeInterner, TypeKind, TypeMemo, TypeParamId, TypeParameterRef, UseKind,
 };
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 /// The tooling limit on instance expansion (a separate resource limit, never
@@ -50,10 +51,10 @@ pub enum RequirementKind {
     Materialized,
 }
 
-/// One GEN-5 requirement. `arguments` are rows of `types`; argument `i` binds
-/// `BinderRef::Body { scope: binder, parameter: i }` of `callee`. Free `Body`
-/// references name the owner's parameters, and when `owner_binder` is set (a
-/// signature-owned store) so do `Bound` references at depth 0.
+/// One GEN-5 requirement. Argument `i` binds `BinderRef::Body { scope:
+/// binder, parameter: i }` of `callee`. Free `Body` references name the
+/// owner's parameters, and when `owner_binder` is set (arguments read from the
+/// owner's signature) so do `Bound` references at depth 0.
 #[derive(Clone, Debug)]
 pub struct Requirement {
     pub owner: DefPath,
@@ -62,7 +63,6 @@ pub struct Requirement {
     pub kind: RequirementKind,
     pub callee: DefPath,
     pub binder: SiteRef,
-    pub types: TypeStore,
     pub arguments: Vec<GenericArgument>,
 }
 
@@ -72,6 +72,10 @@ pub struct Requirement {
 #[derive(Clone, Debug)]
 pub struct Program {
     pub input: InputIdentity,
+    /// The session interner: every TypeId of the program is one of its rows.
+    pub types: Arc<TypeInterner>,
+    /// Structural substitution memo shared by every native pass.
+    pub memo: Arc<TypeMemo>,
     pub definitions: BTreeMap<DefPath, DefinitionRef>,
     pub signatures: BTreeMap<DefPath, SignatureRef>,
     /// Implementation revision of each executable definition's source owner.
@@ -92,6 +96,7 @@ impl Program {
     /// Independent declaration input for C, separate from the lowered units.
     pub fn operation_registry(&self) -> hirsel_layout::operation::OperationRegistry {
         hirsel_layout::operation::OperationRegistry {
+            types: self.types.clone(),
             signatures: self
                 .operations
                 .values()
@@ -101,7 +106,7 @@ impl Program {
                         .map(|s| (op.clone(), s.clone()))
                 })
                 .collect(),
-            owners: crate::library::owners(&self.signatures).over(&self.owners),
+            owners: crate::library::owners(&self.types, &self.signatures).over(&self.owners),
         }
     }
 }
@@ -169,9 +174,12 @@ pub enum InstanceError {
 /// The expanded program: instance views in discovery order, their roles, the
 /// `FnAbi` of each and a key index.
 pub struct Instances {
+    /// The session interner every view's TypeIds are rows of.
+    pub types: Arc<TypeInterner>,
+    pub memo: Arc<TypeMemo>,
     pub views: Vec<InstanceView>,
     pub roles: Vec<InstanceRole>,
-    /// The instance's callable type, a `Function` row of its own store.
+    /// The instance's callable type, a `Function` row.
     pub callables: Vec<TypeId>,
     pub abis: Vec<FnAbiId>,
     /// The actuals the instance's generic body is read under.
@@ -229,7 +237,7 @@ impl Instances {
             .definitions
             .get(definition)
             .ok_or_else(|| InstanceError::MissingDefinition(definition.clone()))?;
-        let key = key_of(definition, def.entry, actuals, None, None)?;
+        let key = key_of(&self.types, definition, def.entry, actuals, None, None)?;
         self.get(&key)
             .ok_or_else(|| InstanceError::MissingInstance(definition.clone()))
     }
@@ -253,7 +261,7 @@ impl Instances {
         }
         let path = view.key.definition().clone();
         let abi = layouts
-            .fn_abi(&view.substitution.store, callable, shape)
+            .fn_abi(&self.types, callable, shape)
             .map_err(|e| InstanceError::Layout(path, e))?;
         let abi = if role.is_library() || view.definition.tracks_caller(view.body) {
             layouts
@@ -282,15 +290,13 @@ impl Instances {
     }
 }
 
-/// Complete actuals of one binder: an owned store and one argument per generic
-/// parameter, in ordinal order. A generic nested function's instance (LIR
-/// schema revision 9) also binds its enclosing functions' generics, which
-/// its body names: `outer` lists each enclosing binder's arguments, rows of
-/// the same store, innermost first.
+/// Complete actuals of one binder: one argument per generic parameter, in
+/// ordinal order. A generic nested function's instance (LIR schema revision 9)
+/// also binds its enclosing functions' generics, which its body names: `outer`
+/// lists each enclosing binder's arguments, innermost first.
 #[derive(Clone, Debug)]
 pub struct Actuals {
     pub binder: Option<SiteRef>,
-    pub store: TypeStore,
     pub arguments: Vec<GenericArgument>,
     pub outer: Vec<(SiteRef, Vec<GenericArgument>)>,
 }
@@ -299,7 +305,6 @@ impl Actuals {
     pub fn none() -> Self {
         Self {
             binder: None,
-            store: TypeStore::default(),
             arguments: Vec::new(),
             outer: Vec::new(),
         }
@@ -332,11 +337,7 @@ impl Actuals {
                 }
             }
         }
-        Ok(Substitution {
-            store: self.store.clone(),
-            types,
-            sizes,
-        })
+        Ok(Substitution { types, sizes })
     }
     pub(crate) fn key_binders(&self) -> Vec<(ActualBinder, GenericArgument)> {
         self.binders()
@@ -361,95 +362,64 @@ impl Actuals {
     }
 }
 
-/// Substitute `ty` of `source` (a store whose free generic references name
-/// `owner`'s binder) into `destination`, replacing them by `owner`'s actuals.
-/// Authority summaries of replaced parameters are conservatively unknown, the
-/// same on every path, so keys computed by expansion and by import agree.
+/// Substitute `ty` (whose free generic references name `owner`'s binder),
+/// replacing them by `owner`'s actuals. Authority summaries of replaced
+/// parameters are conservatively unknown, the same on every path, so keys
+/// computed by expansion and by import agree.
 pub fn substitute(
-    source: &TypeStore,
+    types: &TypeInterner,
+    memo: &TypeMemo,
     ty: TypeId,
     owner: &Actuals,
-    owner_actuals_in_destination: &[GenericArgument],
-    destination: &mut TypeStore,
     also_bound: bool,
 ) -> Result<TypeId, GraphError> {
-    let authorities = vec![AuthoritySummary::Unknown; owner_actuals_in_destination.len()];
+    let authorities = vec![AuthoritySummary::Unknown; owner.arguments.len()];
     let body = hirsel_types::Substitution {
         binder: owner.binder.map(GenericBinder::Body),
-        arguments: owner_actuals_in_destination,
+        arguments: &owner.arguments,
         authorities: &authorities,
         ..Default::default()
     };
-    let mut id = hirsel_types::substitute_type(source, ty, destination, body)?;
-    if also_bound && !owner_actuals_in_destination.is_empty() {
+    let mut id = hirsel_types::substitute(types, memo, ty, &body)?;
+    if also_bound && !owner.arguments.is_empty() {
         let bound = hirsel_types::Substitution {
             binder: Some(GenericBinder::Bound(0)),
-            arguments: owner_actuals_in_destination,
+            arguments: &owner.arguments,
             authorities: &authorities,
             ..Default::default()
         };
-        id = hirsel_types::substitute_type_in_place(destination, id, bound)?;
+        id = hirsel_types::substitute(types, memo, id, &bound)?;
     }
     // An enclosing function's generics, which a nested function's body names.
     for (scope, arguments) in &owner.outer {
-        let arguments = import_arguments(&owner.store, arguments, destination)?;
         let authorities = vec![AuthoritySummary::Unknown; arguments.len()];
         let enclosing = hirsel_types::Substitution {
             binder: Some(GenericBinder::Body(*scope)),
-            arguments: &arguments,
+            arguments,
             authorities: &authorities,
             ..Default::default()
         };
-        id = hirsel_types::substitute_type_in_place(destination, id, enclosing)?;
+        id = hirsel_types::substitute(types, memo, id, &enclosing)?;
     }
     Ok(id)
 }
 
-/// `arguments`, rows of `source`, imported into `destination`.
-fn import_arguments(
-    source: &TypeStore,
-    arguments: &[GenericArgument],
-    destination: &mut TypeStore,
-) -> Result<Vec<GenericArgument>, GraphError> {
-    arguments
-        .iter()
-        .map(|argument| {
-            Ok(match argument {
-                GenericArgument::Type(ty) => {
-                    GenericArgument::Type(hirsel_types::import_type(source, *ty, destination)?)
-                }
-                size => size.clone(),
-            })
-        })
-        .collect()
-}
-
-/// Import `owner`'s actuals into `destination`.
-pub fn import_actuals(
-    owner: &Actuals,
-    destination: &mut TypeStore,
-) -> Result<Vec<GenericArgument>, GraphError> {
-    import_arguments(&owner.store, &owner.arguments, destination)
-}
-
-/// The callee actuals of a requirement or call site whose `arguments` live in
-/// `types` and name `owner`'s binder.
+/// The callee actuals of a requirement or call site whose `arguments` name
+/// `owner`'s binder.
 pub fn callee_actuals(
+    types: &TypeInterner,
+    memo: &TypeMemo,
     callee_binder: Option<SiteRef>,
-    types: &TypeStore,
     arguments: &[GenericArgument],
     owner: &Actuals,
     also_bound: bool,
     path: &DefPath,
 ) -> Result<Actuals, InstanceError> {
-    let mut store = TypeStore::default();
-    let owner_actuals = import_actuals(owner, &mut store)
-        .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
     let mut out = Vec::new();
     for argument in arguments {
         out.push(match argument {
             GenericArgument::Type(ty) => GenericArgument::Type(
-                substitute(types, *ty, owner, &owner_actuals, &mut store, also_bound)
+                substitute(types, memo, *ty, owner, also_bound)
                     .map_err(|e| InstanceError::Substitution(path.clone(), e))?,
             ),
             GenericArgument::Size(Size::Constant(n)) => GenericArgument::Size(Size::Constant(*n)),
@@ -476,7 +446,6 @@ pub fn callee_actuals(
     }
     Ok(Actuals {
         binder: if out.is_empty() { None } else { callee_binder },
-        store,
         arguments: out,
         outer: Vec::new(),
     })
@@ -484,6 +453,7 @@ pub fn callee_actuals(
 
 /// The canonical key of one instance.
 pub fn key_of(
+    types: &TypeInterner,
     path: &DefPath,
     body: BodyId,
     actuals: &Actuals,
@@ -494,7 +464,7 @@ pub fn key_of(
         path,
         body.0,
         &actuals.key_binders(),
-        &actuals.store,
+        types,
         convention,
         environment,
     )
@@ -510,33 +480,31 @@ fn multiplicity(m: Multiplicity) -> CallMultiplicity {
 
 /// A non-generic `Function` row: `function`'s parameters, result and error
 /// substituted (their generic references are `Bound` at depth 0 inside the
-/// declaring function type), pushed into `actuals`' store.
+/// declaring function type) by `actuals`.
 pub fn instantiate_function(
-    signature: &Signature,
+    types: &TypeInterner,
+    memo: &TypeMemo,
     function: &FunctionType,
     modes: hirsel_types::Modes,
-    actuals: &mut Actuals,
+    actuals: &Actuals,
 ) -> Result<TypeId, GraphError> {
-    let arguments = actuals.arguments.clone();
-    let authorities = vec![AuthoritySummary::Unknown; arguments.len()];
+    let authorities = vec![AuthoritySummary::Unknown; actuals.arguments.len()];
     let substitution = hirsel_types::Substitution {
         binder: Some(GenericBinder::Bound(0)),
-        arguments: &arguments,
+        arguments: &actuals.arguments,
         authorities: &authorities,
         ..Default::default()
     };
-    let one = |ty: TypeId, store: &mut TypeStore| {
-        hirsel_types::substitute_type(&signature.types, ty, store, substitution)
-    };
+    let one = |ty: TypeId| hirsel_types::substitute(types, memo, ty, &substitution);
     let mut parameters = Vec::new();
     for parameter in function.parameters.iter() {
         let mut p = parameter.clone();
-        p.ty = one(parameter.ty, &mut actuals.store)?;
+        p.ty = one(parameter.ty)?;
         parameters.push(p);
     }
-    let result = one(function.result, &mut actuals.store)?;
+    let result = one(function.result)?;
     let error = match function.error {
-        Some(e) => Some(one(e, &mut actuals.store)?),
+        Some(e) => Some(one(e)?),
         None => None,
     };
     let row = Type {
@@ -555,14 +523,13 @@ pub fn instantiate_function(
             foreign: function.foreign.clone(),
         }))
     };
-    Ok(actuals.store.push(row))
+    Ok(types.intern(row))
 }
 
-use hirsel_types::Signature;
 
 /// The declared conventions of a `Function` row.
-pub fn convention(store: &TypeStore, callable: TypeId) -> Option<CallableConvention> {
-    let row = store.get(callable)?;
+pub fn convention(types: &TypeInterner, callable: TypeId) -> Option<CallableConvention> {
+    let row = types.get(callable)?;
     let TypeKind::Function(f) = &row.kind else {
         return None;
     };
@@ -621,6 +588,8 @@ pub fn expand(
         program,
         layouts,
         out: Instances {
+            types: program.types.clone(),
+            memo: program.memo.clone(),
             views: Vec::new(),
             roles: Vec::new(),
             callables: Vec::new(),
@@ -710,19 +679,20 @@ impl Expander<'_, '_, '_> {
             .get(path)
             .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?
             .clone();
-        let key = key_of(path, definition.entry, &actuals, None, None)?;
+        let program = self.program;
+        let key = key_of(&program.types, path, definition.entry, &actuals, None, None)?;
         if let Some(&id) = self.out.by_key.get(&key) {
             return Ok(id);
         }
-        let mut actuals = actuals;
         let callable = instantiate_function(
-            &signature,
+            &program.types,
+            &program.memo,
             function,
             hirsel_types::Modes::global(),
-            &mut actuals,
+            &actuals,
         )
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-        let parameters = parameter_views(&actuals.store, callable);
+        let parameters = parameter_views(&program.types, callable);
         let view = InstanceView {
             key,
             body: definition.entry,
@@ -750,8 +720,8 @@ impl Expander<'_, '_, '_> {
         let SignatureKind::Type(t) = &signature.kind else {
             return Ok(());
         };
-        let visited = InstanceKey::new(path, 0, &actuals.key_binders(), &actuals.store, None, None)
-            .map_err(|e| InstanceError::Key(path.clone(), e))?;
+        let program = self.program;
+        let visited = key_of(&program.types, path, BodyId(0), &actuals, None, None)?;
         if !self.nominals.insert(visited) {
             return Ok(());
         }
@@ -759,11 +729,11 @@ impl Expander<'_, '_, '_> {
         // A library resource's drop body is a library body named by its
         // owner's native representation.
         if let Some(hirsel_layout::layout::OwnerRepresentation::Defined(record)) =
-            self.layouts.owners().nominals.get(path)
+            self.layouts.owners().nominals.get(&DefId::intern(path))
             && let Some((finalizer, _)) = &record.finalizer
             && let Some(body) = crate::library::body_index(finalizer)
         {
-            let request = crate::library::Request::finalizer(body, finalizer, path, &actuals);
+            let request = crate::library::Request::finalizer(&program.types, body, finalizer, path, &actuals);
             crate::library::instantiate(self.layouts, &mut self.out, request)?;
             return Ok(());
         }
@@ -774,33 +744,27 @@ impl Expander<'_, '_, '_> {
         let Some(definition) = self.program.definitions.get(finalizer).cloned() else {
             return Ok(());
         };
-        let key = key_of(finalizer, definition.entry, &actuals, None, None)?;
+        let key = key_of(&program.types, finalizer, definition.entry, &actuals, None, None)?;
         if self.out.by_key.contains_key(&key) {
             return Ok(());
         }
         // The finalizer receives its value borrowed and returns unit (DROP-2).
-        let mut actuals = actuals;
+        let types = &*program.types;
         let body = &definition.bodies[definition.entry.0 as usize];
         let parameter = body
             .parameters
             .first()
             .ok_or_else(|| InstanceError::Malformed(format!("{finalizer:?} has no self")))?;
-        let own = actuals.clone();
-        let owner_actuals = import_actuals(&own, &mut actuals.store)
-            .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         let self_ty = substitute(
-            &definition.types,
+            types,
+            &program.memo,
             body.locals[parameter.0 as usize].ty,
-            &own,
-            &owner_actuals,
-            &mut actuals.store,
+            &actuals,
             false,
         )
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-        let unit = actuals.store.push(Type::unit());
-        let callable = actuals
-            .store
-            .push(Type::with_kind(TypeKind::Function(FunctionType {
+        let unit = types.intern(Type::unit());
+        let callable = types.intern(Type::with_kind(TypeKind::Function(FunctionType {
                 state_promises: Default::default(),
                 generics: Vec::new().into(),
                 parameters: vec![hirsel_types::Parameter {
@@ -825,7 +789,7 @@ impl Expander<'_, '_, '_> {
             definition,
             owner: CallableShape::Definition,
             substitution: actuals.substitution(finalizer)?,
-            parameters: parameter_views(&actuals.store, callable),
+            parameters: parameter_views(types, callable),
             captures: Vec::new(),
             caller_destination: false,
         };
@@ -847,6 +811,7 @@ impl Expander<'_, '_, '_> {
         if self.out.roles[id.index()].is_library() {
             return Ok(());
         }
+        let types = &*self.program.types;
         let view = self.out.views[id.index()].clone();
         let actuals = self.out.actuals[id.index()].clone();
         let path = view.key.definition().clone();
@@ -857,7 +822,7 @@ impl Expander<'_, '_, '_> {
             .enumerate()
             .filter_map(|(local, row)| {
                 let local = hirsel_tir::LocalId(local as u32);
-                (generic_function(&view.definition.types, row.ty)
+                (generic_function(types, row.ty)
                     && nested_function(&self.out, id, local)
                         .is_some_and(|(_, _, _, _, empty)| empty))
                 .then_some(local)
@@ -866,7 +831,7 @@ impl Expander<'_, '_, '_> {
         self.out.elided.insert(id, elided);
         for (i, local) in body.locals.iter().enumerate() {
             let local_id = hirsel_tir::LocalId(i as u32);
-            if generic_function(&view.definition.types, local.ty)
+            if generic_function(types, local.ty)
                 && !self.out.elided[&id].contains(&local_id)
             {
                 self.data_local(id, local_id)?;
@@ -898,7 +863,7 @@ impl Expander<'_, '_, '_> {
                     continue;
                 };
                 let ty = body.places[destination.0 as usize].ty;
-                if generic_function(&view.definition.types, ty) {
+                if generic_function(types, ty) {
                     if self.out.elided.get(&id).is_some_and(|locals| {
                         locals.contains(&body.places[destination.0 as usize].root)
                     }) {
@@ -1003,16 +968,14 @@ impl Expander<'_, '_, '_> {
         body_id: BodyId,
         captures: &[hirsel_tir::Operand],
     ) -> Result<(LayoutId, ContentHash, Vec<CaptureView>), InstanceError> {
+        let program = self.program;
+        let types = &*program.types;
         let definition = &parent_view.definition;
-        let path = definition.path.clone();
+        let path = definition.path.path().clone();
         let body = definition
             .bodies
             .get(body_id.0 as usize)
             .ok_or_else(|| InstanceError::Malformed(format!("{path:?}: closure body")))?;
-        let mut actuals = parent_actuals.clone();
-        let own = parent_actuals.clone();
-        let owner_actuals = import_actuals(&own, &mut actuals.store)
-            .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         let capture_locals: Vec<_> = body
             .locals
             .iter()
@@ -1034,7 +997,7 @@ impl Expander<'_, '_, '_> {
             let source = parent_view.definition.bodies[parent_view.body.0 as usize].places
                 [operand.place.0 as usize]
                 .root;
-            if generic_function(&definition.types, local.ty)
+            if generic_function(types, local.ty)
                 && nested_function(&self.out, parent, source)
                     .is_some_and(|(_, _, _, _, empty)| empty)
             {
@@ -1046,20 +1009,13 @@ impl Expander<'_, '_, '_> {
                 ordinal: ordinal as u32,
                 usage,
             });
-            let ty = substitute(
-                &definition.types,
-                local.ty,
-                &own,
-                &owner_actuals,
-                &mut actuals.store,
-                false,
-            )
-            .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-            let layout = if generic_function(&definition.types, local.ty) {
+            let ty = substitute(types, &program.memo, local.ty, parent_actuals, false)
+                .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
+            let layout = if generic_function(types, local.ty) {
                 self.data_local(parent, source)?
             } else {
                 self.layouts
-                    .layout(&actuals.store, ty)
+                    .layout(types, ty)
                     .map_err(|e| InstanceError::Layout(path.clone(), e))?
             };
             // A taken capture holding more than bits moves out of the
@@ -1103,39 +1059,30 @@ impl Expander<'_, '_, '_> {
         empty: bool,
         arguments: &[GenericArgument],
     ) -> Result<InstanceId, InstanceError> {
+        let program = self.program;
+        let types = &*program.types;
         let definition = parent_view.definition.clone();
-        let path = definition.path.clone();
+        let path = definition.path.path().clone();
         let scope = definition
             .bodies
             .get(body_id.0 as usize)
             .ok_or_else(|| InstanceError::Malformed(format!("{path:?}: closure body")))?
             .parameter_scope;
         let mut actuals = callee_actuals(
+            types,
+            &program.memo,
             Some(scope),
-            &definition.types,
             arguments,
             caller_actuals,
             false,
             &path,
         )?;
         for (enclosing, arguments) in parent_actuals.binders() {
-            let arguments = import_arguments(&parent_actuals.store, arguments, &mut actuals.store)
-                .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-            actuals.outer.push((enclosing, arguments));
+            actuals.outer.push((enclosing, arguments.to_vec()));
         }
-        let owner_actuals = import_actuals(parent_actuals, &mut actuals.store)
+        let generic = substitute(types, &program.memo, ty, parent_actuals, false)
             .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-        let generic = substitute(
-            &definition.types,
-            ty,
-            parent_actuals,
-            &owner_actuals,
-            &mut actuals.store,
-            false,
-        )
-        .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-        let arguments = actuals.arguments.clone();
-        let callable = instantiate_row(&mut actuals.store, generic, &arguments)
+        let callable = instantiate_row(types, &program.memo, generic, &actuals.arguments)
             .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         let (environment, digest, views) = if empty {
             (None, None, Vec::new())
@@ -1144,10 +1091,10 @@ impl Expander<'_, '_, '_> {
                 self.environment(parent, parent_view, parent_actuals, body_id, captures)?;
             (Some(environment), Some(digest), views)
         };
-        let convention = convention(&actuals.store, callable).ok_or_else(|| {
+        let convention = convention(types, callable).ok_or_else(|| {
             InstanceError::Malformed(format!("{path:?}: closure of a non-function type"))
         })?;
-        let key = key_of(&path, body_id, &actuals, Some(&convention), digest)?;
+        let key = key_of(types, &path, body_id, &actuals, Some(&convention), digest)?;
         if let Some(id) = self.out.get(&key) {
             return Ok(id);
         }
@@ -1158,7 +1105,7 @@ impl Expander<'_, '_, '_> {
             definition,
             owner: shape,
             substitution: actuals.substitution(&path)?,
-            parameters: parameter_views(&actuals.store, callable),
+            parameters: parameter_views(types, callable),
             captures: views,
             caller_destination: false,
         };
@@ -1215,34 +1162,26 @@ impl Expander<'_, '_, '_> {
         ty: TypeId,
         captures: &[hirsel_tir::Operand],
     ) -> Result<InstanceId, InstanceError> {
+        let program = self.program;
+        let types = &*program.types;
         let definition = parent_view.definition.clone();
-        let path = definition.path.clone();
-        let mut actuals = parent_actuals.clone();
-        let own = parent_actuals.clone();
-        let owner_actuals = import_actuals(&own, &mut actuals.store)
+        let path = definition.path.path().clone();
+        let actuals = parent_actuals.clone();
+        let callable = substitute(types, &program.memo, ty, &actuals, false)
             .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-        let callable = substitute(
-            &definition.types,
-            ty,
-            &own,
-            &owner_actuals,
-            &mut actuals.store,
-            false,
-        )
-        .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         let (environment, digest, views) =
             self.environment(parent, parent_view, parent_actuals, body_id, captures)?;
-        let convention = convention(&actuals.store, callable).ok_or_else(|| {
+        let convention = convention(types, callable).ok_or_else(|| {
             InstanceError::Malformed(format!("{path:?}: closure of a non-function type"))
         })?;
-        let key = key_of(&path, body_id, &actuals, Some(&convention), Some(digest))?;
+        let key = key_of(types, &path, body_id, &actuals, Some(&convention), Some(digest))?;
         let view = InstanceView {
             key,
             body: body_id,
             definition: definition.clone(),
             owner: CallableShape::Closure,
             substitution: actuals.substitution(&path)?,
-            parameters: parameter_views(&actuals.store, callable),
+            parameters: parameter_views(types, callable),
             captures: views,
             caller_destination: false,
         };
@@ -1266,9 +1205,11 @@ impl Expander<'_, '_, '_> {
         actuals: &Actuals,
         only: Option<SiteRef>,
     ) -> Result<(), InstanceError> {
+        let program = self.program;
+        let types = &*program.types;
         let requirements = self.by_owner.get(owner).cloned().unwrap_or_default();
         for requirement in requirements {
-            let named = body_scopes(&requirement.types, &requirement.arguments);
+            let named = body_scopes(types, &requirement.arguments);
             let bound: Vec<SiteRef> = actuals.binders().map(|(s, _)| s).collect();
             if !named.iter().all(|s| bound.contains(s))
                 || only.is_some_and(|scope| !named.contains(&scope))
@@ -1277,8 +1218,9 @@ impl Expander<'_, '_, '_> {
             }
             let callee = &requirement.callee;
             let callee_actuals = callee_actuals(
+                types,
+                &program.memo,
                 Some(requirement.binder),
-                &requirement.types,
                 &requirement.arguments,
                 actuals,
                 requirement.owner_binder.is_some(),
@@ -1293,7 +1235,6 @@ impl Expander<'_, '_, '_> {
                             self.program,
                             body,
                             callee,
-                            callee_actuals.store,
                             callee_actuals.arguments,
                         )?;
                         crate::library::instantiate(self.layouts, &mut self.out, request)?;
@@ -1310,11 +1251,11 @@ impl Expander<'_, '_, '_> {
 }
 
 /// The identity parameter mapping of a callable, with its declared conventions.
-pub fn parameter_views(store: &TypeStore, callable: TypeId) -> Vec<ParameterView> {
+pub fn parameter_views(types: &TypeInterner, callable: TypeId) -> Vec<ParameterView> {
     let Some(Type {
         kind: TypeKind::Function(f),
         ..
-    }) = store.get(callable)
+    }) = types.get(callable)
     else {
         return Vec::new();
     };
@@ -1331,7 +1272,7 @@ pub fn parameter_views(store: &TypeStore, callable: TypeId) -> Vec<ParameterView
 
 /// Whether `ty` is a generic function type: a generic nested function's
 /// value (spec #42).
-fn generic_function(types: &TypeStore, ty: TypeId) -> bool {
+fn generic_function(types: &TypeInterner, ty: TypeId) -> bool {
     matches!(
         types.get(ty).map(|t| &t.kind),
         Some(TypeKind::Function(f)) if !f.generics.is_empty()
@@ -1358,6 +1299,7 @@ enum ProducerSource {
 fn lexical_producers(
     program: &Program,
 ) -> HashMap<(DefPath, BodyId, hirsel_tir::LocalId), Option<Producer>> {
+    let types = &*program.types;
     let mut out = HashMap::new();
     for (path, definition) in &program.definitions {
         let mut sources = HashMap::new();
@@ -1378,7 +1320,7 @@ fn lexical_producers(
                     continue;
                 };
                 let d = &body.places[destination.0 as usize];
-                if !d.projection.is_empty() || !generic_function(&definition.types, d.ty) {
+                if !d.projection.is_empty() || !generic_function(types, d.ty) {
                     continue;
                 }
                 let source = match &body.rvalues[value.0 as usize] {
@@ -1418,7 +1360,7 @@ fn lexical_producers(
                 .filter(|(_, l)| l.storage == Storage::Capture)
                 .zip(captures)
             {
-                if !generic_function(&definition.types, row.ty) {
+                if !generic_function(types, row.ty) {
                     continue;
                 }
                 let p = &parent_body.places[operand.place.0 as usize];
@@ -1470,7 +1412,7 @@ fn lexical_producers(
             };
             for operand in captures {
                 let place = &body.places[operand.place.0 as usize];
-                let dependency = generic_function(&definition.types, place.ty)
+                let dependency = generic_function(types, place.ty)
                     .then(|| {
                         resolved
                             .get(&(producer.owner, place.root))
@@ -1512,7 +1454,7 @@ fn nested_function(
     let view = instances.view(instance);
     let producer = instances
         .producers
-        .get(&(view.definition.path.clone(), view.body, local))
+        .get(&(view.definition.path.path().clone(), view.body, local))
         .copied()
         .flatten()?;
     loop {
@@ -1536,16 +1478,16 @@ fn nested_function(
 /// `arguments`: its parameters, result and error, whose generic references
 /// are `Bound` at depth 0 inside it, substituted.
 fn instantiate_row(
-    store: &mut TypeStore,
+    types: &TypeInterner,
+    memo: &TypeMemo,
     row: TypeId,
     arguments: &[GenericArgument],
 ) -> Result<TypeId, GraphError> {
-    let source = store.clone();
     let Some(Type {
         kind: TypeKind::Function(function),
         modes,
         ..
-    }) = source.get(row)
+    }) = types.get(row)
     else {
         return Ok(row);
     };
@@ -1556,7 +1498,7 @@ fn instantiate_row(
         authorities: &authorities,
         ..Default::default()
     };
-    let mut one = |ty: TypeId| hirsel_types::substitute_type(&source, ty, store, substitution);
+    let one = |ty: TypeId| hirsel_types::substitute(types, memo, ty, &substitution);
     let mut parameters = Vec::new();
     for parameter in function.parameters.iter() {
         let mut p = parameter.clone();
@@ -1568,7 +1510,7 @@ fn instantiate_row(
         Some(e) => Some(one(e)?),
         None => None,
     };
-    Ok(store.push(Type {
+    Ok(types.intern(Type {
         modes: modes.clone(),
         ..Type::with_kind(TypeKind::Function(FunctionType {
             state_promises: Default::default(),
@@ -1587,7 +1529,7 @@ fn instantiate_row(
 }
 
 /// The lexical binders whose generics `arguments` (rows of `types`) name.
-fn body_scopes(types: &TypeStore, arguments: &[GenericArgument]) -> Vec<SiteRef> {
+fn body_scopes(types: &TypeInterner, arguments: &[GenericArgument]) -> Vec<SiteRef> {
     let mut scopes = Vec::new();
     let size = |s: &Size, scopes: &mut Vec<SiteRef>| {
         if let Size::Parameter(BinderRef::Body { scope, .. }) = s
@@ -1603,7 +1545,7 @@ fn body_scopes(types: &TypeStore, arguments: &[GenericArgument]) -> Vec<SiteRef>
             GenericArgument::Size(s) => size(s, &mut scopes),
         }
     }
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     while let Some(ty) = todo.pop() {
         if !seen.insert(ty) {
             continue;

@@ -62,10 +62,10 @@ fn field(b: &Body<'_, '_>, layout: LayoutId, ordinal: u32) -> R<LayoutId> {
 }
 
 fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    let callback = parameter(&cx.store, cx.callable, 1)?;
+    let callback = parameter(cx.types, cx.callable, 1)?;
     let body_abi = cx
         .layouts
-        .fn_abi(&cx.store, callback, CallableShape::Closure)
+        .fn_abi(cx.types, callback, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let returned = cx
         .fn_abi()

@@ -204,11 +204,11 @@ fn comparator_abi(cx: &mut Cx<'_>) -> Result<hirsel_lir::abi_types::FnAbiId, Pas
         unreachable!()
     };
     let key = cx.type_actual(0)?;
-    let shape = hirsel_types::substitute_type(
-        &signature.types,
+    let shape = hirsel_types::substitute(
+        cx.types,
+        &cx.program.memo,
         order.representation.unwrap(),
-        &mut cx.store,
-        Substitution {
+        &Substitution {
             binder: Some(hirsel_types::GenericBinder::Bound(0)),
             roles: &signature.metadata.roles,
             arguments: &[hirsel_types::GenericArgument::Type(key)],
@@ -216,12 +216,12 @@ fn comparator_abi(cx: &mut Cx<'_>) -> Result<hirsel_lir::abi_types::FnAbiId, Pas
         },
     )
     .map_err(|e| PassError::Malformed(format!("Order representation: {e:?}")))?;
-    let TypeKind::Record(fields) = &cx.store.get(shape).unwrap().kind else {
+    let TypeKind::Record(fields) = &cx.types.get(shape).unwrap().kind else {
         unreachable!()
     };
     let callable = fields[0].ty;
     cx.layouts
-        .fn_abi(&cx.store, callable, CallableShape::Closure)
+        .fn_abi(cx.types, callable, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))
 }
 fn callback(

@@ -135,9 +135,9 @@ impl Importer<'_, '_> {
         let revision = self
             .program
             .revisions
-            .get(&self.def.path)
+            .get(self.def.path.path())
             .copied()
-            .ok_or_else(|| InstanceError::MissingRevision(self.def.path.clone()))?;
+            .ok_or_else(|| InstanceError::MissingRevision(self.def.path.path().clone()))?;
         let table = self.layouts.table();
         let mut unit = LirUnit::<Value>::new(UnitHeader {
             track_caller: self.def.tracks_caller(view.body),
@@ -145,7 +145,7 @@ impl Importer<'_, '_> {
             lir_version: hirsel_lir::LIR_VERSION,
             origin: UnitOrigin::Source,
             input: self.program.input.clone(),
-            definition: self.def.path.clone(),
+            definition: self.def.path.path().clone(),
             implementation_revision: revision,
             instance: view.key.digest(),
             target: table.target,

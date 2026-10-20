@@ -57,9 +57,9 @@ use hirsel_lir::layout_types::{
 use hirsel_lir::persistent::{Element, PVec};
 use hirsel_lir::stage::{StageKind, Value};
 use hirsel_span::Span;
-use hirsel_syntax::{ContentHash, DefPath};
+use hirsel_syntax::{ContentHash, DefId, DefPath};
 use hirsel_tir as tir;
-use hirsel_types::{GenericArgument, SignatureKind, TypeId, TypeStore, UseKind};
+use hirsel_types::{GenericArgument, SignatureKind, TypeId, TypeInterner, UseKind};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub use hirsel_lir::ir::{INSTRUCTION_DROP, LOOP_RELEASE, SCRATCH_DISPOSAL, STATE_RELEASE};
@@ -178,7 +178,7 @@ pub fn lower_discharging(
     let none = BTreeSet::new();
     let mut discharged = Vec::new();
     // The library's native representations lie over the program's owners.
-    let owners = crate::library::owners(&program.signatures).over(&program.owners);
+    let owners = crate::library::owners(&program.types, &program.signatures).over(&program.owners);
     let mut layouts = LayoutBuilder::new(target, &owners);
     let mut instances =
         crate::instance::expand(program, &mut layouts).map_err(LowerError::Instance)?;
@@ -203,7 +203,7 @@ pub fn lower_discharging(
         let (plan, no) = plan_instance(program, &instances, id, &mut layouts)
             .map_err(|e| LowerError::Normalize(id, e))?;
         declined.extend(no.into_iter().map(|d| (id, d)));
-        let definition = &instances.view(id).definition.path;
+        let definition = instances.view(id).definition.path.path();
         let origin = origins.get(definition);
         let proof_owner = origin.map_or(definition, |o| &o.definition);
         let sites = discharge.sites(proof_owner);
@@ -245,7 +245,7 @@ pub fn lower_discharging(
             });
         }
         let proven = crate::spare_push::prove(&unit, &|l| layouts.record(l).kind.clone());
-        crate::spare_push::commit(&mut unit, &proven, &mut required, &layouts)
+        crate::spare_push::commit(&mut unit, &proven, &mut required, &program.types, &layouts)
             .map_err(LowerError::Instance)?;
         let fields = crate::spare_push::prove_fields(&unit);
         crate::spare_push::commit_fields(&mut unit, &fields);
@@ -383,7 +383,7 @@ fn statics(
                     "a constant without a materialized value".into(),
                 )));
             };
-            crate::statics::encode(layouts, symbol, value).map_err(static_error)
+            crate::statics::encode(layouts, &program.types, symbol, value).map_err(static_error)
         }))
         .collect()
 }
@@ -396,11 +396,8 @@ pub fn plan_instance(
     layouts: &mut LayoutBuilder<'_>,
 ) -> Result<(Option<LoopPlan>, Vec<Declined>), NormalizeError> {
     let view = instances.view(id);
-    let def: &tir::Definition = &view.definition;
     let actuals = &instances.actuals[id.index()];
-    let mut store = actuals.store.clone();
-    let owner = crate::instance::import_actuals(actuals, &mut store)
-        .map_err(|e| NormalizeError::Instance(InstanceError::Substitution(def.path.clone(), e)))?;
+    let types = &*program.types;
     let abi = &layouts.table().fn_abis[instances.abis[id.index()].0 as usize];
     let passing: Vec<Passing> = abi.parameters.iter().map(|p| p.convention).collect();
     let mut failed = None;
@@ -409,11 +406,11 @@ pub fn plan_instance(
             plain: false,
             copyable: false,
         };
-        let Ok(t) = substitute(&def.types, ty, actuals, &owner, &mut store, false) else {
+        let Ok(t) = substitute(types, &program.memo, ty, actuals, false) else {
             failed.get_or_insert("substitution");
             return none;
         };
-        let Ok(layout) = layouts.layout(&store, t) else {
+        let Ok(layout) = layouts.layout(types, t) else {
             failed.get_or_insert("layout");
             return none;
         };
@@ -961,9 +958,7 @@ fn import_mapped(
     let def: &tir::Definition = &view.definition;
     let body = &def.bodies[view.body.0 as usize];
     let actuals = &instances.actuals[id.index()];
-    let mut store = actuals.store.clone();
-    let store_actuals = crate::instance::import_actuals(actuals, &mut store)
-        .map_err(|e| InstanceError::Substitution(def.path.clone(), e))?;
+    let types = &*program.types;
     let mut im = Importer {
         program,
         instances,
@@ -976,15 +971,14 @@ fn import_mapped(
         body,
         body_id: view.body.0,
         actuals,
-        store,
-        store_actuals,
+        types,
         type_memo: HashMap::new(),
         required,
         finalizer_memo: std::collections::HashSet::new(),
         out: Out::default(),
         local_slot: Vec::new(),
         aliases: view_temporaries(body),
-        observations: discarded_callable_reads(body, &def.types),
+        observations: discarded_callable_reads(body, types),
         nullary: nullary_temporaries(body),
         node_anchors: node_anchors(body),
         joined: joined_views(body),
@@ -1053,7 +1047,7 @@ fn import_mapped(
     im.fields = im.field_webs()?;
     let loans: Vec<_> = im.fields.loans.iter().copied().collect();
     im.elided_loans.extend(loans);
-    byte_views::aliases(body, &def.types, &mut im.aliases);
+    byte_views::aliases(body, types, &mut im.aliases);
     im.cfg()?;
     let mut entry: Vec<Option<State>> = vec![None; body.blocks.len()];
     // Abstract states only grow (towards Maybe), so this reaches a fixpoint.
@@ -1097,9 +1091,9 @@ struct Importer<'a, 'o> {
     body: &'a tir::Body,
     body_id: u32,
     actuals: &'a Actuals,
-    /// The instance's working store: its actuals plus substituted TIR types.
-    store: TypeStore,
-    store_actuals: Vec<GenericArgument>,
+    /// The session interner.
+    types: &'a TypeInterner,
+    /// TIR types already substituted by the instance's actuals.
     type_memo: HashMap<TypeId, TypeId>,
     /// Library instances this unit requires; `lower` registers them.
     required: &'a mut Vec<crate::library::Request>,
@@ -1328,7 +1322,7 @@ fn view_storage(body: &tir::Body, l: usize) -> bool {
 /// A discarded callable view still observes bounds/tags at its assignment.
 /// Its borrowed SSA result needs no owning storage or credit. Function locals
 /// cannot be index components in validated TIR; every other use is counted here.
-fn discarded_callable_reads(body: &tir::Body, types: &TypeStore) -> Vec<bool> {
+fn discarded_callable_reads(body: &tir::Body, types: &TypeInterner) -> Vec<bool> {
     use tir::InstructionKind as K;
     let mut assigned = vec![0u32; body.locals.len()];
     let mut candidate = vec![false; body.locals.len()];

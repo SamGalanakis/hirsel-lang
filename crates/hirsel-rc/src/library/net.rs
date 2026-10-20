@@ -44,22 +44,22 @@ fn read_into(cx: &mut Cx<'_>, intrinsic: &str) -> R<LirUnit<Value>> {
     let SignatureKind::Function(function) = &signature.kind else {
         return Err(PassError::Malformed(format!("{path:?} is not a function")));
     };
-    let mut actuals = Actuals {
+    let actuals = Actuals {
         binder: Some(super::binder(&path)),
-        store: cx.store.clone(),
         arguments: cx.arguments.clone(),
         outer: Vec::new(),
     };
     let callable = instantiate_function(
-        &signature,
+        &cx.program.types,
+        &cx.program.memo,
         function,
         hirsel_types::Modes::global(),
-        &mut actuals,
+        &actuals,
     )
     .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
     let abi = cx
         .layouts
-        .fn_abi(&actuals.store, callable, CallableShape::Definition)
+        .fn_abi(cx.types, callable, CallableShape::Definition)
         .map_err(|e| PassError::Layout(path.clone(), e))?;
     let mut b = Body::new(cx)?;
     let &[n, s, buffer] = b.parameters.as_slice() else {

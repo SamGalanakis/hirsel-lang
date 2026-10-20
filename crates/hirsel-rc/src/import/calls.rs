@@ -293,7 +293,11 @@ impl Importer<'_, '_> {
                     operation_arguments = actuals;
                     (Callee::Operation(reference), abi)
                 } else if self.program.definitions.contains_key(path)
-                    || self.program.instance_bodies.declarations.contains(path)
+                    || self
+                        .program
+                        .instance_bodies
+                        .declarations
+                        .contains(&DefId::intern(path))
                 {
                     let (symbol, abi) = self.direct(path, arguments)?;
                     (Callee::Direct(symbol), abi)
@@ -319,11 +323,11 @@ impl Importer<'_, '_> {
                     let Some(&instance) =
                         self.instances.direct_calls.get(&(self.id, self.call_block))
                     else {
-                        return Err(InstanceError::MissingInstance(self.def.path.clone()).into());
+                        return Err(InstanceError::MissingInstance(self.def.path.path().clone()).into());
                     };
                     let digest = self.instances.view(instance).key.digest();
                     let code =
-                        self.symbol(SymbolKind::Function, &self.def.path.clone(), Some(digest));
+                        self.symbol(SymbolKind::Function, &self.def.path.path().clone(), Some(digest));
                     Some((code, self.instances.abis[instance.index()]))
                 };
                 let abi = match bound {
@@ -331,8 +335,8 @@ impl Importer<'_, '_> {
                     None => {
                         let ty = self.ty(self.body.places[value.place.0 as usize].ty)?;
                         self.layouts
-                            .fn_abi(&self.store, ty, CallableShape::Closure)
-                            .map_err(|e| PassError::Layout(self.def.path.clone(), e))?
+                            .fn_abi(self.types, ty, CallableShape::Closure)
+                            .map_err(|e| PassError::Layout(self.def.path.path().clone(), e))?
                     }
                 };
                 if let Some((code, _)) = bound {
@@ -628,16 +632,17 @@ impl Importer<'_, '_> {
         if function.foreign.is_none() {
             return Ok(None);
         }
-        let mut actuals = crate::instance::Actuals::none();
+        let actuals = crate::instance::Actuals::none();
         let callable = crate::instance::instantiate_function(
-            &signature,
-            function,
-            hirsel_types::Modes::global(),
-            &mut actuals,
-        )
+        &self.program.types,
+        &self.program.memo,
+        function,
+        hirsel_types::Modes::global(),
+        &actuals,
+    )
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         self.layouts
-            .fn_abi(&actuals.store, callable, CallableShape::Foreign)
+            .fn_abi(self.types, callable, CallableShape::Foreign)
             .map(Some)
             .map_err(|e| PassError::Layout(path.clone(), e))
     }
@@ -647,9 +652,10 @@ impl Importer<'_, '_> {
         path: &DefPath,
         arguments: &[GenericArgument],
     ) -> R<(FnAbiId, Vec<hirsel_lir::operation::OperationArgument>)> {
-        let mut callee = crate::instance::callee_actuals(
+        let callee = crate::instance::callee_actuals(
+            self.types,
+            &self.program.memo,
             self.program.binders.get(path).copied(),
-            &self.def.types,
             arguments,
             self.actuals,
             false,
@@ -665,18 +671,19 @@ impl Importer<'_, '_> {
             return malformed(format!("{path:?} is called but is not a function"));
         };
         let callable = crate::instance::instantiate_function(
-            &signature,
+            &self.program.types,
+            &self.program.memo,
             function,
             hirsel_types::Modes::global(),
-            &mut callee,
+            &callee,
         )
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         let arguments =
-            hirsel_layout::operation::collect_arguments(&callee.store, &callee.arguments)
+            hirsel_layout::operation::collect_arguments(self.types, &callee.arguments)
                 .map_err(|e| PassError::Layout(path.clone(), e))?;
         let abi = self
             .layouts
-            .fn_abi(&callee.store, callable, CallableShape::Definition)
+            .fn_abi(self.types, callable, CallableShape::Definition)
             .map_err(|e| PassError::Layout(path.clone(), e))?;
         let abi = if signature.metadata.track_caller {
             self.layouts

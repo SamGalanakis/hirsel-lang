@@ -33,11 +33,12 @@ fn unsupported<T>(message: impl Into<String>) -> Result<T, StaticError> {
 /// Encode `value`, the constant `symbol` names, at its type's layout.
 pub fn encode(
     layouts: &mut LayoutBuilder<'_>,
+    types: &hirsel_types::TypeInterner,
     symbol: Symbol,
     value: &Materialized,
 ) -> Result<StaticData, StaticError> {
     let layout = layouts
-        .layout(&value.types, value.root.ty)
+        .layout(types, value.root.ty)
         .map_err(|e| StaticError(format!("the constant's layout: {e:?}")))?;
     let mut encoder = Encoder {
         layouts,

@@ -30,18 +30,18 @@ use hirsel_lir::layout_types::{LayoutId, LayoutKind, LayoutRecord, LayoutTable, 
 use hirsel_lir::operation::OperationArgument;
 use hirsel_lir::stage::{StageKind, Value};
 use hirsel_syntax::DefPath;
-use hirsel_types::{GenericArgument, Primitive, Size, Type, TypeId, TypeKind, TypeStore};
+use hirsel_types::{GenericArgument, Primitive, Size, Type, TypeId, TypeInterner, TypeKind};
 
 type R<T> = Result<T, PassError>;
 
 /// The layout derivation a body and the instance collector read: the one
 /// `LayoutBuilder` of the program being lowered.
 pub trait Layouts {
-    fn layout(&mut self, store: &TypeStore, ty: TypeId) -> Result<LayoutId, LayoutError>;
+    fn layout(&mut self, types: &TypeInterner, ty: TypeId) -> Result<LayoutId, LayoutError>;
     fn record(&self, id: LayoutId) -> &LayoutRecord;
     fn fn_abi(
         &mut self,
-        store: &TypeStore,
+        types: &TypeInterner,
         callable: TypeId,
         shape: CallableShape,
     ) -> Result<FnAbiId, LayoutError>;
@@ -50,23 +50,27 @@ pub trait Layouts {
     fn owners(&self) -> &Owners;
     /// The cursor's opaque source (`OwnerRepresentation::Cursor`).
     fn cursor_source(&mut self) -> LayoutId;
-    fn environment(&mut self, shape: &EnvironmentShape<'_>) -> Result<LayoutId, LayoutError>;
+    fn environment(
+        &mut self,
+        types: &TypeInterner,
+        shape: &EnvironmentShape<'_>,
+    ) -> Result<LayoutId, LayoutError>;
 }
 
 impl Layouts for LayoutBuilder<'_> {
-    fn layout(&mut self, store: &TypeStore, ty: TypeId) -> Result<LayoutId, LayoutError> {
-        LayoutBuilder::layout(self, store, ty)
+    fn layout(&mut self, types: &TypeInterner, ty: TypeId) -> Result<LayoutId, LayoutError> {
+        LayoutBuilder::layout(self, types, ty)
     }
     fn record(&self, id: LayoutId) -> &LayoutRecord {
         LayoutBuilder::record(self, id)
     }
     fn fn_abi(
         &mut self,
-        store: &TypeStore,
+        types: &TypeInterner,
         callable: TypeId,
         shape: CallableShape,
     ) -> Result<FnAbiId, LayoutError> {
-        LayoutBuilder::fn_abi(self, store, callable, shape)
+        LayoutBuilder::fn_abi(self, types, callable, shape)
     }
     fn with_caller_site(&mut self, base: FnAbiId) -> Result<FnAbiId, LayoutError> {
         LayoutBuilder::with_caller_site(self, base)
@@ -80,8 +84,12 @@ impl Layouts for LayoutBuilder<'_> {
     fn cursor_source(&mut self) -> LayoutId {
         LayoutBuilder::cursor_source(self)
     }
-    fn environment(&mut self, shape: &EnvironmentShape<'_>) -> Result<LayoutId, LayoutError> {
-        LayoutBuilder::environment(self, shape)
+    fn environment(
+        &mut self,
+        types: &TypeInterner,
+        shape: &EnvironmentShape<'_>,
+    ) -> Result<LayoutId, LayoutError> {
+        LayoutBuilder::environment(self, types, shape)
     }
 }
 
@@ -117,9 +125,9 @@ pub struct Cx<'a> {
     instances: &'a mut Instances,
     pub id: InstanceId,
     pub path: DefPath,
-    /// The instance's own store: its actuals and its callable type.
-    pub store: TypeStore,
-    /// Complete generic actuals in ordinal order, rows of `store`.
+    /// The session interner: the actuals and the callable type are its rows.
+    pub types: &'a TypeInterner,
+    /// Complete generic actuals in ordinal order.
     pub arguments: Vec<GenericArgument>,
     pub callable: TypeId,
     pub abi: FnAbiId,
@@ -136,7 +144,7 @@ impl<'a> Cx<'a> {
         Self {
             program,
             path: instances.view(id).key.definition().clone(),
-            store: actuals.store.clone(),
+            types: &program.types,
             arguments: actuals.arguments.clone(),
             callable: instances.callables[id.index()],
             abi: instances.abis[id.index()],
@@ -155,7 +163,7 @@ impl<'a> Cx<'a> {
         self.layouts.table().fn_abis[self.abi.0 as usize].clone()
     }
 
-    /// Type actual `ordinal`, a row of `store`.
+    /// Type actual `ordinal`.
     pub fn type_actual(&self, ordinal: usize) -> R<TypeId> {
         match self.arguments.get(ordinal) {
             Some(GenericArgument::Type(ty)) => Ok(*ty),
@@ -177,18 +185,18 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// The layout of a row of `store`.
+    /// The layout of a type.
     pub fn layout(&mut self, ty: TypeId) -> R<LayoutId> {
         self.layouts
-            .layout(&self.store, ty)
+            .layout(self.types, ty)
             .map_err(|e| PassError::Layout(self.path.clone(), e))
     }
 
     /// The layout of a primitive type.
     pub fn primitive(&mut self, primitive: Primitive) -> R<LayoutId> {
         let ty = self
-            .store
-            .push(Type::with_kind(TypeKind::Primitive(primitive)));
+            .types
+            .intern(Type::with_kind(TypeKind::Primitive(primitive)));
         self.layout(ty)
     }
 

@@ -94,7 +94,7 @@ pub fn plan(
     for site in &body.tail_sites {
         if let tir::TailKind::ConstructorHole(_) = site.kind {
             return Err(NormalizeError::ConstructorHole {
-                definition: def.path.clone(),
+                definition: def.path.path().clone(),
                 call_block: site.call_block,
             });
         }
@@ -176,14 +176,15 @@ fn verify(
     else {
         return Err("not a direct call");
     };
-    if path != &def.path {
+    if path != def.path.path() {
         return Err("calls another definition");
     }
     // The same instance: polymorphic recursion is a different instance.
     let actuals = &instances.actuals[id.index()];
     let callee = callee_actuals(
+        &program.types,
+        &program.memo,
         program.binders.get(path).copied(),
-        &def.types,
         generics,
         actuals,
         false,

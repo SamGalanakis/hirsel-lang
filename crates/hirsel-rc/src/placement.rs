@@ -61,7 +61,7 @@ impl Options {
 
 /// Whether an instance's callable type declares `noalloc`.
 pub fn noalloc(instances: &Instances, id: InstanceId) -> bool {
-    let store = &instances.views[id.index()].substitution.store;
+    let store = &*instances.types;
     matches!(
         store.get(instances.callables[id.index()]).map(|t| &t.kind),
         Some(TypeKind::Function(f)) if f.allocation == Allocation::NoAlloc

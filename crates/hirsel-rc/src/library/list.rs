@@ -54,17 +54,16 @@ fn push(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     if sequential(cx) {
         return push_sequential(cx);
     }
-    let mut callable = cx.store.get(cx.callable).unwrap().clone();
+    let mut callable = cx.types.get(cx.callable).unwrap().clone();
     let TypeKind::Function(f) = &mut callable.kind else {
         unreachable!()
     };
     f.parameters = f.parameters[..1].to_vec().into();
-    let callable = cx.store.push(callable);
+    let callable = cx.types.intern(callable);
     let path = native_path("list_grow");
     let grow = cx.require(Request::native(
         super::body_index(&path).unwrap(),
         &path,
-        cx.store.clone(),
         cx.arguments.clone(),
         callable,
     ))?;

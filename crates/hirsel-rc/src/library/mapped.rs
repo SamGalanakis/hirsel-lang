@@ -30,10 +30,10 @@ const TRUNCATED: u32 = 10;
 fn with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let view_entry = intrinsic(cx, "MappedView", Vec::new())?;
     let check_entry = intrinsic(cx, "MappedCheck", Vec::new())?;
-    let callback = parameter(&cx.store, cx.callable, 2)?;
+    let callback = parameter(cx.types, cx.callable, 2)?;
     let abi = cx
         .layouts
-        .fn_abi(&cx.store, callback, CallableShape::Closure)
+        .fn_abi(cx.types, callback, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let returned = cx
         .fn_abi()

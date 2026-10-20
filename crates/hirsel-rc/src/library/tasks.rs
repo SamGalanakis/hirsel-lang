@@ -29,7 +29,7 @@ use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::operation::OperationArgument;
 use hirsel_lir::stage::Value;
-use hirsel_syntax::DefPath;
+use hirsel_syntax::{DefId, DefPath};
 use hirsel_types::{GenericArgument, SignatureKind, Type, TypeId, TypeKind};
 
 type R<T> = Result<T, PassError>;
@@ -64,13 +64,12 @@ pub static MAIN: LibraryBody = LibraryBody {
 };
 
 /// A runtime entry under this body's actuals: its operation, its `FnAbi` and
-/// its callable type, a row of `store` (a copy of the body's store).
+/// its callable type.
 pub(super) struct Intrinsic {
     operation: OperationId,
     pub(super) abi: FnAbiId,
     /// The actuals the operation's declared ABI is derived under.
     arguments: Vec<OperationArgument>,
-    store: hirsel_types::TypeStore,
     callable: TypeId,
 }
 
@@ -95,22 +94,22 @@ pub(super) fn intrinsic(
     let SignatureKind::Function(function) = &signature.kind else {
         return Err(PassError::Malformed(format!("{path:?} is not a function")));
     };
-    let mut actuals = Actuals {
+    let actuals = Actuals {
         binder: (!arguments.is_empty()).then(|| super::binder(&path)),
-        store: cx.store.clone(),
         arguments,
         outer: Vec::new(),
     };
     let callable = instantiate_function(
-        &signature,
+        &cx.program.types,
+        &cx.program.memo,
         function,
         hirsel_types::Modes::global(),
-        &mut actuals,
+        &actuals,
     )
     .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
     let abi = cx
         .layouts
-        .fn_abi(&actuals.store, callable, CallableShape::Definition)
+        .fn_abi(cx.types, callable, CallableShape::Definition)
         .map_err(|e| PassError::Layout(path.clone(), e))?;
     let abi = if signature.metadata.track_caller {
         cx.layouts
@@ -119,24 +118,23 @@ pub(super) fn intrinsic(
     } else {
         abi
     };
-    let arguments = hirsel_layout::operation::collect_arguments(&actuals.store, &actuals.arguments)
+    let arguments = hirsel_layout::operation::collect_arguments(cx.types, &actuals.arguments)
         .map_err(|e| PassError::Layout(path.clone(), e))?;
     Ok(Intrinsic {
         operation,
         abi,
         arguments,
-        store: actuals.store,
         callable,
     })
 }
 
 /// The type of parameter `ordinal` of a `Function` row.
 pub(super) fn parameter(
-    store: &hirsel_types::TypeStore,
+    types: &hirsel_types::TypeInterner,
     callable: TypeId,
     ordinal: usize,
 ) -> R<TypeId> {
-    match store.get(callable).map(|t| &t.kind) {
+    match types.get(callable).map(|t| &t.kind) {
         Some(TypeKind::Function(f)) if f.parameters.len() > ordinal => Ok(f.parameters[ordinal].ty),
         _ => Err(PassError::Malformed(format!(
             "a task callable has no parameter {ordinal}"
@@ -144,10 +142,10 @@ pub(super) fn parameter(
     }
 }
 
-/// `Option[R]` in the body's store, its layout and its storage bytes.
+/// `Option[R]`, its layout and its storage bytes.
 pub(super) fn option_of(cx: &mut Cx<'_>, result: TypeId) -> R<(LayoutId, u64)> {
-    let ty = cx.store.push(Type::with_kind(TypeKind::Named {
-        definition: DefPath::core("Option"),
+    let ty = cx.types.intern(Type::with_kind(TypeKind::Named {
+        definition: DefId::intern(&DefPath::core("Option")),
         arguments: vec![GenericArgument::Type(result)].into(),
     }));
     let layout = cx.layout(ty)?;
@@ -259,13 +257,13 @@ fn scoped(cx: &mut Cx<'_>, until: bool) -> R<LirUnit<Value>> {
     use super::arena::{payload, variant};
     let result = cx.type_actual(0)?;
     let is_result = matches!(
-        cx.store.get(result).map(|t| &t.kind),
-        Some(TypeKind::Named { definition, .. }) if *definition == DefPath::core("Result")
+        cx.types.get(result).map(|t| &t.kind),
+        Some(TypeKind::Named { definition, .. }) if *definition.path() == DefPath::core("Result")
     );
-    let callback = parameter(&cx.store, cx.callable, if until { 2 } else { 1 })?;
+    let callback = parameter(cx.types, cx.callable, if until { 2 } else { 1 })?;
     let body_abi = cx
         .layouts
-        .fn_abi(&cx.store, callback, CallableShape::Closure)
+        .fn_abi(cx.types, callback, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let (enter, exit) = if until {
         ("TaskScopeEnterUntil", "TaskScopeExitUntil")
@@ -432,28 +430,29 @@ fn scoped(cx: &mut Cx<'_>, until: bool) -> R<LirUnit<Value>> {
 
 fn spawn(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let result = cx.type_actual(0)?;
-    let f = parameter(&cx.store, cx.callable, 1)?;
+    let f = parameter(cx.types, cx.callable, 1)?;
     let entry = intrinsic(cx, "TaskSpawn", vec![GenericArgument::Type(result)])?;
     // The child's code: `$native.task_main` keyed by the spawned callable's type,
     // with the intrinsic's `once fn() -> ()` as its own callable type.
     let path = native_path("task_main");
-    let main_ty = parameter(&entry.store, entry.callable, 1)?;
+    let main_ty = parameter(cx.types, entry.callable, 1)?;
     let environment = cx
         .layouts
-        .environment(&EnvironmentShape {
-            definition: &path,
+        .environment(
+            cx.types,
+            &EnvironmentShape {
+            definition: DefId::intern(&path),
             body: 0,
-            store: &entry.store,
             captures: &[(f, Passing::Take)],
             sizes: &[],
             // The child moves the callable out to drop it with its frame (CONC-2).
             movable: &[0],
-        })
+        },
+        )
         .map_err(|e| PassError::Layout(path.clone(), e))?;
     let mut request = Request::native(
         super::body_index(&path).expect("registered task main"),
         &path,
-        entry.store.clone(),
         vec![GenericArgument::Type(f)],
         main_ty,
     );
@@ -668,7 +667,7 @@ fn join_handle(
 
 fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let f = cx.type_actual(0)?;
-    let result = match cx.store.get(f).map(|t| &t.kind) {
+    let result = match cx.types.get(f).map(|t| &t.kind) {
         Some(TypeKind::Function(function)) => function.result,
         _ => {
             return Err(PassError::Malformed(
@@ -678,7 +677,7 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     };
     let f_abi = cx
         .layouts
-        .fn_abi(&cx.store, f, CallableShape::Closure)
+        .fn_abi(cx.types, f, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let (option_layout, size) = option_of(cx, result)?;
     let entry = intrinsic(cx, "TaskFinish", vec![GenericArgument::Type(result)])?;
@@ -730,7 +729,7 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let value = match value {
         Some(value) => value,
         None => {
-            let ty = b.cx.store.push(Type::unit());
+            let ty = b.cx.types.intern(Type::unit());
             let unit = b.cx.layout(ty)?;
             b.constant(unit, ConstantValue::Unit)
         }

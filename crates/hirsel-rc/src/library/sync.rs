@@ -309,10 +309,10 @@ fn mutex_create(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
 
 /// `mutex.with(tasks, m, body) -> R`.
 fn mutex_with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    let callback = parameter(&cx.store, cx.callable, 2)?;
+    let callback = parameter(cx.types, cx.callable, 2)?;
     let body_abi = cx
         .layouts
-        .fn_abi(&cx.store, callback, CallableShape::Closure)
+        .fn_abi(cx.types, callback, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let layouts = carrier(cx)?;
     let option_layout = layouts.1;

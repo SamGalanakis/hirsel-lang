@@ -41,20 +41,13 @@ impl Importer<'_, '_> {
 
     // --- types and values ---
 
-    /// A TIR type substituted into the instance store.
+    /// A TIR type substituted by the instance's actuals.
     pub(super) fn ty(&mut self, ty: TypeId) -> R<TypeId> {
         if let Some(&t) = self.type_memo.get(&ty) {
             return Ok(t);
         }
-        let t = substitute(
-            &self.def.types,
-            ty,
-            self.actuals,
-            &self.store_actuals,
-            &mut self.store,
-            false,
-        )
-        .map_err(|e| InstanceError::Substitution(self.def.path.clone(), e))?;
+        let t = substitute(self.types, &self.program.memo, ty, self.actuals, false)
+            .map_err(|e| InstanceError::Substitution(self.def.path.path().clone(), e))?;
         self.type_memo.insert(ty, t);
         Ok(t)
     }
@@ -64,7 +57,7 @@ impl Importer<'_, '_> {
     pub(super) fn tracked_block(&mut self, ty: TypeId, payload: LayoutId) -> R<bool> {
         let ty = self.ty(ty)?;
         Ok(crate::library::tracked_block(
-            &self.store,
+            self.types,
             ty,
             self.layouts.table(),
             payload,
@@ -74,8 +67,8 @@ impl Importer<'_, '_> {
     pub(super) fn layout(&mut self, store_ty: TypeId) -> R<LayoutId> {
         let layout = self
             .layouts
-            .layout(&self.store, store_ty)
-            .map_err(|e| PassError::Layout(self.def.path.clone(), e))?;
+            .layout(self.types, store_ty)
+            .map_err(|e| PassError::Layout(self.def.path.path().clone(), e))?;
         self.library_finalizers(store_ty);
         Ok(layout)
     }
@@ -88,7 +81,7 @@ impl Importer<'_, '_> {
             if !self.finalizer_memo.insert(ty) {
                 continue;
             }
-            let Some(row) = self.store.get(ty) else {
+            let Some(row) = self.types.get(ty) else {
                 continue;
             };
             let arguments = |arguments: &[GenericArgument], todo: &mut Vec<TypeId>| {
@@ -117,12 +110,15 @@ impl Importer<'_, '_> {
                     {
                         let actuals = Actuals {
                             binder: (!a.is_empty()).then(|| crate::library::binder(finalizer)),
-                            store: self.store.clone(),
                             arguments: a.to_vec(),
                             outer: Vec::new(),
                         };
                         self.required.push(crate::library::Request::finalizer(
-                            body, finalizer, definition, &actuals,
+                            self.types,
+                            body,
+                            finalizer,
+                            definition.path(),
+                            &actuals,
                         ));
                     }
                 }
@@ -140,10 +136,10 @@ impl Importer<'_, '_> {
         &mut self,
         request: crate::library::Request,
     ) -> R<crate::library::builder::Direct> {
-        let key = request.key(self.layouts)?;
+        let key = request.key(self.types, self.layouts)?;
         let abi = self
             .layouts
-            .fn_abi(&request.actuals.store, request.callable, request.shape)
+            .fn_abi(self.types, request.callable, request.shape)
             .map_err(|e| PassError::Layout(request.path.clone(), e))?;
         let abi = self
             .layouts
@@ -159,7 +155,7 @@ impl Importer<'_, '_> {
     }
 
     /// The instance of the library body of operation `path` under the
-    /// call's generic arguments (rows of the definition's store).
+    /// call's generic arguments.
     pub(super) fn library_request(
         &mut self,
         body: usize,
@@ -167,8 +163,9 @@ impl Importer<'_, '_> {
         arguments: &[GenericArgument],
     ) -> R<crate::library::Request> {
         let callee = crate::instance::callee_actuals(
+            self.types,
+            &self.program.memo,
             self.program.binders.get(path).copied(),
-            &self.def.types,
             arguments,
             self.actuals,
             false,
@@ -178,7 +175,6 @@ impl Importer<'_, '_> {
             self.program,
             body,
             path,
-            callee.store,
             callee.arguments,
         )?)
     }

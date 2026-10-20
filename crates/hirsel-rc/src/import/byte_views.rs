@@ -3,7 +3,7 @@
 use super::*;
 use hirsel_types::{Primitive, TypeKind};
 
-pub(super) fn aliases(body: &tir::Body, types: &TypeStore, aliases: &mut [Option<tir::PlaceId>]) {
+pub(super) fn aliases(body: &tir::Body, types: &hirsel_types::TypeInterner, aliases: &mut [Option<tir::PlaceId>]) {
     use tir::InstructionKind as K;
     let n = body.locals.len();
     let root = |p: tir::PlaceId| body.places[p.0 as usize].root.0 as usize;

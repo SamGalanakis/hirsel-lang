@@ -486,7 +486,7 @@ impl Importer<'_, '_> {
             let builder = self
                 .layouts
                 .flat_builder(element)
-                .map_err(|e| PassError::Layout(self.def.path.clone(), e))?;
+                .map_err(|e| PassError::Layout(self.def.path.path().clone(), e))?;
             for (l, x) in web_of.iter().enumerate() {
                 if *x == Some(w) {
                     out.locals.insert(tir::LocalId(l as u32), builder);

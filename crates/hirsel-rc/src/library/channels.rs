@@ -36,7 +36,7 @@ pub static RECEIVE: LibraryBody = LibraryBody {
 /// layout of its `Option`.
 pub(super) fn carrier(cx: &mut Cx<'_>) -> R<(LayoutId, LayoutId)> {
     let element = cx.type_actual(0)?;
-    let list = cx.store.push(Type::with_kind(TypeKind::Builtin {
+    let list = cx.types.intern(Type::with_kind(TypeKind::Builtin {
         kind: BuiltinType::List,
         arguments: vec![GenericArgument::Type(element)].into(),
     }));

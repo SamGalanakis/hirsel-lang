@@ -72,7 +72,7 @@ fn captures(b: &mut Body<'_, '_>) -> Result<[Parameter; 2], PassError> {
 fn callback_abi(b: &mut Body<'_, '_>, ordinal: usize) -> Result<FnAbiId, PassError> {
     let ty = b.cx.type_actual(ordinal)?;
     b.cx.layouts
-        .fn_abi(&b.cx.store, ty, CallableShape::Closure)
+        .fn_abi(b.cx.types, ty, CallableShape::Closure)
         .map_err(|e| PassError::Layout(b.cx.path.clone(), e))
 }
 
@@ -203,29 +203,29 @@ fn map_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let [it, mapper] = captures(&mut b)?;
     let it_type = b.cx.type_actual(0)?;
-    let TypeKind::Builtin { arguments, .. } = &b.cx.store.get(it_type).unwrap().kind else {
+    let TypeKind::Builtin { arguments, .. } = &b.cx.types.get(it_type).unwrap().kind else {
         return Err(PassError::Malformed(
             "map capture is not an iterator".into(),
         ));
     };
     let generics = arguments.to_vec();
     let body = super::body_index(&native_path("iter_from_step")).unwrap();
-    let mut request = super::Request::operation(
+    let request = super::Request::operation(
         b.cx.program,
         body,
         &hirsel_syntax::DefPath::core("iter.next"),
-        b.cx.store.clone(),
         generics,
     )?;
-    let mut callable = request.actuals.store.get(request.callable).unwrap().clone();
+    let types = b.cx.types;
+    let mut callable = types.row(request.callable).clone();
     let TypeKind::Function(ref mut function) = callable.kind else {
         unreachable!()
     };
     function.parameters = Vec::new().into();
-    let callable = request.actuals.store.push(callable);
+    let callable = types.intern(callable);
     let abi =
         b.cx.layouts
-            .fn_abi(&request.actuals.store, callable, CallableShape::IterNext)
+            .fn_abi(types, callable, CallableShape::IterNext)
             .map_err(|e| PassError::Layout(b.cx.path.clone(), e))?;
     let (callee, loan) = b.borrow(it.address, true)?;
     let pulled = call(&mut b, callee, abi, vec![], &[loan])?.unwrap();
@@ -296,7 +296,7 @@ fn map_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let value = match mapped {
         Some(value) => value,
         None => {
-            let ty = b.cx.store.push(hirsel_types::Type::unit());
+            let ty = b.cx.types.intern(hirsel_types::Type::unit());
             let unit = b.cx.layout(ty)?;
             b.constant(unit, ConstantValue::Unit)
         }
