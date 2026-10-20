@@ -1569,7 +1569,18 @@ pub(crate) unsafe fn execute(
     selection: crate::host::Selection,
     process_arguments: Vec<std::ffi::OsString>,
     sinks: &crate::host::Sinks,
+    options: Options,
 ) -> Result<RunOutcome, String> {
+    let (width, migrate) = match options.workers {
+        Some(workers) => workers,
+        None => workers_from_env()?,
+    };
+    if !(1..=crate::pool::MAX_WIDTH).contains(&width) {
+        return Err(format!(
+            "the run's width {width} is outside 1 to {}",
+            crate::pool::MAX_WIDTH
+        ));
+    }
     let entry = program.code;
     let (result_size, layouts, layout_count) =
         (program.result_size, program.layouts, program.layout_count);
@@ -2002,9 +2013,9 @@ pub(crate) unsafe fn execute(
     if unsafe { hirsel_rt_v2_ctx_create(&config, &mut ctx) } != 0 {
         return Err("the runtime configuration".into());
     }
-    if let Some(budgets) = &budgets {
-        unsafe { &mut *ctx }.set_budgets(budgets.fuel, budgets.memory_bytes);
-    }
+    let control = options.control;
+    unsafe { &mut *ctx }.run().control = std::sync::Arc::clone(&control);
+    unsafe { &mut *ctx }.run().worker_metrics = options.metrics;
     #[cfg(feature = "measurement")]
     if let Some(file) = measurement {
         unsafe { &mut *ctx }.set_measurement_output(file);
@@ -2023,8 +2034,26 @@ pub(crate) unsafe fn execute(
     }
     // F0's free-mode test channel, when the environment sets it, replaces the schedule.
     crate::free::install(unsafe { &mut *ctx }, &launch_config.run_identity)?;
+    // The free-mode test channel decides one worker's interleavings: it runs on one.
+    // An execution of several runs (RUN-10) switches between their roots on one thread: a run
+    // with runners runs on one worker too.
+    if width > 1 && unsafe { &mut *ctx }.run().free.is_none() && runners.is_empty() {
+        // SAFETY: the root context, on the admission thread, before the run's code runs.
+        unsafe { crate::pool::start(ctx, width, migrate) };
+    }
+    // After the workers start: a run with compute workers takes its fuel in chunks, and a
+    // memory budget meters every worker's heap.
+    if let Some(budgets) = &budgets {
+        unsafe { &mut *ctx }.set_budgets(budgets.fuel, budgets.memory_bytes);
+    }
     let mut binding = Box::new(Binding::from_box(adapter).with_arguments(arguments.clone()));
     unsafe { binding.bind(&mut *ctx) };
+    // A host's stop wakes the run's idle wait.
+    if control.hosted()
+        && let Some(fd) = control.wake_fd()
+    {
+        binding.adapter.wake_on(fd);
+    }
     if let Some(table) = program.failure_table {
         crate::isolate::attach(unsafe { &mut *ctx }, table);
     }
@@ -2046,10 +2075,7 @@ pub(crate) unsafe fn execute(
             },
         )
     };
-    // Zeroed and 16-aligned: the entry writes a result of any supported alignment.
-    let mut result = [0u128; RESULT_MAX as usize / 16];
-    let (mut rt, mut args) = (IO_HANDLE, ARGS_HANDLE);
-    let mut roots = [IO_HANDLE, ARGS_HANDLE, u64::MAX, 0, TEST_HANDLE];
+    let roots = [IO_HANDLE, ARGS_HANDLE, u64::MAX, 0, TEST_HANDLE];
     // The replay output already echoed to the real streams.
     let echoed = std::rc::Rc::new(std::cell::Cell::new((0, 0)));
     let echo_replay = || -> Result<(), String> {
@@ -2071,73 +2097,73 @@ pub(crate) unsafe fn execute(
         Ok(())
     };
     let mut report_refusal = None;
+    // The PROG-3 report of a returned error, home state: it runs on the home thread.
+    let mut report = |returned: &crate::exit_report::Returned| {
+        let reported = (|| -> Result<(), String> {
+            echo_replay()?;
+            flush_stdout(sinks).map_err(|e| format!("standard output: {e}"))?;
+            // SAFETY: the returned value is live until its cleanup, after this report.
+            let text = unsafe { crate::exit_report::render(returned) };
+            let mut report = sinks.report.clone();
+            report
+                .write_all(text.as_bytes())
+                .and_then(|()| report.flush())
+                .map_err(|e| format!("standard error: {e}"))
+        })();
+        report_refusal = reported.err();
+    };
     // The run: its entry, then the PROG-3 report and the cleanup of a returned value, all on
     // the run's root fiber, so a stop anywhere in them returns here.
-    let ran = unsafe {
-        crate::stop::run_root(ctx, &mut || {
-            #[cfg(feature = "measurement")]
-            {
-                if measurement_segments {
-                    (*ctx).run().mc_profile = Some(Default::default());
-                    crate::tasks::profile::resume(ctx);
-                }
+    let root: crate::stop::Entry = Box::new(move |ctx, words| unsafe {
+        #[cfg(feature = "measurement")]
+        {
+            if measurement_segments {
+                (*ctx).run().mc_profile = Some(Default::default());
+                crate::tasks::profile::resume(ctx);
             }
-            let mut status = match entry {
-                Code::Zero(entry) => entry(ctx, std::ptr::null_mut(), result.as_mut_ptr().cast()),
-                Code::Main(entry) => entry(
-                    ctx,
-                    std::ptr::null_mut(),
-                    result.as_mut_ptr().cast(),
-                    &mut rt,
-                    &mut args,
-                ),
-                Code::Test(entry) => entry(
-                    ctx,
-                    std::ptr::null_mut(),
-                    result.as_mut_ptr().cast(),
-                    &TEST_HANDLE,
-                ),
-                Code::Roots(entry, _) => entry(
-                    ctx,
-                    std::ptr::null_mut(),
-                    result.as_mut_ptr().cast(),
-                    roots.as_mut_ptr(),
-                ),
-            };
-            if status == STATUS_OK {
-                crate::free::root_end(ctx);
+        }
+        let result = (*words).result.as_mut_ptr().cast();
+        match entry {
+            Code::Zero(entry) => entry(ctx, std::ptr::null_mut(), result),
+            Code::Main(entry) => entry(
+                ctx,
+                std::ptr::null_mut(),
+                result,
+                &mut (*words).rt,
+                &mut (*words).args,
+            ),
+            Code::Test(entry) => entry(ctx, std::ptr::null_mut(), result, &TEST_HANDLE),
+            Code::Roots(entry, _) => {
+                entry(ctx, std::ptr::null_mut(), result, (*words).roots.as_mut_ptr())
             }
-            if status == STATUS_OK
-                && let Some(returned) = (*ctx).run().entry_result.take()
-            {
-                let report = (|| -> Result<(), String> {
-                    echo_replay()?;
-                    flush_stdout(sinks).map_err(|e| format!("standard output: {e}"))?;
-                    let text = crate::exit_report::render(&returned);
-                    let mut report = sinks.report.clone();
-                    report
-                        .write_all(text.as_bytes())
-                        .and_then(|()| report.flush())
-                        .map_err(|e| format!("standard error: {e}"))
-                })();
-                report_refusal = report.err();
-                // Cleanup is mandatory even if the host's reporting sink failed.
-                let mut cleanup = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
-                status = crate::finalize::hirsel_rt_v2_finalize(
-                    ctx,
-                    returned.layout,
-                    returned.value,
-                    std::ptr::null(),
-                    cleanup.as_mut_ptr(),
-                    0,
-                    0,
-                );
-            }
-            status
-        })
+        }
+    });
+    // SAFETY: `report` outlives the run's root, which reports only while `run_root` runs.
+    let frame =
+        unsafe { crate::stop::LaunchFrame::new(root, IO_HANDLE, ARGS_HANDLE, roots, &mut report) };
+    let ran = unsafe { crate::stop::run_root(ctx, frame) };
+    // A stopped run whose workers still run its code: the launcher leaves it to them, and
+    // the last to leave frees it; home state is destroyed here, on the admission thread.
+    let pending = match &ran {
+        Err(_) => crate::pool::busy(unsafe { (*ctx).run_ref() }),
+        Ok(_) => 0,
+    };
+    let detached = pending > 0;
+    let result = match &ran {
+        Ok(_) => {
+            unsafe { (*ctx).run_ref() }
+                .launch
+                .as_ref()
+                .unwrap_or_else(|| crate::fault("a run without its launch frame"))
+                .words
+                .result
+        }
+        Err(_) => [0; RESULT_MAX as usize / 16],
     };
     #[cfg(feature = "measurement")]
-    crate::tasks::profile::finish(unsafe { &mut *ctx });
+    if !detached {
+        crate::tasks::profile::finish(unsafe { &mut *ctx });
+    }
     let bytes: Vec<u8> = result
         .iter()
         .flat_map(|w| w.to_le_bytes())
@@ -2201,7 +2227,9 @@ pub(crate) unsafe fn execute(
         Ok(_) => crate::fault("an entry returned a status other than 0 or 1"),
         Err(stop) => stop.outcome(),
     };
-    crate::free::finish(unsafe { &mut *ctx }, &outcome);
+    if !detached {
+        crate::free::finish(unsafe { &mut *ctx }, &outcome);
+    }
     let returned = !ended
         && matches!(
             outcome,
@@ -2231,7 +2259,10 @@ pub(crate) unsafe fn execute(
         record.push_str("audit unavailable\n");
     } else {
         // A stopped run's tasks still hold their storage: no exit audit (CONC-8).
-        if entry.is_test() && matches!(outcome, hirsel_run_schema::RunOutcome::Blocked(_)) {
+        if !detached
+            && entry.is_test()
+            && matches!(outcome, hirsel_run_schema::RunOutcome::Blocked(_))
+        {
             let waits = crate::tasks::test_waits(ctx);
             sinks
                 .report
@@ -2239,7 +2270,9 @@ pub(crate) unsafe fn execute(
                 .write_all(waits.as_bytes())
                 .map_err(|e| format!("test wait report: {e}"))?;
         }
-        unsafe { (*ctx).abandon() };
+        if !detached {
+            unsafe { (*ctx).abandon() };
+        }
         if ended {
             record.push_str("ended\n");
         }
@@ -2258,8 +2291,18 @@ pub(crate) unsafe fn execute(
         }
         record.push_str("audit unavailable\n");
     }
-    unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
+    if detached {
+        // The stopped run's workers hold it, not the launcher: the last to leave frees it.
+        // Home state is destroyed here, on the admission thread, all the same.
+        if let Some(holders) = crate::pool::holders(unsafe { (*ctx).run_ref() }) {
+            control.track(holders);
+        }
+        unsafe { crate::context::detach(ctx) };
+    } else {
+        unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
+    }
     drop(binding);
+    control.finish(pending);
     // A stopped run's cause, as its observation records it.
     let stopped = match &outcome {
         hirsel_run_schema::RunOutcome::Refused(reason) => Some(format!("refused {reason}")),
@@ -2367,6 +2410,38 @@ pub(crate) unsafe fn execute(
         return Err(error);
     }
     Ok(outcome)
+}
+
+/// How a run executes beyond its program and selection (`crate::host::RunHandle`).
+pub(crate) struct Options {
+    /// The run's stop word, which a host's [`crate::host::RunControl`] shares.
+    pub(crate) control: std::sync::Arc<crate::stop::Control>,
+    /// The width and migrate-every-suspension mode a test asked for, or `None`.
+    pub(crate) workers: Option<(u32, bool)>,
+    /// The scheduling row counters, when the host asked for them.
+    pub(crate) metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
+}
+
+/// The width and migration mode the environment asks for: `HIRSEL_RT_WORKERS` compute workers
+/// beside the admission thread (1, the default, runs on it alone), and under
+/// `HIRSEL_RT_MIGRATE` every task moves to another worker at every suspension, on three
+/// workers unless `HIRSEL_RT_WORKERS` names at least two. Test knobs until multi-worker
+/// execution is proven equal to one worker (design §9 W1).
+fn workers_from_env() -> Result<(u32, bool), String> {
+    let migrate = std::env::var_os("HIRSEL_RT_MIGRATE").is_some();
+    let width = match std::env::var("HIRSEL_RT_WORKERS") {
+        Ok(text) => text
+            .parse::<u32>()
+            .map_err(|_| format!("HIRSEL_RT_WORKERS is not a width: {text:?}"))?,
+        Err(std::env::VarError::NotPresent) => 1,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("HIRSEL_RT_WORKERS is not UTF-8".into());
+        }
+    };
+    Ok(match (width, migrate) {
+        (0 | 1, true) => (3, true),
+        other => other,
+    })
 }
 
 /// A stopped run's output before its report: what the replay printed, then the flush.

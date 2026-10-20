@@ -873,6 +873,12 @@ impl Adapter for RealIo {
     fn scripted_input(&self) -> bool {
         self.signals.as_ref().is_some_and(|s| s.scripted())
     }
+    fn wake_on(&mut self, fd: std::os::fd::RawFd) -> bool {
+        match &self.cooperative {
+            Some((readiness, _)) => readiness.wake_on(fd).is_ok(),
+            None => false,
+        }
+    }
 }
 fn recording_failed(error: std::io::Error) -> AdapterError {
     AdapterError::RecordingFailed(error.to_string())

@@ -55,6 +55,7 @@ use hirsel_kernels::schedule::{Algorithm, Schedule};
 
 use crate::context::TaskCtx;
 use crate::failure::Chained;
+use crate::pool::Owner;
 use crate::fiber::{self, Stack};
 use crate::stop::{Stop, Stopped};
 use crate::{Header, STATUS_FAILURE, STATUS_OK, fault};
@@ -176,9 +177,14 @@ struct Task {
     ended: bool,
     /// Its scheduling priority under `pct@1`, drawn when it was created.
     priority: u64,
-    /// The blocking-pool thread its foreign interval runs on, which alone resumes it
-    /// (`crate::pool`); `None` for the home thread.
-    owner: Option<u16>,
+    /// The threads that may resume it (`crate::pool`): any compute worker, the home thread
+    /// (a home foreign interval, or the run's Io binding in use) or the blocking-pool
+    /// thread its interval runs on.
+    owner: Owner,
+    /// It is the home thread's only until its next suspension, for the run's Io binding.
+    pinned: bool,
+    /// The compute worker it last ran on, at width > 1.
+    last: Option<u16>,
 }
 
 /// A task set (CONC-2): its scope and its members' Task words in add order, `None` once
@@ -588,7 +594,9 @@ impl Task {
             retried: false,
             ended: false,
             priority: 0,
-            owner: None,
+            owner: Owner::Any,
+            pinned: false,
+            last: None,
         }
     }
 }
@@ -791,16 +799,26 @@ pub(crate) fn current_path(ctx: *mut TaskCtx) -> Vec<u32> {
 unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
     let s = scheduler(ctx);
     let from = s.current;
+    // A suspension ends the running task's hold on the home thread for the Io binding.
+    if let Some(Some(row)) = s.tasks.get_mut(from as usize) {
+        unpin(row);
+    }
     if from == next {
+        // SAFETY: caller contract.
+        unsafe { migrate_self(ctx) };
         return;
     }
-    let owner = s.task(next).owner;
-    if crate::pool::crosses(ctx, owner) {
+    if let Some(metrics) = &ctx.run_ref().worker_metrics {
+        metrics.switch();
+    }
+    let row = s.task(next);
+    if let Some(to) = crate::pool::target(ctx, row.owner, row.last) {
         // `next` runs on another thread: this one hands the run over and waits (`crate::pool`).
+        let permit = crate::pool::resumes_into_hirsel(ctx, to);
         ctx.switch_out();
         let save = &raw mut s.task(from).sp;
         // SAFETY: `next` is suspended; `save` is written before any other thread runs.
-        unsafe { crate::pool::hand_off(ctx, save, owner, next, true) };
+        unsafe { crate::pool::hand_off(ctx, save, to, next, permit) };
         recycle(ctx);
         return;
     }
@@ -809,11 +827,188 @@ unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
     // SAFETY: `next`'s context is live and nothing else runs on this worker.
     unsafe { TaskCtx::switch_in(to_ctx, ctx.worker_ptr()) };
     s.current = next;
+    ran_here(ctx, next);
     let save = &raw mut s.task(from).sp;
     let to = s.task(next).sp;
     // SAFETY: `to` is the suspended or prepared stack pointer of `next`.
     unsafe { fiber::switch(save, to) };
     recycle(ctx);
+}
+
+/// End `row`'s hold on the home thread for the Io binding, at its suspension.
+fn unpin(row: &mut Task) {
+    if std::mem::take(&mut row.pinned) {
+        row.owner = Owner::Any;
+    }
+}
+
+/// Task `task` runs on the calling thread from here on: at width > 1, on a compute worker,
+/// it records the worker (counting a migration when it last ran on another).
+fn ran_here(ctx: &mut TaskCtx, task: u32) {
+    if !crate::pool::wide(ctx.run_ref()) {
+        return;
+    }
+    let here = crate::pool::compute_index();
+    let metrics = ctx.run_ref().worker_metrics.clone();
+    record_worker(scheduler(ctx).task(task), here, metrics.as_deref());
+}
+
+fn record_worker(
+    row: &mut Task,
+    here: Option<u16>,
+    metrics: Option<&crate::pool::WorkerMetrics>,
+) {
+    let Some(here) = here else { return };
+    if row.last.is_some_and(|last| last != here)
+        && let Some(metrics) = metrics
+    {
+        metrics.migration();
+    }
+    row.last = Some(here);
+}
+
+/// The running task goes on running after a scheduling point: on another thread when its
+/// owner says so (it left the home thread, or the migrate-every-suspension mode moves it).
+///
+/// # Safety
+/// `ctx` is the running task's; the caller holds nothing a stop must drop.
+unsafe fn migrate_self(ctx: &mut TaskCtx) {
+    let s = scheduler(ctx);
+    let me = s.current;
+    let Some(Some(row)) = s.tasks.get_mut(me as usize) else {
+        return;
+    };
+    let Some(to) = crate::pool::target(ctx, row.owner, row.last) else {
+        return;
+    };
+    let permit = crate::pool::resumes_into_hirsel(ctx, to);
+    ctx.switch_out();
+    let save = &raw mut s.task(me).sp;
+    // SAFETY: this task is suspended at `save` before the other thread resumes it.
+    unsafe { crate::pool::hand_off(ctx, save, to, me, permit) };
+    recycle(ctx);
+}
+
+/// The running task holds the run's Io binding, home state, until its next suspension: at
+/// width > 1 it moves to the home thread, unless it runs there already or sits in a foreign
+/// interval of another thread (whose callbacks reach the binding where they run). A stopped
+/// run's home thread takes no task: the running one is left there, never resumed.
+///
+/// # Safety
+/// `ctx` is the running task's and no borrow of its scheduler is held.
+pub(crate) unsafe fn pin_home(ctx: *mut TaskCtx) {
+    // SAFETY: caller contract.
+    let ctx = unsafe { &mut *ctx };
+    let run = ctx.run_ref();
+    if !crate::pool::wide(run)
+        || crate::pool::compute_index().is_none()
+        || crate::foreign::active()
+        || run.tasks.is_none()
+    {
+        return;
+    }
+    let s = scheduler(ctx);
+    let me = s.current;
+    let Some(Some(row)) = s.tasks.get_mut(me as usize) else {
+        return;
+    };
+    if row.owner != Owner::Any {
+        return;
+    }
+    row.owner = Owner::Home;
+    row.pinned = true;
+    // SAFETY: caller contract.
+    unsafe { migrate_self(ctx) };
+}
+
+/// The running task's Io operation ended without a scheduling point (a handle's close): its
+/// hold on the home thread ends here, so the home thread runs no ordinary Hirsel code.
+///
+/// # Safety
+/// As for [`pin_home`]; the caller holds nothing a stop must drop.
+pub(crate) unsafe fn leave_home(ctx: *mut TaskCtx) {
+    // SAFETY: caller contract.
+    let ctx = unsafe { &mut *ctx };
+    if !crate::pool::wide(ctx.run_ref()) || ctx.run_ref().tasks.is_none() {
+        return;
+    }
+    let s = scheduler(ctx);
+    let me = s.current;
+    let Some(Some(row)) = s.tasks.get_mut(me as usize) else {
+        return;
+    };
+    if row.pinned {
+        unpin(row);
+        // SAFETY: caller contract.
+        unsafe { migrate_self(ctx) };
+    }
+}
+
+/// Run `call` on the home thread for the running task, which goes back to a compute worker
+/// after it: the root's report of a returned error, home state at width > 1. A stopped
+/// run's home thread takes no task: the running one is left there, never resumed.
+///
+/// # Safety
+/// `ctx` is the running task's; `call` does not suspend.
+pub(crate) unsafe fn at_home(ctx: *mut TaskCtx, call: &mut dyn FnMut()) {
+    // SAFETY: caller contract.
+    unsafe {
+        // After a stop the root reports nothing.
+        crate::stop::check(ctx, crate::stop::observe(ctx));
+        pin_home(ctx);
+        call();
+        let s = scheduler(ctx);
+        let me = s.current;
+        unpin(s.task(me));
+        migrate_self(&mut *ctx);
+    }
+}
+
+/// The running task enters a home foreign interval (S-13): at width > 1 it moves to the home
+/// thread, which alone resumes it until [`from_home`]. Whether it moved.
+///
+/// # Safety
+/// `ctx` is the running task's, outside any foreign interval; it holds nothing a stop must
+/// drop.
+pub(crate) unsafe fn to_home(ctx: &mut TaskCtx) -> bool {
+    if !crate::pool::wide(ctx.run_ref()) {
+        return false;
+    }
+    let s = scheduler(ctx);
+    let me = s.current;
+    let row = s.task(me);
+    row.owner = Owner::Home;
+    row.pinned = false;
+    // SAFETY: caller contract.
+    unsafe { migrate_self(ctx) };
+    true
+}
+
+/// The running task's home foreign interval ended: it goes back to a compute worker.
+///
+/// # Safety
+/// `ctx` is the running task's, on the home thread, after its interval's leave.
+pub(crate) unsafe fn from_home(ctx: &mut TaskCtx) {
+    let s = scheduler(ctx);
+    let me = s.current;
+    s.task(me).owner = Owner::Any;
+    // SAFETY: caller contract.
+    unsafe { migrate_self(ctx) };
+}
+
+/// Start a width > 1 run's root task as row 0 on the first compute worker, suspended at `sp`
+/// (its prepared fiber).
+///
+/// # Safety
+/// `ctx` is the run's root context; the run has compute workers and has not started.
+pub(crate) unsafe fn start_root(ctx: *mut TaskCtx, sp: *mut u8) {
+    let s = scheduler(ctx);
+    s.task(ROOT).sp = sp;
+    // SAFETY: caller contract.
+    unsafe {
+        (*ctx).switch_out();
+        crate::pool::start_root((*ctx).run_ptr(), ROOT);
+    }
 }
 
 /// Leave a completed task for good and run `next`. The completed task's row may already be
@@ -832,13 +1027,17 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
     drop(std::mem::take(&mut ctx.failure));
     drop(std::mem::take(&mut ctx.frozen));
     drop(std::mem::take(&mut ctx.isolated));
-    let owner = s.task(next).owner;
-    if crate::pool::crosses(ctx, owner) {
+    if let Some(metrics) = &ctx.run_ref().worker_metrics {
+        metrics.switch();
+    }
+    let row = s.task(next);
+    if let Some(to) = crate::pool::target(ctx, row.owner, row.last) {
+        let permit = crate::pool::resumes_into_hirsel(ctx, to);
         ctx.switch_out();
         s.task(next).state = State::Ready;
         let mut abandoned = std::ptr::null_mut();
         // SAFETY: `next` is suspended; nothing resumes the abandoned stack pointer.
-        unsafe { crate::pool::hand_off(ctx, &raw mut abandoned, owner, next, true) };
+        unsafe { crate::pool::hand_off(ctx, &raw mut abandoned, to, next, permit) };
         fault("a completed task was resumed");
     }
     let to_ctx = s.task(next).ctx;
@@ -846,6 +1045,7 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
     // SAFETY: `next`'s context is live and nothing else runs on this worker.
     unsafe { TaskCtx::switch_in(to_ctx, ctx.worker_ptr()) };
     s.current = next;
+    ran_here(ctx, next);
     s.task(next).state = State::Ready;
     let mut abandoned = std::ptr::null_mut();
     // SAFETY: `next` is suspended; nothing resumes the abandoned stack pointer.
@@ -861,12 +1061,21 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
 pub(crate) unsafe fn resume_row(
     run: *mut crate::context::RunShared,
     task: u32,
+    here: Option<u16>,
 ) -> (*mut TaskCtx, *mut u8) {
     // SAFETY: caller contract; the thread resuming it is the only one running the run.
-    let s = unsafe { (*run).tasks.as_deref_mut() }
-        .unwrap_or_else(|| fault("a handoff in a run without tasks"));
+    let (s, metrics) = unsafe {
+        (
+            (*run)
+                .tasks
+                .as_deref_mut()
+                .unwrap_or_else(|| fault("a handoff in a run without tasks")),
+            (*run).worker_metrics.as_deref(),
+        )
+    };
     s.current = task;
     let row = s.task(task);
+    record_worker(row, here, metrics);
     (row.ctx, row.sp)
 }
 
@@ -887,11 +1096,15 @@ pub(crate) unsafe fn to_pool(ctx: &mut TaskCtx, site: u64) -> u16 {
     };
     let s = scheduler(ctx);
     let me = s.current;
-    s.task(me).owner = Some(slot);
+    let row = s.task(me);
+    unpin(row);
+    row.owner = Owner::Pool(slot);
+    let to = crate::pool::target(ctx, Owner::Pool(slot), None)
+        .unwrap_or_else(|| fault("a pool dispatch from its own pool thread"));
     ctx.switch_out();
     let save = &raw mut s.task(me).sp;
     // SAFETY: this task is suspended at `save` before the pool thread resumes it.
-    unsafe { crate::pool::hand_off(ctx, save, Some(slot), me, false) };
+    unsafe { crate::pool::hand_off(ctx, save, to, me, false) };
     recycle(ctx);
     slot
 }
@@ -905,14 +1118,12 @@ pub(crate) unsafe fn to_pool(ctx: &mut TaskCtx, site: u64) -> u16 {
 pub(crate) unsafe fn from_pool(ctx: &mut TaskCtx, slot: u16) {
     let s = scheduler(ctx);
     let me = s.current;
-    if s.task(me).owner.take() != Some(slot) {
+    let row = s.task(me);
+    if std::mem::replace(&mut row.owner, Owner::Any) != Owner::Pool(slot) {
         fault("a pool interval left from a thread that does not own it");
     }
-    ctx.switch_out();
-    let save = &raw mut s.task(me).sp;
-    // SAFETY: this task is suspended at `save` before home resumes it.
-    unsafe { crate::pool::hand_off(ctx, save, None, me, true) };
-    recycle(ctx);
+    // SAFETY: this task is suspended before the thread its owner names resumes it.
+    unsafe { migrate_self(ctx) };
     crate::pool::release(ctx, slot);
     let s = scheduler(ctx);
     for task in std::mem::take(&mut s.pool_waiters) {
@@ -1127,6 +1338,8 @@ unsafe fn run_next(ctx: &mut TaskCtx) -> Stopped<()> {
 /// # Safety
 /// `ctx` is live and no borrow of its Io adapter or scheduler is held.
 unsafe fn pick(ctx: *mut TaskCtx) -> Stopped<Option<u32>> {
+    // SAFETY: the context is live.
+    queued(unsafe { &*ctx });
     let s = scheduler(ctx);
     if s.schedule.algorithm() == Algorithm::Fifo || s.runnable.is_empty() {
         return Ok(s.runnable.pop_front());
@@ -1144,9 +1357,16 @@ unsafe fn pick(ctx: *mut TaskCtx) -> Stopped<Option<u32>> {
     let mut choice = s.schedule.choose(&priorities);
     // SAFETY: the context is live; a run without an Io binding records nothing.
     if s.schedule.recorded(priorities.len()) && !unsafe { (*ctx).io_data() }.is_null() {
-        let binding = unsafe { crate::io::Binding::get(ctx) };
         let count = priorities.len() as u64;
-        choice = match binding.adapter.schedule(count, choice as u64) {
+        let mut recorded = Ok(0);
+        // The binding is home state: the home thread asks it (`crate::pool`).
+        unsafe {
+            crate::pool::call_home(ctx, &mut || {
+                let binding = crate::io::Binding::get(ctx);
+                recorded = binding.adapter.schedule(count, choice as u64);
+            })
+        }?;
+        choice = match recorded {
             Ok(choice) if choice < count => choice as usize,
             Ok(_) => crate::fault("a scheduling input outside the runnable queue"),
             Err(error) => return Err(Stop::refusal(error)),
@@ -1174,6 +1394,8 @@ unsafe fn next_task(ctx: *mut TaskCtx) -> Stopped<u32> {
     }
     // With nothing runnable, sleep until a parked host request may complete, then poll again.
     while scheduler(ctx).runnable.is_empty() && unsafe { crate::host_waits::wait(ctx) }? {
+        // A host's stop ends the wait too (`crate::host::RunControl`).
+        crate::stop::observe(ctx)?;
         unsafe { poll_parked(ctx) }?;
     }
     // CONC-8: no task can run and nothing outside the run can wake one.
@@ -1249,12 +1471,13 @@ pub(crate) unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_schema::
     waits
 }
 
-/// The single-compute-worker shortcut seam. The scheduler currently has one
-/// compute worker; the blocking pool is a separate home-Io bridge. A scheduler
-/// with multiple compute workers or forced migration must disable this helper.
-/// Free-mode points must always reach their recording policy.
+/// The single-compute-worker shortcut seam: a run with compute workers (or forced migration,
+/// which runs on them) moves its tasks at every suspension and its Io belongs to the home
+/// thread, so it takes no shortcut, and neither does a task on a pool thread. Free-mode points
+/// must always reach their recording policy.
 unsafe fn single_worker_fast_path(ctx: *mut TaskCtx) -> bool {
-    unsafe { (*ctx).run().free.is_none() }
+    let run = unsafe { (*ctx).run_ref() };
+    !crate::pool::wide(run) && !crate::pool::on_pool() && run.free.is_none()
 }
 
 /// Whether the running root is the run's only possible runnable task. The
@@ -1292,13 +1515,17 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     unsafe {
         crate::root_trace::point(ctx)
     };
+    crate::stop::observe(ctx)?;
     if ctx.run().tasks.is_none() {
         return Ok(());
+    }
+    if let Some(metrics) = &ctx.run_ref().worker_metrics {
+        metrics.op();
     }
     // Tokio ce685ee6 current_thread/mod.rs:818-879 keeps polling its sole
     // runnable root without entering the driver. Hirsel additionally preserves
     // explicit scope deadlines and free-mode phase recording at every point.
-    if !crate::pool::on_pool() && unsafe { single_worker_fast_path(ctx) } {
+    if unsafe { single_worker_fast_path(ctx) } {
         let s = scheduler(ctx);
         if s.tasks.len() == 1
             && s.runnable.is_empty()
@@ -1312,13 +1539,38 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     unsafe { poll_parked(ctx) }?;
     let s = scheduler(ctx);
     if s.runnable.is_empty() {
-        return Ok(());
+        // SAFETY: the context is live; the caller holds nothing a stop must drop.
+        unsafe { go_on(ctx) };
+        return crate::stop::observe(ctx);
     }
     s.runnable.push_back(s.current);
+    queued(ctx);
     // SAFETY: the context is live and the queue is nonempty.
     let next = unsafe { pick(ctx) }?.unwrap_or_else(|| crate::fault("an empty runnable queue"));
     unsafe { switch_to(ctx, next) };
-    Ok(())
+    crate::stop::observe(ctx)
+}
+
+/// The running task goes on after a scheduling point that switched to no other task: its
+/// hold on the home thread for the Io binding ends, and it moves where its owner says.
+///
+/// # Safety
+/// `ctx` is the running task's; the caller holds nothing a stop must drop.
+pub(crate) unsafe fn go_on(ctx: &mut TaskCtx) {
+    let s = scheduler(ctx);
+    let me = s.current;
+    if let Some(Some(row)) = s.tasks.get_mut(me as usize) {
+        unpin(row);
+    }
+    // SAFETY: caller contract.
+    unsafe { migrate_self(ctx) };
+}
+
+/// A runnable queue push or pop, for the scheduling rows' counters.
+fn queued(ctx: &TaskCtx) {
+    if let Some(metrics) = &ctx.run_ref().worker_metrics {
+        metrics.queue_op();
+    }
 }
 
 /// Park the running task until `wait` is over; returns once a poll performed its effect.
@@ -1342,12 +1594,17 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
     unsafe {
         crate::root_trace::point(ctx)
     };
+    crate::stop::observe(ctx)?;
+    if let Some(metrics) = &ctx.run_ref().worker_metrics {
+        metrics.op();
+    }
     if yielded {
         // SAFETY: the context is live.
         unsafe { poll_parked(ctx) }?;
         let s = scheduler(ctx);
         if !s.runnable.is_empty() {
             s.runnable.push_back(s.current);
+            queued(ctx);
             // SAFETY: the context is live and the queue is nonempty.
             let next =
                 unsafe { pick(ctx) }?.unwrap_or_else(|| crate::fault("an empty runnable queue"));
@@ -1363,7 +1620,8 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
         unsafe { crate::host_waits::park(ctx, token, current) };
     }
     // SAFETY: the context is live; a poll makes this task runnable again.
-    unsafe { run_next(ctx) }
+    unsafe { run_next(ctx) }?;
+    crate::stop::observe(ctx)
 }
 
 /// Park the running task on host request `token` until a poll completes it (`crate::host_waits`).
@@ -1445,12 +1703,15 @@ unsafe fn completed(ctx: &mut TaskCtx, index: u32, status: u8) -> Stopped<u32> {
     if !std::mem::replace(&mut s.task(index).ended, true) {
         crate::free::end(ctx, &path);
     }
-    let s = scheduler(ctx);
     let chain = ctx.failure.take_chain(&path);
     let failed = status != STATUS_OK;
     if failed != !chain.is_empty() {
         fault("a task's status disagrees with its failure state");
     }
+    if let Some(metrics) = &ctx.run_ref().worker_metrics {
+        metrics.complete();
+    }
+    let s = scheduler(ctx);
     let row = s.task(index);
     row.state = State::Done;
     let scope = row
@@ -1746,6 +2007,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_spawn");
     crate::free::enter(ctx, Phase::Done);
+    // SAFETY: the context is live.
+    let started = unsafe { (*ctx).run_ref() }
+        .worker_metrics
+        .as_ref()
+        .map(|_| std::time::Instant::now());
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1783,7 +2049,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     s.tasks[index as usize] = Some(task);
     s.scope(scope).children.push(index);
     // A free-mode replay never starts a child its cut lacks.
+    // SAFETY: the context is live.
+    if let (Some(started), Some(metrics)) =
+        (started, unsafe { (*ctx).run_ref() }.worker_metrics.as_ref())
+    {
+        metrics.spawn(started.elapsed());
+    }
     if crate::free::start(ctx, &child) {
+        // SAFETY: the context is live.
+        queued(unsafe { &*ctx });
         let s = scheduler(ctx);
         s.runnable.push_back(index);
         #[cfg(feature = "measurement")]
@@ -2803,8 +3077,18 @@ fn mutex_release_op(ctx: *mut TaskCtx, word: u64, outcome: &str) {
 /// The run ended: release the payload blocks its mutexes still hold. Their payloads are
 /// copyable, so the release runs no user code and cannot fail.
 pub(crate) fn end_run(ctx: &mut TaskCtx) {
-    // The run's code ran on this thread last, so its pool threads are idle: they leave.
+    let wide = crate::pool::wide(ctx.run_ref());
+    // The run's code ran on one thread last, so its other threads are idle: they leave.
     crate::pool::shutdown(ctx.run());
+    if let Some(metrics) = ctx.run_ref().worker_metrics.clone() {
+        metrics.stack_rss(stack_rss(ctx));
+    }
+    if wide {
+        // At width > 1 the root, switched out on a compute worker or the home thread, goes
+        // back to the home worker, whose heap the exit reads first.
+        ctx.home_again();
+    }
+    crate::pool::retire(ctx.run());
     let Some(s) = ctx.run().tasks.as_deref_mut() else {
         return;
     };
@@ -2816,6 +3100,30 @@ pub(crate) fn end_run(ctx: &mut TaskCtx) {
             fault("a mutex payload's release failed");
         }
     }
+}
+
+/// The touched bytes of the run's task stacks, for the scheduling rows' counters: every
+/// stack a row still holds and every idle stack of the run's workers.
+fn stack_rss(ctx: &mut TaskCtx) -> u64 {
+    let mut bytes = 0;
+    if let Some(s) = ctx.run_ref().tasks.as_deref() {
+        bytes += s
+            .tasks
+            .iter()
+            .flatten()
+            .filter_map(|row| row.stack.as_ref())
+            .map(Stack::resident_bytes)
+            .sum::<u64>();
+    }
+    for worker in crate::pool::workers(ctx.run_ref()) {
+        // SAFETY: the run's threads are idle, so their workers' stacks are not in use.
+        bytes += unsafe { &*worker }
+            .idle_stacks
+            .iter()
+            .map(Stack::resident_bytes)
+            .sum::<u64>();
+    }
+    bytes
 }
 
 /// `$intrinsic.MutexKill[T](m)` (FAIL-4): the body failed; the mutex keeps the failure chain,

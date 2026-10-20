@@ -2066,6 +2066,9 @@ fn launch_impl(
     if let Some(env) = &fixture.env {
         command.env("HIRSEL_RT_ENV", serde_json::to_string(env).unwrap());
     }
+    if fixture.migrate {
+        command.env("HIRSEL_RT_MIGRATE", "1");
+    }
     if fixture.trace_roots {
         // At a count bound of 3 every root past two holders lives in the runtime's overflow
         // table, so the trace checks exact counts through entry to and exit from it.

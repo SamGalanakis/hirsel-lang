@@ -371,6 +371,10 @@ CRANELIFT_SHARDS = 8
 # (one 235 s), so 96 shards of about 28 cases keep each under the pool's 600 s
 # action limit.
 TRACE_ROOTS_SHARDS = 96
+# The migration gate (design §9 W1) builds the same baseline as an optimized LLVM and a
+# Cranelift executable on the default archive and runs the interpreter, as the trace gate
+# does at about its cost, so it takes as many shards.
+MIGRATE_SHARDS = 96
 # The historical replay (gate-native-history-shard-<i>) runs every
 # protected source under the exhaustive matrix at one CPU; single sources take
 # up to 15 minutes, so 32 path-hash shards keep each under the gate's budget.
@@ -450,6 +454,17 @@ GATE_TESTS = [
            args=["--trace-roots", "--shard", f"{index}/{TRACE_ROOTS_SHARDS}"],
            runtime_archives=RUNTIME_ARCHIVES, measured_as="gate-native-cranelift", **GATE)
       for index in range(1, TRACE_ROOTS_SHARDS + 1)),
+    # The migration gate (design §9 W1): every baseline case's optimized LLVM and Cranelift
+    # executables, on several compute workers that move every task at every suspension, must
+    # observe what the interpreter observes. On demand (`-c hirsel.full=true`); the shards
+    # are the whole corpus.
+    dict(name="gate-native-migrate", full=True, binary="//:hirsel-conformance-bin-native",
+         args=["--migrate"], runtime_archives=RUNTIME_ARCHIVES, measured_as="gate-native-cranelift",
+         **GATE),
+    *(dict(name=f"gate-native-migrate-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",
+           args=["--migrate", "--shard", f"{index}/{MIGRATE_SHARDS}"],
+           runtime_archives=RUNTIME_ARCHIVES, measured_as="gate-native-cranelift", **GATE)
+      for index in range(1, MIGRATE_SHARDS + 1)),
     dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"],
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
     dict(name="gate-native-hash-sweep", full=True, binary="//:hirsel-conformance-bin-native", args=["--hash-sweep", "--hash-seed", "1"],

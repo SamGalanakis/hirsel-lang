@@ -32,7 +32,7 @@ pub use adapt::{input_identity, manifest, program};
 pub use coverage::backend_features;
 pub use differential::{
     Configuration, Engine, Fixture, MATRIX_VERSION, Outcome, Runtime, differential,
-    differential_in, full_matrix, real_io_replay, real_io_replay_in, real_io_replay_with_config,
+    differential_in, full_matrix, migrate_matrix, real_io_replay, real_io_replay_in, real_io_replay_with_config,
     runner_oracle_in, runtime_builds, smoke_matrix, topology_matrix, trace_roots_matrix,
 };
 pub use emit::{

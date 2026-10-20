@@ -23,7 +23,7 @@ use hirsel_driver::native::{
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: native --std-compile [--filter MODULE] [--shard I/N] | --corpus [--seed N] [--shard I/N] | --bugs | --smoke [--filter TEXT]... | --sanitize [--filter TEXT]... | --cranelift [--clif] [--aarch64] [--filter TEXT]... [--shard I/N] | --cranelift-times [--filter TEXT]... | --trace-roots [--filter TEXT]... [--shard I/N] | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] [--seed N] [--exhaustive] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
+const USAGE: &str = "usage: native --std-compile [--filter MODULE] [--shard I/N] | --corpus [--seed N] [--shard I/N] | --bugs | --smoke [--filter TEXT]... | --sanitize [--filter TEXT]... | --cranelift [--clif] [--aarch64] [--filter TEXT]... [--shard I/N] | --cranelift-times [--filter TEXT]... | --trace-roots [--filter TEXT]... [--shard I/N] | --migrate [--filter TEXT]... [--shard I/N] | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] [--seed N] [--exhaustive] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
                      options: [--case ID]... [--root PATH] [--jobs N] [--out DIR] [--hash-seed N]";
 
 fn main() -> ExitCode {
@@ -261,7 +261,7 @@ fn trace_roots(root: &Path, jobs: usize, filter: &Filter, hash_seed: u64) -> Res
         |case, dir| case.run_traced(&matrix, &toolchain, dir),
     );
     let exclusions = native::read_exclusions(root)?;
-    let ok = trace_agree(&results, &exclusions);
+    let ok = trace_agree("trace-roots", &results, &exclusions);
     println!(
         "native trace-roots: {} cases under {} configurations{}",
         results.len(),
@@ -275,21 +275,65 @@ fn trace_roots(root: &Path, jobs: usize, filter: &Filter, hash_seed: u64) -> Res
     Ok(ok)
 }
 
+/// `--migrate` (design §9 W1): every executable baseline case as optimized LLVM and
+/// Cranelift executables on the optimized runtime archive, each run on several compute
+/// workers with every task moving to another worker at every suspension. A configuration
+/// agrees only when its observation equals the interpreter's, as without migration.
+fn migrate(root: &Path, jobs: usize, filter: &Filter, hash_seed: u64) -> Result<bool, String> {
+    let matrix = seeded(hirsel_driver::native::migrate_matrix(), hash_seed);
+    let all = native::baseline(root)?;
+    let cases: Vec<Case> = all
+        .iter()
+        .filter(|c| filter.keeps(&c.id))
+        .cloned()
+        .collect();
+    if cases.is_empty() {
+        if filter.empty_fails(all.iter().map(|c| c.id.as_str())) {
+            return Err(format!(
+                "native migrate: --filter {:?} selected no cases",
+                filter.0
+            ));
+        }
+        println!("native migrate: this shard holds none of the selected cases");
+        return Ok(true);
+    }
+    let toolchain = toolchain(&matrix)?;
+    let results = native::run_cases_with(
+        &cases,
+        &native::scratch("migrate")?,
+        jobs,
+        |case, dir| case.run_migrated(&matrix, &toolchain, dir),
+    );
+    let exclusions = native::read_exclusions(root)?;
+    let ok = trace_agree("migrate", &results, &exclusions);
+    println!(
+        "native migrate: {} cases under {} configurations{}",
+        results.len(),
+        matrix.len(),
+        if ok { " agree under migration" } else { ": FAILED" }
+    );
+    Ok(ok)
+}
+
 /// `--trace-roots`' judgement: every case traces the interpreter's roots under every
 /// configuration, unless `native-tests/regressions/exclusions.tsv` lists exactly why it does
 /// not, as the parity set's LLVM control is judged: the case still runs, its reason must
 /// equal the row's, and a row whose case now agrees is stale. A disagreeing case also prints
 /// a line led by its path, which names it to the gate.
-fn trace_agree(results: &[native::CaseResult], exclusions: &native::Exclusions) -> bool {
+fn trace_agree(
+    label: &str,
+    results: &[native::CaseResult],
+    exclusions: &native::Exclusions,
+) -> bool {
     if results.is_empty() {
-        eprintln!("trace-roots: selected no cases");
+        eprintln!("{label}: selected no cases");
         return false;
     }
     let mut ok = true;
     for result in results {
         let mut agrees = true;
         if result.snapshot.is_none() && result.outcomes.is_empty() {
-            eprintln!("trace-roots: {}: ran under no configuration", result.id);
+            eprintln!("{label}: {}: ran under no configuration", result.id);
             agrees = false;
         }
         let found: std::collections::BTreeMap<String, native::Exclusion> = result
@@ -317,7 +361,7 @@ fn trace_agree(results: &[native::CaseResult], exclusions: &native::Exclusions) 
             if control_excluded && class == Some(Class::Cranelift) && listed.is_none() {
                 if found.contains_key(configuration) {
                     eprintln!(
-                        "trace-roots: {} under {configuration}: unavailable with its excluded LLVM control",
+                        "{label}: {} under {configuration}: unavailable with its excluded LLVM control",
                         result.id
                     );
                 }
@@ -327,14 +371,14 @@ fn trace_agree(results: &[native::CaseResult], exclusions: &native::Exclusions) 
                 (None, None) => {}
                 (None, Some(_)) => {
                     eprintln!(
-                        "trace-roots: {} under {configuration}: now agrees; delete its row in {}",
+                        "{label}: {} under {configuration}: now agrees; delete its row in {}",
                         result.id,
                         native::EXCLUSIONS
                     );
                     agrees = false;
                 }
                 (Some(found), Some(listed)) if found == listed => eprintln!(
-                    "trace-roots: {} under {configuration}: excluded by {}: {} ({})",
+                    "{label}: {} under {configuration}: excluded by {}: {} ({})",
                     result.id,
                     native::EXCLUSIONS,
                     found.reason,
@@ -349,20 +393,20 @@ fn trace_agree(results: &[native::CaseResult], exclusions: &native::Exclusions) 
                     {
                         Some((_, _, Outcome::Mismatch(actual))) => {
                             eprintln!(
-                                "trace-roots: {} under {configuration} observed\n{}",
+                                "{label}: {} under {configuration} observed\n{}",
                                 result.id,
                                 actual.render()
                             );
                             if let Some(reference) = &result.reference {
                                 eprintln!(
-                                    "trace-roots: {} expected\n{}",
+                                    "{label}: {} expected\n{}",
                                     result.id,
                                     reference.render()
                                 );
                             }
                         }
                         _ => eprintln!(
-                            "trace-roots: {} under {configuration}: {} ({}){}",
+                            "{label}: {} under {configuration}: {} ({}){}",
                             result.id,
                             found.reason,
                             found.class,
@@ -376,7 +420,7 @@ fn trace_agree(results: &[native::CaseResult], exclusions: &native::Exclusions) 
             }
         }
         if !agrees {
-            eprintln!("{}: trace-roots: disagrees", result.id);
+            eprintln!("{}: {label}: disagrees", result.id);
             ok = false;
         }
     }
@@ -410,7 +454,7 @@ fn run() -> Result<bool, String> {
             match arg {
                 Long(
                     name @ ("smoke" | "full" | "sanitize" | "hash-sweep" | "cranelift"
-                    | "cranelift-times" | "trace-roots" | "std-compile" | "corpus" | "bugs"),
+                    | "cranelift-times" | "trace-roots" | "migrate" | "std-compile" | "corpus" | "bugs"),
                 ) => {
                     mode = Some((format!("--{name}"), PathBuf::new()));
                 }
@@ -463,11 +507,12 @@ fn run() -> Result<bool, String> {
     if filter.1.is_some()
         && !matches!(
             mode.as_str(),
-            "--full" | "--cranelift" | "--trace-roots" | "--std-compile" | "--corpus"
+            "--full" | "--cranelift" | "--trace-roots" | "--migrate" | "--std-compile" | "--corpus"
         )
     {
         return Err(
-            "--shard requires --full, --cranelift, --trace-roots, --std-compile or --corpus".into(),
+            "--shard requires --full, --cranelift, --trace-roots, --migrate, --std-compile or --corpus"
+                .into(),
         );
     }
     match mode.as_str() {
@@ -759,6 +804,7 @@ fn run() -> Result<bool, String> {
         }
         "--cranelift-times" => cranelift_times(&root, jobs, &filter),
         "--trace-roots" => trace_roots(&root, jobs, &filter, hash_seed),
+        "--migrate" => migrate(&root, jobs, &filter, hash_seed),
         "--sanitize" => {
             // The smoke and memcheck cases as optimized and unoptimized x86-64
             // executables on the system-allocator archive and on the size-class

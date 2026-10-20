@@ -83,6 +83,27 @@ impl Stack {
         self.context().cast()
     }
 
+    /// The bytes of this stack's usable pages that are resident, as `mincore(2)` reports
+    /// them: the stack's share of the process's RSS (the scheduling rows' `rss_bytes_per_task`).
+    pub(crate) fn resident_bytes(&self) -> u64 {
+        // SAFETY: a page size query has no preconditions.
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        let mut pages = vec![0u8; STACK_BYTES.div_ceil(page)];
+        // SAFETY: the usable range is this mapping's, page-aligned, and `pages` holds a byte
+        // per page of it.
+        let queried = unsafe {
+            libc::mincore(
+                self.base.add(GUARD_BYTES).cast(),
+                STACK_BYTES,
+                pages.as_mut_ptr().cast(),
+            )
+        };
+        if queried != 0 {
+            return 0;
+        }
+        pages.iter().filter(|&&p| p & 1 != 0).count() as u64 * page as u64
+    }
+
     /// The stack pointer of a fiber that, when switched to, calls `entry(first, second)`.
     pub(crate) fn prepare(&self, entry: Entry, first: *mut u8, second: *mut u8) -> *mut u8 {
         let words = initial_frame(entry, first, second);

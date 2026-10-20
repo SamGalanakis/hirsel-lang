@@ -261,8 +261,44 @@ impl Host {
             arguments,
             sinks,
             execution,
+            control: Default::default(),
+            workers: None,
+            metrics: None,
         }
     }
+}
+
+/// A started run's stop handle, which any thread may use while the run runs and after
+/// (design §6 Stops and worker lifetime).
+#[derive(Clone)]
+pub struct RunControl(std::sync::Arc<crate::stop::Control>);
+impl RunControl {
+    /// Stop the run. The first stop of a run wins, whoever asks: a later one, or a stop the
+    /// run raised itself, leaves it as it is. A stopped run ends `Environmental(Stopped)` at
+    /// its next operation, scheduling point or fuel refill, never inside a foreign call: one
+    /// in C ends when the call returns.
+    pub fn stop(&self) {
+        self.0.request(crate::stop::Stop::Requested);
+    }
+    /// Where the run stands.
+    pub fn status(&self) -> RunStatus {
+        self.0.status()
+    }
+}
+
+/// Where a run stands, as its [`RunControl`] reports it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RunStatus {
+    /// A stop was requested, by the host or by the run itself.
+    pub stop_requested: bool,
+    /// The admission thread is inside a home foreign interval (a home extern in C, or its
+    /// callback's Hirsel code): `wait` cannot return until it leaves it.
+    pub home_busy: bool,
+    /// `wait` returned the run's outcome.
+    pub finished: bool,
+    /// The workers still inside the run's code when `wait` returned; the last to leave frees
+    /// the run.
+    pub reclamation_pending: u32,
 }
 
 /// A started run; [`RunHandle::wait`] runs it to its outcome.
@@ -273,10 +309,33 @@ pub struct RunHandle<'p> {
     arguments: Vec<OsString>,
     sinks: Sinks,
     execution: Execution,
+    control: std::sync::Arc<crate::stop::Control>,
+    workers: Option<(u32, bool)>,
+    metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
 }
 impl RunHandle<'_> {
     pub fn execution(&self) -> &Execution {
         &self.execution
+    }
+    /// The run's stop handle. A run whose host holds one takes its fuel in chunks and wakes
+    /// its idle waits for a stop.
+    pub fn control(&self) -> RunControl {
+        self.control.host();
+        RunControl(std::sync::Arc::clone(&self.control))
+    }
+    /// Run on `width` compute workers beside the admission thread (`width` > 1), migrating
+    /// every task at every suspension under `migrate`: a test knob until multi-worker
+    /// execution is proven equal to one worker. Without it the environment decides
+    /// (`HIRSEL_RT_WORKERS`, `HIRSEL_RT_MIGRATE`), else one worker.
+    #[doc(hidden)]
+    pub fn with_workers(mut self, width: u32, migrate: bool) -> Self {
+        self.workers = Some((width, migrate));
+        self
+    }
+    /// The run's scheduling row counters (design §5 Headroom), which only a run asked for
+    /// them collects.
+    pub fn worker_metrics(&mut self) -> std::sync::Arc<crate::pool::WorkerMetrics> {
+        std::sync::Arc::clone(self.metrics.get_or_insert_with(Default::default))
     }
     /// Run to the end and return how the run ended. A refusal before entry is reported as
     /// the launch's refusal (`refused` in an observation record, else on the report sink).
@@ -288,9 +347,19 @@ impl RunHandle<'_> {
             arguments,
             sinks,
             execution: _,
+            control,
+            workers,
+            metrics,
         } = self;
+        let options = crate::launch::Options {
+            control,
+            workers,
+            metrics,
+        };
         // SAFETY: a loaded program's code and data live for the process.
-        match unsafe { crate::launch::execute(program, &config, selection, arguments, &sinks) } {
+        match unsafe {
+            crate::launch::execute(program, &config, selection, arguments, &sinks, options)
+        } {
             Ok(outcome) => outcome,
             Err(reason) => crate::launch::refused(&sinks, reason),
         }
@@ -307,5 +376,112 @@ mod tests {
         assert!(ProcessStdin::take().is_none());
         drop(held);
         assert!(ProcessStdin::take().is_some());
+    }
+}
+
+/// A run of a Rust stand-in for compiled entry code, launched as [`RunHandle::wait`]
+/// launches a program: its workers, budget, Io binding and stop handle, the launch frame and
+/// a stopped run's detachment (design §6 Stops and worker lifetime). For the runtime's own
+/// tests.
+#[doc(hidden)]
+pub struct BodyRun {
+    pub config: crate::Config,
+    pub width: u32,
+    pub migrate: bool,
+    pub fuel: Option<u64>,
+    pub adapter: Option<Box<dyn crate::io::Adapter>>,
+    control: std::sync::Arc<crate::stop::Control>,
+    metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
+}
+
+/// How a [`BodyRun`] ended.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct BodyOutcome {
+    /// The root's status, or the stop that ended the run.
+    pub ended: Result<u8, crate::stop::Stop>,
+    /// The workers still inside the run's code when it returned.
+    pub pending: u32,
+}
+
+impl BodyRun {
+    pub fn new(width: u32, migrate: bool) -> Self {
+        BodyRun {
+            config: crate::Config::new(),
+            width,
+            migrate,
+            fuel: None,
+            adapter: None,
+            control: Default::default(),
+            metrics: None,
+        }
+    }
+    pub fn control(&self) -> RunControl {
+        self.control.host();
+        RunControl(std::sync::Arc::clone(&self.control))
+    }
+    pub fn worker_metrics(&mut self) -> std::sync::Arc<crate::pool::WorkerMetrics> {
+        std::sync::Arc::clone(self.metrics.get_or_insert_with(Default::default))
+    }
+    /// Run `body` as the run's root on its first compute worker (on this thread at width
+    /// 1), after `setup` prepared the fresh root context on this thread.
+    pub fn run(
+        self,
+        setup: impl FnOnce(*mut crate::TaskCtx),
+        body: impl FnMut(*mut crate::TaskCtx) -> u8 + Send + 'static,
+    ) -> BodyOutcome {
+        let mut body = body;
+        let mut ctx = std::ptr::null_mut();
+        // SAFETY: a valid configuration and out-parameter.
+        if unsafe { crate::context::hirsel_rt_v2_ctx_create(&self.config, &mut ctx) } != 0 {
+            crate::fault("a body run's configuration");
+        }
+        setup(ctx);
+        // SAFETY: the fresh root context, on this thread, before the run's code runs.
+        unsafe {
+            (*ctx).run().control = std::sync::Arc::clone(&self.control);
+            (*ctx).run().worker_metrics = self.metrics.clone();
+            if self.width > 1 {
+                crate::pool::start(ctx, self.width, self.migrate);
+            }
+            if self.fuel.is_some() {
+                (*ctx).set_budgets(self.fuel, None);
+            }
+        }
+        let mut binding = self.adapter.map(|adapter| Box::new(crate::io::Binding::from_box(adapter)));
+        if let Some(binding) = &mut binding {
+            // SAFETY: the binding outlives the run's code on this thread.
+            unsafe { binding.bind(&mut *ctx) };
+            if self.control.hosted()
+                && let Some(fd) = self.control.wake_fd()
+            {
+                binding.adapter.wake_on(fd);
+            }
+        }
+        let entry: crate::stop::Entry = Box::new(move |ctx, _| body(ctx));
+        // SAFETY: the root context, driven once.
+        let ended = unsafe { crate::stop::run_root(ctx, crate::stop::LaunchFrame::bare(entry)) };
+        let pending = match &ended {
+            // SAFETY: the context is live.
+            Err(_) => crate::pool::busy(unsafe { (*ctx).run_ref() }),
+            Ok(_) => 0,
+        };
+        // SAFETY: the root context; a detached run's workers free it.
+        unsafe {
+            if pending > 0 {
+                if let Some(holders) = crate::pool::holders((*ctx).run_ref()) {
+                    self.control.track(holders);
+                }
+                crate::context::detach(ctx);
+            } else {
+                if ended.is_err() {
+                    (*ctx).abandon();
+                }
+                crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+            }
+        }
+        drop(binding);
+        self.control.finish(pending);
+        BodyOutcome { ended, pending }
     }
 }

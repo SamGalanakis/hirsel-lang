@@ -132,8 +132,13 @@ impl HeapRegistry {
     pub(crate) unsafe fn retire(&self, heap: *mut Heap) {
         // SAFETY: caller contract.
         unsafe {
-            (*heap).collect();
+            // The task last bound to the heap was switched out, which folded its view's
+            // counters into the heap, and may be gone (a completed task's stack is reused or
+            // freed): the heap parks without reading it, and the collection counts into the
+            // parked view.
+            (*heap).forget_view();
             (*heap).park();
+            (*heap).collect();
             (*heap).owner.orphan();
         }
         self.orphans.fetch_add(1, Ordering::Release);

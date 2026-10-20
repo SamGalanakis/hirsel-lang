@@ -9,7 +9,10 @@
 //!   interval's thread; otherwise a call to a `home` package runs on the home thread, blocking
 //!   or not; otherwise an `@blocking` call runs on a blocking-pool thread (`crate::pool`),
 //!   which owns the task until the call returns; otherwise the call runs on the caller's
-//!   worker. Until lane W1 the caller's worker is the home thread.
+//!   worker. At width 1 the caller's worker is the home thread; at width > 1 a home call moves
+//!   its task from its compute worker to the home thread for the interval (`HOMED`).
+//! - **Stops.** An outermost interval's entry and leave observe the run's stop word: a stop
+//!   requested while C runs ends the run when the call returns, never inside it.
 //! - **The `serial` gate** of each `serial` package is a logical object of the run
 //!   (`crate::tasks::gate_enter`): an outermost call's entry takes it before C is entered,
 //!   waiting while another call chain holds it; the owner's nested calls re-enter by depth;
@@ -65,8 +68,10 @@ pub const FOREIGN_SCOPE_ALIGN: usize = 8;
 const ENTERED: u64 = 1 << 3;
 const REENTERED: u64 = 1 << 4;
 const POOLED: u64 = 1 << 5;
-const HOW: u64 = ENTERED | REENTERED | POOLED;
-const _: () = assert!(FOREIGN_PACKAGE_SHIFT >= 6 && FOREIGN_BLOCKING & HOW == 0);
+/// The call moved its task to the home thread, at width > 1 (`crate::tasks::to_home`).
+const HOMED: u64 = 1 << 6;
+const HOW: u64 = ENTERED | REENTERED | POOLED | HOMED;
+const _: () = assert!(FOREIGN_PACKAGE_SHIFT >= 7 && FOREIGN_BLOCKING & HOW == 0);
 
 // Caller-owned storage in hirsel_rt_v2.h, transcribed in runtime_abi.
 const _: () = assert!(std::mem::size_of::<Interval>() == FOREIGN_SCOPE_BYTES);
@@ -136,6 +141,17 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_enter(
         // extern that does not run on the home thread.
         ended("a home package's extern was called on a blocking-pool thread");
     }
+    if !nested {
+        // SAFETY: the call holds nothing yet, and no C frame lies below.
+        unsafe { crate::stop::check(ctx, crate::stop::observe(ctx)) };
+    }
+    if !nested
+        && threads == FOREIGN_THREADS_HOME
+        // SAFETY: the context is the running task's; the call holds nothing yet.
+        && unsafe { crate::tasks::to_home(&mut *ctx) }
+    {
+        word |= HOMED;
+    }
     let gate = (dispatch >> FOREIGN_PACKAGE_SHIFT) as u32;
     if threads == FOREIGN_THREADS_SERIAL {
         // SAFETY: the context is the running task's; the call holds nothing yet.
@@ -182,6 +198,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_leave(previous: *const c_void) {
     if interval.word & (ENTERED | REENTERED) != 0 {
         let gate = ((interval.word & ((1 << 48) - 1)) >> FOREIGN_PACKAGE_SHIFT) as u32;
         crate::tasks::gate_leave(ctx, gate, interval.word & ENTERED != 0);
+    }
+    if interval.word & HOMED != 0 {
+        // SAFETY: the context is the running task's, on the home thread, with no C frame
+        // of its call below: a stop requested while C ran ends the run here.
+        unsafe {
+            crate::stop::check(ctx, crate::stop::observe(ctx));
+            crate::tasks::from_home(&mut *ctx);
+        }
     }
     // SAFETY: the context is live.
     if let Some(metrics) = unsafe { &(*ctx).run_ref().extern_metrics } {
@@ -270,6 +294,20 @@ pub unsafe fn enable_metrics(ctx: *mut TaskCtx) -> std::sync::Arc<crate::pool::E
     let metrics = std::sync::Arc::new(crate::pool::ExternMetrics::default());
     // SAFETY: caller contract.
     unsafe { (*ctx).run().extern_metrics = Some(std::sync::Arc::clone(&metrics)) };
+    metrics
+}
+
+/// Turn on `ctx`'s run's scheduling row counters (design §5 Headroom); a run without them
+/// pays one branch per collection point and reads no clock.
+///
+/// # Safety
+/// `ctx` is a live context of a run that has not started.
+pub unsafe fn enable_worker_metrics(
+    ctx: *mut TaskCtx,
+) -> std::sync::Arc<crate::pool::WorkerMetrics> {
+    let metrics = std::sync::Arc::new(crate::pool::WorkerMetrics::default());
+    // SAFETY: caller contract.
+    unsafe { (*ctx).run().worker_metrics = Some(std::sync::Arc::clone(&metrics)) };
     metrics
 }
 

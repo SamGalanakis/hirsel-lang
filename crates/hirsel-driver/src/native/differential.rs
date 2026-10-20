@@ -263,6 +263,31 @@ pub fn trace_roots_matrix() -> Vec<Configuration> {
     ]
 }
 
+/// The `--migrate` matrix (design §9 W1): one optimized x86-64 LLVM executable and one
+/// Cranelift executable, both on the optimized default archive, run with every suspension
+/// migrating its task to another compute worker; their observations must equal the
+/// interpreter's.
+pub fn migrate_matrix() -> Vec<Configuration> {
+    let x86 = TargetSpec::x86_64_unknown_linux_gnu();
+    vec![
+        Configuration {
+            options: Options::new(x86.clone()),
+            engine: Engine::Native {
+                opt: OptLevel::Speed,
+                partition: Partition::Whole,
+                runtime: Runtime::Default,
+            },
+        },
+        Configuration {
+            options: Options::new(x86),
+            engine: Engine::Cranelift {
+                partition: Partition::Whole,
+                runtime: Runtime::Default,
+            },
+        },
+    ]
+}
+
 /// Every archive variant `matrix`'s native configurations link, the
 /// diagnostic archive first (and alone when there are none).
 pub fn runtime_builds(matrix: &[Configuration]) -> Vec<RuntimeBuild> {
@@ -354,6 +379,9 @@ pub struct Fixture {
     /// `Shared` root's count at every scheduling point into `Observation::roots`, to be
     /// compared with the interpreter's trace.
     pub trace_roots: bool,
+    /// `--migrate` (design §9 W1): native launches run on several compute workers and move
+    /// every task to another worker at every suspension (`HIRSEL_RT_MIGRATE`).
+    pub migrate: bool,
 }
 
 /// Run `entry` under each configuration and compare with `reference`.

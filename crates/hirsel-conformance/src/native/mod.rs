@@ -53,7 +53,7 @@ impl Case {
             matrix,
             toolchain,
             dir,
-            false,
+            Probe::default(),
         )
     }
 
@@ -73,9 +73,44 @@ impl Case {
             matrix,
             toolchain,
             dir,
-            true,
+            Probe {
+                trace_roots: true,
+                ..Probe::default()
+            },
         )
     }
+
+    /// `--migrate` (design §9 W1): run this case under `matrix` with its native executables
+    /// on several compute workers, every task moving to another worker at every suspension,
+    /// so a configuration agrees only when migration changes no observation.
+    pub fn run_migrated(
+        &self,
+        matrix: &[Configuration],
+        toolchain: &Toolchain,
+        dir: &Path,
+    ) -> CaseResult {
+        run_source_path(
+            &self.id,
+            &self.source,
+            self.path.as_deref(),
+            matrix,
+            toolchain,
+            dir,
+            Probe {
+                migrate: true,
+                ..Probe::default()
+            },
+        )
+    }
+}
+
+/// What a differential run probes beyond the observation.
+#[derive(Clone, Copy, Debug, Default)]
+struct Probe {
+    /// Every engine traces its `Shared` roots (`--trace-roots`).
+    trace_roots: bool,
+    /// Native executables migrate every suspension (`--migrate`).
+    migrate: bool,
 }
 
 /// B of the set rule: every discovered executable corpus case outside the gate
@@ -457,7 +492,7 @@ pub fn run_source(
     toolchain: &Toolchain,
     dir: &Path,
 ) -> CaseResult {
-    run_source_path(id, source, None, matrix, toolchain, dir, false)
+    run_source_path(id, source, None, matrix, toolchain, dir, Probe::default())
 }
 fn run_source_path(
     id: &str,
@@ -466,10 +501,10 @@ fn run_source_path(
     matrix: &[Configuration],
     toolchain: &Toolchain,
     dir: &Path,
-    trace_roots: bool,
+    probe: Probe,
 ) -> CaseResult {
     if source.lines().any(|line| line.trim() == "// expect: test") {
-        return run_test_suite(id, source, path, matrix, toolchain, dir, trace_roots);
+        return run_test_suite(id, source, path, matrix, toolchain, dir, probe);
     }
     let mut engine = hirsel_engine::QueryEngine::new(
         hirsel_engine::default_environment(),
@@ -484,7 +519,7 @@ fn run_source_path(
             .first()
             .map(|c| c.options.launch.clone())
             .unwrap_or_default(),
-        trace_roots,
+        probe.trace_roots,
     )
     .and_then(|prepared| {
         if prepared.compiled_only
@@ -524,7 +559,8 @@ fn run_source_path(
                 toolchain,
                 dir,
                 &hirsel_driver::native::Fixture {
-                    trace_roots,
+                    trace_roots: probe.trace_roots,
+                    migrate: probe.migrate,
                     callees,
                     ..crate::fixture(source).unwrap()
                 },
@@ -552,7 +588,7 @@ fn run_test_suite(
     matrix: &[Configuration],
     toolchain: &Toolchain,
     dir: &Path,
-    trace_roots: bool,
+    probe: Probe,
 ) -> CaseResult {
     visit_test_suite(
         id,
@@ -563,7 +599,7 @@ fn run_test_suite(
             .first()
             .map(|c| c.options.launch.clone())
             .unwrap_or_default(),
-        trace_roots,
+        probe.trace_roots,
         |validated, test, reference, test_dir| {
             let mut configurations = matrix.to_vec();
             for c in &mut configurations {
@@ -577,7 +613,8 @@ fn run_test_suite(
                 toolchain,
                 test_dir,
                 &hirsel_driver::native::Fixture {
-                    trace_roots,
+                    trace_roots: probe.trace_roots,
+                    migrate: probe.migrate,
                     ..Default::default()
                 },
             )

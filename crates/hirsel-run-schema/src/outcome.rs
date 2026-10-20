@@ -46,7 +46,8 @@ pub enum Environmental {
     /// A host output sink failed.
     Output(String),
     /// The run's place stopped it before its next request: a simulated place's crash
-    /// (`sim@1`), which its caller sees as `InDoubt(Abandoned())` (RUN-6).
+    /// (`sim@1`), which its caller sees as `InDoubt(Abandoned())` (RUN-6), or the embedding
+    /// host's stop (`RunControl::stop`).
     Stopped,
 }
 impl std::fmt::Display for Environmental {

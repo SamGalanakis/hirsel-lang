@@ -25,6 +25,58 @@ use crate::id_map::IdMap;
 use crate::io::{AdapterError, Binding, Completion, Ready, Request};
 use crate::stop::{Stop, Stopped};
 
+/// Run `f` on the run's home thread, which holds the Io binding: the scheduling points of a
+/// width > 1 run run on compute workers (`crate::pool`).
+///
+/// # Safety
+/// `ctx` is live; `f` does not suspend.
+unsafe fn at_home<T>(ctx: *mut TaskCtx, f: impl FnOnce() -> T) -> Stopped<T> {
+    let (mut f, mut out) = (Some(f), None);
+    // SAFETY: caller contract.
+    unsafe {
+        crate::pool::call_home(ctx, &mut || {
+            out = f.take().map(|f| f());
+            count(ctx);
+        })
+    }?;
+    Ok(out.unwrap_or_else(|| crate::fault("a home call that did not run")))
+}
+
+/// Mirror the binding's parked and armed counts into the run ([`quiet`]), on the thread that
+/// holds the binding.
+///
+/// # Safety
+/// `ctx` is live.
+unsafe fn count(ctx: *mut TaskCtx) {
+    // SAFETY: caller contract.
+    unsafe {
+        let live = if (*ctx).io_data().is_null() {
+            0
+        } else {
+            let waits = &Binding::raw(ctx).waits;
+            waits.parked.len() + waits.armed.len()
+        };
+        (*ctx)
+            .run_ref()
+            .host_waits
+            .store(live as u32, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Whether the run parks no request and arms no deadline: a scheduling point asks its home
+/// thread nothing. It reads the run's mirror of the binding's counts ([`count`]), never the
+/// binding, which only its home thread reaches at width > 1.
+///
+/// # Safety
+/// `ctx` is live.
+unsafe fn quiet(ctx: *mut TaskCtx) -> bool {
+    // SAFETY: caller contract.
+    unsafe { (*ctx).run_ref() }
+        .host_waits
+        .load(std::sync::atomic::Ordering::Relaxed)
+        == 0
+}
+
 /// The parked requests of one run.
 #[derive(Default)]
 pub(crate) struct Waits {
@@ -61,6 +113,11 @@ unsafe fn canceled(
 /// # Safety
 /// The context and its binding are live.
 pub(crate) unsafe fn kind(ctx: *mut TaskCtx, token: u64) -> &'static str {
+    // SAFETY: caller contract.
+    unsafe { crate::stop::check(ctx, at_home(ctx, || kind_here(ctx, token))) }
+}
+
+unsafe fn kind_here(ctx: *mut TaskCtx, token: u64) -> &'static str {
     let binding = unsafe { Binding::get(ctx) };
     match binding.waits.parked.get(&token).map(|p| &p.request) {
         Some(Request::SleepUntil { .. }) => "clock.sleep_until",
@@ -119,6 +176,17 @@ pub(crate) fn may_park(request: &Request) -> bool {
 /// # Safety
 /// `ctx` is live, its Binding bound, and no borrow of the Binding or scheduler is held.
 pub(crate) unsafe fn issue(
+    ctx: *mut TaskCtx,
+    request: Request,
+) -> Stopped<(Result<Completion, AdapterError>, bool)> {
+    // SAFETY: caller contract.
+    let issued = unsafe { issue_here(ctx, request) };
+    // SAFETY: as above.
+    unsafe { count(ctx) };
+    issued
+}
+
+unsafe fn issue_here(
     ctx: *mut TaskCtx,
     request: Request,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
@@ -279,6 +347,10 @@ pub(crate) unsafe fn issue_net(
             if inline {
                 unsafe { crate::root_trace::point(&mut *ctx) };
             }
+            // The spent yield still observes a stop, as `try_yield` does at its entry.
+            if inline {
+                crate::stop::observe(ctx)?;
+            }
             return Ok(Some((result, inline)));
         }
     }
@@ -312,6 +384,19 @@ pub(crate) unsafe fn issue_net(
 /// # Safety
 /// `ctx` is live, its Binding bound, and no borrow of the Binding or scheduler is held.
 pub(crate) unsafe fn arm(
+    ctx: *mut TaskCtx,
+    scope: u32,
+    clock: u64,
+    at: u64,
+) -> Stopped<Option<u64>> {
+    // SAFETY: caller contract.
+    let armed = unsafe { arm_here(ctx, scope, clock, at) };
+    // SAFETY: as above.
+    unsafe { count(ctx) };
+    armed
+}
+
+unsafe fn arm_here(
     ctx: *mut TaskCtx,
     scope: u32,
     clock: u64,
@@ -352,6 +437,15 @@ pub(crate) unsafe fn arm(
 /// # Safety
 /// `ctx` is live; with no Binding bound nothing is armed.
 pub(crate) unsafe fn expired(ctx: *mut TaskCtx, ready: &Ready) -> Stopped<Vec<u32>> {
+    // SAFETY: caller contract.
+    if unsafe { quiet(ctx) } {
+        return Ok(Vec::new());
+    }
+    // SAFETY: caller contract.
+    unsafe { at_home(ctx, || expired_here(ctx, ready)) }?
+}
+
+unsafe fn expired_here(ctx: *mut TaskCtx, ready: &Ready) -> Stopped<Vec<u32>> {
     // SAFETY: the context is live.
     if unsafe { (*ctx).io_data() }.is_null() {
         return Ok(Vec::new());
@@ -394,6 +488,11 @@ pub(crate) unsafe fn expired(ctx: *mut TaskCtx, ready: &Ready) -> Stopped<Vec<u3
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` armed.
 pub(crate) unsafe fn disarm(ctx: *mut TaskCtx, token: u64) {
+    // SAFETY: caller contract.
+    unsafe { crate::stop::check(ctx, at_home(ctx, || disarm_here(ctx, token))) }
+}
+
+unsafe fn disarm_here(ctx: *mut TaskCtx, token: u64) {
     let binding = unsafe { Binding::get(ctx) };
     binding.adapter.finish(token);
     binding.waits.armed.remove(&token);
@@ -404,6 +503,11 @@ pub(crate) unsafe fn disarm(ctx: *mut TaskCtx, token: u64) {
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` parked.
 pub(crate) unsafe fn deadline(ctx: *mut TaskCtx, token: u64) -> Option<u64> {
+    // SAFETY: caller contract.
+    unsafe { crate::stop::check(ctx, at_home(ctx, || deadline_here(ctx, token))) }
+}
+
+unsafe fn deadline_here(ctx: *mut TaskCtx, token: u64) -> Option<u64> {
     let binding = unsafe { Binding::get(ctx) };
     match &binding.waits.parked.get(&token)?.request {
         Request::SleepUntil { deadline, .. } => Some(*deadline),
@@ -416,6 +520,11 @@ pub(crate) unsafe fn deadline(ctx: *mut TaskCtx, token: u64) -> Option<u64> {
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` blocked.
 pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, task: u32) {
+    // SAFETY: caller contract.
+    unsafe { crate::stop::check(ctx, at_home(ctx, || park_here(ctx, token, task))) }
+}
+
+unsafe fn park_here(ctx: *mut TaskCtx, token: u64, task: u32) {
     let binding = unsafe { Binding::get(ctx) };
     match binding.waits.parked.get_mut(&token) {
         Some(parked) => parked.task = Some(task),
@@ -441,6 +550,15 @@ pub(crate) unsafe fn idle(ctx: *mut TaskCtx) -> bool {
 /// # Safety
 /// `ctx` is live and no borrow of the Binding is held.
 pub(crate) unsafe fn ready(ctx: *mut TaskCtx) -> Stopped<Ready> {
+    // SAFETY: caller contract.
+    if unsafe { quiet(ctx) } {
+        return Ok(Ready::Tokens(Vec::new()));
+    }
+    // SAFETY: caller contract.
+    unsafe { at_home(ctx, || ready_here(ctx)) }?
+}
+
+unsafe fn ready_here(ctx: *mut TaskCtx) -> Stopped<Ready> {
     // SAFETY: the context is live.
     if unsafe { (*ctx).io_data() }.is_null() {
         return Ok(Ready::Tokens(Vec::new()));
@@ -473,6 +591,15 @@ pub(crate) unsafe fn ready(ctx: *mut TaskCtx) -> Stopped<Ready> {
 /// # Safety
 /// `ctx` is live; with no Binding bound nothing is parked.
 pub(crate) unsafe fn woken(ctx: *mut TaskCtx, ready: &Ready) -> Vec<u32> {
+    // SAFETY: caller contract.
+    if unsafe { quiet(ctx) } {
+        return Vec::new();
+    }
+    // SAFETY: caller contract.
+    unsafe { crate::stop::check(ctx, at_home(ctx, || woken_here(ctx, ready))) }
+}
+
+unsafe fn woken_here(ctx: *mut TaskCtx, ready: &Ready) -> Vec<u32> {
     // SAFETY: the context is live.
     if unsafe { (*ctx).io_data() }.is_null() {
         return Vec::new();
@@ -498,6 +625,16 @@ pub(crate) unsafe fn woken(ctx: *mut TaskCtx, ready: &Ready) -> Vec<u32> {
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` parked.
 pub(crate) unsafe fn poll(
+    ctx: *mut TaskCtx,
+    token: u64,
+    cause: Option<u32>,
+    ready: bool,
+) -> Stopped<bool> {
+    // SAFETY: caller contract.
+    unsafe { at_home(ctx, || poll_here(ctx, token, cause, ready)) }?
+}
+
+unsafe fn poll_here(
     ctx: *mut TaskCtx,
     token: u64,
     cause: Option<u32>,
@@ -578,6 +715,11 @@ pub(crate) unsafe fn poll(
 /// # Safety
 /// `ctx` is live and its Binding bound.
 pub(crate) unsafe fn wait(ctx: *mut TaskCtx) -> Stopped<bool> {
+    // SAFETY: caller contract.
+    unsafe { at_home(ctx, || wait_here(ctx)) }?
+}
+
+unsafe fn wait_here(ctx: *mut TaskCtx) -> Stopped<bool> {
     let binding = unsafe { Binding::get(ctx) };
     // A script's undelivered signals are an event source even when nothing is parked.
     if binding.waits.parked.is_empty()

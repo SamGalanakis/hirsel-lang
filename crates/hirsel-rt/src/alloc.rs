@@ -971,6 +971,11 @@ impl Heap {
         self.view = view;
     }
 
+    /// Whether binding `view` refreshes it: it last bound another heap or an older epoch.
+    pub(crate) fn stale(&self, view: &View) -> bool {
+        view.heap != self.id || view.epoch != self.epoch
+    }
+
     /// Switch-out: fold the running view's counters, which compiled code changed inline, back
     /// into the worker's words.
     #[inline]

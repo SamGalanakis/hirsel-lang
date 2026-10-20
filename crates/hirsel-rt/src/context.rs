@@ -233,12 +233,23 @@ pub(crate) struct RunShared {
     pub(crate) entry_result: Option<crate::exit_report::Returned>,
     /// The run's tasks, from its first scope (CONC-2).
     pub(crate) tasks: Option<Box<crate::tasks::Scheduler>>,
-    /// Where a stop of the run returns (`crate::stop`).
+    /// Where a stop of a width-1 run returns (`crate::stop`).
     pub(crate) driver: crate::stop::Driver,
     /// The root run's execution of runner calls and the callee runs they start (RUN-10).
     pub(crate) runners: Option<Box<crate::runners::Execution>>,
     /// A callee run's execution root, whose launcher a stop returns to; null for a root.
     pub(crate) root: *mut RunShared,
+    /// The run's stop word and what its host asks of it (`crate::stop`).
+    pub(crate) control: std::sync::Arc<crate::stop::Control>,
+    /// The Io binding's parked requests and armed deadlines, mirrored where every worker reads
+    /// it (`crate::host_waits`).
+    pub(crate) host_waits: std::sync::atomic::AtomicU32,
+    /// The root task's entry, words and stack, owned by the run (`crate::stop`).
+    pub(crate) launch: Option<Box<crate::stop::LaunchFrame>>,
+    /// The run's root context and its first worker (the home thread's), which a detached
+    /// run's last thread frees ([`reclaim`]).
+    root_ctx: *mut TaskCtx,
+    home: *mut Worker,
     /// The running program's failure table (`crate::isolate`).
     pub(crate) failure_table: Option<crate::isolate::FailureTable>,
     /// The scheduler policy the run's tasks start with (`inputs.scheduler`).
@@ -256,12 +267,21 @@ pub(crate) struct RunShared {
     pub(crate) execs: Option<Box<crate::pool::Execs>>,
     /// The extern row's headroom counters, when metrics are enabled (`crate::pool`).
     pub(crate) extern_metrics: Option<std::sync::Arc<crate::pool::ExternMetrics>>,
+    /// The scheduling rows' headroom counters, when metrics are enabled (`crate::pool`).
+    pub(crate) worker_metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
     #[cfg(feature = "measurement")]
     pub(crate) measurement_output: Option<std::fs::File>,
     #[cfg(feature = "measurement")]
     pub(crate) mc_profile: Option<crate::tasks::profile::Profile>,
     #[cfg(feature = "measurement")]
     pub(crate) profile_output: Option<std::fs::File>,
+}
+
+impl RunShared {
+    /// The home thread's worker, the run's first.
+    pub(crate) fn home_worker(&self) -> *mut Worker {
+        self.home
+    }
 }
 
 impl TaskCtx {
@@ -371,7 +391,14 @@ impl TaskCtx {
         // SAFETY: caller contract.
         unsafe {
             (*ctx).worker = worker;
-            (*worker).heap().bind(&raw mut (*ctx).view);
+            match (*(*ctx).run).worker_metrics.as_deref() {
+                Some(metrics) if (*worker).heap().stale(&(*ctx).view) => {
+                    let started = std::time::Instant::now();
+                    (*worker).heap().bind(&raw mut (*ctx).view);
+                    metrics.refresh(started.elapsed());
+                }
+                _ => (*worker).heap().bind(&raw mut (*ctx).view),
+            }
             #[cfg(feature = "measurement")]
             {
                 (*worker).heap().measurement.active_site = (*ctx).site;
@@ -407,6 +434,18 @@ impl TaskCtx {
         self.heap_ref().bound().cast()
     }
 
+    /// Bind the run's root to the home worker after a width > 1 run's threads left
+    /// (`crate::pool::shutdown`): the root was switched out on whichever thread ran it last.
+    pub(crate) fn home_again(&mut self) {
+        let home = self.run_ref().home_worker();
+        // SAFETY: the run's threads left, so nothing runs on the home worker.
+        unsafe {
+            if (*home).heap().bound() != (&raw mut self.view) {
+                TaskCtx::attach(self, home);
+            }
+        }
+    }
+
     /// Make this task the running one on its worker again, after a stop left another bound.
     pub(crate) fn rebind(&mut self) {
         let running = self.running();
@@ -433,12 +472,16 @@ impl TaskCtx {
     pub unsafe fn bind_io_data(&mut self, data: *mut std::ffi::c_void) {
         self.run().io_data = data;
     }
-    /// Apply the run's budgets (`budgets.limits@2`) before its entry runs. At width 1 the
-    /// fuel pool hands the whole budget out as one chunk, so exhaustion is exact; the running
+    /// Apply the run's budgets (`budgets.limits@2`) before its entry runs, after its workers
+    /// start. At width 1 without a host's stop handle the fuel pool hands the whole budget out
+    /// as one chunk; the running
     /// task's word is emptied, so its next fuel point takes that chunk. Under a memory budget
     /// every heap of the run stops allocating and freeing inline, so the meter sees each one.
     pub(crate) fn set_budgets(&mut self, fuel: Option<u64>, memory_bytes: Option<u64>) {
-        self.run().fuel = crate::budget::FuelPool::new(fuel, true);
+        // A refill is where a loop observes a stop: a run with compute workers or a host's
+        // stop handle takes its fuel in chunks.
+        let whole = !crate::pool::wide(self.run_ref()) && !self.run_ref().control.hosted();
+        self.run().fuel = crate::budget::FuelPool::new(fuel, whole);
         self.heap().set_fuel(0);
         let limit = memory_bytes.unwrap_or(0);
         self.heap().meter.set_limit(limit);
@@ -549,19 +592,30 @@ impl TaskCtx {
             }
         }
         self.region = ptr::null_mut();
-        let heap = self.heap();
-        heap.regions.release_all();
-        heap.release_all();
-        heap.meter.clear();
+        // Every heap of the run: tasks that ran on other workers allocated from theirs, and the
+        // run's threads all left (`crate::tasks::end_run`).
+        let heaps: Vec<_> = self.run_ref().heaps.heaps().collect();
+        for &heap in &heaps {
+            // SAFETY: the run's heaps are live and no other thread runs the run.
+            unsafe {
+                (*heap).regions.release_all();
+                (*heap).release_all();
+            }
+        }
+        self.heap().meter.clear();
         self.failure.clear();
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         {
             self.worker().immortalized = 0;
-            let heap = self.heap();
+            let retained_bytes = heaps
+                .iter()
+                // SAFETY: as above.
+                .map(|&heap| unsafe {
+                    (*heap).backing_bytes() + (*heap).regions.active_bytes + (*heap).regions.idle_bytes
+                })
+                .sum();
             return Audit {
-                retained_bytes: heap.backing_bytes()
-                    + heap.regions.active_bytes
-                    + heap.regions.idle_bytes,
+                retained_bytes,
                 ..audit
             };
         }
@@ -574,7 +628,14 @@ impl TaskCtx {
     /// of its storage without running anything of the program. The root becomes the running
     /// task again, whichever task the stop left bound.
     pub(crate) fn abandon(&mut self) {
-        self.rebind();
+        if crate::pool::wide(self.run_ref()) {
+            // Every thread of the run is idle: they leave, and the root, switched out where it
+            // last ran, goes back to the home worker.
+            crate::pool::shutdown(self.run());
+            self.home_again();
+        } else {
+            self.rebind();
+        }
         self.work = ptr::null_mut();
         self.shield = 0;
         self.failure.clear();
@@ -587,15 +648,19 @@ impl TaskCtx {
     pub(crate) fn exit_audit(&self) -> Audit {
         // SAFETY: as for `worker`.
         let worker = unsafe { &*self.worker };
-        let heap = self.heap_ref();
-        let (live_blocks, live_bytes) = heap.live();
-        Audit {
-            live_blocks,
-            live_bytes,
+        let mut audit = Audit {
             immortalized_blocks: worker.immortalized,
-            active_regions: heap.regions.active_count,
-            retained_bytes: 0,
+            ..Audit::default()
+        };
+        for heap in self.run_ref().heaps.heaps() {
+            // SAFETY: the run's heaps are live and no other thread runs the run.
+            let heap = unsafe { &*heap };
+            let (blocks, bytes) = heap.live();
+            audit.live_blocks += blocks;
+            audit.live_bytes += bytes;
+            audit.active_regions = audit.active_regions.wrapping_add(heap.regions.active_count);
         }
+        audit
     }
 }
 
@@ -670,6 +735,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         driver: crate::stop::Driver::default(),
         runners: None,
         root: ptr::null_mut(),
+        control: Default::default(),
+        host_waits: Default::default(),
+        launch: None,
+        root_ctx: ptr::null_mut(),
+        home: ptr::null_mut(),
         failure_table: None,
         schedule: Default::default(),
         free: None,
@@ -678,6 +748,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         fuel: Default::default(),
         execs: None,
         extern_metrics: None,
+        worker_metrics: None,
         #[cfg(feature = "measurement")]
         measurement_output: None,
         #[cfg(feature = "measurement")]
@@ -689,6 +760,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
     let worker = unsafe { Worker::create(run) };
     // The root task's context, which owns the worker and the run.
     let ctx = Box::into_raw(Box::new(TaskCtx::new(worker, run)));
+    // SAFETY: the run was just created.
+    unsafe {
+        (*run).root_ctx = ctx;
+        (*run).home = worker;
+    }
     // SAFETY: both were just created, and the root is the worker's first task.
     unsafe { TaskCtx::attach(ctx, worker) };
     unsafe { out.write(ctx) };
@@ -786,7 +862,40 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_destroy(ctx: *mut TaskCtx) {
     // SAFETY: the root context owns its run and worker, which nothing else uses any more. The
     // run goes first: its tasks' contexts lie in the worker's stacks.
     unsafe {
+        let home = (*ctx.run).home;
         drop(Box::from_raw(ctx.run));
-        drop(Box::from_raw(ctx.worker));
+        drop(Box::from_raw(home));
+    }
+}
+
+/// Leave a stopped run whose workers still run its code (`crate::pool::detach`): its last
+/// thread to leave frees it, its root context and its first worker ([`reclaim`]); when none is
+/// left, they are freed now. Nothing of the program runs, and its storage returns wholesale.
+///
+/// # Safety
+/// `ctx` is a run's root context, stopped, whose launcher uses neither again.
+pub(crate) unsafe fn detach(ctx: *mut TaskCtx) {
+    // SAFETY: caller contract.
+    unsafe {
+        let run = (*ctx).run;
+        if !crate::pool::detach(&mut *run) {
+            reclaim(run);
+        }
+    }
+}
+
+/// Free a detached run: its workers, its storage (every heap, wholesale, with the registry),
+/// its tasks' rows and stacks, its root context and its first worker.
+///
+/// # Safety
+/// The run was detached and no thread runs any of it.
+pub(crate) unsafe fn reclaim(run: *mut RunShared) {
+    // SAFETY: caller contract.
+    unsafe {
+        crate::pool::forget(&mut *run);
+        let (root, home) = ((*run).root_ctx, (*run).home);
+        drop(Box::from_raw(run));
+        drop(Box::from_raw(root));
+        drop(Box::from_raw(home));
     }
 }

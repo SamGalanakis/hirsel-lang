@@ -4,8 +4,10 @@
 //! charges it at each fuel point (`hirsel_lir::fuel`), and a negative result calls
 //! [`hirsel_rt_v2_fuel_refill`], which takes the next chunk from the run's [`FuelPool`] and
 //! returns, or stops the run when the pool is spent. A run with a fuel budget at width 1 takes
-//! one chunk, the whole budget, so its exhaustion is exact; without one, chunks are
-//! [`FUEL_CHUNK`] points, so a fuel build enters the runtime at least that often.
+//! one chunk, the whole budget; without one, at width > 1 or under a host's stop handle,
+//! chunks are [`FUEL_CHUNK`] points, so a fuel build enters the runtime at least that often
+//! and observes a stop there. Exhaustion is exact either way: the last chunks shrink to what
+//! is left.
 //!
 //! **Memory** is the run's logical storage ([`Meter`]), which depends only on requests and
 //! logical lifetimes: a small block is charged its size class ([`small_charge`]), a large one
@@ -237,6 +239,9 @@ fn exceeded(kind: BudgetKind) -> ! {
 pub unsafe extern "C" fn hirsel_rt_v2_fuel_refill(ctx: *mut TaskCtx) {
     // SAFETY: caller contract.
     let ctx = unsafe { &mut *ctx };
+    // A refill is where a loop without runtime entries sees its run's stop (design §6 Stops).
+    // SAFETY: caller contract: a fuel point holds nothing a stop must drop.
+    unsafe { crate::stop::check(ctx, crate::stop::observe(ctx)) };
     let chunk = ctx.run().fuel.take();
     if chunk == 0 {
         // SAFETY: caller contract.
@@ -252,7 +257,7 @@ mod tests {
     use crate::alloc::{DOMAIN_HEAP, hirsel_rt_v2_alloc};
     use crate::context::{Config, hirsel_rt_v2_ctx_create, hirsel_rt_v2_ctx_destroy};
     use crate::region::{Region, hirsel_rt_v2_region_enter, hirsel_rt_v2_region_exit};
-    use crate::stop::{Stop, run_root};
+    use crate::stop::{Stop, run_body};
     use std::cell::Cell;
     use std::mem::MaybeUninit;
 
@@ -275,7 +280,7 @@ mod tests {
     fn run(ctx: *mut TaskCtx, mut body: impl FnMut()) -> Result<(), Stop> {
         // SAFETY: the context is live and driven once.
         let result = unsafe {
-            run_root(ctx, &mut || {
+            run_body(ctx, &mut || {
                 body();
                 0
             })

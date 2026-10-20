@@ -2469,6 +2469,12 @@ pub trait Adapter {
     fn scripted_input(&self) -> bool {
         false
     }
+    /// End this run's idle [`wait`](Adapter::wait) whenever `fd` becomes readable, readying no
+    /// request: a host's stop (`crate::host::RunControl`). Whether the adapter watches it; one
+    /// whose waits do not block on the host needs not.
+    fn wake_on(&mut self, _fd: std::os::fd::RawFd) -> bool {
+        false
+    }
 }
 
 /// The parked requests a scheduling point re-issues ([`Adapter::ready`]).
@@ -2561,6 +2567,21 @@ impl Binding {
     /// # Safety
     /// ctx is live and holds this adapter's Binding with exclusive access.
     pub(crate) unsafe fn get<'a>(ctx: *mut crate::TaskCtx) -> &'a mut Self {
+        // The binding is home state: at width > 1 the running task moves to the home thread
+        // until its next suspension (`crate::tasks::pin_home`).
+        // SAFETY: caller contract.
+        unsafe {
+            crate::tasks::pin_home(ctx);
+            Self::raw(ctx)
+        }
+    }
+
+    /// The bound binding where the calling thread is, without moving the running task: a
+    /// read by the thread that runs the run, between its scheduling points.
+    ///
+    /// # Safety
+    /// As for [`Binding::get`].
+    pub(crate) unsafe fn raw<'a>(ctx: *mut crate::TaskCtx) -> &'a mut Self {
         let p = unsafe { (*ctx).io_data() }.cast::<Self>();
         if p.is_null() {
             crate::fault("Io call without an explicitly bound adapter");
@@ -2581,7 +2602,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_io_close(
     #[cfg(feature = "measurement")]
     let _segment = crate::tasks::profile::Operation::new(ctx, "Close");
     let binding = unsafe { Binding::get(ctx) };
-    match binding.adapter.call(Request::Close { handle }) {
+    let closed = binding.adapter.call(Request::Close { handle });
+    // SAFETY: a close runs in a release, which holds nothing a stop must drop.
+    unsafe { crate::tasks::leave_home(ctx) };
+    match closed {
         Ok(Completion::Unit(Ok(()))) => crate::STATUS_OK,
         // A dropped accepted stream or listener left a scripted client's Expect unmet.
         Ok(Completion::Checked(false)) => {
@@ -2801,6 +2825,9 @@ unsafe fn native_call(ctx: *mut crate::TaskCtx, request: Request) -> Completion 
     };
     if operation && !parked {
         unsafe { crate::tasks::yield_now(&mut *ctx) };
+    } else if !operation {
+        // SAFETY: the context is live.
+        unsafe { crate::tasks::leave_home(ctx) };
     }
     completion
 }
@@ -2833,6 +2860,9 @@ pub(crate) unsafe fn capability_call(
     };
     if operation && !parked {
         unsafe { crate::tasks::yield_now(&mut *ctx) };
+    } else if !operation {
+        // SAFETY: the context is live.
+        unsafe { crate::tasks::leave_home(ctx) };
     }
     completion
 }
