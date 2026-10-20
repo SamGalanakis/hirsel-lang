@@ -1,0 +1,6 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 4
+// Wire representations must be structural data, excluding callbacks.
+fn boundary(value: schema.Boundary[u8, fn() -> u8 uses {}]) -> () uses {} {
+  ()
+}

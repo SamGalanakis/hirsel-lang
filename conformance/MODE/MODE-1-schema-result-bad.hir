@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 10
+// A boundary result cannot borrow its wire input.
+fn boundary() -> schema.Decoder[String, String] uses {} {
+  schema.Decoder(
+    decode: fn(wire: String, mut check: schema.CheckState) -> Result[
+      String,
+      schema.SchemaError
+    ] uses {} {
+      Ok(wire)
+    }
+  )
+}

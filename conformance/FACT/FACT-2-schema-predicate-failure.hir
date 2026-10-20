@@ -1,0 +1,25 @@
+// rule: FACT-2
+// expect: fail SEM-1 at line 5
+// A failure evaluating the shared predicate remains a language failure.
+fn valid(value: u8) -> bool uses {} {
+  value / 0 == 0
+}
+
+distinct type Percent(value: u8) where valid(value)
+
+fn from_wire(value: u8, mut check: schema.CheckState) -> Result[
+  Percent,
+  schema.SchemaError
+] uses {} {
+  schema.charge_check(mut check)?
+  if !valid(value) {
+    return Error(schema.invalid(mut check, "FactViolation", Fact, "Percent", None))
+  }
+  Ok(Percent(value))
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let boundary = schema.Decoder(decode: from_wire)
+  let _ = schema.decode_only(boundary, 1u8, schema.default_options())
+  Ok(())
+}

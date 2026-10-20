@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: accept
+// Explicit fresh ownership permits the same result.
+fn boundary() -> schema.Decoder[String, String] uses {} {
+  schema.Decoder(
+    decode: fn(wire: String, mut check: schema.CheckState) -> Result[
+      String,
+      schema.SchemaError
+    ] uses {} {
+      Ok(unique wire)
+    }
+  )
+}

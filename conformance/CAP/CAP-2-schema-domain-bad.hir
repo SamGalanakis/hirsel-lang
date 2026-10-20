@@ -1,0 +1,6 @@
+// rule: CAP-2
+// expect: reject GEN-1 at line 4
+// Domains cannot carry authority, even with pure callback capture contracts.
+fn boundary(value: schema.Boundary[Io, u8]) -> () uses {} {
+  ()
+}

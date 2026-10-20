@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1533 exported definitions; 555 variants.
+1573 exported definitions; 579 variants.
 
 ## Types and roots
 
@@ -8597,6 +8597,407 @@ Variant of scalar.ParseError.
 - `OutOfRange -> scalar.ParseError`
 
 Variant of scalar.ParseError.
+
+
+## schema
+
+<a id="def-std_401_2fschema_2fBoundary"></a>
+
+- `pub type schema.Boundary[D: inert, W: data + inert] { decode: fn(W, mut CheckState) -> Result[D, SchemaError] uses {}, encode: fn(D, mut CheckState) -> Result[W, SchemaError] uses {}, }`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fBoundaryError"></a>
+
+- `pub type schema.BoundaryError = Schema(SchemaError) | Json(std@1/json.JsonError) | FormatLimit( FormatLimit )`
+
+References: [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/schema/FormatLimit`](#def-std_401_2fschema_2fFormatLimit), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fBoundaryError_23FormatLimit"></a>
+
+- `FormatLimit( FormatLimit ) -> schema.BoundaryError`
+
+Variant of schema.BoundaryError.
+
+References: [`std@1/schema/FormatLimit`](#def-std_401_2fschema_2fFormatLimit)
+
+<a id="def-std_401_2fschema_2fBoundaryError_23Json"></a>
+
+- `Json(std@1/json.JsonError) -> schema.BoundaryError`
+
+Variant of schema.BoundaryError.
+
+References: [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
+
+<a id="def-std_401_2fschema_2fBoundaryError_23Schema"></a>
+
+- `Schema(SchemaError) -> schema.BoundaryError`
+
+Variant of schema.BoundaryError.
+
+References: [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fCheckState"></a>
+
+- `pub opaque type schema.CheckState: plain + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fschema_2fDecoder"></a>
+
+- `pub type schema.Decoder[D: inert, W: data + inert] { decode: fn(W, mut CheckState) -> Result[D, SchemaError] uses {}, }`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fFormatLimit"></a>
+
+- `pub type schema.FormatLimit = InputBytes(u64) | OutputBytes(u64)`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fschema_2fFormatLimit_23InputBytes"></a>
+
+- `InputBytes(u64) -> schema.FormatLimit`
+
+Variant of schema.FormatLimit.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fschema_2fFormatLimit_23OutputBytes"></a>
+
+- `OutputBytes(u64) -> schema.FormatLimit`
+
+Variant of schema.FormatLimit.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fschema_2fIssue"></a>
+
+- `pub type schema.Issue { code: String, stage: Stage, path: List[Segment], schema_site: String, expected: Option[String], children: List[Issue], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/schema/Segment`](#def-std_401_2fschema_2fSegment), [`std@1/schema/Stage`](#def-std_401_2fschema_2fStage)
+
+<a id="def-std_401_2fschema_2fIssues"></a>
+
+- `pub type schema.Issues { items: List[Issue], truncated: bool, }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/bool`](#def-core_401_2fbool), [`std@1/schema/Issue`](#def-std_401_2fschema_2fIssue)
+
+<a id="def-std_401_2fschema_2fLimitError"></a>
+
+- `pub type schema.LimitError { kind: LimitKind, limit: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/schema/LimitKind`](#def-std_401_2fschema_2fLimitKind)
+
+<a id="def-std_401_2fschema_2fLimitKind"></a>
+
+- `pub type schema.LimitKind = InvalidOptions | Depth | Work | DiagnosticBytes`
+
+<a id="def-std_401_2fschema_2fLimitKind_23Depth"></a>
+
+- `Depth -> schema.LimitKind`
+
+Variant of schema.LimitKind.
+
+<a id="def-std_401_2fschema_2fLimitKind_23DiagnosticBytes"></a>
+
+- `DiagnosticBytes -> schema.LimitKind`
+
+Variant of schema.LimitKind.
+
+<a id="def-std_401_2fschema_2fLimitKind_23InvalidOptions"></a>
+
+- `InvalidOptions -> schema.LimitKind`
+
+Variant of schema.LimitKind.
+
+<a id="def-std_401_2fschema_2fLimitKind_23Work"></a>
+
+- `Work -> schema.LimitKind`
+
+Variant of schema.LimitKind.
+
+<a id="def-std_401_2fschema_2fLimits"></a>
+
+- `pub type schema.Limits { max_depth: u64, max_issues: u64, max_work: u64, max_input_bytes: u64, max_output_bytes: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fschema_2fMAX_5fLABEL_5fBYTES"></a>
+
+- `pub const schema.MAX_LABEL_BYTES: u64`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fschema_2fMode"></a>
+
+- `pub type schema.Mode = First | All`
+
+<a id="def-std_401_2fschema_2fMode_23All"></a>
+
+- `All -> schema.Mode`
+
+Variant of schema.Mode.
+
+<a id="def-std_401_2fschema_2fMode_23First"></a>
+
+- `First -> schema.Mode`
+
+Variant of schema.Mode.
+
+<a id="def-std_401_2fschema_2fOptions"></a>
+
+- `pub type schema.Options { limits: Limits, mode: Mode, }`
+
+References: [`std@1/schema/Limits`](#def-std_401_2fschema_2fLimits), [`std@1/schema/Mode`](#def-std_401_2fschema_2fMode)
+
+<a id="def-std_401_2fschema_2fSchemaError"></a>
+
+- `pub type schema.SchemaError = Invalid(Issues) | Limit(LimitError)`
+
+References: [`std@1/schema/Issues`](#def-std_401_2fschema_2fIssues), [`std@1/schema/LimitError`](#def-std_401_2fschema_2fLimitError)
+
+<a id="def-std_401_2fschema_2fSchemaError_23Invalid"></a>
+
+- `Invalid(Issues) -> schema.SchemaError`
+
+Variant of schema.SchemaError.
+
+References: [`std@1/schema/Issues`](#def-std_401_2fschema_2fIssues)
+
+<a id="def-std_401_2fschema_2fSchemaError_23Limit"></a>
+
+- `Limit(LimitError) -> schema.SchemaError`
+
+Variant of schema.SchemaError.
+
+References: [`std@1/schema/LimitError`](#def-std_401_2fschema_2fLimitError)
+
+<a id="def-std_401_2fschema_2fSegment"></a>
+
+- `pub type schema.Segment = Field(String) | Index(u64) | Variant(String) | MapEntry(u64) | Key | Value`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fschema_2fSegment_23Field"></a>
+
+- `Field(String) -> schema.Segment`
+
+Variant of schema.Segment.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fschema_2fSegment_23Index"></a>
+
+- `Index(u64) -> schema.Segment`
+
+Variant of schema.Segment.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fschema_2fSegment_23Key"></a>
+
+- `Key -> schema.Segment`
+
+Variant of schema.Segment.
+
+<a id="def-std_401_2fschema_2fSegment_23MapEntry"></a>
+
+- `MapEntry(u64) -> schema.Segment`
+
+Variant of schema.Segment.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fschema_2fSegment_23Value"></a>
+
+- `Value -> schema.Segment`
+
+Variant of schema.Segment.
+
+<a id="def-std_401_2fschema_2fSegment_23Variant"></a>
+
+- `Variant(String) -> schema.Segment`
+
+Variant of schema.Segment.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fschema_2fStage"></a>
+
+- `pub type schema.Stage = Syntax | Wire | Fact | Transform | Migration`
+
+<a id="def-std_401_2fschema_2fStage_23Fact"></a>
+
+- `Fact -> schema.Stage`
+
+Variant of schema.Stage.
+
+<a id="def-std_401_2fschema_2fStage_23Migration"></a>
+
+- `Migration -> schema.Stage`
+
+Variant of schema.Stage.
+
+<a id="def-std_401_2fschema_2fStage_23Syntax"></a>
+
+- `Syntax -> schema.Stage`
+
+Variant of schema.Stage.
+
+<a id="def-std_401_2fschema_2fStage_23Transform"></a>
+
+- `Transform -> schema.Stage`
+
+Variant of schema.Stage.
+
+<a id="def-std_401_2fschema_2fStage_23Wire"></a>
+
+- `Wire -> schema.Stage`
+
+Variant of schema.Stage.
+
+<a id="def-std_401_2fschema_2fappend_5fissues"></a>
+
+- `pub fn schema.append_issues(mut into: Issues, take more: Issues) -> () uses {}`
+
+References: [`std@1/schema/Issues`](#def-std_401_2fschema_2fIssues)
+
+<a id="def-std_401_2fschema_2farray_5fjson"></a>
+
+- `pub fn schema.array_json() -> Boundary[List[std@1/json.Value], std@1/json.Value] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary)
+
+<a id="def-std_401_2fschema_2fcharge_5fcheck"></a>
+
+- `pub fn schema.charge_check(mut check: CheckState) -> Result[(), SchemaError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fcheck_5fstate"></a>
+
+- `pub fn schema.check_state(o: Options) -> Result[CheckState, SchemaError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fdecode"></a>
+
+- `pub fn schema.decode[D: inert, W: data + inert](b: Boundary[D, W], wire: W, o: Options) -> Result[ D, SchemaError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fdecode_5fonly"></a>
+
+- `pub fn schema.decode_only[D: inert, W: data + inert](b: Decoder[D, W], wire: W, o: Options) -> Result[ D, SchemaError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/Decoder`](#def-std_401_2fschema_2fDecoder), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fdefault_5foptions"></a>
+
+- `pub fn schema.default_options() -> Options uses {}`
+
+References: [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions)
+
+<a id="def-std_401_2fschema_2fempty_5fissues"></a>
+
+- `pub fn schema.empty_issues() -> Issues uses {}`
+
+References: [`std@1/schema/Issues`](#def-std_401_2fschema_2fIssues)
+
+<a id="def-std_401_2fschema_2fencode"></a>
+
+- `pub fn schema.encode[D: inert, W: data + inert](b: Boundary[D, W], value: D, o: Options) -> Result[ W, SchemaError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fenter_5fnode"></a>
+
+- `pub fn schema.enter_node(mut check: CheckState) -> Result[(), SchemaError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError)
+
+<a id="def-std_401_2fschema_2fformat"></a>
+
+- `pub fn schema.format(issues: Issues) -> String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/schema/Issues`](#def-std_401_2fschema_2fIssues)
+
+<a id="def-std_401_2fschema_2fidentity"></a>
+
+- `pub fn schema.identity[W: plain + data + inert]() -> Boundary[W, W] uses {}`
+
+References: [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary)
+
+<a id="def-std_401_2fschema_2finvalid"></a>
+
+- `pub fn schema.invalid( mut check: CheckState, code: String, stage: Stage, schema_site: String, expected: Option[String] ) -> SchemaError uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState), [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError), [`std@1/schema/Stage`](#def-std_401_2fschema_2fStage)
+
+<a id="def-std_401_2fschema_2fleave_5fnode"></a>
+
+- `pub fn schema.leave_node(mut check: CheckState) -> () uses {}`
+
+References: [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState)
+
+<a id="def-std_401_2fschema_2flist"></a>
+
+- `pub fn schema.list[D: inert, W: data + inert](take item: Boundary[D, W]) -> Boundary[ List[D], List[W] ] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary)
+
+<a id="def-std_401_2fschema_2flist_5fjson"></a>
+
+- `pub fn schema.list_json[D: inert](take item: Boundary[D, std@1/json.Value]) -> Boundary[ List[D], std@1/json.Value ] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary)
+
+<a id="def-std_401_2fschema_2fparse_5fjson"></a>
+
+- `pub fn schema.parse_json[D: inert](b: Boundary[D, std@1/json.Value], input: String, o: Options) -> Result[ D, BoundaryError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary), [`std@1/schema/BoundaryError`](#def-std_401_2fschema_2fBoundaryError), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions)
+
+<a id="def-std_401_2fschema_2fprefix"></a>
+
+- `pub fn schema.prefix(segment: Segment, take issues: Issues) -> Issues uses {}`
+
+References: [`std@1/schema/Issues`](#def-std_401_2fschema_2fIssues), [`std@1/schema/Segment`](#def-std_401_2fschema_2fSegment)
+
+<a id="def-std_401_2fschema_2fprefix_5ferror"></a>
+
+- `pub fn schema.prefix_error(segment: Segment, take error: SchemaError) -> SchemaError uses {}`
+
+References: [`std@1/schema/SchemaError`](#def-std_401_2fschema_2fSchemaError), [`std@1/schema/Segment`](#def-std_401_2fschema_2fSegment)
+
+<a id="def-std_401_2fschema_2fshould_5fstop"></a>
+
+- `pub fn schema.should_stop(check: CheckState) -> bool uses {}`
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/schema/CheckState`](#def-std_401_2fschema_2fCheckState)
+
+<a id="def-std_401_2fschema_2ftext_5fjson"></a>
+
+- `pub fn schema.text_json() -> Boundary[String, std@1/json.Value] uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary)
+
+<a id="def-std_401_2fschema_2fthen"></a>
+
+- `pub fn schema.then[A: inert, B: data + inert, W: data + inert]( take outer: Boundary[B, W], take inner: Boundary[A, B] ) -> Boundary[A, W] uses {}`
+
+References: [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary)
+
+<a id="def-std_401_2fschema_2fu8_5fjson"></a>
+
+- `pub fn schema.u8_json() -> Boundary[u8, std@1/json.Value] uses {}`
+
+References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary)
+
+<a id="def-std_401_2fschema_2fwrite_5fjson"></a>
+
+- `pub fn schema.write_json[D: inert](b: Boundary[D, std@1/json.Value], value: D, o: Options) -> Result[ String, BoundaryError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/schema/Boundary`](#def-std_401_2fschema_2fBoundary), [`std@1/schema/BoundaryError`](#def-std_401_2fschema_2fBoundaryError), [`std@1/schema/Options`](#def-std_401_2fschema_2fOptions)
 
 
 ## semver

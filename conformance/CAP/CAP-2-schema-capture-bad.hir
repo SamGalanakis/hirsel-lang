@@ -1,0 +1,11 @@
+// rule: CAP-2
+// expect: reject CLO-4 at line 7
+// A callback's uses {} excludes authority retained in its environment.
+fn boundary(take rt: Io) -> schema.Decoder[u8, u8] uses {rt} {
+  schema.Decoder(
+    decode: fn(wire: u8, mut check: schema.CheckState) -> Result[u8, schema.SchemaError] uses {} {
+      let _ = io.stdout(rt)
+      Ok(wire)
+    }
+  )
+}

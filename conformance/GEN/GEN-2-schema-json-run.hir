@@ -1,0 +1,83 @@
+// rule: GEN-2
+// expect: run
+// JSON syntax offsets are separate from structural paths. DOM issues have no
+// invented byte positions; candidates remain private until writing succeeds.
+pub fn main() -> Result[(), ()] uses {} {
+  let texts = schema.list_json(schema.text_json())
+  let mut options = schema.default_options()
+  let Ok(values) = schema.parse_json(texts, "[\"serde\",\"serde_json\"]", options) else {
+    return Error(())
+  }
+  if values != ["serde", "serde_json"] {
+    return Error(())
+  }
+  let Ok(written) = schema.write_json(texts, values, options) else {
+    return Error(())
+  }
+  if written != "[\"serde\",\"serde_json\"]" {
+    return Error(())
+  }
+  let Error(Schema(Invalid(issues))) = schema.parse_json(
+    texts,
+    "[\"serde\",1]",
+    options
+  ) else {
+    return Error(())
+  }
+  if issues.items[0].path != [Index(1)] || issues.items[0].code != "Type" {
+    return Error(())
+  }
+  let Error(Json(Syntax(1))) = schema.parse_json(texts, "[", options) else {
+    return Error(())
+  }
+  options.limits.max_input_bytes = 2
+  let Error(FormatLimit(InputBytes(2))) = schema.parse_json(texts, "[1]", options) else {
+    return Error(())
+  }
+  options = schema.default_options()
+  let text = schema.text_json()
+  options.limits.max_output_bytes = 3
+  let Error(FormatLimit(OutputBytes(3))) = schema.write_json(text, "é", options) else {
+    return Error(())
+  }
+  options.limits.max_output_bytes = 4
+  let Ok(unicode) = schema.write_json(text, "é", options) else {
+    return Error(())
+  }
+  if unicode != "\"é\"" {
+    return Error(())
+  }
+  let Error(FormatLimit(OutputBytes(4))) = schema.write_json(text, "\u{0}", options) else {
+    return Error(())
+  }
+  options.limits.max_output_bytes = 8
+  let Ok(escaped) = schema.write_json(text, "\u{0}", options) else {
+    return Error(())
+  }
+  if escaped != "\"\\u0000\"" {
+    return Error(())
+  }
+  options = schema.default_options()
+  options.limits.max_work = 1
+  let Error(Schema(Limit(exhausted))) = schema.write_json(text, "x", options) else {
+    return Error(())
+  }
+  if exhausted.kind != Work {
+    return Error(())
+  }
+  let unsigned = schema.u8_json()
+  options = schema.default_options()
+  let Ok(255u8) = schema.parse_json(unsigned, "255", options) else {
+    return Error(())
+  }
+  let Error(Schema(Invalid(_))) = schema.parse_json(unsigned, "256", options) else {
+    return Error(())
+  }
+  let Error(Schema(Invalid(_))) = schema.parse_json(unsigned, "1e0", options) else {
+    return Error(())
+  }
+  let Error(Schema(Invalid(_))) = schema.parse_json(unsigned, "1.0", options) else {
+    return Error(())
+  }
+  Ok(())
+}

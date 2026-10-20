@@ -1,0 +1,108 @@
+// rule: GEN-2
+// expect: run
+// Typed paths adapted from Effect SchemaIssue.Pointer and serde_path_to_error
+// nested field/index paths; no container or raw map key enters an issue.
+pub fn main() -> Result[(), ()] uses {} {
+  let Ok(initial) = schema.check_state(schema.default_options()) else {
+    return Error(())
+  }
+  let mut check = initial
+  let Invalid(leaf) = schema.invalid(
+    mut check,
+    "FactViolation",
+    Fact,
+    "Percent",
+    Some("0..100")
+  ) else {
+    return Error(())
+  }
+  let prefixed = schema.prefix(
+    Field("orders"),
+    schema.prefix(Index(2), schema.prefix(Field("discount"), take leaf))
+  )
+  if prefixed.items[0].path != [Field("orders"), Index(2), Field("discount")] || prefixed.truncated {
+    return Error(())
+  }
+  if schema.format(prefixed) != ".orders[2].discount: FactViolation (Percent)\n" {
+    return Error(())
+  }
+  let mut options = schema.default_options()
+  options.mode = All
+  let Ok(map_initial) = schema.check_state(options) else {
+    return Error(())
+  }
+  let mut map_check = map_initial
+  let Invalid(map_leaf) = schema.invalid(mut map_check, "Type", Wire, "Entry", None) else {
+    return Error(())
+  }
+  let map_issues = schema.prefix(
+    MapEntry(3),
+    schema.prefix(Key, schema.prefix(Variant("Some"), take map_leaf))
+  )
+  if map_issues.items[0].path != [MapEntry(3), Key, Variant("Some")] {
+    return Error(())
+  }
+  let Invalid(value_leaf) = schema.invalid(mut map_check, "Type", Wire, "Entry", None) else {
+    return Error(())
+  }
+  let mut gathered = map_issues
+  schema.append_issues(
+    mut gathered,
+    schema.prefix(MapEntry(4), schema.prefix(Value, take value_leaf))
+  )
+  if list.len(gathered.items) != 2 || gathered.items[1].path != [MapEntry(4), Value] {
+    return Error(())
+  }
+  let mut builder: List[u8] = []
+  let mut i: u64 = 0
+  while i < 256 {
+    list.push(mut builder, b'x')
+    i += 1
+  }
+  let Ok(label) = std@1/text.finish(take builder) else {
+    return Error(())
+  }
+  let expected_label: Option[String] = Some(copy label)
+  let Invalid(_) = schema.invalid(
+    mut map_check,
+    label,
+    Transform,
+    label,
+    expected_label
+  ) else {
+    return Error(())
+  }
+  let oversized = f"{label}x"
+  let Limit(code_limit) = schema.invalid(mut map_check, oversized, Wire, "safe", None) else {
+    return Error(())
+  }
+  if code_limit.kind != DiagnosticBytes || code_limit.limit != 256 {
+    return Error(())
+  }
+  let Limit(site_limit) = schema.invalid(mut map_check, "safe", Wire, oversized, None) else {
+    return Error(())
+  }
+  if site_limit.kind != DiagnosticBytes {
+    return Error(())
+  }
+  let Limit(expected_limit) = schema.invalid(
+    mut map_check,
+    "safe",
+    Wire,
+    "safe",
+    Some(oversized)
+  ) else {
+    return Error(())
+  }
+  if expected_limit.kind != DiagnosticBytes {
+    return Error(())
+  }
+  let same_limit = schema.prefix_error(Field("orders"), Limit(code_limit))
+  let Limit(kept) = same_limit else {
+    return Error(())
+  }
+  if kept != code_limit {
+    return Error(())
+  }
+  Ok(())
+}

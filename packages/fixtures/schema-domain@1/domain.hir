@@ -1,0 +1,87 @@
+fn percent_valid(v: u8) -> bool uses {} {
+  v <= 100
+}
+
+pub distinct type Percent(v: u8) where percent_valid(v)
+
+pub fn percent_decode(v: u8, mut check: std@1/schema.CheckState) -> Result[
+  Percent,
+  std@1/schema.SchemaError
+] uses {} {
+  std@1/schema.charge_check(mut check)?
+  if !percent_valid(v) {
+    return Error(
+      std@1/schema.invalid(mut check, "FactViolation", Fact, "Percent", Some("0..100"))
+    )
+  }
+  Ok(Percent(v))
+}
+
+pub fn percent_encode(value: Percent, mut check: std@1/schema.CheckState) -> Result[
+  u8,
+  std@1/schema.SchemaError
+] uses {} {
+  std@1/schema.charge_check(mut check)?
+  let Percent(v) = value
+  Ok(v)
+}
+
+pub fn percent() -> std@1/schema.Boundary[Percent, u8] uses {} {
+  std@1/schema.Boundary(decode: percent_decode, encode: percent_encode)
+}
+
+pub opaque type Range: plain + inert + noalloc_drop uses {} {
+  low: u8,
+  high: u8,
+}
+
+fn range_decode(value: (u8, u8), mut check: std@1/schema.CheckState) -> Result[
+  Range,
+  std@1/schema.SchemaError
+] uses {} {
+  std@1/schema.charge_check(mut check)?
+  let (low, high) = value
+  if low > high {
+    return Error(
+      std@1/schema.invalid(mut check, "RangeOrder", Fact, "Range", Some("low <= high"))
+    )
+  }
+  Ok(Range(low: low, high: high))
+}
+
+fn range_encode(value: Range, mut check: std@1/schema.CheckState) -> Result[
+  (u8, u8),
+  std@1/schema.SchemaError
+] uses {} {
+  std@1/schema.charge_check(mut check)?
+  Ok((value.low, value.high))
+}
+
+pub fn range() -> std@1/schema.Boundary[Range, (u8, u8)] uses {} {
+  std@1/schema.Boundary(decode: range_decode, encode: range_encode)
+}
+
+// An inert domain need not promise copyability or data equality.
+pub opaque type Token: inert + noalloc_drop uses {} {
+  value: u8,
+}
+
+fn token_decode(value: u8, mut check: std@1/schema.CheckState) -> Result[
+  Token,
+  std@1/schema.SchemaError
+] uses {} {
+  std@1/schema.charge_check(mut check)?
+  Ok(Token(value: value))
+}
+
+fn token_encode(value: Token, mut check: std@1/schema.CheckState) -> Result[
+  u8,
+  std@1/schema.SchemaError
+] uses {} {
+  std@1/schema.charge_check(mut check)?
+  Ok(value.value)
+}
+
+pub fn token() -> std@1/schema.Boundary[Token, u8] uses {} {
+  std@1/schema.Boundary(decode: token_decode, encode: token_encode)
+}

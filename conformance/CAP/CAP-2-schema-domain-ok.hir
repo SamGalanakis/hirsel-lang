@@ -1,0 +1,6 @@
+// rule: CAP-2
+// expect: accept
+// Inert domains satisfy the same dictionary parameter.
+fn boundary(value: schema.Boundary[u8, u8]) -> () uses {} {
+  ()
+}

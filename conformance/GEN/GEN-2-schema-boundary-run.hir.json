@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "schema_tests",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "GEN-2-schema-boundary-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "schema",
+          "module": [
+            "schema"
+          ]
+        }
+      ]
+    },
+    {
+      "manifest": "../../packages/fixtures/schema-domain@1/hirsel.json",
+      "package": {
+        "name": "schema_domain",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "domain",
+          "module": []
+        }
+      ]
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

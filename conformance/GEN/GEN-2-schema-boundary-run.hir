@@ -1,0 +1,151 @@
+// rule: GEN-2
+// expect: run
+// Nested dictionaries construct facts and opaque domains through their owners.
+type Item {
+  discount: domain.Percent,
+}
+
+type Order {
+  items: List[Item],
+}
+
+@serializable
+type ItemWire {
+  discount: u8,
+}
+
+@serializable
+type OrderWire {
+  items: List[ItemWire],
+}
+
+type Wrapped[T: inert] {
+  value: T,
+}
+
+fn wrap[T: inert, W: data + inert](take boundary: schema.Boundary[T, W]) -> schema.Boundary[
+  Wrapped[T],
+  W
+] uses {} {
+  schema.Boundary(
+    decode: fn(wire: W, mut check: schema.CheckState) -> Result[
+      Wrapped[T],
+      schema.SchemaError
+    ] uses {} {
+      let value = boundary.decode(wire, mut check)?
+      Ok(Wrapped(value: take value))
+    },
+    encode: fn(value: Wrapped[T], mut check: schema.CheckState) -> Result[
+      W,
+      schema.SchemaError
+    ] uses {} {
+      boundary.encode(value.value, mut check)
+    }
+  )
+}
+
+fn item_decode(wire: ItemWire, mut check: schema.CheckState) -> Result[
+  Item,
+  schema.SchemaError
+] uses {} {
+  match domain.percent_decode(wire.discount, mut check) {
+    Ok(value) => Ok(Item(discount: value)),
+    Error(error) => Error(schema.prefix_error(Field("discount"), take error)),
+  }
+}
+
+fn item_encode(value: Item, mut check: schema.CheckState) -> Result[
+  ItemWire,
+  schema.SchemaError
+] uses {} {
+  match domain.percent_encode(value.discount, mut check) {
+    Ok(discount) => Ok(ItemWire(discount: discount)),
+    Error(error) => Error(schema.prefix_error(Field("discount"), take error)),
+  }
+}
+
+fn order_decode(wire: OrderWire, mut check: schema.CheckState) -> Result[
+  Order,
+  schema.SchemaError
+] uses {} {
+  let items = schema.list(schema.Boundary(decode: item_decode, encode: item_encode))
+  match items.decode(wire.items, mut check) {
+    Ok(values) => Ok(Order(items: take values)),
+    Error(error) => Error(schema.prefix_error(Field("items"), take error)),
+  }
+}
+
+fn order_encode(value: Order, mut check: schema.CheckState) -> Result[
+  OrderWire,
+  schema.SchemaError
+] uses {} {
+  let items = schema.list(schema.Boundary(decode: item_decode, encode: item_encode))
+  match items.encode(value.items, mut check) {
+    Ok(values) => Ok(OrderWire(items: take values)),
+    Error(error) => Error(schema.prefix_error(Field("items"), take error)),
+  }
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let boundary = schema.Boundary(decode: order_decode, encode: order_encode)
+  let options = schema.default_options()
+  let wire = OrderWire(items: [ItemWire(discount: 10), ItemWire(discount: 99)])
+  let Ok(value) = schema.decode(boundary, wire, options) else {
+    return Error(())
+  }
+  let Ok(back) = schema.encode(boundary, value, options) else {
+    return Error(())
+  }
+  if back != wire {
+    return Error(())
+  }
+  let canonical = codec.encode(wire)
+  let decoded_dto: Result[OrderWire, DecodeError] = codec.decode(canonical)
+  let Ok(dto) = decoded_dto else {
+    return Error(())
+  }
+  let Ok(from_dto) = schema.decode(boundary, dto, options) else {
+    return Error(())
+  }
+  let Ok(canonical_back) = schema.encode(boundary, from_dto, options) else {
+    return Error(())
+  }
+  if codec.encode(canonical_back) != canonical {
+    return Error(())
+  }
+  let bad = OrderWire(items: [ItemWire(discount: 10), ItemWire(discount: 101)])
+  let Error(Invalid(issues)) = schema.decode(boundary, bad, options) else {
+    return Error(())
+  }
+  if list.len(issues.items) != 1 || issues.truncated {
+    return Error(())
+  }
+  let issue = issues.items[0]
+  if issue.path != [Field("items"), Index(1), Field("discount")] || issue.code != "FactViolation" || issue.schema_site != "Percent" {
+    return Error(())
+  }
+  let wrapped = wrap(domain.range())
+  let Ok(range_value) = schema.decode(wrapped, (2u8, 8u8), options) else {
+    return Error(())
+  }
+  let Ok(range_back) = schema.encode(wrapped, range_value, options) else {
+    return Error(())
+  }
+  if range_back != (2u8, 8u8) {
+    return Error(())
+  }
+  let Error(Invalid(_)) = schema.decode(wrapped, (9u8, 2u8), options) else {
+    return Error(())
+  }
+  let tokens = schema.list(wrap(domain.token()))
+  let Ok(token_values) = schema.decode(tokens, [1u8, 2u8], options) else {
+    return Error(())
+  }
+  let Ok(token_wire) = schema.encode(tokens, token_values, options) else {
+    return Error(())
+  }
+  if token_wire != [1u8, 2u8] {
+    return Error(())
+  }
+  Ok(())
+}

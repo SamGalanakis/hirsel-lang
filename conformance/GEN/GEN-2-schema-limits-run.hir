@@ -1,0 +1,139 @@
+// rule: GEN-2
+// expect: run
+fn identity_u8() -> schema.Boundary[u8, u8] uses {} {
+  schema.identity()
+}
+
+fn invalid_u8(wire: u8, mut check: schema.CheckState) -> Result[u8, schema.SchemaError] uses {} {
+  schema.charge_check(mut check)?
+  Error(schema.invalid(mut check, "FactViolation", Fact, "Rejected", None))
+}
+
+fn empty_rejection(wire: u8, mut check: schema.CheckState) -> Result[
+  u8,
+  schema.SchemaError
+] uses {} {
+  schema.charge_check(mut check)?
+  Error(Invalid(schema.empty_issues()))
+}
+
+fn bomb(value: u8, mut check: schema.CheckState) -> Result[u8, schema.SchemaError] uses {} {
+  failure.check(false, Bounds())
+  Ok(value)
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let reject = schema.Boundary(decode: invalid_u8, encode: invalid_u8)
+  let items = schema.list(take reject)
+  let mut options = schema.default_options()
+  let Error(Invalid(first)) = schema.decode(items, [1u8, 2u8, 3u8], options) else {
+    return Error(())
+  }
+  if list.len(first.items) != 1 || first.truncated || first.items[0].path != [Index(0)] {
+    return Error(())
+  }
+  options.mode = All
+  options.limits.max_issues = 2
+  let Error(Invalid(all)) = schema.decode(items, [1u8, 2u8, 3u8], options) else {
+    return Error(())
+  }
+  if list.len(all.items) != 2 || !all.truncated || all.items[1].path != [Index(1)] {
+    return Error(())
+  }
+  let Error(Invalid(encoded)) = schema.encode(items, [1u8, 2u8, 3u8], options) else {
+    return Error(())
+  }
+  if encoded != all {
+    return Error(())
+  }
+  options = schema.default_options()
+  let nested = schema.list(schema.list(identity_u8()))
+  options.limits.max_depth = 1
+  let Error(Limit(depth)) = schema.decode(nested, [[1u8]], options) else {
+    return Error(())
+  }
+  if depth.kind != Depth {
+    return Error(())
+  }
+  options.limits.max_depth = 2
+  options.limits.max_work = 2
+  let Error(Limit(work)) = schema.decode(nested, [[1u8]], options) else {
+    return Error(())
+  }
+  if work.kind != Work {
+    return Error(())
+  }
+  options.limits.max_work = 3
+  let Ok(values) = schema.decode(nested, [[1u8]], options) else {
+    return Error(())
+  }
+  if values != [[1u8]] {
+    return Error(())
+  }
+  options.limits.max_depth = 0
+  let Error(Limit(bad_options)) = schema.decode(nested, [[1u8]], options) else {
+    return Error(())
+  }
+  if bad_options.kind != InvalidOptions {
+    return Error(())
+  }
+  options = schema.default_options()
+  options.limits.max_issues = 0
+  let Error(Limit(_)) = schema.encode(nested, [[1u8]], options) else {
+    return Error(())
+  }
+  options = schema.default_options()
+  let outer = schema.Boundary(decode: invalid_u8, encode: bomb)
+  let after = schema.Boundary(decode: bomb, encode: invalid_u8)
+  let composed = schema.then(take outer, take after)
+  let Error(Invalid(_)) = schema.decode(composed, 1u8, options) else {
+    return Error(())
+  }
+  let Error(Invalid(_)) = schema.encode(composed, 1u8, options) else {
+    return Error(())
+  }
+  let counted = schema.then(identity_u8(), identity_u8())
+  options.limits.max_work = 2
+  let Error(Limit(_)) = schema.decode(counted, 1u8, options) else {
+    return Error(())
+  }
+  options.limits.max_work = 3
+  let Ok(1u8) = schema.decode(counted, 1u8, options) else {
+    return Error(())
+  }
+  options = schema.default_options()
+  options.limits.max_work = 0
+  let Error(Limit(zero_work)) = schema.decode(counted, 1u8, options) else {
+    return Error(())
+  }
+  if zero_work.kind != Work {
+    return Error(())
+  }
+  options = schema.default_options()
+  let empty = schema.list(
+    schema.Boundary(decode: empty_rejection, encode: empty_rejection)
+  )
+  let Error(Invalid(nothing)) = schema.decode(empty, [1u8, 2u8], options) else {
+    return Error(())
+  }
+  if list.len(nothing.items) != 0 || nothing.truncated {
+    return Error(())
+  }
+  // Returned errors leave every successfully entered depth level.
+  options.limits.max_depth = 1
+  let Ok(initial) = schema.check_state(options) else {
+    return Error(())
+  }
+  let mut shared = initial
+  let Error(Limit(_)) = nested.decode([[1u8]], mut shared) else {
+    return Error(())
+  }
+  let scalar_list = schema.list(identity_u8())
+  let Ok(after_failure) = scalar_list.decode([7u8], mut shared) else {
+    return Error(())
+  }
+  if after_failure != [7u8] {
+    return Error(())
+  }
+  Ok(())
+}

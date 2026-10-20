@@ -1,0 +1,6 @@
+// rule: GEN-1
+// expect: accept
+// Inert structural data is admitted as a wire representation.
+fn boundary(value: schema.Boundary[u8, (u8, String)]) -> () uses {} {
+  ()
+}

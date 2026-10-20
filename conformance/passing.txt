@@ -214,6 +214,10 @@ conformance/CAP/CAP-2-recursive-argument-authority-ok.hir
 conformance/CAP/CAP-2-resource-drop-summary-bad.hir
 conformance/CAP/CAP-2-resource-drop-summary-ok.hir
 conformance/CAP/CAP-2-save-file-example.hir
+conformance/CAP/CAP-2-schema-capture-bad.hir
+conformance/CAP/CAP-2-schema-capture-ok.hir
+conformance/CAP/CAP-2-schema-domain-bad.hir
+conformance/CAP/CAP-2-schema-domain-ok.hir
 conformance/CAP/CAP-2-sender-operation-bad.hir
 conformance/CAP/CAP-2-sender-operation-ok.hir
 conformance/CAP/CAP-2-std-stream-file-authority-bad.hir
@@ -513,6 +517,7 @@ conformance/CLO/CLO-4-once-take-capture-unique-run.hir
 conformance/CLO/CLO-4-outer-let-mut-capture-bad.hir
 conformance/CLO/CLO-4-outer-let-mut-capture-ok.hir
 conformance/CLO/CLO-4-parameter-authority.hir
+conformance/CLO/CLO-4-schema-retained-run.hir
 conformance/CLO/CLO-4-scope-body-takes-let-mut-file-run.hir
 conformance/CLO/CLO-4-scope-body-takes-let-mut-list-run.hir
 conformance/CLO/CLO-4-scope-body-takes-let-mut-reassigned-run.hir
@@ -1025,6 +1030,7 @@ conformance/FACT/FACT-2-percent-maximum.hir
 conformance/FACT/FACT-2-percent-zero.hir
 conformance/FACT/FACT-2-plain-base-invalid.hir
 conformance/FACT/FACT-2-plain-record-base.hir
+conformance/FACT/FACT-2-schema-predicate-failure.hir
 conformance/FACT/FACT-3-known-false-requires.hir
 conformance/FACT/FACT-3-known-invalid-fact.hir
 conformance/FACT/FACT-3-known-true-contract.hir
@@ -1244,6 +1250,8 @@ conformance/GEN/GEN-1-projected-call-local-box-receipt-ok.hir
 conformance/GEN/GEN-1-projected-call-local-tuple-receipt-ok.hir
 conformance/GEN/GEN-1-projected-call-tuple-receipt-run.hir
 conformance/GEN/GEN-1-resource-instantiation.hir
+conformance/GEN/GEN-1-schema-wire-bad.hir
+conformance/GEN/GEN-1-schema-wire-ok.hir
 conformance/GEN/GEN-1-sendable-counted-bad.hir
 conformance/GEN/GEN-1-sendable-counted-ok.hir
 conformance/GEN/GEN-1-serializable-contextual-name-ok.hir
@@ -1284,6 +1292,12 @@ conformance/GEN/GEN-2-branded-sorted-map.hir
 conformance/GEN/GEN-2-explicit-eq.hir
 conformance/GEN/GEN-2-explicit-hasher.hir
 conformance/GEN/GEN-2-explicit-order.hir
+conformance/GEN/GEN-2-nominal-plain-callback-run.hir
+conformance/GEN/GEN-2-schema-boundary-run.hir
+conformance/GEN/GEN-2-schema-issues-run.hir
+conformance/GEN/GEN-2-schema-json-run.hir
+conformance/GEN/GEN-2-schema-limits-run.hir
+conformance/GEN/GEN-2-schema-serde-path-run.hir
 conformance/GEN/GEN-2-top-level-dictionary.hir
 conformance/GEN/GEN-2-user-record-dictionary.hir
 conformance/GEN/GEN-3-shape-alias-bad.hir
@@ -2891,6 +2905,8 @@ conformance/MODE/MODE-1-retained-receiver-mut-new-source-match-ok.hir
 conformance/MODE/MODE-1-retained-receiver-mut-run.hir
 conformance/MODE/MODE-1-retained-receiver-new-source-loop-run.hir
 conformance/MODE/MODE-1-retained-receiver-new-source-three-loop-run.hir
+conformance/MODE/MODE-1-schema-result-bad.hir
+conformance/MODE/MODE-1-schema-result-ok.hir
 conformance/MODE/MODE-1-scoped-capture-replace-bad.hir
 conformance/MODE/MODE-1-scoped-capture-replace-ok.hir
 conformance/MODE/MODE-1-scoped-function-share-bad.hir

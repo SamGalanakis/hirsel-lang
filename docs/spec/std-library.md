@@ -67,6 +67,15 @@ with NUL and unterminated bracket/entity syntax, using the same extension
 options as its published example. `tools/generate-markdown.py`
 pins both upstream checkouts and regenerates entity data and vectors.
 
+## Schema boundaries
+
+`schema` supplies pure explicit dictionaries between inert domain values and
+inert structural wire data, structured issues and shared traversal limits.
+The complete contracts, ownership rules, budgets and JSON adapter guarantees
+are in [pure representation boundaries](schema.md). Facts and opaque domains
+are reconstructed by their owners after validation; canonical HSC1 admission
+and legacy JSON derive behavior are unchanged.
+
 ## The catalogue
 
 These declarations are normative: the source package must declare exactly these
@@ -112,6 +121,30 @@ N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
 fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
 @preserves_unique(out) fn json.stringify_into(value: Value, mut out: List[u8]) -> Result[(), JsonError] uses {}
+fn schema.default_options() -> Options uses {}
+fn schema.check_state(o: Options) -> Result[CheckState, SchemaError] uses {}
+fn schema.charge_check(mut check: CheckState) -> Result[(), SchemaError] uses {}
+fn schema.enter_node(mut check: CheckState) -> Result[(), SchemaError] uses {}
+fn schema.leave_node(mut check: CheckState) -> () uses {}
+fn schema.should_stop(check: CheckState) -> bool uses {}
+fn schema.invalid( mut check: CheckState, code: String, stage: Stage, schema_site: String, expected: Option[String] ) -> SchemaError uses {}
+fn schema.decode[D: inert, W: data + inert](b: Boundary[D, W], wire: W, o: Options) -> Result[ D, SchemaError ] uses {}
+fn schema.encode[D: inert, W: data + inert](b: Boundary[D, W], value: D, o: Options) -> Result[ W, SchemaError ] uses {}
+fn schema.decode_only[D: inert, W: data + inert](b: Decoder[D, W], wire: W, o: Options) -> Result[ D, SchemaError ] uses {}
+fn schema.then[A: inert, B: data + inert, W: data + inert]( take outer: Boundary[B, W], take inner: Boundary[A, B] ) -> Boundary[A, W] uses {}
+fn schema.prefix(segment: Segment, take issues: Issues) -> Issues uses {}
+fn schema.prefix_error(segment: Segment, take error: SchemaError) -> SchemaError uses {}
+fn schema.empty_issues() -> Issues uses {}
+fn schema.append_issues(mut into: Issues, take more: Issues) -> () uses {}
+fn schema.format(issues: Issues) -> String uses {}
+fn schema.identity[W: plain + data + inert]() -> Boundary[W, W] uses {}
+fn schema.u8_json() -> Boundary[u8, std@1/json.Value] uses {}
+fn schema.text_json() -> Boundary[String, std@1/json.Value] uses {}
+fn schema.list[D: inert, W: data + inert](take item: Boundary[D, W]) -> Boundary[ List[D], List[W] ] uses {}
+fn schema.array_json() -> Boundary[List[std@1/json.Value], std@1/json.Value] uses {}
+fn schema.list_json[D: inert](take item: Boundary[D, std@1/json.Value]) -> Boundary[ List[D], std@1/json.Value ] uses {}
+fn schema.parse_json[D: inert]( b: Boundary[D, std@1/json.Value], input: String, o: Options ) -> Result[D, BoundaryError] uses {}
+fn schema.write_json[D: inert](b: Boundary[D, std@1/json.Value], value: D, o: Options) -> Result[ String, BoundaryError ] uses {}
 fn msgpack.decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {}
 fn msgpack.encode(value: json.Value) -> Result[unique Bytes, binary.DecodeError] uses {}
 fn cbor.decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {}

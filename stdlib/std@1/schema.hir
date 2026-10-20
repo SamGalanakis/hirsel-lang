@@ -1,0 +1,610 @@
+// Pure representation boundaries. Facts and private invariants remain in owner
+// constructors; these dictionaries neither reflect nor bypass construction.
+pub type Limits {
+  max_depth: u64,
+  max_issues: u64,
+  max_work: u64,
+  max_input_bytes: u64,
+  max_output_bytes: u64,
+}
+
+pub type Mode = First | All
+
+pub type Options {
+  limits: Limits,
+  mode: Mode,
+}
+
+pub type Segment = Field(String) | Index(u64) | Variant(String) | MapEntry(u64) | Key | Value
+
+pub type Stage = Syntax | Wire | Fact | Transform | Migration
+
+pub type Issue {
+  code: String,
+  stage: Stage,
+  path: List[Segment],
+  schema_site: String,
+  expected: Option[String],
+  children: List[Issue],
+}
+
+pub type Issues {
+  items: List[Issue],
+  truncated: bool,
+}
+
+pub type LimitKind = InvalidOptions | Depth | Work | DiagnosticBytes
+
+pub type LimitError {
+  kind: LimitKind,
+  limit: u64,
+}
+
+pub type SchemaError = Invalid(Issues) | Limit(LimitError)
+
+// One state per complete operation, borrowed by every recursive/composed call.
+pub opaque type CheckState: plain + inert + noalloc_drop uses {} {
+  options: Options,
+  depth: u64,
+  work: u64,
+  issues: u64,
+}
+
+pub type Boundary[D: inert, W: data + inert] {
+  decode: fn(W, mut CheckState) -> Result[D, SchemaError] uses {},
+  encode: fn(D, mut CheckState) -> Result[W, SchemaError] uses {},
+}
+
+pub type Decoder[D: inert, W: data + inert] {
+  decode: fn(W, mut CheckState) -> Result[D, SchemaError] uses {},
+}
+
+pub fn default_options() -> Options uses {} {
+  Options(
+    limits: Limits(
+      max_depth: 128,
+      max_issues: 32,
+      max_work: 1000000,
+      max_input_bytes: 16777216,
+      max_output_bytes: 16777216
+    ),
+    mode: First
+  )
+}
+
+pub fn check_state(o: Options) -> Result[CheckState, SchemaError] uses {} {
+  if o.limits.max_depth == 0 || o.limits.max_issues == 0 {
+    return Error(Limit(LimitError(kind: InvalidOptions, limit: 0)))
+  }
+  Ok(CheckState(options: o, depth: 0, work: 0, issues: 0))
+}
+
+pub fn charge_check(mut check: CheckState) -> Result[(), SchemaError] uses {} {
+  if check.work >= check.options.limits.max_work {
+    return Error(Limit(LimitError(kind: Work, limit: check.options.limits.max_work)))
+  }
+  check.work += 1
+  Ok(())
+}
+
+pub fn enter_node(mut check: CheckState) -> Result[(), SchemaError] uses {} {
+  charge_check(mut check)?
+  if check.depth >= check.options.limits.max_depth {
+    return Error(Limit(LimitError(kind: Depth, limit: check.options.limits.max_depth)))
+  }
+  check.depth += 1
+  Ok(())
+}
+
+pub fn leave_node(mut check: CheckState) -> () uses {} {
+  if check.depth > 0 {
+    check.depth -= 1
+  }
+}
+
+pub fn should_stop(check: CheckState) -> bool uses {} {
+  match check.options.mode {
+    First => check.issues > 0,
+    All => check.issues >= check.options.limits.max_issues,
+  }
+}
+
+// Diagnostic labels have a fixed byte cap, independent of raw rejected input.
+pub const MAX_LABEL_BYTES: u64 = 256
+
+pub fn invalid(
+  mut check: CheckState,
+  code: String,
+  stage: Stage,
+  schema_site: String,
+  expected: Option[String]
+) -> SchemaError uses {} {
+  if core@1/bytes.len(core@1/string.as_bytes(code)) > MAX_LABEL_BYTES || core@1/bytes.len(
+    core@1/string.as_bytes(schema_site)
+  ) > MAX_LABEL_BYTES {
+    return Limit(LimitError(kind: DiagnosticBytes, limit: MAX_LABEL_BYTES))
+  }
+  match expected {
+    Some(text) => if core@1/bytes.len(core@1/string.as_bytes(text)) > MAX_LABEL_BYTES {
+      return Limit(LimitError(kind: DiagnosticBytes, limit: MAX_LABEL_BYTES))
+    },
+    None => (),
+  }
+  if should_stop(check) {
+    return Invalid(Issues(items: [], truncated: true))
+  }
+  check.issues += 1
+  let truncated = match check.options.mode {
+    First => false,
+    All => check.issues >= check.options.limits.max_issues,
+  }
+  Invalid(
+    Issues(
+      items: [
+        Issue(
+          code: unique code,
+          stage: stage,
+          path: [],
+          schema_site: unique schema_site,
+          expected: unique expected,
+          children: []
+        )
+      ],
+      truncated: truncated
+    )
+  )
+}
+
+pub fn decode[D: inert, W: data + inert](b: Boundary[D, W], wire: W, o: Options) -> Result[
+  D,
+  SchemaError
+] uses {} {
+  let mut check = check_state(o)?
+  b.decode(wire, mut check)
+}
+
+pub fn encode[D: inert, W: data + inert](b: Boundary[D, W], value: D, o: Options) -> Result[
+  W,
+  SchemaError
+] uses {} {
+  let mut check = check_state(o)?
+  b.encode(value, mut check)
+}
+
+pub fn decode_only[D: inert, W: data + inert](b: Decoder[D, W], wire: W, o: Options) -> Result[
+  D,
+  SchemaError
+] uses {} {
+  let mut check = check_state(o)?
+  b.decode(wire, mut check)
+}
+
+pub fn then[A: inert, B: data + inert, W: data + inert](
+  take outer: Boundary[B, W],
+  take inner: Boundary[A, B]
+) -> Boundary[A, W] uses {} {
+  Boundary(
+    decode: fn(wire: W, mut check: CheckState) -> Result[A, SchemaError] uses {} {
+      enter_node(mut check)?
+      let outcome = match outer.decode(wire, mut check) {
+        Ok(middle) => inner.decode(middle, mut check),
+        Error(error) => Error(take error),
+      }
+      leave_node(mut check)
+      outcome
+    },
+    encode: fn(value: A, mut check: CheckState) -> Result[W, SchemaError] uses {} {
+      enter_node(mut check)?
+      let outcome = match inner.encode(value, mut check) {
+        Ok(middle) => outer.encode(middle, mut check),
+        Error(error) => Error(take error),
+      }
+      leave_node(mut check)
+      outcome
+    }
+  )
+}
+
+// Unwind prefixing, adapted from Effect SchemaIssue.Pointer and
+// serde_path_to_error's parent-chain paths. Never retain the rejected input.
+pub fn prefix(segment: Segment, take issues: Issues) -> Issues uses {} {
+  let Issues(items: items, truncated: truncated) = take issues
+  let mut out: List[Issue] = []
+  for issue in take items {
+    let Issue(
+      code: code,
+      stage: stage,
+      path: path,
+      schema_site: site,
+      expected: expected,
+      children: children
+    ) = take issue
+    let mut path_out: List[Segment] = [unique segment]
+    for part in take path {
+      core@1/list.push(mut path_out, take part)
+    }
+    core@1/list.push(
+      mut out,
+      Issue(
+        code: take code,
+        stage: stage,
+        path: take path_out,
+        schema_site: take site,
+        expected: take expected,
+        children: take children
+      )
+    )
+  }
+  Issues(items: take out, truncated: truncated)
+}
+
+pub fn prefix_error(segment: Segment, take error: SchemaError) -> SchemaError uses {} {
+  match take error {
+    Invalid(issues) => Invalid(prefix(segment, take issues)),
+    Limit(cause) => Limit(take cause),
+  }
+}
+
+pub fn empty_issues() -> Issues uses {} {
+  Issues(items: [], truncated: false)
+}
+
+// The producer has already charged issue slots through invalid().
+pub fn append_issues(mut into: Issues, take more: Issues) -> () uses {} {
+  let Issues(items: items, truncated: truncated) = take more
+  into.truncated = into.truncated || truncated
+  for item in take items {
+    core@1/list.push(mut into.items, take item)
+  }
+}
+
+pub fn format(issues: Issues) -> String uses {} {
+  let mut out: List[u8] = []
+  let mut issue_index: u64 = 0
+  while issue_index < core@1/list.len(issues.items) {
+    let issue = issues.items[issue_index]
+    let mut segment_index: u64 = 0
+    while segment_index < core@1/list.len(issue.path) {
+      match issue.path[segment_index] {
+        Field(name) => {
+          text.append(mut out, ".")
+          text.append(mut out, name)
+        },
+        Index(index) => text.append(mut out, f"[{index}]"),
+        Variant(tag) => {
+          text.append(mut out, "::")
+          text.append(mut out, tag)
+        },
+        MapEntry(index) => text.append(mut out, f".entries[{index}]"),
+        Key => text.append(mut out, ".key"),
+        Value => text.append(mut out, ".value"),
+      }
+      segment_index += 1
+    }
+    text.append(mut out, f": {issue.code} ({issue.schema_site})\n")
+    issue_index += 1
+  }
+  if issues.truncated {
+    text.append(mut out, "...\n")
+  }
+  text.finish_valid(take out)
+}
+
+pub fn identity[W: plain + data + inert]() -> Boundary[W, W] uses {} {
+  Boundary(
+    decode: fn(wire: W, mut check: CheckState) -> Result[W, SchemaError] uses {} {
+      charge_check(mut check)?
+      Ok(unique wire)
+    },
+    encode: fn(value: W, mut check: CheckState) -> Result[W, SchemaError] uses {} {
+      charge_check(mut check)?
+      Ok(unique value)
+    }
+  )
+}
+
+pub fn u8_json() -> Boundary[u8, std@1/json.Value] uses {} {
+  Boundary(
+    decode: fn(wire: std@1/json.Value, mut check: CheckState) -> Result[u8, SchemaError] uses {} {
+      charge_check(mut check)?
+      match wire {
+        Number(n) => match std@1/u8.parse(n) {
+          Ok(value) => Ok(value),
+          Error(_) => Error(
+            invalid(mut check, "Range", Wire, "u8", Some("integer 0..255"))
+          ),
+        },
+        _ => Error(invalid(mut check, "Type", Wire, "u8", Some("number"))),
+      }
+    },
+    encode: fn(value: u8, mut check: CheckState) -> Result[
+      std@1/json.Value,
+      SchemaError
+    ] uses {} {
+      charge_check(mut check)?
+      Ok(Number(std@1/u8.to_string(value)))
+    }
+  )
+}
+
+pub fn text_json() -> Boundary[String, std@1/json.Value] uses {} {
+  Boundary(
+    decode: fn(wire: std@1/json.Value, mut check: CheckState) -> Result[
+      String,
+      SchemaError
+    ] uses {} {
+      charge_check(mut check)?
+      match wire {
+        Text(s) => Ok(unique s),
+        _ => Error(invalid(mut check, "Type", Wire, "String", Some("text"))),
+      }
+    },
+    encode: fn(value: String, mut check: CheckState) -> Result[
+      std@1/json.Value,
+      SchemaError
+    ] uses {} {
+      charge_check(mut check)?
+      Ok(Text(unique value))
+    }
+  )
+}
+
+fn decode_list[D: inert, W: data + inert](
+  item: Boundary[D, W],
+  wire: List[W],
+  mut check: CheckState
+) -> Result[List[D], SchemaError] uses {} {
+  let mut out: List[D] = []
+  let mut issues = empty_issues()
+  let mut failed = false
+  let mut index: u64 = 0
+  for value in wire {
+    match item.decode(value, mut check) {
+      Ok(decoded) => core@1/list.push(mut out, take decoded),
+      Error(error) => match take error {
+        Limit(cause) => return Error(Limit(take cause)),
+        Invalid(errors) => {
+          failed = true
+          append_issues(mut issues, prefix(Index(index), take errors))
+          if should_stop(check) {
+            break
+          }
+        },
+      },
+    }
+    index += 1
+  }
+  if failed {
+    Error(Invalid(take issues))
+  } else {
+    Ok(take out)
+  }
+}
+
+fn encode_list[D: inert, W: data + inert](
+  item: Boundary[D, W],
+  values: List[D],
+  mut check: CheckState
+) -> Result[List[W], SchemaError] uses {} {
+  let mut out: List[W] = []
+  let mut issues = empty_issues()
+  let mut failed = false
+  let mut index: u64 = 0
+  for value in values {
+    match item.encode(value, mut check) {
+      Ok(decoded) => core@1/list.push(mut out, take decoded),
+      Error(error) => match take error {
+        Limit(cause) => return Error(Limit(take cause)),
+        Invalid(errors) => {
+          failed = true
+          append_issues(mut issues, prefix(Index(index), take errors))
+          if should_stop(check) {
+            break
+          }
+        },
+      },
+    }
+    index += 1
+  }
+  if failed {
+    Error(Invalid(take issues))
+  } else {
+    Ok(take out)
+  }
+}
+
+pub fn list[D: inert, W: data + inert](take item: Boundary[D, W]) -> Boundary[
+  List[D],
+  List[W]
+] uses {} {
+  Boundary(
+    decode: fn(wire: List[W], mut check: CheckState) -> Result[List[D], SchemaError] uses {} {
+      enter_node(mut check)?
+      let outcome = decode_list(item, wire, mut check)
+      leave_node(mut check)
+      outcome
+    },
+    encode: fn(values: List[D], mut check: CheckState) -> Result[List[W], SchemaError] uses {} {
+      enter_node(mut check)?
+      let outcome = encode_list(item, values, mut check)
+      leave_node(mut check)
+      outcome
+    }
+  )
+}
+
+pub fn array_json() -> Boundary[List[std@1/json.Value], std@1/json.Value] uses {} {
+  Boundary(
+    decode: fn(wire: std@1/json.Value, mut check: CheckState) -> Result[
+      List[std@1/json.Value],
+      SchemaError
+    ] uses {} {
+      charge_check(mut check)?
+      match wire {
+        Array(items) => Ok(unique items),
+        _ => Error(invalid(mut check, "Type", Wire, "List", Some("array"))),
+      }
+    },
+    encode: fn(items: List[std@1/json.Value], mut check: CheckState) -> Result[
+      std@1/json.Value,
+      SchemaError
+    ] uses {} {
+      charge_check(mut check)?
+      Ok(Array(unique items))
+    }
+  )
+}
+
+pub fn list_json[D: inert](take item: Boundary[D, std@1/json.Value]) -> Boundary[
+  List[D],
+  std@1/json.Value
+] uses {} {
+  then(array_json(), list(take item))
+}
+
+pub type FormatLimit = InputBytes(u64) | OutputBytes(u64)
+
+pub type BoundaryError = Schema(SchemaError) | Json(std@1/json.JsonError) | FormatLimit(
+  FormatLimit
+)
+
+pub fn parse_json[D: inert](b: Boundary[D, std@1/json.Value], input: String, o: Options) -> Result[
+  D,
+  BoundaryError
+] uses {} {
+  let mut check = match check_state(o) {
+    Ok(check) => check,
+    Error(error) => return Error(Schema(take error)),
+  }
+  if core@1/bytes.len(core@1/string.as_bytes(input)) > o.limits.max_input_bytes {
+    return Error(FormatLimit(InputBytes(o.limits.max_input_bytes)))
+  }
+  let wire = match std@1/json.parse(unique input) {
+    Ok(wire) => wire,
+    Error(error) => return Error(Json(take error)),
+  }
+  match b.decode(wire, mut check) {
+    Ok(value) => Ok(take value),
+    Error(error) => Error(Schema(take error)),
+  }
+}
+
+fn output_bytes(mut count: u64, amount: u64, limit: u64) -> Result[(), BoundaryError] uses {} {
+  if amount > limit - count {
+    return Error(FormatLimit(OutputBytes(limit)))
+  }
+  count += amount
+  Ok(())
+}
+
+// Match json.stringify's actual compact escaping, without allocating a candidate.
+fn text_size(text: String, mut count: u64, limit: u64) -> Result[(), BoundaryError] uses {} {
+  output_bytes(mut count, 2, limit)?
+  let bytes = core@1/string.as_bytes(text)
+  for c in bytes {
+    let size: u64 = if c == 34 || c == 92 || c == 8 || c == 9 || c == 10 || c == 12 || c == 13 {
+      2
+    } else if c < 32 {
+      6
+    } else {
+      1
+    }
+    output_bytes(mut count, size, limit)?
+  }
+  Ok(())
+}
+
+fn json_size_inner(
+  value: std@1/json.Value,
+  mut count: u64,
+  limit: u64,
+  depth: u64,
+  mut check: CheckState
+) -> Result[(), BoundaryError] uses {} {
+  match value {
+    Null => output_bytes(mut count, 4, limit),
+    Bool(b) => output_bytes(
+      mut count,
+      if b {
+        4
+      } else {
+        5
+      },
+      limit
+    ),
+    Number(n) => output_bytes(
+      mut count,
+      core@1/bytes.len(core@1/string.as_bytes(n)),
+      limit
+    ),
+    Text(s) => text_size(s, mut count, limit),
+    Array(items) => {
+      if depth == std@1/json.MAX_NESTING {
+        return Error(Json(Nesting(depth)))
+      }
+      output_bytes(mut count, 2, limit)?
+      let mut first = true
+      for item in items {
+        if !first {
+          output_bytes(mut count, 1, limit)?
+        }
+        first = false
+        json_size(item, mut count, limit, depth + 1, mut check)?
+      }
+      Ok(())
+    },
+    Object(items) => {
+      if depth == std@1/json.MAX_NESTING {
+        return Error(Json(Nesting(depth)))
+      }
+      output_bytes(mut count, 2, limit)?
+      let mut first = true
+      for (key, item) in items {
+        if !first {
+          output_bytes(mut count, 1, limit)?
+        }
+        first = false
+        text_size(key, mut count, limit)?
+        output_bytes(mut count, 1, limit)?
+        json_size(item, mut count, limit, depth + 1, mut check)?
+      }
+      Ok(())
+    },
+  }
+}
+
+fn json_size(
+  value: std@1/json.Value,
+  mut count: u64,
+  limit: u64,
+  depth: u64,
+  mut check: CheckState
+) -> Result[(), BoundaryError] uses {} {
+  match enter_node(mut check) {
+    Ok(()) => (),
+    Error(error) => return Error(Schema(take error)),
+  }
+  let measured = json_size_inner(value, mut count, limit, depth, mut check)
+  leave_node(mut check)
+  measured
+}
+
+pub fn write_json[D: inert](b: Boundary[D, std@1/json.Value], value: D, o: Options) -> Result[
+  String,
+  BoundaryError
+] uses {} {
+  let mut check = match check_state(o) {
+    Ok(check) => check,
+    Error(error) => return Error(Schema(take error)),
+  }
+  let wire = match b.encode(value, mut check) {
+    Ok(wire) => wire,
+    Error(error) => return Error(Schema(take error)),
+  }
+  let mut size: u64 = 0
+  json_size(wire, mut size, o.limits.max_output_bytes, 0, mut check)?
+  match std@1/json.stringify(wire) {
+    Ok(text) => Ok(take text),
+    Error(error) => Error(Json(take error)),
+  }
+}
