@@ -838,6 +838,8 @@ fn set_next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.at(yes);
     let first_failure = b.ed.unit.tables.failures.len();
     let entry = b.slot_place(entries, i)?;
+    let pair = live_pair(&mut b, entry)?;
+    let key = field(&mut b, pair, 0)?;
     protect(&mut b, first_failure, loan);
     let one = b.constant(b.layout_of(i), ConstantValue::Integer(1));
     let next = b.add(ArithMode::Wrapping, i, one);
@@ -865,8 +867,6 @@ fn set_next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     // Complete every fallible state write before producing an owned Copy.
     // The source loan covers field 0 and permits the disjoint position write.
     let failure = loan_failure(&mut b, &[loan], None);
-    let pair = live_pair(&mut b, entry)?;
-    let key = field(&mut b, pair, 0)?;
     let value = b.copy(key, failure)?;
     b.end_loan(loan);
     let some = option(&mut b, Some(value))?;
