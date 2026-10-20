@@ -1239,6 +1239,14 @@ impl Checker<'_> {
         if lifetime.named_parameters().is_some() {
             lifetime = self.lifetime(&provenance.modes.relation);
         }
+        // A part lives as long as the value it is read from (PROV-4): a
+        // field of a borrowed loop element, which H types as a fresh local,
+        // is as environment-bound as its source sequence.
+        if self.lifetime(&provenance.modes.relation).is_environment()
+            && !self.property(actual, Bound::Plain)
+        {
+            lifetime = lifetime.union(&Relation::environment());
+        }
         row.modes.relation = lifetime.union(&placement);
         // Retain the projected kind, other modes and cleanup evidence while
         // applying flow-sensitive provenance from the selected checked field.

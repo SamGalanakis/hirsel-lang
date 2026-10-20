@@ -4497,6 +4497,7 @@ conformance/PROV/PROV-4-mixed-source-return-first-arena-bad.hir
 conformance/PROV/PROV-4-mixed-source-return-second-arena-bad.hir
 conformance/PROV/PROV-4-mixed-source-store-arena-bad.hir
 conformance/PROV/PROV-4-mixed-source-take-second-bad.hir
+conformance/PROV/PROV-4-nested-loop-field-element-run.hir
 conformance/PROV/PROV-4-placed-local-binding-result-bad.hir
 conformance/PROV/PROV-4-placed-local-binding-result-ok.hir
 conformance/PROV/PROV-4-placement-names-arena-ok.hir

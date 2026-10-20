@@ -1,0 +1,60 @@
+// rule: PROV-4
+// expect: run
+// stdout: ok
+// A field read through a borrowed loop element lives where the element's
+// sequence does, so the elements of a loop over that field are views of the
+// borrowed input too, whatever the arms of a match on them do.
+type Segment = Field(String) | Index(u64)
+
+type Issue {
+  path: List[Segment],
+}
+
+fn codes(issues: List[Issue]) -> List[u8] uses {} {
+  let mut out: List[u8] = []
+  for issue in issues {
+    for segment in issue.path {
+      match segment {
+        Field(name) => list.push(mut out, 1u8),
+        Index(index) => list.push(mut out, 2u8),
+      }
+    }
+  }
+  take out
+}
+
+fn fields(issues: List[Issue]) -> u64 uses {} {
+  let mut n: u64 = 0
+  for issue in issues {
+    for segment in issue.path {
+      match segment {
+        Field(_) => (),
+        Index(_) => (),
+      }
+      if let Field(name) = segment {
+        n += string.byte_len(name)
+      }
+    }
+  }
+  n
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let issues: List[Issue] = [
+    Issue(path: [Field("ab"), Index(2)]),
+    Issue(path: [Index(0), Field("c")])
+  ]
+  let seen = codes(issues)
+  let ok = list.len(seen) == 4 && seen[0] == 1u8 && seen[1] == 2u8 && seen[2] == 2u8 && fields(
+    issues
+  ) == 3
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}
