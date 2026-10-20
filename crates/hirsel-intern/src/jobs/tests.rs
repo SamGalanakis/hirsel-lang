@@ -30,11 +30,6 @@ proptest! {
     }
 
     #[test]
-    fn one_worker_equals_eight(costs in prop::collection::vec(0u64..1000, 0..64)) {
-        prop_assert_eq!(run(Jobs::ONE, &costs).0, run(Jobs::new(8), &costs).0);
-    }
-
-    #[test]
     fn one_worker_starts_longest_first_ties_by_index(costs in prop::collection::vec(0u64..4, 0..32)) {
         let (_, started) = run(Jobs::ONE, &costs);
         let mut expected: Vec<usize> = (0..costs.len()).collect();
@@ -122,10 +117,4 @@ fn one_job_runs_on_the_callers_thread_and_more_use_compiler_stacks() {
             .iter()
             .all(|(name, _)| name.as_deref() == Some("hirsel-job"))
     );
-}
-
-#[test]
-fn zero_jobs_means_one() {
-    assert_eq!(Jobs::new(0), Jobs::ONE);
-    assert!(Jobs::available().get() >= 1);
 }

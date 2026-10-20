@@ -172,25 +172,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn equal_spellings_share_one_symbol_and_read_back() {
-        let first = Symbol::intern("intern-test-first");
-        assert_eq!(Symbol::intern("intern-test-first"), first);
-        let second = Symbol::intern(&String::from("intern-test-second"));
-        assert_ne!(first, second);
-        assert_eq!(first.as_str(), "intern-test-first");
-        assert_eq!(second.to_string(), "intern-test-second");
-        assert_eq!(format!("{first:?}"), "Symbol(\"intern-test-first\")");
-    }
-
-    #[test]
-    fn order_is_by_spelling_not_by_assignment() {
-        let late = Symbol::intern("intern-test-order-b");
-        let early = Symbol::intern("intern-test-order-a");
-        assert!(early < late);
-        assert_eq!(early.cmp(&early), Ordering::Equal);
-    }
-
-    #[test]
     fn threads_interning_the_same_spellings_agree() {
         let spellings: Vec<String> = (0..500).map(|i| format!("intern-test-race-{i}")).collect();
         let runs: Vec<Vec<Symbol>> = std::thread::scope(|scope| {

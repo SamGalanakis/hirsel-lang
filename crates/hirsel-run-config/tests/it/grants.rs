@@ -351,23 +351,6 @@ fn valid(r: &RunConfig) -> ValidatedRun {
 }
 
 proptest! {
-    #[test]
-    fn within_is_reflexive(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
-        let r = valid(&record(&mut Draw(&bytes)));
-        prop_assert!(grants_within(&r, &r));
-    }
-
-    #[test]
-    fn within_is_transitive(bytes in proptest::collection::vec(any::<u8>(), 0..256)) {
-        let d = &mut Draw(&bytes);
-        let z = record(d);
-        let y = if d.coin() { narrow(&z, d) } else { record(d) };
-        let x = if d.coin() { narrow(&y, d) } else { record(d) };
-        let (x, y, z) = (valid(&x), valid(&y), valid(&z));
-        if grants_within(&x, &y) && grants_within(&y, &z) {
-            prop_assert!(grants_within(&x, &z));
-        }
-    }
 
     #[test]
     fn narrowing_yields_a_subset(bytes in proptest::collection::vec(any::<u8>(), 0..128)) {

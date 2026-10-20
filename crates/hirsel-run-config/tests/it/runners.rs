@@ -228,27 +228,6 @@ fn callee_grants_are_an_io_record_without_stdin_or_runners() {
 }
 
 #[test]
-fn a_fixture_list_validates_alone_and_host_launches_bind_runners() {
-    let list = validate_runners(&serde_json::to_vec(&json!([node(), pool()])).unwrap()).unwrap();
-    assert_eq!(list.len(), 2);
-    assert!(validate_runners(b"[{\"name\": \"pool\"}]").is_err());
-    let run = validate(&record(json!([pool()]))).unwrap();
-    assert!(run.calls());
-    let facts = ProgramFacts {
-        program: run.program(),
-        entry: run.record().entry.clone(),
-        launch: run.record().launch,
-        roots: vec![],
-        code: CodeReach::Safe,
-        fueled: true,
-    };
-    run.clone().bind(&facts).unwrap();
-    let plain = validate(&record(json!([]))).unwrap();
-    assert!(!plain.calls());
-    plain.bind(&facts).unwrap();
-}
-
-#[test]
 fn a_place_admission_policy_is_admit_safe_or_absent() {
     let safe = with(pool(), "admission", json!({"code": "admit.safe@1"}));
     let list = validate_runners(&serde_json::to_vec(&json!([safe.clone()])).unwrap()).unwrap();

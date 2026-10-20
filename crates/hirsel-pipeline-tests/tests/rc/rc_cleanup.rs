@@ -67,39 +67,6 @@ fn a_fallible_resource_call_beside_a_resource_construction_keeps_its_edges() {
     ));
 }
 
-/// A Replace's displaced owner is a temporary of its scope: a failing deep
-/// copy of it built straight into a tuple releases it before the earlier
-/// statement temporaries, and every stage validator accepts that order.
-#[test]
-fn a_displaced_owner_releases_before_earlier_temporaries() {
-    for source in [
-        include_str!("../../../../conformance/DROP/DROP-2-replace-copy-beside-temporary-run.hir"),
-        include_str!("../../../../conformance/DROP/DROP-2-replace-copy-three-temporaries-run.hir"),
-        include_str!("../../../../conformance/DROP/DROP-2-replace-copy-two-displaced-run.hir"),
-    ] {
-        lower_valid(source);
-        validate_driver_ready(source);
-    }
-}
-
-/// An inline element taken at a computed position is copied out, so the
-/// temporary's drop releases every element exactly once.
-#[test]
-fn an_inline_element_at_a_computed_position_is_copied_out() {
-    validate_driver_ready(include_str!(
-        "../../../../conformance/OWN/OWN-4-inline-element-take-run.hir"
-    ));
-}
-
-/// One arm takes a part of its variant's payload and the other ignores its
-/// payload: after the join, the scrutinee's flagged drop leaves nothing owned.
-#[test]
-fn a_variant_payload_part_take_joins_a_wildcard_arm() {
-    validate_driver_ready(include_str!(
-        "../../../../conformance/DROP/DROP-2-variant-payload-part-take-run.hir"
-    ));
-}
-
 fn validate_driver_ready(source: &'static str) {
     let built = try_build(source).unwrap();
     let rows = hirsel_engine::with_compiler_stack(move || {

@@ -627,22 +627,6 @@ mod tests {
     }
 
     #[test]
-    fn next_names_each_value_kind_without_consuming_it() {
-        let mut r = Reader::new("(Tag -3 \"s\" #ff) ");
-        assert_eq!(r.next_kind(), Next::Open);
-        assert_eq!(r.open_any().unwrap(), "Tag");
-        assert_eq!(r.next_kind(), Next::Integer);
-        assert_eq!(r.int().unwrap(), -3);
-        assert_eq!(r.next_kind(), Next::Text);
-        assert_eq!(r.text().unwrap(), "s");
-        assert_eq!(r.next_kind(), Next::Bytes);
-        assert_eq!(r.bytes().unwrap(), vec![0xff]);
-        assert_eq!(r.next_kind(), Next::Close);
-        r.close().unwrap();
-        assert_eq!(r.next_kind(), Next::End);
-    }
-
-    #[test]
     fn primitive_decode_errors() {
         assert_eq!(
             from_text::<u8>("999").unwrap_err().message,

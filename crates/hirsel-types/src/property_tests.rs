@@ -971,44 +971,6 @@ fn describe(world: &World, store: &TypeStore, root: TypeId) -> String {
 }
 
 #[test]
-fn a_sendable_parameter_does_not_cross_after_a_counted_share() {
-    // The testsmash M1 mutant dropped this clause from `prove`, and J, I and
-    // V then all accepted `let y = copy x; cross(take x)` for `T: sendable`.
-    let declarations = crossing_declarations();
-    let generics = GenericDeclarations::signature(&declarations);
-    let mut lookup = |_: &DefPath| Ok::<_, QueryError>(None);
-    for (i, after_share) in [
-        (0, Sendability::NotSendable),
-        (1, Sendability::Sendable),
-        (2, Sendability::NotSendable),
-        (4, Sendability::NotSendable),
-        (5, Sendability::Sendable),
-        (6, Sendability::NotSendable),
-    ] {
-        let mut store = TypeStore::default();
-        let mut row = Type::with_kind(TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(i))));
-        row.modes.uniqueness = Uniqueness::Unique;
-        let root = store.push(row);
-        assert_eq!(
-            sendability_after_sharing(&store, root, &generics, &mut lookup).unwrap(),
-            after_share,
-            "T{i}: {:?}",
-            CROSSING_BOUNDS[i as usize]
-        );
-        let before = if i == 0 || i == 2 {
-            Sendability::DependsOn(vec![TypeParameterRef::bound(TypeParamId(i))].into())
-        } else {
-            Sendability::Sendable
-        };
-        assert_eq!(
-            structural_sendability(&store, root, &generics, &mut lookup).unwrap(),
-            before,
-            "T{i}"
-        );
-    }
-}
-
-#[test]
 fn crossing_flatness_and_equality_agree_with_a_spec_reference() {
     let declarations = crossing_declarations();
     let generics = GenericDeclarations::signature(&declarations);

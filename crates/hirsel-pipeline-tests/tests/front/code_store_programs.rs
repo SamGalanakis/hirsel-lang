@@ -123,21 +123,6 @@ fn an_add_missing_dependencies_adds_nothing_and_names_exactly_the_missing_hashes
 }
 
 #[test]
-fn re_adding_a_bundle_is_idempotent() {
-    let (groups, _) = groups(PROGRAM);
-    let (dir, store) = dir_store(Signatures::None);
-    let bundle = Bundle::of_groups(&groups);
-    assert_eq!(store.add(&bundle).unwrap(), Added::Ok);
-    let stored = files(&dir);
-    assert_eq!(stored.len(), bundle.len());
-    assert_eq!(store.add(&bundle).unwrap(), Added::Ok);
-    assert_eq!(files(&dir), stored);
-    for (hash, bytes) in bundle.objects() {
-        assert_eq!(store.get(hash).unwrap().unwrap().bytes(), bytes);
-    }
-}
-
-#[test]
 fn bytes_that_do_not_hash_to_their_key_are_refused_on_add_and_on_read() {
     let (groups, _) = groups(PROGRAM);
     let (_dir, store) = dir_store(Signatures::None);

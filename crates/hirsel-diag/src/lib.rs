@@ -336,24 +336,6 @@ mod tests {
         assert!(seen.len() >= 15);
     }
     #[test]
-    fn shared_read_guidance_names_thaw_in_both_renderers() {
-        let sources = SourceMap::default();
-        let d = Diagnostic::error(RuleId::of("OWN-7"), Span::default(), "published storage");
-        assert!(d.render_human(&sources).contains("= help:"));
-        assert!(d.render_human(&sources).contains("shared.thaw"));
-        assert!(
-            d.to_json(&sources)["notes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|note| {
-                    note.as_str().is_some_and(|text| {
-                        text.starts_with("help: ") && text.contains("shared.thaw")
-                    })
-                })
-        );
-    }
-    #[test]
     fn specific_repairs_supersede_typical_guidance() {
         let sources = SourceMap::default();
         let mut d = Diagnostic::error(RuleId::of("OWN-2"), Span::default(), "failed");

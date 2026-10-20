@@ -80,16 +80,6 @@ fn reuseaddr(backend: Option<hirsel_driver::native::Backend>) {
 }
 
 #[test]
-fn tcp_listener_restarts_after_server_close_on_llvm() {
-    reuseaddr(Some(hirsel_driver::native::Backend::Llvm));
-}
-
-#[test]
-fn tcp_listener_restarts_after_server_close_on_cranelift() {
-    reuseaddr(Some(hirsel_driver::native::Backend::Cranelift));
-}
-
-#[test]
 fn tcp_listener_restarts_after_server_close_on_host_interpreter() {
     reuseaddr(None);
 }

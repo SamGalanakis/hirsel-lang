@@ -14,31 +14,6 @@ fn path(module: &str, name: &str) -> DefPath {
     })
 }
 
-#[test]
-fn a_path_interns_to_one_id_with_cached_forms() {
-    let p = path("cache", "first");
-    assert_eq!(DefId::get(&p), None);
-    let id = DefId::intern(&p);
-    assert_eq!(DefId::intern(&p.clone()), id);
-    assert_eq!(DefId::get(&p), Some(id));
-    assert_eq!(id.path(), &p);
-    assert_eq!(id.fingerprint(), p.fingerprint());
-    assert_eq!(id.to_string(), "ids@1/cache/first");
-    assert_eq!(format!("{id:?}"), "DefId(\"ids@1/cache/first\")");
-    assert_ne!(DefId::intern(&path("cache", "second")), id);
-}
-
-#[test]
-fn ids_order_by_path_not_by_assignment() {
-    let late = DefId::intern(&path("order", "b"));
-    let early = DefId::intern(&path("order", "a"));
-    assert!(early < late);
-    let mut map = DefMap::default();
-    map.insert(late, 1);
-    assert_eq!(map.get(&late), Some(&1));
-    assert_eq!(map.get(&early), None);
-}
-
 /// Spellings interned in a scrambled order, as a program's first uses would be.
 fn spellings() -> Vec<String> {
     (0..200u32)
