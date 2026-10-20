@@ -118,7 +118,7 @@ impl ManifestFixture {
         signatures: impl IntoIterator<Item = &'a hirsel_types::SignatureRef>,
     ) -> Self {
         for signature in signatures {
-            let path = &signature.definition;
+            let path = signature.definition.path();
             if path.0.package == self.package {
                 continue;
             }

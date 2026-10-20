@@ -154,6 +154,7 @@ pub enum ContractParameter {
 /// declared inside the expression belong to its ordinary nested calls instead.
 /// Result types count too: an empty Inline can receive its size from context.
 pub fn comptime_inputs(
+    t: &TypeInterner,
     syntax: &ast::ItemSyntax,
     checked: &CheckedBody,
     expression: ast::ExprId,
@@ -206,12 +207,12 @@ pub fn comptime_inputs(
             }
         }
     }
-    let mut seen = BTreeSet::new();
+    let mut seen = std::collections::HashSet::new();
     while let Some(ty) = pending.pop() {
         if !seen.insert(ty) {
             continue;
         }
-        let row = checked.types.get(ty).unwrap();
+        let row = t.row(ty);
         if let TypeKind::Builtin { arguments, .. } | TypeKind::Named { arguments, .. } = &row.kind {
             for argument in arguments.iter() {
                 if let GenericArgument::Size(Size::Parameter(parameter)) = argument {

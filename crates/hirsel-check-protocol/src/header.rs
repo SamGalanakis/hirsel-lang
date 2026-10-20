@@ -2,7 +2,7 @@
 //! signature phase and the query engine that drives it through a trait object.
 use hirsel_syntax as ast;
 use hirsel_types::{
-    DeclarationSite, Metadata, QueryOutput, Resolution, Signature, TypeDefinition, TypeStore,
+    DeclarationSite, Metadata, QueryOutput, Resolution, Signature, TypeDefinition,
 };
 
 /// All borrowed input snapshots must belong to the same syntax/interner session.
@@ -20,7 +20,6 @@ pub struct Input<'a> {
 /// Private defining shape produced by the same pass as its public declaration.
 #[derive(Clone, Debug)]
 pub struct OwnerRepresentation {
-    pub types: TypeStore,
     pub declaration: TypeDefinition,
 }
 pub struct NormalizedDeclaration {
