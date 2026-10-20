@@ -744,9 +744,10 @@ shard prints its stage times, slowest variants and costliest programs to stderr,
 and names any variant still running after 30 s.
 
 
-Unfiltered native campaign shards consume `//:native-selection`, the frozen
-program cover checked in as `native-tests/regressions/native-selection.json`:
-an inclusion-minimal feature cover after historical pins. Each selected
+Whole-campaign wrappers opt into the shared `//:native-selection` dependency
+with `-c hirsel.native_selection=true`. It exports the frozen program cover
+checked in as `native-tests/regressions/native-selection.json`, an
+inclusion-minimal feature cover after historical pins. Each selected
 baseline/generated program runs a rotating feasible-pair configuration cover;
 topology partitions and named exclusion cells remain present. `--exhaustive`
 on the campaign binary restores the previous exhaustive release check. The
@@ -756,16 +757,20 @@ run reproducible. The source/IR full agreement keeps all programs and budgets
 
 The cover is frozen because deriving it observes every corpus program through
 14 native builds (two targets by seven lowering options) with LLVM emission:
-about 68 seconds and 270 MB of growth per program, roughly 50 pool CPU-hours
-for the corpus, more than the campaigns it slims. Derived per run, its 32
-shards never finished. Loading it adds, from the current tree, every
+substantial work per program. The former 32 observation shards did not
+finish within their time budget. Each observation now runs in a fresh process;
+only feature strings and errors survive between cases. Compiler panics become
+program errors; a worker crash fails collection. The `inventory` and
+`observations-N` subtargets expose individual derivation stages. Loading it adds, from the current tree, every
 historical pin and every program the cover never observed, so new cases run
 until the next derivation. `tools/bless.sh native-selection` derives it again
 on the pool (`-c hirsel.native_selection=derive`: 256 observation shards of
 about 10 programs within 1 CPU and 4 GiB each, then one merge) and writes the
 file for review.
 
-The whole `gate-native-full` target has no coverage-artifact dependency, since
+Direct `gate-native-full` and `gate-native-full-shard-N` targets have no
+coverage-artifact dependency unless that setting is enabled, since
+
 Buck2 fixes its build graph before it receives test-runner arguments. Explicit
 `--filter` values are the program selection; an unfiltered whole-target run
 reads the checked-in cover.

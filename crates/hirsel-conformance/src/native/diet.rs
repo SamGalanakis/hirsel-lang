@@ -4,12 +4,17 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+#[path = "diet_observe.rs"]
+mod observation;
+pub use observation::worker as observation_worker;
+
 /// The checked-in cover the native campaigns read. Deriving it re-observes
 /// the whole corpus through 14 native builds per program, so it is frozen and
 /// regenerated on demand (`tools/bless.sh native-selection`), not per run.
 pub const FROZEN: &str = "native-tests/regressions/native-selection.json";
 
 /// A program cover. Historical findings are retained independently of gain.
+
 pub struct Selection {
     pub selected: BTreeSet<String>,
     pub protected: BTreeSet<String>,
@@ -274,6 +279,15 @@ pub fn derive_shard(
     shard: Option<crate::Shard>,
     inventory_input: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
+    derive_shard_with(root, shard, inventory_input, observation::isolated)
+}
+
+fn derive_shard_with(
+    root: &Path,
+    shard: Option<crate::Shard>,
+    inventory_input: Option<serde_json::Value>,
+    observe: impl Fn(&Path) -> Result<observation::Observed, String>,
+) -> Result<serde_json::Value, String> {
     let inventory = inventory_input.map_or_else(|| inventory(root), Ok)?;
     let mut cases: BTreeMap<_, _> = native::baseline(root)?
         .into_iter()
@@ -328,33 +342,7 @@ pub fn derive_shard(
     let mut errors = BTreeMap::new();
     for (index, (path, case)) in cases.iter().enumerate() {
         eprintln!("native-select: {}/{} {path}", index + 1, cases.len());
-        // A panicking stage is a failure of this program, not of the derivation.
-        let observe = || {
-            let mut program = hirsel_driver::load_program(case.path.as_ref().unwrap())
-                .map_err(|e| e.to_string())?;
-            program.check_for_execution().map_err(|e| e.to_string())?;
-            let raw = program
-                .engine
-                .export_native_input()
-                .map_err(|e| format!("{e:?}"))?;
-            let input = program
-                .engine
-                .import_native_input(raw)
-                .map_err(|e| format!("{e:?}"))?;
-            Ok::<_, String>(hirsel_driver::native::backend_features(&input))
-        };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(observe))
-            .unwrap_or_else(|panic| {
-                Err(format!(
-                    "a native stage panicked: {}",
-                    panic
-                        .downcast_ref::<String>()
-                        .map(String::as_str)
-                        .or_else(|| panic.downcast_ref::<&str>().copied())
-                        .unwrap_or("(no message)")
-                ))
-            });
-        let (seen, failures) = result.unwrap_or_else(|e| (BTreeSet::new(), vec![e]));
+        let (seen, failures) = observe(case.path.as_ref().unwrap())?;
         // A partially observable program is retained, never silently discarded.
         if !failures.is_empty() {
             pinned.insert(path.clone());
@@ -738,7 +726,10 @@ mod tests {
         ] {
             std::fs::write(root.join(path), "").unwrap();
         }
-        let value = hirsel_engine::with_compiler_stack(|| derive(&root)).unwrap();
+        let value = hirsel_engine::with_compiler_stack(|| {
+            derive_shard_with(&root, None, None, |path| Ok(observation::observe(path)))
+        })
+        .unwrap();
         assert!(
             value["programs"]
                 .as_array()
@@ -768,10 +759,11 @@ mod tests {
         let shards: Vec<_> = (1..=2)
             .map(|index| {
                 hirsel_engine::with_compiler_stack(|| {
-                    derive_shard(
+                    derive_shard_with(
                         &root,
                         Some(crate::Shard { index, count: 2 }),
                         Some(value["inventory"].clone()),
+                        |path| Ok(observation::observe(path)),
                     )
                 })
                 .unwrap()

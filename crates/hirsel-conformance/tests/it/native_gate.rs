@@ -798,3 +798,77 @@ fn stdout_oracles_reject_wrong_native_answers_and_keep_unmarked_references() {
         );
     });
 }
+
+#[test]
+fn feature_collection_releases_each_cases_process_and_retains_check_errors() {
+    let root = std::env::temp_dir().join(format!(
+        "native-observation-processes-{}",
+        std::process::id()
+    ));
+    for directory in [
+        "conformance/LANG",
+        "docs/spec",
+        "native-tests/regressions",
+        "native-tests/topology",
+    ] {
+        std::fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    let corpus = "conformance/LANG/LANG-7-witness.hir";
+    let fixture = "native-tests/regressions/exact.hir";
+    let broken = "native-tests/regressions/broken.hir";
+    let source = "// rule: LANG-7\n// expect: run\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] { Ok(()) }\n";
+    for path in [corpus, fixture] {
+        std::fs::write(root.join(path), source).unwrap();
+    }
+    std::fs::write(root.join(broken), "pub fn main( ???").unwrap();
+    std::fs::write(root.join("conformance/passing.txt"), format!("{corpus}\n")).unwrap();
+    std::fs::write(root.join("docs/spec/language.md"), "### LANG-7: Types\n").unwrap();
+    for path in [
+        "native-tests/regressions/history.tsv",
+        "native-tests/regressions/exclusions.tsv",
+        "native-tests/regressions/smoke.txt",
+        "native-tests/regressions/memcheck.txt",
+        "native-tests/topology/cases.txt",
+    ] {
+        std::fs::write(root.join(path), "").unwrap();
+    }
+    let output = root.join("selection.json");
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_native-select"))
+        .arg("--root")
+        .arg(&root)
+        .arg("--derive")
+        .arg(&output)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "{stderr}");
+    let pids: std::collections::BTreeSet<_> = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("native observation "))
+        .map(|row| row.split_whitespace().next().unwrap())
+        .collect();
+    assert_eq!(pids.len(), 3, "{stderr}");
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+    let programs = value["programs"].as_array().unwrap();
+    assert_eq!(programs.len(), 3);
+    assert!(
+        programs
+            .iter()
+            .filter(|p| p["path"] != broken)
+            .all(|p| p["errors"].as_array().unwrap().is_empty())
+    );
+    assert!(
+        !programs.iter().find(|p| p["path"] == broken).unwrap()["errors"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        value["selected"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == broken)
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

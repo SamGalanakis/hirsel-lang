@@ -181,7 +181,8 @@ def native_full():
     contributes what its output holds."""
     targets = [f'//:gate-agree-native-full-shard-{index}' for index in range(1, AGREE_NATIVE_FULL_SHARDS + 1)]
     with event_logs.recorded('agree') as event_log:
-        status = subprocess.call([str(BUCK2), 'test', *CONFIG, '--event-log', str(event_log), *targets,
+        status = subprocess.call([str(BUCK2), 'test', *CONFIG, '-c', 'hirsel.native_selection=true',
+                                  '--event-log', str(event_log), *targets,
                                   '--', '--timeout', str(AGREE_NATIVE_FULL_TIMEOUT)], cwd=ROOT)
         outputs = shard_outputs(event_log) if event_log.exists() else {}
     merged, errors = merge_native(outputs, AGREE_NATIVE_FULL_SHARDS, known_kinds(KNOWN.read_text()))

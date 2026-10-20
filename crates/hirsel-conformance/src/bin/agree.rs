@@ -8,6 +8,10 @@ use hirsel_cli_args::{
 use std::{path::PathBuf, process::ExitCode};
 const KNOWN: &str = "native-tests/regressions/agree-known.txt";
 fn main() -> ExitCode {
+    if let Some(status) = hirsel_conformance::native::diet::observation_worker() {
+        return status;
+    }
+
     hirsel_engine::with_compiler_stack(main_on_compiler_thread)
 }
 fn main_on_compiler_thread() -> ExitCode {

@@ -185,6 +185,23 @@ class NativePoolRouting(unittest.TestCase):
             self.assertEqual(stages[f'gate-native-full-shard-{index}']['native_selection'],
                              '//:native-selection')
 
+    def test_global_cover_is_opt_in_before_test_runner_filters_arrive(self):
+        source = (sync.ROOT / 'tools/buck2/defs.bzl').read_text()
+        code = source[source.index('def hirsel_command_test('):source.index('def _script_binary_impl(')]
+        for settings, expected in [({}, None), ({'native_selection': 'true'}, '//:native-selection'),
+                                    ({'native_selection_file': 'frozen.json'}, '//:native-selection')]:
+            calls = []
+            scope = dict(FULL_GATE=True, TESTS_ON_HOST=False, TEST_SEED='',
+                         read_root_config=lambda section, key, default: settings.get(key, default),
+                         native_tool_inputs=lambda: {}, _test_platform=lambda name: [],
+                         _request=lambda name: [], _stage=lambda name: name,
+                         _rust_test=lambda **kwargs: calls.append(kwargs))
+            exec(code, scope)
+            for name in ['gate-native-full-shard-1', 'gate-agree-native-full-shard-1']:
+                scope['hirsel_command_test'](name, '//:binary', ['--full'], [], '.',
+                                             full=True, native_selection='//:native-selection')
+                self.assertEqual(calls[-1]['native_selection'], expected)
+
     def test_generated_tests_have_no_host_partition(self):
         buck = (sync.ROOT / 'BUCK').read_text()
         self.assertNotIn('host_cases =', buck)

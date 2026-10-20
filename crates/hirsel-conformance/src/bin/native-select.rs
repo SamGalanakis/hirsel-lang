@@ -94,6 +94,10 @@ fn run() -> Result<(), String> {
 }
 
 fn main() -> std::process::ExitCode {
+    if let Some(status) = hirsel_conformance::native::diet::observation_worker() {
+        return status;
+    }
+
     hirsel_engine::with_compiler_stack(|| match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {

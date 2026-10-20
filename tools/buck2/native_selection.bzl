@@ -26,6 +26,7 @@ def _impl(ctx):
         env = {"LD_LIBRARY_PATH": cmd_args(llvm.project("lib"))}, category = "native_inventory",
     )
     observations = []
+    parts = {"inventory": [DefaultInfo(default_output = inventory)]}
     precheck = ctx.attrs.precheck[DefaultInfo].default_outputs[0]
     for index in range(1, OBSERVATION_SHARDS + 1):
         part = ctx.actions.declare_output("observations-{}.json".format(index))
@@ -35,11 +36,12 @@ def _impl(ctx):
             category = "native_observation", identifier = str(index),
         )
         observations.append(part)
+        parts["observations-{}".format(index)] = [DefaultInfo(default_output = part)]
     merge = cmd_args(ctx.attrs.collector[RunInfo], "--root", tree, "--derive", output.as_output(), hidden = [llvm])
     for observation in observations:
         merge.add("--merge", observation)
     ctx.actions.run(merge, env = {"LD_LIBRARY_PATH": cmd_args(llvm.project("lib"))}, category = "native_selection")
-    return [DefaultInfo(default_output = output)]
+    return [DefaultInfo(default_output = output, sub_targets = parts)]
 
 _selection = rule(
     impl = _impl,

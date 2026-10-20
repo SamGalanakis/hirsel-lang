@@ -399,6 +399,11 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
     """
     if full and not FULL_GATE:
         return
+    # Test-runner --filter/--case arguments arrive after graph construction.
+    # Whole campaign wrappers explicitly opt into the cached global cover;
+    # direct filtered shard invocations must have no eager collection dep.
+    if read_root_config("hirsel", "native_selection", "false") not in ["true", "derive"] and not read_root_config("hirsel", "native_selection_file", ""):
+        native_selection = None
     if selected:
         # A slice of the lane's chosen programs; the setting is part of the
         # test command and therefore its cache key. No slice, no target.

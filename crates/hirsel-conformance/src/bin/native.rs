@@ -28,6 +28,10 @@ const USAGE: &str = "usage: native --std-compile [--filter MODULE] [--shard I/N]
 
 
 fn main() -> ExitCode {
+    if let Some(status) = hirsel_conformance::native::diet::observation_worker() {
+        return status;
+    }
+
     let started = std::time::Instant::now();
     let result = hirsel_engine::with_compiler_stack(run);
     isolate::report(started.elapsed(), matches!(result, Ok(true)));
