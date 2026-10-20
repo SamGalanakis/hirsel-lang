@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Instruction-budget boundaries, attribution and static target selection."""
+"""Instruction-budget boundaries, attribution and blessing."""
 import contextlib
 import io
 import json
@@ -13,12 +13,9 @@ from unittest.mock import patch, Mock
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools/buck2'))
-import graph
-import impact
-import gating
+import event_logs
 
 COUNTS = runpy.run_path(str(ROOT / 'tools/perf-counts'))
-MAIN_RUNS = runpy.run_path(str(ROOT / 'tools/main-runs'))
 
 
 def row(count, **functions):
@@ -50,15 +47,6 @@ class PerfCounts(unittest.TestCase):
             with self.subTest(measured=measured), self.assertRaises(ValueError):
                 COUNTS['ratchet']({'a': row(100)}, [measured])
 
-    def test_only_a_passing_complete_main_run_result_supplies_a_measurement(self):
-        measured = {'a': row(100)}
-        marker = COUNTS['MARKER'] + json.dumps(measured)
-        for status, details, expected in (('pass', marker, measured),
-                                          ('fail', marker, None),
-                                          ('pass', '', None),
-                                          ('pass', marker + '\n' + marker, None)):
-            self.assertEqual(MAIN_RUNS['perf_measurement'](status, details), expected)
-
     def test_improved_case_passes_with_note_and_complete_landing_measurement(self):
         main = COUNTS['main']
         output = io.StringIO()
@@ -69,7 +57,6 @@ class PerfCounts(unittest.TestCase):
                 contextlib.redirect_stdout(output):
             self.assertEqual(main(), 0)
         self.assertIn('improvement a: 100 -> 80 Ir; pass', output.getvalue())
-        self.assertEqual(MAIN_RUNS['perf_measurement']('pass', output.getvalue()), {'a': row(80)})
 
     def test_regression_fails_without_a_landing_measurement(self):
         main = COUNTS['main']
@@ -191,66 +178,28 @@ class PerfCounts(unittest.TestCase):
                     patch.dict(cases.__globals__, build_program=Mock(), run=Mock()):
                 self.assertEqual(list(cases('/bin/hirsel', root, {}, 'micro/missing')), [])
 
-    def test_native_and_std_changes_select_counts_but_docs_do_not(self):
-        for path in ('crates/hirsel-llvm/src/lib.rs', 'crates/hirsel-rt/src/alloc.rs',
-                     'crates/hirsel-rc/src/lib.rs', 'crates/hirsel-lir/src/lib.rs',
-                     'stdlib/std@1/list.hir', 'bench/native/programs/wordfreq.hir',
-                     'bench/micro/manifest.json'):
-            self.assertTrue(impact.perf_counts([path]), path)
-        self.assertFalse(impact.perf_counts(['docs/building.md', 'tools/gate']))
-
-    def test_selection_suggests_target_for_native_source(self):
-        import gating
-        # Exercise the actual Selection path, without a daemon or a real diff.
-        selection = object.__new__(gating.Selection)
-        selection.paths = ['crates/hirsel-llvm/src/lib.rs']
-        selection.root = ROOT
-        selection.classified = impact.classify(selection.paths, {'hirsel-llvm'}, (ROOT / 'BUCK').read_text())
-        selection.graph = graph.Graph((ROOT / 'BUCK').read_text())
-        with patch.object(selection, 'ratchet', return_value=set()), \
-                patch.object(selection, 'std_dependents', return_value=[]):
-            self.assertIn(impact.PERF_COUNTS, selection.suggest().tests)
-
-    def test_per_push_script_target_is_selectable_with_its_inputs_and_dependencies(self):
-        targets = graph.Graph((ROOT / 'BUCK').read_text())
-        self.assertIn('gate-perf-counts', targets.all_tests())
-        self.assertIn('gate-perf-counts', targets.owners(['tools/perf-counts.tsv']))
-        self.assertIn('gate-perf-counts', targets.rdeps({'hirsel-cli-bin-hirsel'}))
-        self.assertNotIn('gate-native-runtime-c', targets.all_tests())
-
 
 class BlessCounts(unittest.TestCase):
     def test_pool_record_rewrites_table_and_failed_or_missing_records_leave_it_alone(self):
-        gate = runpy.run_path(str(ROOT / 'tools/gate'))
-        bless = gate['bless_perf_counts']
-        import gating
+        bless = COUNTS['bless']
+        rows = {'native/example': row(100, work=100)}
+        marker = COUNTS['MARKER'] + json.dumps(rows)
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / 'tools').mkdir()
-            (root / 'tools/perf-counts').write_text((ROOT / 'tools/perf-counts').read_text())
-            baseline = root / 'tools/perf-counts.tsv'
-            rows = {'native/example': row(100, work=100)}
-            marker = COUNTS['MARKER'] + json.dumps(rows)
-            original_cwd = Path.cwd()
-            try:
-                for status, details, success in [(gating.PASS, marker, True),
-                                                  (gating.FAIL, marker, False),
-                                                  (gating.PASS, '', False),
-                                                  (gating.PASS, marker + '\n' + marker, False)]:
-                    with self.subTest(status=status, details=details):
-                        baseline.write_text('original')
-                        with patch.dict(bless.__globals__, ROOT=root), \
-                                patch.object(gating, 'run', return_value=Mock(returncode=0)), \
-                                patch.object(gating, 'buck2', return_value=Mock(returncode=0)) as buck2, \
-                                patch.object(gating, 'test_results', return_value={
-                                    'gate-perf-counts': {'status': status, 'details': details}}), \
-                                patch('subprocess.run'), contextlib.redirect_stdout(io.StringIO()):
-                            self.assertEqual(bless(), 0 if success else 1)
-                            self.assertIn('--test-arg=--record', buck2.call_args.args)
-                        self.assertEqual(baseline.read_text(), COUNTS['table'](rows) if success else 'original')
-            finally:
-                import os
-                os.chdir(original_cwd)
+            baseline = Path(directory) / 'perf-counts.tsv'
+            for status, details, success in [(event_logs.PASS, marker, True),
+                                              (event_logs.FAIL, marker, False),
+                                              (event_logs.PASS, '', False),
+                                              (event_logs.PASS, marker + '\n' + marker, False)]:
+                with self.subTest(status=status, details=details):
+                    baseline.write_text('original')
+                    with patch.dict(bless.__globals__, BASELINE=baseline), \
+                            patch('subprocess.run') as run, patch('pathlib.Path.exists', return_value=True), \
+                            patch.object(event_logs, 'test_results', return_value={
+                                'gate-perf-counts': {'status': status, 'details': details}}), \
+                            contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(bless(), 0 if success else 1)
+                    self.assertIn('--test-arg=--record', run.call_args.args[0])
+                    self.assertEqual(baseline.read_text(), COUNTS['table'](rows) if success else 'original')
 
 
 if __name__ == '__main__':

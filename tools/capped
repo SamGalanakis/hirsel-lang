@@ -17,7 +17,7 @@ Runs share numbered slots: MemAvailable / MemoryMax at startup, clamped to
 for timeouts over 900 s. Queued runs report holders and their wait. At exit it prints the
 scope's peak memory, wall time and exit status to stderr. A run that reaches
 the cap or the timeout is a finding: report the program and its peak, never
-raise the cap to make it pass. Many-program runs go through tools/gate.
+raise the cap to make it pass. Many-program runs go through Buck2 test targets.
 """
 
 import argparse

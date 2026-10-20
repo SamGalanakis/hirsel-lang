@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the agreement shards of `tools/gate --full`; refuse missing/duplicate shards and sum reports.
+"""Run the agreement shards of the full suite (tools/main-runs); refuse missing/duplicate shards and sum reports.
 
     agree.py --full          the unrestricted seed-1 campaign over AGREE_FULL_SHARDS
                              shards, each under its own AGREE_FULL_TIMEOUT

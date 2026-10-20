@@ -14,7 +14,7 @@ No lane commits a generated file, so no rebase can conflict on one
   root and `third-party/` `BUCK`, `third-party/Cargo.{toml,lock}` and `lib.rs`,
   `exec_sizes.bzl`, `test_sizes.bzl`, `workspace-metadata.json` and
   `tools/native-toolchain/pins.bzl`. `bootstrap.py` (so `prepare.py`),
-  `tools/gate`, `tools/land`, `tools/bless.sh`, `tools/native-plants.py` and
+  `tools/land`, `tools/main-runs`, `tools/bless.sh`, `tools/native-plants.py` and
   the runtime benchmark harness run
   `sync.py --if-stale`, which regenerates them only when the tree changed since
   the last generation (a stamp in `.buck2/` of HEAD's tree and every path `git
@@ -24,9 +24,9 @@ No lane commits a generated file, so no rebase can conflict on one
   `.buckconfig`), which fails saying to run `sync.py`. The files are
   byte-identical to the committed ones they replace, so every action key, and
   so remote execution and its cache, is unchanged.
-- **`docs/api.md` is committed, and only `tools/land` writes it**: it
-  regenerates the page with the built CLI on the batch's tip and amends it into
-  the batch's last commit. `tools/gate` and `tools/land` refuse a change that
+- **`docs/api.md` is committed, and only main's hourly run writes it**:
+  `tools/main-runs` regenerates the page with the built CLI after each run and
+  pushes a change straight to main. `tools/land` refuses a change that
   touches it (or force-adds a build input) and print the commands that drop
   it. Its drift tests run in the
   full suite (`FULL_GATE_SKIPS` in `sync.py`), on main.
@@ -107,7 +107,7 @@ are relative to that commit:
   after a daemon restart begins inactive (`deferred/artifact_tree.rs`).
   `MaterializerSender::send` cancels a cleaning
   scan before processing new materializer work (`deferred.rs`).
-- `tools/gate`, `tools/land`, `gating.py`, and `prepare.py` do not override these
+- `tools/land`, `tools/main-runs` and `prepare.py` do not override these
   keys. `--materializations none` controls requested final outputs, not the
   deferred-write prerequisite. The host remote-config hook writes only
   `[buck2_re_client]` and `[hirsel]`, leaving this `[buck2]` policy intact.
@@ -155,21 +155,19 @@ export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 .buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
 .buck2/bin/buck2 test //:hirsel-pipeline-tests-test-rc-shard-2  # one shard of a sharded test binary
 .buck2/bin/buck2 test -c hirsel.tests=host //:hirsel-pipeline-tests-test-rc-shard-1   # run tests on this host
-.buck2/bin/buck2 test //:gate-native-smoke          # the native smoke (tools/gate --tests native-smoke)
+.buck2/bin/buck2 test //:gate-native-smoke          # the native smoke
 .buck2/bin/buck2 test //:gate-link-hosts            # native-tests/link built here and on a pool worker, byte-compared
 python3 tools/buck2/conformance.py                # the whole conformance campaign's shards (full suite only)
 python3 tools/buck2/agree.py --native-full        # the native campaign's shards, merged against agree-known.txt (full suite only)
 .buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-conformance-bin-native
 python3 tools/buck2/sync.py --if-stale            # the generated build files, after any edit or rebase
-tools/gate --suggest                                 # what a change can affect
-tools/gate                                           # run those tests once (then tools/land)
+tools/land                                           # rebase, build, Clippy, fmt, push
 ```
 
-`tools/land` rebuilds after its rebase, then runs the built `hirsel doc stdlib/std@1/hirsel.json`
-and amends a changed `docs/api.md` into the batch's last commit. Push retries
-regenerate after the next rebase. Lane runs keep the
+After each run, `tools/main-runs` runs the built `hirsel doc stdlib/std@1/hirsel.json`
+and pushes a changed `docs/api.md` straight to main. Lane runs keep the
 index's export-count test; its drift tests, which compare the committed page,
-run in the full gate.
+run in the full suite.
 
 Builds use Buck2's default isolation dir, `v2`: never pass
 `--isolation-dir` (or pass only `--isolation-dir v2`) and leave
@@ -239,22 +237,22 @@ Target names follow Cargo's targets, all in the root package:
 | example `<ex>` | `//:hirsel-x-example-<ex>` |
 | build script | `//:hirsel-x-build-script` |
 | a sharded test binary (`SHARDED` in `sync.py`) | `//:hirsel-x-test-it-shard-<i>` |
-| a corpus campaign of `tools/gate` | `//:gate-<stage>` (label `gate`) |
+| a corpus campaign | `//:gate-<stage>` (label `gate`) |
 | a conformance shard (`CONFORMANCE_SHARDS`) | `//:gate-conformance-shard-<i>` |
-| a slice of the corpus cases a gate chose (`-c hirsel.conformance_paths`, up to `SELECTED_SLICES`) | `//:gate-conformance-selected-shard-<i>` |
+| a slice of the corpus cases a lane chose (`-c hirsel.conformance_paths`, up to `SELECTED_SLICES`) | `//:gate-conformance-selected-shard-<i>` |
 | a slice of the chosen cases' variants in the seed-1 sample (`-c hirsel.agree_paths`) | `//:gate-agree-selected-shard-<i>` |
-| a budgeted full agreement shard (`AGREE_FULL_SHARDS`, `--full` only) | `//:gate-agree-full-shard-<i>` |
-| a budgeted native agreement shard (`AGREE_NATIVE_FULL_SHARDS`, `--full` only; `agree.py --native-full` runs and merges them) | `//:gate-agree-native-full-shard-<i>` |
-| a full native matrix shard (`NATIVE_FULL_SHARDS`, `--full` only; `gate-native-full` stays whole for `--bless` and filtered runs) | `//:gate-native-full-shard-<i>` |
+| a budgeted full agreement shard (`AGREE_FULL_SHARDS`, full suite only) | `//:gate-agree-full-shard-<i>` |
+| a budgeted native agreement shard (`AGREE_NATIVE_FULL_SHARDS`, full suite only; `agree.py --native-full` runs and merges them) | `//:gate-agree-native-full-shard-<i>` |
+| a full native matrix shard (`NATIVE_FULL_SHARDS`, full suite only; `gate-native-full` stays whole for `--bless` and filtered runs) | `//:gate-native-full-shard-<i>` |
 | a historical native replay shard (`HISTORY_SHARDS`; `tools/native-plants.py --history-only` runs them) | `//:gate-native-history-shard-<i>` |
 
 ## Instruction budgets
 
-`tools/gate --tests gate-perf-counts` checks the
+`.buck2/bin/buck2 test //:gate-perf-counts` checks the
 17 small native benchmarks and all eight `bench/micro/programs/*.hir` at
 N=1000 (one epoch) on the pool. The complete 25-case measurement, including
 builds and annotation, reserved 125.37 seconds on one pool CPU (2.09
-pool-minutes) and used 119.46 CPU-seconds. `impact.py` suggests it for changes
+pool-minutes) and used 119.46 CPU-seconds. Run it for changes
 to LLVM, RC, LIR, the runtime,
 stdlib and benchmark programs. Valgrind, its loader/libc, LLVM and the runtime
 archives are pinned inputs. Native builds use LLVM O3, one epoch of each
@@ -266,12 +264,11 @@ checks use the production release compiler and the pinned std precheck,
 with one compiler worker. Cache simulation is disabled: only `Ir` is counted,
 so host cache geometry and wall time cannot change the verdict.
 
-`tools/gate --bless-perf-counts` measures on the pool and regenerates
+`tools/perf-counts --bless` measures on the pool and regenerates
 [`tools/perf-counts.tsv`](../perf-counts.tsv) on the host. Review and commit
 that diff. An increase beyond 1% fails; exactly 1% passes. A decrease passes
 and prints `perf-counts: improvement`; main's hourly run (`tools/main-runs`)
-writes the lower counts it measures into the table with a direct push, and a
-drop of more than 15% prints `PERF-CHECK` for the orchestrator.
+writes the lower counts it measures into the table with a direct push.
 The table retains the top 50 `cg_annotate` function counts per case, without
 worker source paths. Failures print the largest 20 function deltas against
 those saved counts. Missing and removed cases fail too.
@@ -327,11 +324,7 @@ the old copy.
   workspace), `third-party/Cargo.lock` (from the workspace lock, so no version
   moves), `third-party/BUCK` (Reindeer, configured by
   `third-party/reindeer.toml` and `third-party/fixups/`) and the root `BUCK`,
-  all gitignored (Generated files above). The tree's generated `BUCK` is
-  compared by target with its base's, which `gating.base_buck` generates
-  with the base's own `sync.py --root-buck` once per commit: a manifest or
-  lock change, or a source adding or dropping a literal `include*!` or
-  `#[path]` reference, selects the targets whose rule changed.
+  all gitignored (Generated files above).
 - Native and full-gate crate cases use the same pool execution path as ordinary
   tests. The runtime ABI symbol test reads the separately built production
   archive; the layering test reads `workspace-metadata.json`, generated from
@@ -340,7 +333,7 @@ the old copy.
 - A pool test's passing verdict is cached by its action key. Test binaries
   whose sources draw random cases (`proptest!`, `SEEDED` in `sync.py`) run
   under `PROPTEST_RNG_SEED` from `-c hirsel.test_seed` (default 1), which is in
-  that key: a cached pass covers its seed only. `tools/gate --full` draws a new
+  that key: a cached pass covers its seed only. `tools/main-runs` draws a new
   seed each run and prints it; `HIRSEL_TEST_SEED=<n>` reproduces one.
 - Features are Cargo's workspace-wide resolution (`cargo build --workspace
   --all-targets`): one feature set per crate, dev-dependency features included.
@@ -382,8 +375,8 @@ the old copy.
   inventory. `full_gate_counts.py --run <command...>` streams Buck2's log and
   checks every `(binary, case)` appears exactly once, rejecting missing,
   duplicate, failed or unexpected executions. Both full-gate crate stages in
-  `tools/gate --full` use it independently; `full_gate_counts.py <log>` checks a
-  saved log. Launcher and counter regressions run in the fast gate.
+  `tools/main-runs` use it independently; `full_gate_counts.py <log>` checks a
+  saved log.
 - On the pool an action's work directory is a bind mount of a subdirectory.
   The runtime refuses to record there, since it cannot establish the mount's
   source ancestry (`crates/hirsel-rt/src/host_paths.rs`), so the launcher puts
@@ -505,7 +498,7 @@ event logs' three-day rotation. The host selects the sink with
 `HIRSEL_TEST_HISTORY=/path/to/results.tsv`, or disables it with
 `HIRSEL_TEST_HISTORY=none`. The default file implementation locks concurrent
 appends and flushes on close; it does not fsync each row. Tests can inject a
-simulated sink into `gating.test_results`.
+simulated sink into `event_logs.test_results`.
 
 Cost-balanced binaries emit libtest's per-case `--report-time` output in normal
 gates, including when their current graph needs only one shard. The launcher
@@ -642,10 +635,10 @@ CPU-hours and GiB-hours per lane and target over the last N hours.
 
 It also sums execution wall seconds and CPU seconds per action category,
 excluding queue time. For rustc compile/link phases and target names, it joins
-the shared retained Buck2 event logs. `tools/gate` and `tools/land` retain their
+the shared retained Buck2 event logs. `tools/land` and `tools/main-runs` retain their
 compressed `.pb.zst` logs, including failed runs, under
 `$HIRSEL_BUCK2_LOG_DIR` (default `~/.cache/hirsel-buck2/event-logs`, shared across
-worktrees). The full gate's helpers use the same recorder. Rotation keeps at
+worktrees). The full suite's helpers use the same recorder. Rotation keeps at
 most three days and 4 GiB, oldest first; running writers and audit readers keep
 their files locked until finished, so active logs may temporarily exceed the
 size bound. A new run rotates completed logs after it finishes.
@@ -723,7 +716,7 @@ the global seed-1 catalogue limited to its lowest `AGREE_LIMIT` (5000) ranks
 shards, `agree.py` checks unique shard identities, matching catalogue
 metadata, sample coverage and classification/edit totals, and fails on any
 cluster or absent shard.
-`tools/gate --full` runs `agree.py --full`: a rotating sample of at most 96 variants per program over
+`tools/main-runs` runs `agree.py --full`: a rotating sample of at most 96 variants per program over
 `AGREE_FULL_SHARDS` (96) shards by the same stable rank, each under its own
 `AGREE_FULL_TIMEOUT` (1800 s), so a slow or non-terminating variant fails one
 named shard. The campaign has grown past what one 4-CPU action can finish

@@ -760,16 +760,16 @@ even with a shorter timeout, leaving the ordinary slots available to short jobs.
 Slots are released on exit or crash. At exit it prints the scope's peak memory,
 wall time and exit status. A run that reaches the cap or the timeout is a finding: report the program
 and its peak rather than raising the cap. Runs over many programs (a directory, a
-shard, a campaign) go through `tools/gate` or their Buck2 targets, which run on
-the pool within their measured reservations.
+shard, a campaign) go through their Buck2 targets, which run on the pool
+within their measured reservations.
 
 ## Buck2
 
-The gate builds and tests with Buck2. Cargo manifests and `Cargo.lock` stay
+Hirsel builds and tests with Buck2. Cargo manifests and `Cargo.lock` stay
 the source of truth: the BUCK files and the other build inputs
 `tools/buck2/sync.py` derives are gitignored, and no change commits them
-(`tools/buck2/README.md`, Generated files). `prepare.py`, `tools/gate`,
-`tools/land` and `tools/bless.sh` regenerate them when the tree changed; before
+(`tools/buck2/README.md`, Generated files). `prepare.py`, `tools/land`,
+`tools/main-runs` and `tools/bless.sh` regenerate them when the tree changed; before
 a bare `.buck2/bin/buck2` after an edit or a rebase, run
 `python3 tools/buck2/sync.py --if-stale`. The toolchains (Rust, the pinned LLVM, Buck2 and
 its prelude) come in hermetically; nothing is installed system-wide.
@@ -780,8 +780,6 @@ python3 tools/buck2/prepare.py                  # once per checkout
 .buck2/bin/buck2 test //:hirsel-lir-unittest //:hirsel-lir-test-it \
   //:hirsel-lir
 .buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
-tools/gate --suggest                            # what the finished change can affect
-tools/gate                                      # run those tests once
 tools/land                                      # land it on main
 ```
 
@@ -795,7 +793,8 @@ host; native tools remain pinned inputs in either mode. More target names and th
 ## Fast loop
 
 While iterating, run the one test that shows the change, by name, then the
-same test through the heaviest crate that reads it, and gate once at the end:
+same test through the heaviest crate that reads it, and run the tests the
+change can break once at the end:
 
 ```sh
 T='-c hirsel.tests=focus'
@@ -808,8 +807,8 @@ A crate's own tests are `//:hirsel-<crate>-unittest` and `-test-it`; source
 compiled through the driver is tested in `//:hirsel-pipeline-tests-test-front`
 and `-test-rc`. Focus books one CPU per test run, so it starts at once where a
 whole-shard request waits for a worker to free its CPUs (median edit-to-result
-38 s against 114 s over twelve paired edits). Leave `-c hirsel.full=true` and
-`tools/gate` for the finished change.
+38 s against 114 s over twelve paired edits). Leave `-c hirsel.full=true` to
+main's hourly run.
 
 Run one corpus program, including its expected outcome, checked execution and
 canonical formatter check, on the pool:
@@ -827,211 +826,88 @@ checks only matched files and their ratchet entries. Every match must meet its
 expected outcome, including new files absent from `passing.txt`; filtered runs
 cannot update that file.
 
-## Gates
+## Testing and landing
 
 Lanes run `.buck2/bin/buck2 kill` in their worktree when they finish and
-before any wait longer than a few minutes. Idle daemons retain substantial
-memory on the shared host. `tools/gate` and `tools/land` do this automatically
-on success, failure and interruption, for the normal and preparation isolation
-dirs, and land also stops the daemon before it joins the land queue; the next
-Buck2 command starts it again. `HIRSEL_KEEP_DAEMON=1` opts out for interactive
-use only; lanes leave it unset.
+before any wait longer than a few minutes: idle daemons retain substantial
+memory on the shared host.
 
-There is no per-push gate. A lane runs the tests its change can affect, land
-checks only what breaks everyone, and the full suite runs hourly on main.
-
-### Testing a change
-
-`tools/gate` is a helper that runs the tests a finished change can affect,
-once. It diffs the worktree against its merge base with `origin/main`:
+There is no lane gate. A lane runs the tests its change can break, once, with
+Buck2: the test targets of the crates it changed, its changed and added corpus
+cases with their twins (the same name up to the outcome word), and the
+importers of the std or package modules it changed. Chosen corpus cases,
+their agreement variants and native programs run through the selected
+targets (`;` separates slices, `|` the paths of one slice):
 
 ```sh
-tools/gate --suggest                     # the targeted set, read statically
-tools/gate                               # run it
-tools/gate --tests hirsel-driver-test-it-stdlib conformance:conformance/SEM/SEM-3-toml \
-  agreement:conformance/SEM/SEM-3-toml   # run exactly these
+.buck2/bin/buck2 test //:hirsel-lir-unittest //:hirsel-lir-test-it
+.buck2/bin/buck2 test -c hirsel.conformance_paths='<case>|<case>' //:gate-conformance-selected-shard-1
+.buck2/bin/buck2 test -c hirsel.agree_paths='<case>|<case>' //:gate-agree-selected-shard-1
+.buck2/bin/buck2 test -c hirsel.native_filters='<program>|<program>' //:gate-native-changed //:gate-native-cranelift-changed
 ```
 
-The targeted set (`tools/buck2/impact.py`):
-
-- documentation no build reads (`*.md`, `LICENSE`, `docs/`): its added links
-  resolve, links into deleted paths are gone, and no whitespace errors;
-- the gate's own tooling under `tools/`: its tests; the Lean model under
-  `proofs/` (and its vectors in `native-tests/model/`): its audit and vector
-  replay on this host; the TLA+ model under `proofs/ordered/`: its TLC runs
-  (`proofs/ordered/check.sh`) on this host; the free-mode models under `proofs/free/` (and
-  the `crates/hirsel-free` source they compile): `proofs/free/check.sh`;
-- a crate's library source: that crate's own test targets (unit, integration
-  in all shards, binary unit tests and doctests), not the tests of every crate
-  that depends on it, and its row of `CRATE_CAMPAIGNS`. For a compiler crate
-  (front end, checker, lowering, validator, interpreter, engine, driver) this
-  is the *smoke slice*: one corpus case per rule ID and expectation kind with
-  its agreement variants, the cheapest by step budget and size, read from the
-  corpus headers each time (`impact.smoke_slice`, about 5 CPU-minutes). For a
-  backend, runtime or LLVM crate it is the native smoke and the native
-  programs the change affects, on both backends;
-- a changed test file: the targets that read it;
-- every changed or added corpus case with its twins (the cases with the same
-  name up to its outcome word: `-ok`, `-bad`, `-run`, `-fail`, `-reject`,
-  `-accept`) and their agreement variants, and the cases a `passing.txt` edit
-  names;
-- a std module (`stdlib/std@1/`): the Buck2 tests that read std, and the
-  agreement variants of the corpus cases whose import closure includes it (a
-  std edit changes no checker or interpreter, only what the variants import).
-  A case reaches std only through its sidecar's dependency; core and std
-  share some module heads, and `list.push` names core where `list.sort` names
-  std (LANG-4); a package fixture under `packages/`: the cases whose packages
-  reach it, with their variants;
-- `hirsel-cli-test-examples` only when `crates/hirsel-cli`,
-  `crates/hirsel-driver` or `examples/` change;
-- data every case reads (the spec's rule table, a corpus list the runner
-  reads, native fixtures): the smoke slice;
-- a build-wide input (`Cargo.toml`, `.buckconfig`, `tools/buck2/`,
-  `third-party/`): every Buck2 test, the smoke slice and the native smoke.
-
-No lane runs a whole conformance or agreement campaign: `--tests conformance`
-and `--tests agreement` are refused, and those campaigns run hourly on main.
-Corpus cases with a `// runners:` header run only interpreted: native
-selection skips them, here and in the full suite.
-
-`--suggest` reads the changed paths, the root `BUCK` without Buck2
-(`tools/buck2/graph.py` expands the `defs.bzl` macros into targets, inputs and
-dependencies) and the corpus import graphs: it starts no daemon and builds
-nothing, so it takes seconds. A bare `tools/gate` runs the set in one Buck2
-invocation, with the host checks in parallel, and prints every target. Each
-failure names its failing cases and the command that reruns each alone (for
-agreement, `agree --seed 1 --limit 5000 --sample-path <case>`, the same
-variants of that case). Nothing is recorded, and main moving never calls for a
-rerun.
-
-`--tests` takes Buck2 test targets (`//:name` or `name`; a sharded binary's name
-runs every shard), `suggested` (the targeted set), `smoke` (the smoke slice),
-`native-smoke`, `conformance:<path>` (the corpus cases under a path),
-`agreement:<path>` (those cases' variants in the seed-1 sample: exactly the
-variants the whole campaign checks of them), `native:<program>` (the LLVM
-smoke matrix and Cranelift parity for one program; a file or a canonical generated
-ID such as `native:generated/success-0`) and `all-tests`. Chosen corpus cases
-run in slices (`gate-conformance-selected-shard-<i>`,
-`gate-agree-selected-shard-<i>`).
+Corpus cases with a `// runners:` header run only interpreted. Land checks
+only what breaks everyone, and the full suite runs hourly on main.
 
 ### Known failures
 
 Failures main is known to have are listed in `tools/known-failures.tsv` (one
 tab-separated row each: test id, reason, owner lane, date). An id is a test
 target, a binary and case (`hirsel-rt-test-it::replay::kill_order`) or a
-corpus case path. `tools/gate` reads origin/main's list, passes a target whose
-only failures are listed, and prints every exclusion with its row. A lane that
-meets a red it did not cause adds a row itself and pushes it straight to main;
-the hourly run adds one for each red it bisects to a landing. When a lane
-lands, land removes the rows on main that lane owns, in a generated-only
-commit (`Expire the known failures of <lane>.`).
+corpus case path. The hourly run reports no red the list explains. A lane
+that meets a red it did not cause adds a row itself and pushes it straight to
+main; the lane that fixes a red removes its row.
 
 ### Landing
 
-`tools/land` runs origin/main's copy of itself and of the gate's scripts on
-the lane's worktree (extracted once per commit into the common git directory),
-so every lane in the queue runs the same landing code and a lane's unlanded
-tooling edit cannot land itself. It refuses to run under an outer `timeout`,
-whose kill could stop it between its push and its record; run it in the
-background with a log. `tools/land --status` prints the lock's holder and how
-long it has held it, the waiters in order and this worktree's place.
+`tools/land` (in the background with a log, never under `timeout`) fetches,
+rebases the worktree's commits onto origin/main, regenerates the build files
+when stale (`sync.py --if-stale`), builds the workspace without the std
+precheck (a test that takes minutes), runs Clippy and checks formatting, all
+through Buck2 at pool priority 75, above the lanes' 50
+(`tools/buck2/platforms.bzl`), and pushes. A push rejected because main moved
+goes back to the rebase; a red check refuses the push and prints its first
+error; a conflict stops land with the conflicted paths. Land runs no tests.
+After its rebase it runs the rebased tree's own `tools/land`, so a landed fix
+to it holds at once. Each push appends a row (`landed`, `branch`, `base`,
+`at`) to `hirsel-landings.jsonl` in the clone's common git directory, from
+which the hourly run names a commit's lane.
 
-Land needs no receipt and runs no tests. It joins an exclusive FIFO queue
-with the worktree's committed change. The lock defaults to
-`/workspace/code/hirsel-briefs/locks/land`; `HIRSEL_LAND_LOCK_DIR` selects
-another shared directory (all lanes landing to the same main must agree).
-Its `count` file is seeded to 1 and re-read each poll; any other count refuses
-landing. A dead holder's kernel lock is released automatically, and waiter
-tickets carry process start times so PID reuse cannot strand the queue. Each
-waiter leaves its change (worktree, commit) in `requests/`.
-
-The lane at the head of the queue lands a batch: its own change and the
-changes queued behind it (up to 16, in queue order), in a batch worktree beside
-the lock (`batch-<clone>`, reused and prepared once). The batch runs
-origin/main's newest landing scripts, fetched when the batch starts, not the
-copy the leading lane started with, so a landed tooling fix holds from the
-next batch. It fetches, rebases each
-change onto the one before (regenerating the gitignored build files when
-stale), builds the workspace, runs Clippy and formatting once on the batch's
-tip, regenerates the API index into the batch's last commit and pushes once.
-Every Buck2 command of the batch runs with one configuration (`fmt.py`'s query
-included), so
-no command waits for another's daemon state, and at pool priority 75, above
-the lanes' 50 (`tools/buck2/platforms.bzl`): on 2026-10-20, at 50, a batch's
-compiles spent 85-94% of their remote time queued behind the gates' test runs.
-The build is the workspace build set without the std precheck and the
-toolchain bundle that holds it; the precheck runs the compiler over std, a
-test, and took 6-10 minutes of a batch's critical path. Each waiting land reads its result from `results/`, moves its
-branch to main as pushed, and prints and logs its landing. When the batch's
-tip is red, land repeats only what failed on it: the targets Buck2's build
-report names, the Clippy twins with errors and the failed local checks. A
-failure that does not repeat is a flake: land prints `land: FLAKE` with the
-failed targets and the batch, records them in the batch's row, and checks the
-tip again whole.
-Otherwise land bisects the batch's prefixes with those failed checks alone (a
-prefix that lacks a failed target, because a later change adds it, passes),
-tells the first change that turns them red (with the failing check's output),
-and checks the rest of the batch again, together, in the next round. A red
-batch thus costs a few builds of its failed targets and one more build of the
-workspace, where bisecting with whole-workspace builds cost one per step, a
-full rebuild each because every prefix is a new tree. An out-of-band push
-that moves main repeats the round under the same lock.
-
-No change commits a generated file, so no rebase conflicts on one: gate and
-land refuse a change that touches `docs/api.md` or a gitignored build file,
-with the commands that drop it. The files many lanes add to merge with
-`tools/buck2/merging.py`, the `hirsel` merge driver `.gitattributes` names, in
-a lane's own rebase and in land's alike: rows both sides append to
-`third-party/NOTICES.md` are both kept, package manifests (`hirsel.json`) merge
-their sources and dependencies structurally, and the sorted ratchet and
-expectation lists keep the entries either side adds and drop those either
-side removes. Any other conflict takes that change out of the batch: rebase it
-by hand and land again. Land appends each landed change with its batch to
-`hirsel-landings.jsonl` in the clone's common git directory; the hourly run
-bisects a red main over these rows. Each entry records `land_wait_seconds`
-(queued until landed or leading), `land_held_seconds` (leading),
-`batch_seconds`, `batch` and `batch_position`. Each batch appends one row to
-`hirsel-land-batches.jsonl` beside it: its members and their outcomes, its
-rounds, and each check's tip, seconds and verdict. `tools/land_stats.py`
-reports lands per hour, the waits, and batch time with what red batches spent
-after their first check.
-
-Land's index step runs the built `hirsel doc stdlib/std@1/hirsel.json` and amends a
-changed `docs/api.md` into the batch's last commit before pushing, with no
-separate commit; a push retry regenerates it after the next rebase. Lane runs
-keep the index's export-count test; the drift tests that compare the
-committed page run in the full suite, on main.
+No change commits a generated file, so no rebase conflicts on one: land
+refuses a change that touches `docs/api.md` or a gitignored build file, with
+the commands that drop it. The files many lanes add to merge with
+`tools/buck2/merging.py`, the `hirsel` merge driver `.gitattributes` names:
+rows both sides append to `third-party/NOTICES.md` are both kept, package
+manifests (`hirsel.json`) merge their sources and dependencies structurally,
+and the sorted ratchet and expectation lists keep the entries either side
+adds and drop those either side removes. Any other conflict is the lane's to
+resolve by hand.
 
 ### Main's hourly run
 
-`tools/main-runs` runs the full suite (`tools/gate --full`, below) on
-`origin/main` from a systemd user timer (`hirsel-main-runs.timer`, hourly,
-installed by `tools/main-runs --install`; it needs no session). Each tick
-fetches; when main has not moved since the last run, or a run is still going,
-it skips rather than queues. Otherwise it checks out the new main in its own
-worktree (`$HIRSEL_MAIN_RUNS/worktrees/main-runs`, by default under
-`~/.local/state/hirsel/main-runs`) and runs that commit's copy of itself at
-pool priority 40, below the lanes' 50. Each run appends a row to
-`hirsel-main-runs.jsonl` in the clone's common git directory: the commit, every
-target's result, the pool CPU-hours (from the scheduler's trace, by the
-runner's lane identity) and the duration.
+`tools/main-runs --tick` runs from a systemd user timer
+(`hirsel-main-runs.timer`, hourly; it needs no session), whose service runs
+the copy in the runner's worktree (`$HIRSEL_MAIN_RUNS/worktrees/main-runs`, by
+default under `~/.local/state/hirsel/main-runs`). A tick skips while a run is
+going or when main has not moved since the last run; otherwise it checks out
+origin/main there and runs that commit's copy, so a fix to the runner holds
+from the next run. The run executes the full suite at pool priority 40: every
+test, the whole conformance campaign, the unrestricted source/IR and native
+agreement campaigns, release tests, the `full_gate_` tests in debug and
+release, the native matrix and every `tools/check-native.sh` check, except
+the stages `tools/main-runs-skip.tsv` (stage, reason, owner lane, date) names.
 
-For each new red, it bisects the landings since main last passed
-(`hirsel-landings.jsonl`) with only the failing targets, in a second worktree
-(`main-bisect`), adds a known-failure row owned by the culprit's lane straight
-to main, and sends the repro (`sluice tool say`, as `@main-runs`) to that lane
-if its step still runs, otherwise to the orchestrator. A red with no earlier
-pass, or no landing to blame, goes to the orchestrator, as does a red that
-survives a second run. When `gate-perf-counts` passes, the instruction counts
-it measured lower than `tools/perf-counts.tsv` beyond the 1% noise are written
-into the table and pushed straight to main; a drop of more than 15% prints
-`PERF-CHECK` and goes to the orchestrator. `tools/main-runs --status` prints
-the last run, the current reds with their owners and culprits, and the skipped
-stages.
-
-`tools/main-runs-skip.tsv` (stage, reason, owner lane, date) names the full
-suite's stages that do not run, with the lane that owns re-enabling them;
-every `--full` honours it, and removing a row re-enables its stage.
+Each run writes one report (`$HIRSEL_MAIN_RUNS/reports/<time>-<sha>.md`, the
+newest copied to `latest.md`): every red the known failures do not explain,
+with its likely culprit (of the commits since the previous run, the one that
+changed the most files under the red's crate or among its failing corpus
+cases) and that commit's lane from the landings log. Each new red goes to its
+lane with `sluice tool say` (as `@main-runs`), or to the orchestrator when no
+lane is known. After the run it regenerates `docs/api.md` with the built CLI
+and ratchets `tools/perf-counts.tsv` down to what `gate-perf-counts` measured
+beyond the 1% noise, pushing each change straight to main.
+`tools/perf-counts --bless` measures on the pool and rewrites the table: the
+reviewed step after an intended change of counts.
 
 Changes to native code also run the filtered native matrix for the programs
 they add or touch on the pool. Focus runs book one CPU at lane priority:
@@ -1043,9 +919,8 @@ they add or touch on the pool. Focus runs book one CPU at lane priority:
 A change to LLVM emission must carry the matching Cranelift change.
 
 For changes to `crates/hirsel-llvm`, `hirsel-cranelift`, `hirsel-lir`, `hirsel-rc`
-or the runtime, `tools/gate --suggest` proposes the same changed-program filters
-through the LLVM native smoke matrix and Cranelift parity (`native:<program>`). With no changed runnable fixtures,
-both use the bounded native smoke list.
+or the runtime, run the programs they affect through the LLVM native smoke
+matrix and Cranelift parity (`-c hirsel.native_filters`, above).
 
 Changes to `crates/hirsel-cranelift` also run the Cranelift parity gate for the
 programs they touch: each case LLVM passes (unoptimized, diagnostic archive) must
@@ -1071,18 +946,11 @@ Tests that execute the full native matrix or take about a minute or longer
 carry `#[ignore = "full gate"]` and a `full_gate_` name prefix. Keep their
 inputs and assertions intact; add a separate bounded smoke test when useful.
 Cases that call `full_matrix` only for discovery, and the drift tests of
-`docs/api.md` (current on main alone, since only `tools/land` writes it), are
+`docs/api.md` (current on main alone, since only the hourly run writes it), are
 skipped by name outside the full suite (`FULL_GATE_SKIPS` in
 `tools/buck2/sync.py`).
 
-`tools/gate --full` is the full suite, which main's hourly run runs (a lane
-runs it only when its brief says so): every test, the whole conformance
-campaign, the unrestricted source/IR and native agreement campaigns, release
-tests, the `full_gate_` tests in both debug and release, the derived native
-program and pairwise configuration covers and every `tools/check-native.sh`
-runtime, sanitizer, toolchain, Lean and TLA+ check, except the stages
-`tools/main-runs-skip.tsv` names. It and `tools/check-native.sh` run every
-stage even after one fails and fail at the end. `tools/main-stall-alarm`
+`tools/main-stall-alarm`
 appends to `alarms.log` in `$HIRSEL_MAIN_RUNS` when main gets no commit for
 40 minutes while lane worktrees are moving; run it from whatever loop watches
 the lanes.

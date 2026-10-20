@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Deterministic Cachegrind instruction budgets (run by //:gate-perf-counts)."""
+"""Deterministic Cachegrind instruction budgets (run by //:gate-perf-counts).
+
+`tools/perf-counts --bless`, on the host, measures on the pool and rewrites
+tools/perf-counts.tsv: the reviewed step after an intended change of counts.
+"""
 import argparse
 import difflib
 import json
@@ -225,11 +229,33 @@ pub fn main(rt: Io) -> Result[(), ()] {{
         yield 'native/' + case['id'], [binary, '--hirsel-grants', grants], case['checksum'].encode() + b'\n'
 
 
+def bless():
+    """Measure on the pool and rewrite the baseline from its one passing record."""
+    import sys
+    sys.path.insert(0, str(ROOT / 'tools/buck2'))
+    import event_logs
+    with tempfile.TemporaryDirectory(prefix='hirsel-perf-bless-') as directory:
+        log = Path(directory) / 'events.pb.zst'
+        subprocess.run([str(ROOT / '.buck2/bin/buck2'), 'test', '--event-log', str(log), '//:gate-perf-counts',
+                        '--', '--test-arg=--record'], cwd=ROOT)
+        result = event_logs.test_results(log).get('gate-perf-counts', {}) if log.exists() else {}
+    records = [line.removeprefix(MARKER) for line in result.get('details', '').splitlines() if line.startswith(MARKER)]
+    if result.get('status') != event_logs.PASS or len(records) != 1:
+        print('perf-counts: no passing pool measurement; tools/perf-counts.tsv unchanged')
+        return 1
+    BASELINE.write_text(table(json.loads(records[0])))
+    print('perf-counts: rewrote tools/perf-counts.tsv; review its diff before committing')
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--record', action='store_true', help='emit measurements for tools/gate --bless-perf-counts; writes no inputs')
+    parser.add_argument('--bless', action='store_true', help='on the host: measure on the pool and rewrite the baseline')
+    parser.add_argument('--record', action='store_true', help='emit measurements for --bless; writes no inputs')
     parser.add_argument('--filter', help='one case substring, for diagnosis (never a passing gate)')
     args = parser.parse_args()
+    if args.bless:
+        return bless()
     env = {key: value for key, value in os.environ.items() if key in (
         'PATH', 'LLVM_SYS_211_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_PRECHECK', 'HIRSEL_MEMORY_LIMIT',
         'HIRSEL_VALGRIND', 'VALGRIND_LIB', 'HIRSEL_VALGRIND_RUNTIME', 'HIRSEL_LINK_KIT', 'HIRSEL_GLIBC_FLOOR', 'LD_LIBRARY_PATH')}

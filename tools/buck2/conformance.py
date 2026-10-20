@@ -23,7 +23,7 @@ import event_logs
 
 ROOT = Path(__file__).resolve().parents[2]
 BUCK2 = ROOT / '.buck2/bin/buck2'
-# The configuration `tools/gate --full` runs Buck2 with, so the daemon keeps one state.
+# The configuration tools/main-runs runs Buck2 with, so the daemon keeps one state.
 CONFIG = os.environ.get('HIRSEL_BUCK2_CONFIG', '').split()
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sync import CONFORMANCE_SHARDS  # noqa: E402

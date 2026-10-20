@@ -2,7 +2,7 @@
 //! observation, and the native program, linked with a generated C table and the runtime,
 //! must print exactly those observations on every target and leave no block live. Native
 //! runs need the pinned toolchain, so `tools/check-native.sh` runs them (`--include-ignored`);
-//! `tools/gate` runs emission and the heap checker's audit.
+//! the plain test run covers emission and the heap checker's audit.
 
 use crate::support;
 

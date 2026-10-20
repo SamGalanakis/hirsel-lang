@@ -13,7 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 BUCK2 = ROOT / '.buck2/bin/buck2'
-# The configuration `tools/gate --full` runs Buck2 with, so the daemon keeps one state.
+# The configuration tools/land and tools/main-runs run Buck2 with, so the daemon keeps one state.
 CONFIG = os.environ.get('HIRSEL_BUCK2_CONFIG', '').split()
 RUSTFMT = ROOT / 'tools/buck2/toolchains/rust-files/bin/rustfmt'
 

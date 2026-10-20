@@ -20,7 +20,7 @@ The native differential gate's checked-in state.
   campaign finds in valid variants of supported programs. A new kind fails the
   gate, and so does a listed kind that no longer occurs in a complete run of
   every shard (`tools/buck2/agree.py --native-full`).
-- `smoke.txt`: the cases `tools/gate --tests native-smoke` runs (heap executor with
+- `smoke.txt`: the cases `//:gate-native-smoke` runs (heap executor with
   fault injection and an optimized x86-64 executable on the diagnostic and on
   the shipped runtime archive), with eight generated successes and eight
   directed failures.

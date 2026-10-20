@@ -14,7 +14,7 @@ arenas are numbered differently.
   copies it elsewhere, replays it in a fresh and in a warmed engine, refuses it
   under another schema version, and reduces it while keeping the same
   discrepancy. Regenerate `case.txt` with `tools/bless.sh replay`.
-- Real mismatches are written by `tools/gate --full` (the `native --full`
+- Real mismatches are written by the full suite (`tools/main-runs`, the `native --full`
   binary) under its report directory's `mismatch/`, each moved after it is
   written and replayed at once from a warmed engine; the first artifact of each
   mismatching case is also reduced to `reduced.hir`.

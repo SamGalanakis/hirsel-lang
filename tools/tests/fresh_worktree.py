@@ -53,8 +53,7 @@ class FreshWorktree(unittest.TestCase):
 
     def script(self, name, *arguments):
         result = subprocess.run([sys.executable, str(self.tree / 'tools/buck2' / name), *arguments], cwd=self.tree,
-                                capture_output=True, text=True, env={k: v for k, v in os.environ.items()
-                                                                     if k != 'HIRSEL_LAND_TREE'})
+                                capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_bootstrap_makes_a_fresh_tree_build_and_a_bare_buck2_without_its_files_names_sync(self):

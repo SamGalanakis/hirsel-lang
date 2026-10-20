@@ -19,10 +19,9 @@ import sys
 ANSI = re.compile(r'\x1b\[[0-9;]*m')
 ERROR = re.compile(r'^error(\[[A-Za-z0-9_:-]+\])?:', re.MULTILINE)
 
-# tools/land runs main's copy of these scripts on a lane's worktree (HIRSEL_LAND_TREE).
-ROOT = Path(os.environ.get('HIRSEL_LAND_TREE') or Path(__file__).resolve().parents[2])
+ROOT = Path(__file__).resolve().parents[2]
 BUCK2 = ROOT / '.buck2/bin/buck2'
-# The configuration `tools/gate --full` runs Buck2 with, plus the Clippy twins.
+# The configuration tools/land and tools/main-runs run Buck2 with, plus the Clippy twins.
 CONFIG = os.environ.get('HIRSEL_BUCK2_CONFIG', '').split() + ['-c', 'hirsel.clippy=true']
 
 

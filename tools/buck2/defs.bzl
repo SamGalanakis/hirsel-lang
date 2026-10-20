@@ -35,7 +35,7 @@ BIN_EXE_DIR = "buck-out/tmp/cargo-bin-exe"
 TESTS_ON_HOST = read_root_config("hirsel", "tests", "pool") == "host"
 # The seed of every randomly seeded test (PROPTEST_RNG_SEED). It is part of the
 # test's environment, so of its cached verdict: a pass is reused only under the
-# same seed, and the full gate draws a new one each run (`tools/gate --full`).
+# same seed, and main's hourly run draws a new one each run (tools/main-runs).
 TEST_SEED = read_root_config("hirsel", "test_seed", "1")
 
 def _request(binary):
@@ -371,7 +371,7 @@ _rust_test = rule(
 )
 
 # The full gate's campaigns are test targets only under `-c hirsel.full=true`
-# (`tools/gate --full`), so `buck2 test //...` never starts one.
+# (tools/main-runs), so `buck2 test //...` never starts one.
 FULL_GATE = read_root_config("hirsel", "full", "false") == "true"
 
 def _stage(name):
@@ -382,7 +382,7 @@ def _stage(name):
 def selected_paths(key, index):
     """Slice `index` (1-based) of the corpus paths a lane chose, from
     `-c hirsel.<key>=<slice>;<slice>...`, each slice `<path>|<path>...`; None
-    past the last slice. tools/gate writes it (gating.selection_config)."""
+    past the last slice."""
     slices = [part for part in read_root_config("hirsel", key, "").split(";") if part]
     if index > len(slices):
         return None

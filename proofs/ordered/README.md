@@ -17,8 +17,7 @@ downloads it once to `~/.cache/tla/` (or uses `$TLA2TOOLS_JAR`). It needs Java 1
 | `./check.sh` | every run in its table has its expected result (about 4 minutes, mostly JVM start-up) |
 | `./check.sh '<regex>'` | only the runs whose names match |
 
-`tools/check-native.sh` runs `check.sh` as a stage. `tools/gate` runs it in the targeted set when a
-change touches `proofs/ordered/` (`tools/buck2/impact.py`, `proof_checks`).
+`tools/check-native.sh` runs `check.sh` as a stage. Run it after changing `proofs/ordered/`.
 
 ## The model
 

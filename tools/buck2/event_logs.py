@@ -1,6 +1,7 @@
-"""Shared, bounded Buck2 event history for gates, landing and pool audits."""
+"""Shared, bounded Buck2 event history for landing, main's hourly run and pool audits."""
 from contextlib import contextmanager, nullcontext
 import csv
+from datetime import datetime, timezone
 import fcntl
 import json
 import os
@@ -11,8 +12,7 @@ import tempfile
 import sys
 import time
 
-# tools/land runs main's copy of these scripts on a lane's worktree (HIRSEL_LAND_TREE).
-ROOT = Path(os.environ.get('HIRSEL_LAND_TREE') or Path(__file__).resolve().parents[2])
+ROOT = Path(__file__).resolve().parents[2]
 BUCK2 = ROOT / '.buck2/bin/buck2'
 MAX_AGE = 3 * 86400
 MAX_BYTES = 4 * 1024**3
@@ -213,6 +213,40 @@ def commands(paths):
                            failed=failed or details.get('signed_exit_code', 0) != 0,
                            wall=wall, end=start[0] + start[1] / 1e9 + wall,
                            cpu=int(props.get('cpu_count', 1)), memory_kb=int(props.get('memory_kb', 0)))
+
+
+# Buck2's TestStatus (buck2_data.proto).
+PASS, FAIL, SKIP, OMITTED, FATAL, TIMED_OUT = 1, 2, 3, 4, 5, 6
+
+
+def test_results(event_log, *, history=None):
+    """Each test's TestResult event from a `buck2 test` event log, by short
+    name; the per-case costs go to the test history (test_costs.py)."""
+    events = subprocess.run([str(BUCK2), 'log', 'show', str(event_log)], cwd=ROOT, check=True,
+                            stdout=subprocess.PIPE, text=True, errors='replace').stdout
+    results, rows = {}, []
+    for line in events.splitlines():
+        if '"TestResult"' not in line:
+            continue
+        event = json.loads(line).get('Event', {})
+        result = event.get('data', {}).get('Instant', {}).get('data', {}).get('TestResult')
+        if not result:
+            continue
+        stamp = event.get('timestamp')
+        date = (datetime.fromtimestamp(stamp[0] + stamp[1] / 1e9, timezone.utc) if stamp
+                else datetime.now(timezone.utc)).isoformat()
+        name = result['name'].removeprefix('root//:').split(' ')[0]
+        seconds = (result.get('duration_us') or 0) / 1e6
+        details = result.get('details') or ''
+        results[name] = dict(status=result.get('status'), details=details, seconds=seconds)
+        match = re.fullmatch(r'(.+)-shard-(\d+)', name)
+        costs = case_costs(details)
+        rows.append(dict(gate=Path(event_log).name.removesuffix('.pb.zst'),
+                         target=match[1] if match else name, shard=match[2] if match else '',
+                         duration_seconds=seconds, date=date, status=result.get('status'),
+                         case_costs=json.dumps(costs, sort_keys=True, separators=(',', ':')) if costs else ''))
+    (test_history() if history is None else history).append(rows)
+    return results
 
 
 def run(arguments, *, buck2=None, runner=None, **kwargs):

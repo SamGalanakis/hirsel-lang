@@ -24,9 +24,7 @@ names through the file's string literals.
 `--if-stale` regenerates only when the tree changed since the last generation
 (generated.py's stamp). `--check` does that, then lists the sharded test
 binaries on the pool for their test-cost coverage (`--files-only` skips the
-listing, which runs Buck2). `--root-buck <file>` writes
-only the root BUCK, without Reindeer: tools/gate compares a change's BUCK with
-its base's by target.
+listing, which runs Buck2).
 """
 
 from __future__ import annotations
@@ -48,8 +46,7 @@ import generated
 from test_sizes_from_usage import requests_bzl
 
 
-# tools/land runs main's copy of these scripts on a lane's worktree (HIRSEL_LAND_TREE).
-ROOT = pathlib.Path(os.environ.get('HIRSEL_LAND_TREE') or pathlib.Path(__file__).resolve().parents[2])
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 HERE = ROOT / "tools/buck2"
 THIRD_PARTY = ROOT / "third-party"
 REINDEER = HERE / "bin/reindeer"
@@ -88,7 +85,7 @@ BUILD_SCRIPT_INPUTS = {
 # What each crate's tests read at run time outside their crate: repository
 # paths they reach from CARGO_MANIFEST_DIR. A test runs from the project root
 # and sees only its declared inputs on the pool. Those inputs are part of its
-# cached verdict's key, and the files whose edits select it (tools/gate).
+# cached verdict's key.
 MANIFEST_REFERENCE = re.compile(r'"manifest"\s*:\s*"([^"]+)"')
 
 
@@ -283,7 +280,7 @@ def dev_opt_levels() -> dict[str, int]:
     packages = tomllib.loads((ROOT / "Cargo.toml").read_text())["profile"]["dev"].get("package", {})
     return {name: entry["opt-level"] for name, entry in packages.items() if name != "*" and "opt-level" in entry}
 
-# The corpus campaigns (tools/gate) as tests over the whole corpus, so
+# The corpus campaigns as tests over the whole corpus, so
 # an unchanged corpus and compiler are a cache hit on the pool.
 CORPUS = [
     "bench/native/programs/**",
@@ -299,11 +296,11 @@ GATE = dict(cwd="crates/hirsel-conformance")
 # The conformance stage runs as shards of the corpus by path hash, each well
 # under ten minutes on a loaded pool; tools/buck2/conformance.py sums their counts.
 CONFORMANCE_SHARDS = 16
-# The seed-1 sample whose variants of its corpus cases a lane gate's
-# agreement slices run (no lane gate runs the whole campaign).
+# The seed-1 sample whose variants of chosen corpus cases the agreement
+# slices run.
 AGREE_LIMIT = 5000
-# A lane's chosen corpus cases (`tools/gate --tests conformance:<path>` and
-# `agreement:<path>`) run in up to SELECTED_SLICES slices
+# Chosen corpus cases (`buck2 test -c hirsel.conformance_paths=<a>|<b>
+# //:gate-conformance-selected-shard-1`, and likewise agreement) run in up to SELECTED_SLICES slices
 # (`-c hirsel.conformance_paths` and `hirsel.agree_paths`, defs.bzl
 # selected_paths), each of at least the smallest slice's cases. Conformance
 # spreads them wide: cases differ in cost by more than tenfold (on 2026-10-19
@@ -313,12 +310,12 @@ AGREE_LIMIT = 5000
 SELECTED_SLICES = 16
 CONFORMANCE_SLICE_PROGRAMS = 20
 AGREE_SLICE_PROGRAMS = 260
-# The unrestricted campaign (`tools/gate --full`) runs as shards of the whole
+# The unrestricted campaign (tools/main-runs) runs as shards of the whole
 # seed-1 catalogue by stable variant rank, each with its own timeout, so a slow
 # or non-terminating variant fails fast and names its shard.
 AGREE_FULL_SHARDS = 96
 AGREE_FULL_TIMEOUT = 1800
-# The unrestricted native agreement campaign (tools/gate --full) runs as
+# The unrestricted native agreement campaign (tools/main-runs) runs as
 # shards of the same catalogue by stable variant rank. On 2026-10-14 the whole
 # campaign took 4909 s for 1987 programs, and on 2026-10-16 2416 programs did
 # not finish in 14400 s on a loaded host; sixteen shards keep each near a
@@ -327,7 +324,7 @@ AGREE_FULL_TIMEOUT = 1800
 # agree-known.txt.
 AGREE_NATIVE_FULL_SHARDS = 16
 AGREE_NATIVE_FULL_TIMEOUT = 3600
-# The full native matrix (tools/gate --full) runs as shards of the baseline by
+# The full native matrix (tools/main-runs) runs as shards of the baseline by
 # path hash, each case under its rotating pairwise cover, so each shard stays well
 # under its Buck2 timeout; gate-native-full stays whole for --bless and for a
 # lane's filtered run.
@@ -354,12 +351,12 @@ GATE_TESTS = [
       for index in range(1, SELECTED_SLICES + 1)),
     dict(name="gate-native-smoke", binary="//:hirsel-conformance-bin-native", args=["--smoke"],
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
-    # Per-push matrix and parity share the changed-program filters from impact.py.
+    # Matrix and parity of the programs `-c hirsel.native_filters=<a>|<b>` names.
     dict(name="gate-native-changed", binary="//:hirsel-conformance-bin-native", args=["--smoke"],
          runtime_archives=RUNTIME_ARCHIVES, changed_native=True, **GATE),
     dict(name="gate-native-cranelift-changed", binary="//:hirsel-conformance-bin-native", args=["--cranelift"],
          runtime_archives=RUNTIME_ARCHIVES, changed_native=True, **GATE),
-    # `tools/gate --full` (`-c hirsel.full=true` declares them). Native stages
+    # tools/main-runs (`-c hirsel.full=true` declares them). Native stages
     # carry their cross toolchain, qemu and Valgrind as pool action inputs.
     *(dict(name=f"gate-agree-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-agree",
            args=["--shard", f"{index}/{AGREE_FULL_SHARDS}"], **GATE)
@@ -921,11 +918,7 @@ def main() -> int:
     parser.add_argument("--check", action="store_true",
                         help="regenerate when stale, then check the sharded test binaries' test-cost coverage on the pool")
     parser.add_argument("--files-only", action="store_true", help="with --check, skip the pool's test-cost inventory")
-    parser.add_argument("--root-buck", type=pathlib.Path, metavar="FILE", help="write only the root BUCK, to FILE")
     args = parser.parse_args()
-    if args.root_buck:
-        args.root_buck.write_text(root_buck(metadata(ROOT / "Cargo.toml")), encoding="utf-8")
-        return 0
     if not REINDEER.is_file():
         raise SystemExit("run tools/buck2/bootstrap.py first (Reindeer is missing)")
     if not ((args.if_stale or args.check) and generated.current(ROOT)):

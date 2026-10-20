@@ -4,14 +4,14 @@ so no rebase can conflict on one.
 - BUILD_INPUTS: what sync.py derives from the Cargo workspace and the committed
   measurements and pins. They are gitignored and generated on demand:
   bootstrap.py writes them, and every entry point that runs Buck2 (prepare.py,
-  tools/gate, tools/land, tools/bless.sh) regenerates them when the tree they
-  were generated from changed (`sync.py --if-stale`). Without them a bare
+  tools/land, tools/main-runs, tools/bless.sh) regenerates them when the tree
+  they were generated from changed (`sync.py --if-stale`). Without them a bare
   `.buck2/bin/buck2` reads the committed BUCK.unsynced stubs and fails with
   one line saying to run sync.py.
-- LAND_WRITTEN: generated pages people read in the repository. They stay
-  committed, and only tools/land writes them: it regenerates them on the
-  batch's tip and pushes them with the batch. tools/gate and tools/land refuse
-  a lane change that touches one.
+- MAIN_WRITTEN: generated pages people read in the repository. They stay
+  committed, and only main's hourly run (tools/main-runs) writes them: it
+  regenerates them and pushes a change to main. tools/land refuses a lane
+  change that touches one.
 
 The stamp records the tree the build inputs were generated from: HEAD's tree
 and every path `git status` reports, with its content. Generation reads only
@@ -39,7 +39,7 @@ BUILD_INPUTS = (
     'tools/buck2/workspace-metadata.json',
     'tools/native-toolchain/pins.bzl',
 )
-LAND_WRITTEN = ('docs/api.md',)
+MAIN_WRITTEN = ('docs/api.md',)
 STAMP = '.buck2/sync-stamp.json'
 SYNC_HINT = 'run python3 tools/buck2/sync.py'
 
@@ -98,13 +98,21 @@ def ensure(root: Path) -> subprocess.CompletedProcess | None:
     if current(root):
         return None
     return subprocess.run([sys.executable, str(root / 'tools/buck2/sync.py')], cwd=root,
-                          capture_output=True, text=True, env=os.environ | {'HIRSEL_LAND_TREE': str(root)})
+                          capture_output=True, text=True)
+
+
+def require(root: Path) -> None:
+    """Regenerate stale build inputs, or exit with sync.py's last lines."""
+    synced = ensure(root)
+    if synced is not None and synced.returncode:
+        lines = [line for line in (synced.stdout + synced.stderr).splitlines() if line.strip()]
+        raise SystemExit('cannot generate the Buck2 build files (tools/buck2/sync.py)\n' + '\n'.join(lines[-20:]))
 
 
 def lane_written(paths) -> list[str]:
     """The generated files among the paths a lane change writes (adds or
     edits): no lane commits them."""
-    return sorted(path for path in paths if path in LAND_WRITTEN or path in BUILD_INPUTS)
+    return sorted(path for path in paths if path in MAIN_WRITTEN or path in BUILD_INPUTS)
 
 
 def refusal(paths) -> list[str]:
@@ -113,10 +121,10 @@ def refusal(paths) -> list[str]:
     touched = lane_written(paths)
     if not touched:
         return []
-    pages = [path for path in touched if path in LAND_WRITTEN]
+    pages = [path for path in touched if path in MAIN_WRITTEN]
     inputs = [path for path in touched if path in BUILD_INPUTS]
     return [f'the change touches generated files, which no lane commits: {", ".join(touched)}',
-            'tools/land regenerates docs/api.md on the batch it pushes, and sync.py regenerates the '
+            'main\'s hourly run (tools/main-runs) regenerates docs/api.md, and sync.py regenerates the '
             'gitignored build files on demand. Drop them from the change:',
             *([f'  git checkout $(git merge-base HEAD origin/main) -- {" ".join(pages)}'] if pages else []),
             *([f'  git rm -q --cached {" ".join(inputs)}'] if inputs else []),

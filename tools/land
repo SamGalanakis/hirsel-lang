@@ -1,750 +1,142 @@
 #!/usr/bin/env python3
-"""Land the lane's committed change on main.
+"""Land this worktree's commits on origin/main.
 
-    tools/land            # land this worktree's committed change
-    tools/land --status   # the land queue: the holder and its age, the waiters, your place
+    tools/land > /tmp/<lane>-land.log 2>&1; echo EXIT $? >> /tmp/<lane>-land.log
 
-Land runs origin/main's copy of itself and of the gate's scripts on the lane's
-worktree, never the worktree's own copy: every lane in the queue runs the same
-landing code, and a lane's unlanded edit to the tooling cannot land itself. It
-refuses to run under an outer `timeout`: a kill can stop it between the push
-and its record. Run it in the background with a log instead.
+Fetch and rebase onto origin/main (the files many lanes add to merge with the
+`hirsel` merge driver, tools/buck2/merging.py), regenerate the build files
+(`sync.py --if-stale`), build the workspace, run Clippy and check formatting
+through Buck2, then push. A push rejected because main moved goes back to the
+rebase. A red check refuses the push and prints its first error.
 
-It needs no receipt: it joins the exclusive FIFO land queue with the
-worktree's committed change. The lane at the head lands every change queued
-behind it, up to BATCH_MAX, as one batch in queue order, in a batch worktree
-beside the lock (`<lock dir>/batch-<clone>`):
-
-- fetch, and rebase each change onto the last (a change whose rebase
-  conflicts leaves the batch and is told which paths conflicted); the files
-  many lanes add to (NOTICES rows, package manifests, sorted ratchet and
-  expectation lists) merge with tools/buck2/merging.py rather than stopping;
-- after each change, regenerate the gitignored build files when stale
-  (tools/buck2/generated.py);
-- check only what breaks everyone, once, on the batch's tip: build the
-  workspace (without the std precheck, a test), run Clippy and
-  check formatting, every Buck2 command at pool
-  priority LAND_PRIORITY in one daemon state; regenerate docs/api.md with the
-  built CLI into the batch's last commit; push once;
-- on red, repeat only what failed (the targets the build report names, the
-  Clippy twins with errors, the failed local checks) on the tip; a failure
-  that does not repeat is a flake, named with its batch in the log and the
-  batch's row, and the tip is checked again. Otherwise
-  bisect the batch's prefixes with those failed checks alone for the first
-  change that turns them red, tell that change's lane, and check the rest of
-  the batch again in the next round. A push rejected because main moved
-  repeats the round.
-
-No lane commits a generated file (generated.py): land refuses a change that
-touches docs/api.md or a gitignored build file before it queues, and says how
-to drop it. Only land writes docs/api.md.
-
-Land runs no tests: the lane runs what its change can affect (tools/gate), and
-the full suite runs hourly on main (tools/main-runs), which bisects a red to
-its landing through the landings log. Each lane's land prints its outcome,
-moves its branch to main as pushed and appends the push with its batch to
-`hirsel-landings.jsonl` in the clone's common git directory. The batch appends
-its checks to `hirsel-land-batches.jsonl`. A landing expires the
-tools/known-failures.tsv rows its lane owns.
+Land runs no tests: the lane runs the tests its change can break, and
+tools/main-runs runs the full suite on main every hour. Each push is appended
+to `hirsel-landings.jsonl` in the common git directory, from which main-runs
+names the lane of a commit.
 """
 
-import fcntl
-import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
+import re
 import subprocess
 import sys
-import tempfile
 import time
 
-# The worktree these scripts act on: the script's own checkout, a lane's
-# worktree that main's copy was started on, or the batch worktree.
-TREE = 'HIRSEL_LAND_TREE'
-ROOT = Path(os.environ.get(TREE) or Path(__file__).resolve().parents[1])
-sys.path.insert(0, str(Path(__file__).resolve().parent / 'buck2'))
-sys.dont_write_bytecode = True
-import gating  # noqa: E402
-from gating import say  # noqa: E402
-import merging  # noqa: E402
-
-# The scripts have read the tree; helpers run from the tree resolve their own.
-os.environ.pop(TREE, None)
+ROOT = Path(subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True,
+                           check=True).stdout.strip())
+sys.path.insert(0, str(ROOT / 'tools/buck2'))
+import generated  # noqa: E402
 
 PY = sys.executable
-ATTEMPTS = 20
-# A batch's size. A red batch costs about log2 of it builds of only its failed
-# targets to bisect, then one build of the rest.
-BATCH_MAX = 16
+BUCK2 = str(ROOT / '.buck2/bin/buck2')
+# The Clippy twins exist under hirsel.clippy, which changes no other action's
+# key; land queues above a lane's tests (50) and main's run (40) on the pool.
+CONFIG = ['-c', 'hirsel.clippy=true', '-c', 'hirsel.priority=75']
+ENV = {'HIRSEL_BUCK2_CONFIG': ' '.join(CONFIG), 'GIT_EDITOR': 'true'}
+# The workspace without tests, Clippy twins, campaign targets, the two-host
+# link build (it holds a host-wide lock) and the std precheck (a test that
+# takes minutes).
+BUILD_SET = ('root//: - kind("_rust_test", root//:) - attrregexfilter(name, "-clippy$", root//:)'
+             ' - attrfilter(labels, gate, root//:) - kind("_link_hosts_local", root//:)'
+             ' - rdeps(root//:, kind("_hirsel_precheck", root//:))')
+ATTEMPTS = 10
 REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
-CLI = 'root//:hirsel-cli-bin-hirsel'
 LANDINGS = 'hirsel-landings.jsonl'
-# One row per batch: its members, rounds, each check's tip, time and verdict.
-BATCHES = 'hirsel-land-batches.jsonl'
-# The batch is the one serial step every lane waits on: its Buck2 commands
-# queue on the pool above the gates' 50 (tools/buck2/platforms.bzl).
-LAND_PRIORITY = 75
-# The workspace build set without the std precheck and what bundles it: the
-# precheck runs the built compiler over std, a test, and alone it
-# took 6-10 minutes of a batch's critical path.
-LAND_BUILD_SET = f'({gating.BUILD_SET}) - rdeps(root//:, kind("_hirsel_precheck", root//:))'
-LAND_LOCK_DIR = Path('/workspace/code/hirsel-briefs/locks/land')
-# origin/main's copies of the landing scripts, by commit, in the common git dir.
-MAIN_COPIES = 'hirsel-land-tools'
-# Set in main's copy: the commit it was extracted from.
-MAIN_COPY = 'HIRSEL_LAND_MAIN'
-KEEP_COPIES = 8
-POLL_SECONDS = 5
-EDITOR = {'GIT_EDITOR': 'true'}
 
 
-def run(*command, **kwargs):
-    if 'env' in kwargs:
-        kwargs['env'] = os.environ | kwargs['env']
-    return gating.run(command, cwd=ROOT, capture_output=True, text=True, **kwargs)
+def say(message):
+    print(f'land: {message}', flush=True)
 
 
-def head():
-    return run('git', 'rev-parse', 'HEAD').stdout.strip()
+def git(*arguments):
+    return subprocess.run(['git', *arguments], cwd=ROOT, capture_output=True, text=True, env=os.environ | ENV)
 
 
-def lock_dir():
-    return Path(os.environ.get('HIRSEL_LAND_LOCK_DIR', str(LAND_LOCK_DIR)))
+def first_error(text, count=40):
+    """The output from its first error line on (its tail when none is found)."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if re.match(r'\s*(error|Error|Diff in|Traceback)', line)),
+                 max(0, len(lines) - count))
+    return '\n'.join(lines[start:start + count])
 
 
-def write_json(path, value):
-    pending = path.with_name(f'.{path.name}.{os.getpid()}')
-    pending.write_text(json.dumps(value, indent=1, sort_keys=True) + '\n')
-    pending.replace(path)
-
-
-def read_json(path):
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        return None
-
-
-# ---------------------------------------------------------------- checks of a tree
-
-FORMATTING = 'formatting'
-# No Buck2 command beside the build: one with another configuration waits for
-# it, or makes it wait. The build files are generated after each rebased change.
-LOCAL_CHECKS = {FORMATTING: [PY, 'tools/buck2/fmt.py', '--check']}
-
-
-def checks(probe=None):
-    """Build, Clippy and formatting on this tree, or only the
-    parts a red tip failed (`probe`): whether all pass, what failed, and the
-    probe of what failed (None when a failure names no part to repeat alone)."""
-    failed = []
-    found = dict(build=[], clippy=[], local=[])
-    narrow = True
-
-    def report(line, detail=None):
-        say(line)
-        if detail is not None:
-            if detail:
-                say(detail)
-            failed.extend([line, detail])
-
-    local = gating.Local()
-    for name, command in LOCAL_CHECKS.items():
-        if probe is None or name in probe['local']:
-            local.start(name, command)
-    if probe is None:
-        build, clippy = gating.uquery(LAND_BUILD_SET), gating.uquery(gating.CLIPPY_SET)
-    else:
-        # A prefix without a failed target (a later change adds it) cannot have its failure.
-        present = set(gating.uquery('root//:'))
-        build = [target for target in probe['build'] if target.split('[')[0] in present]
-        clippy = [target for target in probe['clippy'] if target in present]
-    if build or clippy:
-        started = time.monotonic()
-        with tempfile.TemporaryDirectory(prefix='hirsel-land-') as scratch:
-            build_report = Path(scratch) / 'build.json'
-            result = gating.buck2('build', '--materializations', 'none', '--build-report', str(build_report),
-                                  *build, *[t + '[clippy.txt]' for t in clippy], capture_output=True, text=True)
-            broken = gating.build_failures(build_report)
-        line = (f'land: {"pass" if result.returncode == 0 else "FAIL"}  '
-                f'{"workspace build" if probe is None else "the failed targets"} and Clippy: {len(build)} targets, '
-                f'{len(clippy)} Clippy twins ({time.monotonic() - started:.0f} s)')
-        if result.returncode:
-            report(line, gating.last_lines(result.stderr, 40))
-            # What a red build repeats alone: the targets the build report names.
-            found['build'] = sorted('root//:' + target for target in broken)
-            narrow = bool(broken)
-        else:
-            say(line)
-        if result.returncode == 0 and clippy:
-            names = []
-            clean, text = gating.clippy_report(clippy, names)
-            if not clean:
-                report('land: FAIL  Clippy', gating.last_lines(text, 40))
-                found['clippy'] = sorted(f'root//:{name}-clippy' for name in names)
-                narrow = bool(names)
-    for name, _, status, output, seconds in local.finish():
-        line = f'land: {"pass" if status == 0 else "FAIL"}  {name} ({seconds:.0f} s)'
-        report(line, gating.last_lines(output, 20) if status else None)
-        if status:
-            found['local'].append(name)
-    return not failed, failed, (found if narrow else None)
-
-
-def regenerate_index(checked_head):
-    """Render the API index with the checked CLI and amend a changed page into
-    the batch's last commit: whether it succeeded."""
-    built = gating.buck2('build', '--show-json-output', CLI, capture_output=True, text=True)
-    if built.returncode:
-        say('land: cannot build the index generator\n' + gating.last_lines(built.stderr, 20))
-        return False
-    try:
-        executable = ROOT / json.loads(built.stdout)[CLI]
-    except (ValueError, KeyError, TypeError):
-        say('land: CLI build did not report its executable')
-        return False
-    try:
-        rendered = gating.run(
-            ['systemd-run', '--user', '--scope', '-q', '-p', 'MemoryMax=2560M', '-p', 'RuntimeMaxSec=300',
-             str(executable), 'doc', 'stdlib/std@1/hirsel.json'],
-            cwd=ROOT, capture_output=True,
-            env=os.environ | {'XDG_RUNTIME_DIR': os.environ.get('XDG_RUNTIME_DIR') or f'/run/user/{os.getuid()}'})
-    except OSError as error:
-        say(f'land: cannot run the index generator: {error}')
-        return False
-    if rendered.returncode:
-        say(f'land: index generation failed (scope exit {rendered.returncode}; '
-            'MemoryMax=2560M, RuntimeMaxSec=300); refusing to push\n'
-            + gating.last_lines(rendered.stderr.decode(errors='replace'), 20))
-        return False
-    if head() != checked_head or run('git', 'status', '--porcelain').stdout.strip():
-        say('land: the batch worktree changed during the checks; refusing to push')
-        return False
-    page = ROOT / 'docs/api.md'
-    if page.exists() and page.read_bytes() == rendered.stdout:
-        say('land: API index is current')
-        return True
-    page.write_bytes(rendered.stdout)
-    added = run('git', 'add', '--', 'docs/api.md')
-    committed = (run('git', 'commit', '-q', '--amend', '--no-edit', '--only', '--', 'docs/api.md', env=EDITOR)
-                 if added.returncode == 0 else added)
-    if committed.returncode:
-        say('land: cannot commit the regenerated index\n' + committed.stderr)
-        return False
-    say(f'land: regenerated docs/api.md into {head()[:12]} (generated docs only)')
-    return True
-
-
-# ---------------------------------------------------------------- the batch
-
-def batch_tree(directory):
-    """This clone's batch worktree beside the land lock, made once and reused."""
-    common = run('git', 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip()
-    tree = directory / ('batch-' + hashlib.sha256(common.encode()).hexdigest()[:12])
-    if not (tree / '.git').exists():
-        shutil.rmtree(tree, ignore_errors=True)
-        added = run('git', 'worktree', 'add', '-f', '--detach', str(tree), 'origin/main')
-        if added.returncode:
-            raise SystemExit('land: cannot make the batch worktree\n' + added.stderr)
-    return tree
-
-
-def clean_tree():
-    """Undo whatever an interrupted batch left in the batch worktree; ignored
-    files (the prepared toolchains) stay."""
-    for command in (('rebase', '--abort'), ('cherry-pick', '--abort'), ('reset', '-q', '--hard'), ('clean', '-fdq')):
-        run('git', *command)
-
-
-def outcome(status, member, **fields):
-    return dict(fields, status=status, branch=member.get('branch'), worktree=member.get('worktree'))
-
-
-def rebase_member(member, onto):
-    """Rebase a queued change onto `onto` in the batch worktree: ('rebased',
-    tip, resolved paths), ('already', onto) for a change already on main, or a
-    failure outcome."""
-    commit = member['head']
-    if run('git', 'cat-file', '-e', commit + '^{commit}').returncode:
-        fetched = run('git', 'fetch', '-q', member['worktree'], commit)
-        if fetched.returncode:
-            return outcome('error', member, details=[f'cannot fetch {commit[:12]} from {member["worktree"]}',
-                                                     fetched.stderr.strip()])
-    base = run('git', 'merge-base', commit, onto).stdout.strip()
-    run('git', 'checkout', '-q', '--detach', commit)
-    resolved = []
-    rebase = run('git', '-c', 'merge.conflictStyle=diff3', 'rebase', '-q', '--onto', onto, base, env=EDITOR)
-    while rebase.returncode:
-        conflicts = run('git', 'diff', '--name-only', '--diff-filter=U').stdout.split()
-        unresolved = [path for path in conflicts if not resolve_conflict(path)]
-        if unresolved or not conflicts:
-            run('git', 'rebase', '--abort')
-            return outcome('conflict', member, paths=unresolved,
-                           details=[] if conflicts else [rebase.stdout.strip(), rebase.stderr.strip()])
-        resolved += conflicts
-        nothing = run('git', 'diff', '--cached', '--quiet').returncode == 0
-        rebase = run('git', 'rebase', '--skip' if nothing else '--continue', env=EDITOR)
-    tip = head()
-    if tip == onto:
-        return 'already', onto, []
-    if (synced := gating.generated.ensure(ROOT)) is not None and synced.returncode:
-        return outcome('red', member, details=['land: FAIL  sync.py on the rebased change',
-                                               gating.last_lines(synced.stdout + synced.stderr, 20)])
-    return 'rebased', head(), resolved
-
-
-def resolve_conflict(path):
-    """Resolve one conflicted path with merging.resolve: whether it did."""
-    def stage(number):
-        shown = gating.run(['git', 'show', f':{number}:{path}'], cwd=ROOT, capture_output=True)
-        return shown.stdout.decode(errors='surrogateescape') if shown.returncode == 0 else None
-    text = merging.resolve(path, stage(1), stage(2), stage(3))
-    if text is None:
-        return False
-    (ROOT / path).write_bytes(text.encode(errors='surrogateescape'))
-    return run('git', 'add', '--', path).returncode == 0
-
-
-# This batch's rounds, checks and flakes, for its row in BATCHES.
-BATCH = dict(rounds=0, checks=[], flakes=[])
-
-
-def checked(tip, cache, probe=None):
-    """Whether the checks pass at `tip` (all of them, or only `probe`), what
-    failed and its probe; once per tip and probe."""
-    key = (tip, json.dumps(probe, sort_keys=True))
-    if key not in cache:
-        run('git', 'checkout', '-q', '--detach', tip)
-        say(f'land: checking {tip[:12]}' + (' (the failed checks only)' if probe else ''))
-        started = time.monotonic()
-        if (synced := gating.generated.ensure(ROOT)) is not None and synced.returncode:
-            cache[key] = False, ['land: FAIL  sync.py', gating.last_lines(synced.stdout + synced.stderr, 20)], None
-        else:
-            cache[key] = checks(probe)
-        BATCH['checks'].append(dict(tip=tip, passed=cache[key][0], seconds=round(time.monotonic() - started, 1),
-                                    probe=probe is not None))
-    return cache[key]
-
-
-def first_red(rebased, main, probe, cache):
-    """The index of the change that first turns the batch's prefixes red, or
-    None when main itself is red. A prefix is tried with the tip's failed
-    checks alone (`probe`), or all of them when the failure named none."""
-    def passes(tip):
-        return checked(tip, cache, probe)[0]
-    # The batch's tip fails; main is the empty prefix.
-    culprit = gating.first_failing(len(rebased), lambda index: not passes(rebased[index][1]))
-    if culprit == 0 and not passes(main):
-        return None
-    return culprit
-
-
-def expire_known_failures(owners):
-    """Remove the known failures on main that the landing lanes own, in a
-    generated-only commit."""
-    path = ROOT / gating.KNOWN_FAILURES
-    if not path.is_file():
-        return True
-    text = path.read_text()
-    listed = set(run('git', 'show', f'origin/main:{gating.KNOWN_FAILURES}').stdout.splitlines())
-    kept = gating.without_owners(text, owners, listed)
-    if kept == text:
-        return True
-    path.write_text(kept)
-    expired = sorted({row.split('\t')[0] for row in text.splitlines() if row not in kept.splitlines()})
-    committed = run('git', 'commit', '-q', '-m', f'Expire the known failures of {", ".join(sorted(owners))}.',
-                    '--only', '--', gating.KNOWN_FAILURES)
-    if committed.returncode:
-        say('land: cannot commit the expired known failures\n' + committed.stderr)
-        return False
-    say(f'land: expired known failures owned by the landing lanes: {", ".join(expired)}')
-    return True
-
-
-def push(tip, owners=()):
-    """Expire the landing lanes' known failures, regenerate the index on a
-    checked tip and push it: ('pushed', the pushed commit, the commit the index
-    was amended into or None), or ('moved' or 'failed', details, None)."""
-    run('git', 'checkout', '-q', '--detach', tip)
-    if not expire_known_failures(set(owners)):
-        return 'failed', None, None
-    last = head()
-    if not regenerate_index(last):
-        return 'failed', None, None
-    pushed = run('git', 'push', 'origin', 'HEAD:main')
-    if pushed.returncode == 0:
-        return 'pushed', head(), (last if head() != last else None)
-    if any(marker in pushed.stderr for marker in REJECTED):
-        say('land: main moved during the checks; rebasing the batch again')
-        return 'moved', None, None
-    say('land: git push failed\n' + pushed.stderr)
-    return 'failed', pushed.stderr.strip(), None
-
-
-def land_batch(members, results):
-    """Land queued changes in order as one batch (see the module docstring),
-    filling `results` by request name."""
-    pending = list(members)
-    for attempt in range(1, ATTEMPTS + 1):
-        if not pending:
-            return
-        if (fetch := run('git', 'fetch', 'origin')).returncode:
-            for member in pending:
-                results[member['name']] = outcome('error', member, details=['git fetch failed', fetch.stderr.strip()])
-            return
-        main = tip = run('git', 'rev-parse', 'origin/main').stdout.strip()
-        BATCH['rounds'] = attempt
-        say(f'land: round {attempt}: {len(pending)} changes onto {main[:12]}: '
-            + ', '.join(member.get('branch') or member['name'] for member in pending))
-        rebased = []
-        for member in pending:
-            onto = tip
-            found = rebase_member(member, onto)
-            if isinstance(found, dict):
-                say(f'land: {member.get("branch")}: {found["status"]}'
-                    + (': ' + ', '.join(found['paths']) if found.get('paths') else ''))
-                results[member['name']] = found
-                continue
-            kind, tip, resolved = found
-            if kind == 'already':
-                results[member['name']] = outcome('landed', member, tip=main, pushed=main, base=main, batch=[],
-                                                  resolved=[], details=['already on main'])
-                continue
-            if resolved:
-                say(f'land: {member.get("branch")}: resolved {", ".join(resolved)}')
-            rebased.append((member, tip, dict(resolved=resolved, base=onto)))
-        pending = []
-        if not rebased:
-            return
-        cache = {}
-        ok, _, probe = checked(tip, cache)
-        if not ok and probe is not None and checked(tip, cache, probe)[0]:
-            # A failure that does not repeat is no change's: name it, so flakes
-            # are fixed rather than absorbed, and check the tip again.
-            failed = probe['build'] + probe['clippy'] + probe['local']
-            batch = [member.get('branch') or member['name'] for member, _, _ in rebased]
-            say(f'land: FLAKE  {", ".join(failed)} failed on {tip[:12]} and passed when repeated '
-                f'(batch: {", ".join(batch)}); checking the whole tip again')
-            BATCH['flakes'].append(dict(tip=tip, failed=failed, batch=batch))
-            del cache[(tip, json.dumps(None))]
-            ok, _, probe = checked(tip, cache)
-        if ok:
-            state, pushed, amended = push(tip, [m.get('branch') for m, _, _ in rebased if m.get('branch')])
-            if state == 'moved':
-                pending = [member for member, _, _ in rebased]
-                continue
-            if state == 'failed':
-                for member, _, _ in rebased:
-                    results[member['name']] = outcome('error', member, details=['the push failed', pushed or ''])
-                return
-            say(f'land: pushed {pushed[:12]} to main: {len(rebased)} changes')
-            names = [member.get('branch') for member, _, _ in rebased]
-            for position, (member, tip, landing) in enumerate(rebased, 1):
-                # The last change's commit carries the regenerated index.
-                results[member['name']] = outcome('landed', member, tip=pushed if tip == amended else tip,
-                                                  pushed=pushed, batch=names, position=position, details=[],
-                                                  **landing)
-            return
-        culprit = first_red(rebased, main, probe, cache)
-        if culprit is None:
-            failure = checked(main, cache, probe)[1]
-            for member, _, _ in rebased:
-                results[member['name']] = outcome('red', member, details=[
-                    f'origin/main {main[:12]} itself fails the checks; nothing lands until it is fixed', *failure])
-            return
-        member, red_tip, _ = rebased[culprit]
-        say(f'land: {member.get("branch")} turns the batch red; it leaves the batch and the rest is checked again')
-        results[member['name']] = outcome('red', member, details=checked(red_tip, cache, probe)[1],
-                                          behind=[m.get('branch') for m, _, _ in rebased[:culprit]])
-        pending = [m for index, (m, _, _) in enumerate(rebased) if index != culprit]
-    for member in pending:
-        results[member['name']] = outcome('error', member, details=[f'main moved under {ATTEMPTS} rounds in a row'])
-
-
-def run_batch(batch_file):
-    """The batch runner, in the batch worktree: land the queued changes the
-    lock holder chose and write each one's result for its waiting lane."""
-    batch = read_json(Path(batch_file))
-    directory = Path(batch['directory'])
-    results = {}
-    # Every Buck2 command here, fmt.py's query included, keeps one daemon state
-    # at land's priority.
-    gating.CONFIG.extend(['-c', f'hirsel.priority={LAND_PRIORITY}'])
-    os.environ['HIRSEL_BUCK2_CONFIG'] = ' '.join(gating.CONFIG)
-    clean_tree()
-    try:
-        if run(PY, 'tools/buck2/prepare.py').returncode:
-            for member in batch['members']:
-                results[member['name']] = outcome('error', member, details=['tools/buck2/prepare.py failed '
-                                                                            'in the batch worktree'])
-        else:
-            land_batch(batch['members'], results)
-    finally:
-        clean_tree()
-        (directory / 'results').mkdir(exist_ok=True)
-        for name, result in results.items():
-            write_json(directory / 'results' / f'{name}.json', dict(result, batch_seconds=time.time() - batch['at']))
-        log_batch(batch, results)
-    return 0
-
-
-def log_batch(batch, results):
-    """Append the batch's members, outcomes, rounds and checks to BATCHES in the
-    clone's common git directory, so a red batch's cost is measured."""
-    common = Path(run('git', 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
-    names = {member['name']: member.get('branch') or member['name'] for member in batch['members']}
-    entry = dict(at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(batch['at'])),
-                 seconds=round(time.time() - batch['at'], 1), members=list(names.values()),
-                 outcomes={names[name]: result['status'] for name, result in results.items() if name in names},
-                 pushed=sorted({result['pushed'] for result in results.values() if result.get('pushed')}),
-                 **BATCH)
-    with open(common / BATCHES, 'a') as log:
-        log.write(json.dumps(entry, sort_keys=True) + '\n')
-
-
-def lead(directory, request):
-    """Holding the lock: batch this change with the changes queued behind
-    it, in queue order, and run the batch in the batch worktree."""
-    members = [request]
-    for _, _, ticket in gating.live_tickets(directory / 'queue'):
-        if len(members) >= BATCH_MAX:
-            break
-        queued = read_json(directory / 'requests' / f'{ticket.name}.json')
-        if queued is None:
-            break  # A land without a request lands alone; keep the queue's order.
-        try:
-            moved = gating.run(['git', 'rev-parse', 'HEAD'], cwd=queued['worktree'], capture_output=True,
-                               text=True).stdout.strip()
-        except OSError:
-            moved = None
-        if moved != queued['head']:
-            write_json(directory / 'results' / f'{ticket.name}.json', outcome('stale', queued, details=[
-                'the worktree moved after tools/land queued it; run tools/land again']))
-            continue
-        members.append(queued)
-    tree = batch_tree(directory)
-    batch_file = directory / 'batch.json'
-    write_json(batch_file, dict(directory=str(directory), at=time.time(), members=members))
-    say(f'land: landing a batch of {len(members)} in {tree}: '
-        + ', '.join(member.get('branch') or member['name'] for member in members))
-    # The batch runs origin/main's newest landing scripts, not the copy this
-    # lane started with hours ago, so a landed tooling fix holds from the next
-    # batch. The batch file and the results are the interface between copies.
-    script = Path(__file__).resolve()
-    if run('git', 'fetch', 'origin').returncode == 0:
-        script, sha = main_copy()
-        say(f'land: the batch runs origin/main\'s landing scripts ({sha[:12]})')
-    gating.run([PY, str(script), '--batch', str(batch_file)], cwd=tree, env=os.environ | {TREE: str(tree)})
-    batch_file.unlink(missing_ok=True)
-
-
-# ---------------------------------------------------------------- the queue
-
-def queue(directory, request):
-    """Wait in the land queue until a lock holder lands the change (its
-    result) or this lane holds the lock and leads: (result, timing)."""
-    queue_dir, requests, results = directory / 'queue', directory / 'requests', directory / 'results'
-    for path in (queue_dir, requests, results):
-        path.mkdir(parents=True, exist_ok=True)
-    start = gating.process_start(os.getpid())
-    while True:
-        name = f'{time.time_ns()}-{os.getpid()}'
-        if not (queue_dir / name).exists():
-            break
-    request = dict(request, name=name)
-    write_json(requests / f'{name}.json', request)
-    ticket = queue_dir / name
-    ticket.write_text(f'{start}\n')
-    timing = gating.SlotTiming(0)
+def check(name, command):
     started = time.monotonic()
-    waiting = False
-    try:
-        while True:
-            if (result := read_json(results / f'{name}.json')) is not None:
-                (results / f'{name}.json').unlink(missing_ok=True)
-                timing.wait_seconds = time.monotonic() - started
-                return result, timing
-            if gating.oldest_ticket(queue_dir) == ticket:
-                handle = open(directory / 'slot-0', 'a+')
-                try:
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    handle.close()
-                else:
-                    with handle:
-                        handle.truncate(0)
-                        handle.write(f'{os.getpid()} {start} {ROOT}\n')
-                        handle.flush()
-                        ticket.unlink(missing_ok=True)
-                        timing.wait_seconds = time.monotonic() - started
-                        say(f'land: took land lock 0 after waiting {timing.wait_seconds:.3f} s')
-                        acquired = time.monotonic()
-                        lead(directory, request)
-                        timing.held_seconds = time.monotonic() - acquired
-                        say(f'land: held land lock for {timing.held_seconds:.3f} s')
-                    result = read_json(results / f'{name}.json')
-                    (results / f'{name}.json').unlink(missing_ok=True)
-                    return result, timing
-            if not waiting:
-                for line in gating.queue_status(directory, me={str(ROOT)}):
-                    say(line)
-                say('land: waiting; the lane at the head lands every queued change in one batch')
-                waiting = True
-            time.sleep(POLL_SECONDS)
-    finally:
-        ticket.unlink(missing_ok=True)
-        (requests / f'{name}.json').unlink(missing_ok=True)
+    done = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, env=os.environ | ENV)
+    say(f'{"pass" if done.returncode == 0 else "FAIL"}  {name} ({time.monotonic() - started:.0f} s)')
+    if done.returncode:
+        print(first_error(done.stderr + done.stdout), flush=True)
+    return done.returncode == 0
 
 
-# ---------------------------------------------------------------- the lane
-
-def log_landing(result, base, timing):
-    """Append the push to the landings log every worktree of this clone
-    shares (`<git common dir>/hirsel-landings.jsonl`): tools/main-runs maps a
-    red on main back to its landing and its lane through it."""
-    common = Path(run('git', 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
-    entry = dict(pushed=result['pushed'], landed=result['tip'], base=base,
-                 branch=run('git', 'branch', '--show-current').stdout.strip(),
-                 at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                 batch=result.get('batch'), batch_position=result.get('position'),
-                 land_wait_seconds=timing.wait_seconds, land_held_seconds=timing.held_seconds,
-                 batch_seconds=result.get('batch_seconds'))
-    with open(common / LANDINGS, 'a') as log:
-        log.write(json.dumps(entry, sort_keys=True) + '\n')
-
-
-def outer_timeout():
-    """The pid of a `timeout` this process runs under, or None."""
-    pid = os.getppid()
-    while pid > 1:
-        try:
-            comm = Path(f'/proc/{pid}/comm').read_text().strip()
-            parent = int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[1])
-        except (OSError, ValueError, IndexError):
-            return None
-        if comm == 'timeout':
-            return pid
-        pid = parent
-    return None
-
-
-def main_copy():
-    """The path of origin/main's tools/land, extracted with tools/buck2 into the
-    common git directory once per commit."""
-    sha = run('git', 'rev-parse', 'origin/main').stdout.strip()
-    common = Path(run('git', 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
-    copies = common / MAIN_COPIES
-    target = copies / sha
-    if not (target / 'tools/land').is_file():
-        copies.mkdir(exist_ok=True)
-        pending = Path(tempfile.mkdtemp(dir=copies, prefix='.pending-'))
-        try:
-            archive = subprocess.run(['git', 'archive', sha, 'tools/land', 'tools/buck2'], cwd=ROOT,
-                                     capture_output=True, check=True).stdout
-            subprocess.run(['tar', '-x', '-C', str(pending)], input=archive, check=True)
-            try:
-                pending.rename(target)
-            except OSError:
-                pass  # Another lane extracted the same commit first.
-        finally:
-            shutil.rmtree(pending, ignore_errors=True)
-        for old in sorted((p for p in copies.iterdir() if not p.name.startswith('.')),
-                          key=lambda p: p.stat().st_mtime)[:-KEEP_COPIES]:
-            shutil.rmtree(old, ignore_errors=True)
-    return target / 'tools/land', sha
-
-
-def status():
-    directory = lock_dir()
-    for line in gating.queue_status(directory, me={str(ROOT)}):
-        say(line)
-    if (batch := read_json(directory / 'batch.json')) is not None:
-        say(f'land: landing a batch of {len(batch["members"])} for {gating.minutes(time.time() - batch["at"])}: '
-            + ', '.join(member.get('branch') or member['name'] for member in batch['members']))
-    return 0
-
-
-def finish(request, result, timing):
-    """Report a change's batch result to its lane; a landed change's branch
-    moves to main as pushed."""
-    if result is None:
-        say('land: the batch stopped before it reached this change; run tools/land again')
-        return 1
-    for line in result.get('details', []):
-        if line:
-            say(line if line.startswith('land: ') else '  ' + line.replace('\n', '\n  '))
-    state = result['status']
-    if state == 'landed':
-        if run('git', 'cat-file', '-e', result['pushed'] + '^{commit}').returncode:
-            run('git', 'fetch', '-q', 'origin')  # A batch worktree of another clone pushed it.
-        if head() == request['head']:
-            if run('git', 'reset', '-q', '--keep', result['pushed']).returncode:
-                say(f'land: could not move this branch to main\'s {result["pushed"][:12]}')
-        else:
-            say('land: this worktree moved while it was queued; its branch stays where it is')
-        if result.get('resolved'):
-            say('land: resolved on the rebase: ' + ', '.join(result['resolved']))
-        batch = result.get('batch') or []
-        say(f'land: landed {result["tip"][:12]} in {result["pushed"][:12]} on main'
-            + (f' (batch of {len(batch)}: {", ".join(b or "?" for b in batch)})' if len(batch) > 1 else ''))
-        log_landing(result, result['base'], timing)
-        return 0
-    if state == 'conflict':
-        say('land: the rebase onto origin/main (and the changes landing before this one) conflicts in: '
-            + (', '.join(result.get('paths', [])) or 'see above'))
-        say('land: rebase by hand, resolve, then tools/land')
-    elif state == 'stale':
-        say('land: the worktree moved while it was queued; run tools/land again')
-    elif state == 'red':
-        behind = result.get('behind') or []
-        say('land: refusing to push a red tree: this change turns the checks red'
-            + (f' on top of {", ".join(behind)}' if behind else '') + '; the rest of the batch lands without it')
-    return 1
+def checks():
+    """Generated files, the workspace build, Clippy and formatting, in that order."""
+    if not Path(BUCK2).exists() and not check('prepare.py', [PY, 'tools/buck2/prepare.py']):
+        return False
+    if not check('sync.py --if-stale', [PY, 'tools/buck2/sync.py', '--if-stale']):
+        return False
+    query = subprocess.run([BUCK2, 'uquery', *CONFIG, BUILD_SET], cwd=ROOT, capture_output=True, text=True)
+    if query.returncode:
+        say('FAIL  the build set query\n' + first_error(query.stderr))
+        return False
+    return (check('workspace build', [PY, 'tools/buck2/event_logs.py', 'build', *CONFIG,
+                                      '--materializations', 'none', *query.stdout.split()])
+            and check('Clippy', [PY, 'tools/buck2/clippy.py'])
+            and check('formatting', [PY, 'tools/buck2/fmt.py', '--check']))
 
 
 def main():
-    if sys.argv[1:2] == ['--batch'] and len(sys.argv) == 3:
-        return run_batch(sys.argv[2])
     if sys.argv[1:]:
         print(__doc__, file=sys.stderr)
         return 2
-    if (pid := outer_timeout()) is not None:
-        say(f'land: refusing to run under timeout (pid {pid}): a kill can stop land between its push and its '
-            'record, or strand a rebase. Run it in the background with a log: '
-            'tools/land > /tmp/<lane>-land.log 2>&1; echo EXIT $? >> /tmp/<lane>-land.log')
-        return 2
-    os.chdir(ROOT)
-    if run('git', 'status', '--porcelain').stdout.strip():
-        say('land: the worktree has uncommitted changes; commit them first')
+    if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
+        say('the worktree has uncommitted changes; commit them first')
         return 1
-    if not os.environ.get(MAIN_COPY):
-        if (fetch := run('git', 'fetch', 'origin')).returncode:
-            say('land: git fetch failed\n' + fetch.stderr)
+    branch = git('branch', '--show-current').stdout.strip()
+    for attempt in range(1, ATTEMPTS + 1):
+        if (fetched := git('fetch', '-q', 'origin', 'main')).returncode:
+            say('git fetch failed\n' + fetched.stderr)
             return 1
-        script, sha = main_copy()
-        say(f'land: running origin/main\'s copy of the landing scripts ({sha[:12]})')
-        sys.stdout.flush()
-        os.execve(sys.executable, [sys.executable, str(script)], os.environ | {TREE: str(ROOT), MAIN_COPY: sha})
-    for name, value in (('CARGO_BUILD_JOBS', '4'), ('HIRSEL_JOBS', '4'), ('RUST_TEST_THREADS', '4')):
-        os.environ.setdefault(name, value)
-    base = gating.merge_base('origin/main')
-    if not run('git', 'rev-list', '-1', f'{base}..HEAD').stdout.strip():
-        say('land: nothing to land; HEAD is on origin/main')
-        return 0
-    if refused := gating.generated.refusal(gating.changed_paths(base, deleted=False)):
-        for line in refused:
-            say('land: ' + line)
-        return 1
-    request = dict(worktree=str(ROOT), head=head(), base=base,
-                   branch=run('git', 'branch', '--show-current').stdout.strip())
-    gating.stop_daemons()
-    result, timing = queue(lock_dir(), request)
-    return finish(request, result, timing)
+        main_sha = git('rev-parse', 'origin/main').stdout.strip()
+        changed = git('diff', '--name-only', '--diff-filter=d', 'origin/main...HEAD').stdout.split()
+        if refused := generated.refusal(changed):
+            print('\n'.join('land: ' + line for line in refused), flush=True)
+            return 1
+        if git('rebase', 'origin/main').returncode:
+            conflicts = git('diff', '--name-only', '--diff-filter=U').stdout.split()
+            git('rebase', '--abort')
+            say('the rebase onto origin/main conflicts in: ' + (', '.join(conflicts) or 'see git rebase')
+                + '; rebase by hand, resolve, then run tools/land again')
+            return 1
+        head = git('rev-parse', 'HEAD').stdout.strip()
+        if head == main_sha:
+            say('nothing to land; HEAD is on origin/main')
+            return 0
+        # Run the rebased tree's own land, so a landed fix to it holds at once.
+        if (ROOT / 'tools/land').read_bytes() != Path(__file__).read_bytes():
+            say('the rebased tree has another tools/land; running it')
+            os.execv(PY, [PY, str(ROOT / 'tools/land')])
+        say(f'attempt {attempt}: checking {head[:12]} on origin/main {main_sha[:12]}')
+        if not checks():
+            say('refusing to push a red tree')
+            return 1
+        pushed = git('push', 'origin', 'HEAD:main')
+        if pushed.returncode == 0:
+            common = Path(git('rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
+            with open(common / LANDINGS, 'a') as log:
+                log.write(json.dumps(dict(landed=head, pushed=head, base=main_sha, branch=branch,
+                                          at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())),
+                                     sort_keys=True) + '\n')
+            say(f'landed {head[:12]} on main')
+            return 0
+        if not any(marker in pushed.stderr for marker in REJECTED):
+            say('git push failed\n' + pushed.stderr)
+            return 1
+        say('main moved during the checks; rebasing again')
+    say(f'main moved under {ATTEMPTS} attempts in a row')
+    return 1
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--status']:
-        sys.exit(status())
-    with gating.daemon_lifetime():
-        sys.exit(main())
+    sys.exit(main())

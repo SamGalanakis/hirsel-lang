@@ -141,9 +141,8 @@ path starts with a prefix and samples their catalogue alone, so the limit
 applies to those files' variants. `--sample-path PREFIX` (repeatable) instead
 keeps the whole corpus's sample and checks only its variants of matching files:
 `--seed 1 --limit 5000 --sample-path conformance/CLO/X.hir` checks exactly the
-variants of that file the per-push campaign checks. `tools/gate` runs a
-change's chosen cases this way (`agreement:<path>`) and prints the same command
-to rerun a flagged cluster's case.
+variants of that file the seed-1 campaign checks. `//:gate-agree-selected-shard-<i>`
+runs a lane's chosen cases this way (`-c hirsel.agree_paths`).
 `--hash-seed N` independently selects runtime placement in conformance, native
 and agree, including checked execution, exact-program replay and reductions.
 Native artifact names retain nonzero launch inputs as canonical suffixes; every
@@ -250,7 +249,7 @@ executed by this campaign. Agreement executes only `run`, `fail`, `blocked` and 
 valid and within the interpreter budget. Its reported native count is therefore
 an upper bound; an exact launch count requires running the campaign.
 
-`native --smoke` (in `tools/gate`) runs the cases of
+`native --smoke` (`//:gate-native-smoke`) runs the cases of
 `native-tests/regressions/smoke.txt` and eight generated successes and eight
 directed failures on the heap executor with fault injection and as an optimized
 x86-64 executable on the diagnostic runtime archive and on the shipped (default)
@@ -320,7 +319,7 @@ archive `hirsel run --native` ships, with the inlined fast paths) or `system`
 `LAUNCH_TIMEOUT` (120 s, ten times that under memcheck) and that configuration
 of that case fails by name.
 
-`native --full` (in `tools/gate --full`) runs a derived cover of the executable
+`native --full` (in the full suite, `tools/main-runs`) runs a derived cover of the executable
 cases of `conformance/passing.txt` under a per-program pairwise cover of the
 driver's legal matrix on both targets and
 writes `native-matrix.tsv` (one row per case and configuration, headed by the
@@ -340,7 +339,7 @@ one checkout never share a path; the root is held by a file lock, explicitly
 unlocked when its owner drops even if a spawning child retains a descriptor.
 The next run removes every root whose owner has finished. Runtime archives built
 with Cargo stay in the shared, locked `native-gate/runtime/cache`.
-`native --sanitize` (in `tools/gate --full`) runs the smoke
+`native --sanitize` (in the full suite) runs the smoke
 cases, the allocating cases of `native-tests/regressions/memcheck.txt` and eight
 generated programs as x86-64 executables under Valgrind memcheck, at O0 and O3:
 on the system-allocator archive, where each fixed-size block is one libc
@@ -369,13 +368,13 @@ validator's refusal are discrepancies. The native observation reader also
 requires the actual process exit status to equal the shared RunOutcome policy
 for its reported ending before comparison, including failure, Blocked and budget
 stops; an exit disagreement is a launch discrepancy. Their kinds must be exactly those of
-`native-tests/regressions/agree-known.txt`. The default campaign in
-`tools/gate` is unchanged and still requires zero flagged variants. Every
+`native-tests/regressions/agree-known.txt`. The default campaign is
+unchanged and still requires zero flagged variants. Every
 campaign prints each cluster's first variant to stderr as it finds it
 (`agree: cluster {json}`), so a run stopped before its report still names the
 kinds it saw. `--shard I/N` takes the same stable-rank stripe of the catalogue
 under `--native` as without it; a shard fails on a new kind, and only the merge
-of every shard judges a listed kind that no longer occurs. `tools/gate --full`
+of every shard judges a listed kind that no longer occurs. The full suite
 runs `tools/buck2/agree.py --native-full`: `AGREE_NATIVE_FULL_SHARDS` (16)
 shards, each under `AGREE_NATIVE_FULL_TIMEOUT` (3600 s), merged from their
 reports, or their streamed clusters for a shard that stopped.
@@ -507,8 +506,8 @@ or exit. Its stdout directives match the complete captured output prefix exactly
 including an empty prefix. Ordinary and checked interpretation must agree.
 
 `native --smoke --filter TEXT` runs selected baseline programs under the per-push
-smoke matrix, with real Io record/replay. `tools/gate` gives this and Cranelift
-parity the same changed-program filters; filtered smoke runs those programs on
+smoke matrix, with real Io record/replay. `-c hirsel.native_filters` gives this and Cranelift
+parity (`//:gate-native-changed`, `//:gate-native-cranelift-changed`) the same program filters; filtered smoke runs those programs on
 Cranelift too, including programs outside its fixed smoke list. Unfiltered smoke
 retains that smaller control set. An empty selection fails.
 

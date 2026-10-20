@@ -1,7 +1,7 @@
 //! Links emitted objects with C and the `hirsel_rt_v2` runtime and runs them: x86-64
 //! natively, AArch64 under `qemu-aarch64-static`. These need the pinned clang, the AArch64
 //! cross toolchain and qemu, so `tools/check-native.sh` runs them (`--include-ignored`) and
-//! `tools/gate` does not.
+//! the plain test run does not.
 
 use crate::support;
 

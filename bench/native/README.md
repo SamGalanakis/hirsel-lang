@@ -5,8 +5,8 @@ C and safe Rust references. Local x86-64 reports are informational: missing
 configurations, counters, workloads and native AArch64 timings are reported as
 incomplete. Deterministic instruction budgets for the 17 small Hirsel workloads
 run on the pool as `//:gate-perf-counts`; timing reports remain informational.
-The harness's own tests (`bench/native/tests`) run in `tools/gate`
-whenever a file here outside `programs/` changes. Reports are written to the gitignored `bench/native/out/` by default.
+The harness's own tests (`bench/native/tests`) run in main's hourly run
+(`tools/main-runs`); run them after changing a file here outside `programs/`. Reports are written to the gitignored `bench/native/out/` by default.
 
 The nested Rust project has its own `[workspace]` and lockfile; the parent
 workspace selects only `crates/*`, so none of these dependencies enters it.
