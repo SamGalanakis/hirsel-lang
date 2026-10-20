@@ -407,6 +407,9 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         if paths == None:
             return
         args = args + [arg for path in paths for arg in [flag, path]]
+    if "--corpus" in args:
+        # The LLVM slice rotates with each full run's fresh seed.
+        args = args + ["--seed", TEST_SEED]
     if changed_native:
         # This setting is part of the test command and therefore its cache key.
         # No selection must never turn a per-push target into a whole campaign.
@@ -439,14 +442,14 @@ def _script_binary_impl(ctx):
 
 _script_binary = rule(impl = _script_binary_impl, attrs = {"script": attrs.source()})
 
-def hirsel_script_test(name, script, data, runtime_archives = None, full = True, bin_exes = {}, precheck = None, production = False):
+def hirsel_script_test(name, script, data, runtime_archives = None, full = True, args = [], bin_exes = {}, precheck = None, production = False):
     """A script harness with the same hermetic inputs as native Rust tests."""
     if full and not FULL_GATE:
         return
     binary = name + "-script"
     _script_binary(name = binary, script = script)
     _rust_test(
-        name = name, harness = ":" + binary, args = [], data = data, cwd = ".",
+        name = name, harness = ":" + binary, args = args, data = data, cwd = ".",
         bin_exes = {} if production else bin_exes, release_bin_exes = bin_exes if production else {},
         bin_exe_dir = BIN_EXE_DIR + "/" + name, precheck = precheck,
         llvm = "root//tools/buck2/native-toolchain:llvm",

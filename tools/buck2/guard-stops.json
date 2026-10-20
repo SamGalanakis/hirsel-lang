@@ -1,4 +1,22 @@
 {
+  "gate-native-corpus": [
+    {
+      "cpu_count": 2,
+      "date": "2026-10-20",
+      "reserved_kb": 786432,
+      "needed_kb": 5767168,
+      "stop": "native --corpus shards 3, 8, 10 and 13 of 32 reached the 1536M guard limit under gate-native-cranelift's reservation (resident peaks 1185-1213M, two jobs compiling and running corpus cases); all 16 of 16 shards had passed under its earlier 5632M limit"
+    }
+  ],
+  "gate-std-native": [
+    {
+      "cpu_count": 1,
+      "date": "2026-10-20",
+      "reserved_kb": 1048576,
+      "needed_kb": 4194304,
+      "stop": "native --std-compile over all of std peaks at 3.0 GiB resident in one process (931 s); a shard's first module audit alone peaks at 1.45 GiB"
+    }
+  ],
   "hirsel-driver-test-it": [
     {
       "cpu_count": 2,

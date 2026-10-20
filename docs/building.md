@@ -955,6 +955,66 @@ run; its list is `cranelift-parity-aarch64.tsv`).
 `native --cranelift-times [--filter TEXT]...` prints each case's emission wall time
 under Cranelift, LLVM O0 and LLVM O2, and the totals.
 
+### Native coverage
+
+Three groups of targets catch native-only and scaling defects that the
+interpreted corpus cannot. Main's hourly run runs all of them. A lane runs
+the parts its change can break: the `gate-std-native` shard holding a std
+module it changed (`--std-compile --filter <module>` names one module),
+`gate-native-bugs` for lowering, backend or runtime changes, and the
+checker-scaling shards for front-end changes.
+
+`gate-std-native-shard-<i>` (`native --std-compile`, four module shards)
+builds every public std@1 function through the native stage validators and
+both Cranelift and LLVM at O0, without linking or running anything. Generic
+functions get monomorphic wrappers at representative types (`u64`, size 4),
+and the compile-time generators of `std.derive` compile their generated bodies
+for a representative record. One process over all of std (114 modules, 930
+public functions, 4604 units) took 931 seconds and 3.0 GiB on the dev
+compiler, about 160 seconds of it the first module's source audit, which each
+shard pays once; the four shards took at most 333 seconds each. With their std
+workarounds reverted, `http2.drain_frames` failed its import validator
+(CleanupOrder) and `hpack.lookup` its ready validator (MovedPart) before
+2c871f85 fixed both.
+
+`gate-native-corpus-shard-<i>` (`native --corpus`, 32 shards) runs every
+runnable corpus case (run, fail, blocked and test headers; about 2,560)
+natively and compares the full interpreter observation: stdout, exit status,
+failure rule and site, with headers and `.stdout` sidecars as further oracles.
+Every case runs on Cranelift; a 1/16 slice that rotates with the run's seed, and
+every case with a pending row, also run on LLVM O0. Cases whose header names
+`runners:` run interpreted only, and say so.
+`native-tests/regressions/corpus-exclusions.tsv` names the cases never launched
+natively (MEM-12), and `corpus-pending.tsv` the failures still attempted on
+every run, each with its exact reason; an unlisted failure, a changed reason
+and a pending row that now agrees all fail. At 16 shards a shard took 838 to
+1503 seconds.
+
+`gate-native-bugs` (`native --bugs`) runs a generator seeded from GAP 4--8:
+literal matches on destructured and borrowed scrutinees, let-else payloads,
+`replace`/`take` inside tuple, record and variant construction, const `Inline`
+reads into aggregates, `?` in arms, and loops writing fields of a `mut`,
+`unique` or nested collection. It enumerates all 18 place x operation x context
+combinations (`generated/bug-0` to `-17`), interpreter against LLVM O0 and
+Cranelift. Known failures are rows of `native-tests/regressions/bug-pending.tsv`,
+judged like `corpus-pending.tsv`; a new failure prints a line-minimized program.
+
+`gate-checker-scaling-shard-<i>` (`tools/checker-scaling.py`, one family per
+shard) checks generated programs at N=10, 40 and 160: `match` arms assigning
+record fields through `?`, record field count, nested loops with `?`, closure
+captures, long `if`/`else if` chains and deep nesting. Instructions are
+Cachegrind Ir under the pinned Valgrind, deterministic as in `gate-perf-counts`;
+peak RSS comes from a separate uninstrumented run, and wall time is printed
+only for diagnosis. Over an empty-program baseline (0.59 billion Ir), the
+marginal cost may grow at most twice N log2(N) between consecutive sizes, plus
+16 MiB RSS noise. Each cell has a 2 GiB data cap and a 45-second limit (240
+under Cachegrind); reaching either is a finding. The match/try/field family
+was red for GAP 5 (from N=40 to 160 its marginal Ir grew 18-fold against an
+allowed 11-fold) until 19aa5a01 made that check linear; `EXPECTED` lists any
+family expected to fail, with its owner, and an unexpected pass fails until its
+row is removed. The first shard takes about 70 seconds and the others about 40
+each.
+
 Tests that execute the full native matrix or take about a minute or longer
 carry `#[ignore = "full gate"]` and a `full_gate_` name prefix. Keep their
 inputs and assertions intact; add a separate bounded smoke test when useful.

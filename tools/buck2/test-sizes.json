@@ -223,6 +223,14 @@
       1792486931
     ]
   },
+  "gate-native-corpus": {
+    "cpu_class": "",
+    "cpu_count": 2,
+    "memory_kb": 2883584,
+    "memory_kills": 1,
+    "pss_runs": 0,
+    "runs": 0
+  },
   "gate-native-cranelift": {
     "cpu_class": "",
     "cpu_count": 2,
@@ -457,6 +465,14 @@
       1792195080,
       1792195080
     ]
+  },
+  "gate-std-native": {
+    "cpu_class": "",
+    "cpu_count": 1,
+    "memory_kb": 2097152,
+    "memory_kills": 1,
+    "pss_runs": 0,
+    "runs": 0
   },
   "hirsel-check-unittest": {
     "cpu_class": "",

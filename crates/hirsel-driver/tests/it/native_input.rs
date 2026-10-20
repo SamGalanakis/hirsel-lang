@@ -702,3 +702,55 @@ fn borrowed_associations_and_scoped_promises_are_checked_at_native_import() {
     t.loop_source.as_mut().unwrap().option.0.package.name = "foreign".into();
     assert!(engine.import_native_input(bad).is_err());
 }
+
+/// A library build must select its public surface independently of unrelated
+/// functions, while still including and auditing every reached private helper.
+#[test]
+fn explicit_native_roots_keep_their_private_closure() {
+    hirsel_engine::with_compiler_stack(|| {
+        use hirsel_engine::DefinitionQueries;
+        let mut engine = hirsel_engine::QueryEngine::new(
+            hirsel_engine::default_environment(),
+            hirsel_driver::compiler_adapters(),
+        );
+        let file = engine.sources.add("surface.hir", "fn helper(x:u64)->u64{x}\npub fn visible(x:u64)->u64{helper(x)}\nfn unrelated()->u64{9u64}\n".into()).unwrap();
+        let parsed = engine
+            .parse_file(file, &hirsel_engine::default_context())
+            .unwrap();
+        let visible = parsed
+            .value
+            .tree
+            .items
+            .iter()
+            .find(|i| i.name.as_str() == "visible")
+            .unwrap()
+            .definition
+            .clone();
+        let input = engine.native_input_for(&[visible]).unwrap();
+        let names: std::collections::BTreeSet<_> = input
+            .snapshot()
+            .definitions
+            .keys()
+            .map(|p| p.0.name.as_str())
+            .collect();
+        assert_eq!(names, ["helper", "visible"].into_iter().collect());
+        assert_eq!(
+            input.snapshot().definitions.len(),
+            input.snapshot().audits.len()
+        );
+    });
+}
+
+#[test]
+fn library_surface_instantiates_generics_and_preserves_argument_labels() {
+    hirsel_engine::with_compiler_stack(|| {
+        let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("native-library-surface");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("hirsel.json"), r#"{"schema":1,"package":{"name":"surface","version":"1"},"sources":[{"path":"sample.hir","module":["sample"]}],"dependencies":[]}"#).unwrap();
+        std::fs::write(root.join("sample.hir"), "pub fn keep[T](name take value:T)->T uses {value} {value}\npub fn empty[T]()->List[T] uses {} {[]}\n").unwrap();
+        let mut surface =
+            hirsel_driver::native::StdSurface::load(&root.join("hirsel.json")).unwrap();
+        assert_eq!(surface.modules.len(), 1);
+        assert!(surface.compile("sample").unwrap() >= 4);
+    });
+}

@@ -274,6 +274,12 @@ impl QueryEngine {
             .filter(|path| !self.package_manifests.contains_key(&path.0.package))
             .cloned()
             .collect();
+        self.native_paths_from(roots)
+    }
+    pub(crate) fn native_paths_from(
+        &mut self,
+        roots: impl IntoIterator<Item = DefPath>,
+    ) -> Result<BTreeSet<DefPath>, QueryError> {
         let mut selected = self.semantic_program(roots)?.definitions;
         selected.retain(|path| self.items.contains_key(path));
         // CT-3: a non-generic compile-time-only function never runs: no

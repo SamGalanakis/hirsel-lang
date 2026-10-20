@@ -744,8 +744,8 @@ shard prints its stage times, slowest variants and costliest programs to stderr,
 and names any variant still running after 30 s.
 
 
-Unfiltered native campaign shards consume `//:native-selection`, a cached
-derived coverage artifact built from the collector binary and the complete corpus. It selects
+Unfiltered native campaign shards consume `//:native-selection`, the frozen
+program cover checked in as `native-tests/regressions/native-selection.json`:
 an inclusion-minimal feature cover after historical pins. Each selected
 baseline/generated program runs a rotating feasible-pair configuration cover;
 topology partitions and named exclusion cells remain present. `--exhaustive`
@@ -754,8 +754,18 @@ campaign seed defaults to the full run's `PROPTEST_RNG_SEED`; `--seed N` makes a
 run reproducible. The source/IR full agreement keeps all programs and budgets
 96 mutations each; `--exhaustive` restores its complete catalogue.
 
+The cover is frozen because deriving it observes every corpus program through
+14 native builds (two targets by seven lowering options) with LLVM emission:
+about 68 seconds and 270 MB of growth per program, roughly 50 pool CPU-hours
+for the corpus, more than the campaigns it slims. Derived per run, its 32
+shards never finished. Loading it adds, from the current tree, every
+historical pin and every program the cover never observed, so new cases run
+until the next derivation. `tools/bless.sh native-selection` derives it again
+on the pool (`-c hirsel.native_selection=derive`: 256 observation shards of
+about 10 programs within 1 CPU and 4 GiB each, then one merge) and writes the
+file for review.
+
 The whole `gate-native-full` target has no coverage-artifact dependency, since
 Buck2 fixes its build graph before it receives test-runner arguments. Explicit
-`--filter` values are the program selection and skip coverage collection. An
-unfiltered whole-target run derives the same inclusion-minimal cover in its
-own scratch directory; full-gate shards continue to share the cached artifact.
+`--filter` values are the program selection; an unfiltered whole-target run
+reads the checked-in cover.

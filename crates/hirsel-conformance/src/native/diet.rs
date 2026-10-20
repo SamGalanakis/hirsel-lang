@@ -4,23 +4,41 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-/// A generated cover. Historical findings are retained independently of gain.
+/// The checked-in cover the native campaigns read. Deriving it re-observes
+/// the whole corpus through 14 native builds per program, so it is frozen and
+/// regenerated on demand (`tools/bless.sh native-selection`), not per run.
+pub const FROZEN: &str = "native-tests/regressions/native-selection.json";
+
+/// A program cover. Historical findings are retained independently of gain.
 pub struct Selection {
     pub selected: BTreeSet<String>,
     pub protected: BTreeSet<String>,
+    considered: BTreeSet<String>,
 }
 
 impl Selection {
-    /// Buck2 supplies a cached derived artifact. Direct CLI use derives it
-    /// into this invocation's scratch root instead of trusting a stale list.
+    /// Buck2 supplies the frozen cover (`HIRSEL_NATIVE_SELECTION`); direct CLI
+    /// use reads the checked-in file. Either is completed against `root`.
     pub fn load(root: &Path) -> Result<Self, String> {
-        if let Some(path) = std::env::var_os("HIRSEL_NATIVE_SELECTION") {
-            return Self::read(Path::new(&path));
-        }
-        let value = hirsel_engine::with_compiler_stack(|| derive(root))?;
-        let path = native::scratch("selection")?.join("selection.json");
-        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).map_err(|e| e.to_string())?;
-        Self::read(&path)
+        let path = std::env::var_os("HIRSEL_NATIVE_SELECTION")
+            .map_or_else(|| root.join(FROZEN), std::path::PathBuf::from);
+        let mut selection = Self::read(&path)?;
+        selection.complete(root)?;
+        Ok(selection)
+    }
+    /// A frozen cover goes stale as the corpus grows: every current historical
+    /// pin and every program the cover never observed is selected too.
+    fn complete(&mut self, root: &Path) -> Result<(), String> {
+        let pins = protected(root)?;
+        self.protected.extend(pins.iter().cloned());
+        self.selected.extend(pins);
+        let considered = &self.considered;
+        let new: Vec<_> = universe(root)?
+            .into_iter()
+            .filter(|path| !considered.contains(path))
+            .collect();
+        self.selected.extend(new);
+        Ok(())
     }
     pub fn read(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -28,7 +46,7 @@ impl Selection {
         if !value["shard"].is_null() {
             return Err("a partial native observation is not a program selection".into());
         }
-        if value["version"] != 1 {
+        if value["version"] != 2 {
             return Err("unsupported native selection version".into());
         }
         let paths = |key: &str| -> Result<BTreeSet<String>, String> {
@@ -45,7 +63,8 @@ impl Selection {
         };
         let selected = paths("selected")?;
         let protected = paths("protected")?;
-        if !protected.is_subset(&selected) {
+        let considered = paths("considered")?;
+        if !protected.is_subset(&selected) || !selected.is_subset(&considered) {
             return Err("native selection dropped a historical finding".into());
         }
         if selected.is_empty() {
@@ -54,8 +73,45 @@ impl Selection {
         Ok(Self {
             selected,
             protected,
+            considered,
         })
     }
+}
+
+/// The checked-in form of a derived cover: what it chose, what it pinned and
+/// every program it observed, without the per-program feature table.
+pub fn freeze(derived: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let considered: BTreeSet<&str> = derived["programs"]
+        .as_array()
+        .ok_or("derived cover has no programs")?
+        .iter()
+        .map(|p| p["path"].as_str().ok_or("invalid program path"))
+        .collect::<Result<_, _>>()?;
+    Ok(
+        json!({"version": 2, "selected": derived["selected"], "protected": derived["protected"],
+              "considered": considered, "counts": derived["counts"]}),
+    )
+}
+
+/// Every program a derivation observes: the native baseline, the run cases,
+/// the regression fixtures and the historical pins.
+fn universe(root: &Path) -> Result<BTreeSet<String>, String> {
+    let mut paths: BTreeSet<String> = native::baseline(root)?.into_iter().map(|c| c.id).collect();
+    paths.extend(protected(root)?);
+    let rules = spec_rules(root)?;
+    let mut files = Vec::new();
+    discover(&root.join("conformance"), &mut files)?;
+    for path in files {
+        let relative = path.strip_prefix(root).map_err(|e| e.to_string())?;
+        let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        if matches!(
+            parse_header(relative, &source, &rules)?.expect,
+            Expect::Run { .. }
+        ) {
+            paths.insert(relative.display().to_string());
+        }
+    }
+    Ok(paths)
 }
 
 /// Retain all named exclusion cells in addition to feasible pair coverage, so
@@ -207,8 +263,7 @@ impl Collected {
     }
 }
 
-/// Build a derived coverage artifact. The Buck2 action key includes the
-/// collector binary and every source input; no checked-in selection goes stale.
+/// Derive the cover in one process (tests and small corpora; Buck2 shards it).
 pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
     derive_shard(root, None, None)
 }
@@ -273,7 +328,8 @@ pub fn derive_shard(
     let mut errors = BTreeMap::new();
     for (index, (path, case)) in cases.iter().enumerate() {
         eprintln!("native-select: {}/{} {path}", index + 1, cases.len());
-        let result = (|| {
+        // A panicking stage is a failure of this program, not of the derivation.
+        let observe = || {
             let mut program = hirsel_driver::load_program(case.path.as_ref().unwrap())
                 .map_err(|e| e.to_string())?;
             program.check_for_execution().map_err(|e| e.to_string())?;
@@ -286,7 +342,18 @@ pub fn derive_shard(
                 .import_native_input(raw)
                 .map_err(|e| format!("{e:?}"))?;
             Ok::<_, String>(hirsel_driver::native::backend_features(&input))
-        })();
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(observe))
+            .unwrap_or_else(|panic| {
+                Err(format!(
+                    "a native stage panicked: {}",
+                    panic
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| panic.downcast_ref::<&str>().copied())
+                        .unwrap_or("(no message)")
+                ))
+            });
         let (seen, failures) = result.unwrap_or_else(|e| (BTreeSet::new(), vec![e]));
         // A partially observable program is retained, never silently discarded.
         if !failures.is_empty() {
@@ -578,6 +645,28 @@ pub fn replay_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frozen_cover_keeps_its_choice_and_every_observed_program() {
+        let derived = json!({"version": 1, "selected": ["a", "b"], "protected": ["b"], "counts": {},
+            "programs": [{"path": "a"}, {"path": "b"}, {"path": "c"}]});
+        let frozen = freeze(&derived).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("native-selection-{}.json", std::process::id()));
+        std::fs::write(&path, serde_json::to_vec(&frozen).unwrap()).unwrap();
+        let selection = Selection::read(&path).unwrap();
+        assert_eq!(selection.selected, ["a", "b"].map(String::from).into());
+        assert_eq!(
+            selection.considered,
+            ["a", "b", "c"].map(String::from).into()
+        );
+        // A cover that selects what it never observed is not a cover of it.
+        let mut bad = frozen.clone();
+        bad["selected"] = json!(["a", "d"]);
+        std::fs::write(&path, serde_json::to_vec(&bad).unwrap()).unwrap();
+        assert!(Selection::read(&path).is_err());
+        std::fs::remove_file(&path).unwrap();
+    }
 
     #[test]
     fn a_cover_preserves_the_union_pins_and_has_no_redundant_unpinned_program() {

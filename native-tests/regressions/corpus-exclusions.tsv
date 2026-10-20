@@ -1,0 +1,4 @@
+# Pre-execution exclusions: case<TAB>reason. IDs must exist and be runnable;
+# duplicate, empty and stale reasons fail the runner. Pending native defects
+# belong in corpus-pending.tsv and are still attempted on every selected run.
+conformance/MEM/MEM-12-flat-list-builder-run.hir	Host rule: never launch this fixture natively; its flat-list builder can exhaust the shared host.

@@ -320,6 +320,11 @@ GATE = dict(cwd="crates/hirsel-conformance")
 # The conformance stage runs as shards of the corpus by path hash, each well
 # under ten minutes on a loaded pool; tools/buck2/conformance.py sums their counts.
 CONFORMANCE_SHARDS = 16
+# The hourly run's native coverage stages (tools/main-runs). One process over
+# all of std took 931 s and 3.0 GiB, about 160 s of it the first module's source
+# audit, which each std shard pays once. 16 corpus shards took 838-1503 s each.
+STD_NATIVE_SHARDS = 4
+NATIVE_CORPUS_SHARDS = 32
 # The seed-1 sample whose variants of chosen corpus cases the agreement
 # slices run.
 AGREE_LIMIT = 5000
@@ -370,6 +375,18 @@ TRACE_ROOTS_SHARDS = 96
 # 32 refines 8: an 8-way shard is the union of four 32-way shards.
 HISTORY_SHARDS = 32
 GATE_TESTS = [
+    dict(name="gate-native-bugs", binary="//:hirsel-conformance-bin-native", args=["--bugs"],
+         runtime_archives=RUNTIME_ARCHIVES, measured_as="gate-native-smoke", **GATE),
+    # Every public std function lowered, validated and emitted by both backends.
+    *(dict(name=f"gate-std-native-shard-{index}", binary="//:hirsel-conformance-bin-native",
+           args=["--std-compile", "--shard", f"{index}/{STD_NATIVE_SHARDS}"], **GATE)
+      for index in range(1, STD_NATIVE_SHARDS + 1)),
+    # Every runnable corpus case on Cranelift and a rotating LLVM slice against
+    # the interpreter.
+    *(dict(name=f"gate-native-corpus-shard-{index}", binary="//:hirsel-conformance-bin-native",
+           args=["--corpus", "--shard", f"{index}/{NATIVE_CORPUS_SHARDS}"],
+           runtime_archives=RUNTIME_ARCHIVES, **GATE)
+      for index in range(1, NATIVE_CORPUS_SHARDS + 1)),
     *(dict(name=f"gate-conformance-shard-{index}", binary="//:hirsel-conformance-bin-hirsel-conformance",
            args=["--check-format", "--shard", f"{index}/{CONFORMANCE_SHARDS}"], **GATE)
       for index in range(1, CONFORMANCE_SHARDS + 1)),
@@ -897,10 +914,17 @@ def first_party(meta: dict) -> str:
     if unguarded:
         raise SystemExit("these binary and test roots do not install the memory guard; add "
                          "`hirsel_guard::install!();` (`#[cfg(test)]` in a library): " + ", ".join(unguarded))
-    out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
+    out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", precheck=PRECHECK, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
     out.append("\n" + call("hirsel_native_timeouts", name="native-timeout-repro", data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
     for gate in GATE_TESTS:
         out.append("\n" + call("hirsel_command_test", **gate, precheck=PRECHECK, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
+    for index, family in enumerate(("match_try_fields", "record_fields", "nested_loops_try", "closure_captures", "if_chain", "deep_nesting"), 1):
+        name = f"gate-checker-scaling-shard-{index}"
+        # Cachegrind Ir under the pinned Valgrind (a native tool input), as gate-perf-counts.
+        out.append("\n" + call("hirsel_script_test", name=name, script="tools/checker-scaling.py", full=False,
+                               args=["--family", family, "--hirsel", f"buck-out/tmp/cargo-bin-exe/{name}/hirsel"],
+                               bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, runtime_archives=RUNTIME_ARCHIVES,
+                               data=["tools/checker-scaling.py"]))
     out.append("\n" + call("hirsel_test", name="hirsel-test-tool-profile", crate="test_tool_profile",
                             crate_root="tools/tests/test_tool_profile.rs", srcs=["tools/tests/test_tool_profile.rs"],
                             features=[], deps=[], manifest_dir=".", package_name="test-tool-profile",
@@ -931,7 +955,8 @@ def execution_sizes() -> str:
     """Measured requests stay separate from crate BUCK files."""
     data = json.loads(READS.text(HERE / "action-sizes.json"))
     profiles = data["profiles"]
-    budgets = {(1, 1048576, "")}
+    # The native-selection observation request (tools/buck2/native_selection.bzl).
+    budgets = {(1, 1048576, ""), (1, 4194304, "")}
     requests = {}
     for profile in ("dev", "release"):
         requests[profile] = {}

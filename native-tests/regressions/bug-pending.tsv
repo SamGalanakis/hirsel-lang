@@ -1,0 +1,4 @@
+# Known failures of the bug-seeded generator (`native --bugs`): one row per
+# combination (generated/bug-<0..17>) and configuration, or `snapshot` when the
+# interpreter reference itself fails. Unlisted, changed and stale rows fail.
+# case	configuration	class	reason

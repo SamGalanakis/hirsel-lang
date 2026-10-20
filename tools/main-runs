@@ -136,6 +136,14 @@ def stages(stage, tier):
     stage('source and IR checker agreement (unrestricted)', [PY, 'tools/buck2/agree.py', '--full'])
     stage('instruction count budgets', test('//:gate-perf-counts'))
     stage('native smoke: heap, x86-64 and real Io replay', test('//:gate-native-smoke'))
+    from sync import NATIVE_CORPUS_SHARDS, STD_NATIVE_SHARDS
+    stage('std native compile: every public std function on both backends',
+          test(*[f'//:gate-std-native-shard-{i}' for i in range(1, STD_NATIVE_SHARDS + 1)]))
+    # Cranelift on every runnable case, LLVM O0 on a slice that rotates with the seed.
+    stage('native corpus agreement and the GAP-seeded generator',
+          test(*[f'//:gate-native-corpus-shard-{i}' for i in range(1, NATIVE_CORPUS_SHARDS + 1)], '//:gate-native-bugs'))
+    stage('checker scaling: six families at N=10, 40 and 160',
+          test(*[f'//:gate-checker-scaling-shard-{i}' for i in range(1, 7)]))
     stage('release tests', test(*release, *tests))
     stage('full gate crate tests in release', full_crate_tests(*release, *libtests))
     stage('native and Lean checks', ['tools/check-native.sh'])

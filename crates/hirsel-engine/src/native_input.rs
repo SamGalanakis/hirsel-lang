@@ -81,6 +81,23 @@ impl QueryEngine {
         let _interval = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Plan);
         let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Plan);
         let paths = self.native_paths()?;
+        self.export_native_paths(paths)
+    }
+    /// A build-only library surface uses explicit roots, with exactly the same
+    /// source audit and independent import validation as a whole program.
+    pub fn native_input_for(
+        &mut self,
+        roots: &[DefPath],
+    ) -> Result<ValidatedNativeInput, QueryError> {
+        let paths = self.native_paths_from(roots.iter().cloned())?;
+        let input = self.export_native_paths(paths.clone())?;
+        let current = self.export_native_paths(paths)?;
+        self.import_native_against(input, current)
+    }
+    fn export_native_paths(
+        &mut self,
+        paths: std::collections::BTreeSet<DefPath>,
+    ) -> Result<NativeInput, QueryError> {
         self.prepare_staged_instances()?;
         let mut signatures = self.native_builtin_signatures();
         let mut signature_dependencies = BTreeMap::new();
@@ -203,6 +220,14 @@ impl QueryEngine {
     ) -> Result<ValidatedNativeInput, QueryError> {
         let _interval = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Plan);
         let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Plan);
+        let current = self.export_native_input()?;
+        self.import_native_against(input, current)
+    }
+    fn import_native_against(
+        &mut self,
+        input: NativeInput,
+        current: NativeInput,
+    ) -> Result<ValidatedNativeInput, QueryError> {
         if input.environment != self.environment
             || input.registry_revision != registry::BuiltinRegistry::new().revision()
             || input.completed_source_stages != NativeStatus::Complete
@@ -211,7 +236,6 @@ impl QueryEngine {
                 "stale environment/registry or incomplete source stage",
             ));
         }
-        let current = self.export_native_input()?;
         if input.constant_definitions != current.constant_definitions {
             return Err(invalid("forged constant initialization order"));
         }

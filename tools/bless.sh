@@ -23,6 +23,8 @@
 # Corpus-wide blesses:
 #   passing            conformance/passing.txt: hirsel-conformance --update-passing (adds only)
 #   exclusions         native-tests/regressions/exclusions.tsv: native --full --bless (hours)
+#   native-selection   native-tests/regressions/native-selection.json: the frozen program
+#                      cover, derived on the pool (-c hirsel.native_selection=derive)
 set -euo pipefail
 usage() {
   sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2
@@ -104,6 +106,9 @@ for what in "$@"; do
     all) for each in "${in_test[@]}"; do bless_in_test "$each"; done ;;
     passing) "$buck2" run //:hirsel-conformance-bin-hirsel-conformance -- --update-passing --root "$PWD" ;;
     exclusions) "$buck2" test -c hirsel.full=true -c hirsel.tests=host //:gate-native-full -- --test-arg=--bless --timeout 14400 ;;
+    native-selection)
+      derived="$("$buck2" build -c hirsel.native_selection=derive //:native-selection --show-full-simple-output)"
+      cp "$derived" native-tests/regressions/native-selection.json ;;
     *) cases "$what" > /dev/null || usage; bless_in_test "$what" ;;
   esac
 done

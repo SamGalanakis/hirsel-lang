@@ -72,7 +72,13 @@ fn run() -> Result<(), String> {
                 .collect::<Result<Vec<_>, String>>()?;
             hirsel_conformance::native::diet::merge(&root, &values)?
         };
-        std::fs::write(output, serde_json::to_vec(&selection).unwrap())
+        // A complete cover is written in its checked-in form; shards stay partial.
+        let selection = if selection["shard"].is_null() {
+            hirsel_conformance::native::diet::freeze(&selection)?
+        } else {
+            selection
+        };
+        std::fs::write(output, serde_json::to_vec_pretty(&selection).unwrap())
             .map_err(|e| e.to_string())?;
     } else if let Some(program) = program {
         let source = std::fs::read_to_string(root.join(program)).map_err(|e| e.to_string())?;

@@ -288,6 +288,13 @@ pub fn cases(campaign_seed: u64, count: u64) -> Vec<super::Case> {
 pub fn from_id(id: &str) -> Option<super::Case> {
     let (kind, seed) = id.strip_prefix("generated/")?.rsplit_once('-')?;
     let seed: u64 = seed.parse().ok()?;
+    if kind == "bug" {
+        return Some(super::Case {
+            id: id.into(),
+            source: bug_program(seed),
+            path: None,
+        });
+    }
     let fault = if kind == "success" {
         None
     } else {
@@ -302,4 +309,127 @@ pub fn from_id(id: &str) -> Option<super::Case> {
         id: id.into(),
         source: program(seed, fault),
     })
+}
+
+/// GAP 4--8 cross product: three mutable places (local, field, nested field), replace/take, and three
+/// aggregate contexts. Every seed also exercises borrowed/destructured literal
+/// matches, let-else payloads, const Inline reads, try arms and mut-field loops.
+/// The loop's collection follows the place. Seed modulo 18 enumerates the product.
+/// Known failures of the bug-seeded generator, one exclusion row per
+/// combination and configuration; stale and changed rows fail like any other.
+pub const BUG_PENDING: &str = "native-tests/regressions/bug-pending.tsv";
+
+pub fn bug_program(seed: u64) -> String {
+    let place = (seed % 3) as usize;
+    let operation = (seed / 3) % 2;
+    let context = (seed / 6) % 3;
+    let setup = [
+        "let mut slot = b\"left\"",
+        "let mut holder = Pair(left: b\"left\", right: b\"unused\")",
+        "let mut outer = Outer(inner: Pair(left: b\"left\", right: b\"unused\"))",
+    ][place];
+    let slot = ["slot", "holder.left", "outer.inner.left"][place];
+    // `take` moves only a whole local (OWN-8); a field moves out by `unique replace`.
+    let read = match (operation, place) {
+        (0, _) => format!("replace(mut {slot}, b\"next\")"),
+        (_, 0) => format!("take {slot}"),
+        _ => format!("unique replace(mut {slot}, b\"next\")"),
+    };
+    let aggregate = match context {
+        0 => format!(
+            "let aggregate = Pair(left: {read}, right: NAMES[1])\n  let selected = aggregate.left"
+        ),
+        1 => format!("let aggregate = ({read}, NAMES[1])\n  let (selected, _) = aggregate"),
+        _ => format!(
+            "let aggregate: Option[Bytes] = Some({read})\n  let Some(selected) = aggregate else {{ return Error(\"missing\") }}"
+        ),
+    };
+    let mut source = String::from(
+        r#"type Pair { left: Bytes, right: Bytes }
+type Outer { inner: Pair }
+const NAMES: Inline[Bytes, 2] = [b"left", b"right"]
+const VALUES: Inline[Bytes, 2] = [b"zero", b"one"]
+type Session { pending: bool, outgoing: List[Bytes] }
+type Value = Missing | Object(fields: List[(String, u64)])
+type Kind = Scalar(String) | Ref(u64)
+type Field { boxed: bool, kind: Kind }
+type Message { fields: List[Field] }
+type Model { messages: List[Message] }
+fn check(n:u64)->Result[u64,String] uses {} {
+  if n > 100u64 { return Error("large") }
+  Ok(n)
+}
+fn payload(v:Value)->Result[u64,String] uses {} {
+  let Object(fields: fields) = v else { return Error("missing object") }
+  let mut total:u64 = 0
+  for (key,value) in fields {
+    match key {
+      "x" => { total = check(total + value)? },
+      _ => (),
+    }
+  }
+  Ok(total)
+}
+fn destructured(v:(String,u64))->u64 uses {} {
+  let (key,value) = v
+  match key { "x" => value, _ => 0u64 }
+}
+fn borrowed(key:String)->u64 uses {} {
+  match key { "x" => 1u64, _ => 0u64 }
+}
+fn drain(mut s:Session)->(Bytes,List[Bytes]) uses {} {
+  let prefix = if replace(mut s.pending,false) { b"PRI" } else { b"" }
+  (prefix, unique replace(mut s.outgoing,[]))
+}
+fn lookup(i:u64)->Result[Pair,String] uses {} {
+  if i > 1u64 { return Error("index") }
+  Ok(Pair(left:NAMES[i],right:VALUES[i]))
+}
+"#,
+    );
+    // The collection a loop writes fields through follows the place: a `mut`
+    // parameter, a `unique` element read into a local, or a nested `mut` field.
+    source.push_str(match place {
+        0 => "fn mark(mut model:Model,take owned:List[Field]) uses {} {\n  let mut fields = owned\n  for f in mut fields {\n    if let Ref(j) = f.kind {\n      f.boxed = j == 0u64\n    }\n  }\n  model.messages[0].fields = take fields\n}\n",
+        1 => "fn mark(mut model:Model,resolved:List[List[Field]]) uses {} {\n  let mut fields = unique resolved[0]\n  for f in mut fields {\n    if let Ref(j) = f.kind {\n      f.boxed = j == 0u64\n    }\n  }\n  model.messages[0].fields = take fields\n}\n",
+        _ => "fn mark(mut model:Model,take fields:List[Field]) uses {} {\n  model.messages[0].fields = fields\n  for f in mut model.messages[0].fields {\n    if let Ref(j) = f.kind {\n      f.boxed = j == 0u64\n    }\n  }\n}\n",
+    });
+    source.push_str("pub fn main()->Result[(),String] {\n");
+    source.push_str(&format!("  {setup}\n  {aggregate}\n"));
+    source.push_str(r#"  if selected != b"left" { return Error("aggregate") }
+  let mut s = Session(pending:true,outgoing:[b"a",b"b"])
+  let (prefix,frames) = drain(mut s)
+  if bytes.len(prefix) != 3u64 || list.len(frames) != 2u64 || list.len(s.outgoing) != 0u64 { return Error("drain") }
+  let pair = lookup(1u64)?
+  if pair.left != b"right" || pair.right != b"one" { return Error("const") }
+  if payload(Object(fields:[("x",1u64)]))? != 1u64 { return Error("payload") }
+  if destructured(("x",1u64)) != 1u64 || borrowed("x") != 1u64 { return Error("match") }
+  let mut model = Model(messages:[Message(fields:[])])
+  let fields:List[Field] = [Field(boxed:false,kind:Ref(0u64))]
+  mark(mut model,MARK_ARGUMENT)
+  if !model.messages[0].fields[0].boxed { return Error("loop") }
+  Ok(())
+}
+"#);
+    source.replace(
+        "MARK_ARGUMENT",
+        if place == 1 {
+            "[fields]"
+        } else {
+            "take fields"
+        },
+    )
+}
+
+/// Every combination: seed modulo 18 enumerates the product exactly.
+pub const BUG_COMBINATIONS: u64 = 18;
+
+pub fn bug_cases() -> Vec<super::Case> {
+    (0..BUG_COMBINATIONS)
+        .map(|seed| super::Case {
+            id: format!("generated/bug-{seed}"),
+            source: bug_program(seed),
+            path: None,
+        })
+        .collect()
 }

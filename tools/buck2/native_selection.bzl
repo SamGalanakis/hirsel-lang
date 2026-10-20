@@ -1,4 +1,18 @@
-"""Derive the native program cover from the compiler and its complete corpus."""
+"""The native program cover: the checked-in frozen file, or derived on demand.
+
+Deriving observes every corpus program through 14 native builds, which costs
+more than the slim campaigns it serves, so campaigns read
+native-tests/regressions/native-selection.json and `tools/bless.sh
+native-selection` regenerates it (`-c hirsel.native_selection=derive`).
+"""
+
+FROZEN = "native-tests/regressions/native-selection.json"
+
+# Observation shards. A process's memory grows about 270 MB with each program it
+# observes (14 native builds, 68 s): 21 programs took 24 minutes and 5.8 GiB on
+# this host, so 256 shards observe about 10 each within the 4 GiB request.
+OBSERVATION_SHARDS = 256
+OBSERVATION_REQUEST = (1, 4194304)  # sync.py adds it to POOL_BUDGETS
 
 load(":platforms.bzl", "budget_constraint", "pool_budget_name")
 
@@ -12,11 +26,12 @@ def _impl(ctx):
         env = {"LD_LIBRARY_PATH": cmd_args(llvm.project("lib"))}, category = "native_inventory",
     )
     observations = []
-    for index in range(1, 33):
+    precheck = ctx.attrs.precheck[DefaultInfo].default_outputs[0]
+    for index in range(1, OBSERVATION_SHARDS + 1):
         part = ctx.actions.declare_output("observations-{}.json".format(index))
         ctx.actions.run(
-            cmd_args(ctx.attrs.collector[RunInfo], "--root", tree, "--derive", part.as_output(), "--shard", "{}/32".format(index), "--inventory-input", inventory, hidden = [llvm]),
-            env = {"LD_LIBRARY_PATH": cmd_args(llvm.project("lib"))},
+            cmd_args(ctx.attrs.collector[RunInfo], "--root", tree, "--derive", part.as_output(), "--shard", "{}/{}".format(index, OBSERVATION_SHARDS), "--inventory-input", inventory, hidden = [llvm, precheck]),
+            env = {"LD_LIBRARY_PATH": cmd_args(llvm.project("lib")), "HIRSEL_PRECHECK": cmd_args(precheck)},
             category = "native_observation", identifier = str(index),
         )
         observations.append(part)
@@ -32,21 +47,20 @@ _selection = rule(
         "collector": attrs.exec_dep(providers = [RunInfo]),
         "data": attrs.list(attrs.source()),
         "labels": attrs.list(attrs.string(), default = []),
+        "precheck": attrs.dep(),
         "_llvm": attrs.exec_dep(default = "toolchains//:llvm"),
     },
 )
 
 
-def hirsel_native_selection(name, collector, data):
-    # Fault replay must freeze the healthy cover instead of deriving it from
-    # a deliberately broken compiler. The override is still a declared input.
-    frozen = read_root_config("hirsel", "native_selection_file", "")
-    if frozen:
+def hirsel_native_selection(name, collector, data, precheck):
+    # Fault replay passes its own frozen cover (hirsel.native_selection_file).
+    frozen = read_root_config("hirsel", "native_selection_file", FROZEN)
+    if read_root_config("hirsel", "native_selection", "frozen") != "derive":
         native.export_file(name = name, src = frozen, labels = ["gate"], visibility = ["PUBLIC"])
         return
     # Gate-labelled targets are excluded from the ordinary workspace build.
-    # Keep this build action available without enabling full test campaigns.
     native.configured_alias(name = name + "-collector", actual = collector, platform = "root//tools/buck2:checked", labels = ["gate"])
-    _selection(name = name, collector = ":" + name + "-collector", data = data,
-               exec_compatible_with = [budget_constraint(pool_budget_name(1, 1048576))],
+    _selection(name = name, collector = ":" + name + "-collector", data = data, precheck = precheck,
+               exec_compatible_with = [budget_constraint(pool_budget_name(*OBSERVATION_REQUEST))],
                labels = ["gate"], visibility = ["PUBLIC"])

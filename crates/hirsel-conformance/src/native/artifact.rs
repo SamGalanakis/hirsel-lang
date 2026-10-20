@@ -307,3 +307,36 @@ pub fn reduce(source: &str, probe: &dyn Probe) -> Result<String, String> {
     }
     Ok(lines.join("\n") + "\n")
 }
+
+/// A line-minimal compiler failure, including unavailable stages that have no
+/// execution observation. The predicate must preserve the original failure kind.
+pub fn minimize(source: &str, mut preserves: impl FnMut(&str) -> bool) -> String {
+    let mut lines: Vec<_> = source.lines().collect();
+    let mut width = lines.len().div_ceil(2).max(1);
+    loop {
+        let mut removed = false;
+        let mut at = 0;
+        while at < lines.len() {
+            let end = (at + width).min(lines.len());
+            let candidate = lines[..at]
+                .iter()
+                .chain(&lines[end..])
+                .copied()
+                .collect::<Vec<_>>();
+            let text = candidate.join("\n") + "\n";
+            if !candidate.is_empty() && preserves(&text) {
+                lines = candidate;
+                removed = true;
+            } else {
+                at += 1;
+            }
+        }
+        if width == 1 && !removed {
+            break;
+        }
+        if !removed {
+            width = width.div_ceil(2);
+        }
+    }
+    lines.join("\n") + "\n"
+}

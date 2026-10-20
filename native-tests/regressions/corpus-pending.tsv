@@ -1,0 +1,14 @@
+# Executed native corpus obligations, checked against their exact stable reason.
+# A case with a row runs both backends on every run, so no row goes unjudged.
+# case<TAB>configuration<TAB>class<TAB>reason
+# Known main failure (tools/known-failures.tsv), owner native-bugs-6.
+conformance/FAIL/FAIL-4-mutex-payload-drop-run.hir	x86_64/regions/elide/reuse/flat-walk/cranelift/whole/diagnostic	m2-unavailable	import: import instance N: layout of standalone@N/main: Unavailable { issue: None, what: "a Mutex of a noncopyable pay
+conformance/FAIL/FAIL-4-mutex-payload-drop-run.hir	x86_64/regions/elide/reuse/flat-walk/llvm-O0/whole/diagnostic	m2-unavailable	import: import instance N: layout of standalone@N/main: Unavailable { issue: None, what: "a Mutex of a noncopyable pay
+# std decimal.rescale panics in hirsel-rc import (mod.rs:580, index 76 of 76); reported 2026-10-20.
+conformance/SEM/SEM-1-decimal-div-run.hir	snapshot	compiler-error	a native stage panicked
+conformance/SEM/SEM-1-decimal-divide-zero-run.hir	snapshot	compiler-error	a native stage panicked
+conformance/SEM/SEM-1-decimal-i128-arith-run.hir	snapshot	compiler-error	a native stage panicked
+conformance/SEM/SEM-1-decimal-i128-round-run.hir	snapshot	compiler-error	a native stage panicked
+conformance/SEM/SEM-1-decimal-money-run.hir	snapshot	compiler-error	a native stage panicked
+conformance/SEM/SEM-1-decimal-round-run.hir	snapshot	compiler-error	a native stage panicked
+conformance/SEM/SEM-1-decimal-scale-run.hir	snapshot	compiler-error	a native stage panicked

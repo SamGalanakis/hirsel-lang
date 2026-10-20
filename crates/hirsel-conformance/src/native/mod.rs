@@ -12,6 +12,7 @@
 //! A disagreement without a row, a row whose reason changed and a row whose
 //! configuration now agrees all fail the gate, so support only grows.
 pub mod artifact;
+pub mod corpus;
 pub mod cranelift;
 pub mod diet;
 pub mod generate;
