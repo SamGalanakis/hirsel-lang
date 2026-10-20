@@ -19,6 +19,7 @@ NATIVE = [
     ('crates/hirsel-lir/tests/it/layout.rs', '//:hirsel-lir-test-it -- "${timeout[@]}" $(libtest layout:: --ignored)'),
     ('crates/hirsel-driver/tests/it/native.rs', '$(libtest native:: --include-ignored --test-threads=4)'),
     ('crates/hirsel-pipeline-tests/tests/rc/rc_library_', '$(libtest rc_library_ --include-ignored --test-threads=4)'),
+    ('crates/hirsel-pipeline-tests/tests/front/llvm_scalar_library.rs', '//:hirsel-pipeline-tests-test-front-shard-1 -- "${timeout[@]}" $(libtest llvm_scalar_library:: --include-ignored)'),
     ('crates/hirsel-pipeline-tests/tests/rc/rc_maps_native.rs', '$(libtest rc_maps_native:: --include-ignored --test-threads=1)'),
 ]
 ATTRIBUTE = re.compile(r'^[ \t]*#\[(ignore\b[^\]]*)\]|^[ \t]*#\[cfg_attr\(\s*([^,]+),\s*ignore\b', re.M)
