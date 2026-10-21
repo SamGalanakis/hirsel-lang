@@ -995,7 +995,7 @@ unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
     let row = s.task(next);
     if let Some(to) = crate::pool::target(ctx, row.owner, row.last) {
         // `next` runs on another thread: this one hands the run over and waits (`crate::pool`).
-        let permit = crate::pool::resumes_into_hirsel(ctx, to);
+        let permit = crate::pool::resumes_into_hirsel(row.ctx, to);
         ctx.switch_out();
         let save = &raw mut ctx.task_sp;
         // SAFETY: `next` is suspended; `save` is written before any other thread runs.
@@ -1224,7 +1224,7 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
     }
     let row = s.task(next);
     if let Some(to) = crate::pool::target(ctx, row.owner, row.last) {
-        let permit = crate::pool::resumes_into_hirsel(ctx, to);
+        let permit = crate::pool::resumes_into_hirsel(row.ctx, to);
         ctx.switch_out();
         s.task(next).state = State::Ready;
         let mut abandoned = std::ptr::null_mut();

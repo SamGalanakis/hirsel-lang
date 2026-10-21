@@ -394,4 +394,119 @@ mod tests {
             }
         }
     }
+    unsafe extern "C" fn handoff_child(
+        ctx: *mut TaskCtx,
+        environment: *mut Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        if unsafe { crate::alloc::payload(environment).cast::<u64>().read() } != 0 {
+            unsafe { crate::tasks::yield_now(&mut *ctx) };
+        }
+        STATUS_OK
+    }
+
+    #[test]
+    fn cooperative_handoffs_take_the_incoming_callbacks_permit() {
+        const CHILD: &str = "HIRSEL_F1_HANDOFF_PERMIT";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "tasks::free::foreign::tests::cooperative_handoffs_take_the_incoming_callbacks_permit", "--nocapture"])
+                .env(CHILD, "1").output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            return;
+        }
+        crate::pool::set_compute_grant(1);
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&raw const layout];
+        for width in [1, 2, 8] {
+            for yielded in [false, true] {
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 1;
+                let outcome = run.run(
+                    |_| {},
+                    move |ctx| unsafe {
+                        for dispatch in [
+                            FOREIGN_THREADS_HOME | FOREIGN_BLOCKING,
+                            FOREIGN_THREADS_ANY | FOREIGN_BLOCKING,
+                        ] {
+                            let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                            hirsel_rt_v2_foreign_enter(
+                                ctx,
+                                0,
+                                interval.as_mut_ptr().cast(),
+                                dispatch,
+                            );
+                            assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                            let thread = std::thread::current().id();
+                            let mut scope = 0;
+                            hirsel_rt_v2_task_scope_enter(
+                                ctx,
+                                std::ptr::null_mut(),
+                                &mut scope,
+                                &0,
+                            );
+                            let environment = crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                2,
+                                8,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            );
+                            crate::alloc::payload(environment)
+                                .cast::<u64>()
+                                .write(u64::from(yielded));
+                            let mut child = 0;
+                            hirsel_rt_v2_task_spawn(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut child,
+                                &scope,
+                                handoff_child,
+                                environment,
+                                0,
+                            );
+                            assert_eq!(std::thread::current().id(), thread);
+                            assert_eq!(
+                                crate::pool::compute_permits().1,
+                                1,
+                                "different-task handoff restores callback permit"
+                            );
+                            hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
+                            assert_eq!(
+                                crate::pool::compute_permits().1,
+                                1,
+                                "completion handoff restores callback permit"
+                            );
+                            hirsel_rt_v2_callback_leave(ctx);
+                            assert_eq!(crate::pool::compute_permits().1, 0);
+                            hirsel_rt_v2_foreign_leave(interval.as_ptr().cast());
+                        }
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                assert_eq!(crate::pool::compute_permits().1, 0);
+            }
+        }
+    }
 }
