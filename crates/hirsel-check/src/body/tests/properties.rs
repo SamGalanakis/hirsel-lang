@@ -3,43 +3,31 @@ use super::support;
 use proptest::prelude::*;
 use std::sync::Arc;
 pub(super) fn transport(s: &Signature, noise: u8) -> Signature {
-    let mut result = s.clone();
-    let mut source = s.types.clone();
-    let mut dest = TypeStore::default();
-    for _ in 0..noise {
-        dest.push(Type::with_kind(TypeKind::Primitive(Primitive::Bool)));
+    // Signatures now share the session interner. Perturb unrelated insertion
+    // order instead of copying retired per-signature stores.
+    for n in 0..noise {
+        let scalar =
+            support::session().intern(Type::with_kind(TypeKind::Primitive(Primitive::Bool)));
+        support::session().intern(Type::with_kind(TypeKind::Tuple(
+            vec![scalar; n as usize].into(),
+        )));
     }
-    match &mut result.kind {
-        SignatureKind::Function(f) => {
-            let root = source.push(Type {
-                drop_allocation: DropAllocation::MayAllocate,
-                ..Type::with_kind(TypeKind::Function(f.clone()))
-            });
-            let root = import_type(&source, root, &mut dest).unwrap();
-            let TypeKind::Function(imported) = dest.get(root).unwrap().kind.clone() else {
-                unreachable!()
-            };
-            *f = imported;
-        }
-        SignatureKind::Const { ty: root, .. } => {
-            *root = import_type(&source, *root, &mut dest).unwrap()
-        }
-        SignatureKind::Type(td) => {
-            if let Some(root) = td.representation {
-                td.representation = Some(import_type(&source, root, &mut dest).unwrap());
-            }
-        }
-    }
-    result.types = dest;
-    result
+    s.clone()
 }
+
 fn run(source: &str, seed: &[String], reverse: bool, noise: u8) -> QueryOutput<CheckedBody> {
     let (file, _, ds) = support::parse(source, seed);
     assert!(ds.is_empty());
     let mut registry = support::registry(&file);
     support::normalize_file(&file, &mut registry).unwrap();
     let id = file.items.last().unwrap();
-    let r = hirsel_resolve::resolve_item(&file, id, &registry.index.clone(), &mut registry);
+    let r = hirsel_resolve::resolve_item(
+        &file,
+        id,
+        &registry.index.clone(),
+        super::support::session(),
+        &mut registry,
+    );
     assert!(r.query.diagnostics.is_empty(), "{:?}", r.query.diagnostics);
     let signature = registry.signatures[&id.item.definition].clone();
     let mut loaded: Vec<_> = registry.signatures.into_iter().collect();
@@ -53,6 +41,8 @@ fn run(source: &str, seed: &[String], reverse: bool, noise: u8) -> QueryOutput<C
     check_with_loop_protocols(
         LoopInput {
             body: Input {
+                types: super::support::session(),
+                memo: super::support::memo(),
                 syntax: id,
                 context: &support::context(),
                 resolution: &r,
@@ -76,25 +66,25 @@ pub(super) fn equivalent(a: &QueryOutput<CheckedBody>, b: &QueryOutput<CheckedBo
     assert_eq!(a.instantiations.len(), b.instantiations.len());
     for (x, y) in a.expressions.iter().zip(&b.expressions) {
         assert_eq!((x.expression, x.usage), (y.expression, y.usage));
-        assert!(semantic_equal(&a.types, x.ty, &b.types, y.ty).unwrap());
+        assert!(support::session().semantic_eq(x.ty, y.ty));
     }
     for (x, y) in a.bindings.iter().zip(&b.bindings) {
         assert_eq!(
             (&x.owner, &x.site, &x.binding, x.usage, x.mutable),
             (&y.owner, &y.site, &y.binding, y.usage, y.mutable)
         );
-        assert!(semantic_equal(&a.types, x.ty, &b.types, y.ty).unwrap());
+        assert!(support::session().semantic_eq(x.ty, y.ty));
     }
     for (x, y) in a.patterns.iter().zip(&b.patterns) {
         assert_eq!((&x.kind, &x.fields, x.usage), (&y.kind, &y.fields, y.usage));
-        assert!(semantic_equal(&a.types, x.ty, &b.types, y.ty).unwrap());
+        assert!(support::session().semantic_eq(x.ty, y.ty));
     }
     for (x, y) in a.instantiations.iter().zip(&b.instantiations) {
         assert_eq!((&x.callee, x.expression), (&y.callee, y.expression));
         for (x, y) in x.arguments.iter().zip(&y.arguments) {
             match (x, y) {
                 (GenericArgument::Type(x), GenericArgument::Type(y)) => {
-                    assert!(semantic_equal(&a.types, *x, &b.types, *y).unwrap())
+                    assert!(support::session().semantic_eq(*x, *y))
                 }
                 _ => assert_eq!(x, y),
             }

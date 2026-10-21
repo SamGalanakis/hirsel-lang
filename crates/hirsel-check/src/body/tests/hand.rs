@@ -7,7 +7,8 @@ struct Provider {
     reads: Vec<ast::DefPath>,
 }
 impl SignatureProvider for Provider {
-    fn signature(&mut self, p: &ast::DefPath) -> Result<SignatureRef, QueryError> {
+    fn signature(&mut self, id: ast::DefId) -> Result<SignatureRef, QueryError> {
+        let p = id.path();
         self.reads.push(p.clone());
         if let Some(e) = &self.failure {
             return Err(e.clone());
@@ -53,8 +54,8 @@ fn function(result: TypeId) -> FunctionType {
 }
 impl Fixture {
     fn new(kind: TypeKind) -> Self {
-        let mut store = TypeStore::default();
-        let result = store.push(row(kind));
+        let store = super::support::session();
+        let result = store.intern(row(kind));
         let name = Symbol::intern("main");
         let syntax = ast::ItemSyntax {
             item: ast::Item {
@@ -81,8 +82,7 @@ impl Fixture {
             resolution: Resolution::default(),
             signature: Signature {
                 metadata: Default::default(),
-                definition: super::support::path("main"),
-                types: store,
+                definition: super::support::path("main").into(),
                 kind: SignatureKind::Function(function(result)),
                 fingerprint: Default::default(),
             },
@@ -94,7 +94,7 @@ impl Fixture {
         }
     }
     fn ty(&mut self, kind: TypeKind) -> TypeId {
-        self.signature.types.push(row(kind))
+        super::support::session().intern(row(kind))
     }
     fn expr(&mut self, kind: ast::ExprKind) -> ast::ExprId {
         let id = ast::ExprId(self.syntax.tree.expressions.len() as u32);
@@ -166,6 +166,8 @@ impl Fixture {
         let out = check_with_loop_protocols(
             LoopInput {
                 body: Input {
+                    types: super::support::session(),
+                    memo: super::support::memo(),
                     syntax: &self.syntax,
                     context: &super::support::context(),
                     resolution: &self.resolution,
@@ -301,8 +303,8 @@ fn nonrecursive_lookup_failures_are_recorded() {
 #[test]
 fn generic_foreign_calls_report_gen4_at_the_call() {
     let mut f = Fixture::new(TypeKind::Primitive(Primitive::U8));
-    let mut types = TypeStore::default();
-    let t = types.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+    let types = super::support::session();
+    let t = types.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
         TypeParamId(0),
     ))));
     let mut fun = function(t);
@@ -319,9 +321,8 @@ fn generic_foreign_calls_report_gen4_at_the_call() {
     f.provider.signatures.insert(
         path.clone(),
         Arc::new(Signature {
-            definition: path.clone(),
+            definition: path.clone().into(),
             metadata: Default::default(),
-            types,
             kind: SignatureKind::Function(fun),
             fingerprint: Default::default(),
         }),
@@ -343,14 +344,14 @@ fn generic_foreign_calls_report_gen4_at_the_call() {
 fn manufactured_result_tags_and_constructor_calls_keep_declared_ordinals() {
     let mut f = Fixture::new(TypeKind::Tuple(vec![].into()));
     let definition = super::support::core("Result");
-    let mut types = TypeStore::default();
-    let a = types.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+    let types = super::support::session();
+    let a = types.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
         TypeParamId(0),
     ))));
-    let b = types.push(row(TypeKind::Parameter(TypeParameterRef::bound(
+    let b = types.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
         TypeParamId(1),
     ))));
-    let representation = types.push(row(TypeKind::Variant(
+    let representation = types.intern(row(TypeKind::Variant(
         vec![
             Variant {
                 name: "Error".into(),
@@ -366,7 +367,7 @@ fn manufactured_result_tags_and_constructor_calls_keep_declared_ordinals() {
     f.provider.signatures.insert(
         definition.clone(),
         Arc::new(Signature {
-            definition: definition.clone(),
+            definition: definition.clone().into(),
             metadata: SignatureMetadata {
                 roles: NominalRoles {
                     result_type: Some(definition.clone()),
@@ -374,7 +375,6 @@ fn manufactured_result_tags_and_constructor_calls_keep_declared_ordinals() {
                 },
                 ..Default::default()
             },
-            types,
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
                 format: None,
@@ -409,7 +409,7 @@ fn manufactured_result_tags_and_constructor_calls_keep_declared_ordinals() {
     let item = f.ty(TypeKind::Primitive(Primitive::U8));
     let error = f.ty(TypeKind::Primitive(Primitive::U16));
     let result = f.ty(TypeKind::Named {
-        definition: definition.clone(),
+        definition: definition.clone().into(),
         arguments: vec![GenericArgument::Type(item), GenericArgument::Type(error)].into(),
     });
     if let SignatureKind::Function(fun) = &mut f.signature.kind {
@@ -488,7 +488,7 @@ fn finalizer_consumes_resolver_identity_instead_of_first_local() {
         layout: Layout::default(),
         distinct: false,
         resource: true,
-        drop: Some(f.signature.definition.clone()),
+        drop: Some(f.signature.definition.path().clone()),
         fact: None,
         captures: None,
     });
@@ -520,20 +520,22 @@ fn heap_requires_its_complete_private_producer_contract() {
                     0 => f.allocation = Allocation::MayAllocate,
                     1 => f.authority = AuthoritySummary::Unknown,
                     _ => {
-                        let mut result = signature.types.get(f.result).unwrap().clone();
+                        let mut result = super::support::session().row(f.result).clone();
                         result.allocation_target = None;
-                        f.result = signature.types.push(result);
+                        f.result = super::support::session().intern(result);
                     }
                 }
             }
             fixture
                 .provider
                 .signatures
-                .insert(signature.definition.clone(), Arc::new(signature));
+                .insert(signature.definition.path().clone(), Arc::new(signature));
         }
         let result = check_with_loop_protocols(
             LoopInput {
                 body: Input {
+                    types: super::support::session(),
+                    memo: super::support::memo(),
                     syntax: &fixture.syntax,
                     context: &super::support::context(),
                     resolution: &fixture.resolution,

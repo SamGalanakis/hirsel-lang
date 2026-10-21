@@ -3,6 +3,15 @@ use hirsel_intern::Symbol;
 use hirsel_resolve::{ManifestFixture, ManifestIndex};
 use hirsel_span::SourceMap;
 use std::sync::Arc;
+/// Every fixture and builtin row belongs to this shared session.
+pub(super) fn session() -> &'static TypeInterner {
+    static TYPES: std::sync::OnceLock<Arc<TypeInterner>> = std::sync::OnceLock::new();
+    TYPES.get_or_init(hirsel_engine::registry::session_types)
+}
+pub(super) fn memo() -> &'static TypeMemo {
+    static MEMO: std::sync::OnceLock<TypeMemo> = std::sync::OnceLock::new();
+    MEMO.get_or_init(TypeMemo::new)
+}
 pub(super) struct Registry {
     pub signatures: BTreeMap<ast::DefPath, SignatureRef>,
     pub index: ManifestIndex,
@@ -80,7 +89,8 @@ pub(super) fn context() -> ast::FileContext {
     }
 }
 impl SignatureProvider for Registry {
-    fn signature(&mut self, path: &ast::DefPath) -> Result<SignatureRef, QueryError> {
+    fn signature(&mut self, id: ast::DefId) -> Result<SignatureRef, QueryError> {
+        let path = id.path();
         self.reads.push(path.clone());
         self.signatures
             .get(path)
@@ -134,11 +144,10 @@ fn type_signature(
     cap: Option<CapabilityKind>,
     representation: Option<TypeKind>,
 ) -> Signature {
-    let mut types = TypeStore::default();
-    let repr = representation.map(|r| types.push(row(r)));
+    let types = session();
+    let repr = representation.map(|r| types.intern(row(r)));
     Signature {
-        definition: core(name),
-        types,
+        definition: core(name).into(),
         metadata: SignatureMetadata {
             visibility: ast::Visibility::Public,
             roles: NominalRoles {
@@ -185,11 +194,11 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
     let core_registry = hirsel_engine::registry::BuiltinRegistry::new();
     for signature in core_registry
         .signatures()
-        .filter(|s| s.definition.0.modules == ["$intrinsic"])
+        .filter(|s| s.definition.path().0.modules == ["$intrinsic"])
     {
         registry
             .signatures
-            .insert(signature.definition.clone(), signature.clone());
+            .insert(signature.definition.path().clone(), signature.clone());
     }
 
     for name in [
@@ -393,10 +402,10 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
         ("i64", Primitive::I64),
         ("i128", Primitive::I128),
     ] {
-        let mut types = TypeStore::default();
-        let scalar = types.push(row(TypeKind::Primitive(primitive)));
-        let dictionary = types.push(row(TypeKind::Named {
-            definition: core("Order"),
+        let types = session();
+        let scalar = types.intern(row(TypeKind::Primitive(primitive)));
+        let dictionary = types.intern(row(TypeKind::Named {
+            definition: core("Order").into(),
             arguments: vec![GenericArgument::Type(scalar)].into(),
         }));
         let name = format!("{name}.order");
@@ -407,8 +416,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
                     visibility: ast::Visibility::Public,
                     ..Default::default()
                 },
-                definition: core(&name),
-                types,
+                definition: core(&name).into(),
                 kind: SignatureKind::Const {
                     ty: dictionary,
                     generics: Default::default(),
@@ -420,7 +428,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
     for signature in heap_signatures() {
         registry
             .signatures
-            .insert(signature.definition.clone(), Arc::new(signature));
+            .insert(signature.definition.path().clone(), Arc::new(signature));
     }
     registry.index =
         ManifestIndex::new(fixture(file).with_dependency_signatures(registry.signatures.values()))
@@ -473,7 +481,13 @@ pub(super) fn normalize_file(
     for _ in 0..file.items.len() + 1 {
         let mut next = vec![];
         for syntax in pending {
-            let r = hirsel_resolve::resolve_item(file, syntax, &registry.index.clone(), registry);
+            let r = hirsel_resolve::resolve_item(
+                file,
+                syntax,
+                &registry.index.clone(),
+                session(),
+                registry,
+            );
             let item = &syntax.item;
             let ctx = ast::FileContext {
                 package: item.definition.0.package.clone(),
@@ -481,6 +495,8 @@ pub(super) fn normalize_file(
             };
             match hirsel_signature::normalize(
                 hirsel_check_protocol::header::Input {
+                    types: session(),
+                    memo: memo(),
                     syntax,
                     context: &ctx,
                     resolution: &r,
@@ -521,8 +537,13 @@ pub(super) fn check_source(source: &str) -> (Vec<Diagnostic>, Vec<Output>, Sourc
     }
     let mut outputs = vec![];
     for syntax in &file.items {
-        let resolution =
-            hirsel_resolve::resolve_item(&file, syntax, &registry.index.clone(), &mut registry);
+        let resolution = hirsel_resolve::resolve_item(
+            &file,
+            syntax,
+            &registry.index.clone(),
+            session(),
+            &mut registry,
+        );
         assert!(
             resolution.query.diagnostics.is_empty(),
             "resolver {source}: {:?}",
@@ -532,6 +553,8 @@ pub(super) fn check_source(source: &str) -> (Vec<Diagnostic>, Vec<Output>, Sourc
         let out = check_with_loop_protocols(
             LoopInput {
                 body: Input {
+                    types: session(),
+                    memo: memo(),
                     syntax,
                     context: &context(),
                     resolution: &resolution,
@@ -556,12 +579,12 @@ pub(super) fn heap_signatures() -> [Signature; 2] {
     let arena = type_signature("Arena", vec![], Some(CapabilityKind::Scoped), None);
     let mut heap = type_signature("$intrinsic.heap", vec![], None, None);
     let mut result = row(TypeKind::Named {
-        definition: core("Arena"),
+        definition: core("Arena").into(),
         arguments: vec![].into(),
     });
     result.allocation_target = Some(AllocationTarget::Heap);
     result.modes.sendability = Sendability::Sendable;
-    let result = heap.types.push(result);
+    let result = session().intern(result);
     heap.kind = SignatureKind::Function(FunctionType {
         state_promises: Default::default(),
         generics: vec![].into(),

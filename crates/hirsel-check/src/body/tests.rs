@@ -78,26 +78,29 @@ fn iterator_plan_uses_provider_option_tags_without_assuming_order() {
     let SignatureKind::Type(td) = &mut option.kind else {
         panic!()
     };
-    let mut row = option
-        .types
-        .get(td.representation.unwrap())
-        .unwrap()
-        .clone();
+    let mut row = support::session().row(td.representation.unwrap()).clone();
     let TypeKind::Variant(variants) = &mut row.kind else {
         panic!()
     };
     variants.reverse();
-    td.representation = Some(option.types.push(row));
+    td.representation = Some(support::session().intern(row));
     option.fingerprint = ast::ContentHash::of_bytes(b"manufactured reversed Option tags");
     support::normalize_file(&file, &mut provider).unwrap();
     let item = &file.items[0];
-    let resolution =
-        hirsel_resolve::resolve_item(&file, item, &provider.index.clone(), &mut provider);
+    let resolution = hirsel_resolve::resolve_item(
+        &file,
+        item,
+        &provider.index.clone(),
+        support::session(),
+        &mut provider,
+    );
     assert!(resolution.query.diagnostics.is_empty());
     let signature = provider.signatures[&item.item.definition].clone();
     let output = check_with_loop_protocols(
         LoopInput {
             body: Input {
+                types: support::session(),
+                memo: support::memo(),
                 syntax: item,
                 context: &support::context(),
                 resolution: &resolution,
@@ -140,10 +143,17 @@ fn intrinsic_domains_follow_the_callee_metadata_instead_of_its_name() {
     let callee = &file.items[0].item.definition;
     let main = &file.items[1];
     let signature = registry.signatures[&main.item.definition].clone();
-    let resolution =
-        hirsel_resolve::resolve_item(&file, main, &registry.index.clone(), &mut registry);
+    let resolution = hirsel_resolve::resolve_item(
+        &file,
+        main,
+        &registry.index.clone(),
+        support::session(),
+        &mut registry,
+    );
     let context = support::context();
     let input = || Input {
+        types: support::session(),
+        memo: support::memo(),
         syntax: main,
         context: &context,
         resolution: &resolution,
