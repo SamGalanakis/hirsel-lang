@@ -20,6 +20,9 @@ use hirsel_rt_operations::descriptors::op_descriptor;
 /// Mutex wrappers remain owner-local allocations outside these cell effects.
 /// Drops and task/host effects still need retirement/credit adapters.
 pub(crate) enum Command {
+    RootRelease {
+        block: *mut crate::alloc::Header,
+    },
     ScopeEnter {
         index: u32,
         generation: u32,
@@ -97,6 +100,7 @@ pub(crate) enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::RootRelease { .. } => "root.release",
             Self::ScopeEnter { .. } => "task.scope_enter",
             Self::TaskSetCreate { .. } => "task.set",
             Self::TaskSetAdd { .. } => "task.add",
@@ -217,6 +221,7 @@ impl Backend<Command> for Objects<'_> {
             | Command::TaskSetCreate { .. }
             | Command::TaskSetAdd { .. }
             | Command::TaskSetClose { .. }
+            | Command::RootRelease { .. }
             | Command::SenderClose { .. } => false,
             Command::AtomicLoad { word, .. }
             | Command::AtomicStore { word, .. }
@@ -236,11 +241,26 @@ impl Backend<Command> for Objects<'_> {
 
     fn commit(&mut self, _: TaskId, op: &Operation<Command>, early: bool) -> Receipt<Outcome> {
         assert_eq!(op.descriptor.name, op.payload.name());
+        if let Command::RootRelease { block } = &op.payload {
+            assert!(!early, "root releases only retire");
+            // Every preceding segment free was captured before entering the
+            // backend. Preserve any callback-local credits independently of
+            // this op's newly discovered deaths, even for another log owner.
+            let before = unsafe { (*self.ctx).ordered_freed.get() };
+            unsafe { crate::roots::retire_shared(self.ctx, *block) };
+            let credit = unsafe { (*self.ctx).ordered_freed.replace(before) } - before;
+            return Receipt {
+                result: Outcome::image(0, Vec::new()),
+                next: Next::Keep,
+                credit,
+            };
+        }
         let s = super::scheduler(self.ctx);
         // SAFETY: Objects::new's caller guarantees ownership and image/handle
         // validity. All byte storage below is owned, including output images.
         let (result, next) = unsafe {
             match &op.payload {
+                Command::RootRelease { .. } => unreachable!("handled without a scheduler borrow"),
                 Command::Head { .. } => panic!("strict head effect requires its owner callback"),
                 Command::ScopeEnter {
                     index,
@@ -547,6 +567,70 @@ mod tests {
             scan: std::ptr::null(),
             scan_words: 0,
         }
+    }
+
+    #[test]
+    fn a_logged_shared_release_stays_live_through_older_thaws_and_retires_without_a_poll() {
+        let root_layout = crate::Layout {
+            flags: crate::LAYOUT_FROZEN,
+            ..layout()
+        };
+        let run = Run::with_layouts(&[&root_layout]);
+        let root = unsafe {
+            crate::alloc::hirsel_rt_v2_alloc(run.0, 2, 16, 8, crate::alloc::DOMAIN_HEAP, 0)
+        };
+        unsafe { crate::roots::hirsel_rt_v2_root_dup(run.0, root) };
+        let anchor = unsafe { atomic(run.0, 0) };
+        let mut events = Vec::new();
+        let mut record = |task, name, _: &Outcome, retirement| {
+            events.push((task, name, retirement));
+        };
+        let mut polls = 0;
+        let mut poll = || {
+            polls += 1;
+            Vec::new()
+        };
+        let mut backend = unsafe { Objects::new(run.0, &mut record, &mut poll) };
+        let mut f = Frontier::new(
+            0,
+            policy(),
+            Settled {
+                level: 0,
+                limit: u64::MAX,
+                fuel: u64::MAX,
+            },
+        );
+        f.held.insert(0, Held::empty());
+        f.enqueue(2, Held::empty());
+        let release = || Command::RootRelease { block: root }.operation(Footprint::default());
+        assert!(!backend.can_commit_early(&release()));
+        assert_eq!(
+            f.offer(2, empty(), release(), &mut backend).0,
+            Offer::Logged
+        );
+        assert_eq!(unsafe { crate::roots::count(&*run.0, root) }, 2);
+        assert!(
+            !unsafe { crate::roots::sole(root) },
+            "older thaw keeps its serial outcome"
+        );
+        let yield_op = Command::AtomicLoad {
+            word: anchor,
+            bytes: 8,
+        }
+        .operation(footprint(0, false));
+        f.apply_head(empty(), yield_op, &mut backend).unwrap();
+        assert_eq!(
+            f.absorb(&mut backend),
+            Ok(crate::ordered::Progress::Absorbed(2))
+        );
+        assert!(unsafe { crate::roots::sole(root) });
+        f.apply_head(empty(), release(), &mut backend).unwrap();
+        drop(backend);
+        assert_eq!(polls, 1, "neither root release is a scheduling point");
+        assert_eq!(
+            events[1..],
+            [(2, "root.release", 1), (2, "root.release", 1)]
+        );
     }
 
     #[test]

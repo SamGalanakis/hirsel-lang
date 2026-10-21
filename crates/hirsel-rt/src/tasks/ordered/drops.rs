@@ -2,8 +2,8 @@
 //!
 //! A close detaches its images in a bounded head callback. The owning task
 //! then scans and finalizes them outside Frontier, so nested ops may suspend
-//! without retaining policy or object borrows. Positional speculative-release
-//! logs and allocation credit settlement are still a separate integration.
+//! without retaining policy or object borrows. Shared-root releases instead
+//! own their credits in the log and retire without user callbacks.
 
 use super::super::*;
 use super::engine;
@@ -118,6 +118,16 @@ pub(crate) unsafe fn root_release(ctx: *mut TaskCtx, action: impl FnOnce() -> bo
     let (died, progress) = unsafe { crate::stop::check(ctx, result) };
     assert!(matches!(progress, Progress::Absorbed(_)));
     died
+}
+
+/// Transfer one Shared-root credit to its positional command. The root stays
+/// alive even if this task continues past the release before retirement.
+/// # Safety
+/// The caller owns the role and one Shared-root credit, never a mutex root.
+pub(crate) unsafe fn shared_release(ctx: *mut TaskCtx, block: *mut Header) {
+    let op = super::Command::RootRelease { block }.operation(Default::default());
+    let result = engine::submit(ctx, op);
+    unsafe { crate::stop::check(ctx, result) };
 }
 
 /// # Safety
@@ -484,5 +494,168 @@ mod tests {
         for width in [2, 4, 8] {
             run_drops(width);
         }
+    }
+
+    #[test]
+    fn nested_shared_root_deaths_credit_the_same_retirement_before_the_next_allocation() {
+        let release_inner = step(crate::STEP_RELEASE_ROOT, 0);
+        let scalar = crate::Layout {
+            flags: crate::LAYOUT_FROZEN,
+            ..layout(8)
+        };
+        let outer = crate::Layout {
+            flags: crate::LAYOUT_FROZEN,
+            steps: &release_inner,
+            step_count: 1,
+            field_count: 1,
+            ..layout(8)
+        };
+        let layouts = [&scalar as *const crate::Layout, &outer];
+        for width in [2, 4, 8] {
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = layouts.len() as u32;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe {
+                    let charge = crate::alloc::allocation_charge(ctx, 2, 8, 8);
+                    (*ctx).set_budgets(None, Some(2 * charge));
+                    engine::enable(ctx, Policy::admit(&Default::default(), Some(2 * charge)));
+                },
+                |ctx| unsafe {
+                    for _ in 0..3 {
+                        let inner = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            8,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        let root = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            3,
+                            8,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(root)
+                            .cast::<*mut Header>()
+                            .write(inner);
+                        crate::roots::hirsel_rt_v2_root_release(ctx, root);
+                        let _role = role::Guard::new(ctx);
+                        assert_eq!(
+                            engine::driver(ctx).frontier.as_ref().unwrap().settled.level,
+                            0
+                        );
+                        assert_eq!((*ctx).heap_ref().meter.held(), 0);
+                        assert_eq!((*ctx).ordered_freed.get(), 0, "credits cannot apply twice");
+                    }
+                    let _role = role::Guard::new(ctx);
+                    let task = engine::current(ctx);
+                    engine::driver(ctx).finishing(task);
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+        }
+    }
+
+    #[test]
+    fn another_tasks_logged_root_death_credits_before_its_following_allocation_summary() {
+        use super::super::{Command, Objects, Outcome};
+        use crate::budget::stretch::{Budgets, Settled, Stretch};
+        use crate::ordered::{Frontier, Offer};
+
+        let release_inner = step(crate::STEP_RELEASE_ROOT, 0);
+        let scalar = crate::Layout {
+            flags: crate::LAYOUT_FROZEN,
+            ..layout(8)
+        };
+        let outer = crate::Layout {
+            flags: crate::LAYOUT_FROZEN,
+            steps: &release_inner,
+            step_count: 1,
+            field_count: 1,
+            ..layout(8)
+        };
+        let layouts = [&scalar as *const crate::Layout, &outer];
+        let mut run = crate::host::BodyRun::new(2, true);
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = layouts.len() as u32;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe {
+                let charge = crate::alloc::allocation_charge(ctx, 2, 8, 8);
+                (*ctx).set_budgets(None, Some(2 * charge));
+            },
+            |ctx| unsafe {
+                let _role = role::Guard::new(ctx);
+                let charge = crate::alloc::allocation_charge(ctx, 2, 8, 8);
+                let inner =
+                    crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+                let root =
+                    crate::alloc::hirsel_rt_v2_alloc(ctx, 3, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+                crate::alloc::payload(root)
+                    .cast::<*mut Header>()
+                    .write(inner);
+                let atomic = scheduler(ctx)
+                    .sync
+                    .create_image((&0u64 as *const u64).cast(), 8);
+                (*ctx).heap_ref().meter.ordered((*ctx).run_ptr());
+                let budgets = Budgets {
+                    fuel: false,
+                    memory: true,
+                };
+                let empty = || Stretch::new(budgets);
+                let mut frontier = Frontier::new(
+                    0,
+                    Policy::admit(&Default::default(), None),
+                    Settled {
+                        level: 2 * charge,
+                        limit: 2 * charge,
+                        fuel: u64::MAX,
+                    },
+                );
+                frontier.enqueue(2, Default::default());
+                let mut records = Vec::new();
+                let mut record = |task, name, _: &Outcome, _| records.push((task, name));
+                let mut poll = Vec::new;
+                let mut objects = Objects::new(ctx, &mut record, &mut poll);
+                let release = Command::RootRelease { block: root }.operation(Default::default());
+                assert_eq!(
+                    frontier.offer(2, empty(), release, &mut objects).0,
+                    Offer::Logged
+                );
+                assert!(crate::roots::sole(root), "the logged root remains live");
+                let store = || {
+                    Command::AtomicStore {
+                        word: atomic,
+                        image: 7u64.to_ne_bytes().to_vec(),
+                    }
+                    .operation(Default::default())
+                };
+                let mut after = empty();
+                after.alloc(2 * charge).unwrap();
+                frontier.offer(2, after, store(), &mut objects);
+                // The physical current task is zero while logical task two's
+                // root walk discovers both credits. Neither may attach to the
+                // committer's next stretch or be applied twice.
+                frontier.apply_head(empty(), store(), &mut objects).unwrap();
+                (*ctx).roots.speculative = true;
+                assert_eq!(frontier.absorb(&mut objects), Ok(Progress::Absorbed(2)));
+                (*ctx).roots.speculative = false;
+                assert_eq!(frontier.settled.level, 0);
+                assert_eq!((*ctx).ordered_freed.get(), 0);
+                frontier.absorb(&mut objects).unwrap();
+                assert_eq!(frontier.settled.level, 2 * charge);
+                assert_eq!((*ctx).ordered_freed.get(), 0);
+                drop(objects);
+                assert_eq!(records[1..], [(2, "root.release"), (2, "atomic.store")]);
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
     }
 }

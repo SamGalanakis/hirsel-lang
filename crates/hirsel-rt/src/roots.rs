@@ -228,11 +228,17 @@ pub(crate) unsafe fn consume(ctx: &mut TaskCtx, block: *mut Header) -> bool {
             ctx.heap().measurement.record("count_decrements", 1);
             ctx.heap().measurement.count_decrements += 1;
         }
+        if ctx.roots.in_phase {
+            return take(ctx, block);
+        }
         if ctx.run_ref().tasks.is_some() && crate::tasks::ordered::engine::on(ctx) {
             let ctx = std::ptr::from_mut(ctx);
-            // The same strict boundary includes mutex roots: their decrement
-            // must not bypass the head before the payload finalizer can run.
-            return crate::tasks::ordered::drops::root_release(ctx, || take(&mut *ctx, block));
+            if (*(*ctx).descriptor((*block).index())).flags & crate::LAYOUT_MUTEX_ROOT != 0 {
+                // A mutex's yielding finalizers belong to its original owner.
+                return crate::tasks::ordered::drops::root_release(ctx, || take(&mut *ctx, block));
+            }
+            crate::tasks::ordered::drops::shared_release(ctx, block);
+            return false;
         }
         // A mutex may own finalizers. Its last release belongs to this task's
         // cleanup, so it cannot be deferred to an infallible Shared phase.
@@ -264,6 +270,29 @@ unsafe fn walk(ctx: &mut TaskCtx, block: *mut Header) {
     {
         fault("a Shared root's release walk failed");
     }
+}
+
+/// Apply an owned Shared-root credit during ordered retirement. Frozen graphs
+/// have no finalizers or handles, so the walk cannot suspend. Nested releases
+/// belong to this same action, as they do in a Free entered-phase tail.
+///
+/// # Safety
+/// The caller owns one root credit and the scheduler role; `block` is a Shared
+/// root, never a mutex root. No heap or scheduler borrow spans this call.
+pub(crate) unsafe fn retire_shared(ctx: *mut TaskCtx, block: *mut Header) {
+    let ctx = unsafe { &mut *ctx };
+    assert_eq!(
+        unsafe { (*ctx.descriptor((*block).index())).flags } & crate::LAYOUT_MUTEX_ROOT,
+        0,
+        "a mutex root can run yielding finalizers"
+    );
+    let phase = std::mem::replace(&mut ctx.roots.in_phase, true);
+    unsafe {
+        if take(ctx, block) {
+            walk(ctx, block);
+        }
+    }
+    ctx.roots.in_phase = phase;
 }
 
 /// Free mode: an entered phase of the running task's op applies its pending releases,
