@@ -190,12 +190,23 @@ pub fn lower<S: Stage>(
     let unit = unit.into_stage::<Ready>();
     let mut facts = Facts::new(&unit, table);
     let mut ed = Editor::new(unit);
-    join_versions(&mut ed, &mut facts, lay, false)?;
-    let flags = join_flags(&mut ed, &facts, lay, table)?;
-    let drops: Vec<_> = drop_states(&ed, &facts, lay)
-        .into_iter()
-        .map(|(b, i, st)| (b, i, st, flags.get(&(b, i)).cloned().unwrap_or_default()))
-        .collect();
+    // Reuse the fixed point until flag insertion changes the unit, as rustc's
+    // ElaborateDrops retains ResultsCursors while constructing its MirPatch
+    // (compiler/rustc_mir_transform/src/elaborate_drops.rs:64-94,123-125).
+    // Hirsel also repairs SSA versions; each repair reruns its transfer before
+    // sharing the final result. Ready validation still re-derives its own facts.
+    let inputs = join_versions(&mut ed, &mut facts, lay, false)?;
+    let before_flags = instruction_states_from(&ed, &facts, lay, false, inputs);
+    let drops: Vec<_> = match join_flags(&mut ed, &facts, lay, table, &before_flags)? {
+        None => before_flags
+            .into_iter()
+            .map(|(b, i, st)| (b, i, st, Flags::new()))
+            .collect(),
+        Some(flags) => drop_states(&ed, &facts, lay)
+            .into_iter()
+            .map(|(b, i, st)| (b, i, st, flags.get(&(b, i)).cloned().unwrap_or_default()))
+            .collect(),
+    };
     lower_copies(&mut ed, lay)?;
     let mut lowering = Lowering {
         ed: &mut ed,
@@ -417,7 +428,7 @@ fn join_versions(
     facts: &mut Facts,
     lay: Lay<'_>,
     reads: bool,
-) -> Result<(), PassError> {
+) -> Result<Vec<Option<State>>, PassError> {
     // Parameters and arguments change below, but the graph does not.
     let adjacent = Flow {
         unit: &ed.unit,
@@ -443,7 +454,7 @@ fn join_versions(
     for _ in 0..bound {
         let inputs = VersionInputs::new(ed, facts, lay, reads);
         if inputs.joins.is_empty() {
-            return Ok(());
+            return Ok(inputs.ins);
         }
         // A plain version phi changes only its slot's version transfer, not
         // any other slot's liveness, initialization or version. Distinct slots
@@ -468,7 +479,7 @@ fn join_versions(
             };
             if !inputs.ins[block.index()]
                 .as_ref()
-                .is_some_and(|slots| slots[slot.index()].versions == Versions::Many)
+                .is_some_and(|state| state.slots[slot.index()].versions == Versions::Many)
             {
                 return Err(PassError::Unsupported(
                     "versions that meet inside a block".into(),
@@ -571,7 +582,7 @@ struct VersionEdge {
 /// One solved input and one replay for every version consumer and edge.
 /// Snapshots share persistent state rows; no state is cloned at each drop/read.
 struct VersionInputs {
-    ins: Vec<Option<hirsel_lir::persistent::PVec<crate::insert::SlotState>>>,
+    ins: Vec<Option<State>>,
     edges: Vec<Option<VersionEdge>>,
     joins: Vec<(BlockId, SlotId)>,
 }
@@ -662,10 +673,6 @@ impl VersionInputs {
                 }
             }
         }
-        let ins = ins
-            .into_iter()
-            .map(|state| state.map(|state| state.slots))
-            .collect();
         Self { ins, edges, joins }
     }
 }
@@ -844,12 +851,13 @@ fn join_flags(
     facts: &Facts,
     lay: Lay<'_>,
     table: &LayoutTable,
-) -> Result<BTreeMap<(BlockId, usize), Flags>, PassError> {
+    drops: &[(BlockId, usize, State)],
+) -> Result<Option<BTreeMap<(BlockId, usize), Flags>>, PassError> {
     // Each flagged part with its layout. A flag is true exactly when its part
     // still owns content (LIR revision 13): a part whose remaining fields are
     // all absent or plain, an inactive variant's included, owns nothing.
     let mut wanted: BTreeMap<Part, LayoutId> = BTreeMap::new();
-    for (b, i, state) in drop_states(ed, facts, lay) {
+    for &(b, i, ref state) in drops {
         let Inst::Drop { address, .. } = ed.code[b.index()][i] else {
             unreachable!()
         };
@@ -872,7 +880,7 @@ fn join_flags(
         }
     }
     if wanted.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(None);
     }
     let boolean = table
         .layouts
@@ -1046,7 +1054,7 @@ fn join_flags(
             Ok(extended(ed, e, &extra))
         })?;
     }
-    Ok(flags)
+    Ok(Some(flags))
 }
 
 fn flag_projection(
@@ -1199,6 +1207,22 @@ fn instruction_states(
         facts,
     };
     let ins = version_states(&flow);
+    instruction_states_from(ed, facts, lay, reads, ins)
+}
+
+fn instruction_states_from(
+    ed: &Editor<Ready>,
+    facts: &Facts,
+    lay: Lay<'_>,
+    reads: bool,
+    ins: Vec<Option<State>>,
+) -> Vec<(BlockId, usize, State)> {
+    let flow = Flow {
+        unit: &ed.unit,
+        code: &ed.code,
+        lay,
+        facts,
+    };
     let mut out = Vec::new();
     for (b, state) in ins.into_iter().enumerate() {
         let Some(state) = state else {
@@ -1226,8 +1250,8 @@ fn join_read_versions(
     facts: &mut Facts,
     lay: Lay<'_>,
 ) -> Result<(), PassError> {
-    join_versions(ed, facts, lay, true)?;
-    for (block, i, state) in instruction_states(ed, facts, lay, true) {
+    let inputs = join_versions(ed, facts, lay, true)?;
+    for (block, i, state) in instruction_states_from(ed, facts, lay, true, inputs) {
         let address = match ed.code[block.index()][i] {
             Inst::Read { address, .. } | Inst::Copy { address, .. } => address,
             _ => continue,
