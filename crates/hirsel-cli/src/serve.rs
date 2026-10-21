@@ -32,7 +32,12 @@ const DEFAULT_IDLE: u64 = 900;
 const COMMANDS: [&str; 3] = ["check", "build", "run"];
 
 fn identity() -> String {
-    hirsel_driver::COMPILER_IDENTITY[..8]
+    use sha2::Digest;
+    let mut hash = sha2::Sha256::new();
+    hash.update(hirsel_driver::COMPILER_IDENTITY);
+    hash.update(include_bytes!("main.rs"));
+    hash.update(include_bytes!("serve.rs"));
+    hash.finalize()[..8]
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
@@ -237,7 +242,7 @@ fn start(socket: &Path, workspace: &Path) -> Option<UnixStream> {
 
 fn send_with_fds(stream: &UnixStream, bytes: &[u8], fds: &[RawFd]) -> std::io::Result<()> {
     let space = unsafe { libc::CMSG_SPACE(std::mem::size_of_val(fds) as u32) } as usize;
-    let mut control = vec![0u8; space];
+    let mut control = vec![0usize; space.div_ceil(std::mem::size_of::<usize>())];
     let mut iov = libc::iovec {
         iov_base: bytes.as_ptr() as *mut libc::c_void,
         iov_len: bytes.len(),
@@ -519,7 +524,7 @@ fn read_request(stream: &UnixStream) -> Option<Request> {
 
 fn recv_with_fds(stream: &UnixStream, buffer: &mut [u8]) -> std::io::Result<(usize, Vec<OwnedFd>)> {
     let space = unsafe { libc::CMSG_SPACE((3 * std::mem::size_of::<RawFd>()) as u32) } as usize;
-    let mut control = vec![0u8; space];
+    let mut control = vec![0usize; space.div_ceil(std::mem::size_of::<usize>())];
     let mut iov = libc::iovec {
         iov_base: buffer.as_mut_ptr().cast(),
         iov_len: buffer.len(),

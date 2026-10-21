@@ -65,6 +65,7 @@ class Server:
                                  'XDG_RUNTIME_DIR': str(directory), 'HIRSEL_SERVE_IDLE': '900',
                                  'XDG_CACHE_HOME': str(directory / 'cache'), 'HIRSEL_OBJECTS': 'dir@1'}
         self.exe = str(args.toolchain.resolve() / 'hirsel')
+        self.log_path = directory / 'server.log'
         log = (directory / 'server.log').open('wb')
         command = [self.exe, 'serve', '--workspace', str(directory)]
         if pinned:
@@ -89,14 +90,24 @@ class Server:
 
     def command(self, command, daemon='auto', results='dir@1', perf=None):
         argv = [self.exe, *map(str, command)]
+        child_env = self.env | {'HIRSEL_DAEMON': daemon, 'HIRSEL_RESULTS': results}
         if perf:
+            # perf prepends to PATH and adds PERF_BUILDID_DIR/PREFIX. Restore
+            # the exact environment before the CLI's compatibility handshake.
+            restore = ['/usr/bin/env', '-i', *[f'{k}={v}' for k, v in child_env.items()]]
             argv = ['perf', 'stat', '-x,', '-e', 'cycles,instructions', '-o', str(perf),
-                    '--', 'taskset', '-c', '7', *argv]
+                    '--', 'taskset', '-c', '7', *restore, *argv]
+        before = self.log_path.read_bytes().count(b'exited ')
         start = time.monotonic()
         result = subprocess.run(argv, cwd=self.directory,
-                                env=self.env | {'HIRSEL_DAEMON': daemon, 'HIRSEL_RESULTS': results},
+                                env=child_env,
                                 stdin=subprocess.DEVNULL, capture_output=True, timeout=300)
-        return result, time.monotonic() - start
+        wall = time.monotonic() - start
+        if daemon == 'auto' and results == 'dir@1':
+            after = self.log_path.read_bytes().count(b'exited ')
+            if after != before + 1:
+                raise RuntimeError('command did not use the resident compiler')
+        return result, wall
 
 
 def bytes_of(result):
@@ -179,7 +190,7 @@ def server_counts(pid, output):
     os.close(ack_write)
     try:
         os.write(ctl_write, b'enable\n')
-        if not select.select([ack_read], [], [], 10)[0] or os.read(ack_read, 128) != b'ack\n':
+        if not select.select([ack_read], [], [], 10)[0] or os.read(ack_read, 128).rstrip(b'\0') != b'ack\n':
             raise RuntimeError('perf server counter enable failed')
         yield
         os.write(ctl_write, b'disable\n')
@@ -196,23 +207,38 @@ def server_counts(pid, output):
 def measure(args):
     generated = args.work / 'generated'
     _, syn, _ = corpus.synthetic(generated, 10000)
-    pairs = [('tasks', corpus.ROOT / 'examples/tasks/hirsel.json'), ('syn10k', syn)]
+    pairs = [(name, path) for name, path in [('tasks', corpus.ROOT / 'examples/tasks/hirsel.json'), ('syn10k', syn)] if re.search(args.select, name)]
     report = {'schema': 1, 'mode': 'measure', 'seed': args.seed, 'rounds': args.rounds,
               'server_cpu': 31, 'client_cpu': 7, 'runs': []}
     randomizer = random.Random(args.seed)
     for name, source in pairs:
         directory = args.work / 'measure' / name
         entry, sources = copy_program(corpus.Program(name, 'hirsel', source, 0), directory)
-        edit = next((p for p in sources if p.name == 'view.hir'), sources[0])
+        edit = next((p for p in sources if p.name == ('view.hir' if name == 'tasks' else 'todo_api_0.hir')), sources[0])
         base = edit.read_text() + '\nfn resident_probe(x:u64) -> u64 { x + 1u64 }\n'
         edit.write_text(base)
+        if name == 'tasks':
+            (directory / 'data').mkdir(exist_ok=True)
+            shutil.copytree(source.parent / 'static', directory / 'static', dirs_exist_ok=True)
+            grants = json.loads((source.parent / 'grants.json').read_text())
+            for row in grants['io']['dirs']:
+                row['host'] = str(directory / row['path'])
+            grants['io']['net']['rules'][0]['service'] = '0'
+            grants['args'] = ['--port', '0']
+        else:
+            grants = {'io': {'stdout': 'stdout.bytes@1'}, 'args': []}
+        write_json(directory / 'grants.json', grants)
+        native = ['run', '--native', '--backend', 'cranelift', str(entry), '--grants', str(directory / 'grants.json')]
         server = Server(args, directory, pinned=True)
         try:
             result, _ = server.command(['check', str(entry)])
             if result.returncode:
                 raise RuntimeError(result.stderr.decode())
+            if args.native:
+                result, _ = server.command(native)
+                if result.returncode: raise RuntimeError(result.stderr.decode())
             cells = [(mode, operation) for mode in ['resident', 'disk', 'cold']
-                     for operation in ['unchanged', 'body', 'signature']]
+                     for operation in (['unchanged', 'body', 'signature', 'native'] if args.native else ['unchanged', 'body', 'signature'])]
             for round_number in range(args.rounds):
                 randomizer.shuffle(cells)
                 for mode, operation in cells:
@@ -220,6 +246,7 @@ def measure(args):
                     server.command(['check', str(entry)])
                     change = {'unchanged': base,
                               'body': base.replace('x + 1u64', f'x + {round_number + 2}u64'),
+                              'native': (base.replace('fn selected_attr(on: bool) -> String uses {} {', f'fn selected_attr(on: bool) -> String uses {{}} {{\n  let resident_edit = {round_number + 1}u8') if name == 'tasks' else base.replace('error_json("not found")', f'error_json("not found {round_number + 1}")')),
                               'signature': base.replace('resident_probe(x:u64) -> u64', 'resident_probe(x:u32) -> u32').replace('x + 1u64', 'x + 1u32')}[operation]
                     edit.write_text(change)
                     prefix = directory / f'{round_number}-{mode}-{operation}'
@@ -228,7 +255,7 @@ def measure(args):
                     # Fresh disk processes have not seen this edit; unchanged
                     # entries and unchanged definitions are already in the store.
                     with server_counts(server.process.pid, Path(str(prefix) + '.server.perf')):
-                        result, wall = server.command(['check', str(entry)], daemon=daemon,
+                        result, wall = server.command(native if operation == 'native' else ['check', str(entry)], daemon=daemon,
                                                        results=store, perf=Path(str(prefix) + '.client.perf'))
                     if result.returncode:
                         raise RuntimeError(result.stderr.decode())
@@ -248,8 +275,8 @@ def measure(args):
          **{metric: statistics.median(r[metric] for r in report['runs']
             if (r['program'], r['mode'], r['edit']) == (program, mode, edit))
             for metric in ['wall_s', 'instructions', 'cycles']}}
-        for program in ['tasks', 'syn10k'] for mode in ['resident', 'disk', 'cold']
-        for edit in ['unchanged', 'body', 'signature']]
+        for program, _ in pairs for mode in ['resident', 'disk', 'cold']
+        for edit in (['unchanged', 'body', 'signature', 'native'] if args.native else ['unchanged', 'body', 'signature'])]
     return report
 
 
@@ -262,6 +289,7 @@ def main():
     parser.add_argument('--select', default='.')
     parser.add_argument('--scale', type=lambda s: tuple(map(int, s.split(','))), default=(3000, 10000))
     parser.add_argument('--rounds', type=int, default=10)
+    parser.add_argument('--native', action='store_true', help='include edit to running native cells')
     parser.add_argument('--seed', type=int, default=20261021)
     args = parser.parse_args()
     args.work = args.work.resolve()

@@ -1,5 +1,6 @@
 use hirsel_driver::*;
 use hirsel_engine::*;
+use hirsel_types::Signature;
 use std::sync::Arc;
 
 fn engine(store: Arc<dyn store::ResultStore>) -> QueryEngine {
@@ -81,5 +82,105 @@ fn session_rechecks_edits_and_recovers_from_invalid_sources() {
         }
         assert_eq!(session.stats().loads, 1);
         assert_eq!(session.stats().revision, 4);
+    });
+}
+
+#[test]
+fn persistent_reads_cover_lookups_private_shapes_constants_and_moves() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let base = "type Hidden { value:u8 }\nfn get(x:Hidden) -> u8 { x.value }\nfn helper() -> u8 { 1u8 }\nconst N:u8 = comptime helper()\nfn value() -> u8 { N }\n";
+        let versions = [
+            base.to_owned(),
+            base.replace("1u8", "2u8"),
+            base.replace("value:u8", "value:u32"),
+            format!("fn before() {{}}\n\n{base}"),
+            format!("{base}\nfn value() -> u8 {{ 1u8 }}\n"),
+            base.replace("x.value", "missing"),
+            format!("{base}\nfn missing() {{}}\n"),
+            base.to_owned(),
+        ];
+        for source in versions {
+            let mut actual = engine(store.clone());
+            let mut cold = engine(Arc::new(store::NoneStore));
+            assert_eq!(
+                diagnostics(&checked(&mut actual, &source)),
+                diagnostics(&checked(&mut cold, &source)),
+                "{source}"
+            );
+        }
+    });
+}
+
+#[test]
+fn verify_store_compares_canonical_products_across_new_interners() {
+    with_compiler_stack(|| {
+        let source = "fn a(x:u8) -> u8 { x + 1u8 }\nfn main() -> u8 { a(2u8) }\n";
+        let store = Arc::new(store::MemStore::default());
+        let mut first = engine(store.clone());
+        assert!(checked(&mut first, source).diagnostics.is_empty());
+        first.lower_to_tir(&path("main")).unwrap();
+        let mut verify = engine(store).with_verify_store(store::VerifyStore::Recompute);
+        assert!(checked(&mut verify, source).diagnostics.is_empty());
+        verify.lower_to_tir(&path("main")).unwrap();
+        assert!(verify.recompute_count(&path("main"), QueryKind::Modes) > 0);
+    });
+}
+
+struct ForgedLowering;
+impl LoweringPhase for ForgedLowering {
+    fn lower(
+        &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
+        body: &AnalyzedBody,
+        comptime: &Comptime,
+        signature: &Signature,
+    ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+        let mut output = LowerAdapter.lower(t, m, body, comptime, signature)?;
+        output.value.types = Arc::from([]);
+        Ok(output)
+    }
+    fn lower_evaluation(
+        &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
+        body: &AnalyzedBody,
+        staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
+        signature: &Signature,
+        expression: hirsel_syntax::ExprId,
+        result: hirsel_types::TypeId,
+        constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
+    ) -> Result<hirsel_tir::Definition, QueryError> {
+        LowerAdapter.lower_evaluation(t, m, body, staged, signature, expression, result, constants)
+    }
+    fn entry_body(&self) -> hirsel_tir::BodyId {
+        LowerAdapter.entry_body()
+    }
+}
+#[test]
+fn switching_verification_on_checks_memory_and_disk_lowerings_without_evidence() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let mut adapters = compiler_adapters();
+        adapters.lowering = Some(std::rc::Rc::new(ForgedLowering));
+        let mut first =
+            QueryEngine::new(default_environment(), adapters).with_result_store(store.clone());
+        let source = "fn main() -> u8 { 1u8 }\n";
+        first.verify = Verify::Off;
+        assert!(checked(&mut first, source).diagnostics.is_empty());
+        first.lower_to_tir(&path("main")).unwrap();
+        first.verify = Verify::On;
+        assert!(matches!(
+            first.lower_to_tir(&path("main")),
+            Err(QueryError::Operational(_))
+        ));
+        // A fresh process rejects the unverifiable disk entry, lowers afresh,
+        // and validates the independently rebuilt result.
+        let mut second = engine(store);
+        assert!(checked(&mut second, source).diagnostics.is_empty());
+        let valid = second.lower_to_tir(&path("main")).unwrap();
+        assert!(!valid.value.types.is_empty());
+        assert_eq!(second.recompute_count(&path("main"), QueryKind::Lower), 1);
     });
 }

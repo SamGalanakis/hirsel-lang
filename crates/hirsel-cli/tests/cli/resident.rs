@@ -11,7 +11,7 @@ impl Drop for Server {
     }
 }
 fn command(directory: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    let mut command = Command::new(std::path::absolute(env!("CARGO_BIN_EXE_hirsel")).unwrap());
     command
         .current_dir(directory)
         .env("HIRSEL_DAEMON", "auto")
