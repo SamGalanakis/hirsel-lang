@@ -10,6 +10,8 @@ mod budgets;
 mod cache_defaults;
 #[path = "cli/candidate.rs"]
 mod candidate;
+#[path = "cli/compiler_workers.rs"]
+mod compiler_workers;
 #[path = "cli/deadlines.rs"]
 mod deadlines;
 #[path = "cli/dependency_card.rs"]

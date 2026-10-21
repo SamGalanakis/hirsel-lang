@@ -189,3 +189,129 @@ fn state_is_initialized_once_per_worker_and_reused_only_on_that_thread() {
     assert!(empty.is_empty());
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
+
+#[test]
+fn spawn_failure_finishes_every_task_once_in_input_order() {
+    for successful_spawns in [0, 1] {
+        let attempts = AtomicUsize::new(0);
+        let initialized = AtomicUsize::new(0);
+        let dropped = AtomicUsize::new(0);
+        struct State<'a>(&'a AtomicUsize);
+        impl Drop for State<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let calls: Vec<_> = (0..32).map(|_| AtomicUsize::new(0)).collect();
+        let before = work::read(work::Counter::CacheValidationRows);
+        let results = map_with_state_spawn(
+            Jobs::new(4),
+            (0..32).collect(),
+            |&i| i as u64,
+            || {
+                initialized.fetch_add(1, Ordering::Relaxed);
+                State(&dropped)
+            },
+            |_, i| {
+                calls[i].fetch_add(1, Ordering::Relaxed);
+                work::count_by(work::Counter::CacheValidationRows, i as u64);
+                i
+            },
+            || {
+                if attempts.fetch_add(1, Ordering::Relaxed) == successful_spawns {
+                    Err(std::io::Error::from_raw_os_error(11))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert_eq!(results, (0..32).collect::<Vec<_>>());
+        assert!(calls.iter().all(|count| count.load(Ordering::Relaxed) == 1));
+        assert_eq!(attempts.load(Ordering::Relaxed), successful_spawns + 1);
+        assert_eq!(initialized.load(Ordering::Relaxed), 1);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            work::read(work::Counter::CacheValidationRows) - before,
+            (0..32u64).sum::<u64>()
+        );
+    }
+}
+
+#[test]
+fn spawn_failure_preserves_task_panic_and_drops_queued_tasks() {
+    for successful_spawns in [0, 1] {
+        let attempts = AtomicUsize::new(0);
+        let started = AtomicUsize::new(0);
+        let dropped = AtomicUsize::new(0);
+        struct Task<'a>(&'a AtomicUsize);
+        impl Drop for Task<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let payload = catch_unwind(AssertUnwindSafe(|| {
+            map_with_state_spawn(
+                Jobs::new(4),
+                (0..32).map(|_| Task(&dropped)).collect(),
+                |_| 0,
+                || (),
+                |_, _task| -> () {
+                    started.fetch_add(1, Ordering::Relaxed);
+                    std::panic::panic_any("task failure");
+                },
+                || {
+                    if attempts.fetch_add(1, Ordering::Relaxed) == successful_spawns {
+                        Err(std::io::Error::from_raw_os_error(11))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+        }))
+        .expect_err("the task panic still reaches the caller");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"task failure"));
+        assert_eq!(started.load(Ordering::Relaxed), 1);
+        assert_eq!(dropped.load(Ordering::Relaxed), 32);
+    }
+}
+
+#[test]
+fn spawn_failure_preserves_initializer_panic() {
+    for successful_spawns in [0, 1] {
+        let attempts = AtomicUsize::new(0);
+        let payload = catch_unwind(AssertUnwindSafe(|| {
+            map_with_state_spawn(
+                Jobs::new(4),
+                vec![(); 4],
+                |_| 0,
+                || -> () { std::panic::panic_any("initializer failure") },
+                |_, ()| (),
+                || {
+                    if attempts.fetch_add(1, Ordering::Relaxed) == successful_spawns {
+                        Err(std::io::Error::from_raw_os_error(11))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+        }))
+        .expect_err("the initializer panic still reaches the caller");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"initializer failure"));
+    }
+}
+
+#[test]
+fn jobs_one_and_empty_frontiers_never_try_to_spawn() {
+    let caller = std::thread::current().id();
+    for (jobs, tasks) in [(Jobs::ONE, vec![(); 4]), (Jobs::new(4), vec![])] {
+        let results = map_with_state_spawn(
+            jobs,
+            tasks,
+            |_| 0,
+            || (),
+            |_, ()| std::thread::current().id(),
+            || panic!("sequential and empty frontiers must not spawn"),
+        );
+        assert!(results.iter().all(|&id| id == caller));
+    }
+}

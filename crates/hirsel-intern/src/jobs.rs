@@ -64,6 +64,8 @@ impl Jobs {
 /// (the totals are process-wide); the caller's wait for them is `timings`
 /// wait, not work of its own phase. After a panic no further task starts,
 /// and the panic of the earliest-started panicking task is resumed on the caller.
+/// If a worker cannot start, the started workers drain the queue; if none could
+/// start, the caller does so, as with jobs=1. A process warns only once.
 pub fn map<T: Send, R: Send>(
     jobs: Jobs,
     tasks: Vec<T>,
@@ -84,6 +86,18 @@ pub fn map_with_state<T: Send, R: Send, S>(
     cost: impl Fn(&T) -> u64 + Sync,
     initialize: impl Fn() -> S + Sync,
     work: impl Fn(&mut S, T) -> R + Sync,
+) -> Vec<R> {
+    map_with_state_spawn(jobs, tasks, cost, initialize, work, || Ok(()))
+}
+
+// The gate injects an OS spawn error without consuming shared host threads.
+fn map_with_state_spawn<T: Send, R: Send, S>(
+    jobs: Jobs,
+    tasks: Vec<T>,
+    cost: impl Fn(&T) -> u64 + Sync,
+    initialize: impl Fn() -> S + Sync,
+    work: impl Fn(&mut S, T) -> R + Sync,
+    mut before_spawn: impl FnMut() -> std::io::Result<()>,
 ) -> Vec<R> {
     if tasks.is_empty() {
         return vec![];
@@ -138,26 +152,45 @@ pub fn map_with_state<T: Send, R: Send, S>(
         }
         (work::Tally::read(), panicked)
     };
-    let wait = crate::timings::wait();
+    let mut wait = Some(crate::timings::wait());
+    let mut on_caller = false;
     let outcomes: Vec<_> = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..workers)
-            .map(|_| {
+        let mut handles = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            // Rust std's fallible Builder::spawn_scoped keeps ownership of every
+            // successful handle. Stop at the first OS failure, then join them all.
+            let spawned = before_spawn().and_then(|()| {
                 std::thread::Builder::new()
                     .name("hirsel-job".into())
                     .stack_size(COMPILER_STACK_BYTES)
                     .spawn_scoped(scope, worker)
-                    .expect("job worker creation failed")
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap_or_else(|panic| resume_unwind(panic)))
-            .collect()
+            });
+            match spawned {
+                Ok(handle) => handles.push(handle),
+                Err(error) => {
+                    warn_spawn_failure(&error, handles.len().max(1));
+                    break;
+                }
+            }
+        }
+        if handles.is_empty() {
+            // The caller already supports jobs=1. Do not add its cumulative
+            // work tally back into itself below.
+            on_caller = true;
+            drop(wait.take());
+            vec![Ok(worker())]
+        } else {
+            // Collect every join before propagating even an initializer panic.
+            handles.into_iter().map(|handle| handle.join()).collect()
+        }
     });
     drop(wait);
     let mut first = None;
-    for (tally, panicked) in outcomes {
-        tally.add();
+    for outcome in outcomes {
+        let (tally, panicked) = outcome.unwrap_or_else(|panic| resume_unwind(panic));
+        if !on_caller {
+            tally.add();
+        }
         if let Some((start, payload)) = panicked
             && first.as_ref().is_none_or(|(earliest, _)| start < *earliest)
         {
@@ -175,6 +208,19 @@ pub fn map_with_state<T: Send, R: Send, S>(
                 .expect("every task ran")
         })
         .collect()
+}
+
+/// Resource pressure is operational, not a source-language diagnostic. Keep
+/// repeated frontiers (and resident compiler requests) from flooding stderr.
+fn warn_spawn_failure(error: &std::io::Error, remaining: usize) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr(),
+            "hirsel: compiler worker creation failed: {error}; continuing with {remaining} worker(s); set HIRSEL_JOBS=1 to avoid additional compiler worker threads"
+        );
+    }
 }
 
 #[cfg(test)]

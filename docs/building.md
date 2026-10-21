@@ -396,6 +396,22 @@ workers can exhaust thread or address-space limits before resident memory reache
 the reported memory cap. The repository's `tools/capped` wrapper also sets a
 worker budget; installed CLI users can set `HIRSEL_JOBS` directly.
 
+If the OS refuses a compiler worker, Hirsel warns once on stderr, including the
+OS error and the `HIRSEL_JOBS=1` remedy. It stops creating workers for that
+frontier. Already started workers finish the queued work; if none started, the
+compiler thread finishes it, as with jobs1. Results retain their input order and
+compilation keeps its usual exit status: successful compilation still exits 0,
+source errors still exit 1. This warning is an operational resource failure,
+not a source-language error, and does not add a diagnostic to `--json` output.
+Task panics still propagate after workers have joined.
+
+This follows Rust's fallible scoped-thread builder and explicit join contract
+([Rust `scoped.rs:256–268,293–323`](https://github.com/rust-lang/rust/blob/a7c37f9f0ee5e93396106e9de20f4a86b4154e63/library/std/src/thread/scoped.rs#L256));
+the panic-payload controls follow
+[`thread/tests.rs:110–118,247–263`](https://github.com/rust-lang/rust/blob/a7c37f9f0ee5e93396106e9de20f4a86b4154e63/library/std/src/thread/tests.rs#L110).
+Hirsel adds queue draining with fewer workers and a once-per-process warning
+because its results are independent of worker count.
+
 ### Scripted network grants
 
 The JSON representation of a scripted peer differs from the Hirsel `NetPeer`
