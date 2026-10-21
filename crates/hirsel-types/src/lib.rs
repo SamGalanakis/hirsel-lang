@@ -1197,6 +1197,13 @@ pub struct RecursiveGroup {
 pub trait SignatureProvider {
     fn signature(&mut self, definition: DefId) -> Result<SignatureRef, QueryError>;
     fn lookup(&mut self, context: &FileContext, path: &hirsel_syntax::Path) -> LookupOutput;
+    /// Whether these declarations share an indexed recursive type group.
+    /// Header resolution cannot probe a member's unpublished signature. This
+    /// query must not normalize signatures; providers cover membership with
+    /// declaration lookups and group input reads, just as `recursive_group`.
+    fn in_recursive_group(&mut self, _owner: &DefPath, _member: &DefPath) -> bool {
+        false
+    }
     /// `definition`'s recursive type group, its other members at `stage`.
     /// Providers without one (fixtures over a fixed registry) have none.
     fn recursive_group(

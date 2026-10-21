@@ -2316,6 +2316,19 @@ impl SignatureProvider for Recorder<'_> {
     ) -> Result<hirsel_types::RecursiveGroup, QueryError> {
         self.group_at(definition, stage)
     }
+    fn in_recursive_group(&mut self, owner: &DefPath, member: &DefPath) -> bool {
+        let Some(group) = self.type_group(owner) else {
+            return false;
+        };
+        // Membership is a semantic input even when the header only probes a
+        // peer's nominal name. Use the same coverage as group normalization.
+        for path in &group.members {
+            if let Some(text) = self.engine.implementation_hash(path) {
+                self.observed.representations.insert(path.clone(), text);
+            }
+        }
+        group.members.iter().any(|path| path == member)
+    }
 }
 pub(crate) fn lookup_path(context: &FileContext, path: &hirsel_syntax::Path) -> Option<DefPath> {
     let mut segments: Vec<_> = path

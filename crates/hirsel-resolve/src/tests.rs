@@ -329,6 +329,96 @@ fn clean(output: &ResolveOutput) {
 }
 
 #[test]
+fn recursive_header_uses_own_syntax_without_a_failed_signature_read() {
+    let mut t = Tree::new("pub type Value { next: Value }\n");
+    let ty = t.named_ty("Value", 1);
+    let field = FieldSyntax {
+        growable: false,
+        name: t.name("next"),
+        ty,
+        origin: t.origin(1),
+    };
+    let item = t.type_item(
+        "Value",
+        TypeBody::Record(vec![field]),
+        Visibility::Public,
+        1,
+    );
+    let index = t.index();
+    for view in [ResolveView::Header, ResolveView::Item] {
+        let mut fake = Fake::new(&index);
+        let output = resolve_view(
+            &t.file.items[item],
+            &t.file.items,
+            view,
+            &index,
+            session(),
+            &mut fake,
+            &ExpectedTypes::default(),
+        );
+        clean(&output);
+        assert!(
+            output
+                .types
+                .contains(&(ty, ResolvedName::Definition(own("Value"))))
+        );
+        let self_read = output.reads.iter().any(|read| matches!(
+            read, DependencyRead::Signature { definition, .. } if definition.path() == &own("Value")
+        ));
+        assert_eq!(self_read, matches!(view, ResolveView::Item));
+        assert_eq!(
+            fake.reads,
+            if self_read {
+                vec![own("Value")]
+            } else {
+                vec![]
+            }
+        );
+    }
+}
+
+#[test]
+fn recursive_header_retains_other_declarations_failed_signature_reads() {
+    let mut t = Tree::new("pub type Value { next: Other }\n");
+    let ty = t.named_ty("Other", 1);
+    let name = t.name("next");
+    let item = t.type_item(
+        "Value",
+        TypeBody::Record(vec![FieldSyntax {
+            growable: false,
+            name,
+            ty,
+            origin: t.origin(1),
+        }]),
+        Visibility::Public,
+        1,
+    );
+    let mut manifest =
+        ManifestFixture::from_files(package("test", "1"), [&t.file], ContentHash::default());
+    manifest
+        .definitions
+        .push(entry(own("Other"), Namespace::Type, Visibility::Public));
+    let (index, diagnostics) = ManifestIndex::new(manifest);
+    assert!(diagnostics.is_empty());
+    let mut fake = Fake::new(&index);
+    let output = resolve_view(
+        &t.file.items[item],
+        &t.file.items,
+        ResolveView::Header,
+        &index,
+        session(),
+        &mut fake,
+        &ExpectedTypes::default(),
+    );
+    clean(&output);
+    assert_eq!(fake.reads, vec![own("Other")]);
+    assert!(output.reads.contains(&DependencyRead::Signature {
+        definition: DefId::intern(&own("Other")),
+        fingerprint: None,
+    }));
+}
+
+#[test]
 fn loop_source_paths_resolve_without_operation_signature_reads() {
     let mut t = Tree::new("@loop_source(open, next) type View {}\n");
     let item = t.type_item("View", TypeBody::Record(vec![]), Visibility::Public, 1);

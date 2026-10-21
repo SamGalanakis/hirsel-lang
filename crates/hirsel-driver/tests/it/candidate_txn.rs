@@ -871,3 +871,69 @@ fn candidate_digest_only_receipt_commits_to_the_same_optional_full_export() {
     assert_eq!(full.completion, minimal.completion);
     assert!(compact.counters().retained_bytes < detailed.counters().retained_bytes);
 }
+
+#[test]
+fn candidate_recursive_source_products_are_complete_without_an_image() {
+    for source in [
+        "pub type Value = Null | Text(String) | Array(List[Value])\npub fn main()->u64{1}\n",
+        "@serializable\npub type Value = Null | Text(String) | Array(List[Value])\npub fn main()->u64{1}\n",
+        "pub type Tree = Leaf | Node(box Entry)\npub type Entry { left: Tree, key: u64, right: Tree }\npub fn main()->u64{1}\n",
+    ] {
+        let fixture = Fixture::new(source);
+        let w = workspace();
+        let base = w.capture(&fixture.entry()).unwrap();
+        let candidate = submit(&w, &base, 1, source);
+        let receipt = result(&w, &candidate);
+        assert_eq!(
+            receipt.completion,
+            Completion::Complete,
+            "{source} {:?}",
+            receipt.loader_error
+        );
+        assert_eq!(
+            receipt.verdict,
+            Verdict::Pass,
+            "{source} {:?}",
+            receipt.output.diagnostics
+        );
+        assert!(receipt.checked_products.is_some());
+    }
+}
+
+#[test]
+fn candidate_recursive_source_missing_name_becomes_available_in_a_sibling() {
+    let source = "pub type Tree = Leaf | Node(box Missing)\npub fn main()->u64{1}\n";
+    let fixture = Fixture::new(source);
+    let w = workspace();
+    let base = w.capture(&fixture.entry()).unwrap();
+    let absent = submit(&w, &base, 1, source);
+    let rejected = result(&w, &absent);
+    assert_eq!(
+        rejected.completion,
+        Completion::Complete,
+        "{:?}",
+        rejected.loader_error
+    );
+    assert_eq!(rejected.verdict, Verdict::Reject);
+    let present = submit(
+        &w,
+        &base,
+        2,
+        &format!("{source}pub type Missing {{ tree: Tree }}\n"),
+    );
+    let accepted = result(&w, &present);
+    assert_eq!(
+        accepted.completion,
+        Completion::Complete,
+        "{:?}",
+        accepted.loader_error
+    );
+    assert_eq!(
+        accepted.verdict,
+        Verdict::Pass,
+        "{:?}",
+        accepted.output.diagnostics
+    );
+    assert_eq!(result(&w, &absent).verdict, Verdict::Reject);
+    assert_eq!(std::fs::read_to_string(fixture.entry()).unwrap(), source);
+}

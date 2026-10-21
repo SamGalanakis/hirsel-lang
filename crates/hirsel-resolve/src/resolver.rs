@@ -520,6 +520,17 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
         }
     }
     fn signature(&mut self, definition: &DefPath) -> Option<ty::SignatureRef> {
+        // A header's own declaration/group is being normalized, so no published
+        // signature exists yet. Syntax supplies recursive nominal shape;
+        // probing the provider would turn reentrancy into a false absence read.
+        if matches!(self.view, ResolveView::Header)
+            && (definition == &self.syntax.item.definition
+                || self
+                    .provider
+                    .in_recursive_group(&self.syntax.item.definition, definition))
+        {
+            return None;
+        }
         let id = DefId::intern(definition);
         if let Some(signature) = self.signatures.get(&id) {
             return signature.clone();

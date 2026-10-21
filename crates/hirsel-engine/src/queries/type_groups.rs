@@ -12,7 +12,7 @@ use hirsel_types::{GroupStage, RecursiveGroup};
 /// A group's members in DefPath order, the owner included, and each member's
 /// `hirsel_graph::scc_keys` key over the members' paths and semantic tokens.
 pub(super) struct TypeGroup {
-    members: Vec<DefPath>,
+    pub(super) members: Vec<DefPath>,
     keys: BTreeMap<DefPath, ContentHash>,
 }
 

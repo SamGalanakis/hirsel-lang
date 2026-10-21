@@ -162,7 +162,24 @@ impl QueryEngine {
                             return Err(QueryError::Operational(
                                 hirsel_types::OperationalFailure {
                                     operation: "candidate reads".into(),
-                                    message: format!("conflicting complete read values for {path}"),
+                                    message: format!(
+                                        "conflicting complete read values for {path}, {key:?}: {:?}",
+                                        [
+                                            QueryKind::Signature,
+                                            QueryKind::Resolve,
+                                            QueryKind::Check,
+                                            QueryKind::Modes,
+                                            QueryKind::Lower,
+                                            QueryKind::Summary,
+                                            QueryKind::CheckedSummary
+                                        ]
+                                        .into_iter()
+                                        .filter_map(|kind| self
+                                            .memo_reads(&path, kind)?
+                                            .get(key)
+                                            .map(|value| (kind, value)))
+                                        .collect::<Vec<_>>()
+                                    ),
                                 },
                             ));
                         }

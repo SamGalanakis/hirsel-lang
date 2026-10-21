@@ -78,3 +78,35 @@ fn recursive_type_groups_normalize_alike_in_any_order_and_move_together() {
         assert!(lone.iter().all(|s| s.metadata.recursive_group.is_none()));
     });
 }
+
+#[test]
+fn recursive_header_membership_reads_cover_group_changes() {
+    with_compiler_stack(|| {
+        let mut engine = fresh();
+        signatures(&mut engine, GROUP, ["Tree", "Entry"]);
+        let reads = engine
+            .memo_reads(&path("Tree"), QueryKind::Signature)
+            .unwrap();
+        for member in ["Tree", "Entry"] {
+            let id = hirsel_syntax::DefId::intern(&path(member));
+            assert!(reads.get(&memo::ReadKey::ExecutedBody(id)).is_some());
+            assert!(reads.get(&memo::ReadKey::Signature(id)).is_none());
+        }
+        // Removing the return edge breaks the group, so Tree must now read
+        // Entry's final signature. Its former group receipt cannot survive.
+        let split = "type Tree = Leaf | Node(box Entry)\ntype Entry { key: u64 }\n";
+        let moved = signatures(&mut engine, split, ["Tree", "Entry"]);
+        let cold = signatures(&mut fresh(), split, ["Entry", "Tree"]);
+        assert_eq!(identity(&moved), identity(&cold));
+        let reads = engine
+            .memo_reads(&path("Tree"), QueryKind::Signature)
+            .unwrap();
+        assert!(
+            reads
+                .get(&memo::ReadKey::Signature(hirsel_syntax::DefId::intern(
+                    &path("Entry")
+                )))
+                .is_some()
+        );
+    });
+}
