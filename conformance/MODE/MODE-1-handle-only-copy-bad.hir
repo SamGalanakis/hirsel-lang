@@ -1,0 +1,18 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 17
+// twin: MODE/MODE-1-handle-only-copy-ok.hir
+type Board {
+  items: List[u64],
+}
+
+type Handles {
+  cell: List[Board],
+}
+
+fn a(m: Mutex[Board]) -> Mutex[Board] {
+  copy m
+}
+
+fn aggregate(m: Handles) -> Handles {
+  copy m
+}

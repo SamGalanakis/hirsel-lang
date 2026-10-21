@@ -616,9 +616,11 @@ fn contents(take h: Holder) -> List[u64] {
 
 ## On `copy` and `take`
 
-`copy x` shares `x` and keeps `x`'s bounds, so it never makes local content global; the
-exceptions are a copied `Shared` root and the copied capture of a value whose only counted
-parts are `Shared`, `Mutex` and `Atomic` handles ([CLO-3](closures.md#clo-3-task-closures)). When a value must escape and the caller no longer
+`copy x` shares `x` and keeps `x`'s bounds, so a copy of local counted content stays
+local. A value whose only counted parts are `Shared`, `Mutex` and `Atomic` handles is
+an exception in every expression context: its copy owns independent counts on immutable
+roots or run-owned cells and is global, even when read through a borrowed parameter.
+When a value must escape and the caller no longer
 needs it, `take` is the repair: declare the parameter `take x` and pass `take v` at the
 last use. It costs nothing and moves ownership. When the caller keeps using the value,
 `unique x` deep-copies it (an allocation site). A `copy` that changes nothing may be

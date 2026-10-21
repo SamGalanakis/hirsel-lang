@@ -1,0 +1,18 @@
+// rule: MODE-1
+// expect: accept
+// boundary: Copies of handle-only values are global; copied counted list content stays local.
+type Board {
+  items: List[u64],
+}
+
+type Handles {
+  cell: Mutex[Board],
+}
+
+fn a(m: Mutex[Board]) -> Mutex[Board] {
+  copy m
+}
+
+fn aggregate(m: Handles) -> Handles {
+  copy m
+}

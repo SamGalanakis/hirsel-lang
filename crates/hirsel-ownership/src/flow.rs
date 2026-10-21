@@ -539,9 +539,9 @@ impl Value {
             parts: Some(Arc::new(parts)),
         };
     }
-    /// MEM-11: a copied Shared root is an independently counted handle on an
-    /// immutable root that is never region-placed: global, with no source.
-    fn shared_root_copy(&mut self) {
+    /// Copies whose only counted parts are handles own independent counts on
+    /// immutable roots or run-owned cells: global, with no borrowed source.
+    fn detached_handle_copy(&mut self) {
         self.modes.relation = Relation::global();
         self.loans
             .retain(|loan| !matches!(loan.on, On::Binding(_)) || loan.kind == Kind::Read);
@@ -4540,8 +4540,8 @@ impl Checker<'_> {
                     value.element_place = None;
                     value.element_view = false;
                 }
-                if usage == UseKind::Copy && property.shared {
-                    value.shared_root_copy();
+                if usage == UseKind::Copy && property.copy_detaches {
+                    value.detached_handle_copy();
                 }
                 if usage == UseKind::Copy && property.flat {
                     // MEM-12 copies complete flat bytes, creating an independent
@@ -5109,8 +5109,8 @@ impl Checker<'_> {
                         if !self.arenas.global(&value.modes.relation) {
                             value.alias_bound();
                         }
-                        if property.shared {
-                            value.shared_root_copy();
+                        if property.copy_detaches {
+                            value.detached_handle_copy();
                         }
                         if property.flat {
                             // MEM-12 copies the bytes, so the copy is unique,

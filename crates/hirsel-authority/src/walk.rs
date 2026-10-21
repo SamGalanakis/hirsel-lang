@@ -1598,21 +1598,14 @@ impl<'a> Checker<'a> {
                             let t = self.out.body.types.push(row);
                             self.set_ty(e, t);
                         }
-                        // MEM-11: copying a Shared root acquires an atomic
-                        // count on an immutable, never region-placed root, so
-                        // the copy is global wherever the root was read.
+                        // Handle-only copies own independent counts on immutable
+                        // roots or run-owned cells; they retain no borrowed storage.
                         if let Some(t) = self.ty(e) {
-                            let row = self.out.body.types.get(t).unwrap();
+                            let row = self.out.body.types.get(t).unwrap().clone();
                             if !self.lifetime(&row.modes.relation).is_global()
-                                && matches!(
-                                    row.kind,
-                                    TypeKind::Builtin {
-                                        kind: BuiltinType::Shared,
-                                        ..
-                                    }
-                                )
+                                && self.copy_detaches(t)
                             {
-                                let mut row = row.clone();
+                                let mut row = row;
                                 row.modes.relation = self.placement(&row.modes.relation);
                                 let t = self.out.body.types.push(row);
                                 self.set_ty(e, t);
