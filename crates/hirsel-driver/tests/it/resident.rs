@@ -57,7 +57,7 @@ fn persistent_modes_survive_a_process_and_callee_body_edits_but_read_signatures_
 #[test]
 fn session_rechecks_edits_and_recovers_from_invalid_sources() {
     with_compiler_stack(|| {
-        let f = crate::precheck_fixture::Fixture::new();
+        let f = crate::image_fixture::Fixture::new();
         let source = f.0.join("main.hir");
         std::fs::write(&source, "fn main() {}\n").unwrap();
         let mut session = session::Session::open(&source, Verify::On);

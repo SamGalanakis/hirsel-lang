@@ -88,9 +88,13 @@ class Server:
         self.process.wait(timeout=10)
         self.log.close()
 
-    def command(self, command, daemon='auto', results='dir@1', perf=None):
+    def command(self, command, daemon='auto', results='dir@1', perf=None, cache=None):
         argv = [self.exe, *map(str, command)]
         child_env = self.env | {'HIRSEL_DAEMON': daemon, 'HIRSEL_RESULTS': results}
+        if cache is not None:
+            child_env |= {'HIRSEL_RESULTS_DIR': str(self.directory / (cache + '-results')),
+                          'XDG_CACHE_HOME': str(self.directory / (cache + '-objects')),
+                          'HIRSEL_OBJECTS': 'none@1' if results == 'none@1' else 'dir@1'}
         if perf:
             # perf prepends to PATH and adds PERF_BUILDID_DIR/PREFIX. Restore
             # the exact environment before the CLI's compatibility handshake.
@@ -209,7 +213,8 @@ def measure(args):
     _, syn, _ = corpus.synthetic(generated, 10000)
     pairs = [(name, path) for name, path in [('tasks', corpus.ROOT / 'examples/tasks/hirsel.json'), ('syn10k', syn)] if re.search(args.select, name)]
     report = {'schema': 1, 'mode': 'measure', 'seed': args.seed, 'rounds': args.rounds,
-              'server_cpu': 31, 'client_cpu': 7, 'runs': []}
+              'server_cpu': 31, 'client_cpu': 7, 'runs': [],
+              'cache_policy': 'independent per mode; cold disables definition and object stores'}
     randomizer = random.Random(args.seed)
     for name, source in pairs:
         directory = args.work / 'measure' / name
@@ -237,26 +242,33 @@ def measure(args):
             if args.native:
                 result, _ = server.command(native)
                 if result.returncode: raise RuntimeError(result.stderr.decode())
+                result, _ = server.command(native, daemon='off', cache='disk')
+                if result.returncode: raise RuntimeError(result.stderr.decode())
             cells = [(mode, operation) for mode in ['resident', 'disk', 'cold']
                      for operation in (['unchanged', 'body', 'signature', 'native'] if args.native else ['unchanged', 'body', 'signature'])]
             for round_number in range(args.rounds):
                 randomizer.shuffle(cells)
                 for mode, operation in cells:
                     edit.write_text(base)
-                    server.command(['check', str(entry)])
+                    daemon = 'auto' if mode == 'resident' else 'off'
+                    store = 'none@1' if mode == 'cold' else 'dir@1'
+                    cache = None if mode == 'resident' else mode
+                    seeded, _ = server.command(['check', str(entry)], daemon=daemon, results=store, cache=cache)
+                    if seeded.returncode:
+                        raise RuntimeError(seeded.stderr.decode())
                     change = {'unchanged': base,
                               'body': base.replace('x + 1u64', f'x + {round_number + 2}u64'),
                               'native': (base.replace('fn selected_attr(on: bool) -> String uses {} {', f'fn selected_attr(on: bool) -> String uses {{}} {{\n  let resident_edit = {round_number + 1}u8') if name == 'tasks' else base.replace('error_json("not found")', f'error_json("not found {round_number + 1}")')),
                               'signature': base.replace('resident_probe(x:u64) -> u64', 'resident_probe(x:u32) -> u32').replace('x + 1u64', 'x + 1u32')}[operation]
+                    if operation != 'unchanged' and change == base:
+                        raise RuntimeError(f'{name}: {operation} edit did not change the source')
                     edit.write_text(change)
                     prefix = directory / f'{round_number}-{mode}-{operation}'
-                    daemon = 'auto' if mode == 'resident' else 'off'
-                    store = 'none@1' if mode == 'cold' else 'dir@1'
                     # Fresh disk processes have not seen this edit; unchanged
                     # entries and unchanged definitions are already in the store.
                     with server_counts(server.process.pid, Path(str(prefix) + '.server.perf')):
                         result, wall = server.command(native if operation == 'native' else ['check', str(entry)], daemon=daemon,
-                                                       results=store, perf=Path(str(prefix) + '.client.perf'))
+                                                       results=store, perf=Path(str(prefix) + '.client.perf'), cache=cache)
                     if result.returncode:
                         raise RuntimeError(result.stderr.decode())
                     client = counts(Path(str(prefix) + '.client.perf'))
