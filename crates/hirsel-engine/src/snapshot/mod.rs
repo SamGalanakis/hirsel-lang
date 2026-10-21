@@ -280,8 +280,10 @@ impl QueryEngine {
     /// The inputs a snapshot built now would be built from.
     pub(crate) fn snapshot_stamp(&self) -> SnapshotStamp {
         SnapshotStamp {
-            revision: self.graph.revision().get(),
+            declarations: self.declarations.revision(),
+            revision: self.snapshot_inputs_revision,
             environment: self.environment.clone(),
+            limits: self.comptime_limits,
             manifest: Some(self.declarations.inputs().manifest_revision),
             unavailable: self.unavailable,
         }
@@ -312,9 +314,7 @@ impl QueryEngine {
     }
     /// Signatures changed outside a source revision (a staged constant).
     pub(crate) fn retire_snapshot(&mut self) {
-        if let Some((stamp, _)) = &mut self.snapshot {
-            stamp.revision = u64::MAX;
-        }
+        self.snapshot_inputs_revision += 1;
     }
     /// V's report from `validate` against `package`'s universe, or no
     /// violations under `Verify::Off`. Every V run of a session goes through here.
@@ -336,8 +336,10 @@ impl QueryEngine {
 /// The inputs a kept snapshot was built from.
 #[derive(PartialEq)]
 pub(crate) struct SnapshotStamp {
+    declarations: u64,
     revision: u64,
     environment: QueryEnvironment,
+    limits: hirsel_interp::Limits,
     manifest: Option<ContentHash>,
     unavailable: Option<QueryKind>,
 }

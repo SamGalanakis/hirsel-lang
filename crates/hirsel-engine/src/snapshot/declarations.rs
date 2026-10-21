@@ -159,6 +159,8 @@ impl Declarations {
 /// The index of every indexed item.
 #[derive(Clone, Default)]
 pub struct DeclarationIndex {
+    /// Changes to signature inputs, independent of source body revisions.
+    revision: u64,
     rows: BTreeMap<DefPath, Row>,
     files: BTreeMap<FileId, Arc<[Arc<ItemSyntax>]>>,
     anchors: HashMap<Anchor, FileId>,
@@ -267,8 +269,10 @@ impl DeclarationIndex {
     /// under this index's explicit inputs.
     pub(crate) fn adopt(&mut self, image: &DeclarationIndex) {
         let inputs = std::mem::take(&mut self.inputs);
+        let revision = self.revision + 1;
         *self = Self {
             inputs,
+            revision,
             frozen: OnceLock::new(),
             ..image.clone()
         };
@@ -314,8 +318,10 @@ impl DeclarationIndex {
         sources: &SourceMap,
     ) {
         let inputs = std::mem::take(&mut self.inputs);
+        let revision = self.revision + 1;
         *self = Self {
             inputs,
+            revision,
             ..Self::default()
         };
         let mut files: BTreeMap<FileId, Vec<Arc<ItemSyntax>>> = BTreeMap::new();
@@ -450,6 +456,7 @@ impl DeclarationIndex {
         if old == row {
             return;
         }
+        self.revision += 1;
         if let Some(old) = &old {
             for (sum, part) in self.identity.iter_mut().zip(old.identity) {
                 *sum = sum.wrapping_sub(part);
@@ -490,8 +497,12 @@ impl DeclarationIndex {
     pub fn inputs(&self) -> &ModuleInputs {
         &self.inputs
     }
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
     /// The explicit inputs, to change; the next freeze reads them.
     pub fn inputs_mut(&mut self) -> &mut ModuleInputs {
+        self.revision += 1;
         self.frozen = OnceLock::new();
         &mut self.inputs
     }

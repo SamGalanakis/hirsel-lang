@@ -39,6 +39,10 @@ materialized owner against `validation_with`. Only the replaced views and the
 verdicts that read them are checked again, and a new snapshot reuses the
 previous one's digests and the verdicts whose reads still hold. Failed headers
 are retried: a snapshot is kept only when every signature normalized.
+The snapshot's stamp follows declaration rows, explicit module inputs and S1
+signature publication/retirement, including the environment and comptime limits.
+An ordinary function-body edit retains the snapshot and runtime type tables;
+candidate, header and private-shape changes rebuild the affected views.
 
 Compose phases through per-definition queries; record dependency fingerprints for later caching.
 

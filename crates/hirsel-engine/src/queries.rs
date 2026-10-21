@@ -173,6 +173,8 @@ pub struct QueryEngine {
         Arc<crate::snapshot::SignatureSnapshot>,
     )>,
     pub(crate) snapshot_epoch: crate::memo::Revision,
+    /// Signatures published or retired outside declaration indexing (S1).
+    pub(crate) snapshot_inputs_revision: u64,
     /// The session's one type interner (design §1(a)), over the core rows.
     pub(crate) types: Arc<hirsel_types::TypeInterner>,
     /// The session's structural memo over `types`.
@@ -411,6 +413,7 @@ impl QueryEngine {
             generic_verdict: None,
             snapshot: None,
             snapshot_epoch: crate::memo::Revision::from_u64(1).expect("a nonzero revision"),
+            snapshot_inputs_revision: 0,
             types: crate::registry::session_types(),
             memo: Arc::new(hirsel_types::TypeMemo::new()),
             signature_stack: vec![],
@@ -950,7 +953,12 @@ impl QueryEngine {
                     && !self
                         .modes
                         .get(&DefId::intern(&constant.owner))
-                        .is_some_and(|m| !self.graph.is_dirty(&m.memo.key))
+                        .is_some_and(|m| {
+                            !self.graph.is_dirty(&m.memo.key)
+                                && self
+                                    .key_text(&constant.owner, QueryKind::Modes)
+                                    .is_ok_and(|text| text == m.memo.text)
+                        })
             })
             .map(|(path, _)| path.clone())
             .collect();
@@ -960,6 +968,7 @@ impl QueryEngine {
         self.staged_values
             .retain(|(path, _), _| self.staged_constants.contains_key(path));
         if !retired.is_empty() {
+            self.retire_snapshot();
             self.note_signatures(&retired);
         }
         self.settle_signatures();

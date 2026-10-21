@@ -159,3 +159,152 @@ fn hand_built_opaque_construction_needs_the_owner_input_and_checks_fields() {
         assert_eq!(public, engine.item_signature(&hidden).unwrap().value);
     });
 }
+
+/// The frozen signature universe changes only with its inputs; ordinary body
+/// invalidation must retain its Arc and all the per-view V verdicts.
+#[test]
+fn snapshot_reuses_body_edits_and_tracks_signature_inputs() {
+    with_compiler_stack(|| {
+        use std::sync::Arc;
+        let context = default_context();
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let parse = |engine: &mut QueryEngine, source: &str| {
+            let file = engine
+                .sources
+                .add("snapshot-edits.hir", source.into())
+                .unwrap();
+            engine.parse_file(file, &context).unwrap();
+        };
+        parse(&mut engine, "fn main() -> u64 { 1 }\n");
+        let first = engine.signature_snapshot();
+        parse(&mut engine, "fn main() -> u64 { 2 }\n");
+        let body = engine.signature_snapshot();
+        assert!(Arc::ptr_eq(&first, &body));
+        assert_eq!(
+            engine.recompute_count(&entry_path(&context), QueryKind::Signature),
+            1
+        );
+
+        parse(&mut engine, "fn main() -> u8 { 2u8 }\n");
+        let header = engine.signature_snapshot();
+        assert!(!Arc::ptr_eq(&body, &header));
+        assert_ne!(
+            body.signature(hirsel_syntax::DefId::intern(&entry_path(&context))),
+            header.signature(hirsel_syntax::DefId::intern(&entry_path(&context)))
+        );
+
+        engine.comptime_limits.call_depth += 1;
+        let limits = engine.signature_snapshot();
+        assert!(!Arc::ptr_eq(&header, &limits));
+        engine.module_inputs_mut().manifest_revision =
+            hirsel_syntax::ContentHash::of_bytes(b"new manifest");
+        let manifest = engine.signature_snapshot();
+        assert!(!Arc::ptr_eq(&limits, &manifest));
+        assert!(Arc::ptr_eq(&manifest, &engine.signature_snapshot()));
+
+        // A new later candidate preserves the first header, but affects its
+        // duplicate diagnostic and the declaration-candidate read.
+        parse(
+            &mut engine,
+            "fn main() -> u8 { 2u8 }\nfn main() -> u8 { 3u8 }\n",
+        );
+        let duplicate = engine.signature_snapshot();
+        assert!(!Arc::ptr_eq(&manifest, &duplicate));
+        assert!(
+            duplicate
+                .signature(hirsel_syntax::DefId::intern(&entry_path(&context)))
+                .unwrap()
+                .is_err()
+        );
+    });
+}
+
+#[test]
+fn snapshot_private_shape_edits_change_the_view_without_a_public_fingerprint_change() {
+    with_compiler_stack(|| {
+        use std::sync::Arc;
+        let context = default_context();
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let mut hidden = entry_path(&context);
+        hidden.0.name = "Hidden".into();
+        let hidden = hirsel_syntax::DefId::intern(&hidden);
+        let mut previous = None;
+        for field in ["u64", "u8"] {
+            let file = engine
+                .sources
+                .add(
+                    "opaque-edits.hir",
+                    format!("pub opaque type Hidden: plain uses {{}} {{ value: {field} }}\n"),
+                )
+                .unwrap();
+            engine.parse_file(file, &context).unwrap();
+            let snapshot = engine.signature_snapshot();
+            if let Some(old) = previous {
+                let old: Arc<hirsel_engine::SignatureSnapshot> = old;
+                assert!(!Arc::ptr_eq(&old, &snapshot));
+                assert_eq!(
+                    old.signature(hidden).unwrap().unwrap().fingerprint,
+                    snapshot.signature(hidden).unwrap().unwrap().fingerprint
+                );
+                assert_ne!(
+                    old.representation(hidden).unwrap().unwrap().1,
+                    snapshot.representation(hidden).unwrap().unwrap().1
+                );
+            }
+            previous = Some(snapshot);
+        }
+    });
+}
+
+#[test]
+fn snapshot_retires_staged_signatures_when_only_the_owner_body_changes() {
+    with_compiler_stack(|| {
+        use std::sync::Arc;
+        let context = default_context();
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let mut owner = entry_path(&context);
+        owner.0.name = "value".into();
+        let source = "fn value[n: size]() -> u64 { comptime (n + 1) }\n";
+        let file = engine
+            .sources
+            .add("staged-edits.hir", source.into())
+            .unwrap();
+        engine.parse_file(file, &context).unwrap();
+        let analyzed = engine.mode_definition(&owner).unwrap().value;
+        let expression = analyzed
+            .typed
+            .checked
+            .expressions
+            .iter()
+            .find(|row| {
+                matches!(
+                    analyzed.typed.syntax.tree.expressions[row.expression.0 as usize].kind,
+                    hirsel_syntax::ExprKind::Comptime(_)
+                )
+            })
+            .unwrap()
+            .expression;
+        let staged =
+            hirsel_check_protocol::body::comptime_path(&owner, &analyzed.typed.checked, expression);
+        let staged = hirsel_syntax::DefId::intern(&staged);
+        let initial = engine.signature_snapshot();
+        assert!(initial.signature(staged).is_none());
+        engine.lower_to_tir(&owner).unwrap();
+        let published = engine.signature_snapshot();
+        assert!(!Arc::ptr_eq(&initial, &published));
+        assert!(published.signature(staged).unwrap().is_ok());
+
+        let file = engine
+            .sources
+            .add(
+                "staged-edits.hir",
+                "fn value[n: size]() -> u64 { n + 1 }\n".into(),
+            )
+            .unwrap();
+        engine.parse_file(file, &context).unwrap();
+        let retired = engine.signature_snapshot();
+        assert!(!Arc::ptr_eq(&published, &retired));
+        assert!(retired.signature(staged).is_none());
+        assert!(published.signature(staged).unwrap().is_ok());
+    });
+}
