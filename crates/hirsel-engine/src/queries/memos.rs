@@ -21,7 +21,8 @@ pub(crate) struct Entry<T> {
     /// A signature's fingerprint coverage: the adapter's own dependency list,
     /// before the query's reads join it in the output (PS-9).
     pub covered: Vec<SignatureDependency>,
-    /// A generator evaluation's depth evidence (design §1c).
+    /// A generator evaluation's depth evidence, or a lowering's transparent
+    /// dependency-request trace (design §1c).
     pub depth: Option<crate::memo::DepthEvidence<Span>>,
     /// False when an input changed during the evaluation: the result is
     /// returned but never kept.

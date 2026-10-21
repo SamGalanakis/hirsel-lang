@@ -1720,12 +1720,19 @@ impl DefinitionQueries for QueryEngine {
         let text = self.key_text(definition, QueryKind::Lower)?;
         self.read_execution_signatures(&modes.dependencies);
         if let Some(entry) = self.lowered.get(&id).cloned()
+            && entry
+                .depth
+                .as_ref()
+                .is_none_or(|depth| depth.limit() == self.depth_limit())
             && self.memo_valid(definition, &entry, text)
         {
             if self.verify == Verify::On {
                 if let Ok(output) = entry.result() {
                     self.ensure_lowered_verdict(&output.value)?;
                 }
+            }
+            if let Some(depth) = &entry.depth {
+                self.depth_replay_requests(depth)?;
             }
             self.merge_execution(entry.reads());
             return entry.output();
@@ -1745,6 +1752,7 @@ impl DefinitionQueries for QueryEngine {
         reads.signatures.extend(modes.dependencies.clone());
         let mut observed = Observed::inheriting(previous.as_ref().map(|c| c.reads()));
         self.execution_stack.push(ReadsBuilder::new());
+        self.s1.begin_requests();
         let prepared = self.prepare_comptime(&modes.value, &signature.value);
         let result = prepared.and_then(|comptime| match self.adapters.lowering.clone() {
             Some(adapter) => adapter.lower(
@@ -1778,8 +1786,11 @@ impl DefinitionQueries for QueryEngine {
             .pop()
             .expect("lowering execution frame");
         observed.merged.extend(executed);
+        let depth = self.s1.finish_requests(self.depth_limit());
         let key = MemoKey::new(QueryKind::Lower, id);
-        let entry = Arc::new(self.finish(key, text, reads, result, observed));
+        let mut entry = self.finish(key, text, reads, result, observed);
+        entry.depth = entry.result().is_ok().then_some(depth);
+        let entry = Arc::new(entry);
         if self.verify == Verify::On
             && let Ok(output) = entry.result()
         {

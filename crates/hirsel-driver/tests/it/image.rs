@@ -750,3 +750,48 @@ fn imaged_lowering_reuses_validated_evidence() {
         assert_eq!(outputs, ["reused"]);
     }
 }
+
+/// An image's lowered substitutions preserve their dependency requests when
+/// used beneath a client's constant chain, just like a cold source lowering.
+#[test]
+fn imaged_helper_lowering_preserves_dependency_depth() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let source = "pub const LEAF: u64 = 1u64\npub fn helper()->u64{comptime LEAF}\n";
+        let library = f.library(source);
+        let main = "pub fn main()->Result[(),()]{Ok(())}\n";
+        let imager = f.program("imager", main, &library, "lib");
+        let bytes = image(&f, &mut load(&imager, &StdImages::none()), "lib").unwrap();
+        let stored = StdImage::from_bytes(bytes).unwrap();
+        let mut client = main.to_owned();
+        // The compiler dependency budget is min(call_depth,32). Ordinary
+        // interpreter calls remain shallow in this fixture.
+        for n in 0..31 {
+            client.push_str(&format!("const C{n}:u64=comptime C{}\n", n + 1));
+        }
+        client.push_str("const C31:u64=comptime lib.helper()\n");
+        let manifest = f.program("client", &client, &library, "lib");
+        let root = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+            package: package("client"),
+            modules: vec![],
+            name: "C0".into(),
+        });
+        let mut results = vec![];
+        for images in [StdImages::none(), StdImages::of(vec![stored])] {
+            let mut program = load(&manifest, &images);
+            let result = program.engine.materialize_constant(&root);
+            assert!(
+                matches!(result, Err(QueryError::Operational(_))),
+                "{result:?}"
+            );
+            let limit = program.engine.last_comptime_limit.as_ref().unwrap();
+            assert_eq!(limit.kind, hirsel_tir::ToolingLimitKind::CallDepth);
+            assert_eq!(limit.limit, 32);
+            let site = program.engine.sources.resolve(limit.site.unwrap());
+            let file = program.engine.sources.file(site.file).unwrap();
+            assert_eq!(site.start, source.find("comptime LEAF").unwrap() as u32 + 9);
+            results.push((file.path.clone(), site.start, site.end));
+        }
+        assert_eq!(results[0], results[1]);
+    });
+}

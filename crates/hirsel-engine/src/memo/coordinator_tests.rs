@@ -496,3 +496,52 @@ fn dropped_worker_releases_its_claims() {
     drop(a);
     assert_eq!(waiter.join().unwrap(), Entered::Settled);
 }
+
+#[test]
+fn transparent_requests_preserve_depth_order_and_nested_captures() {
+    let coordinator = S1Coordinator::<u32>::new();
+    let mut worker = coordinator.worker::<u32>();
+    let leaf = DepthEvidence::leaf(3);
+    // Lowering captures a nested request's completed evidence, not its
+    // internal requests a second time at the enclosing depth.
+    worker.begin_requests();
+    assert_eq!(worker.enter(1, 10), Entered::Run);
+    worker.requested(&leaf, 20);
+    let child = worker.composed(3, true);
+    worker.leave();
+    worker.requested(&child, 10);
+    worker.begin_requests();
+    worker.requested(&leaf, 30);
+    let inner = worker.finish_requests(3);
+    let outer = worker.finish_requests(3);
+    assert_eq!(inner.first.as_ref(), &[None, None, None, Some(30)]);
+    assert_eq!(outer.height, 2);
+    assert_eq!(outer.first.as_ref(), &[None, None, Some(20), Some(10)]);
+    // A cached lowering adds no frame; its child still contributes height
+    // to the requesting constant's evidence, including the earlier branch.
+    assert_eq!(worker.enter(2, 40), Entered::Run);
+    worker.replay_requests(&outer).unwrap();
+    let parent = worker.composed(3, true);
+    assert_eq!(parent.height, 2);
+    assert_eq!(parent.request(0, 40), Ok(()));
+    assert_eq!(parent.request(1, 40), Err(20));
+    assert_eq!(parent.request(2, 40), Err(10));
+    assert_eq!(worker.enter(3, 50), Entered::Run);
+    assert_eq!(worker.replay_requests(&outer), Err(20));
+    assert!(!worker.failure_is_own());
+    worker.leave();
+    worker.leave();
+}
+
+#[test]
+fn transparent_empty_requests_are_valid_at_zero_budget() {
+    let coordinator = S1Coordinator::<u32>::new();
+    let mut worker = coordinator.worker::<u32>();
+    worker.begin_requests();
+    let empty = worker.finish_requests(0);
+    assert_eq!(worker.replay_requests(&empty), Ok(()));
+    worker.begin_requests();
+    worker.requested(&DepthEvidence::leaf(0), 7);
+    let trace = worker.finish_requests(0);
+    assert_eq!(worker.replay_requests(&trace), Err(7));
+}

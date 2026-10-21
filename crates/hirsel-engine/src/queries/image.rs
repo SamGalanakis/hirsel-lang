@@ -44,6 +44,7 @@ mod tests {
             }),
             dependencies: vec![],
             execution: Reads::empty(),
+            depth: crate::memo::DepthEvidence::leaf(32),
             verdict: None,
         }
     }
@@ -331,6 +332,9 @@ impl QueryEngine {
         let Some(lowering) = record.lowering.as_ref() else {
             return Ok(None);
         };
+        if lowering.depth.limit() != self.depth_limit() {
+            return Ok(None);
+        }
         self.admit_image_lowering(lowering).map(Some)
     }
     fn admit_image_lowering(
@@ -347,6 +351,7 @@ impl QueryEngine {
             // depends on the importing snapshot's independently checked views.
             self.ensure_lowered_verdict(&lowering.definition)?;
         }
+        self.depth_replay_requests(&lowering.depth)?;
         self.merge_execution(&lowering.execution);
         Ok(QueryOutput {
             value: lowering.definition.clone(),
@@ -380,7 +385,9 @@ impl QueryEngine {
         };
         let lowering = if executable {
             self.execution_stack.push(ReadsBuilder::new());
+            self.s1.begin_requests();
             let lowered = self.lower_to_tir(path);
+            let depth = self.s1.finish_requests(self.depth_limit());
             let execution = self
                 .execution_stack
                 .pop()
@@ -400,6 +407,7 @@ impl QueryEngine {
                 definition: lowered.value,
                 dependencies: lowered.dependencies,
                 execution,
+                depth,
                 verdict,
             })
         } else {

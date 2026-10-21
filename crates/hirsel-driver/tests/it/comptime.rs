@@ -587,3 +587,31 @@ fn generic_generated_instances_follow_their_declaration_on_compiler_thread() {
         Constant::Integer(12)
     );
 }
+/// Lowered helper hits must replay the compile-time requests that produced
+/// their constants at the new caller's logical dependency height.
+#[test]
+fn cached_helper_lowering_preserves_dependency_depth() {
+    with_compiler_stack(|| {
+        let source = "const LEAF: u32 = 1u32\nfn helper() -> u32 { comptime LEAF }\nconst C2: u32 = comptime helper()\nconst C1: u32 = comptime C2\nconst C0: u32 = comptime C1\n";
+        for warm in [false, true] {
+            let mut engine = engine(source);
+            engine.comptime_limits.call_depth = 3;
+            if warm {
+                engine.lower_to_tir(&path("helper")).unwrap();
+            }
+            let result = engine.materialize_constant(&path("C0"));
+            assert!(
+                matches!(result, Err(QueryError::Operational(_))),
+                "warm={warm}: {result:?}"
+            );
+            let limit = engine.last_comptime_limit.as_ref().unwrap();
+            assert_eq!(limit.kind, hirsel_tir::ToolingLimitKind::CallDepth);
+            assert_eq!(limit.limit, 3);
+            let site = engine.sources.resolve(limit.site.unwrap());
+            assert_eq!(
+                site.start,
+                source.find("comptime LEAF").unwrap() as u32 + "comptime ".len() as u32
+            );
+        }
+    });
+}

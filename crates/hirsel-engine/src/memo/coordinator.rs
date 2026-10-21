@@ -56,9 +56,45 @@ pub type WorkerId = u32;
 pub struct Frame<K, S> {
     pub key: K,
     pub site: S,
-    requests: Vec<(DepthEvidence<S>, S)>,
+    requests: Vec<DepthRequest<S>>,
     /// The worker owns the key's claim (else it runs a duplicate).
     claimed: bool,
+}
+
+/// Lowering is transparent to dependency depth: its requests run on the
+/// caller's stack, while a constant/generator owns an additional frame.
+#[derive(Clone, Debug)]
+enum DepthRequest<S> {
+    Frame(DepthEvidence<S>, S),
+    Transparent(DepthEvidence<S>),
+}
+
+struct RequestCapture<S> {
+    stack: usize,
+    requests: Vec<DepthRequest<S>>,
+}
+
+fn compose_requests<S: Copy>(limit: u32, requests: &[DepthRequest<S>]) -> DepthEvidence<S> {
+    let mut result = DepthEvidence::leaf(limit);
+    for request in requests {
+        let (child, height) = match request {
+            DepthRequest::Frame(child, _) => (child, child.height + 1),
+            DepthRequest::Transparent(child) => (child, child.height),
+        };
+        debug_assert_eq!(child.limit(), limit, "evidence under one limit");
+        result.height = result.height.max(height);
+        // Slot zero is meaningful for a transparent trace, including L=0.
+        for n in 0..=limit {
+            let slot = &mut result.first[n as usize];
+            if slot.is_none() {
+                *slot = match request {
+                    DepthRequest::Frame(child, site) => child.request(n, *site).err(),
+                    DepthRequest::Transparent(child) => child.first[n as usize],
+                };
+            }
+        }
+    }
+    result
 }
 
 /// What `S1Worker::enter` decided.
@@ -139,6 +175,7 @@ impl<K: Clone + Eq + Hash> S1Coordinator<K> {
             coordinator: self.clone(),
             id,
             frames: vec![],
+            captures: vec![],
             contextual: false,
         }
     }
@@ -174,6 +211,7 @@ pub struct S1Worker<K: Clone + Eq + Hash, S> {
     coordinator: Arc<S1Coordinator<K>>,
     id: WorkerId,
     frames: Vec<Frame<K, S>>,
+    captures: Vec<RequestCapture<S>>,
     /// A cycle or the depth limit failed a request since the outermost
     /// evaluation began.
     contextual: bool,
@@ -229,18 +267,51 @@ impl<K: Clone + Eq + Hash, S: Copy> S1Worker<K, S> {
     }
     /// Records a completed request in the requesting frame, in request order.
     pub fn requested(&mut self, evidence: &DepthEvidence<S>, site: S) {
-        if let Some(frame) = self.frames.last_mut() {
-            frame.requests.push((evidence.clone(), site));
+        self.record_request(DepthRequest::Frame(evidence.clone(), site));
+    }
+    fn record_request(&mut self, request: DepthRequest<S>) {
+        let stack = self.frames.len();
+        for capture in &mut self.captures {
+            // Internal requests of a nested S1 frame are already represented
+            // by that frame's completed evidence. Never count them twice.
+            if capture.stack == stack {
+                capture.requests.push(request.clone());
+            }
         }
+        if let Some(frame) = self.frames.last_mut() {
+            frame.requests.push(request);
+        }
+    }
+    /// Begin a transparent query's request record. Nested queries keep their
+    /// own record; enclosing queries also observe requests at the same depth.
+    pub fn begin_requests(&mut self) {
+        self.captures.push(RequestCapture {
+            stack: self.frames.len(),
+            requests: vec![],
+        });
+    }
+    pub fn finish_requests(&mut self, limit: u32) -> DepthEvidence<S> {
+        let capture = self.captures.pop().expect("a transparent request capture");
+        assert_eq!(capture.stack, self.frames.len());
+        compose_requests(limit, &capture.requests)
+    }
+    /// Admit and record a cached transparent query without pushing a frame.
+    pub fn replay_requests(&mut self, evidence: &DepthEvidence<S>) -> Result<(), S> {
+        if let Some(site) = evidence.first[self.len().min(evidence.limit()) as usize] {
+            self.contextual = true;
+            return Err(site);
+        }
+        self.record_request(DepthRequest::Transparent(evidence.clone()));
+        Ok(())
     }
     /// The evidence of the evaluation on top, composed from its requests.
     pub fn composed(&self, limit: u32, bounded: bool) -> DepthEvidence<S> {
         let mut evidence = match self.frames.last() {
-            Some(frame) => {
-                DepthEvidence::compose(limit, frame.requests.iter().map(|(e, s)| (e, *s)))
-            }
+            Some(frame) => compose_requests(limit, &frame.requests),
             None => DepthEvidence::leaf(limit),
         };
+        // A framed result's table describes its own requests at n>=1.
+        evidence.first[0] = None;
         evidence.bounded = bounded;
         evidence
     }

@@ -774,6 +774,21 @@ impl QueryEngine {
             })
         })
     }
+    /// Replay a lowering's requests at this caller's depth. Lowering itself
+    /// adds no S1 frame; its cached substitutions still consume dependency
+    /// budget exactly where their source evaluation would have done so.
+    pub(crate) fn depth_replay_requests(
+        &mut self,
+        evidence: &DepthEvidence<Span>,
+    ) -> Result<(), QueryError> {
+        self.s1.replay_requests(evidence).map_err(|site| {
+            self.comptime_limit(hirsel_tir::ToolingLimit {
+                kind: hirsel_tir::ToolingLimitKind::CallDepth,
+                limit: evidence.limit() as u64,
+                site: Some(site),
+            })
+        })
+    }
     /// Records a completed request in the requester's frame, in request order.
     pub(crate) fn depth_requested(&mut self, evidence: &DepthEvidence<Span>, site: Span) {
         self.s1.requested(evidence, site);

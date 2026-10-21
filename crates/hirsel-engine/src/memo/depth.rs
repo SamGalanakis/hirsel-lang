@@ -19,7 +19,8 @@ pub fn dependency_limit(call_depth: usize) -> u32 {
 }
 
 /// A result's depth evidence. `first` has `limit + 1` entries; index 0 is
-/// unused (always `None`), index m in 1..=limit is the overflow site when the
+/// unused (`None`) for framed results. Transparent lowering traces also use
+/// index zero. Index m in 1..=limit is the overflow site when the
 /// result's own requests run at stack length m.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DepthEvidence<S = SiteSpan> {
