@@ -36,6 +36,79 @@ pub(crate) struct StagedConstant {
     pub inputs: Vec<SizeParameterRef>,
     pub signature: hirsel_types::SignatureRef,
 }
+/// One size-generic constant declaration's immutable construction input.
+/// Workers return its registration; the owning engine publishes registrations
+/// only after the task's dependencies settle.
+pub(crate) struct StagedDeclarationInput<'a> {
+    pub(crate) analyzed: &'a AnalyzedBody,
+    pub(crate) expression: ExprId,
+    pub(crate) ty: TypeId,
+    pub(crate) inputs: Vec<SizeParameterRef>,
+}
+
+pub(crate) struct StagedRegistration {
+    pub(crate) path: DefPath,
+    pub(crate) constant: StagedConstant,
+}
+
+impl StagedDeclarationInput<'_> {
+    pub(crate) fn prepare(
+        self,
+        types: &hirsel_types::TypeInterner,
+        memo: &hirsel_types::TypeMemo,
+        owner_signature: &Signature,
+    ) -> Result<StagedRegistration, QueryError> {
+        let owner = self.analyzed.typed.syntax.item.definition.clone();
+        let path = hirsel_check_protocol::body::comptime_path(
+            &owner,
+            &self.analyzed.typed.checked,
+            self.expression,
+        );
+        let mut signature = owner_signature.clone();
+        signature.definition = DefId::intern(&path);
+        signature.metadata = hirsel_types::SignatureMetadata {
+            roles: signature.metadata.roles.clone(),
+            unsafe_ffi: signature.metadata.unsafe_ffi,
+            ..Default::default()
+        };
+        let replacements: Vec<_> = self
+            .inputs
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                (
+                    *p,
+                    Size::Parameter(SizeParameterRef::bound(hirsel_types::SizeParamId(i as u32))),
+                )
+            })
+            .collect();
+        let ty = substitute_sizes_type(types, memo, self.ty, &replacements)?;
+        signature.kind = SignatureKind::Const {
+            ty,
+            generics: self
+                .inputs
+                .iter()
+                .enumerate()
+                .map(|(i, _)| hirsel_types::GenericParameter::Size {
+                    name: format!("size{i}"),
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        };
+        signature.fingerprint = hirsel_types::encoding::fingerprint(types, &signature, &[])
+            .map_err(|e| operational(format!("staged signature: {e:?}")))?;
+        Ok(StagedRegistration {
+            path,
+            constant: StagedConstant {
+                owner,
+                expression: self.expression,
+                inputs: self.inputs,
+                signature: Arc::new(signature),
+            },
+        })
+    }
+}
+
 pub(crate) fn has_staged_reads(definition: &hirsel_tir::Definition) -> bool {
     definition.bodies.iter().flat_map(|body| &body.rvalues).any(|value| {
         matches!(value, hirsel_tir::Rvalue::ReadConstant { arguments, .. } if !arguments.is_empty())
@@ -831,60 +904,28 @@ impl QueryEngine {
             if inputs.is_empty() {
                 continue;
             }
-            let owner = typed.syntax.item.definition.clone();
-            let path =
-                hirsel_check_protocol::body::comptime_path(&owner, &typed.checked, row.expression);
-            let mut signature = self.item_signature(&owner)?.value.as_ref().clone();
-            signature.definition = DefId::intern(&path);
-            signature.metadata = hirsel_types::SignatureMetadata {
-                roles: signature.metadata.roles.clone(),
-                unsafe_ffi: signature.metadata.unsafe_ffi,
-                ..Default::default()
-            };
-            let replacements: Vec<_> = inputs
-                .iter()
-                .enumerate()
-                .map(|(i, p)| {
-                    (
-                        *p,
-                        Size::Parameter(SizeParameterRef::bound(hirsel_types::SizeParamId(
-                            i as u32,
-                        ))),
-                    )
-                })
-                .collect();
-            let ty = substitute_sizes_type(&self.types, &self.memo, row.ty, &replacements)?;
-            signature.kind = SignatureKind::Const {
-                ty,
-                generics: inputs
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| hirsel_types::GenericParameter::Size {
-                        name: format!("size{i}"),
-                    })
-                    .collect::<Vec<_>>()
-                    .into(),
-            };
-            signature.fingerprint =
-                hirsel_types::encoding::fingerprint(&self.types, &signature, &[])
-                    .map_err(|e| operational(format!("staged signature: {e:?}")))?;
-            if self.staged_constants.get(&path).is_some_and(|old| {
-                old.signature.fingerprint == signature.fingerprint && old.inputs == inputs
-            }) {
-                continue;
+            let signature = self.item_signature(&typed.syntax.item.definition)?.value;
+            let registration = StagedDeclarationInput {
+                analyzed,
+                expression: row.expression,
+                ty: row.ty,
+                inputs,
             }
-            self.retire_snapshot();
-            self.staged_constants.insert(
-                path,
-                StagedConstant {
-                    owner,
-                    expression: row.expression,
-                    inputs,
-                    signature: Arc::new(signature),
-                },
-            );
+            .prepare(&self.types, &self.memo, &signature)?;
+            self.install_staged(registration);
         }
         Ok(())
+    }
+    pub(crate) fn install_staged(&mut self, registration: StagedRegistration) {
+        let StagedRegistration { path, constant } = registration;
+        if self.staged_constants.get(&path).is_some_and(|old| {
+            old.signature.fingerprint == constant.signature.fingerprint
+                && old.inputs == constant.inputs
+        }) {
+            return;
+        }
+        self.retire_snapshot();
+        self.staged_constants.insert(path, constant);
     }
     pub(crate) fn materialize_staged(
         &mut self,
