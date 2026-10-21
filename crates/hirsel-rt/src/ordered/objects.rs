@@ -32,7 +32,7 @@ impl Kind {
             Self::Capability => 8,
         }
     }
-    fn from_code(code: u64) -> Option<Self> {
+    pub fn from_code(code: u64) -> Option<Self> {
         Some(match code {
             1 => Self::Atomic,
             2 => Self::Mutex,

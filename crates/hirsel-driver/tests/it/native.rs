@@ -113,6 +113,67 @@ fn agree(name: &str, source: &str, configurations: &[Configuration]) -> Observat
     })
 }
 
+/// Both emitters preserve linked initialized-field metadata, including record
+/// padding and variant arms, in the actual object data consumed by the runtime.
+#[test]
+fn native_glue_preserves_linked_value_metadata_on_every_target() {
+    use hirsel_core_contract::handle_scan::{VALUE, VALUE_FIELDS, VALUE_VARIANT, WORDS};
+    use hirsel_driver::native::{self, Backend, Options};
+    use object::{Object, ObjectSection, ObjectSymbol};
+    with_compiler_stack(|| {
+        let source = r#"type P { a: bool, b: u64 }
+fn keep(x: Result[P, ()]) -> Result[P, ()] { x }
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let x = keep(Ok(P(a: true, b: 42u64)))
+  match x {
+    Ok(p) => { let _ = p.b
+      () }
+    Error(e) => { () }
+  }
+  Ok(())
+}
+"#;
+        let checked = checked(source);
+        for target in TargetSpec::executed() {
+            let ready = native::build(&checked.validated, &Options::new(target)).unwrap();
+            let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
+                &ready.table,
+                &ready.finalizers,
+            );
+            let descriptors =
+                hirsel_lir::rt_program::descriptors(&ready.table, &registry.layouts).unwrap();
+            let mut kinds = std::collections::BTreeSet::new();
+            for backend in [Backend::Llvm, Backend::Cranelift] {
+                let emitted = native::emit_glue(&ready, backend, &registry).unwrap();
+                let object = object::File::parse(emitted.bytes.as_slice()).unwrap();
+                for descriptor in &descriptors {
+                    let words = descriptor.scan.linked(|id| registry.index(id)).unwrap();
+                    for op in words.chunks_exact(WORDS).filter(|op| op[0] == VALUE) {
+                        kinds.insert(op[1]);
+                    }
+                    let name =
+                        hirsel_lir::glue::descriptor_name(&ready.keys.key(descriptor.layout))
+                            .replace("hirsel.layout.", "hirsel.scan.");
+                    let symbol = object
+                        .symbol_by_name(&name)
+                        .unwrap_or_else(|| panic!("{backend:?}: missing {name}"));
+                    let section = object
+                        .section_by_index(symbol.section_index().unwrap())
+                        .unwrap();
+                    let actual = section
+                        .data_range(symbol.address(), words.len() as u64 * 8)
+                        .unwrap()
+                        .unwrap();
+                    let expected: Vec<_> = words.into_iter().flat_map(u64::to_le_bytes).collect();
+                    assert_eq!(actual, expected, "{backend:?}: {name}");
+                }
+            }
+            assert!(kinds.contains(&VALUE_FIELDS));
+            assert!(kinds.contains(&VALUE_VARIANT));
+        }
+    });
+}
+
 /// A launch that hangs is killed at the toolchain's timeout, and that
 /// configuration alone fails, by name, as a launch error.
 #[test]

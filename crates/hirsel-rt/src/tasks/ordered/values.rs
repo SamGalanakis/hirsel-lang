@@ -3,10 +3,12 @@
 //! Unlike SER-2 this keeps exact floating-point bits and resolves handles to
 //! logical object identities. There is no whole-carrier byte slice, user
 //! callback, allocation in the run heap, or scheduling point in this decoder.
-//! Programs remain private test-admission metadata until compiler integration.
+//! Programs use compiler-derived metadata under private trace admission.
 
 use crate::ordered::footprint::ObjectId;
 use crate::ordered::objects::Kind;
+use hirsel_core_contract::handle_scan::*;
+use std::collections::BTreeMap;
 
 const WORK_MAX: usize = 65_536;
 const BYTES_MAX: usize = 1 << 20;
@@ -72,6 +74,116 @@ pub(super) struct Program {
 }
 
 impl Program {
+    /// Decode compiler-emitted initialized-field metadata already linked in
+    /// the native holder-scan stream. No compiler table index enters values.
+    /// # Safety
+    /// Matching immutable descriptors and programs live for this run.
+    pub(super) unsafe fn linked(ctx: *mut crate::TaskCtx, root: u32) -> Result<Self, Error> {
+        unsafe {
+            Self::from_layouts(root, (*ctx).heap_ref().layout_count(), |id| {
+                (*ctx).descriptor(id)
+            })
+        }
+    }
+
+    unsafe fn from_layouts(
+        root: u32,
+        count: u32,
+        descriptor: impl Fn(u32) -> *const crate::Layout,
+    ) -> Result<Self, Error> {
+        let mut ids = BTreeMap::from([(root, 0usize)]);
+        let mut queue = vec![root];
+        let mut nodes = Vec::new();
+        let mut scanned = 0;
+        while nodes.len() < queue.len() {
+            let id = queue[nodes.len()];
+            if id >= count || queue.len() > WORK_MAX {
+                return Err(Error::Program);
+            }
+            let layout = unsafe { &*descriptor(id) };
+            if layout.scan_words == 0
+                || layout.scan_words == u64::MAX
+                || !layout.scan_words.is_multiple_of(WORDS as u64)
+                || layout.scan_words > (WORK_MAX * WORDS) as u64
+                || layout.scan.is_null()
+            {
+                return Err(Error::Unsupported);
+            }
+            let words =
+                unsafe { std::slice::from_raw_parts(layout.scan, layout.scan_words as usize) };
+            let ops = words.as_chunks::<WORDS>().0;
+            scanned += ops.len();
+            if scanned > WORK_MAX {
+                return Err(Error::Limit);
+            }
+            let mut headers = ops.iter().filter(|op| op[0] == VALUE);
+            let header = headers.next().ok_or(Error::Unsupported)?;
+            if headers.next().is_some() || header[2] != layout.size {
+                return Err(Error::Program);
+            }
+            let extent = usize::try_from(layout.size).map_err(|_| Error::Program)?;
+            let mut field = |op: &[u64; WORDS]| -> Result<Field, Error> {
+                let child = u32::try_from(op[2]).map_err(|_| Error::Program)?;
+                if child >= count {
+                    return Err(Error::Program);
+                }
+                let index = *ids.entry(child).or_insert_with(|| {
+                    let index = queue.len();
+                    queue.push(child);
+                    index
+                });
+                Ok(Field {
+                    offset: usize::try_from(op[1]).map_err(|_| Error::Program)?,
+                    node: index,
+                })
+            };
+            let value_fields = ops.iter().filter(|op| op[0] == VALUE_FIELD);
+            let node = match header[1] {
+                VALUE_BITS => Node::Bits(extent),
+                VALUE_BOOL if extent == 1 => Node::Bool,
+                VALUE_FIELDS => Node::Fields {
+                    extent,
+                    fields: value_fields
+                        .map(|op| {
+                            if op[3] != u64::MAX {
+                                return Err(Error::Program);
+                            }
+                            field(op)
+                        })
+                        .collect::<Result<_, _>>()?,
+                },
+                VALUE_VARIANT => {
+                    let arms = usize::try_from(header[6]).map_err(|_| Error::Program)?;
+                    if arms == 0 || arms > WORK_MAX {
+                        return Err(Error::Program);
+                    }
+                    let mut arms = vec![Vec::new(); arms];
+                    for op in value_fields {
+                        let arm = usize::try_from(op[3]).map_err(|_| Error::Program)?;
+                        arms.get_mut(arm).ok_or(Error::Program)?.push(field(op)?);
+                    }
+                    let offset = usize::try_from(header[3]).map_err(|_| Error::Program)?;
+                    let tag = match header[4] {
+                        0 => Tag::Ordinal { offset },
+                        1 => Tag::NonNull {
+                            offset,
+                            nullary: u32::try_from(header[5]).map_err(|_| Error::Program)?,
+                        },
+                        _ => return Err(Error::Program),
+                    };
+                    Node::Variant { extent, tag, arms }
+                }
+                VALUE_HANDLE if extent == 8 => {
+                    Node::Handle(Kind::from_code(header[3]).ok_or(Error::Program)?)
+                }
+                VALUE_UNKNOWN => Node::Unsupported { extent },
+                _ => return Err(Error::Program),
+            };
+            nodes.push(node);
+        }
+        Self::new(nodes, 0)
+    }
+
     pub(super) fn new(nodes: Vec<Node>, root: usize) -> Result<Self, Error> {
         if nodes.len() > WORK_MAX || root >= nodes.len() {
             return Err(Error::Program);
@@ -230,6 +342,91 @@ impl Program {
 mod tests {
     use super::*;
     use std::mem::MaybeUninit;
+
+    #[test]
+    fn derived_layout_metadata_decodes_active_fields_independently_of_link_indices() {
+        use hirsel_layout::layout::{LayoutBuilder, Owners};
+        use hirsel_lir::layout_types::{SizeSpec, TargetSpec};
+        use hirsel_types::{Primitive, testing::Types};
+        for target in TargetSpec::executed() {
+            let mut types = Types::default();
+            let boolean = types.p(Primitive::Bool);
+            let number = types.p(Primitive::U64);
+            let record = types.record(&[boolean, number]);
+            let option = types.variant(&[&[], &[record]]);
+            let owners = Owners::default();
+            let mut builder = LayoutBuilder::new(&target, &owners);
+            let root = builder.layout(&types.store, option).unwrap();
+            let table = builder.finish();
+            hirsel_lir::layout_validate::validate_table(&table, &target).unwrap();
+            let count = table.layouts.len();
+            let mut reference = None;
+            for rotation in [0, 1] {
+                let linked = |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count) as u32;
+                let words: Vec<_> = table
+                    .layouts
+                    .iter()
+                    .map(|record| {
+                        hirsel_lir::handle_scan::Program::lower(record)
+                            .linked(|id| Some(linked(id)))
+                            .unwrap()
+                    })
+                    .collect();
+                let layouts: Vec<_> = table
+                    .layouts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, record)| crate::Layout {
+                        magic: crate::LAYOUT_MAGIC,
+                        version: crate::LAYOUT_VERSION,
+                        size: match record.size {
+                            SizeSpec::Fixed(size) => size,
+                            _ => panic!("fixed fixture"),
+                        },
+                        align: u64::from(record.align),
+                        finalizer: None,
+                        steps: std::ptr::null(),
+                        step_count: 0,
+                        field_count: 0,
+                        flags: 0,
+                        logical: 0,
+                        logical_count: std::ptr::null(),
+                        scan: words[i].as_ptr(),
+                        scan_words: words[i].len() as u64,
+                    })
+                    .collect();
+                let program = unsafe {
+                    Program::from_layouts(linked(root), count as u32, |id| {
+                        &layouts[(id as usize + count - rotation) % count]
+                    })
+                }
+                .unwrap();
+                assert_eq!(program.extent(), 24);
+                let mut value = MaybeUninit::<[u64; 3]>::uninit();
+                let at = value.as_mut_ptr().cast::<u8>();
+                unsafe {
+                    at.cast::<u32>().write(1);
+                    at.add(8).write(1);
+                    at.add(16).cast::<u64>().write(42);
+                    let bytes = program.encode(at, |_, _| panic!("no handles")).unwrap();
+                    assert_eq!(
+                        bytes,
+                        [1u32.to_le_bytes().as_slice(), &[1], &42u64.to_le_bytes()].concat()
+                    );
+                    if let Some(reference) = &reference {
+                        assert_eq!(&bytes, reference);
+                    } else {
+                        reference = Some(bytes);
+                    }
+                    at.cast::<u32>().write(0);
+                    assert_eq!(
+                        program.encode(at, |_, _| None),
+                        Ok(0u32.to_le_bytes().to_vec())
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn active_fields_skip_uninitialized_record_padding_and_inactive_arms() {

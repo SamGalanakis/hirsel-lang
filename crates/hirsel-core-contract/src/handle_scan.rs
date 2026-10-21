@@ -1,4 +1,4 @@
-//! Native holder-scan instruction encoding (runtime descriptor version 14).
+//! Native holder-scan instruction encoding (runtime descriptor version 15, ABI 37).
 //! Eight words per instruction; operands are offsets, counts and linked layout IDs.
 
 pub const WORDS: usize = 8;
@@ -20,3 +20,15 @@ pub const TYPED_HANDLE: u64 = 12;
 pub const TYPE_EDGE: u64 = 13;
 /// Unavailable static closure information; value scans ignore it.
 pub const TYPE_UNKNOWN: u64 = 14;
+
+/// Value-only metadata (runtime ABI 37). Holder scans skip these instructions.
+/// VALUE: kind, extent, tag-offset, tag-form, nullary, arm-count, reserved.
+pub const VALUE: u64 = 15;
+/// VALUE_FIELD: byte-offset, linked-layout, arm (u64::MAX for a record), then zeros.
+pub const VALUE_FIELD: u64 = 16;
+pub const VALUE_UNKNOWN: u64 = 0;
+pub const VALUE_BITS: u64 = 1;
+pub const VALUE_BOOL: u64 = 2;
+pub const VALUE_FIELDS: u64 = 3;
+pub const VALUE_VARIANT: u64 = 4;
+pub const VALUE_HANDLE: u64 = 5;

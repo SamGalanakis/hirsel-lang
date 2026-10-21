@@ -5,7 +5,9 @@
 //! registry by emission; they are never process addresses or local table IDs.
 //! Unsupported borrowed/variable-flat representations explicitly yield unknown.
 
-use crate::layout_types::{HandleKind, LayoutId, LayoutKind, LayoutRecord, ScanStep, TagForm};
+use crate::layout_types::{
+    HandleKind, LayoutId, LayoutKind, LayoutRecord, ScalarKind, ScanStep, SizeSpec, TagForm,
+};
 
 pub use hirsel_core_contract::handle_scan::*;
 
@@ -58,7 +60,80 @@ impl Program {
             let at = out.instruction(TYPE_EDGE, 0);
             out.reference(at + 2, id);
         }
+        out.value(record);
         out
+    }
+
+    fn value(&mut self, record: &LayoutRecord) {
+        let at = self.instruction(VALUE, VALUE_UNKNOWN);
+        let SizeSpec::Fixed(size) = record.size else {
+            return;
+        };
+        self.words[at + 2] = size;
+        match &record.kind {
+            LayoutKind::Scalar(scalar) if *scalar != ScalarKind::Pointer => {
+                self.words[at + 1] = if *scalar == ScalarKind::Bool {
+                    VALUE_BOOL
+                } else {
+                    VALUE_BITS
+                };
+            }
+            LayoutKind::Unit | LayoutKind::Aggregate => {
+                self.words[at + 1] = VALUE_FIELDS;
+                for field in &record.fields {
+                    self.value_field(field, u64::MAX);
+                }
+            }
+            LayoutKind::Variant => {
+                let Some(tag) = &record.tag else { return };
+                let (form, nullary) = match tag.form {
+                    TagForm::Ordinal => (0, 0),
+                    TagForm::Niche { nullary, dataful }
+                        if nullary < 2 && dataful == 1 - nullary =>
+                    {
+                        (1, u64::from(nullary))
+                    }
+                    _ => return,
+                };
+                if !tag
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .all(|(i, arm)| arm.ordinal as usize == i)
+                {
+                    return;
+                }
+                self.words[at + 1] = VALUE_VARIANT;
+                self.words[at + 3] = tag.offset;
+                self.words[at + 4] = form;
+                self.words[at + 5] = nullary;
+                self.words[at + 6] = tag.variants.len() as u64;
+                for arm in &tag.variants {
+                    for field in &arm.fields {
+                        self.value_field(field, u64::from(arm.ordinal));
+                    }
+                }
+            }
+            LayoutKind::Handle => {
+                if let [
+                    ScanStep::Handle {
+                        offset: 0, kind, ..
+                    },
+                ] = record.scan.as_slice()
+                    && *kind != HandleKind::Unknown
+                {
+                    self.words[at + 1] = VALUE_HANDLE;
+                    self.words[at + 3] = kind.code();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn value_field(&mut self, field: &crate::layout_types::FieldLayout, arm: u64) {
+        let at = self.instruction(VALUE_FIELD, field.offset);
+        self.reference(at + 2, field.layout);
+        self.words[at + 3] = arm;
     }
 
     pub fn referenced(&self) -> impl Iterator<Item = LayoutId> + '_ {

@@ -291,6 +291,29 @@ pub(super) unsafe fn complete_receive(
     descriptor: u32,
     message: *const u8,
 ) {
+    // Link only a descriptor actually observed by tracing, once per run.
+    // No task/value read is needed to compile immutable metadata.
+    if status == crate::channels::DONE && observing(ctx) {
+        let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+        let Logical::Ordered(driver) = &mut s.logical else {
+            unreachable!()
+        };
+        if !driver
+            .events
+            .as_ref()
+            .unwrap()
+            .values
+            .contains_key(&descriptor)
+            && let Ok(program) = unsafe { super::values::Program::linked(ctx, descriptor) }
+        {
+            driver
+                .events
+                .as_mut()
+                .unwrap()
+                .values
+                .insert(descriptor, program);
+        }
+    }
     // SAFETY: the receiving owner has its role; no bridge or stop observation.
     let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap() };
     let Logical::Ordered(driver) = &s.logical else {
