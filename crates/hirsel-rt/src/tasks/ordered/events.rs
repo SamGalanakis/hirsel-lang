@@ -42,6 +42,7 @@ pub(super) struct Boundary {
 pub(super) enum CanonicalItem {
     Object(ObjectId),
     Cancellation(Vec<u32>),
+    CompletionRank(ObjectId),
 }
 
 /// The actual completion returned by an owned host request. It is retained
@@ -130,8 +131,18 @@ pub(super) enum CanonicalOutcome {
     Created(ObjectId),
     Alias(ObjectId),
     Scalar(Vec<u8>),
-    Value { status: u32, payload: Vec<u8> },
-    Spawned { scope: ObjectId, path: Vec<u32> },
+    Value {
+        status: u32,
+        payload: Vec<u8>,
+    },
+    Spawned {
+        scope: ObjectId,
+        path: Vec<u32>,
+    },
+    TaskEnd {
+        holding: bool,
+        result: Option<Vec<u8>>,
+    },
     Unit,
 }
 
@@ -191,6 +202,8 @@ pub(super) struct TaskResult {
 pub(super) struct Log {
     ordinals: BTreeMap<Vec<u32>, u64>,
     last_ops: BTreeMap<Vec<u32>, &'static str>,
+    end_ordinals: BTreeMap<Vec<u32>, u64>,
+    next_subevent: BTreeMap<(Vec<u32>, u64), u32>,
     completed: BTreeSet<(Vec<u32>, u64)>,
     pub host_completions: Vec<HostCompletion>,
     pub host_polls: Vec<HostPollCompletion>,
@@ -665,6 +678,48 @@ pub(super) fn complete_await_any(ctx: *mut TaskCtx, set_word: u64, index: Option
     complete_owner(ctx, "task.await_any", || outcome);
 }
 
+/// The bounded end effect has already fixed result readiness and rank. A
+/// cleanup continuation stays under its original end ordinal, and never
+/// reads a result slot that a join may already have moved.
+fn end_subevents(
+    s: &super::super::Scheduler,
+    task: TaskId,
+    continuing: bool,
+    holding: bool,
+) -> Option<Subevents> {
+    let row = s.tasks[task as u32 as usize].as_ref()?;
+    if row.failure.is_some() {
+        return None;
+    }
+    let Logical::Ordered(driver) = &s.logical else {
+        return None;
+    };
+    let log = driver.events.as_ref()?;
+    let object = log.tasks.get(&task)?.clone();
+    let result = if continuing {
+        None
+    } else {
+        Some(log.task_results.get(&row.path)?.payload.clone()?)
+    };
+    let mut events = vec![(
+        CanonicalItem::Object(object),
+        CanonicalOutcome::TaskEnd { holding, result },
+    )];
+    if !continuing {
+        let scope_index = row.scope?;
+        let scope = s.scopes[scope_index as usize].as_ref()?;
+        let id = log
+            .scopes
+            .get(&super::super::handle(scope_index, scope.generation))?
+            .clone();
+        events.push((
+            CanonicalItem::CompletionRank(id),
+            CanonicalOutcome::Scalar(row.completed.to_le_bytes().to_vec()),
+        ));
+    }
+    Some(events)
+}
+
 pub(super) fn record(
     ctx: *mut TaskCtx,
     task: TaskId,
@@ -738,10 +793,19 @@ pub(super) fn record(
                     creator: path.clone(),
                     ordinal: log.ordinals.get(&path).copied().unwrap_or(0),
                 };
-                return Some(vec![(
-                    CanonicalItem::Object(object.clone()),
-                    CanonicalOutcome::Created(object),
-                )]);
+                return Some(vec![
+                    (
+                        CanonicalItem::Object(object.clone()),
+                        CanonicalOutcome::Created(object.clone()),
+                    ),
+                    (
+                        CanonicalItem::CompletionRank(object),
+                        CanonicalOutcome::Scalar(0u64.to_le_bytes().to_vec()),
+                    ),
+                ]);
+            }
+            Command::Head { name: "task.end" } => {
+                return end_subevents(s, task, false, matches!(retirement.transition, Next::Hold));
             }
             Command::TaskSpawn { .. } => {
                 let word = u64::from_ne_bytes(
@@ -882,6 +946,19 @@ pub(super) fn record(
         assert_eq!(result.status, 0);
         Some(vec![(CanonicalItem::Object(item.clone()), outcome)])
     });
+    let canonical = canonical.or_else(|| {
+        if operation.is_none() {
+            let Logical::Ordered(driver) = &s.logical else {
+                unreachable!()
+            };
+            if matches!(retirement.transition, Next::End)
+                && driver.events.as_ref()?.end_ordinals.contains_key(&path)
+            {
+                return end_subevents(s, task, true, matches!(retirement.transition, Next::Hold));
+            }
+        }
+        None
+    });
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
     };
@@ -891,6 +968,18 @@ pub(super) fn record(
         let ordinal = *next;
         *next = next.checked_add(1).expect("operation ordinal overflow");
         log.last_ops.insert(path.clone(), op.descriptor.name);
+        if op.descriptor.name == "task.end"
+            && matches!(retirement.transition, Next::Hold | Next::End)
+        {
+            assert!(
+                log.end_ordinals.insert(path.clone(), ordinal).is_none(),
+                "one task-end entry"
+            );
+        }
+        ordinal
+    } else if matches!(retirement.transition, Next::End)
+        && let Some(&ordinal) = log.end_ordinals.get(&path)
+    {
         ordinal
     } else {
         next.checked_sub(1)
@@ -969,8 +1058,28 @@ pub(super) fn record(
             "one identity per task-set generation"
         );
     }
-    if let (Some(events), Some((op, _))) = (canonical, operation) {
-        for (subevent, (item, outcome)) in events.into_iter().enumerate() {
+    if let Some(events) = canonical {
+        let name = operation.map_or_else(
+            || {
+                if matches!(retirement.transition, Next::End)
+                    && log.end_ordinals.get(&path) == Some(&ordinal)
+                {
+                    "task.end"
+                } else {
+                    log.last_ops[&path]
+                }
+            },
+            |(op, _)| op.descriptor.name,
+        );
+        for (item, outcome) in events {
+            let next = log
+                .next_subevent
+                .entry((path.clone(), ordinal))
+                .or_default();
+            let subevent = *next;
+            *next = next
+                .checked_add(1)
+                .expect("canonical subevent index overflow");
             let version = log.versions.entry(item.clone()).or_default();
             *version = version
                 .checked_add(1)
@@ -984,10 +1093,8 @@ pub(super) fn record(
             log.canonical.push(CanonicalEvent {
                 task: path.clone(),
                 ordinal,
-                subevent: subevent
-                    .try_into()
-                    .expect("canonical subevent index fits u32"),
-                op: op.descriptor.name,
+                subevent,
+                op: name,
                 transition: transition.clone(),
                 item,
                 version: *version,
@@ -1378,7 +1485,7 @@ mod tests {
                             "unclassified task lifecycle still rejects the complete trace"
                         );
                         let events = &log.canonical;
-                        assert_eq!(events.len(), 14);
+                        assert_eq!(events.len(), 15);
                         let set_id = CanonicalItem::Object(ObjectId {
                             creator: vec![],
                             ordinal: 1,
@@ -2042,8 +2149,8 @@ mod tests {
                             {
                                 let _role = role::Guard::new(ctx);
                                 let s = scheduler(ctx);
-                                // Deliberately mutate after the effect: emitted
-                                // inheritance must retain its original observation.
+                                // A later competing cause preserves the
+                                // first-wins inheritance fixed at installation.
                                 s.task(0).canceled.cancel(CANCEL_DEADLINE);
                                 let Logical::Ordered(driver) = &s.logical else {
                                     unreachable!()
@@ -2057,7 +2164,7 @@ mod tests {
                                     .filter(|row| row.task.is_empty())
                                     .cloned()
                                     .collect();
-                                assert_eq!(rows.len(), 5);
+                                assert_eq!(rows.len(), 6);
                                 let scope_id = ObjectId {
                                     creator: vec![],
                                     ordinal: 0,
@@ -2070,24 +2177,29 @@ mod tests {
                                     rows[0].outcome,
                                     CanonicalOutcome::Created(scope_id.clone())
                                 );
-                                assert_eq!(rows[1].item, CanonicalItem::Object(child_id.clone()));
-                                assert_eq!(rows[1].version, 1);
                                 assert_eq!(
-                                    rows[1].outcome,
+                                    rows[1].item,
+                                    CanonicalItem::CompletionRank(scope_id.clone())
+                                );
+                                assert_eq!(rows[1].version, 1);
+                                assert_eq!(rows[2].item, CanonicalItem::Object(child_id.clone()));
+                                assert_eq!(rows[2].version, 1);
+                                assert_eq!(
+                                    rows[2].outcome,
                                     CanonicalOutcome::Spawned {
                                         scope: scope_id.clone(),
                                         path: vec![0]
                                     }
                                 );
                                 assert_eq!(
-                                    (rows[2].item.clone(), rows[2].version),
+                                    (rows[3].item.clone(), rows[3].version),
                                     (CanonicalItem::Object(scope_id), 2)
                                 );
-                                assert_eq!(rows[2].outcome, CanonicalOutcome::Alias(child_id));
-                                assert_eq!(rows[3].item, CanonicalItem::Cancellation(vec![]));
-                                assert_eq!(rows[4].item, CanonicalItem::Cancellation(vec![0]));
+                                assert_eq!(rows[3].outcome, CanonicalOutcome::Alias(child_id));
+                                assert_eq!(rows[4].item, CanonicalItem::Cancellation(vec![]));
+                                assert_eq!(rows[5].item, CanonicalItem::Cancellation(vec![0]));
                                 assert_eq!(
-                                    rows[3].outcome,
+                                    rows[4].outcome,
                                     CanonicalOutcome::Scalar(
                                         if shield == 0 { CANCEL_REQUESTED + 1 } else { 0 }
                                             .to_le_bytes()
@@ -2095,7 +2207,7 @@ mod tests {
                                     )
                                 );
                                 assert_eq!(
-                                    rows[4].outcome,
+                                    rows[5].outcome,
                                     CanonicalOutcome::Scalar(
                                         if shield == 0 { CANCEL_PARENT + 1 } else { 0 }
                                             .to_le_bytes()
@@ -2118,6 +2230,198 @@ mod tests {
                     } else {
                         reference = Some(rows);
                     }
+                }
+            }
+        }
+    }
+
+    unsafe extern "C" fn typed_result_child(
+        ctx: *mut TaskCtx,
+        _: *mut crate::Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        let mut result = [1u64, 42];
+        assert_eq!(
+            unsafe {
+                crate::tasks::hirsel_rt_v2_task_finish(
+                    ctx,
+                    result.as_mut_ptr().cast(),
+                    [0u64; 2].as_ptr().cast(),
+                    16,
+                    3,
+                )
+            },
+            crate::STATUS_OK
+        );
+        // A cleanup operation has a later ordinal; actual completion still
+        // belongs to the original task.end, with its next sub-event index.
+        let mut cause = 99;
+        assert_eq!(
+            unsafe { crate::tasks::hirsel_rt_v2_task_canceled(ctx, &mut cause, &0) },
+            crate::STATUS_OK
+        );
+        assert_eq!(cause, 0);
+        crate::STATUS_OK
+    }
+
+    #[test]
+    fn task_end_events_keep_result_rank_and_cleanup_under_one_ordinal() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let environment = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let image = crate::Layout {
+            size: 16,
+            ..environment
+        };
+        let layouts = [&environment as *const crate::Layout, &image];
+        let mut reference = None;
+        for width in [1, 2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let output = Arc::new(Mutex::new(Vec::new()));
+                let seen = output.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 2;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        super::super::engine::enable(ctx, policy);
+                        enable(ctx);
+                        install_value(ctx, 3, received_integer_program());
+                    },
+                    move |ctx| unsafe {
+                        let mut scope = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_enter(
+                                ctx,
+                                std::ptr::null_mut(),
+                                &mut scope,
+                                &0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        let env = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            8,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(env).cast::<u64>().write(0);
+                        let mut child = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_spawn(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut child,
+                                &scope,
+                                typed_result_child,
+                                env,
+                                0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        let mut result = [0u64; 2];
+                        assert_eq!(
+                            hirsel_rt_v2_task_join(
+                                ctx,
+                                0,
+                                0,
+                                &scope,
+                                &mut child,
+                                result.as_mut_ptr().cast(),
+                                16
+                            ),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!(result, [1, 42]);
+                        result.fill(0);
+                        let _role = role::Guard::new(ctx);
+                        let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                        let ends: Vec<_> = log
+                            .canonical
+                            .iter()
+                            .filter(|row| row.op == "task.end")
+                            .cloned()
+                            .collect();
+                        assert_eq!(ends.len(), 3);
+                        let child_id = ObjectId {
+                            creator: vec![],
+                            ordinal: 1,
+                        };
+                        let scope_id = ObjectId {
+                            creator: vec![],
+                            ordinal: 0,
+                        };
+                        assert_eq!(ends[0].item, CanonicalItem::Object(child_id.clone()));
+                        assert_eq!(ends[0].version, 2);
+                        assert_eq!(
+                            ends[0].outcome,
+                            CanonicalOutcome::TaskEnd {
+                                holding: true,
+                                result: Some(
+                                    [1u32.to_le_bytes().as_slice(), &42u64.to_le_bytes()].concat()
+                                )
+                            }
+                        );
+                        assert_eq!(ends[1].item, CanonicalItem::CompletionRank(scope_id));
+                        assert_eq!(ends[1].version, 2);
+                        assert_eq!(
+                            ends[1].outcome,
+                            CanonicalOutcome::Scalar(0u64.to_le_bytes().to_vec())
+                        );
+                        assert_eq!(ends[2].item, CanonicalItem::Object(child_id));
+                        assert_eq!(ends[2].version, 3);
+                        assert_eq!(
+                            ends[2].outcome,
+                            CanonicalOutcome::TaskEnd {
+                                holding: false,
+                                result: None
+                            }
+                        );
+                        assert!(ends.iter().all(|row| row.task == [0] && row.ordinal == 0));
+                        assert_eq!(ends[0].subevent, 0);
+                        assert_eq!(ends[1].subevent, 1);
+                        assert_eq!(ends[0].transition, Transition::Hold);
+                        assert_eq!(ends[2].transition, Transition::End);
+                        *seen.lock().unwrap() = ends;
+                        drop(_role);
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                            crate::STATUS_OK
+                        );
+                        crate::STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                let ends = output.lock().unwrap().clone();
+                if let Some(reference) = &reference {
+                    assert_eq!(&ends, reference);
+                } else {
+                    reference = Some(ends);
                 }
             }
         }
