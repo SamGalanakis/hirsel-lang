@@ -49,6 +49,15 @@ buffers are released completely before the routine returns; arena storage resets
 at the corresponding epoch. No recursive destructor uses the native stack.
 All sizes and seeds are in `manifest.json`; 17 cases × three sizes = 51 inputs.
 
+`programs/wordfreq-owned-bulk.hir` is a separately measured application variant:
+only token construction uses `bytes.append`; the frozen `wordfreq.hir`, output
+append loops and Rust allocator references retain their original contracts.
+Build it with `build-hirsel --case wordfreq-owned-bulk --configuration regions-on-whole`,
+then run its executable with the ordinary wordfreq input and epoch arguments.
+It is outside the frozen 51-input manifest and does not replace a primary row.
+The [copy-cost report](../../reports/wordfreq-copy-cost-2026-10-21.md) records its
+small instruction saving, slower measured cycles, and open performance target.
+
 | Program / subcases | Algorithm and oracle | Natural lifetime |
 |---|---|---|
 | binarytrees | Stretch tree, retained long tree, depths 4..d in steps of 2 and 2^(d-depth) temporary trees; checked node counts | Each temporary tree; separate retained long-tree arena |

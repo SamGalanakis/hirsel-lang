@@ -5,6 +5,53 @@ use crate::rc_support as support;
 use support::*;
 
 #[test]
+fn borrowed_box_key_reads_do_not_acquire_holders() {
+    let source = r#"
+type Word { key: Bytes, count: u64, next: u64 }
+fn equal(nodes: List[box Word], index: u64, token: Bytes) -> bool {
+  nodes[index].key == token
+}
+fn next(nodes: List[box Word], index: u64) -> u64 { nodes[index].next }
+fn main() -> bool { equal([box Word(key: b"key", count: 1, next: 0)], 0, b"key") }
+"#;
+    let (program, lowered) = lower_valid(source);
+    for name in ["equal", "next"] {
+        let unit = unit_named(&lowered, name);
+        assert!(
+            unit.instructions
+                .iter()
+                .all(|i| !matches!(i, hirsel_lir::ir::Inst::Copy { .. })),
+            "{}",
+            dump(unit)
+        );
+    }
+    // Insertion and elision must keep those views borrowed too. A Value-stage
+    // read alone does not prove that the executable acquires no holder.
+    for regions in [false, true] {
+        let mut options = hirsel_driver::native::Options::new(target());
+        options.regions = regions;
+        let built = hirsel_driver::native::build_program(&program, manifest(&program), &options)
+            .expect("build borrowed reads");
+        let mut checked = 0;
+        for unit in &built.units {
+            let unit = unit.unit();
+            if ["equal", "next"].contains(&unit.header.definition.0.name.as_str()) {
+                checked += 1;
+                assert!(
+                    unit.instructions.iter().all(|i| !matches!(
+                        i,
+                        hirsel_lir::ir::Inst::Dup { .. } | hirsel_lir::ir::Inst::Release { .. }
+                    )),
+                    "{}",
+                    dump(unit)
+                );
+            }
+        }
+        assert_eq!(checked, 2);
+    }
+}
+
+#[test]
 fn decimal_rescale_reuses_disposal_storage_from_an_earlier_block() {
     lower_valid(
         "fn main() -> Result[(), ()] { let v = std@1/decimal.new(std@1/bigint.zero(), 1); let _ = std@1/decimal.rescale(v, 0, HalfUp()); Ok(()) }",

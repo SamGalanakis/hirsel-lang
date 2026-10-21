@@ -1,0 +1,59 @@
+// rule: MEM-7
+// expect: run
+// stdout: ok
+type Word {
+  key: Bytes,
+  count: u64,
+  next: u64,
+}
+
+fn owned(data: Bytes) -> Bytes {
+  let mut result_bytes: List[u8] = []
+  bytes.append(mut result_bytes, data)
+  bytes.from_list(take result_bytes)
+}
+
+fn key_is(nodes: List[box Word], index: u64, key: Bytes) -> bool {
+  nodes[index].key == key
+}
+
+fn output_error[E](take e: E) -> () {}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  // Rust a7c37f9 library/alloctests/tests/vec.rs:170-178, specialized to u8.
+  let mut extended: List[u8] = [1u8, 2u8, 3u8, 4u8, 5u8]
+  bytes.append(mut extended, b"\x06\x07\x08\x09\x00")
+  failure.check(
+    bytes.from_list(take extended) == b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x00",
+    TextInvariant()
+  )
+  let input = owned(b"_\x00\xffkey_")
+  let key = owned(bytes.slice(input, 1, 6))
+  let empty = owned(bytes.slice(input, 3, 3))
+  let mut nodes: List[box Word] = [box Word(key: owned(key), count: 1, next: 0)]
+  let alias = copy nodes
+  failure.check(key_is(nodes, 0, b"\x00\xffkey"), TextInvariant())
+  failure.check(key_is(alias, 0, b"\x00\xffkey"), TextInvariant())
+  nodes[0].key = owned(b"changed")
+  nodes[0].count += 1
+  failure.check(key_is(nodes, 0, b"changed") && nodes[0].count == 2, TextInvariant())
+  failure.check(
+    key_is(alias, 0, b"\x00\xffkey") && alias[0].count == 1,
+    TextInvariant()
+  )
+  let mut out: List[u8] = []
+  bytes.append(mut out, key)
+  let kept = bytes.from_list(copy out)
+  bytes.append(mut out, bytes.slice(kept, 1, 5))
+  bytes.append(mut out, empty)
+  failure.check(kept == b"\x00\xffkey", TextInvariant())
+  failure.check(bytes.from_list(copy out) == b"\x00\xffkey\xffkey", TextInvariant())
+  failure.check(input == b"_\x00\xffkey_", TextInvariant())
+  out.print(io.stdout(rt) ? grant_error, "ok\n") ? output_error
+  Ok(())
+}

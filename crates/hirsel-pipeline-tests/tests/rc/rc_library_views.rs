@@ -390,6 +390,42 @@ fn encoding_audit(source: &str, name: &str) {
     });
 }
 
+#[test]
+fn wordfreq_bulk_copies_and_aliased_box_reads_agree() {
+    let source = include_str!("../../../../conformance/MEM/MEM-7-wordfreq-bulk-alias-run.hir");
+    for name in ["encoding-wordfreq-bulk", "encoding-cranelift-wordfreq-bulk"] {
+        encoding_audit(source, name);
+    }
+}
+
+#[test]
+fn wordfreq_bulk_workload_matches_exact_vectors() {
+    let workload = include_str!("../../../../bench/native/programs/wordfreq-owned-bulk.hir");
+    let common = include_str!("../../../../bench/native/programs/common.hir");
+    let common = common.split("pub fn main(").next().unwrap();
+    let source = format!(
+        r#"{workload}
+{common}
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {{}} {{ () }}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
+  failure.check(workload(b"") == b"", TextInvariant())
+  failure.check(workload(b" \t\r\n\x0b\x0c") == b"", TextInvariant())
+  failure.check(workload(b"a b a b c\n") == b"a\t2\nb\t2\nc\t1\n", TextInvariant())
+  failure.check(workload(b"\xc3\xa9 x\t\xc3\xa9\nlast") == b"\xc3\xa9\t2\nx\t1\nlast\t1\n", TextInvariant())
+  out.print(io.stdout(rt) ? grant_error, "ok\n") ? error
+  Ok(())
+}}
+"#
+    );
+    for name in [
+        "encoding-wordfreq-vectors",
+        "encoding-cranelift-wordfreq-vectors",
+    ] {
+        encoding_audit(&source, name);
+    }
+}
+
 const ENCODING_PREFIX: &str = r#"
 fn output_error[E](take e: E) -> () {}
 @noalloc
