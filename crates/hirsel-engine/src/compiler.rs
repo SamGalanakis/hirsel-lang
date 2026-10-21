@@ -136,7 +136,8 @@ impl Compiler {
         Ok((engine, file))
     }
     /// Index an explicit package and its dependency declarations without an entry
-    /// or any body checking, compile-time evaluation or image loading.
+    /// or any body checking, compile-time evaluation or image loading. The
+    /// returned engine retains this compiler's session policies for later queries.
     pub fn load_package_declarations(
         &self,
         manifest: &Path,
@@ -339,5 +340,287 @@ fn check_diagnostics(error: ToolError) -> Result<CheckOutput, ToolError> {
             ..Default::default()
         }),
         error => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hirsel_span::Span;
+    use hirsel_syntax::ItemSyntax;
+    use hirsel_types::{Resolution, Signature, TypeInterner, TypeMemo};
+    use std::sync::Arc;
+
+    struct NoBodies;
+    impl CheckerPhase for NoBodies {
+        fn check(
+            &self,
+            _t: &hirsel_types::TypeInterner,
+            _m: &hirsel_types::TypeMemo,
+            _syntax: std::sync::Arc<ItemSyntax>,
+            _resolution: Resolution,
+            _signature: &Signature,
+            _signatures: &mut dyn SignatureProvider,
+        ) -> Result<QueryOutput<TypedBody>, QueryError> {
+            panic!("declaration loading entered a body phase")
+        }
+    }
+    impl ModesPhase for NoBodies {
+        fn check_modes(
+            &self,
+            _t: &hirsel_types::TypeInterner,
+            _m: &hirsel_types::TypeMemo,
+            _body: std::sync::Arc<TypedBody>,
+            _signature: &Signature,
+            _products: &mut PhaseProducts,
+            _signatures: &mut dyn SignatureProvider,
+        ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
+            panic!("declaration loading entered a body phase")
+        }
+    }
+    impl LoweringPhase for NoBodies {
+        fn lower(
+            &self,
+            _t: &hirsel_types::TypeInterner,
+            _m: &hirsel_types::TypeMemo,
+            _body: &AnalyzedBody,
+            _comptime: &Comptime,
+            _signature: &Signature,
+        ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+            panic!("declaration loading entered a body phase")
+        }
+        fn lower_evaluation(
+            &self,
+            _t: &hirsel_types::TypeInterner,
+            _m: &hirsel_types::TypeMemo,
+            _body: &AnalyzedBody,
+            _staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
+            _signature: &Signature,
+            _expression: hirsel_syntax::ExprId,
+            _result: hirsel_types::TypeId,
+            _constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
+        ) -> Result<hirsel_tir::Definition, QueryError> {
+            panic!("declaration loading entered a body phase")
+        }
+        fn entry_body(&self) -> hirsel_tir::BodyId {
+            panic!("declaration loading entered a body phase")
+        }
+    }
+
+    struct DeclarationPhases;
+    impl Phases for DeclarationPhases {
+        fn normalize_signature(
+            &self,
+            _: hirsel_check_protocol::header::Input<'_>,
+            _: &mut dyn SignatureProvider,
+        ) -> Result<hirsel_check_protocol::header::NormalizedDeclaration, QueryError> {
+            panic!("declaration loading normalized a signature")
+        }
+        fn validate_loop_source(
+            &self,
+            _: &TypeInterner,
+            _: &TypeMemo,
+            _: &Signature,
+            _: Span,
+            _: &mut dyn SignatureProvider,
+        ) -> Result<(), QueryError> {
+            panic!("declaration loading validated an association")
+        }
+        fn validate_format(
+            &self,
+            _: &TypeInterner,
+            _: &TypeMemo,
+            _: &Signature,
+            _: Span,
+            _: &mut dyn SignatureProvider,
+        ) -> Result<(), QueryError> {
+            panic!("declaration loading validated an association")
+        }
+        fn validate_serializable_check(
+            &self,
+            _: &TypeInterner,
+            _: &TypeMemo,
+            _: &Signature,
+            _: Span,
+            _: &mut dyn SignatureProvider,
+        ) -> Result<(), QueryError> {
+            panic!("declaration loading validated an association")
+        }
+        fn checker(&self) -> Arc<dyn CheckerPhase> {
+            Arc::new(NoBodies)
+        }
+        fn modes(&self) -> Arc<dyn ModesPhase> {
+            Arc::new(NoBodies)
+        }
+        fn lowering(&self) -> Arc<dyn LoweringPhase> {
+            Arc::new(NoBodies)
+        }
+    }
+    fn phases() -> Arc<dyn Phases> {
+        Arc::new(DeclarationPhases)
+    }
+
+    struct Fixture(std::path::PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "declaration-policy-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            let fixture = Self(root);
+            fixture.write("dep.hir", "pub fn unused() -> u64 { unknown() }\n");
+            fixture.write("api.hir", "pub fn unused() -> u64 { let x: Missing = unknown(); x }\npub const CYCLE: u64 = CYCLE\npub fn generated() -> u64 = comptime missing_generator()\npub fn generic[T]() -> u64 = comptime missing_generator()\n");
+            fixture.manifest(serde_json::json!([{
+                "manifest": "dep.json", "package": {"name":"dep","version":"1"}, "expose": []
+            }]));
+            fixture.write("dep.json", r#"{"schema":1,"package":{"name":"dep","version":"1"},"sources":[{"path":"dep.hir","module":[]}],"dependencies":[]}"#);
+            fixture
+        }
+        fn write(&self, path: &str, text: &str) {
+            std::fs::write(self.0.join(path), text).unwrap();
+        }
+        fn manifest(&self, dependencies: serde_json::Value) {
+            self.write(
+                "hirsel.json",
+                &serde_json::json!({
+                    "schema":1, "package":{"name":"probe","version":"1"},
+                    "sources":[{"path":"api.hir","module":[]}], "dependencies":dependencies
+                })
+                .to_string(),
+            );
+        }
+        fn path(&self) -> std::path::PathBuf {
+            self.0.join("hirsel.json")
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    fn assert_only_declarations(package: &PackageDeclarations) {
+        let engine = &package.engine;
+        assert_eq!(
+            package.files.len(),
+            2,
+            "root and dependency indexed without an entry"
+        );
+        assert_eq!(engine.work_stats().parsed_definitions, 5);
+        assert!(
+            engine
+                .memo_stats()
+                .recomputed
+                .keys()
+                .all(|kind| matches!(kind, QueryKind::Lex | QueryKind::Parse))
+        );
+        assert!(engine.constant_values.is_empty());
+        assert!(engine.staged_values.is_empty());
+        assert!(engine.staged_constants.is_empty());
+        assert_eq!(engine.generated_sources().count(), 0);
+        assert!(engine.last_comptime_limit.is_none());
+        for (_, context) in &package.files {
+            assert!(!engine.imaged(&context.package));
+        }
+    }
+
+    #[test]
+    fn declaration_loading_preserves_verify_and_defaults_without_bodies() {
+        let fixture = Fixture::new();
+        let compiler = Compiler::new(phases, [17; 32]);
+        assert_eq!(compiler.verify(), Verify::On);
+        for verify in [Verify::On, Verify::Off] {
+            let package = compiler
+                .clone()
+                .with_verify(verify)
+                .load_package_declarations(&fixture.path())
+                .unwrap();
+            assert_eq!(package.engine.verify, verify);
+            assert_only_declarations(&package);
+            let (ordinary, _) = compiler
+                .clone()
+                .with_verify(verify)
+                .load(&fixture.0.join("api.hir"))
+                .unwrap();
+            assert_eq!(ordinary.verify, verify);
+        }
+    }
+
+    #[test]
+    fn declaration_loading_preserves_all_configured_session_policies() {
+        let fixture = Fixture::new();
+        let store = Arc::new(crate::store::SimStore::default());
+        let limits = hirsel_interp::Limits {
+            steps: Some(0),
+            call_depth: 1,
+        };
+        for owned in [false, true] {
+            let compiler = Compiler::new(phases, [23; 32])
+                .with_config(CompileConfig {
+                    jobs: hirsel_intern::jobs::Jobs::new(3),
+                    verify: Verify::Off,
+                    retention: crate::memo::Retention::Resident,
+                    lowering: LoweringPolicy::Reachable,
+                    store: store.clone(),
+                    verify_store: crate::store::VerifyStore::Recompute,
+                    hold_bytes: 0,
+                })
+                .with_comptime_limits(limits);
+            let compiler = if owned {
+                compiler.with_owned_engines()
+            } else {
+                compiler
+            };
+            let package = compiler.load_package_declarations(&fixture.path()).unwrap();
+            let engine = &package.engine;
+            assert_eq!(engine.verify, Verify::Off);
+            assert_eq!(engine.retention, crate::memo::Retention::Resident);
+            assert_eq!(engine.configured_jobs.unwrap().get(), 3);
+            assert_eq!(engine.configured_lowering, LoweringPolicy::Reachable);
+            assert_eq!(engine.hold_bytes(), 0);
+            assert_eq!(engine.verify_store, crate::store::VerifyStore::Recompute);
+            let provider: Arc<dyn crate::store::ResultStore> = store.clone();
+            assert!(Arc::ptr_eq(
+                engine.result_store.as_ref().unwrap(),
+                &provider
+            ));
+            assert_eq!(engine.comptime_limits, limits);
+            assert_eq!(engine.session, !owned);
+            assert_eq!(engine.store_identity, ContentHash([23; 32]));
+            assert_only_declarations(&package);
+        }
+        assert!(
+            store.log().is_empty(),
+            "indexing must not query or populate the result store"
+        );
+    }
+
+    #[test]
+    fn declaration_loading_still_refuses_invalid_manifests_and_dependencies() {
+        let fixture = Fixture::new();
+        for verify in [Verify::On, Verify::Off] {
+            let compiler = Compiler::new(phases, [0; 32]).with_verify(verify);
+            fixture.write("hirsel.json", "{");
+            assert!(compiler.load_package_declarations(&fixture.path()).is_err());
+            fixture.manifest(serde_json::json!([{
+                "manifest":"missing.json", "package":{"name":"dep","version":"1"}, "expose":[]
+            }]));
+            assert!(compiler.load_package_declarations(&fixture.path()).is_err());
+            fixture.manifest(serde_json::json!([{
+                "manifest":"dep.json", "package":{"name":"dep","version":"2"}, "expose":[]
+            }]));
+            let error = compiler
+                .load_package_declarations(&fixture.path())
+                .err()
+                .unwrap();
+            assert!(
+                error
+                    .to_string()
+                    .contains("selected package version does not match dependency")
+            );
+        }
     }
 }

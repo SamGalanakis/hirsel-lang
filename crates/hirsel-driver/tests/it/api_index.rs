@@ -233,14 +233,15 @@ fn package_documentation_does_not_query_bodies_or_initializers() {
         let source = root.join("api.hir");
         std::fs::write(
             &source,
-            "pub fn value() -> u64 { 1 }\npub const VALUE: u64 = 1\n",
+            "pub fn value() -> u64 { 1 }\npub const VALUE: u64 = 1\npub fn generated() -> u64 = comptime missing_generator()\n",
         )
         .unwrap();
         let before =
             api_index::render_json(&api_index::entries(&root.join("hirsel.json")).unwrap());
         // Syntactically valid bodies with unavailable names/types and a const
-        // cycle must not enter signature extraction, checking or evaluation.
-        std::fs::write(&source, "pub fn value() -> u64 { let hidden: Missing = unknown(); hidden }\npub const VALUE: u64 = VALUE\n").unwrap();
+        // cycle and failing generators must not enter signature extraction,
+        // checking or evaluation.
+        std::fs::write(&source, "pub fn value() -> u64 { let hidden: Missing = unknown(); hidden }\npub const VALUE: u64 = VALUE\npub fn generated() -> u64 = comptime another_missing_generator()\n").unwrap();
         let after = api_index::render_json(&api_index::entries(&root.join("hirsel.json")).unwrap());
         assert_eq!(before, after);
         std::fs::remove_dir_all(root).unwrap();

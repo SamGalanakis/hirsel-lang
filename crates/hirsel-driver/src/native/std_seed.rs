@@ -48,6 +48,7 @@ pub(crate) fn with_seed(writable: Arc<dyn ObjectStore>, partition: &str) -> Arc<
 /// is linked or run.
 pub fn seed_objects(manifest: &Path, output: &Path) -> Result<SeedReport, String> {
     let mut package = crate::COMPILER
+        .with_owned_engines()
         .load_package_declarations(manifest)
         .map_err(|e| e.to_string())?;
     let mut roots = std::collections::BTreeMap::<_, Vec<_>>::new();
@@ -105,6 +106,7 @@ pub fn seed_objects(manifest: &Path, output: &Path) -> Result<SeedReport, String
             group.len(),
         );
         let mut package = crate::COMPILER
+            .with_owned_engines()
             .load_package_declarations(manifest)
             .map_err(|e| e.to_string())?;
         let input = package

@@ -67,7 +67,7 @@ pub(crate) fn load_package_declarations(
     manifest: &Path,
 ) -> Result<PackageDeclarations, ToolError> {
     let (graph, package) = Graph::program(manifest)?;
-    let mut engine = QueryEngine::new(default_environment(), compiler.adapters());
+    let mut engine = compiler.engine(default_environment());
     engine.declarations.inputs_mut().package_exposures = graph
         .packages
         .iter()
