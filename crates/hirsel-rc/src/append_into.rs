@@ -18,7 +18,7 @@
 //! `String` result its `string.as_bytes` view, which then views the static
 //! empty bytes without the bridge call.
 //!
-//! Two kinds of producer have an appending form:
+//! Three kinds of producer have an appending form:
 //! - std@1's `T.to_string(v)` appends as `T.format_into(v, mut D)`: std's
 //!   contract is the same text, and no failure but allocation exhaustion.
 //! - A *builder*: a function returning `bytes.from_list(take L)` of a local
@@ -28,6 +28,10 @@
 //!   body with `L` replaced by the trailing parameter, the freeze and its
 //!   result removed, so a unique destination stays unique as it did when the
 //!   copy pushed onto it (MODE-2); std's `T.format_into` declares the same.
+//!
+//! - A transparent direct-return Bytes wrapper over an eligible producer,
+//!   with scalar parameters and no other work. One derived form per definition
+//!   forwards to the producer's form; discovery stops after eight wrappers.
 //!
 //! Exactness. The bytes reach `D` in the same order; capacity is
 //! unobservable. A failure (FAIL-1) runs cleanup, and a finalizer could then
@@ -1127,7 +1131,7 @@ impl Fuser {
         if let Some(&b) = self.builders.get(path) {
             return b;
         }
-        let b = builder(program, path, self).is_some();
+        let b = appending_shape(program, path, self, 0).is_some();
         self.builders.insert(path.clone(), b);
         b
     }
@@ -1290,6 +1294,25 @@ impl Fuser {
             Consumer::Call { dest, block, .. } => (*dest, *block),
         };
         let dest_root = root(body, dest);
+        // A new relay fusion is restricted to an ordinary local heap output.
+        // An arena or incoming mut receiver can carry recoverable MEM-6 charges;
+        // moving the producer's pushes there needs a separate exact proof.
+        if let Producer::Derived(path) = &producer
+            && appending_shape(program, path, self, 0).is_some_and(|s| s.relay.is_some())
+            && (!matches!(
+                body.locals[dest_root.0 as usize].storage,
+                Storage::Local | Storage::Temporary
+            ) || !heap_receiver(body, refs, dest_root)
+                || types
+                    .get(place(body, dest).ty)?
+                    .modes
+                    .relation
+                    .reaches()
+                    .iter()
+                    .any(|r| matches!(r, hirsel_types::Reach::Place(_))))
+        {
+            return None;
+        }
         if place(body, dest)
             .projection
             .iter()
@@ -1360,11 +1383,28 @@ impl Fuser {
         if let Some(into) = self.derived.get(f) {
             return Some(into.clone());
         }
-        let shape = builder(program, f, self)?;
+        let shape = appending_shape(program, f, self, 0)?;
+        let relay_into = match &shape.relay {
+            Some(path) => {
+                let into = self.derive(program, path)?;
+                let def = &program.definitions[&into];
+                let body = &def.bodies[def.entry.0 as usize];
+                let ty = body.locals[body.parameters.last()?.0 as usize].ty;
+                Some((into, ty))
+            }
+            None => None,
+        };
         let into = into_path(f);
         let def = &program.definitions[f];
         let mut origin = self.origins.get(f).cloned();
-        let derived = derive_body(&program.types, def, &into, &shape, origin.as_mut());
+        let derived = derive_body(
+            &program.types,
+            def,
+            &into,
+            &shape,
+            relay_into,
+            origin.as_mut(),
+        );
         if let Some(origin) = origin {
             self.origins.insert(into.clone(), origin);
         }
@@ -1564,6 +1604,197 @@ struct Shape {
     list: Vec<LocalId>,
     freeze: usize,
     result: Vec<LocalId>,
+    relay: Option<DefPath>,
+}
+
+/// Only a locally constructed ordinary list is a new relay receiver. A type
+/// row alone is not enough to exclude an arena-backed value transported here.
+fn heap_receiver(body: &Body, refs: &mut Refs, local: LocalId) -> bool {
+    let web = refs.web(local);
+    let mut created = false;
+    for l in &web {
+        for reference in &refs.by_local[l.0 as usize] {
+            match reference {
+                Ref::Assigned { value, place, .. } if whole(body, *place) => {
+                    match &body.rvalues[value.0 as usize] {
+                        Rvalue::Construct {
+                            constructor: tir::Constructor::Sequence,
+                            destination:
+                                hirsel_types::Destination::Heap | hirsel_types::Destination::Inferred,
+                            ..
+                        } => created = true,
+                        Rvalue::Use(op)
+                            if op.usage == UseKind::Take
+                                && whole(body, op.place)
+                                && web.contains(&root(body, op.place)) => {}
+                        _ => return false,
+                    }
+                }
+                Ref::Result { .. } => return false,
+                _ => {}
+            }
+        }
+    }
+    created
+}
+
+/// At most eight transparent wrappers, independent of discovery order or the
+/// cache of already derived helpers. A recursive chain exhausts this budget.
+fn appending_shape(
+    program: &Program,
+    path: &DefPath,
+    fuser: &mut Fuser,
+    depth: u8,
+) -> Option<Shape> {
+    if let Some(shape) = builder(program, path, fuser) {
+        return Some(shape);
+    }
+    if depth == 8 {
+        return None;
+    }
+    let def = program.definitions.get(path)?;
+    let SignatureKind::Function(f) = &program.signatures.get(path)?.kind else {
+        return None;
+    };
+    if !f.generics.is_empty()
+        || def.bodies.len() != 1
+        || !def.contracts.is_empty()
+        || !def.protocol_associations.is_empty()
+        || path.0.name.ends_with(INTO_SUFFIX)
+        || !f.state_promises.is_empty()
+        || !f.contracts.is_empty()
+        || f.error.is_some()
+        || f.parameters.iter().any(|p| {
+            p.passing != PassingMode::Borrow
+                || !matches!(kind(&program.types, p.ty), Some(TypeKind::Primitive(p))
+                if !matches!(p, Primitive::Bytes | Primitive::String))
+        })
+    {
+        return None;
+    }
+    let body = &def.bodies[def.entry.0 as usize];
+    if !body.tail_sites.is_empty()
+        || !is_primitive(&program.types, body.result, Primitive::Bytes)
+        || body.locals.iter().any(|l| l.storage == Storage::Capture)
+    {
+        return None;
+    }
+    let mut calls = body
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| matches!(b.terminator, Terminator::Call { .. }));
+    let (call, block) = calls.next()?;
+    if calls.next().is_some() {
+        return None;
+    }
+    let Terminator::Call {
+        callee:
+            Callee::Definition {
+                path: callee,
+                arguments: generics,
+            },
+        returns: Some(ret),
+        ..
+    } = &block.terminator
+    else {
+        return None;
+    };
+    if !generics.is_empty() || callee == path {
+        return None;
+    }
+    let mut pending = vec![callee.clone()];
+    let mut seen = HashSet::new();
+    while let Some(next) = pending.pop() {
+        if next == *path {
+            return None;
+        }
+        if !seen.insert(next.clone()) {
+            continue;
+        }
+        if let Some(def) = program.definitions.get(&next) {
+            if def.bodies.iter().flat_map(|b| &b.blocks).any(|b| {
+                matches!(
+                    b.terminator,
+                    Terminator::Call {
+                        callee: Callee::Indirect { .. },
+                        ..
+                    }
+                )
+            }) {
+                return None;
+            }
+            pending.extend(
+                def.bodies
+                    .iter()
+                    .flat_map(|b| &b.blocks)
+                    .filter_map(|b| callee_path(&b.terminator))
+                    .cloned(),
+            );
+        }
+    }
+    appending_shape(program, callee, fuser, depth + 1)?;
+    let mut refs = Refs::new(body);
+    let result = refs.web(root(body, ret.destination));
+    for l in &result {
+        for r in &refs.by_local[l.0 as usize] {
+            match r {
+                Ref::Inert | Ref::Moved | Ref::Returned => {}
+                Ref::Result { block } if *block == call => {}
+                Ref::Assigned { value, .. } => match &body.rvalues[value.0 as usize] {
+                    Rvalue::Use(op)
+                        if op.usage == UseKind::Take
+                            && whole(body, op.place)
+                            && result.contains(&root(body, op.place)) => {}
+                    _ => return None,
+                },
+                _ => return None,
+            }
+        }
+    }
+    let mut returns = 0;
+    for (b, block) in body.blocks.iter().enumerate() {
+        for inst in &block.instructions {
+            match &inst.kind {
+                K::StorageLive(_)
+                | K::StorageDead { .. }
+                | K::EndOrigin(_)
+                | K::BindOrigin { .. }
+                | K::EndLoan { .. }
+                | K::EndScope(_) => {}
+                K::BeginLoan { mutable: false, .. } => {}
+                K::Assign { value, .. } => match &body.rvalues[value.0 as usize] {
+                    Rvalue::Use(op) if whole(body, op.place) => {}
+                    _ => return None,
+                },
+                K::Drop { place: p, .. } if silent(&program.types, place(body, *p).ty) => {}
+                K::RunCleanup(c) if !cleanup_fails(body, &program.types, *c) => {}
+                _ => return None,
+            }
+        }
+        match &block.terminator {
+            Terminator::Goto(_) => {}
+            Terminator::Call { .. } if b == call => {}
+            Terminator::Return { value, cleanup }
+                if value.usage == UseKind::Take
+                    && whole(body, value.place)
+                    && result.contains(&root(body, value.place))
+                    && !cleanup_fails(body, &program.types, *cleanup) =>
+            {
+                returns += 1;
+            }
+            _ => return None,
+        }
+    }
+    if returns != 1 {
+        return None;
+    }
+    Some(Shape {
+        list: vec![],
+        freeze: call,
+        result,
+        relay: Some(callee.clone()),
+    })
 }
 
 /// `path` is a builder: its result is `bytes.from_list` of a local list that
@@ -1807,6 +2038,7 @@ fn builder(program: &Program, path: &DefPath, fuser: &mut Fuser) -> Option<Shape
         list,
         freeze,
         result,
+        relay: None,
     })
 }
 
@@ -2030,13 +2262,23 @@ fn derive_body(
     def: &Definition,
     into: &DefPath,
     shape: &Shape,
+    relay_into: Option<(DefPath, TypeId)>,
     mut origin: Option<&mut SourceMap>,
 ) -> Definition {
     let mut def = def.clone();
     def.path = DefId::intern(into);
     let unit = types.intern(Type::unit());
-    // A declared `mut` parameter's list reaches the caller's environment.
-    let local_ty = def.bodies[def.entry.0 as usize].locals[shape.list[0].0 as usize].ty;
+    // A relay has no private list; it receives the same ordinary trailing
+    // List[u8] parameter as a builder's derived appending form.
+    let local_ty = match shape.list.first() {
+        Some(local) => def.bodies[def.entry.0 as usize].locals[local.0 as usize].ty,
+        None => {
+            relay_into
+                .as_ref()
+                .expect("a relay has an appending callee")
+                .1
+        }
+    };
     let mut row = types.get(local_ty).expect("the list's type").clone();
     row.modes = hirsel_types::Modes {
         relation: hirsel_types::Relation::new([hirsel_types::Reach::Environment]),
@@ -2050,7 +2292,7 @@ fn derive_body(
         ty: list_ty,
         storage: Storage::Parameter,
         scope: tir::ScopeId(0),
-        span: body.locals[shape.list[0].0 as usize].span,
+        span: body.blocks[body.entry.0 as usize].span,
     });
     body.parameters.push(parameter);
     let binding = Origin {
@@ -2136,7 +2378,70 @@ fn derive_body(
         terminator: Terminator::Goto(ret.next),
         span,
     });
-    body.blocks[freeze].terminator = Terminator::Goto(resume);
+    if let Some((into, _)) = relay_into {
+        let Terminator::Call {
+            mut arguments,
+            on_failure,
+            ..
+        } = body.blocks[freeze].terminator.clone()
+        else {
+            unreachable!()
+        };
+        let loan = next_loan(body);
+        let destination = PlaceId(body.places.len() as u32);
+        body.places.push(Place {
+            root: parameter,
+            projection: Default::default(),
+            ty: list_ty,
+            binding: Some(binding),
+            loan: None,
+        });
+        let lent = PlaceId(body.places.len() as u32);
+        body.places.push(Place {
+            loan: Some(loan),
+            ..body.places[destination.0 as usize].clone()
+        });
+        let failure = with_loan_end(body, loan, on_failure);
+        body.blocks[freeze].instructions.push(Instruction {
+            kind: K::BeginLoan {
+                id: loan,
+                place: destination,
+                mutable: true,
+                if_inactive: false,
+            },
+            span,
+            on_failure: failure,
+        });
+        arguments.push(CallArgument {
+            parameter: ParamId(arguments.len() as u32),
+            value: Operand {
+                place: lent,
+                usage: UseKind::Mut,
+            },
+        });
+        body.blocks[freeze].terminator = Terminator::Call {
+            callee: Callee::Definition {
+                path: into,
+                arguments: vec![],
+            },
+            arguments,
+            returns: Some(CallReturn {
+                destination: ret.destination,
+                next: resume,
+            }),
+            on_failure: failure,
+        };
+        body.blocks[resume.0 as usize].instructions = vec![Instruction {
+            kind: K::EndLoan {
+                loan,
+                if_active: false,
+            },
+            span,
+            on_failure,
+        }];
+    } else {
+        body.blocks[freeze].terminator = Terminator::Goto(resume);
+    }
     body.result = unit;
     compact_rvalues(body);
     // Cleanups lose the list's and the result's drops; shared suffixes stay shared.

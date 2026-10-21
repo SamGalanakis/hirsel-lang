@@ -3928,6 +3928,16 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
                 let ty = self.value_type(unit, result)?;
                 let image = self.read_resolved(&r, ty.layout, false)?;
+                if ty.repr == ValueRepr::Scalar(ScalarKind::U8)
+                    && u.addresses[address.index()]
+                        .projection
+                        .get(&u.pools.projections)
+                        .unwrap_or(&[])
+                        .iter()
+                        .any(|p| matches!(p, ProjectionStep::Index(_)))
+                {
+                    self.ledger.counters.indexed_byte_reads += 1;
+                }
                 let through_slot = u.addresses[address.index()]
                     .projection
                     .get(&u.pools.projections)

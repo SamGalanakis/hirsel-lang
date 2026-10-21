@@ -255,6 +255,19 @@ impl<'a> Sites<'a> {
     }
 }
 
+/// Generated definitions keep their source owner's anchors and diagnostic name.
+/// This is the explicit mapping produced by import and bound to the run identity.
+pub(super) fn source_definition<'a>(
+    program: &'a ReadyProgram,
+    definition: &'a DefPath,
+) -> &'a DefPath {
+    program
+        .semantic_owners
+        .get(definition)
+        .and_then(Option::as_ref)
+        .unwrap_or(definition)
+}
+
 /// Every site code emission can pass to `hirsel_rt_v2_failure_begin`, mapped
 /// back to its definition and byte range.
 pub fn site_codes(program: &ReadyProgram) -> BTreeMap<u64, (DefPath, SiteRange)> {
@@ -267,7 +280,10 @@ pub fn site_codes(program: &ReadyProgram) -> BTreeMap<u64, (DefPath, SiteRange)>
                     &summary.implementation_revision,
                     site,
                 ),
-                (summary.definition.clone(), site),
+                (
+                    source_definition(program, &summary.definition).clone(),
+                    site,
+                ),
             );
         }
     }

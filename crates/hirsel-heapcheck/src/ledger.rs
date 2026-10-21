@@ -516,6 +516,11 @@ pub struct Counters {
     pub disposes: u64,
     pub finalizers: u64,
     pub peak_live_heap: u64,
+    /// Executed scalar byte reads through an index projection; not reserve traffic.
+    pub indexed_byte_reads: u64,
+    /// Payload capacity in live counted blocks (excludes frame/static storage).
+    pub live_heap_bytes: u64,
+    pub peak_live_heap_bytes: u64,
     /// Actual variable-element length-prefix reads, and sequential Packed
     /// element extent reads (MEM-13), while finding boundaries.
     pub flat_prefix_reads: u64,
@@ -742,6 +747,11 @@ impl Ledger {
         if owner == Owner::Heap {
             self.counters.allocations += 1;
             self.live_heap += 1;
+            self.counters.live_heap_bytes += capacity;
+            self.counters.peak_live_heap_bytes = self
+                .counters
+                .peak_live_heap_bytes
+                .max(self.counters.live_heap_bytes);
             self.counters.peak_live_heap = self.counters.peak_live_heap.max(self.live_heap);
         }
         if matches!(owner, Owner::Heap | Owner::Region(_) | Owner::Static) {
@@ -828,7 +838,9 @@ impl Ledger {
         a.state = AllocState::Dead;
         a.layout = None;
         let owner = a.owner;
+        let capacity = a.capacity;
         if owner == Owner::Heap {
+            self.counters.live_heap_bytes -= capacity;
             self.counters.frees += 1;
             self.live_heap -= 1;
         }

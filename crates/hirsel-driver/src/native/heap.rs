@@ -68,11 +68,18 @@ fn positions(program: &ReadyProgram, sites: &Sites<'_>) -> Positions {
         return Positions::default();
     }
     std::sync::Arc::new(
-        super::observe::site_codes(program)
-            .into_values()
-            .filter_map(|(definition, range)| {
-                let (line, column) = sites.position(&definition, range)?;
-                Some(((definition, range), (u64::from(line), u64::from(column))))
+        program
+            .summaries
+            .iter()
+            .flat_map(|summary| {
+                summary.sites.iter().filter_map(|&range| {
+                    let owner = super::observe::source_definition(program, &summary.definition);
+                    let (line, column) = sites.position(owner, range)?;
+                    Some((
+                        (summary.definition.clone(), range),
+                        (u64::from(line), u64::from(column)),
+                    ))
+                })
             })
             .collect(),
     )
@@ -2037,6 +2044,7 @@ fn violation(
 }
 
 fn observation(
+    program: &ReadyProgram,
     audit: &hirsel_heapcheck::Audit,
     output: &[u8],
     sites: &Sites<'_>,
@@ -2078,11 +2086,15 @@ fn observation(
                     start: f.site.0,
                     end: f.site.1,
                 };
-                let mut failure = sites.failure(&f.rule, &f.definition, site)?;
+                let mut failure = sites.failure(
+                    &f.rule,
+                    super::observe::source_definition(program, &f.definition),
+                    site,
+                )?;
                 if let Some((definition, (start, end))) = &f.operation {
                     let operation = sites.failure(
                         &f.rule,
-                        definition,
+                        super::observe::source_definition(program, definition),
                         SiteRange {
                             source: f.operation_source,
                             start: *start,
@@ -2165,7 +2177,7 @@ pub fn run_heap_in(
         .as_ref()
         .map_err(|v| violation(entry, v, hirsel_heapcheck::Perturbation::Clean))?;
     Ok(HeapRun {
-        observation: observation(audit, &run.output, sites)?,
+        observation: observation(program, audit, &run.output, sites)?,
         sites: run.sites,
         choices: run.choices,
         counters: run.counters,
@@ -2222,7 +2234,7 @@ pub fn heap_campaign_in(
     }
     let audit = campaign.clean.result.as_ref().expect("checked above");
     Ok(HeapRun {
-        observation: observation(audit, &campaign.clean.output, sites)?,
+        observation: observation(program, audit, &campaign.clean.output, sites)?,
         sites: campaign.clean.sites,
         choices: campaign.clean.choices,
         counters: campaign.clean.counters,

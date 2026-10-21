@@ -60,7 +60,7 @@ fn checksum(b: Bytes) -> u64 {
 ";
 
 fn source(body: &str) -> String {
-    format!("{SHARED}{body}{ENTRY}")
+    format!("{SHARED}\n{body}\n{ENTRY}")
 }
 
 fn named(program: &Program, name: &str) -> Option<DefPath> {
@@ -116,6 +116,10 @@ fn checked(source: &str, before: &Program, after: &Program) {
 /// The driver's build (C at every stage) agrees with the interpreter on H,
 /// under its failure campaign.
 fn agree(source: &str, name: &str) {
+    agree_modes(source, name, false);
+}
+
+fn agree_modes(source: &str, name: &str, native: bool) {
     let source = source.to_owned();
     let name = name.to_owned();
     with_compiler_stack(move || {
@@ -135,14 +139,35 @@ fn agree(source: &str, name: &str) {
         )
         .unwrap();
         let reference = Observation::of_reference(execution.observation.as_ref().unwrap());
-        assert!(!reference.output.is_empty(), "{source}");
+        assert!(
+            !reference.output.is_empty() || !reference.failures.is_empty(),
+            "{source}"
+        );
         let input = loaded.engine.export_native_input().unwrap();
         let validated = loaded.engine.import_native_input(input).unwrap();
         let target = hirsel_driver::native::TargetSpec::x86_64_unknown_linux_gnu();
-        let configurations = vec![Configuration {
+        let mut configurations = vec![Configuration {
             options: Options::new(target.clone()),
             engine: Engine::Heap { campaign: true },
         }];
+        if native {
+            use hirsel_driver::native::{OptLevel, Partition, Runtime};
+            configurations.push(Configuration {
+                options: Options::new(target.clone()),
+                engine: Engine::Native {
+                    opt: OptLevel::Speed,
+                    partition: Partition::Whole,
+                    runtime: Runtime::Diagnostic,
+                },
+            });
+            configurations.push(Configuration {
+                options: Options::new(target.clone()),
+                engine: Engine::Cranelift {
+                    partition: Partition::Whole,
+                    runtime: Runtime::Diagnostic,
+                },
+            });
+        }
         let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
         let tools =
             Toolchain::in_tree_diagnostic(&root.join("append-into-runtime"), &[&target]).unwrap();
@@ -156,6 +181,19 @@ fn agree(source: &str, name: &str) {
             &root.join(&name),
         ) {
             assert_eq!(outcome, Outcome::Agree, "{source}\n{configuration}");
+        }
+        if native {
+            std::fs::create_dir_all(root.join(format!("{name}-replay"))).unwrap();
+            assert_eq!(
+                hirsel_driver::native::real_io_replay(
+                    &validated,
+                    &entry,
+                    &reference,
+                    &tools,
+                    &root.join(format!("{name}-replay"))
+                ),
+                Outcome::Agree
+            );
         }
     });
 }
@@ -474,4 +512,305 @@ fn value() -> u64 { string.byte_len(primitive()) + string.byte_len(custom()) }
             .any(|c| c == "text.finish_valid")
     );
     agree(&input, "primitive-trusted-text");
+}
+
+// Port of Goose 8511ae34 test/codegen/append_destination_storage.goose:5–15.
+// u8 payloads exercise Hirsel's existing Bytes fusion, with the same vector.
+const RELAY_VECTOR: &str = "fn make(n: u64) -> Bytes {
+  let mut out: List[u8] = []
+  let data = if n == 0u64 { b\"\" } else if n == 1u64 { b\"\\x00\" } else { b\"\\x00\\x01\" }
+  for i in 0u64..bytes.len(data) { list.push(mut out, data[i]) }
+  bytes.from_list(take out)
+}
+fn relay(n: u64) -> Bytes { make(n) }
+fn relay2(n: u64) -> Bytes { relay(n) }
+fn append(mut out: List[u8], data: Bytes) {
+  for i in 0u64..bytes.len(data) { list.push(mut out, data[i]) }
+}
+pub fn main() -> u64 {
+  let mut out: List[u8] = [99u8]
+  for k in 0u64..3u64 { append(mut out, relay2(k)) }
+  let b = bytes.from_list(take out)
+  if b == b\"\\x63\\x00\\x00\\x01\" { 1u64 } else { 0u64 }
+}
+";
+
+fn relay_run(source: &str) -> hirsel_heapcheck::Run {
+    let program = compile(source);
+    println!(
+        "main before {:?}, after {:?}",
+        calls(&program, "main"),
+        calls(&fuse(&program), "main")
+    );
+    let fused = fuse(&program);
+    checked(source, &program, &fused);
+    let mut options = Options::new(target());
+    options.regions = false;
+    let built = hirsel_driver::native::build_program(&program, manifest(&program), &options)
+        .expect("build");
+    let heap = hirsel_heapcheck::Program {
+        target: target(),
+        layouts: built.table.clone(),
+        units: built.raw_units(),
+        statics: built.statics.clone(),
+    };
+    let campaign = hirsel_heapcheck::fault_campaign(
+        &heap,
+        &named(&program, "main").unwrap(),
+        &[],
+        &mut || Box::new(hirsel_heapcheck::NoOperations),
+        &hirsel_heapcheck::Config::default(),
+    );
+    assert!(
+        campaign.first_violation().is_none(),
+        "{:?}",
+        campaign.first_violation()
+    );
+    println!(
+        "relay witness: counters={:?}, injected={}",
+        campaign.clean.counters,
+        campaign.injected.len()
+    );
+    campaign.clean
+}
+
+#[test]
+fn relay_destination_storage_witness() {
+    let relay = relay_run(RELAY_VECTOR);
+    let direct =
+        relay_run(&RELAY_VECTOR.replace("append(mut out, relay2(k))", "append(mut out, make(k))"));
+    assert_eq!(
+        relay.result.as_ref().unwrap().observation,
+        direct.result.as_ref().unwrap().observation
+    );
+    println!(
+        "relay observation {:?}",
+        relay.result.as_ref().unwrap().observation
+    );
+    // The static source is read once: the whole-result copy performs no reads.
+    assert_eq!(relay.counters.indexed_byte_reads, 3);
+    assert_eq!(direct.counters.indexed_byte_reads, 3);
+    assert_eq!(relay.counters.allocations, 1);
+    assert_eq!(relay.counters, direct.counters);
+    let fallback = relay_run(&RELAY_VECTOR.replace(
+        "fn relay(n: u64) -> Bytes { make(n) }",
+        "fn relay(n: u64) -> Bytes { let b = make(n); let length = bytes.len(b); b }",
+    ));
+    assert_eq!(
+        fallback.result.as_ref().unwrap().observation,
+        relay.result.as_ref().unwrap().observation
+    );
+    assert_eq!(fallback.counters.indexed_byte_reads, 6);
+    assert_eq!(fallback.counters.allocations, 3);
+    assert!(relay.counters.peak_live_heap_bytes <= fallback.counters.peak_live_heap_bytes);
+    assert_eq!(relay.counters.live_heap_bytes, 0);
+}
+
+#[test]
+fn transparent_number_relays_append_without_private_storage() {
+    let input = source(&format!(
+        "fn relay(n: u64) -> Bytes {{ number(n) }}\nfn relay2(n: u64) -> Bytes {{ relay(n) }}\n{}",
+        EMIT.replace("number(v", "relay2(v")
+    ));
+    let program = compile(&input);
+    let fused = fuse(&program);
+    checked(&input, &program, &fused);
+    for (wrapper, producer) in [("relay2", "relay"), ("relay", "number")] {
+        let derived = format!("{wrapper}$into");
+        assert_eq!(
+            fused
+                .definitions
+                .keys()
+                .filter(|p| p.0.name == derived)
+                .count(),
+            1
+        );
+        assert!(
+            calls(&fused, &derived)
+                .iter()
+                .any(|c| c == &format!("{producer}$into"))
+        );
+    }
+    assert_eq!(
+        calls(&fused, "value")
+            .iter()
+            .filter(|c| c.as_str() == "relay2$into")
+            .count(),
+        2
+    );
+    agree_modes(&input, "transparent-number-relays", true);
+}
+
+#[test]
+fn relay_depth_is_bounded_per_definition() {
+    let mut definitions = RELAY_VECTOR.split("fn relay(").next().unwrap().to_owned();
+    for i in 1..=9 {
+        let callee = if i == 1 {
+            "make".to_owned()
+        } else {
+            format!("relay{}", i - 1)
+        };
+        definitions.push_str(&format!("fn relay{i}(n: u64) -> Bytes {{ {callee}(n) }}\n"));
+    }
+    let consumer = RELAY_VECTOR.split("fn append(").nth(1).unwrap();
+    for depth in [1, 8, 9] {
+        let input = format!(
+            "{definitions}fn append({}",
+            consumer.replace("relay2(k)", &format!("relay{depth}(k)"))
+        );
+        let program = compile(&input);
+        let fused = fuse(&program);
+        checked(&input, &program, &fused);
+        let callee = if depth < 9 {
+            format!("relay{depth}$into")
+        } else {
+            format!("relay{depth}")
+        };
+        assert!(
+            calls(&fused, "main").contains(&callee),
+            "depth {depth}: {:?}",
+            calls(&fused, "main")
+        );
+        let helpers = fused
+            .definitions
+            .keys()
+            .filter(|p| p.0.name.ends_with(INTO_SUFFIX))
+            .count();
+        assert!(helpers <= depth + 1);
+        if depth == 9 {
+            assert_eq!(helpers, 0);
+        }
+    }
+}
+
+#[test]
+fn relay_reads_writes_and_failures_keep_the_original_output() {
+    let variants = [
+        RELAY_VECTOR.replace(
+            "append(mut out, relay2(k))",
+            "let b = relay2(k); append(mut out, b); append(mut out, b)",
+        ),
+        RELAY_VECTOR.replace(
+            "append(mut out, relay2(k))",
+            "let b = relay2(k); list.push(mut out, 42u8); append(mut out, b)",
+        ),
+        RELAY_VECTOR.replace(
+            "  bytes.from_list(take out)\n}\nfn relay",
+            "  failure.check(n < 2u64, Arithmetic())\n  bytes.from_list(take out)\n}\nfn relay",
+        ),
+        RELAY_VECTOR.replace(
+            "fn relay(n: u64) -> Bytes { make(n) }",
+            "fn relay(n: u64) -> Bytes { let b = make(n); let length = bytes.len(b); b }",
+        ),
+        RELAY_VECTOR.replace(
+            "append(mut out, relay2(k))",
+            "let b = relay2(k); failure.check(k < 2u64, Arithmetic()); append(mut out, b)",
+        ),
+    ];
+    for input in variants {
+        let program = compile(&input);
+        let fused = fuse(&program);
+        checked(&input, &program, &fused);
+        assert!(!calls(&fused, "main").iter().any(|p| p == "relay2$into"));
+        let run = relay_run(&input);
+        assert!(run.result.is_ok());
+    }
+}
+
+#[test]
+fn relay_arguments_and_bounded_destinations_keep_their_contracts() {
+    let body = "fn relay(unused: u64, n: u64) -> Bytes { number(n) }\nfn value() -> u64 { let mut out: List[u8] = []; append(mut out, relay(7u64, 42u64)); checksum(bytes.from_list(take out)) }";
+    let input = source(body);
+    let program = compile(&input);
+    let fused = fuse(&program);
+    checked(&input, &program, &fused);
+    assert!(calls(&fused, "value").contains(&"relay$into".to_owned()));
+    agree(&input, "relay-argument-ordinals");
+
+    let bounded = source(
+        "fn relay(n: u64) -> Bytes { number(n) }\nfn limited(cap: u64) -> Result[u64, OutOfSpace] { arena.bounded(cap, fn(a: Arena) -> u64 { let mut out: List[u8] in a = []; let b = relay(42u64); for i in 0u64..bytes.len(b) { list.push(mut out, b[i]) }; list.len(out) }) }\nfn value() -> u64 { if limited(3u64) == Ok(3u64) && limited(2u64) == Error(OutOfSpace()) { 1u64 } else { 0u64 } }",
+    );
+    let program = compile(&bounded);
+    let fused = fuse(&program);
+    checked(&bounded, &program, &fused);
+    assert!(named(&fused, "relay$into").is_none());
+    agree(&bounded, "relay-bounded-destinations");
+
+    let alias = source(
+        "fn alias(xs: List[u8]) -> Bytes { number(list.len(xs)) }\nfn value() -> u64 { let mut out: List[u8] = [99u8]; let b = alias(out); append(mut out, b); checksum(bytes.from_list(take out)) }",
+    );
+    let program = compile(&alias);
+    let fused = fuse(&program);
+    checked(&alias, &program, &fused);
+    assert!(named(&fused, "alias$into").is_none());
+    agree(&alias, "relay-output-alias");
+}
+
+#[test]
+fn relay_argument_and_callee_failures_preserve_the_failure_oracle() {
+    for (i, input) in [
+        RELAY_VECTOR.replace(
+            "  let mut out: List[u8] = []",
+            "  failure.check(n < 2u64, Arithmetic())\n  let mut out: List[u8] = []",
+        ),
+        format!(
+            "fn argument(n: u64) -> u64 {{ failure.check(n < 2u64, Arithmetic()); n }}\n{}",
+            RELAY_VECTOR.replace("relay2(k)", "relay2(argument(k))")
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let program = compile(&input);
+        let fused = fuse(&program);
+        checked(&input, &program, &fused);
+        assert!(calls(&fused, "main").contains(&"relay2$into".to_owned()));
+        let optimized = relay_run(&input);
+        let fallback = relay_run(&input.replace(
+            "fn relay(n: u64) -> Bytes { make(n) }",
+            "fn relay(n: u64) -> Bytes { let b = make(n); let length = bytes.len(b); b }",
+        ));
+        let mut optimized = optimized.result.as_ref().unwrap().observation.clone();
+        // Raw H names generated definitions. The driver maps them to their
+        // semantic source owner; require the original range/source unchanged.
+        for failure in &mut optimized.failures {
+            if let Some(name) = failure.definition.0.name.strip_suffix(INTO_SUFFIX) {
+                let name = name.to_owned();
+                assert!(named(&program, &name).is_some());
+                failure.definition.0.name = name;
+            }
+        }
+        let fallback = &fallback.result.as_ref().unwrap().observation;
+        assert_eq!(optimized.failures.len(), 1);
+        assert!(
+            optimized.equivalent(fallback),
+            "{optimized:?} != {fallback:?}"
+        );
+        let actual = if i == 0 { "2u64" } else { "argument(2u64)" };
+        let body = format!(
+            "fn argument(n: u64) -> u64 {{ failure.check(n < 2u64, Arithmetic()); n }}\nfn relay(n: u64) -> Bytes {{ number(n) }}\nfn value() -> u64 {{ let mut out: List[u8] = []; let b = relay({actual}); append(mut out, b); checksum(bytes.from_list(take out)) }}\n"
+        );
+        let input = source(&body);
+        let input = if i == 0 {
+            input.replacen(
+                "fn number(n: u64) -> Bytes {",
+                "fn number(n: u64) -> Bytes {\n  failure.check(n < 2u64, Arithmetic())",
+                1,
+            )
+        } else {
+            input
+        };
+        agree_modes(&input, &format!("relay-failure-{i}"), true);
+    }
+    let input = RELAY_VECTOR.replace(
+        "  let mut out: List[u8] = []",
+        "  if n > 0u64 { let discarded = relay(n - 1u64) }\n  let mut out: List[u8] = []",
+    );
+    let program = compile(&input);
+    let fused = fuse(&program);
+    checked(&input, &program, &fused);
+    assert!(named(&fused, "relay$into").is_none());
+    assert!(calls(&fused, "main").contains(&"relay2".to_owned()));
+    let run = relay_run(&input);
+    assert!(run.result.as_ref().unwrap().observation.failures.is_empty());
 }
