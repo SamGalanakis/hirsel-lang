@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: accept
+// boundary: Named constructions stop uniqueness traversal at copied run-owned handle parts.
+type Pair {
+  handle: Atomic[u64],
+  values: List[u64],
+}
+
+fn f(m: Atomic[u64]) uses {} {
+  let t = copy m
+  let p: unique Pair = Pair(handle: take t, values: [2u64])
+}

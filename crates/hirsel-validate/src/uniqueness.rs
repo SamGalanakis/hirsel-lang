@@ -884,7 +884,9 @@ impl Checker<'_> {
                         && matches!(
                             self.layout(&mut store, self.place_type(value.place)),
                             Some(TypeKind::Builtin {
-                                kind: hirsel_types::BuiltinType::Shared,
+                                kind: hirsel_types::BuiltinType::Shared
+                                    | hirsel_types::BuiltinType::Mutex
+                                    | hirsel_types::BuiltinType::Atomic,
                                 ..
                             })
                         );

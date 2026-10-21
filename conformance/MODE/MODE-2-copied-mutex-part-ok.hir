@@ -1,0 +1,7 @@
+// rule: MODE-2
+// expect: accept
+// boundary: Copied run-owned handles bound the unique graph while aliased list parts do not.
+fn f(m: Mutex[List[u64]]) uses {} {
+  let t = copy m
+  let p: unique (Mutex[List[u64]], List[u64]) = (take t, [2u64])
+}

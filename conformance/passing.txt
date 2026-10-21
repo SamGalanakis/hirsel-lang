@@ -6513,3 +6513,11 @@ conformance/CONC/CONC-5-inline-branch-result-ok.hir
 conformance/CONC/CONC-5-inline-branch-result-bad.hir
 conformance/MODE/MODE-4-opaque-carrier-forwarding-ok.hir
 conformance/MODE/MODE-4-opaque-carrier-forwarding-bad.hir
+conformance/MODE/MODE-2-copied-mutex-part-ok.hir
+conformance/MODE/MODE-2-copied-mutex-part-bad.hir
+conformance/MODE/MODE-2-copied-atomic-part-ok.hir
+conformance/MODE/MODE-2-copied-atomic-part-bad.hir
+conformance/MODE/MODE-2-copied-mutex-record-ok.hir
+conformance/MODE/MODE-2-copied-mutex-record-bad.hir
+conformance/MODE/MODE-2-copied-atomic-record-ok.hir
+conformance/MODE/MODE-2-copied-atomic-record-bad.hir

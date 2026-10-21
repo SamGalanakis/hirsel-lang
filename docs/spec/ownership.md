@@ -212,8 +212,9 @@ that evidence.
 
 ### MODE-2: Uniqueness
 
-A `unique` value exclusively owns every counted block reachable from it; a `Shared` root
-inside it is a boundary (its contents are not owned and never traversed). Fresh
+A `unique` value exclusively owns every counted block reachable from it; a `Shared`,
+`Mutex` or `Atomic` root inside it is a boundary (its contents are not owned and never
+traversed). A copied handle part therefore preserves a construction's uniqueness. Fresh
 constructions from unique parts are unique; `unique x` deep-copies when `x` is not
 provably unique (an allocation site). Copying, sharing a part, or passing as a plain `mut`
 argument ends a binding's uniqueness; borrowing does not, including a borrow-only use of a

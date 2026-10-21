@@ -45,7 +45,7 @@ impl Checker<'_> {
         work::count(Counter::AuthoritySourceRows);
         self.source_rows.sites.get(&p).copied()
     }
-    /// MODE-2 construction owns its parts. Plain bits, flat copies and Shared
+    /// MODE-2 construction owns its parts. Plain bits, flat copies and handle
     /// boundaries need no exclusive source; other counted parts must be taken
     /// from current unique evidence, not copied from a unique borrowed place.
     pub(super) fn unique_construction_part(&mut self, expression: ExprId) -> bool {
@@ -59,7 +59,7 @@ impl Checker<'_> {
         if matches!(
             row.kind,
             TypeKind::Builtin {
-                kind: BuiltinType::Shared,
+                kind: BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic,
                 ..
             }
         ) {

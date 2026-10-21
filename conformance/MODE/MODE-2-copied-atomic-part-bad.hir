@@ -1,0 +1,7 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 6
+// twin: MODE/MODE-2-copied-atomic-part-ok.hir
+fn f(m: Atomic[u64], xs: List[u64]) uses {} {
+  let t = copy m
+  let p: unique (Atomic[u64], List[u64]) = (take t, copy xs)
+}

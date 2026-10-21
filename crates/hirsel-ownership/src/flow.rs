@@ -4961,7 +4961,10 @@ impl Checker<'_> {
                     }
                     for child in children {
                         let mut part = self.value(state, *child);
-                        if self.property(*child).is_some_and(|p| p.shared || p.plain) {
+                        if self
+                            .property(*child)
+                            .is_some_and(|p| p.handle_root || p.plain)
+                        {
                             part.modes.uniqueness = Uniqueness::Unique;
                         }
                         value.join(&part);
@@ -6476,7 +6479,7 @@ impl Checker<'_> {
                         let mut part = self.value(state, arg.value);
                         if self
                             .property(arg.value)
-                            .is_some_and(|p| p.shared || p.plain)
+                            .is_some_and(|p| p.handle_root || p.plain)
                         {
                             part.modes.uniqueness = Uniqueness::Unique;
                         }
@@ -7687,7 +7690,9 @@ impl Checker<'_> {
         part: &Value,
     ) {
         if part.modes.uniqueness != Uniqueness::Unique
-            && !self.property(child).is_some_and(|p| p.plain || p.shared)
+            && !self
+                .property(child)
+                .is_some_and(|p| p.plain || p.handle_root)
         {
             aggregate
                 .shared_parts

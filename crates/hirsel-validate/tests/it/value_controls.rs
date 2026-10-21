@@ -1019,3 +1019,52 @@ fn projected_handle_sendability_is_structural_and_requires_global_content() {
         assert_eq!(f.kinds(), vec![ViolationKind::TypeMismatch { entity }]);
     }
 }
+
+#[test]
+fn copied_run_owned_handles_bound_a_unique_constructions_graph() {
+    for kind in [BuiltinType::Mutex, BuiltinType::Atomic, BuiltinType::List] {
+        let mut f = Fixture::unit();
+        let payload = f
+            .definition
+            .types
+            .push(ty(TypeKind::Primitive(Primitive::U64)));
+        let input = f.slot(
+            TypeKind::Builtin {
+                kind,
+                arguments: vec![GenericArgument::Type(payload)].into(),
+            },
+            Storage::Parameter,
+        );
+        f.body().parameters = vec![LocalId(input)];
+        let input_type = f.body().places[input as usize].ty;
+        let output = f.slot(TypeKind::Tuple(vec![input_type].into()), Storage::Local);
+        let old = f.body().places[output as usize].ty;
+        let mut row = f.definition.types.get(old).unwrap().clone();
+        row.modes.uniqueness = Uniqueness::Unique;
+        let unique = f.definition.types.push(row);
+        f.body().places[output as usize].ty = unique;
+        f.body().locals[output as usize].ty = unique;
+        f.assign(
+            output,
+            Rvalue::Construct {
+                constructor: Constructor::Tuple,
+                fields: vec![ConstructField {
+                    field: 0,
+                    value: copy(input),
+                }],
+                destination: Destination::Inferred,
+            },
+            0,
+        );
+        let cleanup = f.cleanup(vec![drop(output)]);
+        f.body().blocks[0].terminator = ret(0, cleanup);
+        owner_signature(&mut f, PassingMode::Borrow);
+        if kind == BuiltinType::List {
+            assert!(f.kinds().contains(&ViolationKind::TypeMismatch {
+                entity: "unique construction"
+            }));
+        } else {
+            f.valid();
+        }
+    }
+}

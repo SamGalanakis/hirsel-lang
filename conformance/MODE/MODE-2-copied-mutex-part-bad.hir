@@ -1,0 +1,7 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 6
+// twin: MODE/MODE-2-copied-mutex-part-ok.hir
+fn f(m: Mutex[List[u64]], xs: List[u64]) uses {} {
+  let t = copy m
+  let p: unique (Mutex[List[u64]], List[u64]) = (take t, copy xs)
+}
