@@ -1,6 +1,6 @@
 // rule: LANG-14
 // expect: reject LANG-14 at line 6
-// twin: LANG/LANG-14-reserved-binding-recovery-ok.hir
-// Shows "drop" is in the keyword list and cannot be a parameter name.
+// twin: PROG/PROG-3-ordinary-nonentry.hir
+// "drop" cannot name a u32 parameter; the twin uses the identifier "value".
 @noalloc
 fn example(drop: u32) -> u32 { 0 }
