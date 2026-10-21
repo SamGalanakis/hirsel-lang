@@ -17,7 +17,7 @@ pub(super) fn saved(s: &Scheduler, task: u32) -> bool {
 /// host readiness and pool allocation remain outside this callback.
 /// # Safety
 /// The role exclusively owns `s`; both sides of every slot copy are saved.
-unsafe fn poll(s: &mut Scheduler, task: u32) -> Option<bool> {
+unsafe fn poll(s: &mut Scheduler, task: u32, pool_available: Option<bool>) -> Option<bool> {
     if !saved(s, task) {
         return Some(false);
     }
@@ -82,13 +82,26 @@ unsafe fn poll(s: &mut Scheduler, task: u32) -> Option<bool> {
                 false
             }
         }
-        Wait::Host { .. } | Wait::Pool => return None,
+        Wait::Pool => pool_available?,
+        Wait::Host { .. } => return None,
     })
 }
 
 /// # Safety
 /// The role owns the table and every stack access is gated on a saved image.
 pub(super) unsafe fn poll_free(s: &mut Scheduler) {
+    unsafe { poll_free_inner(s, None) };
+}
+
+/// As poll_free, with capacity captured outside the scheduler callback. A
+/// wake permits the owner to retry claim; polling never reserves a pool slot.
+/// # Safety
+/// As for poll_free.
+pub(super) unsafe fn poll_free_with_pool(s: &mut Scheduler, pool_available: bool) {
+    unsafe { poll_free_inner(s, Some(pool_available)) };
+}
+
+unsafe fn poll_free_inner(s: &mut Scheduler, pool_available: Option<bool>) {
     s.wake_receivers();
     // Keep unsupported service waits pending. No host bridge, allocation of
     // pool threads, or scheduler(ctx) reentry is permitted under IdleGuard.
@@ -102,7 +115,7 @@ pub(super) unsafe fn poll_free(s: &mut Scheduler) {
             continue;
         }
         // SAFETY: after-save publication protects every inspected stack slot.
-        match unsafe { poll(s, task) } {
+        match unsafe { poll(s, task, pool_available) } {
             Some(ready) => {
                 s.task(task).woken = false;
                 if ready {
@@ -167,7 +180,7 @@ unsafe fn poll_ordered_inner(s: &mut Scheduler, hosts_polled: bool) -> bool {
             continue;
         }
         // SAFETY: preflight checked every slot before the first poll effect.
-        let ready = unsafe { poll(s, task) }.expect("runtime-only ordered wait");
+        let ready = unsafe { poll(s, task, None) }.expect("runtime-only ordered wait");
         s.task(task).woken = false;
         if ready {
             s.unpark(task);

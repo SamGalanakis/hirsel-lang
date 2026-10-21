@@ -126,6 +126,7 @@ pub(super) unsafe fn after_save(
     s: &mut Scheduler,
     task: u32,
     completed: bool,
+    pool_available: bool,
 ) -> Vec<(u32, Owner)> {
     if let Some(Some(row)) = s.tasks.get(task as usize) {
         if completed && row.finishing {
@@ -164,7 +165,7 @@ pub(super) unsafe fn after_save(
             }
         }
     }
-    unsafe { super::readiness::poll_free(s) };
+    unsafe { super::readiness::poll_free_with_pool(s, pool_available) };
     let ready = std::mem::take(&mut s.runnable);
     ready
         .into_iter()

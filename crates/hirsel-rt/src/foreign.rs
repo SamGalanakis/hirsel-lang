@@ -242,7 +242,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_leave(previous: *const c_void) {
     unsafe {
         crate::stop::check(ctx, crate::stop::observe(ctx));
     }
-    crate::pool::acquire_permit(ctx);
+    {
+        // Another callback can hold the last permit while entering a runtime
+        // operation. Never wait for its permit while holding that operation's
+        // scheduler role. No runtime borrow survives this segment boundary.
+        let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+        crate::pool::acquire_permit(ctx);
+    }
     // SAFETY: the context is live.
     if let Some(metrics) = unsafe { &(*ctx).run_ref().extern_metrics } {
         metrics.call(std::time::Duration::from_nanos(

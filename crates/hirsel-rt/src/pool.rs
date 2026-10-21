@@ -1432,7 +1432,17 @@ pub(crate) fn release(ctx: *mut TaskCtx, slot: u16) {
 
 /// Whether some pool slot is free or can still start.
 pub(crate) fn has_slot(ctx: *mut TaskCtx) -> bool {
-    let pool = execs(ctx).pool.lock().unwrap();
+    unsafe { has_slot_run((*ctx).run_ptr()) }
+}
+
+/// A bounded capacity snapshot, without a host bridge, task lookup or allocation.
+/// # Safety
+/// The run retains its topology through this idle/runtime callback.
+pub(crate) unsafe fn has_slot_run(run: *mut RunShared) -> bool {
+    let Some(execs) = (unsafe { (*(*run).execs.get()).as_deref() }) else {
+        return true;
+    };
+    let pool = execs.pool.lock().unwrap();
     pool.len() < POOL_THREADS || pool.iter().any(|thread| !thread.busy)
 }
 
