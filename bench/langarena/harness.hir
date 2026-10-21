@@ -1,0 +1,90 @@
+// Protocol: upstream rust/src/main.rs:93-140, 356-433.
+pub type Config = Map[String, json.Value]
+
+pub type Report {
+  seconds: f64,
+  actual: u32,
+  expected: u32,
+}
+
+fn invalid[E](take error: E) -> String {
+  "invalid configuration or host I/O"
+}
+
+pub fn number(config: Config, key: String) -> u64 {
+  match map.get(config, key) {
+    Some(Number(s)) => results.unwrap_or(u64.parse(s), 0),
+    _ => 0,
+  }
+}
+
+pub fn hash_bytes(data: Bytes) -> u32 {
+  let mut hash = 5381u32
+  for i in 0u64..bytes.len(data) {
+    hash = u32.wrapping_add(u32.wrapping_mul(hash, 33), int.widen(data[i]))
+  }
+  hash
+}
+
+pub fn hash_float(value: f64) -> u32 {
+  hash_bytes(string.as_bytes(f"{value:.7}"))
+}
+
+// State survives warmup; only the PRNG (when used) restarts before measurement.
+pub fn measure_reset[S](
+  rt: Io,
+  config: Config,
+  take initial: S,
+  step: fn(mut S, u64) -> (),
+  reset: fn(mut S) -> (),
+  checksum: fn(S) -> u32
+) -> Result[Report, String] {
+  let iterations = number(config, "iterations")
+  let warmup = match map.get(config, "warmup_iterations") {
+    Some(_) => number(config, "warmup_iterations"),
+    None() => if iterations / 5 > 0 {
+      iterations / 5
+    } else {
+      1
+    },
+  }
+  let mut state = take initial
+  for i in 0u64..warmup {
+    step(mut state, i)
+  }
+  reset(mut state)
+  let c = io.monotonic_clock(rt) ? invalid
+  let start = clock.monotonic(c) ? invalid
+  for i in 0u64..iterations {
+    step(mut state, i)
+  }
+  let end = clock.monotonic(c) ? invalid
+  let ns: f64 = float.from_int(instant.ticks(end) - instant.ticks(start))
+  Ok(
+    Report(
+      seconds: ns / 1000000000.0,
+      actual: checksum(state),
+      expected: int.narrow(number(config, "checksum"))
+    )
+  )
+}
+
+fn unchanged[S](mut state: S) {}
+
+pub fn measure[S](
+  rt: Io,
+  config: Config,
+  take initial: S,
+  step: fn(mut S, u64) -> (),
+  checksum: fn(S) -> u32
+) -> Result[Report, String] {
+  measure_reset(rt, config, take initial, step, unchanged, checksum)
+}
+
+pub fn hash_list(data: List[u8]) -> u32 {
+  let mut hash = 5381u32
+  for byte in data {
+    hash = u32.wrapping_add(u32.wrapping_mul(hash, 33), int.widen(byte))
+  }
+  hash
+}

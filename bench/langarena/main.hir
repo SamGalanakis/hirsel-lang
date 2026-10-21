@@ -1,0 +1,59 @@
+fn invalid[E](take error: E) -> String {
+  "invalid configuration or host I/O"
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  let filename = results.unwrap_or(arg.text(args, 0), "bench/langarena/run.js")
+  let filter = results.unwrap_or(arg.text(args, 1), "")
+  let dir = io.dir(rt, path.of(".")) ? invalid
+  let content = file.read_bytes(dir, path.of(filename)) ? invalid
+  let source = string.from_bytes(take content) ? invalid
+  let Ok(Array(configs)) = json.parse(take source) else {
+    return Error("expected a JSON task array")
+  }
+  let output = io.stdout(rt) ? invalid
+  let mut total: f64 = 0.0
+  let mut count = 0u64
+  let mut passed = 0u64
+  let wall = io.wall_clock(rt) ? invalid
+  let now = clock.wall(wall) ? invalid
+  out.print(output, f"start: {now / 1000000}\n") ? invalid
+  for item in configs {
+    let Object(config) = item else {
+      return Error("expected a task object")
+    }
+    let Some(Text(name)) = map.get(config, "name") else {
+      return Error("task has no name")
+    }
+    if !string.contains_ignore_case(name, filter) {
+      continue
+    }
+    if !registry.contains(name) {
+      out.print(
+        output,
+        f"Warning: Benchmark '{name}' defined in config but not found in code\n"
+      ) ? invalid
+      continue
+    }
+    let report = registry.execute(rt, name, config)?
+    total += report.seconds
+    count += 1
+    if report.actual == report.expected {
+      passed += 1
+      out.print(output, f"{name}: OK in {report.seconds:.9}s\n") ? invalid
+    } else {
+      out.print(
+        output,
+        f"{name}: ERR[actual={report.actual}, expected={report.expected}] in {report.seconds:.9}s\n"
+      ) ? invalid
+    }
+  }
+  out.print(output, f"Summary: {total:.9}s, {count}, {passed}, {count - passed}\n") ? invalid
+  if count != passed {
+    return Error("checksum mismatch (RECOMPILE_MARKER_0)")
+  }
+  if count == 0 {
+    return Error("no implemented tasks selected")
+  }
+  Ok(())
+}

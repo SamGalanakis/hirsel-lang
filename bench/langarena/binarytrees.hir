@@ -1,0 +1,90 @@
+// langarena: Binarytrees::Obj
+// langarena: Binarytrees::Arena
+// Port: rust/src/benchmarks/binarytrees.rs:4-46, 75-139 (3c9f84d).
+type Tree = Leaf(item: i64) | Branch(item: i64, left: box Tree, right: box Tree)
+
+fn tree(item: i64, depth: u64) -> box Tree {
+  if depth == 0 {
+    box Leaf(item: item)
+  } else {
+    let delta: i64 = int.narrow(1u64 << depth - 1)
+    box Branch(
+      item: item,
+      left: tree(item - delta, depth - 1),
+      right: tree(item + delta, depth - 1)
+    )
+  }
+}
+
+fn sum(node: box Tree) -> i64 {
+  match node {
+    Leaf(item: item) => item + 1,
+    Branch(item: item, left: left, right: right) => item + 1 + sum(left) + sum(right),
+  }
+}
+
+type Node {
+  item: i64,
+  left: u64,
+  right: u64,
+}
+
+fn build(mut nodes: List[Node], item: i64, depth: u64) -> u64 {
+  let index = list.len(nodes)
+  list.push(mut nodes, Node(item: item, left: 0, right: 0))
+  if depth > 0 {
+    let delta: i64 = int.narrow(1u64 << depth - 1)
+    let left = build(mut nodes, item - delta, depth - 1)
+    let right = build(mut nodes, item + delta, depth - 1)
+    nodes[index] = Node(item: item, left: left, right: right)
+  }
+  index
+}
+
+fn arena_sum(nodes: List[Node], index: u64) -> i64 {
+  let node = nodes[index]
+  node.item + 1 + if node.left == 0 {
+    0
+  } else {
+    arena_sum(nodes, node.left) + arena_sum(nodes, node.right)
+  }
+}
+
+type State {
+  depth: u64,
+  arena: bool,
+  value_out: u32,
+}
+
+fn step(mut s: State, iteration: u64) {
+  let value = if s.arena {
+    let mut nodes: List[Node] = []
+    let root = build(mut nodes, 0, s.depth)
+    arena_sum(nodes, root)
+  } else {
+    sum(tree(0, s.depth))
+  }
+  let positive: u64 = int.narrow(value)
+  s.value_out = u32.wrapping_add(s.value_out, int.truncate(positive))
+}
+
+fn checksum(s: State) -> u32 {
+  s.value_out
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  harness.measure(
+    rt,
+    config,
+    State(
+      depth: harness.number(config, "depth"),
+      arena: name == "Binarytrees::Arena",
+      value_out: 0
+    ),
+    step,
+    checksum
+  )
+}

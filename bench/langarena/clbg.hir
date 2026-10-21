@@ -1,0 +1,352 @@
+// langarena: CLBG::Fannkuchredux
+// langarena: CLBG::Mandelbrot
+// langarena: CLBG::Nbody
+// langarena: CLBG::Spectralnorm
+// Ports at 3c9f84d: rust/src/benchmarks/fannkuchredux.rs:18-100,
+// mandelbrot.rs:29-81, nbody.rs:28-175, spectralnorm.rs:29-87.
+// Lists replace Rust fixed arrays; scalar Planet copies permit updating a pair
+// without overlapping mutable list loans. Algorithms and state transitions match.
+
+fn fannkuch(n: u64) -> u32 {
+  let mut perm1: List[u64] = []
+  let mut perm: List[u64] = []
+  let mut count: List[u64] = []
+  for i in 0u64..32u64 {
+    list.push(mut perm1, i)
+    list.push(mut perm, 0)
+    list.push(mut count, 0)
+  }
+  let mut max_flips = 0u64
+  let mut permutations = 0u64
+  let mut alternating_sum = 0i64
+  let mut r = n
+  while true {
+    while r > 1 {
+      count[r - 1] = r
+      r -= 1
+    }
+    for i in 0u64..n {
+      perm[i] = perm1[i]
+    }
+    let mut flips = 0u64
+    let mut k = perm[0]
+    while k != 0 {
+      for i in 0u64..k + 1 >> 1u64 {
+        let j = k - i
+        let temp = perm[i]
+        perm[i] = perm[j]
+        perm[j] = temp
+      }
+      flips += 1
+      k = perm[0]
+    }
+    if flips > max_flips {
+      max_flips = flips
+    }
+    let signed: i64 = int.narrow(flips)
+    if permutations % 2 == 0 {
+      alternating_sum += signed
+    } else {
+      alternating_sum -= signed
+    }
+    while true {
+      if r == n {
+        let wrapped: u64 = int.truncate(alternating_sum)
+        return u32.wrapping_add(
+          u32.wrapping_mul(int.truncate(wrapped), 100),
+          int.truncate(max_flips)
+        )
+      }
+      let first = perm1[0]
+      for i in 0u64..r {
+        let temp = perm1[i]
+        perm1[i] = perm1[i + 1]
+        perm1[i + 1] = temp
+      }
+      perm1[r] = first
+      count[r] -= 1
+      if count[r] > 0 {
+        break
+      }
+      r += 1
+    }
+    permutations += 1
+  }
+  0
+}
+
+fn mandelbrot(mut value_out: List[u8], w: u64, h: u64) {
+  text.append(mut value_out, f"P4\n{w} {h}\n")
+  let wf: f64 = float.from_int(w)
+  let hf: f64 = float.from_int(h)
+  let mut bits = 0u64
+  let mut byte = 0u8
+  for y in 0u64..h {
+    let yf: f64 = float.from_int(y)
+    let ci = 2.0 * yf / hf - 1.0
+    for x in 0u64..w {
+      let xf: f64 = float.from_int(x)
+      let cr = 2.0 * xf / wf - 1.5
+      let mut zr: f64 = 0.0
+      let mut zi: f64 = 0.0
+      let mut tr: f64 = 0.0
+      let mut ti: f64 = 0.0
+      let mut i = 0u64
+      while i < 50 && tr + ti <= 4.0 {
+        zi = 2.0 * zr * zi + ci
+        zr = tr - ti + cr
+        tr = zr * zr
+        ti = zi * zi
+        i += 1
+      }
+      byte = byte << 1u8
+      if tr + ti <= 4.0 {
+        byte = byte | 1u8
+      }
+      bits += 1
+      if bits == 8 {
+        list.push(mut value_out, byte)
+        byte = 0
+        bits = 0
+      } else if x == w - 1 {
+        let shift: u8 = int.narrow(8u64 - w % 8)
+        byte = byte << shift
+        list.push(mut value_out, byte)
+        byte = 0
+        bits = 0
+      }
+    }
+  }
+}
+
+fn a(i: u64, j: u64) -> f64 {
+  let ij: f64 = float.from_int(i + j)
+  let fi: f64 = float.from_int(i)
+  1.0 / (ij * (ij + 1.0) / 2.0 + fi + 1.0)
+}
+
+fn multiply(u: List[f64], transpose: bool) -> List[f64] {
+  let n = list.len(u)
+  let mut value_out: List[f64] = []
+  for i in 0u64..n {
+    let mut total: f64 = 0.0
+    for j in 0u64..n {
+      total += if transpose {
+        a(j, i)
+      } else {
+        a(i, j)
+      } * u[j]
+    }
+    list.push(mut value_out, total)
+  }
+  take value_out
+}
+
+fn ata(u: List[f64]) -> List[f64] {
+  multiply(multiply(u, false), true)
+}
+
+type Planet {
+  x: f64,
+  y: f64,
+  z: f64,
+  vx: f64,
+  vy: f64,
+  vz: f64,
+  mass: f64,
+}
+
+const SOLAR: f64 = 4.0 * 3.141592653589793 * 3.141592653589793
+
+fn planet(x: f64, y: f64, z: f64, vx: f64, vy: f64, vz: f64, mass: f64) -> Planet {
+  Planet(
+    x: x,
+    y: y,
+    z: z,
+    vx: vx * 365.24,
+    vy: vy * 365.24,
+    vz: vz * 365.24,
+    mass: mass * SOLAR
+  )
+}
+
+fn create_bodies() -> List[Planet] {
+  let mut value_out: List[Planet] = [
+    planet(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+    planet(
+      4.84143144246472090,
+      -1.16032004402742839,
+      -1.03622044471123109e-1,
+      1.66007664274403694e-3,
+      7.69901118419740425e-3,
+      -6.90460016972063023e-5,
+      9.54791938424326609e-4
+    ),
+    planet(
+      8.34336671824457987,
+      4.12479856412430479,
+      -4.03523417114321381e-1,
+      -2.76742510726862411e-3,
+      4.99852801234917238e-3,
+      2.30417297573763929e-5,
+      2.85885980666130812e-4
+    ),
+    planet(
+      1.28943695621391310e1,
+      -1.51111514016986312e1,
+      -2.23307578892655734e-1,
+      2.96460137564761618e-3,
+      2.37847173959480950e-3,
+      -2.96589568540237556e-5,
+      4.36624404335156298e-5
+    ),
+    planet(
+      1.53796971148509165e1,
+      -2.59193146099879641e1,
+      1.79258772950371181e-1,
+      2.68067772490389322e-3,
+      1.62824170038242295e-3,
+      -9.51592254519715870e-5,
+      5.15138902046611451e-5
+    )
+  ]
+  let mut px: f64 = 0.0
+  let mut py: f64 = 0.0
+  let mut pz: f64 = 0.0
+  for b in value_out {
+    px += b.vx * b.mass
+    py += b.vy * b.mass
+    pz += b.vz * b.mass
+  }
+  value_out[0] = Planet(
+    x: 0.0,
+    y: 0.0,
+    z: 0.0,
+    vx: -px / SOLAR,
+    vy: -py / SOLAR,
+    vz: -pz / SOLAR,
+    mass: SOLAR
+  )
+  take value_out
+}
+
+fn energy(bodies: List[Planet]) -> f64 {
+  let mut e: f64 = 0.0
+  for i in 0u64..5u64 {
+    let b = bodies[i]
+    e += 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy + b.vz * b.vz)
+    for j in i + 1..5u64 {
+      let other = bodies[j]
+      let dx = b.x - other.x
+      let dy = b.y - other.y
+      let dz = b.z - other.z
+      e -= b.mass * other.mass / f64.sqrt(dx * dx + dy * dy + dz * dz)
+    }
+  }
+  e
+}
+
+fn advance(mut bodies: List[Planet]) {
+  for _ in 0u64..1000u64 {
+    for i in 0u64..5u64 {
+      let mut b = bodies[i]
+      for j in i + 1..5u64 {
+        let mut other = bodies[j]
+        let dx = b.x - other.x
+        let dy = b.y - other.y
+        let dz = b.z - other.z
+        let distance = f64.sqrt(dx * dx + dy * dy + dz * dz)
+        let mag: f64 = 0.01 / (distance * distance * distance)
+        let bm = b.mass * mag
+        let om = other.mass * mag
+        b.vx -= dx * om
+        b.vy -= dy * om
+        b.vz -= dz * om
+        other.vx += dx * bm
+        other.vy += dy * bm
+        other.vz += dz * bm
+        bodies[j] = other
+      }
+      b.x += 0.01 * b.vx
+      b.y += 0.01 * b.vy
+      b.z += 0.01 * b.vz
+      bodies[i] = b
+    }
+  }
+}
+
+type State {
+  name: String,
+  n: u64,
+  w: u64,
+  h: u64,
+  value_out: u32,
+  pixels: List[u8],
+  u: List[f64],
+  v: List[f64],
+  planets: List[Planet],
+  initial_energy: f64,
+}
+
+fn step(mut s: State, iteration: u64) {
+  if s.name == "CLBG::Fannkuchredux" {
+    s.value_out = u32.wrapping_add(s.value_out, fannkuch(s.n))
+  } else if s.name == "CLBG::Mandelbrot" {
+    mandelbrot(mut s.pixels, s.w, s.h)
+  } else if s.name == "CLBG::Nbody" {
+    advance(mut s.planets)
+  } else {
+    s.v = ata(s.u)
+    s.u = ata(s.v)
+  }
+}
+
+fn checksum(s: State) -> u32 {
+  if s.name == "CLBG::Fannkuchredux" {
+    s.value_out
+  } else if s.name == "CLBG::Mandelbrot" {
+    harness.hash_list(s.pixels)
+  } else if s.name == "CLBG::Nbody" {
+    harness.hash_float(s.initial_energy) << 5u32 & harness.hash_float(energy(s.planets))
+  } else {
+    let mut vbv: f64 = 0.0
+    let mut vv: f64 = 0.0
+    for i in 0u64..list.len(s.v) {
+      vbv += s.u[i] * s.v[i]
+      vv += s.v[i] * s.v[i]
+    }
+    harness.hash_float(f64.sqrt(vbv / vv))
+  }
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let mut u: List[f64] = []
+  let mut v: List[f64] = []
+  for _ in 0u64..harness.number(config, "size") {
+    list.push(mut u, 1.0)
+    list.push(mut v, 1.0)
+  }
+  let planets = create_bodies()
+  let initial = energy(planets)
+  harness.measure(
+    rt,
+    config,
+    State(
+      name: unique name,
+      n: harness.number(config, "n"),
+      w: harness.number(config, "w"),
+      h: harness.number(config, "h"),
+      value_out: 0,
+      pixels: [],
+      u: take u,
+      v: take v,
+      planets: planets,
+      initial_energy: initial
+    ),
+    step,
+    checksum
+  )
+}

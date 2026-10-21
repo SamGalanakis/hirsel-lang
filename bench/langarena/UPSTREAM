@@ -1,0 +1,5 @@
+LangArena — https://github.com/kostya/LangArena
+Pinned revision: 3c9f84d (see compare.py UPSTREAM for the full revision).
+run.js, test.js and LICENSE are copied verbatim. The Hirsel algorithms are
+ports of rust/src/benchmarks/ at that revision, under the accompanying MIT
+license. File and line references are recorded in each group.
