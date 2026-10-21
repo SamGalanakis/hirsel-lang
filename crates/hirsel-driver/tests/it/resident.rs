@@ -184,3 +184,33 @@ fn switching_verification_on_checks_memory_and_disk_lowerings_without_evidence()
         assert_eq!(second.recompute_count(&path("main"), QueryKind::Lower), 1);
     });
 }
+
+#[test]
+fn manifest_session_preserves_the_cold_loader_syntax_error_boundary() {
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        let source = fixture.0.join("main.hir");
+        let manifest = fixture.0.join("hirsel.json");
+        std::fs::write(&source, "fn main() {}\n").unwrap();
+        std::fs::write(
+            &manifest,
+            serde_json::json!({
+                "schema": 1, "package": {"name":"application", "version":"1"},
+                "entry": {"module":[], "name":"main"},
+                "sources":[{"path":"main.hir", "module":[]}], "dependencies":[],
+                "unsafe_ffi":{"link":[], "headers_checked":false, "wrappers":[]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut session = session::Session::open(&manifest, Verify::On);
+        assert!(session.check().unwrap().diagnostics.is_empty());
+        std::fs::write(&source, "fn main(").unwrap();
+        assert_eq!(
+            session.check().unwrap_err().to_string(),
+            check_path(&manifest).unwrap_err().to_string()
+        );
+        std::fs::write(&source, "fn main() {}\n").unwrap();
+        assert!(session.check().unwrap().diagnostics.is_empty());
+    });
+}

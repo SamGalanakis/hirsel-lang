@@ -135,6 +135,14 @@ impl Session {
         if self.program.is_none() {
             self.load()?;
         }
+        // Manifest loading parses source packages before returning a program.
+        // Keep that same error boundary after an in-place edit; standalone
+        // sources instead report syntax diagnostics in CheckOutput.
+        let mut sidecar = self.entry.as_os_str().to_os_string();
+        sidecar.push(".json");
+        if self.entry.extension().is_some_and(|ext| ext == "json") || Path::new(&sidecar).exists() {
+            self.program.as_mut().unwrap().parse_sources()?;
+        }
         Ok(self.program.as_mut().unwrap())
     }
     fn load(&mut self) -> Result<(), ToolError> {

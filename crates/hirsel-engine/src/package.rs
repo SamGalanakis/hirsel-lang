@@ -404,6 +404,9 @@ impl LoadedProgram {
     /// longer lexes or parses fails the program the same way a fresh load does.
     pub fn parse_sources(&mut self) -> Result<(), ToolError> {
         for (file, context) in self.files.clone() {
+            if self.engine.imaged(&context.package) {
+                continue;
+            }
             self.engine
                 .parse_file(file, &context)
                 .map_err(|e| self.error(e))?;
