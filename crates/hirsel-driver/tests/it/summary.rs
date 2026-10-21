@@ -438,6 +438,7 @@ fn published_summary_survives_body_release_and_rejects_stale_seeds() {
         let (mut engine, output) = check(source);
         assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
         let main = hirsel_syntax::DefId::intern(&path("main"));
+        let early = engine.checked_definition_summary(main).unwrap();
         let analyzed = engine.mode_definition(main.path()).unwrap();
         let mode_summary = summarize(engine.types(), &analyzed.value.typed);
         let summary = engine
@@ -445,11 +446,21 @@ fn published_summary_survives_body_release_and_rejects_stale_seeds() {
             .unwrap();
         assert_eq!(summary.summary, mode_summary.0);
         assert_eq!(summary.growth, mode_summary.1);
+        let checked = summary.checked.as_ref().expect("pre-mode input retained");
+        assert_eq!((&checked.summary, &checked.growth), (&early.0, &early.1));
+        assert!(engine.memo_reads(main.path(), QueryKind::Check).is_none());
+        assert!(engine.memo_reads(main.path(), QueryKind::Modes).is_none());
         let checks = engine.recompute_count(main.path(), QueryKind::Check);
         assert!(Arc::ptr_eq(
             &summary,
             &engine.definition_summary(main).unwrap()
         ));
+        assert_eq!(
+            engine.recompute_count(main.path(), QueryKind::Check),
+            checks
+        );
+
+        assert_eq!(engine.checked_definition_summary(main).unwrap(), early);
         assert_eq!(
             engine.recompute_count(main.path(), QueryKind::Check),
             checks
@@ -468,6 +479,11 @@ fn published_summary_survives_body_release_and_rejects_stale_seeds() {
         let seeded = Arc::new(seeded);
         assert_eq!(seeded.summary, summary.summary);
         assert_eq!(seeded.growth, summary.growth);
+        let restored_early = seeded.checked.as_ref().unwrap();
+        assert_eq!(
+            (&restored_early.summary, &restored_early.growth),
+            (&early.0, &early.1)
+        );
         assert_eq!(seeded.reads, summary.reads);
         let computations = engine.memo_stats().recomputed.clone();
         assert!(engine.seed_definition_summary(seeded.clone()));
@@ -513,7 +529,7 @@ fn published_summaries_match_mode_refined_selection_inputs() {
             let (mut engine, output) = check(&source);
             assert!(output.diagnostics.is_empty(), "{source}\n{:?}", output.diagnostics);
             let checked = engine.definition_summaries().unwrap();
-            for (checked, _) in checked {
+            for (checked, growth) in checked {
                 let path = checked.owner.path();
                 let analyzed = engine.mode_definition(path).unwrap();
                 let mode = summarize(engine.types(), &analyzed.value.typed);
@@ -521,6 +537,12 @@ fn published_summaries_match_mode_refined_selection_inputs() {
                 // every frame, call, generic argument, site and growth edge.
                 let published = engine.definition_summary(checked.owner).unwrap();
                 assert_eq!((&published.summary, &published.growth), (&mode.0, &mode.1), "{path}\n{source}");
+                let retained=published.checked.as_ref().expect("retain original H input");
+                assert_eq!((&retained.summary,&retained.growth),(&checked,&growth));
+                engine.publish_definition(checked.owner,hirsel_engine::memo::Retention::Batch).unwrap();
+                let before=engine.recompute_count(path,QueryKind::Check);
+                assert_eq!(engine.checked_definition_summary(checked.owner).unwrap(),(checked.clone(),growth.clone()));
+                assert_eq!(engine.recompute_count(path,QueryKind::Check),before);
             }
         }
     });

@@ -9,8 +9,34 @@ impl QueryEngine {
         definition: DefId,
         retention: crate::memo::Retention,
     ) -> Result<std::sync::Arc<PublishedSummary>, QueryError> {
-        let summary = self.definition_summary(definition)?;
+        let mut summary = self.definition_summary(definition)?;
         if retention == crate::memo::Retention::Batch {
+            if summary.checked.is_none() {
+                let (checked, growth) = self.checked_definition_summary(definition)?;
+                let mut extended = (*summary).clone();
+                extended.checked = Some(CheckedSummary {
+                    summary: checked,
+                    growth,
+                });
+                let mut reads = ReadsBuilder::new();
+                reads.merge(&extended.reads);
+                if let Some(entry) = self.checked.get(&definition) {
+                    reads.merge(entry.reads());
+                }
+                extended.reads = Arc::new(reads.finish().map_err(|_| {
+                    QueryError::Operational(hirsel_types::OperationalFailure {
+                        operation: "definition publication".into(),
+                        message: "checked and final summary inputs disagree".into(),
+                    })
+                })?);
+                summary = Arc::new(extended);
+                let detail = self
+                    .summaries
+                    .get(&definition)
+                    .map(|entry| entry.detail.clone())
+                    .unwrap_or_default();
+                self.record_summary(summary.clone(), detail, true);
+            }
             for kind in [QueryKind::Check, QueryKind::Modes] {
                 self.forget(&crate::memo::MemoKey::new(kind, definition));
             }
@@ -47,9 +73,18 @@ impl QueryEngine {
         self.start(path, QueryKind::Summary)?;
         let (summary, growth) = summarize(self.types(), &analyzed.value.typed);
         let reads = completed.memo.reads.clone();
+        let checked = self
+            .checked
+            .get(&definition)
+            .and_then(|entry| entry.result().ok())
+            .map(|body| {
+                let (summary, growth) = summarize(self.types(), &body.value);
+                CheckedSummary { summary, growth }
+            });
         let published = std::sync::Arc::new(PublishedSummary {
             summary,
             growth,
+            checked,
             reads,
             text,
         });
@@ -117,7 +152,16 @@ impl QueryEngine {
         &mut self,
         definition: DefId,
     ) -> Result<(DefinitionSummary, ParameterGrowth), QueryError> {
-        let checked = self.check_query(definition.path())?;
+        let path = definition.path();
+        if let Some(entry) = self.summaries.get(&definition).cloned()
+            && let Ok(text) = self.key_text(path, QueryKind::Summary)
+            && self.memo_valid(path, &entry, text)
+            && let Ok(output) = entry.result()
+            && let Some(checked) = &output.value.checked
+        {
+            return Ok((checked.summary.clone(), checked.growth.clone()));
+        }
+        let checked = self.check_query(path)?;
         Ok(summarize(self.types(), &checked.value))
     }
 

@@ -105,6 +105,14 @@ pub struct ParameterGrowth {
     pub edges: Box<[GrowthEdge]>,
 }
 
+/// GEN-5's checked input, before modes add planned calls. Retained separately
+/// from the final summary so releasing bodies never changes that input.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CheckedSummary {
+    pub summary: DefinitionSummary,
+    pub growth: ParameterGrowth,
+}
+
 /// The compact published input of CT-5, staged selection and GEN-5. Its reads
 /// share the memo's allocation; retaining it never retains a checked body.
 /// Durable encodings use the same canonical type table as the other outputs.
@@ -112,6 +120,8 @@ pub struct ParameterGrowth {
 pub struct PublishedSummary {
     pub summary: DefinitionSummary,
     pub growth: ParameterGrowth,
+    #[serde(default)]
+    pub checked: Option<CheckedSummary>,
     pub reads: std::sync::Arc<crate::memo::Reads>,
     /// The owner's body and package-manifest key, as for a body memo.
     pub text: hirsel_syntax::ContentHash,

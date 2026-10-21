@@ -27,8 +27,8 @@ pub use diagnostics::*;
 pub use generic_graph::{InstanceEdge, InstanceGraph, InstanceKind};
 mod summary;
 pub use summary::{
-    CallClass, DefinitionSummary, Frame, FrameKind, GenericParameterRef, GrowthEdge,
-    ParameterGrowth, PublishedSummary, SummaryCall, growing_sites, summarize,
+    CallClass, CheckedSummary, DefinitionSummary, Frame, FrameKind, GenericParameterRef,
+    GrowthEdge, ParameterGrowth, PublishedSummary, SummaryCall, growing_sites, summarize,
 };
 mod semantic;
 mod snapshot;
