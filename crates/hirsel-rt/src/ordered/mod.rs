@@ -237,6 +237,12 @@ impl<P, R> Frontier<P, R> {
         self.queue.push_back(task);
     }
 
+    /// Retirement awaiting its readiness continuation; there is no head until
+    /// that continuation merges wakes and requeues the retiring task.
+    pub fn retiring_task(&self) -> Option<TaskId> {
+        self.polling.as_ref().map(|(task, _)| *task)
+    }
+
     pub fn head(&self) -> Option<TaskId> {
         self.head
     }

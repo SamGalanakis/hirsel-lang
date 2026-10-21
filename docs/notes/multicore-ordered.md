@@ -108,7 +108,14 @@ early send publishes and touches before the deferred poll is requested.
 physical saved-frame ownership. It suppresses duplicate notifications and
 requires both a physical save and head promotion for full logs or allocation
 pauses. Scheduler.logical has an Ordered variant whose idle callback updates
-this metadata under the generic saved-flag publication guard. A real eight-worker
+this metadata under the generic saved-flag publication guard. Lifecycle adapters
+can defer a retirement until its owner's physical save. The idle callback then
+preflights every woken runtime wait before performing any slot effect, polls in
+park order, merges wakes, and selects the next head. An unsupported service wait
+leaves the whole retirement pending for a future host continuation. Free and
+Ordered share the existing bounded runtime wait implementation; Free retains its
+callback and notification order. These lifecycle hooks remain uninstalled at
+native task boundaries. A real eight-worker
 control cycles the root through 256 saved-stack resumptions without duplicate
 notifications. Every E entry now has an ordered submission branch. A
 command owns its image, an unaccepted full-log command remains on its owner's

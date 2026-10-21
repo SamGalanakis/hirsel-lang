@@ -45,7 +45,7 @@ pub(super) unsafe fn dispatch_ready(ctx: *mut TaskCtx) {
 pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     // This experimental policy supports runtime waits only. Its home/driver
     // readiness bridge is not activated; no table borrow crosses a bridge.
-    unsafe { poll_ready(scheduler(ctx)) };
+    unsafe { super::readiness::poll_free(scheduler(ctx)) };
     unsafe { dispatch_ready(ctx) };
     let s = scheduler(ctx);
     let me = s.current;
@@ -141,83 +141,6 @@ pub(super) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
     unsafe { crate::pool::free::finish_current(ctx) }
 }
 
-fn saved(s: &Scheduler, task: u32) -> bool {
-    s.tasks[task as usize]
-        .as_ref()
-        .and_then(|row| row.dispatch.as_ref())
-        .is_none_or(|frame| frame.is_saved())
-}
-
-/// All effects here are bounded runtime work under IdleGuard. In particular,
-/// host readiness and pool allocation remain outside this callback.
-/// # Safety
-/// The role exclusively owns `s`; both sides of every slot copy are saved.
-unsafe fn poll(s: &mut Scheduler, task: u32) -> Option<bool> {
-    if !saved(s, task) {
-        return Some(false);
-    }
-    let wait = s.task(task).wait?;
-    Some(match wait {
-        Wait::Join { child, slot, size } => {
-            if !saved(s, child) {
-                return Some(false);
-            }
-            match s.task(child).state {
-                State::Holding => {
-                    let held = s.task(child).slot.take().expect("a held result");
-                    // SAFETY: both stacks were saved, with live Option images.
-                    unsafe { deliver(held, slot, size) };
-                    true
-                }
-                State::Done => true,
-                State::Ready | State::Parked => false,
-            }
-        }
-        Wait::Exit { scope } => {
-            let children = s.scope(scope).children.clone();
-            children.into_iter().all(|child| {
-                saved(s, child) && matches!(s.task(child).state, State::Holding | State::Done)
-            })
-        }
-        Wait::Receive { channel, slot } => {
-            let shield = s.task(task).shield();
-            // SAFETY: the destination belongs to a saved waiting frame.
-            if let Some(status) = unsafe { receive_ready(s, task, shield, channel, slot) } {
-                s.task(task).status = status;
-                true
-            } else {
-                false
-            }
-        }
-        Wait::Any { set, member: None } => s.first_completed(set).is_some(),
-        Wait::Any {
-            set,
-            member: Some(index),
-        } => s.member_completed(set, index),
-        // SAFETY: the waiting task owns its set; this reads task rows only.
-        Wait::Drain { set } => unsafe { poll_drained(s, set) },
-        Wait::Final => false,
-        Wait::Retry { cancelable } => {
-            let shield = s.task(task).shield();
-            let canceled = cancelable && s.canceled_task(task, shield).is_some();
-            std::mem::take(&mut s.task(task).retried) || canceled
-        }
-        Wait::Gate { gate } => {
-            let row = s.gate(gate);
-            if row.owner.is_none() {
-                row.owner = Some(task);
-                row.depth = 1;
-                row.version += 1;
-                true
-            } else {
-                false
-            }
-        }
-        Wait::Host { .. } | Wait::Pool => return None,
-    })
-}
-
-/// # Safety
 /// Called only by tasks::after_save under its context-independent idle guard.
 pub(super) unsafe fn after_save(
     s: &mut Scheduler,
@@ -261,40 +184,12 @@ pub(super) unsafe fn after_save(
             }
         }
     }
-    unsafe { poll_ready(s) };
+    unsafe { super::readiness::poll_free(s) };
     let ready = std::mem::take(&mut s.runnable);
     ready
         .into_iter()
         .map(|task| (task, s.task(task).owner))
         .collect()
-}
-
-/// # Safety
-/// The role owns the table and every stack access is gated on a saved image.
-unsafe fn poll_ready(s: &mut Scheduler) {
-    s.wake_receivers();
-    // Keep unsupported service waits pending. No host bridge, allocation of
-    // pool threads, or scheduler(ctx) reentry is permitted under IdleGuard.
-    let woken = std::mem::take(&mut s.woken);
-    for task in woken {
-        let Some(Some(row)) = s.tasks.get_mut(task as usize) else {
-            continue;
-        };
-        if row.wait.is_none() {
-            row.woken = false;
-            continue;
-        }
-        // SAFETY: after-save publication protects every inspected stack slot.
-        match unsafe { poll(s, task) } {
-            Some(ready) => {
-                s.task(task).woken = false;
-                if ready {
-                    s.unpark(task);
-                }
-            }
-            None => s.woken.push(task),
-        }
-    }
 }
 
 /// CONC-8 requires every logical task to be blocked and every physical image

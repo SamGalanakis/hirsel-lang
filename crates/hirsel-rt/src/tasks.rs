@@ -48,6 +48,7 @@ pub(crate) mod free;
 pub(crate) mod ordered;
 #[cfg(feature = "measurement")]
 pub(crate) mod profile;
+mod readiness;
 pub mod role;
 
 use std::collections::VecDeque;

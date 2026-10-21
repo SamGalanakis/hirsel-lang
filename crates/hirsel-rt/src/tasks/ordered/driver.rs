@@ -36,6 +36,8 @@ pub(crate) struct Driver {
     pub(super) waiting: BTreeMap<TaskId, u64>,
     pub(super) returned: BTreeMap<TaskId, super::Returned>,
     pub(super) host_poll: bool,
+    /// A park/holding/end boundary cannot poll slots before its physical save.
+    poll_after_save: Option<TaskId>,
     pub(super) carriers: BTreeMap<(crate::ordered::objects::Kind, u64), super::engine::Carrier>,
 }
 
@@ -52,6 +54,7 @@ impl Driver {
             waiting: BTreeMap::new(),
             returned: BTreeMap::new(),
             host_poll: false,
+            poll_after_save: None,
             carriers: BTreeMap::new(),
         }
     }
@@ -71,6 +74,9 @@ impl Driver {
     /// Selected frames are omitted from later scans until claimed and saved.
     /// During a deferred poll no new turn may be selected before wake merge.
     pub(crate) fn select(&mut self) -> Vec<TaskId> {
+        if self.poll_after_save.is_some() {
+            return Vec::new();
+        }
         let Some(frontier) = &self.frontier else {
             return Vec::new();
         };
@@ -121,6 +127,14 @@ impl Driver {
         }
     }
 
+    /// Defer exactly this retirement until its owner publishes a saved frame.
+    /// Native lifecycle adapters call this before suspending or finishing.
+    pub(crate) fn defer_poll_until_saved(&mut self, task: TaskId) {
+        assert!(!self.host_poll, "a home poll already owns this retirement");
+        assert_eq!(self.frontier.as_ref().unwrap().retiring_task(), Some(task));
+        assert!(self.poll_after_save.replace(task).is_none());
+    }
+
     /// Called under the role immediately before the owner switches to idle.
     /// A Full log or an allocation pause must wait for head, even if the last
     /// accepted D operation left its protocol state Ahead rather than Pending.
@@ -163,6 +177,29 @@ pub(crate) fn after_save(
         unreachable!()
     };
     driver.saved(id, completed);
+    let deferred = driver.poll_after_save;
+    if let Some(retiring) = deferred {
+        let task = retiring as u32;
+        assert_eq!(s.task(task).generation, (retiring >> 32) as u32);
+        if super::super::readiness::saved(s, task)
+            // SAFETY: generic after_save owns IdleGuard and published saved.
+            && unsafe { super::super::readiness::poll_ordered(s) }
+        {
+            let ready = std::mem::take(&mut s.runnable)
+                .into_iter()
+                .map(|task| super::super::handle(task, s.task(task).generation))
+                .collect();
+            let super::super::Logical::Ordered(driver) = &mut s.logical else {
+                unreachable!()
+            };
+            assert_eq!(driver.frontier.as_ref().unwrap().retiring_task(), deferred);
+            driver.frontier.as_mut().unwrap().complete_poll(ready);
+            driver.poll_after_save = None;
+        }
+    }
+    let super::super::Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
     let selected = driver.select();
     selected
         .into_iter()
@@ -185,13 +222,13 @@ mod tests {
     use crate::ordered::{Backend, Next, Operation, Receipt};
     use hirsel_rt_operations::descriptors::op_descriptor;
 
-    struct BackendStub;
+    struct BackendStub(Next);
     impl Backend<Command> for BackendStub {
         type Result = Outcome;
         fn commit(&mut self, _: TaskId, _: &Operation<Command>, _: bool) -> Receipt<Outcome> {
             Receipt {
                 result: Outcome::image(0, Vec::new()),
-                next: Next::Yield,
+                next: self.0.clone(),
                 credit: 0,
             }
         }
@@ -239,7 +276,7 @@ mod tests {
                     memory: false
                 }),
                 op,
-                &mut BackendStub
+                &mut BackendStub(Next::Yield)
             ),
             Ok(crate::ordered::Progress::Poll)
         );
@@ -301,6 +338,75 @@ mod tests {
                     driver.finishing(id);
                     super::super::super::role::release(ctx);
                 }
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+    }
+
+    #[test]
+    fn a_retirement_poll_waits_for_the_real_idle_save_before_waking_its_owner() {
+        let mut run = crate::host::BodyRun::new(8, false);
+        // SAFETY: the fixture uses runtime Retry waits and explicit physical
+        // saves only. The backend models a park; it performs no native op.
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe {
+                super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
+            },
+            |ctx| unsafe {
+                use super::super::super::{State as NativeState, Wait, role, scheduler};
+                role::enter(ctx);
+                let id = {
+                    let s = scheduler(ctx);
+                    super::super::super::handle(s.current, s.task(s.current).generation)
+                };
+                for turn in 0..256 {
+                    let s = scheduler(ctx);
+                    let super::super::super::Logical::Ordered(driver) = &mut s.logical else {
+                        unreachable!()
+                    };
+                    driver.enter(id, 0);
+                    let op =
+                        Command::AtomicLoad { word: 0, bytes: 8 }.operation(Default::default());
+                    assert_eq!(
+                        driver.frontier.as_mut().unwrap().apply_head(
+                            Stretch::new(Budgets {
+                                fuel: false,
+                                memory: false
+                            }),
+                            op,
+                            &mut BackendStub(Next::Park),
+                        ),
+                        Ok(crate::ordered::Progress::Poll)
+                    );
+                    driver.defer_poll_until_saved(id);
+                    driver.suspending(id, false);
+                    assert!(driver.select().is_empty());
+                    let me = s.current;
+                    s.task(me).retried = true;
+                    s.park(Wait::Retry { cancelable: false });
+                    assert!(!super::super::super::readiness::poll_ordered(s));
+                    assert!(s.task(me).retried, "preflight must not consume the retry");
+                    crate::pool::free::suspend_current(ctx, false);
+                    let s = scheduler(ctx);
+                    assert_eq!(s.task(me).state, NativeState::Ready);
+                    assert!(s.task(me).wait.is_none());
+                    let super::super::super::Logical::Ordered(driver) = &mut s.logical else {
+                        unreachable!()
+                    };
+                    assert_eq!(driver.frontier.as_ref().unwrap().retired(), turn + 1);
+                    assert_eq!(driver.frontier.as_ref().unwrap().head(), Some(id));
+                    assert_eq!(driver.poll_after_save, None);
+                }
+                let s = scheduler(ctx);
+                let super::super::super::Logical::Ordered(driver) = &mut s.logical else {
+                    unreachable!()
+                };
+                driver.enter(id, 0);
+                driver.finishing(id);
+                role::release(ctx);
                 crate::STATUS_OK
             },
         );
