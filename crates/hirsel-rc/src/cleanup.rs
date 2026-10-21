@@ -2378,7 +2378,9 @@ impl Lowering<'_, '_> {
     ) -> Result<(), PassError> {
         let n = steps
             .iter()
-            .position(|s| !matches!(s, ProjectionStep::Field(_)))
+            // Every enclosing checked projection must already hold. A sibling
+            // sharing just Ok's tag may precede the nested Some tag test.
+            .rposition(|s| !matches!(s, ProjectionStep::Field(_)))
             .expect("an in-place path has a checked step");
         let selected = steps[n];
         let unit = &self.ed.unit;

@@ -12,12 +12,9 @@ fn serve(tasks: Tasks, n: Net, clock: MonotonicClock, take stream: Stream of n) 
   config.read_timeout = Some(duration.from_parts(30, 0))
   let mut connection = http.server_connection(tasks, n, take stream, config)
   while true {
-    // GAP: `Ok(Some((owned, _)))` fails MEM-13 natively when next_stream
-    // returns Ok(None()) or an error; bind the pair whole instead.
-    let Ok(Some(exchange)) = http.next_stream(mut connection, Some(clock)) else {
+    let Ok(Some((owned, _))) = http.next_stream(mut connection, Some(clock)) else {
       return ()
     }
-    let (owned, _) = take exchange
     let mut responding = take owned
     if http.respond(mut responding, 200u16, [], BODY, false) != Ok(()) {
       return ()

@@ -1,0 +1,64 @@
+// rule: MEM-13
+// expect: run
+// stdout: 9 9 1 9 9 1
+// A tuple wildcard inside nested variants observes payloads only after their tags match.
+pub type Small = A | B(u8)
+
+fn pick(n: u8) -> Result[Option[(String, String)], Small] {
+  if n == 0 {
+    Error(A())
+  } else if n == 1 {
+    Ok(None())
+  } else {
+    Ok(Some(("a", "b")))
+  }
+}
+
+fn binding(n: u8) -> u8 {
+  let Ok(Some((x, _))) = pick(n) else {
+    return 9u8
+  }
+  if x == "a" {
+    1u8
+  } else {
+    0u8
+  }
+}
+
+fn arm(n: u8) -> u8 {
+  match pick(n) {
+    Ok(Some((x, _))) => if x == "a" {
+      1u8
+    } else {
+      0u8
+    },
+    _ => 9u8,
+  }
+}
+
+fn digit(n: u8) -> String {
+  if n == 9 {
+    "9"
+  } else if n == 1 {
+    "1"
+  } else {
+    "bad"
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let _ = out.print(stdout, digit(binding(0)))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(binding(1)))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(binding(2)))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(arm(0)))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(arm(1)))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(arm(2)))
+  let _ = out.print(stdout, "\n")
+  Ok(())
+}

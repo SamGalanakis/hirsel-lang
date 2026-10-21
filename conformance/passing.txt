@@ -2288,6 +2288,7 @@ conformance/MEM/MEM-12-variable-field-update-bad.hir
 conformance/MEM/MEM-12-variable-field-update-ok.hir
 conformance/MEM/MEM-13-construction.hir
 conformance/MEM/MEM-13-contradicted-arms-run.hir
+conformance/MEM/MEM-13-let-else-tuple-wildcard-run.hir
 conformance/MEM/MEM-13-nested-final-pattern-ok.hir
 conformance/MEM/MEM-13-nested-nullary-canceled-run.hir
 conformance/MEM/MEM-13-nested-nullary-closed-run.hir
