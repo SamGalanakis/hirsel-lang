@@ -33,16 +33,17 @@ pub struct PublishedDefinition {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-struct Task {
-    index: usize,
-    definition: DefPath,
-    syntax: Arc<ItemSyntax>,
-    signature: Result<Arc<QueryOutput<SignatureRef>>, QueryError>,
-    resolution: Option<Arc<Entry<Resolution>>>,
-    checked: Option<Arc<Entry<TypedBody>>>,
-    text: ContentHash,
+pub(crate) struct Task {
+    pub(crate) index: usize,
+    pub(crate) definition: DefPath,
+    pub(crate) syntax: Arc<ItemSyntax>,
+    pub(crate) signature: Result<Arc<QueryOutput<SignatureRef>>, QueryError>,
+    pub(crate) signature_reads: Arc<Reads>,
+    pub(crate) resolution: Option<Arc<Entry<Resolution>>>,
+    pub(crate) checked: Option<Arc<Entry<TypedBody>>>,
+    pub(crate) text: ContentHash,
 }
-struct Stage<T> {
+pub(crate) struct Stage<T> {
     result: Result<Arc<QueryOutput<T>>, QueryError>,
     detail: DependencyReads,
     observed: Observed,
@@ -59,7 +60,7 @@ impl<T> Stage<T> {
         self.result = result.map(Arc::new);
     }
 }
-enum Product<T> {
+pub(crate) enum Product<T> {
     Hit(Arc<Entry<T>>),
     Computed(Stage<T>),
 }
@@ -77,33 +78,111 @@ impl<T> Product<T> {
         }
     }
 }
-struct Completed {
-    index: usize,
-    definition: DefPath,
-    text: ContentHash,
-    resolution: Option<Product<Resolution>>,
-    checked: Option<Product<TypedBody>>,
-    modes: Option<Product<AnalyzedBody>>,
-    result: Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
-    phase: QueryKind,
+pub(crate) struct Completed {
+    pub(crate) index: usize,
+    pub(crate) definition: DefPath,
+    pub(crate) text: ContentHash,
+    pub(crate) resolution: Option<Product<Resolution>>,
+    pub(crate) checked: Option<Product<TypedBody>>,
+    pub(crate) modes: Option<Product<AnalyzedBody>>,
+    pub(crate) result: Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
+    pub(crate) phase: QueryKind,
+    signature_reads: Arc<Reads>,
+}
+
+impl Completed {
+    /// The task's completed receipt without mutating an engine. Inherited
+    /// phase/cache reads join in the same order as merge_stage publication.
+    /// The caller supplies the exact frozen environment and source inputs.
+    pub(crate) fn complete_reads(
+        &self,
+        source: &mut impl memos::ReadSource,
+    ) -> Result<Reads, crate::memo::Inconsistent> {
+        fn append<T>(
+            owner: &DefPath,
+            product: &Product<T>,
+            inherited: &Reads,
+            source: &mut impl memos::ReadSource,
+        ) -> Result<Reads, crate::memo::Inconsistent> {
+            match product {
+                Product::Hit(entry) => Ok(entry.reads().clone()),
+                Product::Computed(stage) => {
+                    let mut merged = stage.observed.merged.clone();
+                    merged.merge(inherited);
+                    let observed = Observed {
+                        products: stage.observed.products.clone(),
+                        representations: stage.observed.representations.clone(),
+                        merged,
+                    };
+                    memos::complete_reads(owner, &stage.detail, &observed, source)
+                }
+            }
+        }
+        let mut reads = Reads::empty();
+        if let Some(product) = &self.resolution {
+            reads = append(&self.definition, product, &reads, source)?;
+        }
+        if let Some(product) = &self.checked {
+            reads = append(&self.definition, product, &reads, source)?;
+        }
+        if let Some(product) = &self.modes {
+            reads = append(&self.definition, product, &reads, source)?;
+        }
+        if self.phase == QueryKind::Signature {
+            reads = reads.union(&self.signature_reads)?;
+        }
+        Ok(reads)
+    }
+}
+
+/// Read finishing over the same immutable context as a body task. Environment
+/// is explicit: a manifest digest alone omits compile-time limits and compiler
+/// identity. Candidate identity is supplied for the demanded owner, including
+/// source-generated definitions that are absent from the declaration index.
+pub(crate) struct FrozenReadSource<'a> {
+    pub(crate) declarations: &'a Declarations,
+    pub(crate) citations: &'a dyn CitationSource,
+    pub(crate) candidates: Option<ContentHash>,
+    pub(crate) environment: ContentHash,
+}
+impl memos::ReadSource for FrozenReadSource<'_> {
+    fn namespace(
+        &mut self,
+        context: &FileContext,
+        result: &Result<DefPath, hirsel_types::LookupError>,
+    ) -> Option<hirsel_resolve::Namespace> {
+        self.declarations
+            .index(context.package.clone())
+            .entry(result.as_ref().ok()?)
+            .map(|entry| entry.namespace)
+    }
+    fn cited(&self, path: &DefPath) -> ContentHash {
+        self.citations.cited_text(DefId::intern(path))
+    }
+    fn candidates(&self, _: &DefPath) -> Option<ContentHash> {
+        self.candidates
+    }
+    fn environment(&self) -> ContentHash {
+        self.environment
+    }
 }
 
 /// Only immutable phase handles and inputs cross the worker boundary. In
 /// particular this has neither QueryEngine nor an interpreter behind a lock.
-struct Worker<'a> {
-    types: &'a hirsel_types::TypeInterner,
-    memo: &'a hirsel_types::TypeMemo,
-    snapshot: &'a SignatureSnapshot,
-    declarations: &'a Declarations,
-    citations: &'a dyn CitationSource,
-    sources: &'a SourceMap,
-    items: &'a BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
-    resolver: Option<&'a dyn ResolverPhase>,
-    checker: Option<&'a dyn CheckerPhase>,
-    modes: Option<&'a dyn ModesPhase>,
+pub(crate) struct Worker<'a> {
+    pub(crate) types: &'a hirsel_types::TypeInterner,
+    pub(crate) memo: &'a hirsel_types::TypeMemo,
+    pub(crate) snapshot: &'a SignatureSnapshot,
+    pub(crate) declarations: &'a Declarations,
+    pub(crate) citations: &'a dyn CitationSource,
+    pub(crate) sources: &'a SourceMap,
+    pub(crate) items: &'a BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+    pub(crate) resolver: Option<&'a dyn ResolverPhase>,
+    pub(crate) checker: Option<&'a dyn CheckerPhase>,
+    pub(crate) modes: Option<&'a dyn ModesPhase>,
 }
 impl Worker<'_> {
-    fn run(&self, task: Task) -> Completed {
+    pub(crate) fn run(&self, task: Task) -> Completed {
         let mut done = Completed {
             index: task.index,
             definition: task.definition.clone(),
@@ -113,6 +192,7 @@ impl Worker<'_> {
             modes: None,
             result: Err(QueryError::NotImplemented),
             phase: QueryKind::Resolve,
+            signature_reads: task.signature_reads.clone(),
         };
         let owner = DefId::intern(&task.definition);
         // A checked memo already includes the complete resolution reads. A
@@ -628,6 +708,7 @@ impl QueryEngine {
                 definition,
                 syntax,
                 signature: Err(QueryError::NotImplemented),
+                signature_reads: Arc::new(Reads::empty()),
                 resolution,
                 checked,
                 text,
@@ -652,6 +733,9 @@ impl QueryEngine {
         let declarations = self.frozen_declarations();
         (self.last_phase, self.unavailable) = saved_phase;
         for task in &mut tasks {
+            task.signature_reads = self
+                .shared_memo_reads(&task.definition, QueryKind::Signature)
+                .unwrap_or_else(|| Arc::new(Reads::empty()));
             let id = DefId::intern(&task.definition);
             task.signature = match snapshot.signature(id) {
                 Some(Ok(signature)) => self
@@ -800,5 +884,195 @@ impl QueryEngine {
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod frozen_task_tests {
+    use super::*;
+
+    struct RejectAfterReads;
+    impl CheckerPhase for RejectAfterReads {
+        fn check(
+            &self,
+            _: &hirsel_types::TypeInterner,
+            _: &hirsel_types::TypeMemo,
+            syntax: Arc<ItemSyntax>,
+            _: Resolution,
+            _: &Signature,
+            provider: &mut dyn SignatureProvider,
+        ) -> Result<QueryOutput<TypedBody>, QueryError> {
+            provider.signature(DefId::intern(&DefPath::core("String")))?;
+            let _ = provider.signature(DefId::intern(&DefPath::core("missing-task-input")));
+            let _ = provider.cite_name(&syntax.item.definition);
+            let _ = provider.lookup(
+                &default_context(),
+                &hirsel_syntax::Path {
+                    package: None,
+                    segments: vec![Symbol::intern("missing-task-lookup")],
+                },
+            );
+            Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                const { hirsel_diag::RuleId::of("LANG-1") },
+                syntax.item.name_span,
+                "fixture rejection after reads",
+            )]))
+        }
+    }
+    fn fixture() -> (QueryEngine, DefPath) {
+        let mut adapters = crate::phases::engine_only_adapters();
+        adapters.checker = Some(Arc::new(RejectAfterReads));
+        let mut engine = QueryEngine::new(default_environment(), adapters);
+        let file = engine
+            .sources
+            .add("task.hir", "fn a()->(){()}\n".into())
+            .unwrap();
+        let parsed = engine.parse_file(file, &default_context()).unwrap();
+        let path = parsed.value.items[0].item.definition.clone();
+        let id = DefId::intern(&path);
+        let ty = engine.types.intern(hirsel_types::Type::unit());
+        let signature = Arc::new(Signature {
+            definition: id,
+            kind: hirsel_types::SignatureKind::Function(hirsel_types::FunctionType {
+                state_promises: Default::default(),
+                generics: Default::default(),
+                parameters: Default::default(),
+                result: ty,
+                error: None,
+                allocation: hirsel_types::Allocation::MayAllocate,
+                authority: hirsel_types::AuthoritySummary::Known(Default::default()),
+                uses: hirsel_types::Uses::Unrestricted,
+                contracts: Default::default(),
+                incomplete: false,
+                foreign: None,
+            }),
+            metadata: Default::default(),
+            fingerprint: ContentHash::of_bytes(b"task header"),
+        });
+        let text = engine.key_text(&path, QueryKind::Signature).unwrap();
+        let entry = engine.finish(
+            MemoKey::new(QueryKind::Signature, id),
+            text,
+            DependencyReads::default(),
+            Ok(output(signature)),
+            Observed::default(),
+        );
+        engine.signatures.insert(id, Arc::new(entry));
+        (engine, path)
+    }
+    #[test]
+    fn frozen_task_receipts_equal_scalar_failure_with_cold_and_partial_hits() {
+        crate::with_compiler_stack(|| {
+            for partial in [false, true] {
+                let (mut engine, path) = fixture();
+                if partial {
+                    engine.resolve_query(&path).unwrap();
+                }
+                let id = DefId::intern(&path);
+                let snapshot = engine.signature_inputs();
+                let declarations = engine.frozen_declarations();
+                let environment = engine.environment_value();
+                let candidates = engine.candidates_value(&path);
+                let citations = engine.citation_source();
+                let worker = Worker {
+                    types: &engine.types,
+                    memo: &engine.memo,
+                    snapshot: &snapshot,
+                    declarations: &declarations,
+                    citations: &citations,
+                    sources: &engine.sources,
+                    items: &engine.items,
+                    resolver: engine.adapters.resolver.as_deref(),
+                    checker: engine.adapters.checker.as_deref(),
+                    modes: None,
+                };
+                let done = worker.run(Task {
+                    index: 0,
+                    definition: path.clone(),
+                    syntax: engine.items[&path][0].clone(),
+                    signature: engine.signatures[&id].result(),
+                    signature_reads: engine.signatures[&id].memo.reads.clone(),
+                    resolution: partial.then(|| engine.resolutions[&id].clone()),
+                    checked: None,
+                    text: ContentHash::default(),
+                });
+                assert_eq!(done.phase, QueryKind::Check);
+                assert!(matches!(done.result, Err(QueryError::Diagnostics(_))));
+                let actual = done
+                    .complete_reads(&mut FrozenReadSource {
+                        declarations: &declarations,
+                        citations: &citations,
+                        candidates: Some(candidates),
+                        environment,
+                    })
+                    .unwrap();
+                drop(citations);
+                assert!(matches!(
+                    engine.check_query(&path),
+                    Err(QueryError::Diagnostics(_))
+                ));
+                let expected = engine.checked[&id].reads();
+                assert_eq!(&actual, expected, "partial={partial}");
+                assert!(
+                    actual
+                        .get(&ReadKey::FailedSignature(DefId::intern(&DefPath::core(
+                            "missing-task-input"
+                        ))))
+                        .is_some()
+                );
+                assert_eq!(actual.get(&ReadKey::Environment), Some(environment));
+                assert_eq!(
+                    actual.get(&ReadKey::DeclarationCandidates(id)),
+                    Some(candidates)
+                );
+                assert!(actual.get(&ReadKey::CitedText(id)).is_some());
+            }
+        });
+    }
+    #[test]
+    fn frozen_task_header_stop_inherits_the_already_observed_header_receipt() {
+        crate::with_compiler_stack(|| {
+            let (mut engine, path) = fixture();
+            let snapshot = engine.signature_inputs();
+            let declarations = engine.frozen_declarations();
+            let environment = engine.environment_value();
+            let candidates = engine.candidates_value(&path);
+            let citations = engine.citation_source();
+            let worker = Worker {
+                types: &engine.types,
+                memo: &engine.memo,
+                snapshot: &snapshot,
+                declarations: &declarations,
+                citations: &citations,
+                sources: &engine.sources,
+                items: &engine.items,
+                resolver: engine.adapters.resolver.as_deref(),
+                checker: None,
+                modes: None,
+            };
+            let key = ReadKey::ExecutedBody(DefId::intern(&DefPath::core("header-read")));
+            let receipt = ContentHash::of_bytes(b"frozen header dependency");
+            let done = worker.run(Task {
+                index: 0,
+                definition: path.clone(),
+                syntax: engine.items[&path][0].clone(),
+                signature: Err(QueryError::NotImplemented),
+                signature_reads: Arc::new(Reads::from_vec(vec![(key, receipt)]).unwrap()),
+                resolution: None,
+                checked: None,
+                text: ContentHash::default(),
+            });
+            assert_eq!(done.phase, QueryKind::Signature);
+            let reads = done
+                .complete_reads(&mut FrozenReadSource {
+                    declarations: &declarations,
+                    citations: &citations,
+                    candidates: Some(candidates),
+                    environment,
+                })
+                .unwrap();
+            assert_eq!(reads.get(&key), Some(receipt));
+            assert_eq!(reads.get(&ReadKey::Environment), Some(environment));
+        });
     }
 }
