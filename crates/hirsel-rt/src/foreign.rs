@@ -163,6 +163,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_enter(
             REENTERED
         };
     }
+    if crate::tasks::ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, crate::tasks::ordered::foreign::enter(ctx)) };
+    }
     if !nested && threads != FOREIGN_THREADS_HOME && dispatch & FOREIGN_BLOCKING != 0 {
         // SAFETY: as above; this returns on the pool thread.
         let slot = unsafe { crate::tasks::to_pool(&mut *ctx, site) };

@@ -1384,6 +1384,9 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
 /// `ctx` is the running task's, on the home thread, outside any foreign interval; it holds
 /// nothing a stop must drop.
 pub(crate) unsafe fn to_pool(ctx: &mut TaskCtx, site: u64) -> u16 {
+    if ordered::engine::on(ctx) {
+        return unsafe { crate::stop::check(ctx, ordered::foreign::to_pool(ctx, site)) };
+    }
     let slot = loop {
         if let Some(slot) = crate::pool::claim(ctx) {
             break slot;
@@ -1439,6 +1442,9 @@ pub(crate) unsafe fn from_pool(ctx: &mut TaskCtx, slot: u16) {
 /// # Safety
 /// `ctx` is the running task's and holds nothing a stop must drop.
 pub(crate) unsafe fn gate_enter(ctx: &mut TaskCtx, gate: u32, site: u64) -> bool {
+    if ordered::engine::on(ctx) {
+        return unsafe { crate::stop::check(ctx, ordered::foreign::gate_enter(ctx, gate, site)) };
+    }
     let s = scheduler(ctx);
     let me = s.current;
     let row = s.gate(gate);
@@ -1496,6 +1502,10 @@ pub(crate) unsafe fn gate_enter(ctx: &mut TaskCtx, gate: u32, site: u64) -> bool
 /// The running task leaves `serial` gate `gate`: an outermost leave frees it and polls the
 /// tasks waiting for it; a nested one only lowers its depth.
 pub(crate) fn gate_leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) {
+    if ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, ordered::foreign::gate_leave(ctx, gate, outermost)) };
+        return;
+    }
     let object = if outermost && crate::free::enter(ctx, Phase::Done) {
         let object = crate::free::gate(ctx, gate);
         crate::free::touch(ctx, object, "gate leave");
