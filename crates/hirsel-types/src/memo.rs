@@ -17,6 +17,13 @@ use std::sync::{PoisonError, RwLock};
 
 const SHARDS: usize = 16;
 
+#[cfg(test)]
+thread_local! { static PROOF_WALK_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) fn proof_walk_rows() -> usize {
+    PROOF_WALK_ROWS.with(std::cell::Cell::get)
+}
+
 /// A sharded concurrent map: the structural memo is read by every worker.
 struct Shards<K, V> {
     shards: [RwLock<HashMap<K, V, IdHasher>>; SHARDS],
@@ -401,6 +408,55 @@ impl<'q> ContextMemo<'q> {
             self.replay(&entry.reads);
             return entry.value;
         }
+        // Borrowed from rustc15c1044 type_ir/fast_reject.rs:94-104,130-145:
+        // settle local leaf kinds before allocating recursive-walk state.
+        // Hirsel delegates to its exact proof_step, retaining all flags and
+        // lexical bounds; this is a full judgment, not an approximate reject.
+        if self.t.get(ty).is_some_and(|row| {
+            matches!(
+                row.kind,
+                TypeKind::Primitive(_)
+                    | TypeKind::Parameter(_)
+                    | TypeKind::Function(_)
+                    | TypeKind::Error
+            )
+        }) {
+            let (t, generics) = (self.t, self.generics);
+            let mut walked = Walked::default();
+            let (step, _) = crate::properties::proof_step(
+                t,
+                ty,
+                ty,
+                false,
+                &mut false,
+                bound,
+                generics,
+                flags,
+                &mut walked.deps,
+                self,
+            )?;
+            match step {
+                crate::properties::ProofStep::Fail => walked.failed = true,
+                crate::properties::ProofStep::Parts(parts) => {
+                    assert!(parts.is_empty(), "a leaf has no proof children")
+                }
+                crate::properties::ProofStep::Expand { .. } => {
+                    unreachable!("a leaf cannot expand a declaration")
+                }
+            }
+            let value = walked.verdict();
+            self.proofs.insert(
+                key,
+                ProofEntry {
+                    value: Ok(value.clone()),
+                    reads: Box::default(),
+                    heights: Box::default(),
+                    nonglobal: sensitive,
+                    interior: !sensitive,
+                },
+            );
+            return Ok(value);
+        }
         let start = self.log.len();
         let value = self.walk(ty, bound, flags, sensitive);
         if let Err(error) = &value {
@@ -470,6 +526,8 @@ impl<'q> ContextMemo<'q> {
         if let Some(visit) = w.seen.get(&(id, inherited_unique)) {
             return Ok(Some(w.settled(*visit)));
         }
+        #[cfg(test)]
+        PROOF_WALK_ROWS.with(|rows| rows.set(rows.get() + 1));
         let key = ProofKey {
             ty: id,
             bound,

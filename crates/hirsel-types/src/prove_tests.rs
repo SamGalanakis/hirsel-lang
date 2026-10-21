@@ -380,3 +380,76 @@ fn representation_proof_keys_share_occurrences_without_losing_copy_or_crossing_m
         }
     }
 }
+
+#[test]
+fn leaf_proofs_use_local_rules_without_allocating_walk_frames() {
+    let t = TypeInterner::new(None);
+    let declarations = GenericDeclarations::signature(&[GenericParameter::Type {
+        name: "T".into(),
+        bounds: vec![].into(),
+    }]);
+    let byte = t.intern(row(TypeKind::Primitive(Primitive::U8)));
+    let function = t.intern(row(TypeKind::Function(FunctionType {
+        state_promises: Default::default(),
+        generics: vec![].into(),
+        parameters: vec![].into(),
+        result: byte,
+        error: None,
+        allocation: Allocation::MayAllocate,
+        authority: AuthoritySummary::Unknown,
+        uses: Uses::Unrestricted,
+        contracts: vec![].into(),
+        incomplete: false,
+        foreign: None,
+    })));
+    let mut roots = vec![
+        byte,
+        function,
+        parameter(&t),
+        t.intern(row(TypeKind::Error)),
+    ];
+    for primitive in [Primitive::String, Primitive::Bytes] {
+        for unique in [false, true] {
+            let mut row = row(TypeKind::Primitive(primitive));
+            row.modes.uniqueness = if unique {
+                Uniqueness::Unique
+            } else {
+                Uniqueness::Aliased
+            };
+            row.modes.multiplicity = Multiplicity::Once;
+            row.modes.relation = Relation::place(Origin {
+                root: OriginRoot::Local(LexicalOwner::first(&path("leaf")), LocalId(0)),
+                fields: vec![].into(),
+            });
+            roots.push(t.intern(row));
+        }
+    }
+    let before = crate::memo::proof_walk_rows();
+    let mut lookup = |_| panic!("a leaf proof makes no signature lookup");
+    let mut memo = ContextMemo::new(&t, &declarations, &mut lookup);
+    for root in roots {
+        for bound in [Bound::Plain, Bound::Copyable, Bound::Sendable, Bound::Flat] {
+            for flags in every_flag() {
+                let expected = prove(
+                    &t,
+                    root,
+                    bound,
+                    &declarations,
+                    flags.check_root_locality,
+                    flags.use_evidence,
+                    flags.shared_storage,
+                    flags.handles,
+                    &mut |_| panic!("a leaf has no declaration"),
+                );
+                assert_eq!(memo.prove(root, bound, flags), expected);
+                assert_eq!(memo.prove(root, bound, flags), expected);
+            }
+        }
+    }
+    assert_eq!(
+        crate::memo::proof_walk_rows(),
+        before,
+        "local leaf judgments do not need a graph walk frame"
+    );
+    assert!(memo.hits() > 0, "leaf answers retain memo hits");
+}
