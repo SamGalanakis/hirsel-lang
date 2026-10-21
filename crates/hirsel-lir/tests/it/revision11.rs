@@ -130,6 +130,11 @@ fn capture_take(mutation: Mutation) -> Vec<K> {
             },
         );
     }
+    // These are explicit releases in the closure body, rather than releases
+    // moved out of a source scope's cleanup chain.
+    for anchor in &mut t.builder.unit.tables.cleanup_anchors {
+        anchor.cleanup = INSTRUCTION_DROP;
+    }
     t.builder.ret(ENTRY, None);
     t.check()
 }

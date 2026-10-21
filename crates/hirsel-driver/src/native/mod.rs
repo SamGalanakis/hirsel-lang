@@ -85,3 +85,8 @@ pub fn profile_sources(input: &hirsel_engine::NativeInput) -> ProfileSources {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod validation_tests;
+#[cfg(test)]
+mod smoke_validation_tests;
