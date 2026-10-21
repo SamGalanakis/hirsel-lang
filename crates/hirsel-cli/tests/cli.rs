@@ -30,6 +30,8 @@ mod placement;
 mod ready_together;
 #[path = "cli/replay.rs"]
 mod replay;
+#[path = "cli/resident.rs"]
+mod resident;
 #[path = "cli/runners.rs"]
 mod runners;
 #[path = "cli/select_race.rs"]

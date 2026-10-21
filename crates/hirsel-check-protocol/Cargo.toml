@@ -15,3 +15,4 @@ hirsel-span = { path = "../hirsel-span" }
 hirsel-intern = { path = "../hirsel-intern" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-types = { path = "../hirsel-types" }
+serde = { version = "1", features = ["derive"] }

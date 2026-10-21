@@ -71,7 +71,10 @@ pub fn check_safe_path(
         let output = program
             .check(hirsel_engine::LoweringPolicy::Comptime)
             .map_err(|error| program.error(error))?;
-        if output.diagnostics.iter().any(|d| d.severity == hirsel_diag::Severity::Error)
+        if output
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == hirsel_diag::Severity::Error)
             || output.completion != hirsel_engine::CheckCompletion::Complete
         {
             return Ok((output, None));

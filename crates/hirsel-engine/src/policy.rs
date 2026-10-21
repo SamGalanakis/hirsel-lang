@@ -42,3 +42,12 @@ pub fn free_sessions(free: bool) {
 pub(crate) fn frees_sessions() -> bool {
     FREE_SESSIONS.load(Ordering::Relaxed) || hirsel_intern::memory::metered()
 }
+
+static PERSISTENT_RESULTS: AtomicBool = AtomicBool::new(false);
+/// Enable the CLI's disk result store for compiler-created sessions.
+pub fn persistent_results(enabled: bool) {
+    PERSISTENT_RESULTS.store(enabled, Ordering::Relaxed);
+}
+pub(crate) fn uses_persistent_results() -> bool {
+    PERSISTENT_RESULTS.load(Ordering::Relaxed)
+}

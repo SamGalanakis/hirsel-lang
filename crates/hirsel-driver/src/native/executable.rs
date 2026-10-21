@@ -167,8 +167,13 @@ pub fn build_path_native_backend_with_validation(
                 false,
                 sources.as_ref(),
             )?;
-            let linked =
-                super::link::link_standalone(&program, &loaded.entry, &objects, &tools, &scratch.0)?;
+            let linked = super::link::link_standalone(
+                &program,
+                &loaded.entry,
+                &objects,
+                &tools,
+                &scratch.0,
+            )?;
             let timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
             std::fs::copy(&linked.path, output).map_err(io)?;
             // The debug file keeps its build-id name beside the executable, where

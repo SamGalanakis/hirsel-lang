@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Differential edit checks and interleaved resident compiler measurements.
+
+Run under tools/capped (the daemon and clients inherit its resource scope).
+Every edit compares resident, fresh disk-warm and cache-free CLI bytes. The
+measurement mode uses 10 seeded interleaved rounds, perf cycles+instructions,
+server CPU 31 and client CPU 7; results include both processes' work.
+"""
+import argparse
+import contextlib
+import hashlib
+import json
+import os
+from pathlib import Path
+import random
+import re
+import select
+import shutil
+import signal
+import statistics
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import corpus
+
+
+def write_json(path, value):
+    path.write_text(json.dumps(value, indent=2) + '\n')
+
+
+def copy_program(program, directory):
+    source = program.path
+    directory.mkdir(parents=True, exist_ok=True)
+    if source.suffix == '.json':
+        manifest = json.loads(source.read_text())
+        for row in manifest['sources']:
+            target = directory / row['path']
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source.parent / row['path'], target)
+        for row in manifest.get('dependencies', []):
+            row['manifest'] = str((source.parent / row['manifest']).resolve())
+        path = directory / 'hirsel.json'
+        write_json(path, manifest)
+        sources = [directory / row['path'] for row in manifest['sources']]
+    else:
+        path = directory / source.name
+        shutil.copyfile(source, path)
+        sidecar = Path(str(source) + '.json')
+        if sidecar.exists():
+            manifest = json.loads(sidecar.read_text())
+            for row in manifest.get('dependencies', []):
+                row['manifest'] = str((source.parent / row['manifest']).resolve())
+            write_json(Path(str(path) + '.json'), manifest)
+        sources = [path]
+    return path, sources
+
+
+class Server:
+    def __init__(self, args, directory, pinned=False):
+        self.directory = directory
+        self.env = os.environ | {'HIRSEL_DAEMON': 'auto', 'HIRSEL_RESULTS': 'dir@1',
+                                 'HIRSEL_RESULTS_DIR': str(directory / 'results'),
+                                 'XDG_RUNTIME_DIR': str(directory), 'HIRSEL_SERVE_IDLE': '900',
+                                 'XDG_CACHE_HOME': str(directory / 'cache'), 'HIRSEL_OBJECTS': 'dir@1'}
+        self.exe = str(args.toolchain.resolve() / 'hirsel')
+        log = (directory / 'server.log').open('wb')
+        command = [self.exe, 'serve', '--workspace', str(directory)]
+        if pinned:
+            command = ['taskset', '-c', '31', *command]
+        self.process = subprocess.Popen(command, cwd=directory, env=self.env,
+                                        stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+        self.log = log
+        # Wait on output we own, with a deadline; no benchmark interval starts here.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if b'serving ' in (directory / 'server.log').read_bytes():
+                return
+            if self.process.poll() is not None:
+                raise RuntimeError((directory / 'server.log').read_text())
+            time.sleep(.01)
+        raise RuntimeError('resident server did not become ready')
+
+    def close(self):
+        self.process.terminate()
+        self.process.wait(timeout=10)
+        self.log.close()
+
+    def command(self, command, daemon='auto', results='dir@1', perf=None):
+        argv = [self.exe, *map(str, command)]
+        if perf:
+            argv = ['perf', 'stat', '-x,', '-e', 'cycles,instructions', '-o', str(perf),
+                    '--', 'taskset', '-c', '7', *argv]
+        start = time.monotonic()
+        result = subprocess.run(argv, cwd=self.directory,
+                                env=self.env | {'HIRSEL_DAEMON': daemon, 'HIRSEL_RESULTS': results},
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=300)
+        return result, time.monotonic() - start
+
+
+def bytes_of(result):
+    return result.returncode, result.stdout, result.stderr
+
+
+def variants(path):
+    text = path.read_text()
+    probes = ('\nfn resident_probe(x:u64) -> u64 { x + 1u64 }\n'
+              'pub fn resident_public(x:u64) -> u64 { resident_probe(x) }\n')
+    base = text + probes
+    return [
+        ('initial', base), ('unchanged', base),
+        ('body', base.replace('x + 1u64', 'x + 2u64')),
+        ('private-signature', base.replace('resident_probe(x:u64) -> u64', 'resident_probe(x:u32) -> u32').replace('x + 1u64', 'x + 1u32')),
+        ('public-signature', base.replace('pub fn resident_public(x:u64) -> u64 { resident_probe(x) }', 'pub fn resident_public(x:u32) -> u32 { x }')),
+        ('insert-item', 'fn resident_before() {}\n' + base),
+        ('move-items', probes + text),
+        ('delete-item', text), ('syntax-error', text + '\nfn resident_bad('),
+        ('recover', base),
+    ]
+
+
+def oracle(args):
+    programs = [p for p in corpus.corpus(args.work / 'generated', scale=args.scale)
+                if p.language == 'hirsel' and re.search(args.select, p.name)]
+    if re.search(args.select, 'tasks'):
+        programs.append(corpus.Program('tasks', 'hirsel', corpus.ROOT / 'examples/tasks/hirsel.json', 0))
+    report = {'schema': 1, 'mode': 'oracle', 'programs': [], 'comparisons': 0}
+    for index, program in enumerate(programs):
+        directory = args.work / 'oracle' / f'{index:03}-{program.name.replace("/", "-")}'
+        entry, sources = copy_program(program, directory)
+        server = Server(args, directory)
+        row = {'program': program.name, 'edits': []}
+        try:
+            for name, text in variants(sources[0]):
+                sources[0].write_text(text)
+                for flag in [[], ['--json']]:
+                    command = ['check', *flag, str(entry)]
+                    warm, _ = server.command(command)
+                    disk, _ = server.command(command, daemon='off')
+                    cold, _ = server.command(command, daemon='off', results='none@1')
+                    for label, result in [('resident', warm), ('disk', disk)]:
+                        report['comparisons'] += 1
+                        if bytes_of(result) != bytes_of(cold):
+                            failure = directory / f'{name}-{label}{"-json" if flag else ""}'
+                            for suffix, output in [('actual', result), ('cold', cold)]:
+                                Path(str(failure) + f'.{suffix}.stdout').write_bytes(output.stdout)
+                                Path(str(failure) + f'.{suffix}.stderr').write_bytes(output.stderr)
+                            raise AssertionError(f'{program.name} {name} {label} {flag}: {failure}')
+                    row['edits'].append({'edit': name, 'json': bool(flag), 'exit': cold.returncode,
+                                         'digest': hashlib.sha256(cold.stdout + cold.stderr).hexdigest()})
+            row['status'] = 'pass'
+        finally:
+            server.close()
+            report['programs'].append(row)
+            write_json(args.output, report)
+        print(f'PASS {program.name}: {len(row["edits"])} edit/output states', flush=True)
+    return report
+
+
+def counts(path):
+    values = {}
+    for line in path.read_text().splitlines():
+        columns = line.split(',')
+        if len(columns) > 2 and columns[0].strip().isdigit():
+            values[columns[2].strip()] = int(columns[0])
+    return values
+
+
+@contextlib.contextmanager
+def server_counts(pid, output):
+    """perf's documented enable/ack protocol brackets exactly one request."""
+    ctl_read, ctl_write = os.pipe()
+    ack_read, ack_write = os.pipe()
+    proc = subprocess.Popen(['perf', 'stat', '-x,', '-e', 'cycles,instructions', '-p', str(pid),
+                             '-D', '-1', '--control', f'fd:{ctl_read},{ack_write}', '-o', str(output)],
+                            pass_fds=(ctl_read, ack_write), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.close(ctl_read)
+    os.close(ack_write)
+    try:
+        os.write(ctl_write, b'enable\n')
+        if not select.select([ack_read], [], [], 10)[0] or os.read(ack_read, 128) != b'ack\n':
+            raise RuntimeError('perf server counter enable failed')
+        yield
+        os.write(ctl_write, b'disable\n')
+        if not select.select([ack_read], [], [], 10)[0]:
+            raise RuntimeError('perf server counter disable failed')
+        os.read(ack_read, 128)
+    finally:
+        proc.send_signal(signal.SIGINT)
+        proc.wait(timeout=10)
+        os.close(ctl_write)
+        os.close(ack_read)
+
+
+def measure(args):
+    generated = args.work / 'generated'
+    _, syn, _ = corpus.synthetic(generated, 10000)
+    pairs = [('tasks', corpus.ROOT / 'examples/tasks/hirsel.json'), ('syn10k', syn)]
+    report = {'schema': 1, 'mode': 'measure', 'seed': args.seed, 'rounds': args.rounds,
+              'server_cpu': 31, 'client_cpu': 7, 'runs': []}
+    randomizer = random.Random(args.seed)
+    for name, source in pairs:
+        directory = args.work / 'measure' / name
+        entry, sources = copy_program(corpus.Program(name, 'hirsel', source, 0), directory)
+        edit = next((p for p in sources if p.name == 'view.hir'), sources[0])
+        base = edit.read_text() + '\nfn resident_probe(x:u64) -> u64 { x + 1u64 }\n'
+        edit.write_text(base)
+        server = Server(args, directory, pinned=True)
+        try:
+            result, _ = server.command(['check', str(entry)])
+            if result.returncode:
+                raise RuntimeError(result.stderr.decode())
+            cells = [(mode, operation) for mode in ['resident', 'disk', 'cold']
+                     for operation in ['unchanged', 'body', 'signature']]
+            for round_number in range(args.rounds):
+                randomizer.shuffle(cells)
+                for mode, operation in cells:
+                    edit.write_text(base)
+                    server.command(['check', str(entry)])
+                    change = {'unchanged': base,
+                              'body': base.replace('x + 1u64', f'x + {round_number + 2}u64'),
+                              'signature': base.replace('resident_probe(x:u64) -> u64', 'resident_probe(x:u32) -> u32').replace('x + 1u64', 'x + 1u32')}[operation]
+                    edit.write_text(change)
+                    prefix = directory / f'{round_number}-{mode}-{operation}'
+                    daemon = 'auto' if mode == 'resident' else 'off'
+                    store = 'none@1' if mode == 'cold' else 'dir@1'
+                    # Fresh disk processes have not seen this edit; unchanged
+                    # entries and unchanged definitions are already in the store.
+                    with server_counts(server.process.pid, Path(str(prefix) + '.server.perf')):
+                        result, wall = server.command(['check', str(entry)], daemon=daemon,
+                                                       results=store, perf=Path(str(prefix) + '.client.perf'))
+                    if result.returncode:
+                        raise RuntimeError(result.stderr.decode())
+                    client = counts(Path(str(prefix) + '.client.perf'))
+                    worker = counts(Path(str(prefix) + '.server.perf'))
+                    row = {'program': name, 'round': round_number, 'mode': mode, 'edit': operation,
+                           'wall_s': wall, 'client': client, 'server': worker,
+                           'instructions': client.get('instructions', 0) + worker.get('instructions', 0),
+                           'cycles': client.get('cycles', 0) + worker.get('cycles', 0)}
+                    report['runs'].append(row)
+                    write_json(args.output, report)
+                    print(json.dumps(row), flush=True)
+        finally:
+            server.close()
+    report['medians'] = [
+        {'program': program, 'mode': mode, 'edit': edit,
+         **{metric: statistics.median(r[metric] for r in report['runs']
+            if (r['program'], r['mode'], r['edit']) == (program, mode, edit))
+            for metric in ['wall_s', 'instructions', 'cycles']}}
+        for program in ['tasks', 'syn10k'] for mode in ['resident', 'disk', 'cold']
+        for edit in ['unchanged', 'body', 'signature']]
+    return report
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('mode', choices=['oracle', 'measure'])
+    parser.add_argument('--toolchain', type=Path, required=True)
+    parser.add_argument('--work', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--select', default='.')
+    parser.add_argument('--scale', type=lambda s: tuple(map(int, s.split(','))), default=(3000, 10000))
+    parser.add_argument('--rounds', type=int, default=10)
+    parser.add_argument('--seed', type=int, default=20261021)
+    args = parser.parse_args()
+    args.work = args.work.resolve()
+    args.work.mkdir(parents=True, exist_ok=True)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    result = globals()[args.mode](args)
+    write_json(args.output, result)
+
+
+if __name__ == '__main__':
+    main()

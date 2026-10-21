@@ -70,6 +70,8 @@ impl Span {
 /// holds and maps them back to anchors of the reading process. Number 0 is no
 /// anchor. Outside a codec a span carries its anchor id as is.
 pub enum AnchorCodec {
+    /// Number anchors in first-encounter order while collecting a record.
+    Collect(Vec<Anchor>),
     /// Each anchor's number; another anchor fails the serialization.
     Encode(BTreeMap<Anchor, u32>),
     /// The anchor of each number, from 1.
@@ -89,7 +91,18 @@ pub fn with_anchor_codec<R>(codec: &mut AnchorCodec, f: impl FnOnce() -> R) -> R
 }
 impl serde::Serialize for Span {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let anchor = CODEC.with_borrow(|codec| match codec {
+        let anchor = CODEC.with_borrow_mut(|codec| match codec {
+            Some(AnchorCodec::Collect(anchors)) if self.anchor != Anchor(0) => {
+                let index = anchors
+                    .iter()
+                    .position(|a| *a == self.anchor)
+                    .unwrap_or_else(|| {
+                        anchors.push(self.anchor);
+                        anchors.len() - 1
+                    });
+                Ok(index as u32 + 1)
+            }
+            Some(AnchorCodec::Collect(_)) => Ok(0),
             Some(AnchorCodec::Encode(numbers)) if self.anchor != Anchor(0) => numbers
                 .get(&self.anchor)
                 .copied()

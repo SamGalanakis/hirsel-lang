@@ -2,7 +2,7 @@
 use hirsel_syntax as ast;
 use hirsel_types::*;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct TryPlan {
     pub expression: ast::ExprId,
     pub result: ast::DefPath,
@@ -14,17 +14,17 @@ pub struct TryPlan {
     pub error_type: TypeId,
     pub propagated_result: TypeId,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct FunctionPlan {
     pub owner: NameSite,
     pub result: TypeId,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ForPlan {
     pub protocol: ForProtocol,
     pub kind: ForPlanKind,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum ForPlanKind {
     Cursor {
         cursor: CursorPlan,
@@ -49,7 +49,7 @@ impl ForPlan {
     }
 }
 /// Checked execution protocol, independent of implementation bodies or lookups.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum ForExecution {
     Range,
     Indexed {
@@ -62,7 +62,7 @@ pub enum ForExecution {
     },
     Recovery,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum LoopLength {
     Definition {
         definition: ast::DefPath,
@@ -73,7 +73,7 @@ pub enum LoopLength {
         result: TypeId,
     },
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum LoopRead {
     /// SEM-4 sequence indexing; no library function is called.
     Index { result: TypeId },
@@ -84,7 +84,7 @@ pub enum LoopRead {
         advance: ast::DefPath,
     },
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum ForProtocol {
     Range { inclusive: bool },
     Sequence(BuiltinType),
@@ -95,7 +95,7 @@ pub enum ForProtocol {
     Iterator,
     BorrowedSource(ast::DefPath),
 }
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct Plans {
     /// Finalizer-resource patterns and their complete physical field types.
     pub resource_patterns: Vec<(ast::PatternId, Vec<TypeId>)>,
@@ -114,7 +114,7 @@ pub struct Plans {
 /// The "no arm" repair of a plain `?` (LANG-8): append `arm` to the variant
 /// declaration of `owner`. The checker sees no declaration source, so the
 /// engine places the edit and attaches it to the diagnostic at `site`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ArmFix {
     pub site: hirsel_span::Span,
     pub owner: ast::DefPath,
@@ -125,7 +125,7 @@ pub struct ArmFix {
     /// The owner is `@serializable`, so the arm changes its schema (SER-2, STORE-7).
     pub serializable: bool,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct FactPlan {
     pub expression: ast::ExprId,
     pub predicate: ast::DefPath,
@@ -133,7 +133,7 @@ pub struct FactPlan {
     pub result: TypeId,
     pub usage: UseKind,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ContractPlan {
     pub owner: NameSite,
     pub expression: ast::ExprId,
@@ -143,7 +143,7 @@ pub struct ContractPlan {
     pub function: TypeId,
     pub parameters: Vec<ContractParameter>,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum ContractParameter {
     Parameter(ParamId),
     Snapshot(ast::ExprId),

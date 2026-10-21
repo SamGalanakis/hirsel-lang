@@ -379,7 +379,7 @@ impl LoadedProgram {
             return Ok(false);
         };
         let (old, context) = self.files[index].clone();
-        if self.engine.prechecked(&context.package) {
+        if self.engine.imaged(&context.package) {
             return Ok(false);
         }
         let file = self

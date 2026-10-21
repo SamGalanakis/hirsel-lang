@@ -15,6 +15,7 @@ pub use program_revision::ForeignUse;
 pub(crate) use program_revision::SemanticProgram;
 mod image;
 pub(crate) use image::ImageBuild;
+mod persistent;
 mod safety;
 mod summaries;
 pub use safety::{Escape, UnsafeReach};
@@ -86,7 +87,7 @@ pub struct PhaseAdapters {
 }
 
 /// Reads survive errors and missing phases, rather than being lost in QueryError.
-#[derive(Clone, Debug, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 pub struct DependencyReads {
     pub operational_failure: Option<hirsel_types::OperationalFailure>,
     pub signatures: Vec<SignatureDependency>,
@@ -108,6 +109,13 @@ pub(crate) type ParsedFile = (
 /// A single coherent session. Items are item-local syntax at anchors: moving an
 /// item moves its anchor, never its IDs, spans or cached results.
 pub struct QueryEngine {
+    pub(crate) store_identity: ContentHash,
+    pub(crate) verify_store: crate::store::VerifyStore,
+    pending_store_checks: BTreeMap<(DefId, QueryKind), crate::store::Variant>,
+    persisted_diagnostic_phases: Vec<(Diagnostic, String)>,
+    pub(crate) lower_verdicts:
+        hirsel_syntax::DefMap<(hirsel_tir::DefinitionRef, Vec<hirsel_validate::VRead>)>,
+    pub(crate) result_store: Option<Arc<dyn crate::store::ResultStore>>,
     /// Whether V validates what this session lowers; `run_v` is its only reader.
     pub verify: Verify,
     /// A `Compiler` opened this engine as a session (`free_sessions`).
@@ -360,6 +368,12 @@ impl QueryEngine {
         let registry = crate::registry::BuiltinRegistry::shared();
         environment.builtin_signatures_hash = registry.revision();
         Self {
+            store_identity: ContentHash::default(),
+            verify_store: crate::store::VerifyStore::Off,
+            pending_store_checks: BTreeMap::new(),
+            persisted_diagnostic_phases: vec![],
+            lower_verdicts: Default::default(),
+            result_store: None,
             verify: Verify::On,
             session: false,
             comptime_limits: hirsel_interp::Limits::default(),
@@ -1123,6 +1137,17 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<AnalyzedBody>>, QueryError> {
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Modes)?;
+        if let Some(entry) = self.modes.get(&id).cloned()
+            && self.memo_valid(definition, &entry, text)
+        {
+            return self.mode_result(entry);
+        }
+        if let Some(entry) = self.load_mode(definition) {
+            self.modes.insert(id, entry.clone());
+            return self.mode_result(entry);
+        }
         let checked = self.check_query(definition)?;
         let signature = self.signature_output(definition)?;
         let timing = timings::phase(Phase::Modes);
@@ -1168,6 +1193,7 @@ impl QueryEngine {
                 let reads = recorder.reads;
                 let key = MemoKey::new(QueryKind::Modes, id);
                 let entry = Arc::new(self.finish(key, text, reads, result, observed));
+                self.store_mode(definition, &entry)?;
                 keep(
                     &mut self.modes,
                     &mut self.graph,
@@ -1178,6 +1204,12 @@ impl QueryEngine {
             }
         };
         drop(timing);
+        self.mode_result(entry)
+    }
+    fn mode_result(
+        &mut self,
+        entry: Arc<Entry<AnalyzedBody>>,
+    ) -> Result<Arc<QueryOutput<AnalyzedBody>>, QueryError> {
         // Compile-time users also depend on private shapes used by a body,
         // including when its public signature and source text are unchanged.
         let representations: Vec<_> = entry
@@ -1199,6 +1231,13 @@ impl QueryEngine {
         let snapshot = self.snapshot(definition)?;
         if let Some(body) = generation::generator(&snapshot) {
             return self.generated_check_query(definition, snapshot, body);
+        }
+        let id = DefId::intern(definition);
+        let text = self.key_text(definition, QueryKind::Check)?;
+        if let Some(entry) = self.checked.get(&id).cloned()
+            && self.memo_valid(definition, &entry, text)
+        {
+            return entry.result();
         }
         let resolution = self.resolve_query(definition)?;
         let signature = self.signature_output(definition)?;
@@ -1300,6 +1339,14 @@ impl QueryEngine {
     }
 
     pub fn diagnostic_phase(&self, diagnostic: &Diagnostic) -> Option<String> {
+        if let Some((_, phase)) = self
+            .persisted_diagnostic_phases
+            .iter()
+            .rev()
+            .find(|(d, _)| d.rule == diagnostic.rule && d.primary == diagnostic.primary)
+        {
+            return Some(phase.clone());
+        }
         for entry in self.modes.values() {
             if let Some((_, phase)) = entry
                 .products
@@ -1673,7 +1720,17 @@ impl DefinitionQueries for QueryEngine {
         if let Some(entry) = self.lowered.get(&id).cloned()
             && self.memo_valid(definition, &entry, text)
         {
+            if self.verify == Verify::On {
+                if let Ok(output) = entry.result() {
+                    self.ensure_lowered_verdict(&output.value)?;
+                }
+            }
             self.merge_execution(entry.reads());
+            return entry.output();
+        }
+        if let Some(entry) = self.load_lower(definition) {
+            self.merge_execution(entry.reads());
+            self.lowered.insert(id, entry.clone());
             return entry.output();
         }
         timings::count(Count::Lowered);
@@ -1698,11 +1755,12 @@ impl DefinitionQueries for QueryEngine {
             None => self.missing(QueryKind::Lower),
         });
         let mut result = result.map(shared_output);
+        let mut vreads = vec![];
         if let Ok(lowered) = &result {
             let report = self.run_v(&definition.0.package, |types, signatures| {
                 let _timing = timings::phase(Phase::Verify);
                 timings::count(Count::VRuns);
-                hirsel_validate::validate(&lowered.value, types, signatures, &mut vec![])
+                hirsel_validate::validate(&lowered.value, types, signatures, &mut vreads)
             });
             if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
                 result = Err(error);
@@ -1720,6 +1778,16 @@ impl DefinitionQueries for QueryEngine {
         observed.merged.extend(executed);
         let key = MemoKey::new(QueryKind::Lower, id);
         let entry = Arc::new(self.finish(key, text, reads, result, observed));
+        if self.verify == Verify::On
+            && let Ok(output) = entry.result()
+        {
+            self.remember_lowered_verdict(output.value.clone(), vreads.clone());
+        }
+        self.store_lower(
+            definition,
+            &entry,
+            (self.verify == Verify::On).then_some(vreads),
+        )?;
         keep(
             &mut self.lowered,
             &mut self.graph,

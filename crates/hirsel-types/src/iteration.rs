@@ -20,7 +20,7 @@ pub struct ProtocolAssociation {
 
 /// Complete implicit open/next calls. All TypeIds belong to the checked body.
 /// Source evaluation and use are fixed by H; J refines the same graph contracts.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct CursorPlan {
     pub association: Option<ProtocolAssociation>,
     pub statement: StmtId,
@@ -34,7 +34,7 @@ pub struct CursorPlan {
     pub step: OptionLayout,
 }
 /// Declared Option constructor layout for one cursor advancement.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct OptionLayout {
     pub result: TypeId,
     pub item: TypeId,
