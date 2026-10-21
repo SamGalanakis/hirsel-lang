@@ -45,3 +45,8 @@ pub fn sc_load(word: &AtomicU32) -> u32 {
 pub fn relax() {
     loom::thread::yield_now();
 }
+
+#[cfg(test)]
+pub fn model(f: impl Fn() + Sync + Send + 'static) {
+    loom::model(f);
+}

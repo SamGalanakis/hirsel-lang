@@ -138,6 +138,14 @@ impl<S: TapeSink> Recorder<S> {
         Ok(())
     }
 
+    /// A serial package gate exists from run admission, at version 1. It has
+    /// no creating task or op; lazy registration must not emit a create event.
+    pub fn gate(&mut self, package: &str) {
+        self.objects
+            .entry(ObjectId::Gate(package.into()))
+            .or_insert(1);
+    }
+
     /// Op `op` of `task` created `object` (version 1).
     pub fn create(&mut self, task: &[u32], object: ObjectId) {
         self.objects.insert(object.clone(), 1);

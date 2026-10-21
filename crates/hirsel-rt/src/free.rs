@@ -29,13 +29,12 @@ use hirsel_free::session::{Advance, Claim, Handle, Session, TestHook};
 
 pub(crate) const CHANNEL: u8 = 1;
 pub(crate) const MUTEX: u8 = 2;
+const GATE: u8 = 3;
 
 /// A run's free-mode state.
 pub(crate) struct Free {
     hook: TestHook,
     pub(crate) session: Session,
-    /// Tasks parked replay-pending, woken at the next publish.
-    pub(crate) retrying: Vec<u32>,
 }
 
 /// The run's free-mode state, when it has one.
@@ -56,11 +55,7 @@ pub(crate) fn install(ctx: &mut TaskCtx, binding: &[u8]) -> Result<(), String> {
         hirsel_kernels::schedule::Algorithm::Random,
         hook.seed,
     );
-    ctx.run().free = Some(Box::new(Free {
-        hook,
-        session,
-        retrying: Vec::new(),
-    }));
+    ctx.run().free = Some(Box::new(Free { hook, session }));
     Ok(())
 }
 
@@ -100,7 +95,8 @@ fn diverged(ctx: *mut TaskCtx, error: Diverged) -> ! {
 
 /// Whether free mode is on.
 pub(crate) fn on(ctx: *mut TaskCtx) -> bool {
-    free(ctx).is_some()
+    // SAFETY: the context is live; policy is fixed before any worker starts.
+    unsafe { (*ctx).run_ref().free_mode || (*ctx).run_ref().free.is_some() }
 }
 
 fn path(ctx: *mut TaskCtx) -> Vec<u32> {
@@ -113,6 +109,10 @@ fn path(ctx: *mut TaskCtx) -> Vec<u32> {
 /// runs its entry and then waits for good.
 pub(crate) fn enter(ctx: *mut TaskCtx, first: Phase) -> bool {
     let Some(free) = free(ctx) else {
+        if on(ctx) {
+            crate::roots::apply_pending(ctx);
+            return true;
+        }
         return false;
     };
     let path = path(ctx);
@@ -132,19 +132,21 @@ pub(crate) fn enter(ctx: *mut TaskCtx, first: Phase) -> bool {
 /// replay-pending check again.
 pub(crate) fn publish(ctx: *mut TaskCtx, phase: Phase) {
     let Some(free) = free(ctx) else {
+        if on(ctx) {
+            crate::tasks::wake_retrying(ctx);
+        }
         return;
     };
     let path = path(ctx);
     if let Err(error) = free.session.publish(&path, phase) {
         diverged(ctx, error);
     }
-    let woken = std::mem::take(&mut free.retrying);
-    crate::tasks::wake_all(ctx, &woken);
+    crate::tasks::wake_retrying(ctx);
 }
 
 /// Publish (k, done); a replayed task at its cut parks for good before the next segment.
 pub(crate) fn done(ctx: *mut TaskCtx) {
-    if free(ctx).is_none() {
+    if !on(ctx) {
         return;
     }
     publish(ctx, Phase::Done);
@@ -170,6 +172,15 @@ pub(crate) fn create(ctx: *mut TaskCtx, handle: Handle) {
         let result = free.session.create(&path(ctx), handle);
         check(ctx, result);
     }
+}
+
+/// A serial package's logical gate: no creating op, version 1 at admission.
+pub(crate) fn gate(ctx: *mut TaskCtx, gate: u32) -> Handle {
+    let handle = (GATE, u64::from(gate));
+    if let Some(free) = free(ctx) {
+        free.session.gate(handle, &format!("package:{gate}"));
+    }
+    handle
 }
 
 /// Whether sub-event 0 of the running op on `handle` is enabled (always, live).
@@ -274,7 +285,14 @@ pub(crate) fn await_any_member(ctx: *mut TaskCtx) -> Option<u64> {
 /// does not admit it, and the endpoint stays open. A drop never parks for good: the task's
 /// next op does.
 pub(crate) fn close(ctx: *mut TaskCtx, handle: Handle, outcome: &str) -> Option<bool> {
-    let free = free(ctx)?;
+    let Some(free) = free(ctx) else {
+        if on(ctx) {
+            crate::roots::apply_pending(ctx);
+            crate::tasks::wake_retrying(ctx);
+            return Some(true);
+        }
+        return None;
+    };
     let at = path(ctx);
     free.session.begin(&at);
     if !free.session.admits(&at, Phase::Done) {
@@ -286,8 +304,7 @@ pub(crate) fn close(ctx: *mut TaskCtx, handle: Handle, outcome: &str) -> Option<
     if let Err(error) = free.session.publish(&at, Phase::Done) {
         diverged(ctx, error);
     }
-    let woken = std::mem::take(&mut free.retrying);
-    crate::tasks::wake_all(ctx, &woken);
+    crate::tasks::wake_retrying(ctx);
     Some(true)
 }
 
@@ -330,8 +347,7 @@ pub(crate) fn print<T>(
     let sink = if stderr { "stderr" } else { "stdout" };
     let free = self::free(ctx).unwrap();
     let mut request = check(ctx, free.session.host_begin(&at, sink));
-    let woken = std::mem::take(&mut free.retrying);
-    crate::tasks::wake_all(ctx, &woken);
+    crate::tasks::wake_retrying(ctx);
     loop {
         let free = self::free(ctx).unwrap();
         match check(ctx, free.session.host_claim(&at, &mut request)) {
@@ -349,8 +365,7 @@ pub(crate) fn print<T>(
     match check(ctx, free.session.host_end(&at, &request, sink, bytes)) {
         Advance::Final => crate::tasks::park_final(ctx),
         Advance::Done => {
-            let woken = std::mem::take(&mut free.retrying);
-            crate::tasks::wake_all(ctx, &woken);
+            crate::tasks::wake_retrying(ctx);
             if free.session.at_cut(&at) {
                 crate::tasks::park_final(ctx);
             }
@@ -363,6 +378,10 @@ pub(crate) fn print<T>(
 /// roots they free in the phase, so no cleanup phase remains), then done.
 pub(crate) fn end(ctx: *mut TaskCtx, task: &[u32]) {
     let Some(free) = self::free(ctx) else {
+        if on(ctx) {
+            crate::roots::apply_pending(ctx);
+            crate::tasks::wake_retrying(ctx);
+        }
         return;
     };
     free.session.begin(task);
@@ -380,14 +399,13 @@ pub(crate) fn end(ctx: *mut TaskCtx, task: &[u32]) {
         }
     }
     let free = self::free(ctx).unwrap();
-    let woken = std::mem::take(&mut free.retrying);
-    crate::tasks::wake_all(ctx, &woken);
+    crate::tasks::wake_retrying(ctx);
 }
 
 /// The root task's entry returned: its end op, and in a replay a wait until every other task
 /// is at its cut, since the recording's stop followed all their published phases.
 pub(crate) fn root_end(ctx: *mut TaskCtx) {
-    if free(ctx).is_none() {
+    if !on(ctx) {
         return;
     }
     end(ctx, &[]);

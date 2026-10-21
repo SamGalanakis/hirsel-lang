@@ -973,3 +973,49 @@ fn an_idle_home_wait_reports_blocked_with_one_process_permit() {
     assert_eq!(outcome.pending, 0);
     assert_eq!(hirsel_rt::pool::compute_permits().1, 0);
 }
+
+static FREE_CHILD_RAN: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C" fn free_quantum_child(ctx: *mut TaskCtx, _: *mut Header, _: u64, _: u64) -> u8 {
+    FREE_CHILD_RAN.store(true, SeqCst);
+    let mut slot = [1_u64, 42];
+    unsafe {
+        hirsel_rt::tasks::hirsel_rt_v2_task_finish(
+            ctx,
+            slot.as_mut_ptr().cast(),
+            NONE.as_ptr().cast(),
+            16,
+        )
+    }
+}
+
+#[test]
+fn free_immediate_ops_keep_their_worker_for_at_most_128_semantic_ops() {
+    let _serial = serial();
+    for width in [1, 8] {
+        FREE_CHILD_RAN.store(false, SeqCst);
+        let mut run = BodyRun::new(width, false);
+        run.config = config();
+        run.free = true;
+        let metrics = run.worker_metrics();
+        let ended = run.run(
+            |_| {},
+            |ctx| {
+                let scope = enter(ctx); // Op 1.
+                let child = spawn(ctx, scope, free_quantum_child, 0); // Op 2.
+                assert!(!FREE_CHILD_RAN.load(SeqCst), "spawn's switch is elided");
+                for _ in 0..125 {
+                    unsafe { yield_now(&mut *ctx) };
+                    assert!(!FREE_CHILD_RAN.load(SeqCst));
+                }
+                unsafe { yield_now(&mut *ctx) }; // Op 128 gives up this worker.
+                assert!(FREE_CHILD_RAN.load(SeqCst));
+                assert_eq!(join(ctx, scope, child), [1, 42]);
+                exit(ctx, scope);
+                0
+            },
+        );
+        assert!(ended.ended.is_ok(), "{ended:?}");
+        assert!(metrics.elisions() >= 127);
+    }
+}

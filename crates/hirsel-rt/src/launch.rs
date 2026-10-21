@@ -2054,6 +2054,11 @@ pub(crate) unsafe fn execute(
         unsafe { &mut *ctx }.run().schedule =
             hirsel_kernels::schedule::Schedule::new(algorithm, scheduler.seed);
     }
+    unsafe { &mut *ctx }.run().free_mode = requested
+        .as_ref()
+        .and_then(|run| run.record().io.as_ref())
+        .and_then(|io| io.tasks.as_deref())
+        == Some("tasks.free@1");
     // F0's free-mode test channel, when the environment sets it, replaces the schedule.
     crate::free::install(unsafe { &mut *ctx }, &launch_config.run_identity)?;
     // The free-mode test channel decides one worker's interleavings: it runs on one.

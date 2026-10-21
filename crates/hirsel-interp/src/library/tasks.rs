@@ -28,8 +28,6 @@ pub(super) struct Tasks {
     entered: Vec<(u64, Value, u64)>,
     /// Live task sets (CONC-2): their scope and members in add order, `None` once awaited.
     sets: BTreeMap<u64, TaskSet>,
-    /// Children completed so far: the next completion's place in completion order.
-    completions: u64,
     /// The run's scheduler policy (`inputs.scheduler`) and the root task's priority.
     pub schedule: hirsel_kernels::schedule::Schedule,
     pub root_priority: u64,
@@ -75,6 +73,8 @@ struct ScopeState {
     owner: u64,
     deadline: Option<ScopeDeadline>,
     children: Vec<u64>,
+    /// Ranks always advance, even before any set exists or contains a child.
+    completions: u64,
     // Completed detached failures still belong to the scope. Keep each child's
     // chain separately so completion order cannot change spawn-order reporting.
     failures: BTreeMap<Vec<u32>, Vec<FailureRecord>>,
@@ -448,8 +448,15 @@ impl Tasks {
         }
         let child = self.tasks.get_mut(&task).unwrap();
         child.finished = true;
-        child.completed = self.completions;
-        self.completions += 1;
+        let scope = self
+            .scopes
+            .get_mut(&child.scope)
+            .expect("a live child's scope");
+        child.completed = scope.completions;
+        scope.completions = scope
+            .completions
+            .checked_add(1)
+            .ok_or_else(|| invalid("a scope's completion rank overflowed"))?;
         child.result = Some(result);
         let detached = child.detached;
         self.spawn_counts.remove(&task);

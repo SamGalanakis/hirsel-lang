@@ -144,6 +144,14 @@ impl Replayer {
         self.end.as_ref()
     }
 
+    /// Gates exist at admission, independently of which replayed task first
+    /// reaches one. Registration does not consume an ordinal or a gap.
+    pub fn gate(&mut self, package: &str) {
+        self.objects
+            .entry(ObjectId::Gate(package.into()))
+            .or_insert(1);
+    }
+
     pub fn create(&mut self, task: &[u32], object: ObjectId) -> Result<(), Diverged> {
         self.objects.insert(object.clone(), 1);
         self.script(task)?.events.push(Event::Versioned {

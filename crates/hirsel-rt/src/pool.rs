@@ -355,6 +355,7 @@ pub struct WorkerMetrics {
     started: Instant,
     ops: AtomicU64,
     switches: AtomicU64,
+    elisions: AtomicU64,
     queue_ops: AtomicU64,
     spawns: AtomicU64,
     spawn_ns: AtomicU64,
@@ -372,6 +373,7 @@ impl Default for WorkerMetrics {
             started: Instant::now(),
             ops: AtomicU64::new(0),
             switches: AtomicU64::new(0),
+            elisions: AtomicU64::new(0),
             queue_ops: AtomicU64::new(0),
             spawns: AtomicU64::new(0),
             spawn_ns: AtomicU64::new(0),
@@ -397,6 +399,14 @@ impl WorkerMetrics {
     /// A task switch: one switch-out and switch-in pair.
     pub(crate) fn switch(&self) {
         self.switches.fetch_add(1, Relaxed);
+    }
+    /// A completed immediate op retained its task's worker.
+    pub(crate) fn elision(&self) {
+        self.elisions.fetch_add(1, Relaxed);
+    }
+    /// Semantic ops whose fiber switch was elided (diagnostic count).
+    pub fn elisions(&self) -> u64 {
+        self.elisions.load(Relaxed)
     }
     /// A runnable queue push, pop or steal.
     pub(crate) fn queue_op(&self) {

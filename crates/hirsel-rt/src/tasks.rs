@@ -49,6 +49,7 @@ pub(crate) mod profile;
 
 use std::collections::VecDeque;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use hirsel_free::phase::Phase;
 use hirsel_kernels::schedule::{Algorithm, Schedule};
@@ -185,6 +186,8 @@ struct Task {
     pinned: bool,
     /// The compute worker it last ran on, at width > 1.
     last: Option<u16>,
+    /// Consecutive immediate ops since this task last gave up its worker.
+    budget: hirsel_free::schedule::Budget,
 }
 
 /// A task set (CONC-2): its scope and its members' Task words in add order, `None` once
@@ -207,6 +210,9 @@ struct Scope {
     canceled: Option<u32>,
     /// `task.scope_until`'s deadline (CONC-3).
     deadline: Option<ScopeDeadline>,
+    /// Completion order belongs to the parent scope, including children that
+    /// finish before a TaskSet exists or before their handles enter it.
+    completions: AtomicU64,
 }
 
 /// A scope's deadline: its armed timer's host token until it fires or the scope exits.
@@ -239,14 +245,14 @@ pub(crate) struct Scheduler {
     sync: crate::sync::Synchronizers,
     sets: Vec<Option<TaskSet>>,
     vacant_sets: Vec<u32>,
-    /// Children that held their result or failed so far: the next one's completion order.
-    completions: u64,
     /// The run's scheduler policy (`inputs.scheduler`).
     schedule: Schedule,
     /// The `serial` packages' gates, by package ordinal (S-13).
     gates: Vec<ForeignGate>,
     /// Tasks parked on [`Wait::Pool`].
     pool_waiters: Vec<u32>,
+    /// Replay enablement and live free-mode object waits.
+    retrying: Vec<u32>,
 }
 
 fn handle(index: u32, generation: u32) -> u64 {
@@ -494,8 +500,17 @@ impl Scheduler {
     }
     /// `task` holds its result or failed: its place in completion order.
     fn order(&mut self, task: u32) {
-        let order = self.completions;
-        self.completions += 1;
+        let scope = self
+            .task(task)
+            .scope
+            .expect("a completed child has a scope");
+        let order = self
+            .scope(scope)
+            .completions
+            .fetch_add(1, Ordering::Relaxed);
+        if order == u64::MAX {
+            fault("a scope's completion rank overflowed");
+        }
         self.task(task).completed = order;
     }
     /// The task set a TaskSet word names, which must belong to `scope`.
@@ -597,6 +612,7 @@ impl Task {
             owner: Owner::Any,
             pinned: false,
             last: None,
+            budget: Default::default(),
         }
     }
 }
@@ -760,11 +776,9 @@ pub(crate) fn park_final(ctx: *mut TaskCtx) -> ! {
 /// cancellation); the caller checks its condition again.
 pub(crate) fn park_retry(ctx: *mut TaskCtx, cancelable: bool) {
     let current = scheduler(ctx).current;
-    // SAFETY: the context is live and reached by its running task only.
-    if let Some(free) = unsafe { (*ctx).run().free.as_deref_mut() }
-        && !free.retrying.contains(&current)
-    {
-        free.retrying.push(current);
+    let s = scheduler(ctx);
+    if !s.retrying.contains(&current) {
+        s.retrying.push(current);
     }
     // SAFETY: the context is live; the caller holds nothing a stop must drop.
     unsafe { block(&mut *ctx, Wait::Retry { cancelable }, false, 0) };
@@ -782,6 +796,13 @@ pub(crate) fn wake_all(ctx: *mut TaskCtx, tasks: &[u32]) {
             s.wake(task);
         }
     }
+}
+
+/// A phase publication can enable object or replay waiters. They recheck
+/// outside the publishing phase, and never hold an object while waiting.
+pub(crate) fn wake_retrying(ctx: *mut TaskCtx) {
+    let retrying = std::mem::take(&mut scheduler(ctx).retrying);
+    wake_all(ctx, &retrying);
 }
 
 /// Whether the running task's end op has run (a holding child's later drops follow it).
@@ -807,6 +828,7 @@ pub(crate) fn current_path(ctx: *mut TaskCtx) -> Vec<u32> {
 unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
     let s = scheduler(ctx);
     let from = s.current;
+    s.task(from).budget.reset();
     // A suspension ends the running task's hold on the home thread for the Io binding.
     if let Some(Some(row)) = s.tasks.get_mut(from as usize) {
         unpin(row);
@@ -1149,6 +1171,31 @@ pub(crate) unsafe fn gate_enter(ctx: &mut TaskCtx, gate: u32, site: u64) -> bool
         row.depth += 1;
         return false;
     }
+    if crate::free::on(ctx) {
+        let started = ctx
+            .run_ref()
+            .extern_metrics
+            .as_ref()
+            .map(|_| std::time::Instant::now());
+        // Entry is admitted separately: releases precede the gate wait, and
+        // replay-pending owns neither gate nor compute permit.
+        crate::free::enter(ctx, Phase::Entered);
+        let object = crate::free::gate(ctx, gate);
+        crate::free::publish(ctx, Phase::Entered);
+        crate::free::wait_until(ctx, |ctx| {
+            scheduler(ctx).gate(gate).owner.is_none() && crate::free::enabled(ctx, object)
+        });
+        let row = scheduler(ctx).gate(gate);
+        row.owner = Some(me);
+        row.depth = 1;
+        row.version += 1;
+        crate::free::touch(ctx, object, "gate enter");
+        crate::free::done(ctx);
+        if let (Some(started), Some(metrics)) = (started, &ctx.run_ref().extern_metrics) {
+            metrics.gate_entry(started.elapsed());
+        }
+        return true;
+    }
     if row.owner.is_none() {
         row.owner = Some(me);
         row.depth = 1;
@@ -1174,6 +1221,13 @@ pub(crate) unsafe fn gate_enter(ctx: &mut TaskCtx, gate: u32, site: u64) -> bool
 /// The running task leaves `serial` gate `gate`: an outermost leave frees it and polls the
 /// tasks waiting for it; a nested one only lowers its depth.
 pub(crate) fn gate_leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) {
+    let object = if outermost && crate::free::enter(ctx, Phase::Done) {
+        let object = crate::free::gate(ctx, gate);
+        crate::free::touch(ctx, object, "gate leave");
+        Some(object)
+    } else {
+        None
+    };
     let s = scheduler(ctx);
     let me = s.current;
     let row = s.gate(gate);
@@ -1187,6 +1241,9 @@ pub(crate) fn gate_leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) {
         for task in std::mem::take(&mut row.waiters) {
             s.wake(task);
         }
+    }
+    if object.is_some() {
+        crate::free::done(ctx);
     }
 }
 
@@ -1526,6 +1583,20 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
         metrics.op();
     }
+    // In free mode, semantic ordinals and publications still happen for
+    // every op, while immediate ops keep this worker for at most 128 ops.
+    // F0's injected schedule retains its one-op quantum for reference tests.
+    if ctx.run_ref().free_mode && ctx.run_ref().free.is_none() {
+        let s = scheduler(ctx);
+        let me = s.current;
+        if s.task(me).budget.proceed() {
+            if let Some(metrics) = &ctx.run_ref().worker_metrics {
+                metrics.elision();
+            }
+            unsafe { go_on(ctx) };
+            return crate::stop::observe(ctx);
+        }
+    }
     // Tokio ce685ee6 current_thread/mod.rs:818-879 keeps polling its sole
     // runnable root without entering the driver. Hirsel additionally preserves
     // explicit scope deadlines and free-mode phase recording at every point.
@@ -1617,6 +1688,7 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
     }
     let s = scheduler(ctx);
     let current = s.current;
+    s.task(current).budget.reset();
     s.task(current).wait_site = site;
     s.park(wait);
     if let Wait::Host { token } = wait {
@@ -1809,6 +1881,7 @@ fn open_scope(ctx: *mut TaskCtx, deadline: Option<ScopeDeadline>) -> (u32, u32) 
         children: Vec::new(),
         canceled: None,
         deadline,
+        completions: AtomicU64::new(0),
     };
     let index = match s.vacant_scopes.pop() {
         Some(index) => {
@@ -3277,4 +3350,47 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
         yield_now(&mut *ctx);
     }
     STATUS_OK
+}
+
+#[cfg(test)]
+mod free_policy_tests {
+    use super::*;
+
+    fn scope() -> Scope {
+        Scope {
+            generation: 1,
+            owner: ROOT,
+            children: Vec::new(),
+            canceled: None,
+            deadline: None,
+            completions: AtomicU64::new(0),
+        }
+    }
+
+    #[test]
+    fn completion_ranks_are_per_scope_even_before_set_creation_or_insertion() {
+        let mut s = Scheduler::default();
+        s.scopes = vec![Some(scope()), Some(scope())];
+        for parent in [0, 1, 1, 0] {
+            let mut task = Task::new(1, std::ptr::null_mut(), Some(parent), vec![], None);
+            task.state = State::Holding;
+            s.tasks.push(Some(task));
+        }
+        for id in 0..4 {
+            s.order(id);
+        }
+        assert_eq!(s.task(0).completed, 0);
+        assert_eq!(s.task(1).completed, 0);
+        assert_eq!(s.task(2).completed, 1);
+        assert_eq!(s.task(3).completed, 1);
+        // Create a set after completion, and insert in the opposite order.
+        s.sets.push(Some(TaskSet {
+            generation: 1,
+            scope: 0,
+            members: vec![Some(handle(3, 1)), Some(handle(0, 1))],
+        }));
+        assert_eq!(s.first_completed(0), Some(1));
+        s.set(0).members[1] = None;
+        assert_eq!(s.first_completed(0), Some(0));
+    }
 }

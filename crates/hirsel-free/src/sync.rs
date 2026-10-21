@@ -46,3 +46,9 @@ pub fn relax() {
     std::hint::spin_loop();
     std::thread::yield_now();
 }
+
+/// Run a unit test directly; the proof crate substitutes loom's model here.
+#[cfg(test)]
+pub fn model(f: impl FnOnce()) {
+    f();
+}

@@ -391,6 +391,8 @@ pub struct BodyRun {
     pub config: crate::Config,
     pub width: u32,
     pub migrate: bool,
+    /// Test the admitted free policy without an environment test hook.
+    pub free: bool,
     pub fuel: Option<u64>,
     pub adapter: Option<Box<dyn crate::io::Adapter>>,
     control: std::sync::Arc<crate::stop::Control>,
@@ -413,6 +415,7 @@ impl BodyRun {
             config: crate::Config::new(),
             width,
             migrate,
+            free: false,
             fuel: None,
             adapter: None,
             control: Default::default(),
@@ -444,6 +447,7 @@ impl BodyRun {
         unsafe {
             (*ctx).run().control = std::sync::Arc::clone(&self.control);
             (*ctx).run().worker_metrics = self.metrics.clone();
+            (*ctx).run().free_mode = self.free;
             if self.width > 1 {
                 crate::pool::start(ctx, self.width, self.migrate);
             }

@@ -274,6 +274,19 @@ impl Session {
             .clone()
     }
 
+    /// Bind an engine's gate handle to its stable package identity. Unlike
+    /// ordinary objects, gates exist before any task runs (version 1).
+    pub fn gate(&mut self, handle: Handle, package: &str) {
+        let id = ObjectId::Gate(package.into());
+        if let Some(previous) = self.objects.insert(handle, id.clone()) {
+            assert_eq!(previous, id, "a gate handle changed package identity");
+        }
+        match &mut self.side {
+            Side::Live(recorder) => recorder.gate(package),
+            Side::Replay(replayer) => replayer.gate(package),
+        }
+    }
+
     /// The task's current op created `handle`'s object (version 1).
     pub fn create(&mut self, path: &[u32], handle: Handle) -> Result<(), Diverged> {
         let id = ObjectId::Made {

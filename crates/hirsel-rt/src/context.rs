@@ -257,6 +257,8 @@ pub(crate) struct RunShared {
     pub(crate) schedule: hirsel_kernels::schedule::Schedule,
     /// Free mode's session and test channel (`crate::free`).
     pub(crate) free: Option<Box<crate::free::Free>>,
+    /// The admitted tasks.free@1 policy, independently of recording.
+    pub(crate) free_mode: bool,
     /// The exact counts of roots past the finite maximum (`crate::roots`).
     pub(crate) root_overflow: crate::roots::Overflow,
     /// Every worker's heap, until the run ends (`crate::heaps`).
@@ -768,6 +770,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         failure_table: None,
         schedule: Default::default(),
         free: None,
+        free_mode: false,
         root_overflow: Default::default(),
         heaps,
         fuel: Default::default(),

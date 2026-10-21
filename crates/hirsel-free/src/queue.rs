@@ -1,0 +1,247 @@
+//! Tokio's bounded single-producer/multi-consumer worker deque, ported from
+//! `tokio/src/runtime/scheduler/multi_thread/queue.rs:28-101,142-584`, commit
+//! ce685ee6916549ed7e52dbfd5430858bbdc734d3 (MIT). The packed head reserves a
+//! steal before reading slots and keeps the producer from reusing them until
+//! the whole batch has moved. This allows stealing started, suspended tasks.
+//!
+//! Hirsel differences: generic owned task identifiers replace Notified<T>;
+//! overflow and stolen batches return to the engine instead of calling Tokio's
+//! injection queue/stats; AtomicU32's relaxed load replaces unsync_load on the
+//! sole producer. These keep the protocol independent of a runtime and let the
+//! same source run under loom. LIFO slots remain owner-local (schedule.rs).
+
+use crate::sync::{Arc, AtomicU32, AtomicU64, Cell, Ordering};
+use std::marker::PhantomData;
+
+/// The production capacity (Tokio: 256). Models instantiate four slots.
+pub const CAPACITY: usize = 256;
+
+struct Inner<T, const N: usize> {
+    head: AtomicU64,
+    tail: AtomicU32,
+    buffer: Box<[Cell<Option<T>>]>,
+}
+
+/// One producer/owner. It may move between threads, but cannot be shared.
+pub struct Local<T, const N: usize = CAPACITY> {
+    inner: Arc<Inner<T, N>>,
+    /// Cell is !Sync while remaining Send: only the owner pushes/pops.
+    owner: PhantomData<std::cell::Cell<()>>,
+}
+
+/// Any number of thieves. A steal takes ceil(n/2) from the FIFO's front.
+pub struct Steal<T, const N: usize = CAPACITY>(Arc<Inner<T, N>>);
+
+fn pack(steal: u32, real: u32) -> u64 {
+    (u64::from(steal) << 32) | u64::from(real)
+}
+
+fn unpack(word: u64) -> (u32, u32) {
+    ((word >> 32) as u32, word as u32)
+}
+
+pub fn local<T, const N: usize>() -> (Local<T, N>, Steal<T, N>) {
+    assert!(N >= 2 && N.is_power_of_two() && N <= u16::MAX as usize);
+    let inner = Arc::new(Inner {
+        head: AtomicU64::new(0),
+        tail: AtomicU32::new(0),
+        buffer: (0..N).map(|_| Cell::new(None)).collect(),
+    });
+    (
+        Local {
+            inner: inner.clone(),
+            owner: PhantomData,
+        },
+        Steal(inner),
+    )
+}
+
+impl<T, const N: usize> Clone for Steal<T, N> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T, const N: usize> Inner<T, N> {
+    /// # Safety
+    /// The caller owns this slot, having claimed it by the head CAS. A
+    /// stealer retains its reservation until every read is finished.
+    unsafe fn take(&self, index: u32) -> T {
+        // SAFETY: caller contract.
+        unsafe { self.buffer[index as usize & (N - 1)].with_mut(|slot| slot.take().unwrap()) }
+    }
+
+    /// # Safety
+    /// Sole producer; index is the unpublished tail, outside the reserved range.
+    unsafe fn put(&self, index: u32, task: T) {
+        // SAFETY: caller contract.
+        unsafe {
+            self.buffer[index as usize & (N - 1)].with_mut(|slot| {
+                assert!(slot.is_none());
+                *slot = Some(task);
+            })
+        }
+    }
+}
+
+impl<T, const N: usize> Local<T, N> {
+    /// Push one task. On overflow return the newest half plus this task for
+    /// injection; on a concurrent steal return just this task. Publish and
+    /// notify the injection batch before allowing the worker to sleep.
+    pub fn push(&mut self, task: T) -> Vec<T> {
+        loop {
+            let head = self.inner.head.load(Ordering::Acquire);
+            let (steal, real) = unpack(head);
+            let tail = self.inner.tail.load(Ordering::Relaxed);
+            if tail.wrapping_sub(steal) < N as u32 {
+                // SAFETY: sole producer; the reserved steal range is excluded.
+                unsafe { self.inner.put(tail, task) };
+                self.inner
+                    .tail
+                    .store(tail.wrapping_add(1), Ordering::Release);
+                return Vec::new();
+            }
+            if steal != real {
+                return vec![task];
+            }
+            // Claim all slots. Publish the retained oldest half at its new
+            // logical positions (same physical slots) and inject the newest.
+            if self
+                .inner
+                .head
+                .compare_exchange_weak(head, pack(tail, tail), Ordering::Release, Ordering::Relaxed)
+                .is_err()
+            {
+                continue;
+            }
+            let half = N as u32 / 2;
+            self.inner
+                .tail
+                .store(tail.wrapping_add(half), Ordering::Release);
+            let mut overflow = Vec::with_capacity(N / 2 + 1);
+            for i in half..N as u32 {
+                // SAFETY: the CAS claimed the whole buffer; these slots
+                // were excluded from the retained half's published range.
+                overflow.push(unsafe { self.inner.take(real.wrapping_add(i)) });
+            }
+            overflow.push(task);
+            return overflow;
+        }
+    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        let mut head = self.inner.head.load(Ordering::Acquire);
+        loop {
+            let (steal, real) = unpack(head);
+            let tail = self.inner.tail.load(Ordering::Relaxed);
+            if real == tail {
+                return None;
+            }
+            let next_real = real.wrapping_add(1);
+            let next = if steal == real {
+                pack(next_real, next_real)
+            } else {
+                pack(steal, next_real)
+            };
+            match self.inner.head.compare_exchange_weak(
+                head,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    // SAFETY: CAS transferred this slot to the sole owner;
+                    // no push happens until this pop returns.
+                    return Some(unsafe { self.inner.take(real) });
+                }
+                Err(actual) => head = actual,
+            }
+        }
+    }
+
+    /// Drain before retiring a worker, including a live shrink. A concurrent
+    /// thief owns its batch; this drain cannot duplicate it.
+    pub fn drain(&mut self) -> Vec<T> {
+        let mut out = Vec::new();
+        while let Some(task) = self.pop() {
+            out.push(task);
+        }
+        out
+    }
+}
+
+impl<T, const N: usize> Steal<T, N> {
+    /// Claim a batch. Only one stealer per victim proceeds; a racing stealer
+    /// returns empty instead of spinning on another worker's reservation.
+    pub fn steal_half(&self) -> Vec<T> {
+        let mut head = self.0.head.load(Ordering::Acquire);
+        let (first, count, reserved) = loop {
+            let (steal, real) = unpack(head);
+            if steal != real {
+                return Vec::new();
+            }
+            let tail = self.0.tail.load(Ordering::Acquire);
+            let count = tail.wrapping_sub(real).div_ceil(2);
+            if count == 0 {
+                return Vec::new();
+            }
+            let next = pack(steal, real.wrapping_add(count));
+            match self
+                .0
+                .head
+                .compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => break (real, count, next),
+                Err(actual) => head = actual,
+            }
+        };
+        // Validate only after winning the CAS: an old head paired with a
+        // newer tail may transiently suggest more than the ring's capacity.
+        // Such a reservation always loses its CAS (Tokio queue.rs:514).
+        assert!(count <= N as u32 / 2);
+        let mut tasks = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            // SAFETY: the reservation owns these slots and excludes reuse
+            // until all the reads below are published by the final CAS.
+            tasks.push(unsafe { self.0.take(first.wrapping_add(i)) });
+        }
+        let mut head = reserved;
+        loop {
+            let (_, real) = unpack(head);
+            match self.0.head.compare_exchange_weak(
+                head,
+                pack(real, real),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return tasks,
+                Err(actual) => head = actual,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn logical_indices_wrap_without_losing_the_reserved_steal_range() {
+        crate::sync::model(|| {
+            let (mut local, thief) = local::<_, 4>();
+            let start = u32::MAX - 1;
+            local
+                .inner
+                .head
+                .store(pack(start, start), Ordering::Relaxed);
+            local.inner.tail.store(start, Ordering::Relaxed);
+            for id in 0..4 {
+                assert!(local.push(id).is_empty());
+            }
+            assert_eq!(thief.steal_half(), [0, 1]);
+            assert!(local.push(4).is_empty());
+            assert!(local.push(5).is_empty());
+            assert_eq!(local.drain(), [2, 3, 4, 5]);
+        });
+    }
+}

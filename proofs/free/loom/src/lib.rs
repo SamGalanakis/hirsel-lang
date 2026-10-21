@@ -9,3 +9,9 @@ pub mod claim;
 pub mod phase;
 #[path = "../../../../crates/hirsel-free/src/section.rs"]
 pub mod section;
+
+#[path = "../../../../crates/hirsel-free/src/schedule.rs"]
+pub mod schedule;
+
+#[path = "../../../../crates/hirsel-free/src/queue.rs"]
+pub mod queue;
