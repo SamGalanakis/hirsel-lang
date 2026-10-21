@@ -113,22 +113,99 @@ pub fn seed_objects(manifest: &Path, output: &Path) -> Result<SeedReport, String
             let ready = super::stages::build_program(&program, manifest.clone(), &options)
                 .map_err(|e| e.to_string())?;
             report.units = ready.summaries.len();
-            report.generic_units = ready
-                .summaries
-                .iter()
-                .filter(|u| {
-                    input
-                        .snapshot()
-                        .signatures
-                        .get(&u.definition)
-                        .is_some_and(|s| match &s.kind {
-                            hirsel_types::SignatureKind::Function(f) => !f.generics.is_empty(),
-                            _ => false,
-                        })
-                })
-                .count();
+            report.generic_units = ready.unit_objects.as_ref().map_or(0, |o| o.generic_units);
             report.objects += ready.unit_objects.as_ref().map_or(0, |o| o.objects.len());
         }
     }
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hirsel_lir::objects::NoObjects;
+
+    /// Installed products must be reusable by a distinct consumer on its first build,
+    /// without changing process environment or sharing a compiler session.
+    #[test]
+    fn a_read_only_seed_hits_on_a_new_programs_first_build() {
+        hirsel_engine::with_compiler_stack(|| {
+            let directory =
+                std::env::temp_dir().join(format!("hirsel-native-seed-{}", std::process::id()));
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join("library.hir"),
+                "pub fn answer(x:u64)->u64 { x+1u64 }\n",
+            )
+            .unwrap();
+            let library = directory.join("library.json");
+            std::fs::write(
+                &library,
+                serde_json::json!({
+                    "schema":1,"package":{"name":"seeded","version":"1"},
+                    "sources":[{"path":"library.hir","module":[]}],"dependencies":[]
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let output = directory.join("objects");
+            let report = seed_objects(&library, &output).unwrap();
+            assert_eq!(report.roots, 1);
+            assert!(report.objects >= 6, "{report:?}");
+            std::fs::write(directory.join("main.hir"), "pub fn main()->Result[(),()] { failure.check(lib.answer(3u64)==4u64, Arithmetic()); Ok(()) }\n").unwrap();
+            let manifest = directory.join("application.json");
+            std::fs::write(&manifest, serde_json::json!({
+                "schema":1,"package":{"name":"consumer","version":"1"},
+                "sources":[{"path":"main.hir","module":[]}],
+                "dependencies":[{"manifest":"library.json","package":{"name":"seeded","version":"1"},"expose":[{"head":"lib","module":[]}]}],
+                "entry":{"module":[],"name":"main"}
+            }).to_string()).unwrap();
+            let mut loaded = crate::load_program(&manifest).unwrap();
+            loaded.check_for_execution().unwrap();
+            let input = loaded
+                .engine
+                .native_input_for(&[loaded.entry.clone()])
+                .unwrap();
+            let target = if cfg!(target_arch = "aarch64") {
+                TargetSpec::aarch64_unknown_linux_gnu()
+            } else {
+                TargetSpec::x86_64_unknown_linux_gnu()
+            };
+            for backend in [Backend::Cranelift, Backend::Llvm] {
+                for opt in [OptLevel::None, OptLevel::Default, OptLevel::Speed] {
+                    let partition = hirsel_lir::objects::partition(
+                        &target.triple,
+                        backend.name(),
+                        &format!("{opt:?}").to_lowercase(),
+                    );
+                    let mut options = Options::new(target.clone());
+                    options.validation = Validation::Ready;
+                    options.objects = Some(UnitObjects {
+                        store: Arc::new(SeededObjects {
+                            writable: Arc::new(NoObjects),
+                            seed: Arc::new(ReadOnlyObjects(output.join(partition))),
+                        }),
+                        backend,
+                        opt,
+                        debug: opt == OptLevel::None,
+                        fuel: false,
+                        jobs: hirsel_intern::jobs::Jobs::new(2),
+                    });
+                    let seeded = super::super::build(&input, &options).unwrap();
+                    let seeded_objects = seeded.unit_objects.unwrap();
+                    assert!(
+                        seeded_objects.hits > 0,
+                        "{backend:?} {opt:?}: no installed owner hit"
+                    );
+                    options.objects.as_mut().unwrap().store = Arc::new(NoObjects);
+                    let fresh = super::super::build(&input, &options)
+                        .unwrap()
+                        .unit_objects
+                        .unwrap();
+                    assert_eq!(seeded_objects.objects, fresh.objects, "{backend:?} {opt:?}");
+                }
+            }
+            std::fs::remove_dir_all(directory).unwrap();
+        });
+    }
 }

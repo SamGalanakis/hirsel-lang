@@ -1211,7 +1211,7 @@ fn template_owners_and_objects_are_identical_at_one_and_eight_workers() {
                 let serial = emit(1);
                 let parallel = emit(8);
                 assert_eq!(serial, parallel, "{name}: {backend:?} {opt:?}");
-                assert_eq!(serial.len(), ready.units.len());
+                assert_eq!(serial.len(), ready.units.len() + 1, "one glue object");
                 if name == "root" && backend == Backend::Llvm {
                     assert!(
                         serial

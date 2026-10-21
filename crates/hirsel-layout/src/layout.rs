@@ -385,6 +385,15 @@ impl<'o> LayoutBuilder<'o> {
     pub fn table(&self) -> &LayoutTable {
         &self.table
     }
+    /// Reserve the canonical scalar and header rows native stages synthesize.
+    /// Call before instance expansion: first-match indexes then select these
+    /// same content identities regardless of source layout request order.
+    pub fn prepare_native_controls(&mut self) {
+        self.scalar(ScalarKind::Bool);
+        self.scalar(ScalarKind::U64);
+        self.header();
+    }
+
     /// Seal the table. It always holds `Scalar(Bool)`, which a stage may need
     /// after sealing (a uniqueness test's result) whether or not the source
     /// names a bool; appended last, so no existing id moves.

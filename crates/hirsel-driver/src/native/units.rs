@@ -5,10 +5,9 @@
 //! (`hirsel_lir::objects::object_key`), so a unit the object store holds skips every stage
 //! after the Value passes, and program assembly reads its fragment.
 //!
-//! A unit's object holds the unit and, `linkonce_odr`, the library and known callable
-//! bodies it reaches, as a whole-program object holds every one it calls: a template is
-//! never an object of its own. Their keys enter the unit's key. A missed unit lowers each
-//! template it needs once, whichever unit asks first.
+//! Every unit owns one retained object, including library templates. Optimized LLVM
+//! callers may copy reached templates and small callees as optimizer-only bodies;
+//! their content keys enter the caller key. Cranelift and LLVM O0 import owner symbols.
 
 use super::emit::Backend;
 use super::stages::{NativeError, Options, StageName, timed};
@@ -124,9 +123,7 @@ pub(crate) struct Program<'a> {
     pub origins: &'a [InstanceId],
 }
 
-/// One unit of a program after `lower`: an object's own unit has its fragment, and a
-/// template (a library or known callable body) has none, its summary being in the
-/// fragments of the units that copy it.
+/// One unit of a program after `lower`, with its independently retained owner object.
 pub(crate) struct LoweredUnit {
     pub fragment: Option<UnitFragment>,
     /// The object store held the fragment.
@@ -147,11 +144,14 @@ pub(crate) fn lower(
         s.instance
             .and_then(|i| index.get(&(s.definition.clone(), i)).copied())
     };
-    let template: Vec<bool> = units
+    let copyable: Vec<bool> = units
         .iter()
         .map(|u| {
-            u.header.origin == UnitOrigin::Library
-                || program.emit.inline_instances.contains(&u.header.instance)
+            program.objects.backend == Backend::Llvm
+                && program.objects.opt != OptLevel::None
+                && (u.header.origin == UnitOrigin::Library
+                    || program.emit.inline_instances.contains(&u.header.instance)
+                    || u.instructions.len() <= super::link::SMALL_UNIT_INSTRUCTIONS)
         })
         .collect();
     // What each unit's code can name: its calls and function references, and the
@@ -176,7 +176,7 @@ pub(crate) fn lower(
             let mut seen = BTreeSet::new();
             let mut pending: Vec<usize> = reached[i].clone();
             while let Some(j) = pending.pop() {
-                if j != i && template[j] && seen.insert(j) {
+                if j != i && copyable[j] && seen.insert(j) {
                     pending.extend(reached[j].iter().copied());
                 }
             }
@@ -240,7 +240,7 @@ pub(crate) fn lower(
         })
         .collect();
     let jobs = program.objects.jobs;
-    let tasks: Vec<usize> = (0..keys.len()).filter(|&i| !template[i]).collect();
+    let tasks: Vec<usize> = (0..keys.len()).collect();
     let results = hirsel_intern::jobs::map(
         jobs,
         tasks,
@@ -289,7 +289,7 @@ pub(crate) fn lower(
             for unit in &selected {
                 for symbol in references(unit.unit()) {
                     if let Some(j) = find(&symbol)
-                        && template[j]
+                        && copyable[j]
                         && j != i
                         && !copies[i].contains(&j)
                     {
@@ -435,13 +435,20 @@ fn emit(
         sources: None,
     };
     let definition = selected[0].unit().header.definition.clone();
+    let copies = selected[1..]
+        .iter()
+        .map(|u| u.unit().header.instance)
+        .collect();
+    let inputs = EmitInputs {
+        available_externally: &copies,
+        ..program.emit.clone()
+    };
     match program.objects.backend {
-        Backend::Llvm => hirsel_llvm::emit_object_profile(selected, program.emit, profile)
-            .map_err(|e| e.to_string()),
-        Backend::Cranelift => {
-            hirsel_cranelift::emit_object_profile(selected, program.emit, profile)
-                .map_err(|e| e.to_string())
+        Backend::Llvm => {
+            hirsel_llvm::emit_object_profile(selected, &inputs, profile).map_err(|e| e.to_string())
         }
+        Backend::Cranelift => hirsel_cranelift::emit_object_profile(selected, &inputs, profile)
+            .map_err(|e| e.to_string()),
     }
     .map_err(|message| NativeError::of(StageName::Emission, &definition, message))
 }
@@ -505,7 +512,9 @@ mod cache_tests {
             }
         }
         fn put(&self, key: &UnitKey, bytes: &[u8]) {
-            self.puts.fetch_add(1, Ordering::Relaxed);
+            if bytes.starts_with(b"HIRFRG01") {
+                self.puts.fetch_add(1, Ordering::Relaxed);
+            }
             self.rows.lock().unwrap().insert(*key, bytes.into());
         }
     }

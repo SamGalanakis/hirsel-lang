@@ -111,7 +111,7 @@ and the `runtime failure[RULE] at PACKAGE@VERSION/module/definition (FILE:LINE:C
 stage cannot build yet prints `hirsel: native <stage>: ...` and exits 3; that is
 a tool outcome and says nothing about the source. `--backend cranelift` builds
 the same LIR with Cranelift, unoptimized, for a fast debug loop
-(`crates/hirsel-cranelift`); `--backend llvm` (the default) is LLVM O3.
+(`crates/hirsel-cranelift`); `--backend llvm` selects LLVM O2; the default is Cranelift.
 
 Check/run (including `--native` and `--simulation`) also accept an explicit
 launch manifest JSON path. A source path loads its exact `.hir.json` sidecar
@@ -133,10 +133,10 @@ and cannot combine with `--run` or `--native`.
 with empty grants. A launcher can explicitly fill its Io projections and Args/Env
 snapshots before supplying that record; selecting the source grants no authority.
 
-`hirsel build [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux]
+`hirsel build [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux]
 <source|manifest.json> -o <exe>` writes a standalone executable linked with the
-production runtime. Default builds use LLVM O2, release O3, debug O0 with source
-line tables. `--backend cranelift` lowers the same LIR with Cranelift: `--debug`
+production runtime. Default and release builds use LLVM O2; debug defaults to Cranelift
+with source line tables. `--lto` selects whole-module LLVM O2. `--backend cranelift` lowers the same LIR with Cranelift: `--debug`
 is its unoptimized level with DWARF 5 source line tables, and the default profile
 uses its `speed` level. Release builds use LLVM; combining `--release` with
 `--backend cranelift` exits 2 with that diagnostic. Its parity gate covers x86-64

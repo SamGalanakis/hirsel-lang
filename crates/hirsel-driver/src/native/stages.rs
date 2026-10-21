@@ -216,6 +216,8 @@ pub struct UnitObjectArtifacts {
     pub objects: Vec<hirsel_lir::stage::ObjectArtifact>,
     /// How many of them the object store held.
     pub hits: usize,
+    /// Units instantiated with type or size arguments, including generated helpers.
+    pub generic_units: usize,
 }
 
 impl ReadyProgram {
@@ -674,10 +676,6 @@ fn build_units(
         measurement: false,
         fuel: objects.fuel,
     };
-    let headers: Vec<(DefPath, ContentHash)> = units
-        .iter()
-        .map(|u| (u.header.definition.clone(), u.header.instance))
-        .collect();
     let lowered_units = super::units::lower(
         &super::units::Program {
             options,
@@ -694,30 +692,14 @@ fn build_units(
         },
         units,
     )?;
-    // A template's summary is in the fragment of every unit that copies it.
-    let mut templates = BTreeMap::new();
-    for unit in &lowered_units {
-        if let Some(fragment) = &unit.fragment {
-            for template in &fragment.templates {
-                templates
-                    .entry((template.definition.clone(), template.instance))
-                    .or_insert_with(|| template.clone());
-            }
-        }
-    }
     let mut summaries = Vec::with_capacity(lowered_units.len());
-    let mut artifacts = Vec::new();
+    let mut artifacts = Vec::with_capacity(lowered_units.len());
     let mut hits = 0;
-    for (unit, header) in lowered_units.into_iter().zip(headers) {
-        match unit.fragment {
-            Some(fragment) => {
-                hits += usize::from(unit.hit);
-                summaries.push(fragment.summary);
-                artifacts.push(fragment.object);
-            }
-            // A template no object copies is not in the program's code.
-            None => summaries.extend(templates.remove(&header)),
-        }
+    for unit in lowered_units {
+        let fragment = unit.fragment.expect("every planned unit owns a fragment");
+        hits += usize::from(unit.hit);
+        summaries.push(fragment.summary);
+        artifacts.push(fragment.object);
     }
     Ok(BuiltUnits {
         summaries,
@@ -727,6 +709,14 @@ fn build_units(
             debug: objects.debug,
             objects: artifacts,
             hits,
+            generic_units: lowered
+                .unit_origins
+                .iter()
+                .filter(|id| {
+                    let actuals = &lowered.instances.actuals[id.index()];
+                    !actuals.arguments.is_empty() || !actuals.outer.is_empty()
+                })
+                .count(),
         },
         keys,
         callbacks,

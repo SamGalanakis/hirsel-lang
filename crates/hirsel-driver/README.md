@@ -55,21 +55,17 @@ inputs, passed after the runtime archive (`-l<name>` or the file); the link acce
 `Unsafe` operation (CAP-6, from `ValidatedNativeInput::unsafe_reach`); each sets
 hirsel-rt's `ESCAPES` bit, so the executable refuses a record whose
 `admission.code` is `admit.safe@1`.
-`ReadyProgram.callbacks` names the definitions a unit references as C callbacks, whose
-objects define their callback thunks (linkonce for library and inlined units).
+`ReadyProgram.callbacks` names the definitions referenced as C callbacks; their
+thunks live in the always-regenerated glue object.
 
-Native callable-target specializations retain their original instance's signature
-and placement proofs. `ReadyProgram.inline_instances` lets `native::link` include
-known callable bodies and their transitive specializations in each calling
-partition; the backend emits them as linkonce entries. Singleton boundaries
-therefore do not erase a proven closure target or prevent its inlining. Ordinary
-source entries, failure anchors and dynamic callable dispatch keep their ABI.
-At O3, `native::partition_objects` also copies each small source unit
-(`SMALL_UNIT_INSTRUCTIONS` LIR instructions or fewer), transitively, into every
-object whose units call it, as an `available_externally` body. Its own object
-still exports it, so the copy only lets LLVM inline it there; whether a call
-inlines does not depend on the partition. An object's code therefore depends on
-the small callee bodies it copies.
+Every native unit, including each library template and known callable body, owns
+one retained object. Cranelift and LLVM O0 import their callees. Optimized LLVM
+callers may include reached templates and small source callees
+(`SMALL_UNIT_INSTRUCTIONS` or fewer) as `available_externally` optimizer bodies.
+Copied bodies enter the caller's content key, and retained owners keep entries,
+root adapters and callable thunks available independently of the caller set.
+Workers lower each unit completely, with plan-derived finalizers and results in
+plan order. `ReleaseLto` explicitly selects the whole-module path.
 
 Allowed dependencies: hirsel-engine, the shared data crates, check-protocol, signature, check, modes, lower, run-config, core-contract, the native backends, and `object` (reading runner, image and stub ELF files, writing the runner note). Only cli, conformance and pipeline-tests (and the registry-backed harnesses of check and modes, as dev-dependencies) depend on this crate.
 

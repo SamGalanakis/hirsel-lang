@@ -240,6 +240,7 @@ pub fn lower_cached(
     // The library's native representations lie over the program's owners.
     let owners = crate::library::owners(&program.types, &program.signatures).over(&program.owners);
     let mut layouts = LayoutBuilder::new(target, &owners);
+    layouts.prepare_native_controls();
     let mut instances =
         crate::instance::expand(program, &mut layouts).map_err(LowerError::Instance)?;
     let mut plans = Vec::new();

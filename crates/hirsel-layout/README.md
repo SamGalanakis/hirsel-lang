@@ -32,3 +32,7 @@ prefix, just as variable-element Lists do. Their elements remain fixed-size.
 `with_caller_site` derives and memoizes ABI v2's optional inert source-code pair,
 without changing a FunctionType. All closure/iterator callable ABIs carry it;
 marked source bodies and compiled library bodies select it for their direct ABI.
+
+`LayoutBuilder::prepare_native_controls` reserves the synthetic Bool, U64 and
+header rows before native instance expansion. Later passes' first-match lookups
+then keep their content keys when an unrelated source Bool is added.

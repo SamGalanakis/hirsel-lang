@@ -63,7 +63,8 @@ LLVM O2. `--lto` explicitly requests whole-module LLVM O2;
 it cannot be combined with `--debug` or `--backend cranelift`. Combining
 `--release` with `--backend cranelift` is refused. The backends' own
 IR verifiers (LLVM's module verifier, Cranelift's `enable_verifier`) run only with
-every-stage validation (`HIRSEL_VALIDATE_STAGES=1`) and in
+the explicit `--validate-stages` policy (or the harness default
+`HIRSEL_VALIDATE_STAGES=1`) and in
 compilers built with debug assertions, as every test build is.
 
 ### What a native build needs
