@@ -177,7 +177,8 @@ pub(crate) unsafe fn issue(
     ctx: *mut TaskCtx,
     request: Request,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
-    if crate::tasks::ordered::engine::on(ctx) {
+    let ordered = crate::tasks::ordered::engine::on(ctx);
+    if ordered {
         crate::tasks::ordered::host::begin(ctx, matches!(request, Request::Close { .. }))?;
     }
     let close = matches!(request, Request::Close { .. });
@@ -185,7 +186,10 @@ pub(crate) unsafe fn issue(
     let issued = unsafe { issue_here(ctx, request) };
     // SAFETY: as above.
     unsafe { count(ctx) };
-    if close && issued.is_ok() && crate::tasks::ordered::engine::on(ctx) {
+    if ordered && let Ok((result, _)) = &issued {
+        crate::tasks::ordered::events::complete_host(ctx, close, result);
+    }
+    if close && issued.is_ok() && ordered {
         crate::tasks::ordered::host::finish(ctx, crate::ordered::Next::Keep)?;
     }
     issued

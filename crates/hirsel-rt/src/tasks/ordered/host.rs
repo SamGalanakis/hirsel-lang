@@ -155,7 +155,10 @@ mod tests {
                 }));
                 unsafe { run.use_physical_dispatch() };
                 let outcome = run.run(
-                    |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+                    |ctx| unsafe {
+                        engine::enable(ctx, Policy::admit(&Default::default(), None));
+                        super::super::events::enable(ctx);
+                    },
                     move |ctx| unsafe {
                         let mut scope = 0;
                         if cancellation {
@@ -200,6 +203,20 @@ mod tests {
                                 "waiting preserves one host ordinal"
                             );
                             assert!(engine::driver(ctx).host_ops.is_empty());
+                            let log = engine::driver(ctx).events.as_ref().unwrap();
+                            assert_eq!(log.host_completions.len(), 1);
+                            let done = &log.host_completions[0];
+                            assert_eq!(done.ordinal, before);
+                            assert!(done.task.is_empty());
+                            assert_eq!(done.op, "host.request");
+                            assert_eq!(
+                                done.result,
+                                Ok(Completion::Wait(if cancellation {
+                                    Err(crate::io::WaitError::Canceled(CANCEL_DEADLINE))
+                                } else {
+                                    Ok(())
+                                }))
+                            );
                         }
                         if cancellation {
                             let mut expired = 0;
@@ -360,6 +377,111 @@ mod tests {
             );
             assert_eq!(outcome.ended, Ok(STATUS_OK));
             assert_eq!(*probe.output.lock().unwrap(), b"one");
+        }
+    }
+    struct CompletionHost {
+        home: std::thread::ThreadId,
+        mapped: Vec<u8>,
+    }
+    impl Adapter for CompletionHost {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            assert_eq!(std::thread::current().id(), self.home);
+            match request {
+                Request::MapView { .. } => Ok(Completion::View(crate::io::MapView {
+                    length: 3,
+                    bytes: None,
+                    block: self.mapped.as_ptr() as usize,
+                })),
+                Request::Close { .. } => {
+                    self.mapped.fill(0);
+                    Ok(Completion::Unit(Err(crate::io::IoError::Fault(5))))
+                }
+                Request::TestCheck { .. } => Err(AdapterError::InvalidHandle(77)),
+                request => panic!("unexpected {request:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn immediate_host_evidence_owns_mapping_bytes_and_keeps_close_and_error_ordinals() {
+        for width in [2, 4, 8] {
+            let mut mapped = vec![0; crate::alloc::HEADER_SIZE + 16];
+            mapped.extend([1, 2, 3]);
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.adapter = Some(Box::new(CompletionHost {
+                home: std::thread::current().id(),
+                mapped,
+            }));
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe {
+                    engine::enable(ctx, Policy::admit(&Default::default(), None));
+                    super::super::events::enable(ctx);
+                },
+                |ctx| unsafe {
+                    let (result, parked) = crate::host_waits::issue(
+                        ctx,
+                        Request::MapView {
+                            directory: 0,
+                            mapped: 99,
+                        },
+                    )
+                    .unwrap();
+                    assert!(!parked);
+                    assert!(matches!(result, Ok(Completion::View(_))));
+                    crate::tasks::try_yield(&mut *ctx).unwrap();
+                    let (result, parked) =
+                        crate::host_waits::issue(ctx, Request::Close { handle: 99 }).unwrap();
+                    assert!(!parked);
+                    assert_eq!(
+                        result,
+                        Ok(Completion::Unit(Err(crate::io::IoError::Fault(5))))
+                    );
+                    let (result, parked) = crate::host_waits::issue(
+                        ctx,
+                        Request::TestCheck {
+                            test: 77,
+                            condition: true,
+                        },
+                    )
+                    .unwrap();
+                    assert!(!parked);
+                    assert_eq!(result, Err(AdapterError::InvalidHandle(77)));
+                    crate::tasks::try_yield(&mut *ctx).unwrap();
+                    let driver = engine::driver(ctx);
+                    let log = driver.events.as_ref().unwrap();
+                    assert_eq!(log.host_completions.len(), 3);
+                    assert_eq!(
+                        log.host_completions
+                            .iter()
+                            .map(|done| done.ordinal)
+                            .collect::<Vec<_>>(),
+                        [0, 1, 2]
+                    );
+                    let Ok(Completion::View(view)) = &log.host_completions[0].result else {
+                        panic!("captured view")
+                    };
+                    assert_eq!(view.bytes, Some(vec![1, 2, 3]));
+                    assert_eq!(
+                        view.block, 0,
+                        "no borrowed mapping address survives capture"
+                    );
+                    assert_eq!(view.contents(), [1, 2, 3]);
+                    assert_eq!(log.host_completions[1].op, "host.handle_drop");
+                    assert_eq!(
+                        log.host_completions[2].result,
+                        Err(AdapterError::InvalidHandle(77))
+                    );
+                    assert_eq!(driver.recorded.values().copied().sum::<u64>(), 3);
+                    assert!(driver.host_ops.is_empty());
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            assert_eq!(outcome.pending, 0);
         }
     }
 }

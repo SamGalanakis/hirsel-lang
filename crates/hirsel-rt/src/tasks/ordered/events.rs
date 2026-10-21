@@ -8,7 +8,7 @@ use crate::TaskCtx;
 use crate::budget::stretch::Stretch;
 use crate::ordered::footprint::{Item, ObjectId, TaskId};
 use crate::ordered::{Next, Operation, Retirement};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Transition {
@@ -44,6 +44,17 @@ pub(super) enum CanonicalItem {
     Cancellation(Vec<u32>),
 }
 
+/// The actual completion returned by an owned host request. It is retained
+/// separately from its entry/park boundaries under the same ordinal. Host
+/// handle values still require logical-key normalization before export.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct HostCompletion {
+    pub task: Vec<u32>,
+    pub ordinal: u64,
+    pub op: &'static str,
+    pub result: Result<crate::io::Completion, crate::io::AdapterError>,
+}
+
 /// Canonical scalar event: no native handle word or physical worker enters it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CanonicalEvent {
@@ -77,6 +88,9 @@ pub(super) struct Unsupported {
 #[derive(Default)]
 pub(super) struct Log {
     ordinals: BTreeMap<Vec<u32>, u64>,
+    last_ops: BTreeMap<Vec<u32>, &'static str>,
+    completed: BTreeSet<(Vec<u32>, u64)>,
+    pub host_completions: Vec<HostCompletion>,
     pub boundaries: Vec<Boundary>,
     versions: BTreeMap<CanonicalItem, u64>,
     canonical: Vec<CanonicalEvent>,
@@ -101,6 +115,57 @@ pub(super) fn enable(ctx: *mut TaskCtx) {
     let driver = super::engine::driver(ctx);
     assert!(driver.recorded.is_empty());
     assert!(driver.events.replace(Log::default()).is_none());
+}
+
+/// Capture after the owned request returned, before its caller can yield.
+/// This is non-suspending and keeps the entered operation's original ordinal.
+pub(crate) fn complete_host(
+    ctx: *mut TaskCtx,
+    close: bool,
+    result: &Result<crate::io::Completion, crate::io::AdapterError>,
+) {
+    // SAFETY: the host boundary has regained its scheduler role; no bridge
+    // or stop-aware entry is permitted between the effect and its evidence.
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let Logical::Ordered(driver) = &s.logical else {
+        return;
+    };
+    if driver.events.is_none() {
+        return;
+    }
+    let task = unsafe { (*ctx).task_id };
+    let path = s.task(task).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path]
+        .checked_sub(1)
+        .expect("a host completion follows entry");
+    let op = if close {
+        "host.handle_drop"
+    } else {
+        "host.request"
+    };
+    assert_eq!(log.last_ops.get(&path), Some(&op));
+    assert!(
+        log.completed.insert((path.clone(), ordinal)),
+        "one completion per host operation"
+    );
+    // A MapView can borrow host mapping storage. Copy its actual bytes while
+    // the request still owns the view, rather than retaining a native address.
+    let result = match result {
+        Ok(crate::io::Completion::View(view)) => Ok(crate::io::Completion::View(
+            crate::io::MapView::of(view.contents()),
+        )),
+        value => value.clone(),
+    };
+    log.host_completions.push(HostCompletion {
+        task: path,
+        ordinal,
+        op,
+        result,
+    });
 }
 
 pub(super) fn record(
@@ -189,6 +254,8 @@ pub(super) fn record(
     let ordinal = if operation.is_some() {
         let ordinal = *next;
         *next = next.checked_add(1).expect("operation ordinal overflow");
+        log.last_ops
+            .insert(path.clone(), operation.unwrap().0.descriptor.name);
         ordinal
     } else {
         next.checked_sub(1)
