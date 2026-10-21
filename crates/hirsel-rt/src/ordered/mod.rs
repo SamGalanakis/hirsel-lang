@@ -92,6 +92,17 @@ pub struct Receipt<R> {
     pub credit: u64,
 }
 
+/// Borrowed evidence at an operation's retirement position. Reading it never
+/// replays a commit, samples a later object version or changes an ordinal.
+/// Writers copy only when tracing/recording is enabled.
+#[derive(Clone, Copy, Debug)]
+pub struct Retirement<'a> {
+    pub index: u64,
+    pub before: &'a Stretch,
+    pub transition: &'a Next,
+    pub credit: u64,
+}
+
 /// Object access happens under the scheduler role. An early send must enqueue
 /// a pending message without touching its channel. `publish` clears pending
 /// marks AND touches their channels, before the retirement's poll. `record`
@@ -108,6 +119,20 @@ pub trait Backend<P> {
 
     fn commit(&mut self, task: TaskId, op: &Operation<P>, early: bool) -> Receipt<Self::Result>;
     fn record(&mut self, task: TaskId, op: &Operation<P>, result: &Self::Result, retirement: u64);
+    /// Complete metadata for canonical writers. Existing backends retain
+    /// their record callback; no summary copy is needed when unused.
+    fn record_retirement(
+        &mut self,
+        task: TaskId,
+        op: &Operation<P>,
+        result: &Self::Result,
+        retirement: Retirement<'_>,
+    ) {
+        self.record(task, op, result, retirement.index);
+    }
+    /// A waiting operation may resume, yield or call without a second op.
+    /// Its continuation has a positional stretch but consumes no ordinal.
+    fn record_continuation(&mut self, _task: TaskId, _retirement: Retirement<'_>) {}
     fn publish(&mut self, task: TaskId, op: &Operation<P>, result: &Self::Result);
     /// Enter one holding rest selected by a retiring call, including later
     /// members after a previous rest returns. No poll or user code may run.
@@ -552,7 +577,17 @@ impl<P, R> Frontier<P, R> {
         let early = committed.is_some();
         let receipt = committed.unwrap_or_else(|| backend.commit(task, &operation, false));
         self.settled.level = self.settled.level.saturating_sub(receipt.credit);
-        backend.record(task, &operation, &receipt.result, self.retired);
+        backend.record_retirement(
+            task,
+            &operation,
+            &receipt.result,
+            Retirement {
+                index: self.retired,
+                before: &before,
+                transition: &receipt.next,
+                credit: receipt.credit,
+            },
+        );
         if early {
             backend.publish(task, &operation, &receipt.result);
         }
@@ -577,7 +612,17 @@ impl<P, R> Frontier<P, R> {
             return Err(kind);
         }
         self.tasks.get_mut(&task).unwrap().open_speculative_bytes = 0;
-        self.transition(task, effect(), backend)
+        let next = effect();
+        backend.record_continuation(
+            task,
+            Retirement {
+                index: self.retired,
+                before: &before,
+                transition: &next,
+                credit: 0,
+            },
+        );
+        self.transition(task, next, backend)
     }
 
     fn transition<B: Backend<P, Result = R>>(

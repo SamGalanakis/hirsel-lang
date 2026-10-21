@@ -22,6 +22,7 @@ struct Objects {
     calls: Vec<(TaskId, TaskId)>,
     members: Vec<(TaskId, TaskId)>,
     returned_calls: Vec<TaskId>,
+    retirements: Vec<(TaskId, bool, u64, Stretch, Next, u64)>,
 }
 
 impl Backend<Command> for Objects {
@@ -49,6 +50,33 @@ impl Backend<Command> for Objects {
     fn record(&mut self, task: TaskId, op: &Operation<Command>, result: &u64, retirement: u64) {
         self.trace
             .push((retirement, task, op.descriptor.name, *result));
+    }
+    fn record_retirement(
+        &mut self,
+        task: TaskId,
+        op: &Operation<Command>,
+        result: &u64,
+        record: Retirement<'_>,
+    ) {
+        self.record(task, op, result, record.index);
+        self.retirements.push((
+            task,
+            false,
+            record.index,
+            record.before.clone(),
+            record.transition.clone(),
+            record.credit,
+        ));
+    }
+    fn record_continuation(&mut self, task: TaskId, record: Retirement<'_>) {
+        self.retirements.push((
+            task,
+            true,
+            record.index,
+            record.before.clone(),
+            record.transition.clone(),
+            record.credit,
+        ));
     }
     fn publish(&mut self, task: TaskId, _: &Operation<Command>, _: &u64) {
         self.published.push(task);
@@ -617,4 +645,60 @@ fn a_pending_keep_can_resume_its_saved_frame_after_absorption() {
     assert_eq!(f.absorb(&mut b), Ok(Progress::Absorbed(2)));
     f.start(2, 3);
     assert_eq!(f.state(2), State::Running(3));
+}
+
+#[test]
+fn retirement_metadata_keeps_early_stretches_and_positional_credits() {
+    let (mut f, mut b) = frontier();
+    let before = stretch(&[Event::Alloc(24), Event::Fuel, Event::Free(8)]);
+    let prior = b.retirements.len();
+    assert_eq!(
+        f.offer(2, before.clone(), store(7, 9), &mut b).0,
+        Offer::Early
+    );
+    assert_eq!(
+        b.retirements.len(),
+        prior,
+        "commit must not emit a retirement"
+    );
+    f.apply_head(empty(), step("task.check_canceled", Next::Park), &mut b)
+        .unwrap();
+    f.absorb(&mut b).unwrap();
+    assert_eq!(
+        b.retirements.last().unwrap(),
+        &(2, false, 2, before, Next::Yield, 0)
+    );
+    let credit = operation("root.release", Command::Step(Next::Keep, 16), &[], &[]);
+    f.apply_head(empty(), credit, &mut b).unwrap();
+    assert_eq!(b.retirements.last().unwrap().5, 16);
+    assert_eq!(f.settled.level, 0);
+}
+
+#[test]
+fn waiting_continuations_record_their_stretch_without_inventing_an_op() {
+    let (mut f, mut b) = frontier();
+    f.apply_head(empty(), step("host.request", Next::Keep), &mut b)
+        .unwrap();
+    let operations = b.trace.len();
+    let before = stretch(&[Event::Fuel, Event::Alloc(8)]);
+    f.continue_head(before.clone(), &mut b, || Next::Yield)
+        .unwrap();
+    assert_eq!(b.trace.len(), operations);
+    assert_eq!(
+        b.retirements.last().unwrap(),
+        &(1, true, 1, before, Next::Yield, 0)
+    );
+}
+
+#[test]
+fn a_budget_stop_does_not_publish_metadata_for_the_rejected_operation() {
+    let (mut f, mut b) = frontier();
+    f.settled.limit = 8;
+    let prior = (b.trace.len(), b.retirements.len());
+    assert_eq!(
+        f.apply_head(stretch(&[Event::Alloc(16)]), store(7, 9), &mut b),
+        Err(BudgetKind::Memory)
+    );
+    assert_eq!((b.trace.len(), b.retirements.len()), prior);
+    assert!(b.values.is_empty());
 }
