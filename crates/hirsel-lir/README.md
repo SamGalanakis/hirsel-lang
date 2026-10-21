@@ -748,3 +748,7 @@ which `hirsel-layout` derives for every `Shared` reference and which descriptor
 version 13 lowers to `STEP_RELEASE_ROOT`. Both emitters add a root with
 `hirsel_rt_v2_root_dup` (LLVM inline by a CAS below the dup bound) and give one
 up only with `hirsel_rt_v2_root_release`; glue never releases a root inline.
+
+`objects::SeededObjects` layers a configured writable store over a read-only
+seed. `ReadOnlyObjects` checks framing without refreshing mtimes or removing
+corrupt entries, allowing shared toolchain installations to remain read-only.

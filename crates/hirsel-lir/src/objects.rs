@@ -49,8 +49,43 @@ impl UnitKey {
 /// Stored unit fragments by `UnitKey`. A `get` that cannot produce intact bytes is a
 /// miss; a `put` that cannot store is dropped. Neither is ever an error the build sees.
 pub trait ObjectStore: Send + Sync {
+    /// Whether writes can be retained; none avoids preparing import-cache entries.
+    fn enabled(&self) -> bool {
+        true
+    }
     fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>>;
     fn put(&self, key: &UnitKey, value: &[u8]);
+}
+
+/// A writable cache with a read-only toolchain seed as fallback. Hits never copy
+/// seed entries into the writable store; misses are written only to `writable`.
+pub struct SeededObjects {
+    pub writable: Arc<dyn ObjectStore>,
+    pub seed: Arc<dyn ObjectStore>,
+}
+
+impl ObjectStore for SeededObjects {
+    fn enabled(&self) -> bool {
+        self.writable.enabled() || self.seed.enabled()
+    }
+    fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
+        self.writable.get(key).or_else(|| self.seed.get(key))
+    }
+    fn put(&self, key: &UnitKey, value: &[u8]) {
+        self.writable.put(key, value);
+    }
+}
+
+/// A toolchain object partition. It never refreshes mtimes, removes corrupt
+/// entries or writes files, so a shared installation can be read-only.
+pub struct ReadOnlyObjects(pub PathBuf);
+impl ObjectStore for ReadOnlyObjects {
+    fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
+        let hex = key.hex();
+        let bytes = fs::read(self.0.join(&hex[..2]).join(&hex)).ok()?;
+        Some(unframe(&bytes)?.into())
+    }
+    fn put(&self, _: &UnitKey, _: &[u8]) {}
 }
 
 /// The store format version in `dir@1`'s directory name.
@@ -66,6 +101,9 @@ pub fn partition(target: &str, backend: &str, opt: &str) -> String {
 #[derive(Debug, Default)]
 pub struct NoObjects;
 impl ObjectStore for NoObjects {
+    fn enabled(&self) -> bool {
+        false
+    }
     fn get(&self, _: &UnitKey) -> Option<Arc<[u8]>> {
         None
     }

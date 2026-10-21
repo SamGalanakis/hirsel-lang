@@ -464,13 +464,28 @@ pub fn build_program(
     let _interval = timings::interval(Interval::Units);
     let target = &options.target;
     let import = timings::phase(Phase::Import);
-    let mut lowered = hirsel_rc::import::lower_discharging(
+    let mut imports;
+    let mut none = hirsel_rc::import::NoImports;
+    let cache: &mut dyn hirsel_rc::import::ImportCache = match &options.objects {
+        Some(objects) => {
+            imports = super::import_cache::Imports::new(
+                objects.store.as_ref(),
+                target,
+                program.types.clone(),
+                options.validation == Validation::EveryStage,
+            );
+            &mut imports
+        }
+        None => &mut none,
+    };
+    let mut lowered = hirsel_rc::import::lower_cached(
         program,
         target,
         &hirsel_rc::flat_walk::Options {
             enabled: options.flat_walk,
         },
         &options.discharge,
+        cache,
     )
     .map_err(|e| NativeError::new(StageName::Import, e.to_string()))?;
     let discharged = timed(Phase::LirValidate, || {

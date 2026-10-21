@@ -63,7 +63,7 @@ const PHASES: [&str; 18] = [
     "store lookup",
     "debug object",
 ];
-const COUNTS: [&str; 25] = [
+const COUNTS: [&str; 28] = [
     "definitions",
     "units",
     "V runs",
@@ -71,6 +71,9 @@ const COUNTS: [&str; 25] = [
     "store misses",
     "object hits",
     "object misses",
+    "native imports",
+    "import hits",
+    "import misses",
     "lowered",
     "dependency parses",
     "recomputes",

@@ -629,3 +629,26 @@ an atomic update to every allocation, so time a run without `--mem-usage`.
 reports computed authority, weight, public API exposure, replay constraints and
 health. See [Dependency cards for agents](dependency-cards.md) for field semantics,
 cache reuse and optional verified code-store provenance.
+
+## Native unit objects
+
+Native builds lower and emit units on `HIRSEL_JOBS` workers (the host's available
+parallelism by default). `HIRSEL_OBJECTS=none@1` is the default writable store;
+`dir@1` retains checksummed fragments under
+`$XDG_CACHE_HOME/hirsel/objects-v1/<target>-<backend>-<opt>` (or `$HOME/.cache`),
+and `sim@1` keeps them in memory. Object and import keys describe the unit's
+content and dependencies. Warm imports replay layout, ABI and library requests;
+warm object hits skip placement, RC, reuse, Ready validation and emission.
+`--validate-stages` always imports and recomputes object hits, comparing the
+fragments with fresh emission.
+
+The toolchain bundle also carries `hirsel-std.objects`, a read-only seed of std's
+non-generic runtime closure for the host. The same keys check it on a program's
+first build. `HIRSEL_STD_OBJECTS=<directory>` selects another seed;
+`HIRSEL_STD_OBJECTS=none` disables it. Misses use the selected writable store.
+`hirsel seed-objects <package manifest.json> -o <directory>` creates a seed without
+linking or executing the package, and reports the generic instances its roots
+reach. Install the `hirsel-std.objects` directory beside `hirsel` with its precheck.
+
+The timing counts `native imports`, `import hits` and `import misses` distinguish
+fresh SSA import from replay; `units` counts the placement-to-Ready pipelines run.

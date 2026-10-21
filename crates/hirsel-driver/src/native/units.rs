@@ -11,7 +11,7 @@
 //! template it needs once, whichever unit asks first.
 
 use super::emit::Backend;
-use super::stages::{NativeError, Options, StageName, checkpoint, seal, timed};
+use super::stages::{NativeError, Options, StageName, timed};
 use hirsel_intern::timings::{self, Count, Phase};
 use hirsel_lir::LayoutKeys;
 use hirsel_lir::emission::{EmitInputs, OptLevel};
@@ -69,6 +69,7 @@ impl UnitObjects {
             &format!("{opt:?}").to_lowercase(),
         );
         hirsel_lir::objects::objects_by_name(name, None, &partition)
+            .map(|store| super::std_seed::with_seed(store, &partition))
     }
 }
 
@@ -413,68 +414,15 @@ fn stages(
         operations: program.operations,
         discharge: program.discharge,
     };
-    let definition = unit.header.definition.clone();
-    let fail = |stage, message: String| NativeError::of(stage, &definition, message);
-    timings::count(Count::Units);
-    let value = checkpoint(
-        StageName::Import,
+    super::stages::lower_unit(
         unit,
+        id,
+        options,
+        program.instances,
+        program.finalizers,
         inputs,
         program.validation,
-        options.validation,
-    )?;
-    let placement =
-        hirsel_rc::placement::Options::for_instance(options.regions, program.instances, id);
-    let placed = timed(Phase::Place, || {
-        hirsel_rc::placement::place(value, table, &placement)
-    })
-    .map_err(|e| fail(StageName::Placement, e.to_string()))?;
-    let placed = checkpoint(
-        StageName::Placement,
-        placed,
-        inputs,
-        program.validation,
-        options.validation,
-    )?;
-    let proofs = Proofs::for_instance(program.instances, id);
-    let mut unit = timed(Phase::Rc, || {
-        hirsel_rc::insert::insert(placed, table, &proofs)
-    })
-    .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
-    if options.elide {
-        unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
-            .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
-    }
-    let rc = checkpoint(
-        StageName::Perceus,
-        unit,
-        inputs,
-        program.validation,
-        options.validation,
-    )?;
-    let reuse = hirsel_rc::reuse::Options {
-        reuse: options.reuse,
-    };
-    let reused = timed(Phase::Reuse, || {
-        hirsel_rc::reuse::reuse_indexed(rc, &reuse, program.validation.index())
-    })
-    .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
-    let reused = checkpoint(
-        StageName::Reuse,
-        reused,
-        inputs,
-        program.validation,
-        options.validation,
-    )?;
-    let ready = timed(Phase::Ready, || {
-        hirsel_rc::ready::ready_indexed(reused, program.finalizers, program.validation.index())
-    })
-    .map_err(|e| fail(StageName::Ready, e.to_string()))?;
-    let ready = seal(StageName::Ready, || {
-        program.validation.validate(ready, inputs)
-    })?;
-    super::emit::check_unit_runtime_calls(ready.unit(), table, program.emit.manifest)?;
-    Ok(ready)
+    )
 }
 
 /// One object of `selected`, the first the object's own unit.

@@ -145,6 +145,12 @@ pub enum Count {
     ObjectHits,
     /// Object-cache misses (none until the unit cache exists).
     ObjectMisses,
+    /// Native units imported instead of replayed.
+    NativeImports,
+    /// Native imports replayed from stored effects and Value LIR.
+    ImportHits,
+    /// Native import lookups that need fresh importing.
+    ImportMisses,
     /// Bodies lowered to TIR; in `check`, the bodies lowered at check time.
     Lowered,
     /// Dependency package sources parsed; none for a package a std image holds
@@ -186,7 +192,7 @@ pub enum Count {
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 25] = [
+    pub const ALL: [Count; 28] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -194,6 +200,9 @@ impl Count {
         Count::StoreMisses,
         Count::ObjectHits,
         Count::ObjectMisses,
+        Count::NativeImports,
+        Count::ImportHits,
+        Count::ImportMisses,
         Count::Lowered,
         Count::DependencyParses,
         Count::Recomputes,
@@ -223,6 +232,9 @@ impl Count {
             Count::StoreMisses => "store misses",
             Count::ObjectHits => "object hits",
             Count::ObjectMisses => "object misses",
+            Count::NativeImports => "native imports",
+            Count::ImportHits => "import hits",
+            Count::ImportMisses => "import misses",
             Count::Lowered => "lowered",
             Count::DependencyParses => "dependency parses",
             Count::Recomputes => "recomputes",

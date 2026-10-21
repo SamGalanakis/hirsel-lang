@@ -6,6 +6,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+hirsel-codec = { path = "../hirsel-codec" }
 hirsel-code-store = { path = "../hirsel-code-store" }
 hirsel-type-analysis = { path = "../hirsel-type-analysis" }
 hirsel-layout = { path = "../hirsel-layout" }
@@ -45,7 +46,6 @@ sha2 = "0.10"
 
 [dev-dependencies]
 hirsel-guard = { path = "../hirsel-guard" }
-hirsel-codec = { path = "../hirsel-codec" }
 hirsel-intern = { path = "../hirsel-intern", features = ["id-salt"] }
 hirsel-validate = { path = "../hirsel-validate" }
 hirsel-lexer = { path = "../hirsel-lexer" }

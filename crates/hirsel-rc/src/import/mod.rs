@@ -265,10 +265,15 @@ pub fn lower_cached(
         {
             crate::effects::replay(&hit.effects, &mut layouts, &mut instances, own_environment)
                 .map_err(|e| LowerError::Replay(id, format!("{e:?}")))?;
+            hirsel_intern::timings::count(hirsel_intern::timings::Count::ImportHits);
             plans.push(None);
             units.push(None);
             hits.push((id, hit));
             continue;
+        }
+        hirsel_intern::timings::count(hirsel_intern::timings::Count::NativeImports);
+        if cache.enabled() && sites.is_none() {
+            hirsel_intern::timings::count(hirsel_intern::timings::Count::ImportMisses);
         }
         let mut recorder = crate::effects::Recorder::new(&mut layouts, own_environment);
         if instances.roles[id.index()].is_library() {
