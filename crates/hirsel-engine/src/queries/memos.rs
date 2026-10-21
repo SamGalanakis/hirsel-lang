@@ -85,6 +85,10 @@ impl DefInputs {
 fn tag(domain: &str, parts: &[&[u8]]) -> ContentHash {
     ContentHash::of_parts(domain, parts.iter().copied())
 }
+/// The canonical absence of a declaration-candidate row.
+pub(crate) fn no_candidates() -> ContentHash {
+    tag("hirsel.read.no-candidates", &[])
+}
 /// The observed value of an optional hash.
 pub(crate) fn optional(hash: Option<ContentHash>) -> ContentHash {
     match hash {
@@ -214,7 +218,7 @@ impl QueryEngine {
             return candidates;
         }
         let Some(items) = self.items.get(path) else {
-            return tag("hirsel.read.no-candidates", &[]);
+            return no_candidates();
         };
         let mut parts: Vec<Vec<u8>> = vec![(items.len() as u64).to_le_bytes().to_vec()];
         for item in items {
@@ -253,7 +257,7 @@ impl QueryEngine {
             .collect();
         ContentHash::of_parts("hirsel.read.cited", parts.iter().map(Vec::as_slice))
     }
-    fn failed_key_value(&self, path: &DefPath) -> ContentHash {
+    pub(crate) fn failed_key_value(&self, path: &DefPath) -> ContentHash {
         optional(self.failed_signature_key(path))
     }
 
@@ -404,10 +408,23 @@ impl QueryEngine {
             ReadKey::CitedText(d) => self.cited_value(d.path()),
             ReadKey::DeclarationCandidates(d) => self.candidates_value(d.path()),
             ReadKey::Environment => self.environment_value(),
-            ReadKey::NameSet(..)
-            | ReadKey::ValidationView(_)
-            | ReadKey::UniverseErrors
-            | ReadKey::FirstHeap => return None,
+            ReadKey::ValidationView(d) => self
+                .signature_snapshot()
+                .validation(&owner.0.package)
+                .view(d)
+                .map_or_else(ContentHash::default, |(_, digest)| digest.0),
+            ReadKey::UniverseErrors => {
+                self.signature_snapshot()
+                    .validation(&owner.0.package)
+                    .universe_errors()
+                    .0
+            }
+            ReadKey::FirstHeap => self
+                .signature_snapshot()
+                .validation(&owner.0.package)
+                .first_heap()
+                .map_or_else(ContentHash::default, |(d, _)| d.path().fingerprint()),
+            ReadKey::NameSet(..) => return None,
         })
     }
 

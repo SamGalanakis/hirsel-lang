@@ -285,6 +285,7 @@ impl StdImage {
                 let body = self.inputs(d)?.body;
                 let owner = entry.owner.map(|(declaration, dependencies)| {
                     crate::representation::OwnerRecord {
+                        view: Default::default(),
                         text_hash: body,
                         representation: hirsel_check_protocol::header::OwnerRepresentation {
                             declaration,

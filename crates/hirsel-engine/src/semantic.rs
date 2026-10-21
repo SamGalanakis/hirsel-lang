@@ -223,6 +223,7 @@ impl SignatureAdapter {
         products.representation = output
             .owner
             .map(|owner| crate::representation::OwnerRecord {
+                view: Default::default(),
                 text_hash: syntax.text_hash,
                 representation: owner,
                 dependencies: output.public.dependencies.clone(),

@@ -5,6 +5,23 @@ pub(crate) struct OwnerRecord {
     pub text_hash: ContentHash,
     pub representation: hirsel_check_protocol::header::OwnerRepresentation,
     pub dependencies: Vec<SignatureDependency>,
+    pub view: std::sync::OnceLock<(hirsel_types::SignatureRef, ContentHash)>,
+}
+impl OwnerRecord {
+    pub fn body_view(
+        &self,
+        types: &hirsel_types::TypeInterner,
+        public: &hirsel_types::SignatureRef,
+    ) -> &(hirsel_types::SignatureRef, ContentHash) {
+        self.view.get_or_init(|| {
+            let view = std::sync::Arc::new(hirsel_types::encoding::owner_view(
+                public,
+                self.representation.declaration.clone(),
+            ));
+            let digest = hirsel_validate::digest(types, &view).0;
+            (view, digest)
+        })
+    }
 }
 pub use hirsel_tir::representation::RepresentationRecord;
 impl QueryEngine {
@@ -36,7 +53,12 @@ impl QueryEngine {
         if let Some(image) = self.image_signature(path)
             && std::sync::Arc::ptr_eq(&image.output.value, &public)
         {
-            return Ok((image.private.clone(), self.implementation_hash(path)));
+            let digest = image
+                .owner
+                .as_ref()
+                .map(|owner| owner.body_view(&self.types, &public).1)
+                .unwrap_or_else(|| hirsel_validate::digest(&self.types, &image.private).0);
+            return Ok((image.private.clone(), Some(digest)));
         }
         let Some(record) = self
             .signature_products(public.definition)
@@ -44,8 +66,10 @@ impl QueryEngine {
         else {
             // Absence is a private input too: adding a source shape must retry
             // an owner body's previously cached constructor rejection.
-            let revision = self.implementation_hash(public.definition.path());
-            return Ok((public, revision));
+            let digest = self
+                .implementation_hash(public.definition.path())
+                .map(|_| hirsel_validate::digest(&self.types, &public).0);
+            return Ok((public, digest));
         };
         if self.implementation_hash(public.definition.path()) != Some(record.text_hash) {
             return Err(QueryError::Operational(hirsel_types::OperationalFailure {
@@ -53,9 +77,8 @@ impl QueryEngine {
                 message: "stale private representation".into(),
             }));
         }
-        let private =
-            hirsel_types::encoding::owner_view(&public, record.representation.declaration.clone());
-        Ok((std::sync::Arc::new(private), Some(record.text_hash)))
+        let (private, digest) = record.body_view(&self.types, &public);
+        Ok((private.clone(), Some(*digest)))
     }
 
     /// Only the defining owner can obtain the private shape. Consumers must select

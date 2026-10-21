@@ -10,18 +10,12 @@ use hirsel_syntax::{ContentHash, DefId, FileContext, PackageId, Path};
 use hirsel_types::{LookupOutput, QueryError, SignatureProvider, SignatureRef};
 use hirsel_validate::SignatureLookup;
 
-/// The value a failed signature read observes: the failure, hashed.
-fn failed(error: &QueryError) -> ContentHash {
-    ContentHash::of_parts(
-        "hirsel.read.failed-signature.v1",
-        [format!("{error:?}").as_bytes()],
-    )
-}
 /// A signature provider for bodies of `owner`'s package, reading `snapshot`.
 pub struct FrozenProvider<'a> {
     snapshot: &'a SignatureSnapshot,
     owner: PackageId,
     reads: &'a mut ReadsBuilder,
+    private_shapes: bool,
 }
 impl<'a> FrozenProvider<'a> {
     pub fn new(
@@ -33,15 +27,38 @@ impl<'a> FrozenProvider<'a> {
             snapshot,
             owner,
             reads,
+            private_shapes: false,
+        }
+    }
+    /// A body query's provider, selecting its package's private views while
+    /// recording the same public-signature and representation receipts as
+    /// the live engine recorder.
+    pub fn for_body(
+        snapshot: &'a SignatureSnapshot,
+        owner: PackageId,
+        reads: &'a mut ReadsBuilder,
+    ) -> Self {
+        Self {
+            snapshot,
+            owner,
+            reads,
+            private_shapes: true,
         }
     }
     /// `d`'s view as the owner's bodies see it, recording `Signature(d)` (or
     /// `FailedSignature(d)`) and, for an opaque type seen privately,
     /// `Representation(d)` with the private view's digest.
     pub fn body_view(&mut self, d: DefId) -> Result<SignatureRef, QueryError> {
-        let view = self.signature(d)?;
-        if let Some(Ok(private)) = self.snapshot.body_view(&self.owner, d)
-            && !std::sync::Arc::ptr_eq(private, &view)
+        let public = self.public_signature(d)?;
+        let view = self
+            .snapshot
+            .body_view(&self.owner, d)
+            .and_then(Result::ok)
+            .unwrap_or(&public);
+        if public.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque
+            && public.definition.path().0.package == self.owner
+            && (self.snapshot.private.contains_key(&d)
+                || self.snapshot.lookup.candidates.contains_key(&d))
         {
             let digest = self
                 .snapshot
@@ -49,9 +66,8 @@ impl<'a> FrozenProvider<'a> {
                 .and_then(Result::ok)
                 .map_or_else(ContentHash::default, |(_, digest)| digest.0);
             self.reads.record(ReadKey::Representation(d), digest);
-            return Ok(private.clone());
         }
-        Ok(view)
+        Ok(view.clone())
     }
     /// V's digest of `d`'s view in the owner's universe, recording
     /// `ValidationView(d)`.
@@ -91,13 +107,13 @@ impl<'a> FrozenProvider<'a> {
         let candidates = self.snapshot.declaration_candidates(d);
         self.reads.record(
             ReadKey::DeclarationCandidates(d),
-            candidates.unwrap_or_default(),
+            candidates.unwrap_or_else(crate::queries::memos::no_candidates),
         );
         candidates
     }
 }
-impl SignatureProvider for FrozenProvider<'_> {
-    fn signature(&mut self, definition: DefId) -> Result<SignatureRef, QueryError> {
+impl FrozenProvider<'_> {
+    fn public_signature(&mut self, definition: DefId) -> Result<SignatureRef, QueryError> {
         match self.snapshot.signature(definition) {
             Some(Ok(signature)) => {
                 self.reads
@@ -105,16 +121,29 @@ impl SignatureProvider for FrozenProvider<'_> {
                 Ok(signature.clone())
             }
             Some(Err(error)) => {
-                self.reads
-                    .record(ReadKey::FailedSignature(definition), failed(error));
+                self.reads.record(
+                    ReadKey::FailedSignature(definition),
+                    self.snapshot.failed_signature_receipt(definition),
+                );
                 Err(error.clone())
             }
             None => {
                 let error = QueryError::NotImplemented;
-                self.reads
-                    .record(ReadKey::FailedSignature(definition), failed(&error));
+                self.reads.record(
+                    ReadKey::FailedSignature(definition),
+                    self.snapshot.failed_signature_receipt(definition),
+                );
                 Err(error)
             }
+        }
+    }
+}
+impl SignatureProvider for FrozenProvider<'_> {
+    fn signature(&mut self, definition: DefId) -> Result<SignatureRef, QueryError> {
+        if self.private_shapes {
+            self.body_view(definition)
+        } else {
+            self.public_signature(definition)
         }
     }
     fn lookup(&mut self, context: &FileContext, path: &Path) -> LookupOutput {

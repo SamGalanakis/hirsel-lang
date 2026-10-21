@@ -308,3 +308,56 @@ fn snapshot_retires_staged_signatures_when_only_the_owner_body_changes() {
         assert!(published.signature(staged).unwrap().is_ok());
     });
 }
+
+#[test]
+fn live_and_frozen_bodies_record_the_same_private_view_receipt() {
+    with_compiler_stack(|| {
+        let context = default_context();
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let mut hidden = entry_path(&context);
+        hidden.0.name = "Hidden".into();
+        let mut build = hidden.clone();
+        build.0.name = "build".into();
+        let hidden = hirsel_syntax::DefId::intern(&hidden);
+        let mut previous = None;
+        for field in ["u64", "u8"] {
+            let source = format!(
+                "pub opaque type Hidden: plain uses {{}} {{ value: {field} }}\nfn build() -> Hidden {{ Hidden(value: 1) }}\n"
+            );
+            let file = engine.sources.add("private-receipts.hir", source).unwrap();
+            engine.parse_file(file, &context).unwrap();
+            engine.check_definition(&build).unwrap();
+            let serial = engine.memo_reads(&build, QueryKind::Check).unwrap().clone();
+            let snapshot = engine.signature_snapshot();
+            let mut frozen = ReadsBuilder::new();
+            let mut provider =
+                FrozenProvider::for_body(&snapshot, context.package.clone(), &mut frozen);
+            let view = provider.signature(hidden).unwrap();
+            assert!(matches!(&view.kind, SignatureKind::Type(t) if t.representation.is_some()));
+            let frozen = frozen.finish().unwrap();
+            for (key, value) in frozen.iter() {
+                assert!(
+                    serial
+                        .iter()
+                        .any(|(read, observed)| read == key && observed == value),
+                    "{key:?}"
+                );
+            }
+            let digest = frozen
+                .iter()
+                .find_map(|(key, value)| {
+                    (*key == ReadKey::Representation(hidden)).then_some(*value)
+                })
+                .unwrap();
+            assert_eq!(
+                digest,
+                snapshot.representation(hidden).unwrap().unwrap().1.0
+            );
+            if let Some(old) = previous {
+                assert_ne!(old, digest);
+            }
+            previous = Some(digest);
+        }
+        assert_eq!(engine.recompute_count(&build, QueryKind::Check), 2);
+    });
+}

@@ -64,6 +64,7 @@ pub(crate) struct LookupInput {
     pub registry: crate::registry::BuiltinRegistry,
     pub builtins: std::collections::BTreeSet<DefId>,
     pub candidates: DefMap<ContentHash>,
+    pub failed: DefMap<ContentHash>,
 }
 const _: () = {
     const fn shared<T: Send + Sync>() {}
@@ -216,6 +217,16 @@ impl SignatureSnapshot {
     pub fn declaration_candidates(&self, d: DefId) -> Option<ContentHash> {
         self.lookup.candidates.get(&d).copied()
     }
+    /// The exact negative receipt captured from the failed query's complete key,
+    /// or the canonical absent-query receipt. A diagnostic's debug spelling is
+    /// never an input identity.
+    pub fn failed_signature_receipt(&self, d: DefId) -> ContentHash {
+        self.lookup
+            .failed
+            .get(&d)
+            .copied()
+            .unwrap_or_else(|| crate::queries::memos::optional(None))
+    }
     pub fn epoch(&self) -> Revision {
         self.epoch
     }
@@ -338,10 +349,15 @@ impl QueryEngine {
             ),
             registry: self.registry.clone(),
             builtins: self.builtins.keys().map(DefId::intern).collect(),
+            failed: signatures
+                .iter()
+                .filter(|(_, result)| result.is_err())
+                .map(|(d, _)| (*d, self.failed_key_value(d.path())))
+                .collect(),
             candidates: self
                 .source_paths()
                 .iter()
-                .filter_map(|path| Some((DefId::intern(path), self.declarations.candidates(path)?)))
+                .map(|path| (DefId::intern(path), self.candidates_value(path)))
                 .collect(),
         };
         let snapshot = Arc::new(
@@ -645,5 +661,67 @@ mod tests {
         assert_eq!(work::read(Counter::ValidateSignatureRows), before);
         assert!(snapshot.signature(injected.definition).is_none());
         assert!(imported.snapshot_seed_verdicts.is_empty());
+    }
+    #[test]
+    fn frozen_negative_and_validation_receipts_match_live_observations() {
+        struct Reject;
+        impl SignaturePhase for Reject {
+            fn signature(
+                &self,
+                _: &TypeInterner,
+                _: &hirsel_types::TypeMemo,
+                syntax: Arc<ItemSyntax>,
+                _: &Declarations,
+                _: &mut PhaseProducts,
+                _: &mut dyn SignatureProvider,
+            ) -> Result<QueryOutput<Signature>, QueryError> {
+                Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                    const { hirsel_diag::RuleId::of("LANG-7") },
+                    syntax.item.name_span,
+                    "fixture rejection",
+                )]))
+            }
+        }
+        let mut adapters = crate::phases::engine_only_adapters();
+        adapters.signature = Some(Arc::new(Reject));
+        let mut engine = QueryEngine::new(default_environment(), adapters);
+        let file = engine
+            .sources
+            .add("failed.hir", "fn failed() -> u64 { 1 }".into())
+            .unwrap();
+        let parsed = engine.parse_file(file, &default_context()).unwrap();
+        let owner = parsed.value.items[0].item.definition.clone();
+        let failed = DefId::intern(&owner);
+        let mut missing = owner.clone();
+        missing.0.name = "absent".into();
+        let absent = DefId::intern(&missing);
+        let snapshot = engine.signature_snapshot();
+        let mut reads = ReadsBuilder::new();
+        let mut provider = FrozenProvider::new(&snapshot, owner.0.package.clone(), &mut reads);
+        assert!(provider.signature(failed).is_err());
+        assert!(provider.signature(absent).is_err());
+        provider.declaration_candidates(failed);
+        provider.declaration_candidates(absent);
+        provider.validation_view(failed);
+        provider.universe_errors();
+        provider.first_heap();
+        let reads = reads.finish().unwrap();
+        for (key, value) in reads.iter() {
+            assert_eq!(engine.observe(&owner, key), Some(*value), "{key:?}");
+        }
+        // A failed header's exact complete query key changes even when the
+        // phase returns byte-identical diagnostic prose.
+        let old = snapshot.failed_signature_receipt(failed);
+        let file = engine
+            .sources
+            .add("failed.hir", "fn failed(x: u8) -> u64 { 1 }".into())
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let changed = engine.signature_snapshot();
+        assert_ne!(old, changed.failed_signature_receipt(failed));
+        assert_eq!(
+            engine.observe(&owner, &ReadKey::FailedSignature(failed)),
+            Some(changed.failed_signature_receipt(failed))
+        );
     }
 }

@@ -1931,10 +1931,10 @@ impl SignatureProvider for Recorder<'_> {
         if self.private_shapes {
             let public = result?;
             let (view, revision) = self.engine.body_signature(&self.owner.0.package, public)?;
-            if let Some(revision) = revision {
+            if let Some(digest) = revision {
                 self.observed
-                    .representations
-                    .insert(definition.clone(), revision);
+                    .merged
+                    .record(ReadKey::Representation(id), digest);
             }
             Ok(view)
         } else {
