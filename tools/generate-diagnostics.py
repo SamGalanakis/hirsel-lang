@@ -106,12 +106,38 @@ RELATED = {
 }
 
 
+DETAILS = {
+    "LANG-4": """
+Unresolved values, types, module members, fields and expected-type variants offer
+up to three closest accessible names, for example “help: did you mean `bytes.len`?”.
+Matching uses rustc's restricted Damerau-Levenshtein distance
+(including adjacent transpositions) with a maximum distance of one third of the
+misspelled name's character count, at least one. Case and underscore differences
+match first; the known rename `count` → `len` matches only if `len` is available.
+Reordered underscore-separated words are a fallback. Equally close names are
+shown in lexical order, with no fix when there is more than one candidate.
+
+When there is exactly one suggestion and an exact identifier span is available,
+JSON `fix` contains a machine-applicable replacement of that identifier. The
+module path, receiver, arguments and surrounding syntax remain intact. The
+existing schema version stays 1. Suggestions respect package exposure and
+visibility; ambiguous module heads still require explicit qualification.
+
+The algorithm and matching tests are ported from
+[rustc_span::edit_distance](https://github.com/rust-lang/rust/blob/a7c37f9f0ee5e93396106e9de20f4a86b4154e63/compiler/rustc_span/src/edit_distance.rs#L24)
+(MIT OR Apache-2.0), lines 24–104 and 235–334. Hirsel keeps up to three tied best
+matches, ignores underscores alongside case, and recognizes the rename above.
+""",
+}
+
+
 def render():
     sections = [INTRO]
     for line in (ROOT / "crates/hirsel-diag/src/guidance.tsv").read_text().splitlines():
         rule, title, meaning, help_text = line.split("\t")
         help_text = help_text.removeprefix("help: ")
         sections.append(f"\n## {rule}: {title}\n\n{meaning}\n\nTypical fix: {help_text}\n")
+        sections.append(DETAILS.get(rule, ""))
         for child, child_title, child_meaning, child_fix in RELATED.get(rule, []):
             sections.append(
                 f"\n### {child}: {child_title}\n\n{child_meaning}\n\nTypical fix: {child_fix}\n"
