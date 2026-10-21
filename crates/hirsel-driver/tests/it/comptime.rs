@@ -13,6 +13,37 @@ fn engine(source: &str) -> QueryEngine {
     engine
 }
 
+fn lowering_text(
+    engine: &QueryEngine,
+    value: Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError>,
+) -> Result<(String, String, Vec<SignatureDependency>), String> {
+    value
+        .map(|output| {
+            let cx = hirsel_proof_export::Cx::new(
+                std::rc::Rc::new(|_| hirsel_proof_export::Location::unknown()),
+                engine.types().clone(),
+            );
+            (
+                hirsel_codec::to_text_with(
+                    &hirsel_proof_export::DefinitionSection {
+                        path: output.value.path.path().clone(),
+                        locations: vec![],
+                        tir: (*output.value).clone(),
+                        tir_digest: hirsel_syntax::ContentHash::default(),
+                        references: output.dependencies.clone(),
+                        operations: vec![],
+                        obligations: vec![],
+                    },
+                    cx,
+                )
+                .0,
+                placed_evidence(&engine.sources, format!("{:?}", output.diagnostics)),
+                output.dependencies,
+            )
+        })
+        .map_err(|error| placed_evidence(&engine.sources, format!("{error:?}")))
+}
+
 #[test]
 fn materialized_constant_publishes_and_validates() {
     hirsel_engine::with_compiler_stack(
@@ -1329,36 +1360,6 @@ fn frozen_frontier_releases_completed_typed_bodies_before_next_root() {
 
 #[test]
 fn frozen_lowering_frontier_matches_scalar_for_nonconstant_comptime_and_edits() {
-    fn text(
-        engine: &QueryEngine,
-        value: Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError>,
-    ) -> Result<(String, String, Vec<SignatureDependency>), String> {
-        value
-            .map(|output| {
-                let cx = hirsel_proof_export::Cx::new(
-                    std::rc::Rc::new(|_| hirsel_proof_export::Location::unknown()),
-                    engine.types().clone(),
-                );
-                (
-                    hirsel_codec::to_text_with(
-                        &hirsel_proof_export::DefinitionSection {
-                            path: output.value.path.path().clone(),
-                            locations: vec![],
-                            tir: (*output.value).clone(),
-                            tir_digest: hirsel_syntax::ContentHash::default(),
-                            references: output.dependencies.clone(),
-                            operations: vec![],
-                            obligations: vec![],
-                        },
-                        cx,
-                    )
-                    .0,
-                    placed_evidence(&engine.sources, format!("{:?}", output.diagnostics)),
-                    output.dependencies,
-                )
-            })
-            .map_err(|error| placed_evidence(&engine.sources, format!("{error:?}")))
-    }
     with_compiler_stack(|| {
         let source = "const SEED:u32=7u32\nfn helper()->u32{SEED}\nfn A()->u32{comptime helper()}\nfn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nfn B()->u64{comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}}\nfn BAD()->u32{comptime missing()}\n";
         let paths = vec![path("B"), path("A"), path("BAD"), path("A")];
@@ -1380,7 +1381,7 @@ fn frozen_lowering_frontier_matches_scalar_for_nonconstant_comptime_and_edits() 
                     .iter()
                     .map(|path| {
                         let value = control.lower_to_tir(path);
-                        text(&control, value)
+                        lowering_text(&control, value)
                     })
                     .collect();
                 assert!(
@@ -1421,7 +1422,7 @@ fn frozen_lowering_frontier_matches_scalar_for_nonconstant_comptime_and_edits() 
                 }
                 let actual: Vec<_> = actual
                     .into_iter()
-                    .map(|outcome| text(&candidate, outcome.result))
+                    .map(|outcome| lowering_text(&candidate, outcome.result))
                     .collect();
                 assert_eq!(actual, expected, "jobs={jobs} source={revision}");
             }
@@ -1657,6 +1658,214 @@ fn frozen_frontier_hold_budgets_preserve_staged_generated_cycle_and_depth_outcom
                         );
                     }
                 }
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_lowering_prefix_withholds_later_generated_and_staged_publication() {
+    with_compiler_stack(|| {
+        let source = "type Point{x:u64}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String]{Ok(codegen.body(\"fn(v:standalone@0/Point)->u64 uses {}{12}\"))}\nfn width[T](v:T)->u64 uses {}=comptime gen(shape(T))\nfn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nfn FIRST()->u64{comptime {let zero=0u64;1u64/zero}}\nconst LATER:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)+width(Point(x:1))}\n";
+        for jobs in [1, 2, 8] {
+            let mut control = engine(source);
+            let expected = control.lower_to_tir(&path("FIRST")).unwrap_err();
+            let mut candidate = engine(source);
+            let outcomes = candidate.lower_definition_prefix(
+                vec![path("FIRST"), path("LATER")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(
+                placed_evidence(
+                    &candidate.sources,
+                    format!("{:?}", outcomes[0].result.as_ref().unwrap_err())
+                ),
+                placed_evidence(&control.sources, format!("{expected:?}"))
+            );
+            assert_eq!(
+                candidate.generated_sources().count(),
+                control.generated_sources().count(),
+                "jobs={jobs}: suffix generated source escaped the prefix"
+            );
+            assert!(
+                candidate
+                    .memo_reads(&path("LATER"), QueryKind::Summary)
+                    .is_none(),
+                "jobs={jobs}: later root published a check after the first failure"
+            );
+            assert!(
+                candidate
+                    .memo_reads(&path("scaled"), QueryKind::Summary)
+                    .is_none(),
+                "jobs={jobs}: later staged helper published"
+            );
+            assert!(
+                candidate
+                    .memo_reads(&path("gen"), QueryKind::Summary)
+                    .is_none(),
+                "jobs={jobs}: later generic generator published"
+            );
+        }
+    });
+}
+
+#[test]
+fn frozen_lowering_prefix_keeps_demanded_closure_and_final_outcomes_across_edits() {
+    with_compiler_stack(|| {
+        let source = "type Point{x:u64}\nconst SEED:u64=12\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String]{let _=SEED;Ok(codegen.body(\"fn(v:standalone@0/Point)->u64 uses {}{12}\"))}\nfn width[T](v:T)->u64 uses {}=comptime gen(shape(T))\nfn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nfn FIRST()->u64{comptime LATER}\nconst LATER:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)+width(Point(x:1))}\nfn BAD()->u64{comptime {let zero=0u64;1u64/zero}}\nfn UNUSED()->u64{comptime 99}\n";
+        let roots = vec![
+            path("FIRST"),
+            path("LATER"),
+            path("FIRST"),
+            path("BAD"),
+            path("UNUSED"),
+        ];
+        for jobs in [1, 2, 8] {
+            let mut candidate = engine(source);
+            for revision in [
+                source.to_owned(),
+                source.replace("SEED:u64=12", "SEED:u64=23"),
+                source.replace("1u64/zero", "1u64+zero"),
+            ] {
+                let file = candidate
+                    .sources
+                    .add("comptime.hir", revision.clone())
+                    .unwrap();
+                candidate.parse_file(file, &default_context()).unwrap();
+                let mut control = engine(&revision);
+                let mut expected = vec![];
+                let mut depths = vec![];
+                for root in &roots {
+                    let result = control.lower_to_tir(root);
+                    let failed = result.is_err();
+                    expected.push(lowering_text(&control, result));
+                    depths.push(if failed {
+                        None
+                    } else {
+                        control
+                            .lower_definition_outcomes(
+                                vec![root.clone()],
+                                hirsel_intern::jobs::Jobs::ONE,
+                            )
+                            .remove(0)
+                            .depth
+                    });
+                    if failed {
+                        break;
+                    }
+                }
+                for warm in [false, true] {
+                    let actual = candidate.lower_definition_prefix(
+                        roots.clone(),
+                        hirsel_intern::jobs::Jobs::new(jobs),
+                    );
+                    assert_eq!(actual.len(), expected.len(), "jobs={jobs} warm={warm}");
+                    for (outcome, depth) in actual.iter().zip(&depths) {
+                        assert!(!outcome.reads.is_empty());
+                        assert_eq!(outcome.phase, Some(QueryKind::Lower));
+                        assert!(outcome.limit.is_none());
+                        assert_eq!(
+                            placed_evidence(&candidate.sources, format!("{:?}", outcome.depth)),
+                            placed_evidence(&control.sources, format!("{depth:?}"))
+                        );
+                    }
+                    let actual: Vec<_> = actual
+                        .into_iter()
+                        .map(|outcome| lowering_text(&candidate, outcome.result))
+                        .collect();
+                    assert_eq!(
+                        actual, expected,
+                        "jobs={jobs} warm={warm} revision={revision}"
+                    );
+                    assert_eq!(
+                        candidate.generated_sources().count(),
+                        control.generated_sources().count()
+                    );
+                    if expected.len() < roots.len() {
+                        assert!(
+                            candidate
+                                .memo_reads(&path("UNUSED"), QueryKind::Summary)
+                                .is_none(),
+                            "suffix summary must remain unpublished"
+                        );
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_lowering_prefix_generator_rejections_keep_serial_selection_and_limits() {
+    with_compiler_stack(|| {
+        for body in [
+            "Error(\"failed\")",
+            "let _=A;Error(\"unreachable\")",
+            "Ok(codegen.body(\"fn(v:standalone@0/Point)->u32 uses {}{12u32}\"))",
+        ] {
+            let source = format!(
+                "type Point{{x:u64}}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {{}}],String]{{{body}}}\nfn width[T](v:T)->u64 uses {{}}=comptime gen(shape(T))\nconst A:u64=comptime width(Point(x:1))\nconst B:u64=comptime width(Point(x:2))\nconst UNUSED:u64=99\n"
+            );
+            for jobs in [1, 2, 8] {
+                for warm in [false, true] {
+                    let mut control = engine(&source);
+                    let mut candidate = engine(&source);
+                    if warm {
+                        assert!(control.lower_to_tir(&path("A")).is_err());
+                        assert!(candidate.lower_to_tir(&path("A")).is_err());
+                    }
+                    let expected = control.lower_to_tir(&path("B"));
+                    let actual = candidate.lower_definition_prefix(
+                        vec![path("B"), path("A"), path("UNUSED")],
+                        hirsel_intern::jobs::Jobs::new(jobs),
+                    );
+                    assert_eq!(actual.len(), 1);
+                    assert_eq!(
+                        lowering_text(&candidate, actual[0].result.clone()),
+                        lowering_text(&control, expected),
+                        "jobs={jobs} warm={warm} source={source}"
+                    );
+                    assert_eq!(
+                        placed_evidence(&candidate.sources, format!("{:?}", actual[0].limit)),
+                        placed_evidence(
+                            &control.sources,
+                            format!("{:?}", control.last_comptime_limit)
+                        )
+                    );
+                    assert!(
+                        candidate
+                            .memo_reads(&path("UNUSED"), QueryKind::Summary)
+                            .is_none()
+                    );
+                }
+            }
+        }
+        let source = "const LEAF:u64=1\nconst INNER:u64=comptime LEAF\nfn FIRST()->u64{comptime INNER}\nconst UNUSED:u64=99\n";
+        for jobs in [1, 2, 8] {
+            for limit in [0, 1, 2, 3] {
+                let mut control = engine(source);
+                let mut candidate = engine(source);
+                control.comptime_limits.call_depth = limit;
+                candidate.comptime_limits.call_depth = limit;
+                let expected = control.lower_to_tir(&path("FIRST"));
+                let failed = expected.is_err();
+                let actual = candidate.lower_definition_prefix(
+                    vec![path("FIRST"), path("UNUSED")],
+                    hirsel_intern::jobs::Jobs::new(jobs),
+                );
+                assert_eq!(actual.len(), if failed { 1 } else { 2 });
+                assert_eq!(
+                    lowering_text(&candidate, actual[0].result.clone()),
+                    lowering_text(&control, expected)
+                );
+                assert_eq!(
+                    placed_evidence(&candidate.sources, format!("{:?}", actual[0].limit)),
+                    placed_evidence(
+                        &control.sources,
+                        format!("{:?}", control.last_comptime_limit)
+                    )
+                );
             }
         }
     });

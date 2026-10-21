@@ -682,7 +682,7 @@ impl QueryEngine {
         definitions: Vec<DefPath>,
         jobs: hirsel_intern::jobs::Jobs,
     ) -> Vec<MaterializationResult> {
-        self.s1_root_outcomes(definitions, jobs, RootKind::Constant)
+        self.s1_root_outcomes(definitions, jobs, RootKind::Constant, false)
             .into_iter()
             .map(|outcome| MaterializationResult {
                 definition: outcome.definition,
@@ -704,7 +704,15 @@ impl QueryEngine {
         definitions: Vec<DefPath>,
         jobs: hirsel_intern::jobs::Jobs,
     ) -> Vec<LoweringResult> {
-        self.s1_root_outcomes(definitions, jobs, RootKind::Lower)
+        self.lower_root_results(definitions, jobs, false)
+    }
+    fn lower_root_results(
+        &mut self,
+        definitions: Vec<DefPath>,
+        jobs: hirsel_intern::jobs::Jobs,
+        prefix: bool,
+    ) -> Vec<LoweringResult> {
+        self.s1_root_outcomes(definitions, jobs, RootKind::Lower, prefix)
             .into_iter()
             .map(|outcome| {
                 let (result, depth) = match outcome.result {
@@ -723,15 +731,29 @@ impl QueryEngine {
             })
             .collect()
     }
+    /// Lower an ordered file prefix, returning through its first rejection.
+    /// Later speculative roots must not publish declarations or body products.
+    pub fn lower_definition_prefix(
+        &mut self,
+        definitions: Vec<DefPath>,
+        jobs: hirsel_intern::jobs::Jobs,
+    ) -> Vec<LoweringResult> {
+        self.lower_root_results(definitions, jobs, true)
+    }
     fn s1_root_outcomes(
         &mut self,
         definitions: Vec<DefPath>,
         jobs: hirsel_intern::jobs::Jobs,
         kind: RootKind,
+        prefix: bool,
     ) -> Vec<RootOutcome> {
         let mut selections = BTreeMap::new();
+        let mut settled = vec![];
         loop {
-            if let Some(results) = self.s1_roots_round(&definitions, jobs, kind, &mut selections) {
+            let remaining = &definitions[settled.len()..];
+            if let Some(results) =
+                self.s1_roots_round(remaining, jobs, kind, &mut selections, prefix)
+            {
                 if let Some(last) = results.last() {
                     self.last_phase = last.phase;
                     self.last_comptime_limit = last.limit.clone();
@@ -739,7 +761,11 @@ impl QueryEngine {
                         .then_some(last.phase)
                         .flatten();
                 }
-                return results;
+                let failed = results.last().is_some_and(|result| result.result.is_err());
+                settled.extend(results);
+                if !prefix || failed || settled.len() == definitions.len() {
+                    return settled;
+                }
             }
         }
     }
@@ -805,6 +831,7 @@ impl QueryEngine {
         jobs: hirsel_intern::jobs::Jobs,
         kind: RootKind,
         selections: &mut BTreeMap<DefPath, hirsel_diag::Label>,
+        prefix: bool,
     ) -> Option<Vec<RootOutcome>> {
         if definitions.is_empty() {
             return Some(vec![]);
@@ -844,15 +871,19 @@ impl QueryEngine {
         let source = match self.frozen_s1_source(lower_budget) {
             Ok(source) => source,
             Err(_) => {
-                return Some(
-                    definitions
-                        .iter()
-                        .map(|path| self.scalar_root_outcome(path, kind))
-                        .collect(),
-                );
+                let mut outcomes = vec![];
+                for path in definitions {
+                    let outcome = self.scalar_root_outcome(path, kind);
+                    let failed = outcome.result.is_err();
+                    outcomes.push(outcome);
+                    if prefix && failed {
+                        break;
+                    }
+                }
+                return Some(outcomes);
             }
         };
-        let completed = hirsel_intern::jobs::map_with_state(
+        let mut completed = hirsel_intern::jobs::map_with_state(
             jobs,
             tasks,
             |_| 1,
@@ -888,6 +919,33 @@ impl QueryEngine {
                 )
             },
         );
+        // A worker result is tentative until its input position settles.
+        // Only the earliest incomplete/rejected root may drive registration;
+        // later work cannot publish source or memo products across that barrier.
+        let end = if prefix {
+            completed
+                .iter()
+                .filter(|(_, _, product, _, _, _, pending, _)| {
+                    product.result.is_err() || !pending.is_empty()
+                })
+                // Settle earlier successes before a later demand changes the
+                // signature universe. Only a barrier at the first root may
+                // publish its own required registrations in this round.
+                .map(|(index, ..)| if *index == 0 { 1 } else { *index })
+                .min()
+                .unwrap_or(definitions.len())
+        } else {
+            definitions.len()
+        };
+        completed.retain(|(index, ..)| *index < end);
+        let mut demanded: BTreeSet<DefId> = definitions[..end].iter().map(DefId::intern).collect();
+        for (_, _, product, _, _, _, _, _) in &completed {
+            for (read, _) in product.reads.iter() {
+                if let ReadKey::ExecutedBody(definition) = read {
+                    demanded.insert(*definition);
+                }
+            }
+        }
         let bodies = source
             .completed
             .into_inner()
@@ -895,7 +953,8 @@ impl QueryEngine {
         let mut bodies = bodies;
         bodies.sort_by(|(left, _, _), (right, _, _)| left.definition().cmp(right.definition()));
         for (body, text, reads) in bodies {
-            if self.key_text(body.definition(), QueryKind::Modes).ok() == Some(text)
+            if (!prefix || demanded.contains(&DefId::intern(body.definition())))
+                && self.key_text(body.definition(), QueryKind::Modes).ok() == Some(text)
                 && self.execution_valid(body.definition(), &reads)
             {
                 let _ = self.merge_compact_completed(body);
@@ -980,7 +1039,8 @@ impl QueryEngine {
         generated.sort_by(|left, right| left.definition.cmp(&right.definition));
         let mut published = false;
         for product in generated {
-            if self.implementation_hash(&product.definition) == Some(product.syntax.text_hash)
+            if (!prefix || demanded.contains(&DefId::intern(&product.definition)))
+                && self.implementation_hash(&product.definition) == Some(product.syntax.text_hash)
                 && self.execution_valid(&product.definition, &product.reads)
             {
                 match self.merge_generated_text(product) {
@@ -995,7 +1055,9 @@ impl QueryEngine {
         // Successes reached inside a failed root remain independently valid.
         // Publish only after all worker requests/claims have settled.
         for (path, constant, mut registrations, staged) in shared.into_constants() {
-            if self.execution_valid(&path, &constant.executed) {
+            if (!prefix || demanded.contains(&DefId::intern(&path)))
+                && self.execution_valid(&path, &constant.executed)
+            {
                 registrations.sort_by(|a, b| a.path.cmp(&b.path));
                 for registration in registrations {
                     self.install_staged(registration);
@@ -1029,7 +1091,7 @@ impl QueryEngine {
                 },
             )
             .collect();
-        for (index, path) in definitions.iter().enumerate() {
+        for (index, path) in definitions[..end].iter().enumerate() {
             let Some((_, product, limit, phase, mut registrations, pending, selected)) =
                 completed.remove(&index)
             else {
@@ -1103,7 +1165,12 @@ impl QueryEngine {
             if let Some(error) = error {
                 results[index].as_mut().unwrap().result = Err(error);
             }
+            if prefix && results[index].as_ref().unwrap().result.is_err() {
+                results.truncate(index + 1);
+                return Some(results.into_iter().map(Option::unwrap).collect());
+            }
         }
+        results.truncate(end);
         Some(results.into_iter().map(Option::unwrap).collect())
     }
 }
