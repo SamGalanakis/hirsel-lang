@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Differential edit checks and interleaved resident compiler measurements.
 
-Run under tools/capped (the daemon and clients inherit its resource scope).
+Each program gets a tools/capped scope for its daemon and clients.
 Every edit compares resident, fresh disk-warm and cache-free CLI bytes. The
 measurement mode uses 10 seeded interleaved rounds, perf cycles+instructions,
 server CPU 31 and client CPU 7; results include both processes' work.
@@ -280,6 +280,58 @@ def measure(args):
     return report
 
 
+def campaign(args):
+    """Release the shared capped slot after each program's resident session."""
+    if args.mode == 'oracle':
+        names = [p.name for p in corpus.corpus(args.work / 'generated', scale=args.scale)
+                 if p.language == 'hirsel' and re.search(args.select, p.name)]
+        if re.search(args.select, 'tasks'):
+            names.append('tasks')
+    else:
+        names = [name for name in ['tasks', 'syn10k'] if re.search(args.select, name)]
+    report = {'schema': 1, 'mode': args.mode, 'seed': args.seed, 'rounds': args.rounds,
+              'server_cpu': 31, 'client_cpu': 7, 'programs': [], 'runs': [],
+              'comparisons': 0, 'medians': []}
+    scale_stopped = False
+    for number, name in enumerate(names):
+        row = {'program': name}
+        if name == 'std@1':
+            row |= {'status': 'excluded', 'reason': 'std uses image, outside the resident command protocol'}
+        elif scale_stopped and re.fullmatch(r'syn\d+k', name):
+            row |= {'status': 'excluded', 'reason': 'earlier scale size reached its resource limit'}
+        else:
+            directory = args.work / 'sessions' / f'{number:03}-{name.replace("/", "-")}'
+            directory.mkdir(parents=True, exist_ok=True)
+            output = directory / 'result.json'
+            command = [str(corpus.ROOT / 'tools/capped'), '--timeout', '900',
+                       str(Path(__file__).resolve()), args.mode, '--single',
+                       '--select', '^' + re.escape(name) + '$',
+                       '--scale', ','.join(map(str, args.scale)), '--rounds', str(args.rounds),
+                       '--seed', str(args.seed), '--toolchain', str(args.toolchain.resolve()),
+                       '--work', str(directory), '--output', str(output)]
+            if args.native:
+                command.append('--native')
+            log = directory / 'session.log'
+            with log.open('wb') as stream:
+                result = subprocess.run(command, stdout=stream, stderr=stream)
+            row |= {'status': 'pass' if result.returncode == 0 else 'timeout' if result.returncode == 124 else 'failed',
+                    'exit': result.returncode, 'log': str(log), 'output': str(output)}
+            if output.exists():
+                part = json.loads(output.read_text())
+                row['edits'] = part.get('programs', [])
+                report['runs'].extend(part.get('runs', []))
+                report['medians'].extend(part.get('medians', []))
+                report['comparisons'] += part.get('comparisons', 0)
+            if result.returncode in (124, 137) and re.fullmatch(r'syn\d+k', name):
+                scale_stopped = True
+        report['programs'].append(row)
+        write_json(args.output, report)
+        print(f'{row["status"].upper()} {name}', flush=True)
+        if row['status'] == 'failed':
+            raise RuntimeError(f'{name}: {row["log"]}')
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=['oracle', 'measure'])
@@ -287,6 +339,7 @@ def main():
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--select', default='.')
+    parser.add_argument('--single', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--scale', type=lambda s: tuple(map(int, s.split(','))), default=(3000, 10000))
     parser.add_argument('--rounds', type=int, default=10)
     parser.add_argument('--native', action='store_true', help='include edit to running native cells')
@@ -295,7 +348,7 @@ def main():
     args.work = args.work.resolve()
     args.work.mkdir(parents=True, exist_ok=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    result = globals()[args.mode](args)
+    result = globals()[args.mode](args) if args.single else campaign(args)
     write_json(args.output, result)
 
 
