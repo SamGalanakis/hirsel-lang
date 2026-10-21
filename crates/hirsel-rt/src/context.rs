@@ -442,6 +442,10 @@ impl TaskCtx {
         unsafe {
             if (*home).heap().bound() != (&raw mut self.view) {
                 TaskCtx::attach(self, home);
+            } else {
+                // Its view is home's already, but its worker may be a compute worker, which
+                // the run's exit retires.
+                self.worker = home;
             }
         }
     }

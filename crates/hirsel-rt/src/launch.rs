@@ -2014,6 +2014,16 @@ pub(crate) unsafe fn execute(
         return Err("the runtime configuration".into());
     }
     let control = options.control;
+    // A test's host stop from another thread (`HIRSEL_RT_STOP_AFTER_MS`), as an embedding
+    // host's `RunControl::stop`: the run is hosted before its budgets take their chunks.
+    if let Some(delay) = stop_after_from_env()? {
+        control.host();
+        let control = std::sync::Arc::clone(&control);
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            control.request(crate::stop::Stop::Requested);
+        });
+    }
     unsafe { &mut *ctx }.run().control = std::sync::Arc::clone(&control);
     unsafe { &mut *ctx }.run().worker_metrics = options.metrics;
     #[cfg(feature = "measurement")]
@@ -2420,6 +2430,18 @@ pub(crate) struct Options {
     pub(crate) workers: Option<(u32, bool)>,
     /// The scheduling row counters, when the host asked for them.
     pub(crate) metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
+}
+
+/// The delay after which a test stops the run from another thread: `HIRSEL_RT_STOP_AFTER_MS`.
+fn stop_after_from_env() -> Result<Option<std::time::Duration>, String> {
+    match std::env::var("HIRSEL_RT_STOP_AFTER_MS") {
+        Ok(text) => text
+            .parse::<u64>()
+            .map(|ms| Some(std::time::Duration::from_millis(ms)))
+            .map_err(|_| format!("HIRSEL_RT_STOP_AFTER_MS is not a delay: {text:?}")),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err("HIRSEL_RT_STOP_AFTER_MS is not UTF-8".into()),
+    }
 }
 
 /// The width and migration mode the environment asks for: `HIRSEL_RT_WORKERS` compute workers

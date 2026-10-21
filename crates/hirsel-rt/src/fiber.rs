@@ -12,7 +12,8 @@
 //! inaccessible guard of [`GUARD_BYTES`] below, so running out of stack faults like the main
 //! thread's: environmental termination, never a language failure. The top of each mapping
 //! holds the context of the task that runs on it ([`Stack::context`]). Valgrind is told about each
-//! stack (`STACK_REGISTER`) so a switch is not mistaken for a huge frame.
+//! stack (`STACK_REGISTER`) so a switch is not mistaken for a huge frame, and, with the `tsan`
+//! feature, ThreadSanitizer which fiber each switch resumes.
 
 // Context-switch references (layout/ABI comparison, no assembly copied):
 // corosensei 4b5db484, src/arch/x86_64.rs:374-402,407-510 (initial frame,
@@ -41,6 +42,8 @@ pub(crate) type Entry = unsafe extern "C" fn(*mut u8, *mut u8) -> !;
 pub(crate) struct Stack {
     base: *mut u8,
     valgrind: u64,
+    #[cfg(feature = "tsan")]
+    tsan: std::cell::Cell<*mut std::ffi::c_void>,
 }
 
 impl Stack {
@@ -68,7 +71,15 @@ impl Stack {
             base.wrapping_add(GUARD_BYTES),
             base.wrapping_add(length),
         );
-        Stack { base, valgrind }
+        Stack {
+            base,
+            valgrind,
+            #[cfg(feature = "tsan")]
+            tsan: std::cell::Cell::new(tsan::create(
+                base.wrapping_add(GUARD_BYTES),
+                base.wrapping_add(length),
+            )),
+        }
     }
 
     /// The slot of the context of the task that runs on this stack, at the mapping's top.
@@ -106,6 +117,14 @@ impl Stack {
 
     /// The stack pointer of a fiber that, when switched to, calls `entry(first, second)`.
     pub(crate) fn prepare(&self, entry: Entry, first: *mut u8, second: *mut u8) -> *mut u8 {
+        // A reused stack's last fiber ended by switching away, never returning: a fresh
+        // fiber starts with an empty shadow stack.
+        #[cfg(feature = "tsan")]
+        self.tsan.set(tsan::renew(
+            self.base.wrapping_add(GUARD_BYTES),
+            self.base.wrapping_add(GUARD_BYTES + STACK_BYTES),
+            self.tsan.get(),
+        ));
         let words = initial_frame(entry, first, second);
         // SAFETY: the frame lies in the top of this stack's usable bytes.
         unsafe {
@@ -119,6 +138,8 @@ impl Stack {
 impl Drop for Stack {
     fn drop(&mut self) {
         crate::memcheck::stack_deregister(self.valgrind);
+        #[cfg(feature = "tsan")]
+        tsan::destroy(self.base.wrapping_add(GUARD_BYTES), self.tsan.get());
         // SAFETY: the mapping is this stack's and no fiber runs on it any more.
         unsafe { libc::munmap(self.base.cast(), GUARD_BYTES + STACK_BYTES) };
     }
@@ -132,8 +153,96 @@ impl Drop for Stack {
 /// and `save` stays writable until this fiber is resumed.
 #[inline(always)]
 pub(crate) unsafe fn switch(save: *mut *mut u8, to: *mut u8) {
+    // Called here, not in a helper: an instrumented function that returned after the call
+    // would pop its frame off the resumed fiber's shadow stack.
+    #[cfg(feature = "tsan")]
+    // SAFETY: the fiber is the one suspended at `to`; flags 0 synchronizes the switch, as
+    // the scheduler's handoff does.
+    unsafe {
+        tsan::__tsan_switch_to_fiber(tsan::target(to), 0)
+    };
     // SAFETY: caller contract.
     unsafe { fiber_switch(save, to) }
+}
+
+/// ThreadSanitizer's fibers (compiler-rt 19 include/sanitizer/tsan_interface.h:150-172):
+/// every stack mapping is a fiber of its own, and so is each thread's own stack, under the
+/// thread's fiber. A suspended fiber is only its stack pointer, so a switch finds the fiber
+/// to resume by the range that holds `to`; a thread leaving its own stack registers that
+/// stack's range first.
+#[cfg(feature = "tsan")]
+mod tsan {
+    use std::collections::BTreeMap;
+    use std::ffi::c_void;
+    use std::sync::Mutex;
+
+    unsafe extern "C" {
+        fn __tsan_get_current_fiber() -> *mut c_void;
+        fn __tsan_create_fiber(flags: u32) -> *mut c_void;
+        fn __tsan_destroy_fiber(fiber: *mut c_void);
+        pub(super) fn __tsan_switch_to_fiber(fiber: *mut c_void, flags: u32);
+    }
+
+    /// Each range's low address: its high address and its fiber, for the stack mappings and for
+    /// the threads' own stacks. A thread's reported stack may span mappings (the main thread's
+    /// reaches its stack limit), so a mapping is looked up first.
+    static MAPPINGS: Mutex<BTreeMap<usize, (usize, usize)>> = Mutex::new(BTreeMap::new());
+    static THREADS: Mutex<BTreeMap<usize, (usize, usize)>> = Mutex::new(BTreeMap::new());
+
+    fn find(ranges: &Mutex<BTreeMap<usize, (usize, usize)>>, at: usize) -> Option<usize> {
+        let ranges = ranges.lock().unwrap();
+        let (_, &(high, fiber)) = ranges.range(..=at).next_back()?;
+        (at < high).then_some(fiber)
+    }
+
+    pub(super) fn create(low: *mut u8, high: *mut u8) -> *mut c_void {
+        // SAFETY: creating a fiber has no preconditions.
+        let fiber = unsafe { __tsan_create_fiber(0) };
+        MAPPINGS
+            .lock()
+            .unwrap()
+            .insert(low as usize, (high as usize, fiber as usize));
+        fiber
+    }
+
+    pub(super) fn renew(low: *mut u8, high: *mut u8, old: *mut c_void) -> *mut c_void {
+        let fiber = create(low, high);
+        // SAFETY: the old fiber is no longer resumed; the running one is left to leak.
+        if unsafe { __tsan_get_current_fiber() } != old {
+            unsafe { __tsan_destroy_fiber(old) };
+        }
+        fiber
+    }
+
+    pub(super) fn destroy(low: *mut u8, fiber: *mut c_void) {
+        MAPPINGS.lock().unwrap().remove(&(low as usize));
+        // SAFETY: the stack's fiber runs nowhere any more.
+        unsafe { __tsan_destroy_fiber(fiber) };
+    }
+
+    /// The fiber suspended at `to`, after registering the calling thread's own stack when it
+    /// runs there.
+    pub(super) fn target(to: *mut u8) -> *mut c_void {
+        let here = std::ptr::addr_of!(to) as usize;
+        if find(&MAPPINGS, here).is_none() {
+            // SAFETY: the calling thread's attributes describe its own live stack.
+            unsafe {
+                let mut attr: libc::pthread_attr_t = std::mem::zeroed();
+                if libc::pthread_getattr_np(libc::pthread_self(), &mut attr) == 0 {
+                    let (mut low, mut size) = (std::ptr::null_mut(), 0);
+                    libc::pthread_attr_getstack(&attr, &mut low, &mut size);
+                    libc::pthread_attr_destroy(&mut attr);
+                    let low = low as usize;
+                    let fiber = __tsan_get_current_fiber() as usize;
+                    THREADS.lock().unwrap().insert(low, (low + size, fiber));
+                }
+            }
+        }
+        find(&MAPPINGS, to as usize)
+            .or_else(|| find(&THREADS, to as usize))
+            .unwrap_or_else(|| crate::fault("a fiber switch to a stack of no fiber"))
+            as *mut c_void
+    }
 }
 
 #[cfg(target_arch = "x86_64")]

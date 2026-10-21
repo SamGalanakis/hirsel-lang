@@ -177,10 +177,6 @@ impl Exec {
         self.inbox.lock().unwrap().closed = true;
     }
 
-    fn closed(&self) -> bool {
-        self.inbox.lock().unwrap().closed
-    }
-
     /// Whether the thread holds the run (or runs a home interval, for home).
     pub(crate) fn busy(&self) -> bool {
         self.busy.load(Ordering::SeqCst)
@@ -215,7 +211,8 @@ impl Permits {
         self.freed.notify_one();
     }
     /// Permits no thread holds.
-    pub(crate) fn available(&self) -> u32 {
+    #[cfg(test)]
+    fn available(&self) -> u32 {
         *self.available.lock().unwrap()
     }
 }
@@ -473,12 +470,6 @@ pub(crate) fn compute_index() -> Option<u16> {
 #[inline]
 pub(crate) fn wide(run: &RunShared) -> bool {
     run.execs.as_deref().is_some_and(|e| !e.compute.is_empty())
-}
-
-/// Whether the calling thread is `run`'s home thread at width > 1.
-#[inline]
-pub(crate) fn on_wide_home(run: &RunShared) -> bool {
-    wide(run) && own_exec().is_null()
 }
 
 /// The run's execs, created with the home thread holding the run's one permit.
@@ -930,11 +921,6 @@ pub(crate) fn wake(exec: &Exec) {
     exec.post(Post::Wake, None);
 }
 
-/// Whether `run`'s home thread takes posts: false once its run stopped and its loop closed.
-pub(crate) fn home_open(run: &RunShared) -> bool {
-    run.execs.as_deref().is_none_or(|execs| !execs.home.closed())
-}
-
 /// A pool slot for an interval: an idle pool thread, a new one, or `None` when all
 /// [`POOL_THREADS`] are busy.
 pub(crate) fn claim(ctx: *mut TaskCtx) -> Option<u16> {
@@ -1001,12 +987,6 @@ pub(crate) fn acquire_permit(ctx: *mut TaskCtx) -> bool {
         Some(execs) => execs.permits.acquire(unsafe { &*current(execs) }),
         None => false,
     }
-}
-
-/// The run's compute permits no thread holds, or `None` before its first dispatch.
-pub(crate) fn available_permits(ctx: *mut TaskCtx) -> Option<u32> {
-    // SAFETY: the context is live.
-    unsafe { (*(*ctx).run_ptr()).execs.as_deref() }.map(|execs| execs.permits.available())
 }
 
 /// The run ended and every one of its threads is idle: each leaves and is joined. Their

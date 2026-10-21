@@ -305,14 +305,60 @@ fn migrate(root: &Path, jobs: usize, filter: &Filter, hash_seed: u64) -> Result<
         |case, dir| case.run_migrated(&matrix, &toolchain, dir),
     );
     let exclusions = native::read_exclusions(root)?;
-    let ok = trace_agree("migrate", &results, &exclusions);
+    let (results, unjudged) = before_launch(results, &exclusions);
+    let ok = results.is_empty() || trace_agree("migrate", &results, &exclusions);
     println!(
-        "native migrate: {} cases under {} configurations{}",
+        "native migrate: {} cases under {} configurations{}; {unjudged} configurations fail \
+         before their executables start",
         results.len(),
         matrix.len(),
         if ok { " agree under migration" } else { ": FAILED" }
     );
     Ok(ok)
+}
+
+/// Migration is the launched executable's (`HIRSEL_RT_MIGRATE`): what fails before it starts
+/// (the reference snapshot, or a stage before launch) fails the same without it, so it is
+/// reported and left unjudged, unless an exclusion row lists it. The results left, and how
+/// many configurations were left unjudged.
+fn before_launch(
+    results: Vec<native::CaseResult>,
+    exclusions: &native::Exclusions,
+) -> (Vec<native::CaseResult>, usize) {
+    let mut unjudged = 0;
+    let mut left = Vec::new();
+    for mut result in results {
+        let listed = |configuration: &str| {
+            exclusions.contains_key(&(result.id.clone(), configuration.to_string()))
+        };
+        if let Some(reason) = &result.snapshot
+            && !listed(native::SNAPSHOT)
+        {
+            eprintln!("migrate: {}: unjudged, its snapshot fails: {reason}", result.id);
+            unjudged += 1;
+            continue;
+        }
+        let id = result.id.clone();
+        result.outcomes.retain(|(name, _, outcome)| match outcome {
+            Outcome::Unavailable(error)
+                if error.stage != hirsel_driver::native::StageName::Launch
+                    && !exclusions.contains_key(&(id.clone(), name.clone())) =>
+            {
+                eprintln!(
+                    "migrate: {id} under {name}: unjudged, fails at {}: {}",
+                    error.stage.name(),
+                    error.message.lines().next().unwrap_or_default()
+                );
+                unjudged += 1;
+                false
+            }
+            _ => true,
+        });
+        if result.snapshot.is_some() || !result.outcomes.is_empty() {
+            left.push(result);
+        }
+    }
+    (left, unjudged)
 }
 
 /// `--trace-roots`' judgement: every case traces the interpreter's roots under every

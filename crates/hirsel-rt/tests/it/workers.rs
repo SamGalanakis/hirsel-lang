@@ -578,6 +578,7 @@ fn a_fuel_loop_observes_a_stop_within_one_chunk() {
         let mut run = BodyRun::new(width, false);
         run.fuel = fuel;
         let control = run.control();
+        let status = run.control();
         let stopper = std::thread::spawn(move || {
             eventually("the loop", || LOOPING.load(SeqCst));
             control.stop();
@@ -597,6 +598,10 @@ fn a_fuel_loop_observes_a_stop_within_one_chunk() {
         );
         stopper.join().unwrap();
         assert_eq!(ended.ended, Err(Stop::Requested), "width {width}, fuel {fuel:?}");
+        // A detached root leaves at its next refill too, before the next run counts.
+        eventually("the root to leave", || {
+            status.status().reclamation_pending == 0
+        });
         assert!(
             CHARGES_AFTER_STOP.load(SeqCst) <= hirsel_rt::budget::FUEL_CHUNK,
             "width {width}: {} charges after the stop",

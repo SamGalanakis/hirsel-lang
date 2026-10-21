@@ -361,3 +361,44 @@ fn a_fuel_build_without_a_budget_refills_its_chunk_and_finishes_on_both_backends
     }
     std::fs::remove_file(source).unwrap();
 }
+
+/// A host's stop (`HIRSEL_RT_STOP_AFTER_MS`, as `RunControl::stop`) reaches an optimised,
+/// allocation-free loop of a fuel build at its next fuel refill, within one chunk: the loop's
+/// budget outlasts the test by far, so only the stop ends it, on one worker and on three
+/// compute workers, in an LLVM release build and a Cranelift one (design §6 Stops, W1).
+#[test]
+fn a_stop_ends_a_fuel_builds_loop_at_its_next_refill_on_both_backends() {
+    let source = super::file(SPIN);
+    // Release builds are LLVM's; Cranelift builds its default.
+    for build in [&["--release"][..], &["--backend", "cranelift"]] {
+        let exe = source.with_extension(format!("stop.{}.exe", build.len()));
+        let built = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["build", "--fuel"])
+            .args(build)
+            .arg(&source)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert_eq!(built.status.code(), Some(0), "{built:?}");
+        for workers in ["1", "3"] {
+            let started = std::time::Instant::now();
+            let stopped = Command::new(&exe)
+                .env("HIRSEL_RT_STOP_AFTER_MS", "200")
+                .env("HIRSEL_RT_WORKERS", workers)
+                .arg("--hirsel-grants")
+                .arg(grants(r#""fuel":1000000000000000"#))
+                .output()
+                .unwrap();
+            assert!(started.elapsed() < std::time::Duration::from_secs(60), "{stopped:?}");
+            assert_eq!(stopped.stdout, b"start\n", "{stopped:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&stopped.stderr),
+                "hirsel-rt: environmental failure: its place stopped the run\n",
+                "{stopped:?}"
+            );
+        }
+        std::fs::remove_file(exe).unwrap();
+    }
+    std::fs::remove_file(source).unwrap();
+}
