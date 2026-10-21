@@ -76,6 +76,11 @@ pub(crate) struct Ring {
     len: usize,
 }
 
+// SAFETY: a Ring owns raw image storage, with no Rust references into it.
+// Runtime objects move it only under their exclusive owner or object lock;
+// Hirsel's MODE-4 rules ensure that transferred payloads are sendable.
+unsafe impl Send for Ring {}
+
 impl Ring {
     pub(crate) fn new(size: usize, align: usize) -> Ring {
         let align = align.max(1).next_power_of_two();

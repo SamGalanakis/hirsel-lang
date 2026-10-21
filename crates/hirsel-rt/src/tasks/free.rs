@@ -7,6 +7,7 @@
 
 use super::*;
 
+pub(crate) mod mutex;
 pub(crate) mod record;
 
 #[derive(Default)]

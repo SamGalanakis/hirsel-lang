@@ -3530,6 +3530,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
         };
         return STATUS_OK;
     }
+    free::mutex::live(ctx);
     crate::free::enter(ctx, Phase::Done);
     unsafe {
         let layout = (*ctx).descriptor(descriptor);
@@ -3566,6 +3567,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     let word = unsafe { mutex_word(m) };
     if ordered::engine::on(ctx) {
         unsafe { crate::stop::check(ctx, ordered::engine::mutex_take(ctx, word, payload, out)) };
+        return STATUS_OK;
+    }
+    if free::mutex::live(ctx) {
+        unsafe { crate::stop::check(ctx, free::mutex::take(ctx, word, payload, out)) };
         return STATUS_OK;
     }
     let free = crate::free::enter(ctx, Phase::Entered);
@@ -3620,6 +3625,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
     let _segment = profile::Operation::new(ctx, "mutex_put");
     if ordered::engine::on(ctx) {
         unsafe { crate::stop::check(ctx, ordered::engine::mutex_put(ctx, mutex_word(m), payload)) };
+        return STATUS_OK;
+    }
+    if free::mutex::live(ctx) {
+        unsafe { crate::stop::check(ctx, free::mutex::put(ctx, mutex_word(m), payload)) };
         return STATUS_OK;
     }
     // SAFETY: caller contract.
@@ -3739,6 +3748,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u6
     let path = s.task(current).path.clone();
     // SAFETY: the context is live.
     let chain = unsafe { (*ctx).failure.chain(&path) };
+    if free::mutex::live(ctx) {
+        unsafe { crate::stop::check(ctx, free::mutex::kill(ctx, mutex_word(m), chain)) };
+        return STATUS_OK;
+    }
     // SAFETY: caller contract.
     unsafe {
         let word = mutex_word(m);

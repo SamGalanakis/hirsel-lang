@@ -10,7 +10,8 @@ use crate::failure::Chained;
 use crate::fault;
 use crate::release::Layout;
 pub(crate) use hirsel_free::atomic::Image as AtomicImage;
-use std::sync::Arc;
+use hirsel_free::mutex::{Acquired, Permit};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Internal handle tag, disjoint from channel endpoints and task sets.
 pub(crate) const MUTEX: u64 = 1 << 61;
@@ -18,7 +19,7 @@ pub(crate) const MUTEX: u64 = 1 << 61;
 enum Payload {
     Reserved,
     Image(Arc<AtomicImage>),
-    Mutex { element: Element, image: Ring },
+    Mutex(Arc<MutexCell>),
     Closed,
 }
 
@@ -45,6 +46,47 @@ pub(crate) struct Synchronizers {
     cells: Vec<Cell>,
     generation: u32,
     stripes: Option<Arc<hirsel_free::atomic::Stripes>>,
+}
+
+pub(crate) struct MutexCell {
+    pub(crate) element: Element,
+    state: Mutex<MutexImage>,
+}
+
+pub(crate) struct MutexImage {
+    image: Ring,
+    pub(crate) permit: Permit,
+    closed: bool,
+}
+
+impl MutexCell {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, MutexImage> {
+        self.state.lock().unwrap()
+    }
+
+    /// # Safety
+    /// The slot holds a Some image of this cell's element.
+    pub(crate) unsafe fn put(&self, state: &mut MutexImage, slot: *mut u8) -> Option<u32> {
+        assert!(
+            !state.closed && state.image.is_empty(),
+            "a live empty mutex"
+        );
+        state.image.push(slot, self.element.size);
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.element.none.as_ptr(), slot, self.element.size)
+        };
+        state.permit.release()
+    }
+
+    /// # Safety
+    /// The slot is writable for this cell's element, and the caller owns its
+    /// permit. The state lock and record stay held through publication.
+    pub(crate) unsafe fn take(&self, state: &mut MutexImage, slot: *mut u8) {
+        assert!(
+            !state.closed && state.image.pop(slot, self.element.size),
+            "a held mutex payload"
+        );
+    }
 }
 
 impl Synchronizers {
@@ -115,7 +157,17 @@ impl Synchronizers {
             fault("an atomic reservation initialized as a mutex");
         }
         let image = Ring::new(element.size, layout.align as usize);
-        self.initialize(reservation, Payload::Mutex { element, image });
+        self.initialize(
+            reservation,
+            Payload::Mutex(Arc::new(MutexCell {
+                element,
+                state: Mutex::new(MutexImage {
+                    image,
+                    permit: Permit::new(),
+                    closed: false,
+                }),
+            })),
+        );
         unsafe { self.put(word, slot) };
     }
 
@@ -180,51 +232,58 @@ impl Synchronizers {
     /// # Safety
     /// `slot` is a writable `None` image of the cell's element.
     pub(crate) unsafe fn take(&mut self, word: u64, slot: *mut u8) {
-        let Payload::Mutex { element, image } = &mut self.cell(word).payload else {
-            fault("a mutex acquisition of another kind of cell");
-        };
-        if !image.pop(slot, element.size) {
+        let cell = self.mutex(word);
+        let mut state = cell.lock();
+        let mut queued = false;
+        if state.permit.acquire(u32::MAX, &mut queued) != Acquired::Payload {
             fault("a mutex acquired while a body holds it");
         }
+        unsafe { cell.take(&mut state, slot) };
     }
 
     pub(crate) fn available(&mut self, word: u64) -> bool {
-        let cell = self.cell(word);
-        cell.dead.is_some()
-            || matches!(&cell.payload, Payload::Mutex { image, .. } if !image.is_empty())
+        self.mutex(word).lock().permit.available()
     }
 
     /// # Safety
     /// `slot` is a `Some` image of the cell's element.
     pub(crate) unsafe fn put(&mut self, word: u64, slot: *mut u8) {
-        let cell = self.cell(word);
-        let Payload::Mutex { element, image } = &mut cell.payload else {
-            fault("a mutex put to another kind of cell");
-        };
-        if !image.is_empty() || cell.dead.is_some() {
-            fault("a mutex payload put back twice or after death");
-        }
-        image.push(slot, element.size);
-        unsafe { std::ptr::copy_nonoverlapping(element.none.as_ptr(), slot, element.size) };
+        let cell = self.mutex(word);
+        let mut state = cell.lock();
+        unsafe { cell.put(&mut state, slot) };
     }
 
     pub(crate) fn dead(&mut self, word: u64) -> Option<&Vec<Chained>> {
         self.cell(word).dead.as_ref()
     }
     pub(crate) fn kill(&mut self, word: u64, chain: Vec<Chained>) {
+        self.kill_waiters(word, chain);
+    }
+
+    pub(crate) fn kill_waiters(&mut self, word: u64, chain: Vec<Chained>) -> Vec<u32> {
+        let waiters = self.mutex(word).lock().permit.kill();
         self.cell(word).dead = Some(chain);
+        waiters
+    }
+
+    pub(crate) fn mutex(&mut self, word: u64) -> Arc<MutexCell> {
+        let Payload::Mutex(cell) = &self.cell(word).payload else {
+            fault("a mutex access of another kind of cell");
+        };
+        cell.clone()
     }
 
     /// Detach before running user destruction, which may create or close cells.
     pub(crate) fn close(&mut self, word: u64) -> Option<(Ring, u32)> {
         let cell = self.cell(word);
-        let Payload::Mutex { element, image } =
-            std::mem::replace(&mut cell.payload, Payload::Closed)
-        else {
+        let Payload::Mutex(mutex) = std::mem::replace(&mut cell.payload, Payload::Closed) else {
             fault("a mutex closed twice or an atomic closed as a mutex");
         };
         cell.dead = None;
-        (!image.is_empty() && !element.inert).then_some((image, element.descriptor))
+        let mut state = mutex.lock();
+        state.closed = true;
+        let image = std::mem::replace(&mut state.image, Ring::new(mutex.element.size, 1));
+        (!image.is_empty() && !mutex.element.inert).then_some((image, mutex.element.descriptor))
     }
 
     pub(crate) fn end(&mut self) {

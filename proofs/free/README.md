@@ -41,6 +41,10 @@ expected result; the gate runs it when these models or the kernel source they co
   the initial value for native/native, native/fallback and fallback/fallback
   pairs. Concurrent wide loads must see a whole old or new image. Both models
   compile the production cell implementation through the same sync shim.
+- `loom/tests/mutex.rs` runs the production FIFO permit state at preemption
+  bound **2**: a returned payload remains reserved for the oldest waiter, and
+  competing acquirers cannot both take it. Native runtime controls also cover
+  seven parked waiters, FIFO reacquisition and wakeup of all waiters on death.
 
 GenMC is built once by `check.sh`, pinned by commit, into
 `${XDG_CACHE_HOME:-~/.cache}/genmc-<commit>`; it needs cmake, clang and LLVM 19-22 with their

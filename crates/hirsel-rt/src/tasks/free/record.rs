@@ -108,8 +108,12 @@ pub(crate) unsafe fn atomic_create(
     size: u64,
 ) -> Stopped<()> {
     entry(ctx);
+    // scheduler() observes a runtime stop and can abandon its calling fiber.
+    // Resolve it before opening the section, whose RAII owner must be dropped
+    // normally before any stop/suspension. The role keeps this pointer stable.
+    let scheduler = crate::tasks::scheduler(ctx) as *mut crate::tasks::Scheduler;
     phase(ctx, |_| unsafe {
-        out.write(crate::tasks::scheduler(ctx).sync.create_image(value, size));
+        out.write((*scheduler).sync.create_image(value, size));
     })
 }
 

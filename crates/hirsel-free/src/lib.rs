@@ -16,6 +16,7 @@ pub mod cancel;
 pub mod claim;
 pub mod frame;
 pub mod keys;
+pub mod mutex;
 pub mod pending;
 pub mod phase;
 pub mod projection;
