@@ -102,6 +102,9 @@ pub struct Lowered {
     pub statics: Vec<hirsel_lir::statics::StaticData>,
     /// Signature/placement proof owner of every unit, including specializations.
     pub unit_origins: Vec<InstanceId>,
+    /// Explicit semantic owner of each native definition. None denotes a planned
+    /// library body covered by the shared runtime node in ProgramRevision.
+    pub semantic_owners: BTreeMap<DefPath, Option<DefPath>>,
     /// Source bodies available for inlining in every calling partition.
     pub inline_instances: std::collections::BTreeSet<ContentHash>,
     /// Per unit imported under a nonempty plan: the instance, the
@@ -227,7 +230,7 @@ pub fn lower_cached(
     cache: &mut dyn ImportCache,
 ) -> Result<Lowered, LowerError> {
     // Results built only to be appended are built in place (append_into).
-    let (fused, origins) = crate::append_into::fuse_with_origins(program, discharge);
+    let (fused, origins, source_owners) = crate::append_into::fuse_with_origins(program, discharge);
     let program = &fused;
     let mut native_discharge = discharge.clone();
     for (path, origin) in &origins {
@@ -405,6 +408,23 @@ pub fn lower_cached(
         .into_iter()
         .map(|u| crate::flat_walk::rewrite(u, &table, flat_walk))
         .collect();
+    let semantic_owners = instances
+        .ids()
+        .map(|id| {
+            let path = instances.view(id).key.definition().clone();
+            let owner = if instances.roles[id.index()].is_library() {
+                None
+            } else {
+                Some(
+                    source_owners
+                        .get(&path)
+                        .cloned()
+                        .unwrap_or_else(|| path.clone()),
+                )
+            };
+            (path, owner)
+        })
+        .collect();
     let mut lowered = Lowered {
         instances,
         plans,
@@ -413,6 +433,7 @@ pub fn lower_cached(
         table,
         statics,
         unit_origins: Vec::new(),
+        semantic_owners,
         inline_instances: Default::default(),
         discharged,
         native_discharge,

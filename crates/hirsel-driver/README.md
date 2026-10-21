@@ -252,3 +252,7 @@ Native placement, RC insertion and elision, reuse and cleanup use one per-unit
 lowering function. Object workers, heap inspection and dumps all use it;
 production validates Ready once, and harnesses also check intermediate stages.
 Finalizer facts come from the plan, so no stage retains every unit's RC output.
+Native semantic binding checks every planned unit against the run identity's
+closure. Derived append forms retain explicit source owners; planned library
+bodies are covered by its shared runtime revision. Linking checks the sealed
+unit selection and every exported function's definition again.

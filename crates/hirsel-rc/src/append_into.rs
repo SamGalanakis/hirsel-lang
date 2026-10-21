@@ -134,7 +134,11 @@ impl SourceMap {
 pub(crate) fn fuse_with_origins(
     program: &Program,
     discharge: &hirsel_lir::discharge::Discharge,
-) -> (Program, BTreeMap<DefPath, SourceMap>) {
+) -> (
+    Program,
+    BTreeMap<DefPath, SourceMap>,
+    BTreeMap<DefPath, DefPath>,
+) {
     let mut p = program.clone();
     let mut fuser = Fuser {
         origins: program
@@ -160,7 +164,24 @@ pub(crate) fn fuse_with_origins(
         fuser.builders.clear();
         fuser.totals.clear();
     }
-    (p, fuser.origins)
+    let derived: BTreeMap<_, _> = fuser
+        .derived
+        .iter()
+        .map(|(source, generated)| (generated.clone(), source.clone()))
+        .collect();
+    let mut owners: BTreeMap<_, _> = program
+        .definitions
+        .keys()
+        .map(|p| (p.clone(), p.clone()))
+        .collect();
+    for (generated, source) in &derived {
+        let mut source = source;
+        while let Some(parent) = derived.get(source) {
+            source = parent;
+        }
+        owners.insert(generated.clone(), source.clone());
+    }
+    (p, fuser.origins, owners)
 }
 
 #[derive(Default)]

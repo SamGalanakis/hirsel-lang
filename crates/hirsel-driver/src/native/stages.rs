@@ -155,6 +155,11 @@ impl std::error::Error for NativeError {}
 /// A whole program at Ready: every unit sealed by the Ready validator against
 /// this table, target, manifest and input.
 pub struct ReadyProgram {
+    /// Planned provenance: source definitions (including derived forms) name their
+    /// source owner; library instances name the common semantic runtime bundle.
+    semantic_owners: BTreeMap<DefPath, Option<DefPath>>,
+    /// The exact planned unit identities checked when binding the semantic input.
+    semantic_units: Option<BTreeSet<(DefPath, ContentHash)>>,
     /// Validation policy retained for subsequent inspection and emission.
     pub validation: Validation,
     pub operations: hirsel_layout::operation::OperationRegistry,
@@ -221,6 +226,46 @@ pub struct UnitObjectArtifacts {
 }
 
 impl ReadyProgram {
+    /// Recheck the linked selection against the identities sealed by semantic binding.
+    pub(crate) fn check_semantic_units(
+        &self,
+        objects: &[hirsel_lir::stage::ObjectArtifact],
+    ) -> Result<(), NativeError> {
+        let Some(covered) = &self.semantic_units else {
+            return Err(NativeError::new(
+                StageName::Link,
+                "native units have no semantic binding",
+            ));
+        };
+        for unit in &self.summaries {
+            if !covered.contains(&(unit.definition.clone(), unit.instance)) {
+                return Err(NativeError::of(
+                    StageName::Link,
+                    &unit.definition,
+                    "linked unit outside the semantic closure covered by the run identity",
+                ));
+            }
+        }
+        let definitions: BTreeSet<_> = covered.iter().map(|(path, _)| path).collect();
+        for export in objects.iter().flat_map(|object| &object.exports) {
+            if export.kind == hirsel_lir::stage::ObjectSymbolKind::Function
+                && export
+                    .definition
+                    .as_ref()
+                    .is_none_or(|path| !definitions.contains(path))
+            {
+                return Err(NativeError::new(
+                    StageName::Link,
+                    format!(
+                        "linked symbol `{}` outside the semantic closure covered by the run identity",
+                        export.name
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Whether the program builds tracked arena blocks (MEM-6): it opens a bounded arena,
     /// which only `arena.bounded`'s recovery does.
     pub fn tracking(&self) -> bool {
@@ -240,6 +285,26 @@ impl ReadyProgram {
                 "semantic binding belongs to another input",
             ));
         }
+        for unit in &self.summaries {
+            let covered = match self.semantic_owners.get(&unit.definition) {
+                Some(Some(owner)) => input.semantic_contains(owner),
+                Some(None) => unit.origin == hirsel_lir::ir::UnitOrigin::Library,
+                None => false,
+            };
+            if !covered {
+                return Err(NativeError::of(
+                    StageName::Link,
+                    &unit.definition,
+                    "native unit outside the semantic closure covered by the run identity",
+                ));
+            }
+        }
+        self.semantic_units = Some(
+            self.summaries
+                .iter()
+                .map(|unit| (unit.definition.clone(), unit.instance))
+                .collect(),
+        );
         self.revisions = self
             .launches
             .keys()
@@ -578,6 +643,8 @@ pub fn build_program(
         })
         .collect::<Result<_, _>>()?;
     Ok(ReadyProgram {
+        semantic_owners: lowered.semantic_owners.clone(),
+        semantic_units: None,
         validation: options.validation,
         callbacks,
         operations,
@@ -745,6 +812,8 @@ impl BuiltUnits {
             })
             .collect();
         ReadyProgram {
+            semantic_owners: lowered.semantic_owners.clone(),
+            semantic_units: None,
             validation: options.validation,
             callbacks: self.callbacks,
             operations,
@@ -841,6 +910,45 @@ fn callbacks<S>(unit: &hirsel_lir::ir::LirUnit<S>) -> impl Iterator<Item = DefPa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn semantic_binding_rejects_unplanned_units_and_object_exports() {
+        hirsel_engine::with_compiler_stack(|| {
+            let mut engine = hirsel_engine::QueryEngine::new(
+                hirsel_engine::default_environment(),
+                crate::compiler_adapters(),
+            );
+            let file = engine.sources.add("semantic.hir", "fn helper()->u64 { 7u64 }\npub fn main()->Result[(),()] { let _ = helper(); Ok(()) }\n".into()).unwrap();
+            let output =
+                hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
+                    .unwrap();
+            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+            let input = engine.export_native_input().unwrap();
+            let input = engine.import_native_input(input).unwrap();
+            let mut options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
+            options.objects = Some(super::super::UnitObjects {
+                store: std::sync::Arc::new(hirsel_lir::objects::NoObjects),
+                backend: super::super::Backend::Cranelift,
+                opt: hirsel_lir::emission::OptLevel::None,
+                debug: false,
+                fuel: false,
+                jobs: hirsel_intern::jobs::Jobs::ONE,
+            });
+            let mut ready = build(&input, &options).unwrap();
+            let mut objects = ready.unit_objects.as_ref().unwrap().objects.clone();
+            ready.check_semantic_units(&objects).unwrap();
+            let definition = ready.summaries[0].definition.clone();
+            ready.summaries[0].definition = DefPath::core("unselected");
+            assert!(ready.check_semantic_units(&objects).is_err());
+            ready.summaries[0].definition = definition.clone();
+            objects[0].exports[0].definition = Some(DefPath::core("unselected"));
+            assert!(ready.check_semantic_units(&objects).is_err());
+            ready
+                .semantic_owners
+                .insert(definition, Some(DefPath::core("unselected")));
+            assert!(ready.bind_revisions(&input).is_err());
+        });
+    }
 
     #[test]
     fn unit_pipeline_is_identical_at_every_worker_count_and_validation_policy() {

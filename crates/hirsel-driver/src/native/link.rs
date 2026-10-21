@@ -1326,6 +1326,7 @@ fn launcher_object(
     standalone: bool,
     main_symbol: &str,
 ) -> Result<Vec<u8>, NativeError> {
+    program.check_semantic_units(objects)?;
     let (symbol, result_size, caller_site) = entry_result(program, entry)?;
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
         &program.table,
@@ -1546,21 +1547,12 @@ fn link_launcher(
 ) -> Result<Linked, NativeError> {
     let (symbol, _, _) = entry_result(program, entry)?;
     let target = &program.target;
-    let library_symbols: std::collections::BTreeSet<String> = program
-        .summaries
-        .iter()
-        .filter(|s| {
-            s.origin == hirsel_lir::ir::UnitOrigin::Library
-                || program.inline_instances.contains(&s.instance)
-        })
-        .map(|s| hirsel_lir::emission::symbol_name(&s.definition, Some(&s.instance)))
-        .collect();
     // Link manifest: each definition instance has exactly one implementation
     // across the objects, the entry among them, and every import is another
     // object's export, a runtime entry or a toolchain routine.
     let mut exported = std::collections::BTreeSet::new();
     for export in objects.iter().flat_map(|o| &o.exports) {
-        if !exported.insert(export.name.as_str()) && !library_symbols.contains(&export.name) {
+        if !exported.insert(export.name.as_str()) {
             return Err(NativeError::new(
                 StageName::Link,
                 format!("two objects implement `{}`", export.name),
@@ -1579,9 +1571,6 @@ fn link_launcher(
             hirsel_lir::stage::ObjectSymbolKind::Runtime
                 | hirsel_lir::stage::ObjectSymbolKind::Foreign
         ) || exported.contains(import.name.as_str())
-            // A library body glue's callback thunk calls: the object of the unit that
-            // names the callback keeps its copy.
-            || library_symbols.contains(&import.name)
             || hirsel_lir::emission::TOOLCHAIN_IMPORTS.contains(&import.name.as_str());
         if !declared {
             return Err(NativeError::new(
