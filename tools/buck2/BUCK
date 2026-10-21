@@ -16,6 +16,19 @@ constraint_value(name = "profile_checked", constraint_setting = ":profile", visi
 
 constraint_value(name = "profile_profiling", constraint_setting = ":profile", visibility = ["PUBLIC"])
 
+# Distribution builds trade build time for compiler throughput. Dev/release stay unchanged.
+constraint_value(name = "profile_dist", constraint_setting = ":profile", visibility = ["PUBLIC"])
+
+platform(
+    name = "dist",
+    constraint_values = [
+        "prelude//os/constraints:linux",
+        "prelude//cpu/constraints:x86_64",
+        ":profile_dist",
+    ],
+    visibility = ["PUBLIC"],
+)
+
 # Release code with line information and walkable stacks for perf.
 platform(
     name = "profiling",

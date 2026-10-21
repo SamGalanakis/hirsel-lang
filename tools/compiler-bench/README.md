@@ -7,8 +7,10 @@ compares user-mode instruction counts with a stored baseline, and runs only when
 invoked by hand.
 
 ```sh
-# The release CLI bundle: hirsel plus its sibling hirsel-std.precheck.
-.buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-toolchain --show-output
+# The distribution CLI: fat LTO, one codegen unit; sibling std precheck.
+.buck2/bin/buck2 build --target-platforms //tools/buck2:dist //:hirsel-toolchain --show-output
+# Developer release builds keep their existing profile.
+tools/compiler-bench/run --quick --toolchain <bundle> --output quick.json       # Hirsel examples + syn3k, no Rust
 tools/compiler-bench/run --toolchain <bundle> --output results.json            # whole suite
 tools/compiler-bench/run --toolchain <bundle> --groups examples --modes check --output r.json
 tools/compiler-bench/compare baseline.json results.json   # exit 1 on a regression
@@ -92,7 +94,11 @@ scope the same number of CPUs. Hirsel compiles on one thread, so its cells are
 Hirsel cell's median `instructions:u` divided by its Rust pair's. Above 1x,
 Hirsel executes more user instructions. Wall and CPU times are descriptive only.
 
-Each cell states its cache in its `cache` field.
+Each cell states its cache in its `cache` field. Compiler benchmarks disable
+the native program cache (`HIRSEL_PROGRAM_CACHE=off`) so repeated builds exercise
+the compiler. `--quick` selects only Hirsel: the seven examples plus syn3k, in
+check, debug Cranelift and release LLVM modes (24 cells). Explicit `--modes`
+can narrow this selection.
 
 - **Hirsel**: every run is a fresh process. It reads the std precheck and keeps
   nothing else between runs, because the query cache is process-local. So a
@@ -201,7 +207,7 @@ tools/compiler-bench/run-main --groups examples --modes check
 ```
 
 `run-main` fetches `origin/main` into a detached worktree and builds the
-release bundle on the Buck2 pool. It runs the suite (one capped process at a
+distribution bundle on the Buck2 pool. It runs the suite (one capped process at a
 time) and compares the result with the baseline. Each result and comparison
 is kept under `$HIRSEL_MAIN_RUNS/compiler-bench/`, and a regression appends
 one line to `$HIRSEL_MAIN_RUNS/alarms.log`, the file `tools/main-stall-alarm`

@@ -161,6 +161,14 @@ remote executions (172 local preparation actions); the test passed again.
 The copied runtime archives accounted for about 8.16 GiB and toolchain bundles
 3.36 GiB before cleanup; sharing these across worktrees is separate work.
 
+## Distribution compiler
+
+`//tools/buck2:dist` builds the distribution compiler with fat LTO and one
+codegen unit. The existing mimalloc dependency already builds v3.
+`tools/compiler-bench/run-main` measures this profile. Developer `dev` and
+`release`, checked tools and runtime archives keep their existing profiles.
+See [the measurements](../../reports/toolchain-dist.md).
+
 ## Everyday commands
 
 ```sh

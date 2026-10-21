@@ -118,6 +118,27 @@ class Scoreboard(unittest.TestCase):
         self.assertEqual((pair['rust'], pair['ratio']), ('p/rust/debug/j1', 3.0))
 
 
+class QuickMatrix(unittest.TestCase):
+    def test_quick_matrix_is_24_hirsel_compiles(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            programs = [p for p in corpus.corpus(Path(scratch), scale=(3000,)) if run.quick_program(p)]
+            self.assertEqual(len(programs), 8)
+            self.assertIn('syn3k', [p.name for p in programs])
+            for program in programs:
+                self.assertEqual(program.language, 'hirsel')
+                self.assertEqual(run.modes(program, ['check', 'clif', 'llvm-o2'], quick=True),
+                                 ['check', 'clif', 'llvm-o2'])
+
+    def test_measurements_disable_the_native_program_cache(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            runner = run.Runner.__new__(run.Runner)
+            runner.work = Path(scratch)
+            runner.base_env = {'HIRSEL_PROGRAM_CACHE': 'on'}
+            runner.native_env = {'HIRSEL_PROGRAM_CACHE': 'on'}
+            for native in (False, True):
+                self.assertEqual(runner.env(native=native)['HIRSEL_PROGRAM_CACHE'], 'off')
+
+
 class Corpus(unittest.TestCase):
     def tree(self, root):
         return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob('*')) if p.is_file()}

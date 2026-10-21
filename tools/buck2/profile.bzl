@@ -13,6 +13,10 @@ RELEASE_FLAGS = [
     "-Ccodegen-units=16",
 ]
 
+# tsrs notes/perf-pgo.md: fat LTO requires bitcode in every target rlib.
+# Proc macros and build scripts keep host_transition's canonical dev profile.
+DIST_FLAGS = RELEASE_FLAGS + ["-Cembed-bitcode=yes", "-Clto=fat", "-Ccodegen-units=1"]
+
 # The runtime archive is built as Cargo's release profile with
 # CARGO_PROFILE_RELEASE_PANIC=abort (crates/hirsel-driver/src/native/link.rs).
 # Cargo leaves proc macros and build scripts unwinding; so does this. Cargo's
@@ -28,6 +32,7 @@ PANIC_ABORT = select({
 def workspace_profile_flags(host_code = False):
     return select({
         "root//tools/buck2:profile_release": RELEASE_FLAGS,
+        "root//tools/buck2:profile_dist": DIST_FLAGS,
         "root//tools/buck2:profile_profiling": RELEASE_FLAGS + ["-Cdebuginfo=line-tables-only", "-Cforce-frame-pointers=yes"],
         "root//tools/buck2:profile_checked": RELEASE_FLAGS + ["-Cdebug-assertions=yes", "-Coverflow-checks=yes"],
         "DEFAULT": [],
@@ -37,6 +42,7 @@ def workspace_profile_flags(host_code = False):
 def third_party_profile_flags(host_code = False):
     return select({
         "root//tools/buck2:profile_release": RELEASE_FLAGS,
+        "root//tools/buck2:profile_dist": DIST_FLAGS,
         "root//tools/buck2:profile_profiling": RELEASE_FLAGS + ["-Cdebuginfo=line-tables-only", "-Cforce-frame-pointers=yes"],
         "root//tools/buck2:profile_checked": RELEASE_FLAGS + ["-Cdebug-assertions=yes", "-Coverflow-checks=yes"],
         "DEFAULT": ["-Copt-level=1"],

@@ -31,6 +31,7 @@ def _compile_constraints(name):
     target = "third-party:" + name
     return select({
         "root//tools/buck2:profile_release": [budget_constraint(pool_budget_name(*compile_request("release", target)))],
+        "root//tools/buck2:profile_dist": [budget_constraint(pool_budget_name(*compile_request("release", target)))],
         "root//tools/buck2:profile_profiling": [budget_constraint(pool_budget_name(*compile_request("release", target)))],
         "DEFAULT": [budget_constraint(pool_budget_name(*compile_request("dev", target)))],
     })

@@ -12,7 +12,7 @@ names the crate from any package directory, locally or on the pool, and so do
 CARGO_TARGET_TMPDIR and CARGO_BIN_EXE_<name>.
 """
 
-load(":platforms.bzl", "CLIPPY_REQUEST", "PRECHECK_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "doctest_properties", "pool_budget_name", "test_budget_name", "test_executor", "test_request", "test_memory_limit")
+load(":platforms.bzl", "CLIPPY_REQUEST", "PRECHECK_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "doctest_properties", "dist_compile_request", "pool_budget_name", "test_budget_name", "test_executor", "test_request", "test_memory_limit")
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS")
 load(":profile.bzl", "workspace_profile_flags")
 load("@prelude//linking:link_info.bzl", "ArchiveLinkable", "LinkStrategy", "ObjectsLinkable")
@@ -88,6 +88,7 @@ def _env_set(key, value):
 def _compile_constraints(name):
     return select({
         "root//tools/buck2:profile_release": [budget_constraint(pool_budget_name(*compile_request("release", name)))],
+        "root//tools/buck2:profile_dist": [budget_constraint(pool_budget_name(*dist_compile_request(name)))],
         "root//tools/buck2:profile_profiling": [budget_constraint(pool_budget_name(*compile_request("release", name)))],
         "DEFAULT": [budget_constraint(pool_budget_name(*compile_request("dev", name)))],
     })
@@ -116,6 +117,7 @@ def _dev_codegen(name):
 def _codegen_flags(name):
     return select({
         "root//tools/buck2:profile_release": _release_codegen_units(name),
+        "root//tools/buck2:profile_dist": [],
         "root//tools/buck2:profile_profiling": _release_codegen_units(name),
         "DEFAULT": _dev_codegen(name),
     })

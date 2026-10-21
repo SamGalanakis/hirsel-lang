@@ -111,6 +111,15 @@ def pool_budget_name(cpu, memory_kb, cpu_class = ""):
     name = "pool_{}_{}".format(cpu, memory_kb)
     return name + "_" + cpu_class if cpu_class else name
 
+# Fat-LTO links aggregate the compiler's LLVM modules on one worker. Keep this
+# reservation separate from release's small incremental compile/link actions.
+DIST_LINK_REQUEST = [1, 4194304, ""]
+
+def dist_compile_request(name):
+    if name == "hirsel-cli-bin-hirsel":
+        return DIST_LINK_REQUEST
+    return compile_request("release", name)
+
 def compile_request(profile, name):
     """A compile's `[cpu, memory_kb, cpu_class]` in `profile` (dev or release)."""
     # If this profile has not run recently, use the other profile's measured
@@ -207,7 +216,7 @@ _platforms_rule = rule(
 def declare_platforms(name, constraints):
     native.constraint_setting(name = "budget")
     budgets = {}
-    requests = [tuple(b) for b in POOL_BUDGETS] + [tuple(CLIPPY_REQUEST), tuple(PRECHECK_REQUEST)]
+    requests = [tuple(b) for b in POOL_BUDGETS] + [tuple(CLIPPY_REQUEST), tuple(PRECHECK_REQUEST), tuple(DIST_LINK_REQUEST)]
     if PROBE_CPUS:
         requests += [tuple(compile_request(profile, target)) for profile, targets in COMPILE_CLASSES.items() for target in targets]
     # The first platform is what a target without a budget (third-party

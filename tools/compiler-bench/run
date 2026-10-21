@@ -173,12 +173,15 @@ class Runner:
         self.scratch.mkdir(parents=True, exist_ok=True)
         self.base_env, self.native_env = env['base'], env['native']
         # Older toolchains lack phase reports; perf still counts every compile.
-        usage = subprocess.run([str(self.hirsel), '--help'], capture_output=True, text=True).stdout
+        usage = subprocess.run([str(self.hirsel), '--help'], capture_output=True, text=True,
+                               env=dict(os.environ, LLVM_PROFILE_FILE=os.devnull)).stdout
         self.timings = ['--timings=json'] if '--timings' in usage else []
         self.cells = []
 
     def env(self, native=False, jobs=None):
         env = dict(self.native_env if native else self.base_env)
+        # Measure compilation even when the program cache already holds an executable.
+        env['HIRSEL_PROGRAM_CACHE'] = 'off'
         if jobs:
             # Rust pairs share one target directory, so the dependencies build once.
             env['HIRSEL_JOBS'] = str(jobs)
@@ -288,11 +291,13 @@ class Runner:
         jobs = [int(j) for j in args.jobs.split(',')]
         blocked = set()
         for program in programs:
+            if getattr(args, 'quick', False) and not quick_program(program):
+                continue
             if select and not select.search(program.name):
                 continue
             counts = jobs if program.language == 'rust' else [1]
             if want is None or set(program.groups) & want:
-                for mode in modes(program, wanted):
+                for mode in modes(program, wanted, quick=getattr(args, 'quick', False)):
                     if 'scale' in program.groups and (program.language, mode) in blocked:
                         say(f'  {program.name}/{program.language}/{mode}: skipped (a smaller size reached the cap or timeout)')
                         continue
@@ -311,14 +316,19 @@ class Runner:
         return self.cells
 
 
-def modes(program, wanted):
+def quick_program(program):
+    """The distribution smoke matrix: the seven examples and syn3k, Hirsel only."""
+    return program.language == 'hirsel' and ('examples' in program.groups or program.name == 'syn3k')
+
+
+def modes(program, wanted, quick=False):
     if program.name == 'std@1':
         own = ('precheck',)
     elif program.language == 'hirsel' and program.check_only:
         own = ('check',)
     elif program.language == 'hirsel':
         # Every backend for the examples; check and the debug backend elsewhere.
-        own = HIRSEL_MODES if 'examples' in program.groups else ('check', 'clif')
+        own = HIRSEL_MODES if quick or 'examples' in program.groups else ('check', 'clif')
     else:
         own = RUST_MODES
     return [m for m in own if wanted is None or m in wanted or (m == 'precheck' and 'check' in wanted)]
@@ -360,6 +370,7 @@ def pairs(cells):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--quick', action='store_true', help='Hirsel examples and syn3k: check, debug Cranelift and release LLVM')
     parser.add_argument('--toolchain', required=True, help='directory with hirsel and hirsel-std.precheck')
     parser.add_argument('--output', required=True, help='result file to write')
     parser.add_argument('--work', default=None, help='corpus and scratch directory (default: a temporary one)')
@@ -372,6 +383,8 @@ def main():
     parser.add_argument('--jobs', default='1,8', help='cargo job counts (default 1,8); Hirsel is single-threaded')
     parser.add_argument('--timeout', type=int, default=300, help='seconds per run (default 300)')
     args = parser.parse_args()
+    if args.quick and args.modes is None:
+        args.modes = 'check,clif,llvm-o2'
     if not (Path(args.toolchain) / 'hirsel').exists():
         parser.error(f'{args.toolchain}/hirsel does not exist')
     if args.repeat < 1 or args.cpu not in os.sched_getaffinity(0):
@@ -383,12 +396,15 @@ def main():
     work = Path(args.work).resolve()
     started = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     say(f'compiler-bench: writing the corpus to {work}')
-    programs = corpus.corpus(work)
+    programs = corpus.corpus(work, scale=(3000,)) if args.quick else corpus.corpus(work)
     native = args.modes is None or any(m in NATIVE for m in args.modes.split(','))
     if native:
         say('compiler-bench: building the pinned native toolchains on the pool')
+    env = environment(native)
+    say(f'compiler-bench: waiting for CPU{args.cpu} timing lock')
     with timing_lock(args.cpu):
-        cells = Runner(args, environment(native)).go(programs)
+        say(f'compiler-bench: CPU{args.cpu} lock acquired; starting measurements')
+        cells = Runner(args, env).go(programs)
     rustc = subprocess.run(['rustc', '--version'], capture_output=True, text=True).stdout.strip()
     result = {
         'schema': 1, 'suite': 'compiler-bench', 'commit': git_commit(), 'started': started,
@@ -397,7 +413,7 @@ def main():
         'toolchain': {'hirsel': str(Path(args.toolchain).resolve() / 'hirsel'), 'rustc': rustc,
                       'hirsel_sha256': file_hash(Path(args.toolchain) / 'hirsel'),
                       'std_precheck_sha256': file_hash(Path(args.toolchain) / 'hirsel-std.precheck')},
-        'selection': {'groups': args.groups, 'select': args.select, 'modes': args.modes, 'jobs': args.jobs},
+        'selection': {'quick': args.quick, 'groups': args.groups, 'select': args.select, 'modes': args.modes, 'jobs': args.jobs},
         'repeat': args.repeat, 'cells': cells, 'pairs': pairs(cells),
     }
     Path(args.output).write_text(json.dumps(result, indent=1) + '\n')
