@@ -898,3 +898,14 @@ retires old compact products once, while its acknowledgment remains available
 for P/S1 work that has not refreshed yet. Overlapping changed inputs combine
 their memo mark requests before applying them, retaining first-read provenance
 and text-mark priority without changing memo-touch accounting.
+
+Program checking admits consecutive constants with complete static source-call
+closures to immutable S1 workers after GEN-5, using the same path at every jobs
+count. Staged, generated, indirect, generic and unavailable dependencies remain
+serial boundaries. Eligibility reads coherent compact products without query
+fallback. Captured per-root phase, limit and reads are restored in source order;
+successful values still pass through ordinary lowering and V, and earlier
+lowering diagnostics survive a later failure. Unchanged lower products skip S1
+materialization. Image release omits optional whole-universe lower/constant
+products from unrecorded files before proving the retained package closure.
+This admission does not yet bound S1 completion queues or body holds.

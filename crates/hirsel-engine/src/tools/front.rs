@@ -118,6 +118,135 @@ impl QueryEngine {
                 })
     }
 
+    /// Conservative first production frontier: every call has a published
+    /// static target, no generic/staged/generated requirement can publish new
+    /// declarations from a later speculative root. Dynamic roots stay serial.
+    pub(crate) fn static_constant_frontier(&mut self, root: &DefPath) -> bool {
+        if self.adapters.phases.is_none() {
+            return false;
+        }
+        self.invalidate_front_products();
+        if self
+            .front_products
+            .lowered
+            .contains_key(&DefId::intern(root))
+        {
+            return true;
+        }
+        let mut pending = vec![DefId::intern(root)];
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(definition) = pending.pop() {
+            if !seen.insert(definition) {
+                continue;
+            }
+            let Some(syntax) = self
+                .items
+                .get(definition.path())
+                .and_then(|items| items.first())
+                .cloned()
+            else {
+                return false;
+            };
+            if crate::queries::generation::generator(&syntax).is_some()
+                || crate::queries::generation::instance_bodied(&syntax)
+            {
+                return false;
+            }
+            // Eligibility is read-only: unavailable or dirty compact inputs
+            // cannot run another query before an earlier file prefix settles.
+            let Some(published) = self
+                .front_products
+                .selection
+                .get(&definition)
+                .cloned()
+                .filter(|summary| self.current_front_summary(summary))
+            else {
+                return false;
+            };
+            let summary = &published.summary;
+            if !summary.staged.is_empty() || summary.frames.iter().any(|frame| frame.generic) {
+                return false;
+            }
+            // Indirect, intrinsic and constructor calls absent from the
+            // symbolic static-call list remain on the existing scalar path.
+            if syntax.tree.expressions.iter().any(|expression| {
+                matches!(expression.kind, hirsel_syntax::ExprKind::Call { .. })
+                    && !summary
+                        .calls
+                        .iter()
+                        .any(|call| call.site == expression.origin.span)
+            }) {
+                return false;
+            }
+            for call in &summary.calls {
+                if !call.arguments.is_empty() {
+                    return false;
+                }
+                if call.target_frame.is_none() {
+                    pending.push(call.callee);
+                }
+            }
+            for (read, _) in published.reads.iter() {
+                if let crate::memo::ReadKey::Signature(dependency) = read
+                    && self
+                        .items
+                        .get(dependency.path())
+                        .and_then(|items| items.first())
+                        .is_some_and(|item| {
+                            matches!(item.item.kind, hirsel_syntax::ItemKind::Const { .. })
+                        })
+                {
+                    pending.push(*dependency);
+                }
+            }
+        }
+        true
+    }
+
+    /// S1 admission for consecutive ordinary constants, after GEN-5. Cached
+    /// lower products need no materialization query. Per-root failure metadata
+    /// is restored at the original input position; successful values are then
+    /// consumed by ordinary lowering, preserving its diagnostics and V path.
+    pub(crate) fn front_constants(
+        &mut self,
+        definitions: Vec<DefPath>,
+        jobs: hirsel_intern::jobs::Jobs,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<(), QueryError> {
+        if definitions.is_empty() {
+            return Ok(());
+        }
+        self.invalidate_front_products();
+        let missing = definitions
+            .iter()
+            .filter(|path| {
+                !self
+                    .front_products
+                    .lowered
+                    .contains_key(&DefId::intern(path))
+            })
+            .cloned()
+            .collect();
+        let mut outcomes: std::collections::BTreeMap<_, _> = self
+            .materialize_value_outcomes(missing, jobs)
+            .into_iter()
+            .map(|outcome| (outcome.definition.clone(), outcome))
+            .collect();
+        for definition in definitions {
+            if let Some(outcome) = outcomes.remove(&definition) {
+                self.last_phase = outcome.phase;
+                self.unavailable = matches!(outcome.result, Err(QueryError::NotImplemented))
+                    .then_some(outcome.phase)
+                    .flatten();
+                self.last_comptime_limit = outcome.limit;
+                self.merge_execution(&outcome.reads);
+                outcome.result?;
+            }
+            diagnostics.extend(self.front_lower(&definition)?);
+        }
+        Ok(())
+    }
+
     /// Program-level lowering diagnostics. Lowered IR stays in the ordinary
     /// Lower memo, whose complete execution/V receipts mark this owner on edits.
     pub(crate) fn front_lower(

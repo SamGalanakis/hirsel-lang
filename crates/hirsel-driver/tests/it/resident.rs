@@ -945,3 +945,200 @@ fn compact_dead_arm_inputs_follow_edits_without_scanning_unchanged_body_memos() 
         }
     });
 }
+
+#[test]
+fn program_constant_frontiers_evaluate_on_workers_and_reuse_published_values() {
+    const CHILD: &str = "HIRSEL_CA_CONSTANT_FRONTIER_CHILD";
+    if let Some(jobs) = std::env::var_os(CHILD) {
+        let jobs: usize = jobs.to_str().unwrap().parse().unwrap();
+        struct WorkerOnly {
+            inner: Arc<dyn LoweringPhase>,
+            parallel: bool,
+            evaluations: std::sync::atomic::AtomicUsize,
+        }
+        impl LoweringPhase for WorkerOnly {
+            fn lower(
+                &self,
+                t: &hirsel_types::TypeInterner,
+                m: &hirsel_types::TypeMemo,
+                body: &AnalyzedBody,
+                comptime: &Comptime,
+                signature: &Signature,
+            ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+                self.inner.lower(t, m, body, comptime, signature)
+            }
+            fn lower_evaluation(
+                &self,
+                t: &hirsel_types::TypeInterner,
+                m: &hirsel_types::TypeMemo,
+                body: &AnalyzedBody,
+                staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
+                signature: &Signature,
+                expression: hirsel_syntax::ExprId,
+                result: hirsel_types::TypeId,
+                constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
+            ) -> Result<hirsel_tir::Definition, QueryError> {
+                if self.parallel {
+                    assert_eq!(
+                        std::thread::current().name(),
+                        Some("hirsel-job"),
+                        "production S1 evaluated an ordinary constant on the caller"
+                    );
+                }
+                self.evaluations
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.inner
+                    .lower_evaluation(t, m, body, staged, signature, expression, result, constants)
+            }
+            fn entry_body(&self) -> hirsel_tir::BodyId {
+                self.inner.entry_body()
+            }
+        }
+        with_compiler_stack(|| {
+            let mut adapters = compiler_adapters();
+            let guard = Arc::new(WorkerOnly {
+                inner: adapters.lowering.take().unwrap(),
+                parallel: jobs > 1,
+                evaluations: std::sync::atomic::AtomicUsize::new(0),
+            });
+            adapters.lowering = Some(guard.clone());
+            let mut candidate = QueryEngine::new(default_environment(), adapters);
+            let source = "fn helper(x:u64)->u64{x+1}\nconst A:u64=comptime helper(1)\nconst B:u64=comptime helper(2)\nconst C:u64=comptime helper(3)\nfn main(){}\n";
+            for (text, accepted) in [
+                (source.to_string(), true),
+                (source.replace("x+1", "x / 0"), false),
+                (source.replace("x+1", "x+2"), true),
+            ] {
+                let file = candidate.sources.add("frontier.hir", text.clone()).unwrap();
+                let actual = check_progress(&mut candidate, file, &default_context()).unwrap();
+                let mut cold = engine(Arc::new(store::NoneStore));
+                let expected = checked(&mut cold, &text);
+                // The logical source name participates in rendered diagnostics.
+                let render = |output: &CheckOutput| {
+                    diagnostics(output)
+                        .into_iter()
+                        .map(|d| {
+                            d.replace("frontier.hir", "source.hir")
+                                .replace("resident.hir", "source.hir")
+                        })
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(render(&actual), render(&expected));
+                assert_eq!(actual.diagnostics.is_empty(), accepted);
+                if accepted {
+                    let before = guard.evaluations.load(std::sync::atomic::Ordering::Relaxed);
+                    assert!(before >= 3);
+                    for name in ["A", "B", "C"] {
+                        candidate.materialize_value(&path(name)).unwrap();
+                    }
+                    assert_eq!(
+                        guard.evaluations.load(std::sync::atomic::Ordering::Relaxed),
+                        before
+                    );
+                }
+            }
+        });
+        return;
+    }
+    for jobs in [1, 2, 8] {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "resident::program_constant_frontiers_evaluate_on_workers_and_reuse_published_values", "--nocapture"])
+            .env(CHILD, jobs.to_string()).env("HIRSEL_JOBS", jobs.to_string()).output().unwrap();
+        assert!(
+            output.status.success(),
+            "jobs={jobs}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn constant_frontier_keeps_earlier_lower_warnings_when_a_later_root_stops() {
+    struct Sequence(Arc<dyn LoweringPhase>, bool);
+    impl LoweringPhase for Sequence {
+        fn lower(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            comptime: &Comptime,
+            signature: &Signature,
+        ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+            if self.1 && signature.definition.path().0.name == "B" {
+                return Err(QueryError::NotImplemented);
+            }
+            let mut output = self.0.lower(t, m, body, comptime, signature)?;
+            if signature.definition.path().0.name == "A" {
+                let mut warning = hirsel_diag::Diagnostic::error(
+                    const { hirsel_diag::RuleId::of("LANG-8") },
+                    body.typed.syntax.item.name_span,
+                    "fixture: earlier constant warning",
+                );
+                warning.severity = hirsel_diag::Severity::Warning;
+                output.diagnostics.push(warning);
+            }
+            Ok(output)
+        }
+        fn lower_evaluation(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
+            signature: &Signature,
+            expression: hirsel_syntax::ExprId,
+            result: hirsel_types::TypeId,
+            constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
+        ) -> Result<hirsel_tir::Definition, QueryError> {
+            if self.1 {
+                assert_ne!(
+                    body.typed.syntax.item.definition.0.name, "C",
+                    "later staged constant evaluated after an earlier operational stop"
+                );
+            }
+            self.0
+                .lower_evaluation(t, m, body, staged, signature, expression, result, constants)
+        }
+        fn entry_body(&self) -> hirsel_tir::BodyId {
+            self.0.entry_body()
+        }
+    }
+    with_compiler_stack(|| {
+        for stopped in [false, true] {
+            let mut adapters = compiler_adapters();
+            adapters.lowering = Some(Arc::new(Sequence(
+                adapters.lowering.take().unwrap(),
+                stopped,
+            )));
+            let mut candidate = QueryEngine::new(default_environment(), adapters);
+            let file = candidate
+                .sources
+                .add(
+                    "warning-prefix.hir",
+                    "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime 1\nconst B:u64=comptime 2\nconst C:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\n".into(),
+                )
+                .unwrap();
+            let output = check_progress(&mut candidate, file, &default_context()).unwrap();
+            assert_eq!(output.diagnostics.len(), 1, "{:?}", diagnostics(&output));
+            assert_eq!(
+                output.diagnostics[0].severity,
+                hirsel_diag::Severity::Warning
+            );
+            assert_eq!(
+                output.diagnostics[0].message,
+                "fixture: earlier constant warning"
+            );
+            assert_eq!(
+                output.completion,
+                if stopped {
+                    CheckCompletion::Incomplete {
+                        phase: QueryKind::Lower,
+                    }
+                } else {
+                    CheckCompletion::Complete
+                }
+            );
+        }
+    });
+}

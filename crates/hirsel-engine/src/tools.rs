@@ -489,9 +489,25 @@ pub(crate) fn check_files(
                 .partition(|definition| {
                     engine.lowers_at_check(definition, LoweringPolicy::Comptime)
                 });
+            let constants: std::collections::BTreeSet<_> = parsed
+                .items
+                .iter()
+                .filter(|syntax| matches!(syntax.item.kind, hirsel_syntax::ItemKind::Const { .. }))
+                .map(|syntax| syntax.item.definition.clone())
+                .collect();
+            let mut pending = vec![];
             for definition in comptime {
-                diagnostics.extend(engine.front_lower(&definition)?);
+                if constants.contains(&definition) && engine.static_constant_frontier(&definition) {
+                    pending.push(definition);
+                } else {
+                    // Executing a nonconstant body can publish generated or
+                    // staged signatures. End this frozen constant frontier
+                    // before that serial boundary, preserving source order.
+                    engine.front_constants(std::mem::take(&mut pending), jobs, diagnostics)?;
+                    diagnostics.extend(engine.front_lower(&definition)?);
+                }
             }
+            engine.front_constants(pending, jobs, diagnostics)?;
             // CT-5: each instance a body selects is generated and checked here.
             let roots = parsed
                 .items
