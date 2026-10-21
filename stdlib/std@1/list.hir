@@ -183,7 +183,7 @@ fn minimum(a: u64, b: u64) -> u64 uses {} {
 }
 
 // Classify two cache-sized blocks before swapping, so unpredictable key
-// comparisons become offset writes rather than branches on every element.
+// comparisons become bitmap writes rather than branches on every element.
 @noalloc
 fn partition_range[T](
   mut xs: unique List[T],
@@ -199,148 +199,18 @@ fn partition_range[T](
   while left < right && by(xs[right - 1], xs[begin]) >= 0 {
     right -= 1
   }
-  let mut offsets_left: Inline[u64, 64] = [
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64
-  ]
-  let mut offsets_right: Inline[u64, 64] = [
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64,
-    0u64
-  ]
+  // libc++ sort.h __populate_{left,right}_bitset / __swap_bitmap_pos.
+  // Each bit is one misplaced position, consumed low-to-high for paired
+  // swaps and high-to-low for the tail, exactly like the former offset lists.
+  let mut offsets_left: u64 = 0
+  let mut offsets_right: u64 = 0
   let mut base_left = left
   let mut base_right = right
-  let mut count_left: u64 = 0
-  let mut count_right: u64 = 0
-  let mut start_left: u64 = 0
-  let mut start_right: u64 = 0
   while left < right {
+    // At most 64 positions per block, so every bitmap shift is below 64.
     let unknown = right - left
-    let take_left = if count_left == 0 {
-      if count_right == 0 {
+    let take_left = if offsets_left == 0 {
+      if offsets_right == 0 {
         minimum(64, unknown / 2)
       } else {
         minimum(64, unknown)
@@ -348,63 +218,54 @@ fn partition_range[T](
     } else {
       0u64
     }
-    let take_right = if count_right == 0 {
+    let take_right = if offsets_right == 0 {
       minimum(64, unknown - take_left)
     } else {
       0u64
     }
     for k in 0u64..take_left {
-      offsets_left[count_left] = k
-      count_left += if by(xs[left + k], xs[begin]) >= 0 {
+      let misplaced = if by(xs[left + k], xs[begin]) >= 0 {
         1u64
       } else {
         0u64
       }
+      offsets_left = offsets_left | misplaced << k
     }
     left += take_left
     for k in 0u64..take_right {
-      offsets_right[count_right] = k
-      count_right += if by(xs[right - 1 - k], xs[begin]) < 0 {
+      let misplaced = if by(xs[right - 1 - k], xs[begin]) < 0 {
         1u64
       } else {
         0u64
       }
+      offsets_right = offsets_right | misplaced << k
     }
     right -= take_right
-    let count = minimum(count_left, count_right)
-    for k in 0u64..count {
-      core@1/list.swap(
-        mut xs,
-        base_left + offsets_left[start_left + k],
-        base_right - 1 - offsets_right[start_right + k]
-      )
+    while offsets_left != 0 && offsets_right != 0 {
+      let offset_left = core@1/int.trailing_zeros(offsets_left)
+      let offset_right = core@1/int.trailing_zeros(offsets_right)
+      core@1/list.swap(mut xs, base_left + offset_left, base_right - 1 - offset_right)
+      offsets_left = offsets_left & offsets_left - 1
+      offsets_right = offsets_right & offsets_right - 1
     }
-    count_left -= count
-    count_right -= count
-    start_left += count
-    start_right += count
-    if count_left == 0 {
-      start_left = 0
+    if offsets_left == 0 {
       base_left = left
     }
-    if count_right == 0 {
-      start_right = 0
+    if offsets_right == 0 {
       base_right = right
     }
   }
-  while count_left > 0 {
-    count_left -= 1
+  while offsets_left != 0 {
+    let offset = 63u64 - core@1/int.leading_zeros(offsets_left)
+    offsets_left = offsets_left ^ 1u64 << offset
     right -= 1
-    core@1/list.swap(mut xs, base_left + offsets_left[start_left + count_left], right)
+    core@1/list.swap(mut xs, base_left + offset, right)
     left = right
   }
-  while count_right > 0 {
-    count_right -= 1
-    core@1/list.swap(
-      mut xs,
-      base_right - 1 - offsets_right[start_right + count_right],
-      left
-    )
+  while offsets_right != 0 {
+    let offset = 63u64 - core@1/int.leading_zeros(offsets_right)
+    offsets_right = offsets_right ^ 1u64 << offset
+    core@1/list.swap(mut xs, base_right - 1 - offset, left)
     left += 1
   }
   let pivot = left - 1

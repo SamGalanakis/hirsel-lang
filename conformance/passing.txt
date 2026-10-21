@@ -2353,6 +2353,7 @@ conformance/MEM/MEM-14-dynamic-list-replace-run.hir
 conformance/MEM/MEM-14-insert-keeps-brand.hir
 conformance/MEM/MEM-14-list-checked-index.hir
 conformance/MEM/MEM-14-list-out-of-bounds.hir
+conformance/MEM/MEM-14-list-sort-partition-first-fail.hir
 conformance/MEM/MEM-14-move-ends-brand-bad.hir
 conformance/MEM/MEM-14-move-ends-brand-ok.hir
 conformance/MEM/MEM-14-owned-replacement-block-copy.hir
@@ -6276,6 +6277,7 @@ conformance/SEM/SEM-5-float-key-ok.hir
 conformance/SEM/SEM-5-insertion-order.hir
 conformance/SEM/SEM-5-keyed-read-struct-key-run.hir
 conformance/SEM/SEM-5-keyed-reads-keep-order-run.hir
+conformance/SEM/SEM-5-list-sort-bitset-records-run.hir
 conformance/SEM/SEM-5-list-sort-block-0-run.hir
 conformance/SEM/SEM-5-list-sort-block-1-run.hir
 conformance/SEM/SEM-5-list-sort-block-10-run.hir

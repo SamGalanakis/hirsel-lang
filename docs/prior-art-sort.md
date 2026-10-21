@@ -1,4 +1,4 @@
-# Stable sort prior art
+# Sort prior art
 
 `list.sort_stable` ports Zig's WikiSort at commit
 `bff490a23889750de7096d9057c0a432efc929a8` (MIT), cloned for this work.
@@ -52,3 +52,44 @@ Deviations from Zig:
   length query as a four-byte string, because Hirsel's existing API takes a
   needle of the element type. Input ranges, query values and results are exact.
   u8 character vectors use their numeric byte values. The public API is unchanged.
+
+## Unstable partition storage
+
+The existing pattern-defeating quicksort and its comparator sequence remain in
+`stdlib/std@1/list.hir`. Its 64-position block queues use the bitmap mechanism
+from LLVM libc++ commit `fc9215428138c4d9238486c2bdbea192b6107b65`,
+`libcxx/include/__algorithm/sort.h:354–399` (`__swap_bitmap_pos`,
+`__populate_left_bitset`, `__populate_right_bitset`) and `452–480`
+(`__swap_bitmap_pos_within`). A set bit represents one misplaced element.
+Trailing-zero counts consume paired positions in ascending order; leading-zero
+counts consume remaining positions in descending order. This replaces two
+initialized `Inline[u64, 64]` arrays with two `u64` values.
+
+Rust std was also reviewed at commit
+`6a58677913ae3e443146503de3933abef0b2eda3`,
+`library/core/src/slice/sort/unstable/quicksort.rs:90–152` (partition contract
+and dispatch), `244–337` (cyclic branchless Lomuto), and `341–360` (simple
+Lomuto). Its cyclic moves and different comparison sequence are not ported:
+Hirsel must keep every owner in the list and preserve observable callback
+failure, including the first failing site.
+
+Deviations from libc++:
+
+- Keep the existing Hirsel scans, block sizes, pivot selection, recursion,
+  heapsort fallback and exact comparison/swap order. Only queue storage changes;
+  libc++'s whole partitioner and comparator-purity dispatch are not adopted.
+- Compare through the public three-way noalloc callback, with ordinary failure
+  propagation. Classify all selected left positions before the right positions,
+  then swap. No callback is skipped or assumed infallible.
+- Use checked source indexing and ownership-preserving `list.swap`; no unchecked
+  pointer operations, temporary element copies, backend assumptions or validator
+  exceptions are introduced. Each shift is by a block offset below 64, and each
+  subtract-one mask update is guarded by a nonzero test.
+- Clear the highest remaining bit with XOR rather than constructing a mask below
+  that bit. This keeps the highest-bit case within ordinary checked u64 shifts.
+
+Existing Zig literal vectors, six input patterns and stable-sort fixtures remain
+independent controls. Added record and failure fixtures pin a 129-element
+pre-change equal-key permutation and the first of two distinct callback failure
+sites. The permutation pin is a regression control for this storage change,
+not a new public stability guarantee.

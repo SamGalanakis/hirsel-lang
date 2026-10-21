@@ -1,0 +1,48 @@
+// rule: MEM-14
+// expect: fail MEM-14 at line 15
+// The first block scan reaches ID 41 before ID 42: keep the first failure site.
+type Item {
+  key: u64,
+  id: u64,
+}
+
+@noalloc
+fn compare(a: Item, b: Item) -> i32 uses {} {
+  if a.id == 42 {
+    failure.check(false, Bounds())
+  }
+  if a.id == 41 {
+    failure.check(false, Bounds())
+  }
+  if a.key < b.key {
+    -1i32
+  } else if a.key > b.key {
+    1i32
+  } else {
+    0i32
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  let mut input: List[Item] = []
+  for i in 0u64..129u64 {
+    list.push(mut input, Item(key: (i * 37 + 13) % 17, id: i))
+  }
+  let mut xs = unique take input
+  list.sort(mut xs, compare)
+  let mut h: u64 = 0
+  for i in 0u64..list.len(xs) {
+    if i > 0 {
+      failure.check(xs[i - 1].key <= xs[i].key, Bounds())
+    }
+    h = int.wrapping_add(u64.wrapping_mul(h, 31u64), xs[i].id)
+  }
+  let output = match io.stdout(rt) {
+    Ok(o) => o,
+    Error(_) => return Error("stdout"),
+  }
+  match out.print(output, f"{h}\n") {
+    Ok(()) => Ok(()),
+    Error(_) => Error("write"),
+  }
+}
