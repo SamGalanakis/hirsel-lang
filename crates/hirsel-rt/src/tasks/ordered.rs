@@ -9,9 +9,33 @@ use crate::ordered::footprint::{Footprint, TaskId};
 use crate::ordered::{Backend, Next, Operation, Receipt};
 use hirsel_rt_operations::descriptors::op_descriptor;
 
-/// Creations and drops need provisional identity/root-credit adapters before
-/// joining this set. Unsupported boundaries remain pending at the head.
+/// The caller reserves creation identities before logging. Reservations and
+/// ABI images belong to the command; initialization consumes each token once.
+/// Mutex wrappers remain owner-local allocations outside these cell effects.
+/// Drops and task/host effects still need retirement/credit adapters.
 pub(crate) enum Command {
+    AtomicCreate {
+        reservation: RefCell<Option<crate::sync::Reserved>>,
+        image: Vec<u8>,
+    },
+    MutexCreate {
+        reservation: RefCell<Option<crate::sync::Reserved>>,
+        descriptor: u32,
+        none: Vec<u8>,
+        image: RefCell<Vec<u8>>,
+    },
+    ChannelOpen {
+        reservation: RefCell<Option<crate::channels::ReservedChannel>>,
+        descriptor: u32,
+        none: Vec<u8>,
+    },
+    SenderDup {
+        reservation: RefCell<Option<crate::channels::ReservedEndpoint>>,
+        sender: u64,
+    },
+    MutexCause {
+        word: u64,
+    },
     AtomicLoad {
         word: u64,
         bytes: usize,
@@ -37,6 +61,11 @@ pub(crate) enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::AtomicCreate { .. } => "atomic.create",
+            Self::MutexCreate { .. } => "mutex.create",
+            Self::ChannelOpen { .. } => "channel.open",
+            Self::SenderDup { .. } => "sender.dup",
+            Self::MutexCause { .. } => "mutex.cause",
             Self::AtomicLoad { .. } => "atomic.load",
             Self::AtomicStore { .. } => "atomic.store",
             Self::Send { .. } => "channel.send",
@@ -59,6 +88,9 @@ pub(crate) struct Outcome {
     pub(crate) status: u32,
     /// Output carrier, including the None image of a successful send/put.
     pub(crate) image: Vec<u8>,
+    /// A cause is applied only to the command's owner continuation, never to
+    /// the worker/ctx that happened to commit a different task's logged op.
+    pub(crate) chain: Vec<crate::failure::Chained>,
     pending: RefCell<Option<crate::channels::PendingSend>>,
 }
 
@@ -67,6 +99,7 @@ impl Outcome {
         Self {
             status,
             image,
+            chain: Vec::new(),
             pending: RefCell::new(None),
         }
     }
@@ -99,9 +132,21 @@ impl Backend<Command> for Objects<'_> {
     type Result = Outcome;
 
     fn can_commit_early(&mut self, op: &Operation<Command>) -> bool {
-        match op.payload {
-            Command::MutexTake { word, .. } => super::scheduler(self.ctx).sync.available(word),
-            _ => true,
+        let s = super::scheduler(self.ctx);
+        match &op.payload {
+            Command::AtomicLoad { word, .. }
+            | Command::AtomicStore { word, .. }
+            | Command::MutexPut { word, .. } => s.sync.initialized(*word),
+            Command::MutexTake { word, .. } => s.sync.initialized(*word) && s.sync.available(*word),
+            Command::MutexCause { word } => {
+                s.sync.initialized(*word) && s.sync.dead(*word).is_some()
+            }
+            Command::Send { sender, .. } | Command::SenderDup { sender, .. } => {
+                s.channels.initialized(*sender, true)
+            }
+            Command::AtomicCreate { .. }
+            | Command::MutexCreate { .. }
+            | Command::ChannelOpen { .. } => true,
         }
     }
 
@@ -112,6 +157,71 @@ impl Backend<Command> for Objects<'_> {
         // validity. All byte storage below is owned, including output images.
         let (result, next) = unsafe {
             match &op.payload {
+                Command::AtomicCreate { reservation, image } => {
+                    let reservation = reservation
+                        .borrow_mut()
+                        .take()
+                        .expect("creation committed once");
+                    let word = reservation.word();
+                    s.sync
+                        .initialize_image(reservation, image.as_ptr(), image.len() as u64);
+                    (Outcome::image(0, word.to_ne_bytes().to_vec()), Next::Yield)
+                }
+                Command::MutexCreate {
+                    reservation,
+                    descriptor,
+                    none,
+                    image,
+                } => {
+                    let layout = (*self.ctx).descriptor(*descriptor);
+                    let element = crate::channels::Element::new(*descriptor, layout, none.as_ptr());
+                    let reservation = reservation
+                        .borrow_mut()
+                        .take()
+                        .expect("creation committed once");
+                    let word = reservation.word();
+                    s.sync.initialize_mutex(
+                        reservation,
+                        element,
+                        &*layout,
+                        image.borrow_mut().as_mut_ptr(),
+                    );
+                    (Outcome::image(0, word.to_ne_bytes().to_vec()), Next::Yield)
+                }
+                Command::ChannelOpen {
+                    reservation,
+                    descriptor,
+                    none,
+                } => {
+                    let layout = (*self.ctx).descriptor(*descriptor);
+                    let element = crate::channels::Element::new(*descriptor, layout, none.as_ptr());
+                    let reservation = reservation
+                        .borrow_mut()
+                        .take()
+                        .expect("creation committed once");
+                    let (sender, receiver) = reservation.words();
+                    s.channels.initialize_open(reservation, element, &*layout);
+                    let image = [sender.to_ne_bytes(), receiver.to_ne_bytes()].concat();
+                    (Outcome::image(0, image), Next::Yield)
+                }
+                Command::SenderDup {
+                    reservation,
+                    sender,
+                } => {
+                    let reservation = reservation.borrow_mut().take().expect("dup committed once");
+                    let word = reservation.word();
+                    s.channels.initialize_dup(reservation, *sender);
+                    (Outcome::image(0, word.to_ne_bytes().to_vec()), Next::Yield)
+                }
+                Command::MutexCause { word } => {
+                    let chain =
+                        s.sync.dead(*word).cloned().unwrap_or_else(|| {
+                            crate::fault("the cause of a mutex that is not dead")
+                        });
+                    let mut outcome = Outcome::image(0, Vec::new());
+                    outcome.chain = chain;
+                    (outcome, Next::Keep)
+                }
                 Command::AtomicLoad { word, bytes } => {
                     let mut image = vec![0; *bytes];
                     s.sync.read(*word, image.as_mut_ptr(), *bytes as u64);
@@ -133,6 +243,7 @@ impl Backend<Command> for Objects<'_> {
                         Outcome {
                             status,
                             image: image.clone(),
+                            chain: Vec::new(),
                             pending: RefCell::new(pending),
                         },
                         Next::Yield,
@@ -189,9 +300,17 @@ mod tests {
     struct Run(*mut TaskCtx);
     impl Run {
         fn new() -> Self {
+            Self::with_layouts(&[])
+        }
+        fn with_layouts(layouts: &[*const crate::Layout]) -> Self {
+            let config = crate::Config {
+                layout_count: layouts.len() as u32,
+                layouts: layouts.as_ptr(),
+                ..crate::Config::new()
+            };
             let mut ctx = std::ptr::null_mut();
             assert_eq!(
-                unsafe { crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx) },
+                unsafe { crate::context::hirsel_rt_v2_ctx_create(&config, &mut ctx) },
                 0
             );
             Self(ctx)
@@ -245,6 +364,245 @@ mod tests {
                 .sync
                 .create_image((&raw const n).cast(), 8)
         }
+    }
+
+    fn layout() -> crate::Layout {
+        crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        }
+    }
+
+    #[test]
+    fn a_logged_creation_initializes_its_provisional_word_only_at_retirement() {
+        let run = Run::new();
+        let anchor = unsafe { atomic(run.0, 0) };
+        let reservation = super::super::scheduler(run.0).sync.reserve_image();
+        let word = reservation.word();
+        let mut events = Vec::new();
+        let mut record = |task, name, result: &Outcome, retirement| {
+            events.push((task, name, result.image.clone(), retirement));
+        };
+        let mut poll = Vec::new;
+        let mut backend = unsafe { Objects::new(run.0, &mut record, &mut poll) };
+        let mut f = Frontier::new(
+            0,
+            Policy {
+                reorder: Reorder::Off,
+                ..policy()
+            },
+            Settled {
+                level: 0,
+                limit: u64::MAX,
+                fuel: u64::MAX,
+            },
+        );
+        f.enqueue(1, Held::empty());
+        assert_eq!(
+            f.offer(
+                1,
+                empty(),
+                Command::AtomicCreate {
+                    reservation: RefCell::new(Some(reservation)),
+                    image: bytes(41),
+                }
+                .operation(footprint(1, true)),
+                &mut backend
+            )
+            .0,
+            Offer::Logged
+        );
+        assert!(!super::super::scheduler(run.0).sync.initialized(word));
+        assert!(!backend.can_commit_early(
+            &Command::AtomicLoad { word, bytes: 8 }.operation(footprint(1, false))
+        ));
+        assert_eq!(
+            f.offer(
+                1,
+                empty(),
+                Command::AtomicStore {
+                    word,
+                    image: bytes(42)
+                }
+                .operation(footprint(1, true)),
+                &mut backend
+            )
+            .0,
+            Offer::Logged
+        );
+        assert!(!super::super::scheduler(run.0).sync.initialized(word));
+        f.apply_head(
+            empty(),
+            Command::AtomicLoad {
+                word: anchor,
+                bytes: 8,
+            }
+            .operation(footprint(0, false)),
+            &mut backend,
+        )
+        .unwrap();
+        f.absorb(&mut backend).unwrap();
+        let mut image = 0u64;
+        unsafe {
+            super::super::scheduler(run.0)
+                .sync
+                .read(word, (&raw mut image).cast(), 8)
+        };
+        assert_eq!(image, 41);
+        f.apply_head(
+            empty(),
+            Command::AtomicLoad {
+                word: anchor,
+                bytes: 8,
+            }
+            .operation(footprint(0, false)),
+            &mut backend,
+        )
+        .unwrap();
+        f.absorb(&mut backend).unwrap();
+        unsafe {
+            super::super::scheduler(run.0)
+                .sync
+                .read(word, (&raw mut image).cast(), 8)
+        };
+        assert_eq!(image, 42);
+        assert_eq!(
+            events.iter().map(|e| e.1).collect::<Vec<_>>(),
+            vec![
+                "atomic.load",
+                "atomic.create",
+                "atomic.load",
+                "atomic.store"
+            ]
+        );
+        assert_eq!(events[1].2, bytes(word));
+    }
+
+    #[test]
+    fn native_creation_and_dup_preserve_reserved_words_and_move_owned_images() {
+        let layout = layout();
+        let run = Run::with_layouts(&[&layout]);
+        let mut record = |_, _, _: &Outcome, _| {};
+        let mut poll = Vec::new;
+        let mut backend = unsafe { Objects::new(run.0, &mut record, &mut poll) };
+        let reservation = super::super::scheduler(run.0).channels.reserve_open();
+        let (sender, receiver) = reservation.words();
+        let duplicate = super::super::scheduler(run.0).channels.reserve_dup();
+        let dup_word = duplicate.word();
+        assert!(
+            !super::super::scheduler(run.0)
+                .channels
+                .initialized(sender, true)
+        );
+        let dup = Command::SenderDup {
+            reservation: RefCell::new(Some(duplicate)),
+            sender,
+        }
+        .operation(footprint(0, true));
+        assert!(!backend.can_commit_early(&dup));
+        let open = Command::ChannelOpen {
+            reservation: RefCell::new(Some(reservation)),
+            descriptor: 2,
+            none: vec![0; 16],
+        }
+        .operation(footprint(0, true));
+        let receipt = backend.commit(1, &open, true);
+        assert_eq!(
+            receipt.result.image,
+            [bytes(sender), bytes(receiver)].concat()
+        );
+        assert!(backend.can_commit_early(&dup));
+        let receipt = backend.commit(1, &dup, true);
+        assert_eq!(receipt.result.image, bytes(dup_word));
+        let channel = super::super::scheduler(run.0)
+            .channels
+            .channel(sender, true);
+        super::super::scheduler(run.0).channels.close(sender);
+        assert!(!super::super::scheduler(run.0).channels.ready(channel));
+        super::super::scheduler(run.0).channels.close(dup_word);
+        assert!(super::super::scheduler(run.0).channels.ready(channel));
+        super::super::scheduler(run.0).channels.close(receiver);
+
+        let reservation = super::super::scheduler(run.0).sync.reserve_mutex();
+        let word = reservation.word();
+        let create = Command::MutexCreate {
+            reservation: RefCell::new(Some(reservation)),
+            descriptor: 2,
+            none: vec![0; 16],
+            image: RefCell::new([bytes(1), bytes(97)].concat()),
+        }
+        .operation(footprint(1, true));
+        let take = Command::MutexTake {
+            word,
+            none: vec![0; 16],
+        }
+        .operation(footprint(1, true));
+        assert!(!backend.can_commit_early(&take));
+        let receipt = backend.commit(1, &create, true);
+        assert_eq!(receipt.result.image, bytes(word));
+        if let Command::MutexCreate { image, .. } = &create.payload {
+            assert_eq!(*image.borrow(), vec![0; 16]);
+        }
+        assert!(backend.can_commit_early(&take));
+        assert_eq!(
+            backend.commit(1, &take, true).result.image,
+            [bytes(1), bytes(97)].concat()
+        );
+        super::super::scheduler(run.0).sync.close(word);
+    }
+
+    #[test]
+    fn an_early_mutex_cause_returns_an_owned_chain_for_its_owner() {
+        let layout = layout();
+        let run = Run::with_layouts(&[&layout]);
+        let element =
+            unsafe { crate::channels::Element::new(2, &layout, [0u64; 2].as_ptr().cast()) };
+        let mut image = [1u64, 42];
+        let word = unsafe {
+            super::super::scheduler(run.0).sync.create_mutex(
+                element,
+                &layout,
+                image.as_mut_ptr().cast(),
+            )
+        };
+        let failure = crate::failure::FailureRecord {
+            kind: 1,
+            rule: 2,
+            site: 3,
+            operation_site: 4,
+        };
+        unsafe {
+            super::super::scheduler(run.0)
+                .sync
+                .take(word, image.as_mut_ptr().cast())
+        };
+        super::super::scheduler(run.0)
+            .sync
+            .kill(word, vec![(failure, vec![9])]);
+        let mut record = |_, _, _: &Outcome, _| {};
+        let mut poll = Vec::new;
+        let mut backend = unsafe { Objects::new(run.0, &mut record, &mut poll) };
+        let cause = Command::MutexCause { word }.operation(footprint(0, false));
+        assert!(backend.can_commit_early(&cause));
+        let receipt = backend.commit(1, &cause, true);
+        assert_eq!(receipt.next, Next::Keep);
+        assert_eq!(receipt.result.chain, vec![(failure, vec![9])]);
+        assert!(
+            !unsafe { (*run.0).failure.active() },
+            "committer is not the op's owner"
+        );
+        super::super::scheduler(run.0).sync.close(word);
     }
 
     #[test]

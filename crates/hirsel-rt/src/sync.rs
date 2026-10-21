@@ -14,6 +14,7 @@ use crate::release::Layout;
 pub(crate) const MUTEX: u64 = 1 << 61;
 
 enum Payload {
+    Reserved,
     Image(Vec<u8>),
     Mutex { element: Element, image: Ring },
     Closed,
@@ -23,6 +24,18 @@ struct Cell {
     generation: u32,
     payload: Payload,
     dead: Option<Vec<Chained>>,
+}
+
+/// A row allocation with no observable object yet. Only its owning command
+/// can initialize it, once. Abandoned suffix reservations die with the run.
+#[must_use]
+pub(crate) struct Reserved {
+    word: u64,
+}
+impl Reserved {
+    pub(crate) fn word(&self) -> u64 {
+        self.word
+    }
 }
 
 #[derive(Default)]
@@ -42,10 +55,74 @@ impl Synchronizers {
         u64::from(self.generation) << 32 | (self.cells.len() - 1) as u64
     }
 
+    pub(crate) fn reserve_image(&mut self) -> Reserved {
+        Reserved {
+            word: self.create(Payload::Reserved),
+        }
+    }
+
+    pub(crate) fn reserve_mutex(&mut self) -> Reserved {
+        Reserved {
+            word: MUTEX | self.create(Payload::Reserved),
+        }
+    }
+
+    /// Whether a provisional word has reached its creation's commit.
+    pub(crate) fn initialized(&mut self, word: u64) -> bool {
+        !matches!(self.cell(word).payload, Payload::Reserved)
+    }
+
+    fn initialize(&mut self, reservation: Reserved, payload: Payload) {
+        let cell = self.cell(reservation.word);
+        if !matches!(cell.payload, Payload::Reserved) {
+            fault("a reserved synchronizer initialized twice");
+        }
+        cell.payload = payload;
+    }
+
+    /// # Safety
+    /// `image` is readable for `size` bytes; the reservation belongs to this run.
+    pub(crate) unsafe fn initialize_image(
+        &mut self,
+        reservation: Reserved,
+        image: *const u8,
+        size: u64,
+    ) {
+        if reservation.word & MUTEX != 0 {
+            fault("a mutex reservation initialized as an atomic");
+        }
+        self.initialize(
+            reservation,
+            Payload::Image(unsafe { bytes(image, size) }.to_vec()),
+        );
+    }
+
+    /// # Safety
+    /// `slot` holds a `Some` image of `element`, and `layout` describes it.
+    /// The mutex reservation belongs to this run.
+    pub(crate) unsafe fn initialize_mutex(
+        &mut self,
+        reservation: Reserved,
+        element: Element,
+        layout: &Layout,
+        slot: *mut u8,
+    ) {
+        let word = reservation.word;
+        if word & MUTEX == 0 {
+            fault("an atomic reservation initialized as a mutex");
+        }
+        let image = Ring::new(element.size, layout.align as usize);
+        self.initialize(reservation, Payload::Mutex { element, image });
+        unsafe { self.put(word, slot) };
+    }
+
     /// # Safety
     /// `image` is readable for `size` bytes.
     pub(crate) unsafe fn create_image(&mut self, image: *const u8, size: u64) -> u64 {
-        self.create(Payload::Image(unsafe { bytes(image, size) }.to_vec()))
+        let reservation = self.reserve_image();
+        let word = reservation.word();
+        unsafe { self.initialize_image(reservation, image, size) };
+        word
     }
 
     /// # Safety
@@ -56,9 +133,9 @@ impl Synchronizers {
         layout: &Layout,
         slot: *mut u8,
     ) -> u64 {
-        let image = Ring::new(element.size, layout.align as usize);
-        let word = MUTEX | self.create(Payload::Mutex { element, image });
-        unsafe { self.put(word, slot) };
+        let reservation = self.reserve_mutex();
+        let word = reservation.word();
+        unsafe { self.initialize_mutex(reservation, element, layout, slot) };
         word
     }
 

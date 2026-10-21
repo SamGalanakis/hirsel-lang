@@ -195,6 +195,30 @@ struct Endpoint {
     generation: u32,
     channel: u32,
     sender: bool,
+    initialized: bool,
+}
+
+/// Owned provisional endpoint; no lookup or close may observe it until init.
+#[must_use]
+pub(crate) struct ReservedEndpoint {
+    word: u64,
+}
+impl ReservedEndpoint {
+    pub(crate) fn word(&self) -> u64 {
+        self.word
+    }
+}
+
+#[must_use]
+pub(crate) struct ReservedChannel {
+    channel: u32,
+    sender: ReservedEndpoint,
+    receiver: ReservedEndpoint,
+}
+impl ReservedChannel {
+    pub(crate) fn words(&self) -> (u64, u64) {
+        (self.sender.word(), self.receiver.word())
+    }
 }
 
 /// The run's channels and their open endpoints.
@@ -210,9 +234,31 @@ pub(crate) struct Channels {
 }
 
 impl Channels {
-    /// A fresh channel of `element`s, `layout` its descriptor: its Sender and Receiver words.
-    pub(crate) fn open(&mut self, element: Element, layout: &Layout) -> (u64, u64) {
-        let row = Channel {
+    /// Reserve identities only; channel counts, buffers and endpoint lookup
+    /// remain absent until the owning creation command commits.
+    pub(crate) fn reserve_open(&mut self) -> ReservedChannel {
+        let channel = self.vacant_channels.pop().unwrap_or_else(|| {
+            self.channels.push(None);
+            (self.channels.len() - 1) as u32
+        });
+        ReservedChannel {
+            channel,
+            sender: self.reserve_endpoint(true),
+            receiver: self.reserve_endpoint(false),
+        }
+    }
+
+    pub(crate) fn initialize_open(
+        &mut self,
+        reservation: ReservedChannel,
+        element: Element,
+        layout: &Layout,
+    ) {
+        let channel = reservation.channel;
+        if self.channels[channel as usize].is_some() {
+            fault("a reserved channel initialized twice");
+        }
+        self.channels[channel as usize] = Some(Channel {
             queue: Ring::new(element.size, layout.align as usize),
             element,
             senders: 1,
@@ -222,34 +268,47 @@ impl Channels {
             pending: BTreeSet::new(),
             sent: 0,
             received: 0,
-        };
-        let channel = match self.vacant_channels.pop() {
-            Some(index) => {
-                self.channels[index as usize] = Some(row);
-                index
-            }
-            None => {
-                self.channels.push(Some(row));
-                (self.channels.len() - 1) as u32
-            }
-        };
-        (self.endpoint(channel, true), self.endpoint(channel, false))
+        });
+        self.initialize_endpoint(reservation.sender, channel);
+        self.initialize_endpoint(reservation.receiver, channel);
+    }
+
+    /// A fresh channel of `element`s, `layout` its descriptor: its Sender and Receiver words.
+    pub(crate) fn open(&mut self, element: Element, layout: &Layout) -> (u64, u64) {
+        let reservation = self.reserve_open();
+        let words = reservation.words();
+        self.initialize_open(reservation, element, layout);
+        words
+    }
+
+    pub(crate) fn reserve_dup(&mut self) -> ReservedEndpoint {
+        self.reserve_endpoint(true)
+    }
+
+    /// A dup reserves no sender count until it commits. Its source may itself
+    /// be provisional while logging, provided its creation commits first.
+    pub(crate) fn initialize_dup(&mut self, reservation: ReservedEndpoint, sender: u64) {
+        let channel = self.channel(sender, true);
+        self.row(channel).senders += 1;
+        self.initialize_endpoint(reservation, channel);
     }
 
     /// Another Sender of the channel `sender` names.
     pub(crate) fn dup(&mut self, sender: u64) -> u64 {
-        let channel = self.channel(sender, true);
-        self.row(channel).senders += 1;
-        self.endpoint(channel, true)
+        let reservation = self.reserve_dup();
+        let word = reservation.word();
+        self.initialize_dup(reservation, sender);
+        word
     }
 
-    fn endpoint(&mut self, channel: u32, sender: bool) -> u64 {
+    fn reserve_endpoint(&mut self, sender: bool) -> ReservedEndpoint {
         // Below `tasks::TASK_SET`, which marks a task set's endpoint word.
         self.generation = (self.generation + 1) & 0x3fff_ffff;
         let row = Endpoint {
             generation: self.generation,
-            channel,
+            channel: u32::MAX,
             sender,
+            initialized: false,
         };
         let index = match self.vacant_endpoints.pop() {
             Some(index) => {
@@ -261,7 +320,26 @@ impl Channels {
                 (self.endpoints.len() - 1) as u32
             }
         };
-        ENDPOINT | u64::from(self.generation) << 32 | u64::from(index)
+        ReservedEndpoint {
+            word: ENDPOINT | u64::from(self.generation) << 32 | u64::from(index),
+        }
+    }
+
+    fn initialize_endpoint(&mut self, reservation: ReservedEndpoint, channel: u32) {
+        let word = reservation.word;
+        let row = self.endpoints[word as u32 as usize]
+            .as_mut()
+            .unwrap_or_else(|| fault("a missing reserved endpoint"));
+        if row.initialized || row.generation != ((word & !ENDPOINT) >> 32) as u32 {
+            fault("a reserved endpoint initialized twice or of another run");
+        }
+        row.channel = channel;
+        row.initialized = true;
+    }
+
+    pub(crate) fn initialized(&self, word: u64, sender: bool) -> bool {
+        self.lookup(word)
+            .is_some_and(|(_, endpoint)| endpoint.sender == sender)
     }
 
     /// The channel an open endpoint word of the given kind names.
@@ -293,7 +371,8 @@ impl Channels {
         }
         let index = word as u32;
         let endpoint = (*self.endpoints.get(index as usize)?)?;
-        (endpoint.generation == ((word & !ENDPOINT) >> 32) as u32).then_some((index, endpoint))
+        (endpoint.initialized && endpoint.generation == ((word & !ENDPOINT) >> 32) as u32)
+            .then_some((index, endpoint))
     }
 
     fn row(&mut self, channel: u32) -> &mut Channel {
@@ -499,6 +578,65 @@ mod tests {
         let (sender, receiver) = channels.open(element, &layout);
         let channel = channels.channel(sender, true);
         (channels, sender, receiver, channel)
+    }
+
+    #[test]
+    fn an_uncommitted_dup_does_not_keep_a_channel_open() {
+        let (mut channels, sender, receiver, channel) = channel();
+        let reservation = channels.reserve_dup();
+        let word = reservation.word();
+        assert!(!channels.initialized(word, true));
+        channels.close(sender);
+        assert!(channels.ready(channel));
+        assert!(channels.waiting(channel).unwrap().1);
+        let mut out = [0u64; 2];
+        assert_eq!(
+            unsafe { channels.receive(channel, out.as_mut_ptr().cast()) },
+            Err(CLOSED)
+        );
+        drop(reservation);
+        channels.close(receiver);
+    }
+
+    #[test]
+    fn reservations_remain_distinct_when_channels_commit_out_of_order() {
+        let mut channels = Channels::default();
+        let first = channels.reserve_open();
+        let first_words = first.words();
+        let second = channels.reserve_open();
+        let second_words = second.words();
+        assert_ne!(first_words, second_words);
+        let layout = Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let none = [0u64; 2];
+        let element = || unsafe { Element::new(0, &layout, none.as_ptr().cast()) };
+        channels.initialize_open(second, element(), &layout);
+        assert!(!channels.initialized(first_words.0, true));
+        assert!(channels.initialized(second_words.0, true));
+        channels.initialize_open(first, element(), &layout);
+        let first_channel = channels.channel(first_words.0, true);
+        let second_channel = channels.channel(second_words.0, true);
+        assert_ne!(first_channel, second_channel);
+        let mut message = [1u64, 55];
+        unsafe { channels.send(first_channel, message.as_mut_ptr().cast()) };
+        assert!(channels.ready(first_channel));
+        assert!(!channels.ready(second_channel));
+        for word in [first_words.0, first_words.1, second_words.0, second_words.1] {
+            channels.close(word);
+        }
     }
 
     #[test]

@@ -81,9 +81,16 @@ registered after a capture still participates in that capture's type closure.
 send, and mutex take/put effects using owned ABI images. Unavailable mutexes
 cannot commit early. Its record and poll callbacks run only at retirement;
 an early send's receipt publishes and touches the channel before that poll.
-These adapters are not yet installed in the fiber entry path. Creation,
-provisional handles, drops, task operations and host operations still need
-native boundary adapters.
+Synchronizers and channels split row reservation from initialization. The
+noncloneable reservation belongs to its logged creation command. A provisional
+cell/endpoint cannot serve a dependent operation before commit, and reserving a
+sender duplicate adds no live sender count. Existing cooperative creation uses
+the same reserve/init path. Native adapters cover atomic/mutex creation, channel
+open, sender duplication and mutex cause; cause chains are owned outcomes for
+the operation's task, not mutations of a different committing task's context.
+Mutex wrappers still belong to their owner's allocation/budget path.
+These adapters are not yet installed in the fiber entry path. Drops, task
+operations and host operations still need native boundary adapters.
 
 ## Integration status
 
