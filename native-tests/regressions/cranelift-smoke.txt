@@ -80,3 +80,4 @@ conformance/LANG/LANG-13-joined-view-consumers-run.hir
 conformance/RUN/RUN-8-safe-place-run.hir
 conformance/RUN/RUN-12-callee-progress-run.hir
 conformance/RUN/RUN-9-forwarded-cancel-run.hir
+conformance/LANG/LANG-13-or-pattern-after-guard-run.hir
