@@ -2150,6 +2150,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_alloc(
     site: u64,
 ) -> *mut Header {
     unsafe {
+        ordered_preflight(ctx, index, extent, align);
         let heap = &mut (*ctx).heap();
         // A bare system block needs its layout's bare entry, so the index is checked.
         #[cfg(feature = "system-allocator")]
@@ -2182,6 +2183,56 @@ pub unsafe extern "C" fn hirsel_rt_v2_alloc(
         });
         block
     }
+}
+
+/// Reserve ordered speculative storage before borrowing a worker heap. The
+/// charge mirrors Heap::allocate, including the optional bare-system path.
+/// No worker reference may survive this call, since it may migrate the task.
+pub(crate) unsafe fn ordered_preflight(ctx: *mut TaskCtx, _index: u32, extent: u64, align: u64) {
+    if unsafe {
+        (*ctx)
+            .run_ref()
+            .ordered_allowance
+            .load(std::sync::atomic::Ordering::Acquire)
+    } == u64::MAX
+    {
+        return;
+    }
+    check_request(extent, align);
+    let bytes = {
+        #[cfg(feature = "system-allocator")]
+        let bare = unsafe { (*ctx).heap_ref().bare_capacity(_index, extent, align) };
+        #[cfg(not(feature = "system-allocator"))]
+        let bare: Option<u64> = None;
+        if let Some(capacity) = bare {
+            crate::budget::small_charge(capacity)
+        } else if !cfg!(feature = "system-allocator")
+            && extent <= SMALL_MAX
+            && align <= SMALL_ALIGN_MAX
+        {
+            crate::budget::small_charge(class_capacity(pool_of(extent, align)))
+        } else {
+            crate::budget::large_charge(request_capacity(extent, align))
+        }
+    };
+    unsafe { ordered_reserve(ctx, bytes) };
+}
+
+pub(crate) unsafe fn ordered_reserve(ctx: *mut TaskCtx, bytes: u64) {
+    if unsafe {
+        (*ctx)
+            .run_ref()
+            .ordered_allowance
+            .load(std::sync::atomic::Ordering::Acquire)
+    } == u64::MAX
+    {
+        return;
+    }
+    let result = {
+        let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+        crate::tasks::ordered::engine::reserve_allocation(ctx, bytes)
+    };
+    unsafe { crate::stop::check(ctx, result) };
 }
 
 #[cold]
@@ -2325,6 +2376,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_reuse(
         #[cfg(feature = "system-allocator")]
         if (*token).kind() == KIND_SMALL && ctx.heap().bare_capacity(index, extent, align).is_none()
         {
+            ordered_preflight(ctx, index, extent, align);
             let (block, _) = ctx.heap().allocate(index, extent, align);
             ptr::copy_nonoverlapping(payload(token), payload(block), capacity as usize);
             ctx.heap().free(token);
@@ -2497,6 +2549,7 @@ unsafe fn detach_reserved(
                 .unwrap_or_else(|| fault("a sequence capacity overflows its extent"));
             let align = element_align.max(8);
             check_request(extent, align);
+            ordered_preflight(ctx, (*block).index(), extent, align);
             let (fresh, bytes) = (*ctx).heap().allocate((*block).index(), extent, align);
             if (*ctx).heap().diagnostic {
                 ptr::write_bytes(payload(fresh), UNINIT_POISON, bytes as usize);
@@ -2554,12 +2607,13 @@ unsafe fn grow(
 ) -> (*mut Header, u64) {
     // SAFETY: `old` is a live unique heap block (`unique_heap_block`).
     unsafe {
-        let heap = &mut (*ctx).heap();
         let align = align.max(8);
         check_request(extent, align);
-        if keep > heap.capacity(old) || keep > extent {
+        if keep > (*ctx).heap_ref().capacity(old) || keep > extent {
             fault("a sequence count exceeds its storage");
         }
+        ordered_preflight(ctx, (*old).index(), extent, align);
+        let heap = &mut (*ctx).heap();
         let (new, bytes) = heap.allocate((*old).index(), extent, align);
         if heap.diagnostic {
             check_poison(new);

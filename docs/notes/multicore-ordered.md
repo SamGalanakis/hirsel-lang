@@ -199,6 +199,16 @@ in earlier logged turns. Memory preflight, positional credit events and the
 combined memory/fuel native gate remain unfinished. Allocation allowance pauses
 must precede any worker-heap or region-pool borrow.
 
+Finite ordered speculation allowances now preflight heap creation, sequence
+growth/detach, the bare-system reuse conversion, and regional segment growth.
+The charge calculation mirrors the chosen heap class or canonical region size.
+A denied reservation leaves the request untouched and saves until head promotion;
+the head does not wait on the allowance. Preflight runs before worker heap/pool
+borrows, and region growth reborrows its task-owned record after migration.
+Physical reservations are currently conservative until their retiring turn is
+absorbed; ordinary free credits do not replenish the allowance yet. Memory
+budget admission and exact charge/credit settlement remain gated.
+
 ## Integration status
 
 This is a protocol and guarded migration substrate, not an enabled concurrent

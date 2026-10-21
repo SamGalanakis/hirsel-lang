@@ -43,6 +43,12 @@ pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
 /// positional speculative release/credit logs are not installed.
 /// No native object exists before this admission.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
+    unsafe {
+        (*ctx).run_ref().ordered_allowance.store(
+            policy.speculation_bytes,
+            std::sync::atomic::Ordering::Release,
+        )
+    };
     let mut objects = Registry::default();
     objects.install_types(unsafe { crate::ordered::capture::types(ctx) });
     let root = current(ctx);
@@ -157,6 +163,30 @@ fn stretch(ctx: *mut TaskCtx) -> Stretch {
     capture_fuel(ctx);
     let (task, driver) = fuel_state(ctx);
     driver.stretches.remove(&task).unwrap_or_else(empty)
+}
+
+/// Before taking a worker heap/pool borrow. A denied reservation leaves the
+/// request and logical budget untouched; only head promotion can resume it.
+pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
+    let task = current(ctx);
+    driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
+    capture_fuel(ctx);
+    advance(ctx)?;
+    let reserved = {
+        let driver = driver(ctx);
+        let frontier = driver
+            .frontier
+            .as_mut()
+            .expect("restored allocation frontier");
+        let fuel = frontier
+            .logged_fuel(task)
+            .saturating_add(driver.stretches.get(&task).map_or(0, Stretch::fuel_charges));
+        frontier.reserve(task, bytes, fuel)
+    };
+    if reserved.is_err() {
+        at_head(ctx)?;
+    }
+    Ok(())
 }
 
 /// A refill is a physical budget boundary, never a semantic operation or poll.
@@ -874,28 +904,73 @@ mod tests {
                 let _role = unsafe { role::Guard::new(ctx) };
                 probe.younger.store(current(ctx), Ordering::Release);
             }
-            let remaining = if mode == 2 {
-                for _ in 0..5 {
+            if mode >= 3 {
+                unsafe {
+                    if mode == 3 {
+                        let block = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            256,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(block)
+                            .cast::<[u64; 3]>()
+                            .write([0; 3]);
+                        assert_eq!(
+                            crate::release::hirsel_rt_v2_release(
+                                ctx,
+                                block,
+                                2,
+                                std::ptr::null(),
+                                0,
+                                0
+                            ),
+                            0
+                        );
+                    } else {
+                        let mut region = std::mem::MaybeUninit::<crate::region::Region>::uninit();
+                        crate::region::hirsel_rt_v2_region_enter(ctx, region.as_mut_ptr());
+                        crate::region::hirsel_rt_v2_arena_alloc(
+                            ctx,
+                            region.as_mut_ptr(),
+                            2,
+                            256,
+                            8,
+                            0,
+                        );
+                        assert_eq!(
+                            crate::region::hirsel_rt_v2_region_exit(ctx, region.as_mut_ptr(), 0, 0),
+                            0
+                        );
+                    }
+                }
+                probe.younger_passed.store(true, Ordering::Release);
+            } else {
+                let remaining = if mode == 2 {
+                    for _ in 0..5 {
+                        unsafe { charge(ctx) };
+                    }
+                    let value = 3u64;
+                    assert_eq!(
+                        unsafe {
+                            hirsel_rt_v2_atomic_store(ctx, &atomic, (&raw const value).cast(), 8)
+                        },
+                        0
+                    );
+                    16
+                } else {
+                    21
+                };
+                // Include fuel in earlier logged turns when bounding this segment.
+                // Without that term the logged variant would return past point21.
+                for _ in 0..remaining {
                     unsafe { charge(ctx) };
                 }
-                let value = 3u64;
-                assert_eq!(
-                    unsafe {
-                        hirsel_rt_v2_atomic_store(ctx, &atomic, (&raw const value).cast(), 8)
-                    },
-                    0
-                );
-                16
-            } else {
-                21
-            };
-            // Include fuel in earlier logged turns when bounding this segment.
-            // Without that term the logged variant would return past point21.
-            for _ in 0..remaining {
-                unsafe { charge(ctx) };
+                probe.younger_passed.store(true, Ordering::Release);
+                panic!("the younger's exhausted point must stop at promotion");
             }
-            probe.younger_passed.store(true, Ordering::Release);
-            panic!("the younger's exhausted point must stop at promotion");
         }
         let mut result = [1u64, 0];
         assert_eq!(
@@ -912,14 +987,13 @@ mod tests {
         0
     }
 
-    #[test]
-    fn ordered_native_younger_fuel_exhaustion_waits_for_the_older_retiring_turn() {
+    fn younger_budget(modes: &[u64]) {
         use super::super::super::*;
         use hirsel_core_contract::handle_scan::TYPED_HANDLE;
         use std::sync::{Arc, atomic::Ordering};
-        for (width, logged) in [2, 4, 8]
+        for (width, mode) in [2, 4, 8]
             .into_iter()
-            .flat_map(|width| [(width, false), (width, true)])
+            .flat_map(|width| modes.iter().copied().map(move |mode| (width, mode)))
         {
             let probe = Arc::new(FuelOrder::default());
             let seen = probe.clone();
@@ -936,7 +1010,13 @@ mod tests {
             run.fuel = Some(20);
             unsafe { run.use_physical_dispatch() };
             let outcome = run.run(
-                |ctx| unsafe { enable(ctx, Policy::admit(&Default::default(), None)) },
+                move |ctx| unsafe {
+                    let mut policy = Policy::admit(&Default::default(), None);
+                    if mode >= 3 {
+                        policy.speculation_bytes = 0;
+                    }
+                    enable(ctx, policy);
+                },
                 move |ctx| unsafe {
                     let mut scope = 0;
                     assert_eq!(
@@ -956,7 +1036,7 @@ mod tests {
                         0
                     );
                     let mut last_child = 0;
-                    for mode in [0, if logged { 2 } else { 1 }] {
+                    for mode in [0, mode] {
                         let environment = crate::alloc::hirsel_rt_v2_alloc(
                             ctx,
                             2,
@@ -1002,16 +1082,38 @@ mod tests {
                         ),
                         0
                     );
-                    panic!("the younger stop must precede root continuation");
+                    assert!(
+                        mode >= 3,
+                        "the younger fuel stop must precede root continuation"
+                    );
+                    assert_eq!(hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0), 0);
+                    let _role = role::Guard::new(ctx);
+                    let task = current(ctx);
+                    driver(ctx).finishing(task);
+                    0
                 },
             );
             assert_eq!(
                 outcome.ended,
-                Err(Stop::BudgetExceeded(hirsel_run_schema::BudgetKind::Fuel))
+                if mode >= 3 {
+                    Ok(0)
+                } else {
+                    Err(Stop::BudgetExceeded(hirsel_run_schema::BudgetKind::Fuel))
+                }
             );
             assert!(probe.older_retired.load(Ordering::Acquire));
-            assert!(!probe.younger_passed.load(Ordering::Acquire));
+            assert_eq!(probe.younger_passed.load(Ordering::Acquire), mode >= 3);
         }
+    }
+
+    #[test]
+    fn ordered_native_younger_fuel_exhaustion_waits_for_the_older_retiring_turn() {
+        younger_budget(&[1, 2]);
+    }
+
+    #[test]
+    fn ordered_native_heap_and_region_allowance_pauses_resume_only_after_head_promotion() {
+        younger_budget(&[3, 4]);
     }
 
     #[test]

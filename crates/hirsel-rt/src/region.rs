@@ -927,7 +927,8 @@ unsafe fn reserve_in(
     check_request(extent, align);
     // SAFETY: caller checked the region is active.
     unsafe {
-        let region = &mut *region;
+        let record = region;
+        let region = &mut *record;
         let end = segment_end(region);
         if !region.cursor.is_null() {
             let start = region
@@ -949,6 +950,10 @@ unsafe fn reserve_in(
         } else {
             need
         };
+        crate::alloc::ordered_reserve(ctx, canonical_size(need));
+        // Preflight may migrate. Reborrow the task-local region only after
+        // it returns, then take the new worker's pool.
+        let region = &mut *record;
         let segment = ctx.pool().take(need);
         let cursor = install(ctx, region, segment);
         let start = cursor.wrapping_add(cursor.align_offset(align as usize));

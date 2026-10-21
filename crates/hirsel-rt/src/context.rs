@@ -272,6 +272,8 @@ pub(crate) struct RunShared {
     pub(crate) free_mode: bool,
     /// Published at ordered admission, read without borrowing policy state.
     pub(crate) ordered_mode: std::sync::atomic::AtomicBool,
+    /// Fast allocation preflight selector; MAX means no physical allowance cap.
+    pub(crate) ordered_allowance: std::sync::atomic::AtomicU64,
     /// The exact counts of roots past the finite maximum (`crate::roots`).
     pub(crate) root_overflow: crate::roots::Overflow,
     /// Every worker's heap, until the run ends (`crate::heaps`).
@@ -816,6 +818,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         free: RoleCell::new(None),
         free_mode: false,
         ordered_mode: Default::default(),
+        ordered_allowance: std::sync::atomic::AtomicU64::new(u64::MAX),
         root_overflow: Default::default(),
         heaps,
         fuel: Default::default(),
