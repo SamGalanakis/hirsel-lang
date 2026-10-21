@@ -14,7 +14,7 @@ use hirsel_validate::{
     Violation,
 };
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// One signature view and V's digest of it.
 #[derive(Clone, Debug)]
@@ -73,6 +73,7 @@ pub struct ViewTable {
     /// The views whose verdict read the first heap role.
     heap_readers: Vec<u32>,
     errors: UniverseErrors,
+    input_digest: OnceLock<ContentHash>,
 }
 impl ViewTable {
     /// The table of `signatures` (one per path), reusing the digests of
@@ -107,6 +108,7 @@ impl ViewTable {
             readers: DefMap::default(),
             heap_readers: vec![],
             errors: UniverseErrors::default(),
+            input_digest: OnceLock::new(),
         };
         let verdicts: Vec<_> = table
             .views
@@ -128,6 +130,18 @@ impl ViewTable {
     }
     pub fn get(&self, d: DefId) -> Option<&View> {
         self.index.get(&d).map(|&i| &self.views[i as usize])
+    }
+    /// Identity of all inputs a private evaluation overlay can observe. This
+    /// includes valid rows: an overlay can invalidate a dependent declaration
+    /// even when both base universes have no errors. Compute once per universe.
+    pub fn input_digest(&self) -> ContentHash {
+        *self.input_digest.get_or_init(|| {
+            input_digest(
+                self.views.iter(),
+                self.first_heap.as_ref(),
+                self.errors.digest,
+            )
+        })
     }
     pub fn views(&self) -> &[View] {
         &self.views
@@ -156,6 +170,7 @@ pub struct PackageViews {
     verdicts: DefMap<Arc<ViewVerdict>>,
     first_heap: Option<(DefId, HeapRole)>,
     errors: UniverseErrors,
+    input_digest: OnceLock<ContentHash>,
 }
 impl PackageViews {
     /// The universe `base` with `replacements` in place of (or beside) its views.
@@ -186,6 +201,24 @@ impl PackageViews {
     /// The view this universe has in place of `d`'s public one.
     pub fn replacement(&self, d: DefId) -> Option<&View> {
         self.replaced.get(&d)
+    }
+    /// This package's complete V input identity, including its private views.
+    /// Replacement artifacts use their base package's digest as provenance;
+    /// their own bytes remain identified by their producing execution reads.
+    pub fn input_digest(&self) -> ContentHash {
+        *self.input_digest.get_or_init(|| {
+            let views = self
+                .base
+                .views
+                .iter()
+                .map(|view| self.replaced.get(&view.d).unwrap_or(view))
+                .chain(
+                    self.replaced
+                        .values()
+                        .filter(|view| self.base.get(view.d).is_none()),
+                );
+            input_digest(views, self.first_heap.as_ref(), self.errors.digest)
+        })
     }
     fn over(
         t: &TypeInterner,
@@ -227,6 +260,7 @@ impl PackageViews {
             verdicts: DefMap::default(),
             first_heap: heap,
             errors: UniverseErrors::default(),
+            input_digest: OnceLock::new(),
         };
         let verdicts: DefMap<_> = again
             .iter()
@@ -256,5 +290,80 @@ impl SignatureLookup for PackageViews {
     }
     fn universe_errors(&self) -> (ContentHash, &[Violation]) {
         (self.errors.digest, &self.errors.errors)
+    }
+}
+
+/// Salsa validates a query against its recorded inputs (runtime.rs:316-334).
+/// An overlay additionally reads the whole signature universe through its
+/// error aggregate; hash that immutable input once rather than inventing an
+/// error-only receipt or recording O(N) inputs for every evaluation.
+fn input_digest<'a>(
+    views: impl Iterator<Item = &'a View>,
+    heap: Option<&(DefId, HeapRole)>,
+    errors: ContentHash,
+) -> ContentHash {
+    let mut views: Vec<_> = views.collect();
+    views.sort_by(|a, b| a.d.path().cmp(b.d.path()));
+    let mut bytes = Vec::with_capacity(views.len() * 96);
+    bytes.extend((views.len() as u64).to_le_bytes());
+    for view in views {
+        crate::memo::encode_def_path(&mut bytes, view.d.path());
+        bytes.extend(view.digest.0.0);
+    }
+    bytes.push(u8::from(heap.is_some()));
+    if let Some((d, _)) = heap {
+        crate::memo::encode_def_path(&mut bytes, d.path());
+    }
+    bytes.extend(errors.0);
+    ContentHash::of_parts("hirsel.validate.universe-input.v1", [bytes.as_slice()])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn universe_input_digest_covers_valid_views_and_package_replacements() {
+        let types = crate::registry::session_types();
+        let registry = crate::registry::BuiltinRegistry::new();
+        let option = registry
+            .get(DefId::intern(&hirsel_syntax::DefPath::core("Option")))
+            .unwrap();
+        let result = registry
+            .get(DefId::intern(&hirsel_syntax::DefPath::core("Result")))
+            .unwrap();
+        let table = |rows: Vec<SignatureRef>| {
+            Arc::new(ViewTable::new(
+                &types,
+                rows,
+                None,
+                &mut ValidatedSignatures::default(),
+                None,
+            ))
+        };
+        let first = table(vec![option.clone(), result.clone()]);
+        let reordered = table(vec![result.clone(), option.clone()]);
+        assert_eq!(first.input_digest(), reordered.input_digest());
+        let mut changed = (*option).clone();
+        changed.metadata.visibility = hirsel_syntax::Visibility::PublicOpaque;
+        // Even a forged unchanged producer fingerprint cannot hide V input changes.
+        assert_eq!(changed.fingerprint, option.fingerprint);
+        let changed = Arc::new(changed);
+        let second = table(vec![changed.clone(), result]);
+        assert_ne!(first.input_digest(), second.input_digest());
+        assert_ne!(first.input_digest(), table(vec![option]).input_digest());
+        let package = PackageViews::new(
+            &types,
+            first.clone(),
+            [View::new(&types, changed, None)],
+            &mut ValidatedSignatures::default(),
+            None,
+        );
+        assert_eq!(package.input_digest(), second.input_digest());
+        assert_eq!(
+            first.input_digest(),
+            reordered.input_digest(),
+            "replacement leaves base immutable"
+        );
     }
 }
