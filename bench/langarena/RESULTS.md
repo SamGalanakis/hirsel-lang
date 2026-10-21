@@ -329,3 +329,61 @@ Raw samples, counters, logs and build commands are in ignored `build/accepted-cp
 | --- | --- | --- |
 | hirsel | cd68edba7f192acfe9934587e8e50266870362f4bad3cff9327de07d4c7810e7 | 896ed13a4be8219e80bd32e64d675e389591b98b08d95db7ae0ea49d7c6f2538 |
 | rust | f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f | 34f46c760fcc739816add285f1328cd3fb8eef465143303f6c96ef7349dc8cb3 |
+
+## Graph, Maze and simulation ports (2026-10-21)
+
+All ten tasks below pass the unchanged `test.js` and `run.js` checksums in native
+LLVM release mode. This supersedes the earlier snapshot’s missing statuses for
+these tasks. No stdlib or compiler changes were required. The scoped
+`//:gate-langarena` target passed all 10 protocol/comparison tests; its quick
+checksum coverage increased from 7 to 17 registered tasks.
+
+Quick comparison: `test.js`, 10 seeded interleaved rounds on CPU31, seed
+20261021, session `la-port-4-quick-01`. Every Hirsel and Rust sample passed
+(200/200). Source, compiler, toolchain and binary identities remained fixed.
+Runtime excludes warmup; instructions include preparation, warmup and startup.
+Rust prints milliseconds: a zero is below 0.0005 seconds, so its runtime ratio
+is unavailable rather than treating it as a zero denominator. Quick workloads
+produce no published-host estimates.
+
+| Task | Quick/full checksum | Quick time H/R | Instructions H/R |
+| --- | --- | ---: | ---: |
+| Graph::BFS | pass / pass | unavailable (<0.0005 s Rust) | 2.592 |
+| Graph::DFS | pass / pass | unavailable (<0.0005 s Rust) | 2.598 |
+| Graph::AStar | pass / pass | unavailable (<0.0005 s Rust) | 2.610 |
+| Maze::Generator | pass / pass | unavailable (<0.0005 s Rust) | 1.831 |
+| Maze::BFS | pass / pass | unavailable (<0.0005 s Rust) | 1.908 |
+| Maze::AStar | pass / pass | unavailable (<0.0005 s Rust) | 1.989 |
+| Etc::TextRaytracer | pass / pass | unavailable (<0.0005 s Rust) | 2.072 |
+| Etc::NeuralNet | pass / pass | 3.001 | 1.903 |
+| Etc::CacheSimulation | pass / pass | unavailable (<0.0005 s Rust) | 2.091 |
+| Etc::GameOfLife | pass / pass | unavailable (<0.0005 s Rust) | 2.398 |
+
+Adaptations preserve upstream algorithm and iteration order: BFS queues use a
+list plus a head index; maze and Life neighbor pairs use row-major indices;
+fixed arrays use `Inline` and arena indices use u64. Binary heaps preserve
+score/vertex ordering with safe swaps in place of Rust’s unsafe hole operations.
+The neural network uses one indexed neuron arena. LRU links use slot+1 with zero
+as the absent link; its map/free-list ownership is detached once per 1000-access
+batch to satisfy the harness’s copyable-state callback. These are representation
+and ownership adaptations; no workload or checksum changes were made.
+
+Consumed-source SHA-256: `5672d534ef08c2c499c526dcf44246b67e19ed767f4556b4f2845f7187e83359`.
+
+| Participant | Executable SHA-256 |
+| --- | --- |
+| hirsel | 719eeffac4f7641145f50c03395f82bac66586e1697e1c2be9119ac60b493146 |
+| rust | 34f46c760fcc739816add285f1328cd3fb8eef465143303f6c96ef7349dc8cb3 |
+
+Reproduce from the repository root:
+
+```sh
+python3 bench/langarena/compare.py --quick --filter Graph:: --filter Maze:: \
+  --filter TextRaytracer --filter NeuralNet --filter CacheSimulation \
+  --filter GameOfLife --session NEW_SESSION --output /tmp/la-port-4-quick-report.md
+```
+
+Raw measurements and logs: ignored `build/la-port-4-quick-01/measurements.json`.
+The complete session and validation logs were also retained in the lane’s
+external evidence directory before worktree cleanup. No tasks in this group
+remain blocked.

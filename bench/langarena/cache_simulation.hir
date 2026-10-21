@@ -1,0 +1,168 @@
+// langarena: Etc::CacheSimulation
+// Port: LangArena 3c9f84d rust/src/benchmarks/cache_simulation.rs:5-207.
+// Arena slots, free list and doubly linked LRU order match Rust. Zero is the
+// absent link; real links use slot+1 so all storage/index arithmetic is unsigned.
+type Node {
+  key: String,
+  value: String,
+  prev: u64,
+  next: u64,
+}
+
+type State {
+  capacity: u64,
+  values: u64,
+  cache: unique Map[String, u64],
+  nodes: List[Node],
+  free: unique List[u64],
+  head: u64,
+  tail: u64,
+  size: u64,
+  hits: u32,
+  misses: u32,
+  seed: u64,
+}
+
+fn move_front(mut s: State, node: u64) {
+  if node == s.head {
+    return
+  }
+  let prev = s.nodes[node - 1].prev
+  let next = s.nodes[node - 1].next
+  if prev != 0 {
+    s.nodes[prev - 1].next = next
+  }
+  if next != 0 {
+    s.nodes[next - 1].prev = prev
+  }
+  if node == s.tail {
+    s.tail = prev
+  }
+  s.nodes[node - 1].prev = 0
+  s.nodes[node - 1].next = s.head
+  if s.head != 0 {
+    s.nodes[s.head - 1].prev = node
+  }
+  s.head = node
+  if s.tail == 0 {
+    s.tail = node
+  }
+}
+
+fn put(
+  mut s: State,
+  mut index: unique Map[String, u64],
+  mut free_slots: unique List[u64],
+  take key: String,
+  take value: String
+) {
+  match map.get(index, key) {
+    Some(node) => {
+      s.nodes[node - 1].value = take value
+      move_front(mut s, node)
+      return
+    },
+    None => {},
+  }
+  if s.size >= s.capacity && s.tail != 0 {
+    let old = s.tail
+    let old_key = s.nodes[old - 1].key
+    map.remove(mut index, old_key)
+    let prev = s.nodes[old - 1].prev
+    if prev != 0 {
+      s.nodes[prev - 1].next = 0
+    }
+    s.tail = prev
+    if old == s.head {
+      s.head = 0
+    }
+    list.push(mut free_slots, old)
+    s.size -= 1
+  }
+  let item = Node(key: unique key, value: take value, prev: 0, next: 0)
+  let node = match list.pop(mut free_slots) {
+    Some(slot) => {
+      s.nodes[slot - 1] = take item
+      slot
+    },
+    None => {
+      list.push(mut s.nodes, take item)
+      list.len(s.nodes)
+    },
+  }
+  map.insert(mut index, unique key, node)
+  s.nodes[node - 1].next = s.head
+  if s.head != 0 {
+    s.nodes[s.head - 1].prev = node
+  }
+  s.head = node
+  if s.tail == 0 {
+    s.tail = node
+  }
+  s.size += 1
+}
+
+fn step(mut s: State, iteration: u64) {
+  // The harness lends copyable state. Detach the owned tables once per batch,
+  // then preserve uniqueness through all 1000 accesses and evictions.
+  let mut index = unique replace(mut s.cache, map.empty())
+  let mut free_slots = unique replace(mut s.free, [])
+  for _ in 0u64..1000u64 {
+    s.seed = (s.seed * 3877 + 29573) % 139968
+    let value: f64 = float.from_int(s.seed)
+    let bound: f64 = float.from_int(s.values)
+    let number: u64 = int.narrow(
+      results.unwrap_or(float.to_i32(value / 139968.0 * bound), 0)
+    )
+    let key = f"item_{number}"
+    match map.get(index, key) {
+      Some(node) => {
+        move_front(mut s, node)
+        s.hits += 1
+        put(mut s, mut index, mut free_slots, take key, f"updated_{iteration}")
+      },
+      None => {
+        s.misses += 1
+        put(mut s, mut index, mut free_slots, take key, f"new_{iteration}")
+      },
+    }
+  }
+  s.cache = take index
+  s.free = take free_slots
+}
+
+fn reset(mut s: State) {
+  s.seed = 42
+}
+
+fn checksum(s: State) -> u32 {
+  let a = u32.wrapping_add(5432u32 << 5u32, s.hits)
+  let b = u32.wrapping_add(a << 5u32, s.misses)
+  u32.wrapping_add(b << 5u32, int.truncate(s.size))
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  harness.measure_reset(
+    rt,
+    config,
+    State(
+      capacity: harness.number(config, "size"),
+      values: harness.number(config, "values"),
+      cache: map.empty(),
+      nodes: [],
+      free: [],
+      head: 0,
+      tail: 0,
+      size: 0,
+      hits: 0,
+      misses: 0,
+      seed: 42
+    ),
+    step,
+    reset,
+    checksum
+  )
+}

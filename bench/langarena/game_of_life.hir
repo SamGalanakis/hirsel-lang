@@ -1,0 +1,76 @@
+// langarena: Etc::GameOfLife
+// Port: LangArena 3c9f84d rust/src/benchmarks/game_of_life.rs:4-156.
+// Flat row-major cell indices replace (x,y) pairs; eight prelinked neighbors,
+// two-phase updates and preparation RNG order are unchanged.
+type Cell {
+  alive: bool,
+  next_state: bool,
+  neighbors: Inline[u64, 8],
+}
+
+type State {
+  cells: List[Cell],
+}
+
+fn step(mut s: State, iteration: u64) {
+  for i in 0u64..list.len(s.cells) {
+    let mut count = 0u64
+    for j in 0u64..8u64 {
+      if s.cells[s.cells[i].neighbors[j]].alive {
+        count += 1
+      }
+    }
+    s.cells[i].next_state = count == 3 || s.cells[i].alive && count == 2
+  }
+  for i in 0u64..list.len(s.cells) {
+    s.cells[i].alive = s.cells[i].next_state
+  }
+}
+
+fn checksum(s: State) -> u32 {
+  let mut hash = 2166136261u32
+  let mut alive = 0u32
+  for cell in s.cells {
+    let value = if cell.alive {
+      1u32
+    } else {
+      0u32
+    }
+    alive += value
+    hash = u32.wrapping_mul(hash ^ value, 16777619)
+  }
+  u32.wrapping_add(hash, alive)
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let w = harness.number(config, "w")
+  let h = harness.number(config, "h")
+  let mut cells: List[Cell] = []
+  list.reserve(mut cells, w * h)
+  let mut seed = 42u64
+  for y in 0u64..h {
+    for x in 0u64..w {
+      let mut neighbors: Inline[u64, 8] = [0, 0, 0, 0, 0, 0, 0, 0]
+      let mut n = 0u64
+      for dy in 0u64..3u64 {
+        for dx in 0u64..3u64 {
+          if dx == 1 && dy == 1 {
+            continue
+          }
+          neighbors[n] = (y + h + dy - 1) % h * w + (x + w + dx - 1) % w
+          n += 1
+        }
+      }
+      seed = (seed * 3877 + 29573) % 139968
+      let value: f64 = float.from_int(seed)
+      list.push(
+        mut cells,
+        Cell(alive: value / 139968.0 < 0.1, next_state: false, neighbors: neighbors)
+      )
+    }
+  }
+  harness.measure(rt, config, State(cells: take cells), step, checksum)
+}

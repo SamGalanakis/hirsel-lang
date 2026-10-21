@@ -1,0 +1,139 @@
+// langarena: Etc::TextRaytracer
+// Port: LangArena 3c9f84d rust/src/benchmarks/text_raytracer.rs:4-241.
+type Vector {
+  x: f64,
+  y: f64,
+  z: f64,
+}
+
+fn scale(v: Vector, s: f64) -> Vector {
+  Vector(x: v.x * s, y: v.y * s, z: v.z * s)
+}
+
+fn sub(a: Vector, b: Vector) -> Vector {
+  Vector(x: a.x - b.x, y: a.y - b.y, z: a.z - b.z)
+}
+
+fn dot(a: Vector, b: Vector) -> f64 {
+  a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+fn normalize(v: Vector) -> Vector {
+  scale(v, 1.0 / f64.sqrt(dot(v, v)))
+}
+
+type Sphere {
+  center: Vector,
+  radius: f64,
+  color: Vector,
+}
+
+type State {
+  w: u64,
+  h: u64,
+  value_out: u32,
+}
+
+fn intersect(dir: Vector, obj: Sphere) -> Option[f64] {
+  let l = obj.center
+  let tca = dot(l, dir)
+  if tca < 0.0 {
+    return None
+  }
+  let d2 = dot(l, l) - tca * tca
+  let r2 = obj.radius * obj.radius
+  if d2 > r2 {
+    return None
+  }
+  let t0 = tca - f64.sqrt(r2 - d2)
+  if t0 > 10000.0 {
+    None
+  } else {
+    Some(t0)
+  }
+}
+
+fn shade(dir: Vector, obj: Sphere, t: f64) -> u32 {
+  let pi = scale(dir, t)
+  let normal = normalize(sub(pi, obj.center))
+  let light = normalize(sub(Vector(x: 0.7, y: -1.0, z: 1.7), pi))
+  let lam = dot(light, normal)
+  let clamped: f64 = if lam < 0.0 {
+    0.0
+  } else if lam > 1.0 {
+    1.0
+  } else {
+    lam
+  }
+  let r = clamped * 0.5 + obj.color.x * 0.3
+  let g = clamped * 0.5 + obj.color.y * 0.3
+  let b = clamped * 0.5 + obj.color.z * 0.3
+  let index: u64 = int.narrow(
+    results.unwrap_or(float.to_i32(f64.floor((r + g + b) / 3.0 * 6.0)), 6)
+  )
+  let lut: Inline[u32, 6] = [46, 45, 43, 42, 88, 77]
+  if index < 6 {
+    lut[index]
+  } else {
+    32
+  }
+}
+
+fn step(mut s: State, iteration: u64) {
+  let fw: f64 = float.from_int(s.w)
+  let fh: f64 = float.from_int(s.h)
+  let scene: Inline[Sphere, 3] = [
+    Sphere(
+      center: Vector(x: -1.0, y: 0.0, z: 3.0),
+      radius: 0.3,
+      color: Vector(x: 1.0, y: 0.0, z: 0.0)
+    ),
+    Sphere(
+      center: Vector(x: 0.0, y: 0.0, z: 3.0),
+      radius: 0.8,
+      color: Vector(x: 0.0, y: 1.0, z: 0.0)
+    ),
+    Sphere(
+      center: Vector(x: 1.0, y: 0.0, z: 3.0),
+      radius: 0.4,
+      color: Vector(x: 0.0, y: 0.0, z: 1.0)
+    )
+  ]
+  for j in 0u64..s.h {
+    for i in 0u64..s.w {
+      let fi: f64 = float.from_int(i)
+      let fj: f64 = float.from_int(j)
+      let dir = normalize(
+        Vector(x: (fi - fw / 2.0) / fw, y: (fj - fh / 2.0) / fh, z: 1.0)
+      )
+      let mut pixel = 32u32
+      for k in 0u64..3u64 {
+        match intersect(dir, scene[k]) {
+          Some(t) => {
+            pixel = shade(dir, scene[k], t)
+            break
+          },
+          None => {},
+        }
+      }
+      s.value_out = u32.wrapping_add(s.value_out, pixel)
+    }
+  }
+}
+
+fn checksum(s: State) -> u32 {
+  s.value_out
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  harness.measure(
+    rt,
+    config,
+    State(w: harness.number(config, "w"), h: harness.number(config, "h"), value_out: 0),
+    step,
+    checksum
+  )
+}

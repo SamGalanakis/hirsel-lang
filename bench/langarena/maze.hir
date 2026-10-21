@@ -1,0 +1,349 @@
+// langarena: Maze::Generator
+// langarena: Maze::BFS
+// langarena: Maze::AStar
+// Port: LangArena 3c9f84d rust/src/benchmarks/maze.rs:8-468.
+// Cell coordinates and neighbor pairs become row-major indices. Neighbor shuffle,
+// DFS stack order, recursive finish opening and A* pair tie-breaking match Rust.
+type Cell {
+  kind: u32,
+  neighbors: Inline[u64, 4],
+}
+
+type Entry {
+  score: i64,
+  vertex: u64,
+}
+
+type PathNode {
+  vertex: u64,
+  parent: i64,
+}
+
+type State {
+  w: u64,
+  h: u64,
+  cells: List[Cell],
+  mode: u64,
+  path: List[u64],
+  value_out: u32,
+}
+
+fn precedes(a: Entry, b: Entry) -> bool {
+  a.score < b.score || a.score == b.score && a.vertex < b.vertex
+}
+
+// Rust a7c37f9 library/alloc/src/collections/binary_heap/mod.rs:807-882;
+// safe swaps replace holes in BinaryHeap<Reverse<(i32,usize)>> sift-up/down.
+fn push(mut queue_heap: unique List[Entry], item: Entry) {
+  list.push(mut queue_heap, item)
+  let mut i = list.len(queue_heap) - 1
+  while i > 0 {
+    let parent = (i - 1) / 2
+    if !precedes(queue_heap[i], queue_heap[parent]) {
+      break
+    }
+    list.swap(mut queue_heap, i, parent)
+    i = parent
+  }
+}
+
+fn pop(mut queue_heap: unique List[Entry]) -> Entry {
+  let first = queue_heap[0]
+  let last = option.unwrap_or(list.pop(mut queue_heap), first)
+  if list.len(queue_heap) > 0 {
+    queue_heap[0] = last
+    let mut i = 0u64
+    while i * 2 + 1 < list.len(queue_heap) {
+      let mut child = i * 2 + 1
+      if child + 1 < list.len(queue_heap) && precedes(
+        queue_heap[child + 1],
+        queue_heap[child]
+      ) {
+        child += 1
+      }
+      if !precedes(queue_heap[child], queue_heap[i]) {
+        break
+      }
+      list.swap(mut queue_heap, i, child)
+      i = child
+    }
+  }
+  first
+}
+
+fn random(mut seed: u64) -> u64 {
+  seed = (seed * 3877 + 29573) % 139968
+  let value: f64 = float.from_int(seed)
+  int.narrow(results.unwrap_or(float.to_i32(value / 139968.0 * 4.0), 0))
+}
+
+fn walkable(kind: u32) -> bool {
+  kind == 1 || kind == 2 || kind == 3
+}
+
+fn count(s: State, at: u64) -> u64 {
+  let mut total = 0u64
+  for j in 0u64..4u64 {
+    if walkable(s.cells[s.cells[at].neighbors[j]].kind) {
+      total += 1
+    }
+  }
+  total
+}
+
+fn dig(mut s: State, at: u64) {
+  let mut stack: List[u64] = [at]
+  list.reserve(mut stack, s.w * s.h)
+  while let Some(pos) = list.pop(mut stack) {
+    if count(s, pos) == 1 {
+      s.cells[pos].kind = 1
+      for j in 0u64..4u64 {
+        let neighbor = s.cells[pos].neighbors[j]
+        if s.cells[neighbor].kind == 0 {
+          list.push(mut stack, neighbor)
+        }
+      }
+    }
+  }
+}
+
+fn open_finish(mut s: State, at: u64) {
+  s.cells[at].kind = 1
+  // Snapshot precedes recursing, as upstream collects neighbors_to_check first.
+  let mut walls: List[u64] = []
+  for j in 0u64..4u64 {
+    let neighbor = s.cells[at].neighbors[j]
+    if s.cells[neighbor].kind == 0 {
+      list.push(mut walls, neighbor)
+    }
+  }
+  if count(s, at) > 1 {
+    return
+  }
+  for neighbor in walls {
+    open_finish(mut s, neighbor)
+  }
+}
+
+fn generate(mut s: State) {
+  let start = s.w + 1
+  for j in 0u64..4u64 {
+    let neighbor = s.cells[start].neighbors[j]
+    if s.cells[neighbor].kind == 0 {
+      dig(mut s, neighbor)
+    }
+  }
+  let finish = (s.h - 2) * s.w + s.w - 2
+  for j in 0u64..4u64 {
+    let neighbor = s.cells[finish].neighbors[j]
+    if s.cells[neighbor].kind == 0 {
+      open_finish(mut s, neighbor)
+    }
+  }
+}
+
+fn bfs(s: State) -> List[u64] {
+  let start = s.w + 1
+  let target = (s.h - 2) * s.w + s.w - 2
+  let mut visited: List[bool] = []
+  for _ in 0u64..s.w * s.h {
+    list.push(mut visited, false)
+  }
+  let mut paths: List[PathNode] = [PathNode(vertex: start, parent: -1)]
+  let mut queue: List[u64] = [0u64]
+  let mut head = 0u64
+  visited[start] = true
+  while head < list.len(queue) {
+    let id = queue[head]
+    head += 1
+    let at = paths[id].vertex
+    for j in 0u64..4u64 {
+      let neighbor = s.cells[at].neighbors[j]
+      if neighbor == target {
+        let mut path_out: List[u64] = [target]
+        let mut current: i64 = int.narrow(id)
+        while current >= 0 {
+          let index: u64 = int.narrow(current)
+          list.push(mut path_out, paths[index].vertex)
+          current = paths[index].parent
+        }
+        list.reverse(mut path_out)
+        return take path_out
+      }
+      if walkable(s.cells[neighbor].kind) && !visited[neighbor] {
+        visited[neighbor] = true
+        let parent: i64 = int.narrow(id)
+        list.push(mut paths, PathNode(vertex: neighbor, parent: parent))
+        list.push(mut queue, list.len(paths) - 1)
+      }
+    }
+  }
+  []
+}
+
+fn heuristic(s: State, at: u64) -> i64 {
+  // Walkable cells are inside the border, so the target is >= each coordinate.
+  int.narrow(s.h - 2 - at / s.w + s.w - 2 - at % s.w)
+}
+
+fn astar(s: State) -> List[u64] {
+  let start = s.w + 1
+  let target = (s.h - 2) * s.w + s.w - 2
+  let mut came: List[i64] = []
+  let mut g: List[i64] = []
+  let mut best: List[i64] = []
+  for _ in 0u64..s.w * s.h {
+    list.push(mut came, -1)
+    list.push(mut g, 2147483647)
+    list.push(mut best, 2147483647)
+  }
+  let mut queue_heap: unique List[Entry] = []
+  g[start] = 0
+  let f = heuristic(s, start)
+  best[start] = f
+  push(mut queue_heap, Entry(score: f, vertex: start))
+  while list.len(queue_heap) > 0 {
+    let current = pop(mut queue_heap)
+    let at = current.vertex
+    if at == target {
+      let mut path_out: List[u64] = []
+      let mut cur: i64 = int.narrow(at)
+      while cur != -1 {
+        let index: u64 = int.narrow(cur)
+        list.push(mut path_out, index)
+        cur = came[index]
+      }
+      list.reverse(mut path_out)
+      return take path_out
+    }
+    let current_g = g[at]
+    for j in 0u64..4u64 {
+      let neighbor = s.cells[at].neighbors[j]
+      if !walkable(s.cells[neighbor].kind) {
+        continue
+      }
+      let tentative = current_g + 1
+      if tentative < g[neighbor] {
+        came[neighbor] = int.narrow(at)
+        g[neighbor] = tentative
+        let f_new = tentative + heuristic(s, neighbor)
+        if f_new < best[neighbor] {
+          best[neighbor] = f_new
+          push(mut queue_heap, Entry(score: f_new, vertex: neighbor))
+        }
+      }
+    }
+  }
+  []
+}
+
+fn step(mut s: State, iteration: u64) {
+  if s.mode == 0 {
+    for i in 0u64..list.len(s.cells) {
+      if s.cells[i].kind == 1 {
+        s.cells[i].kind = 0
+      }
+    }
+    s.cells[s.w + 1].kind = 2
+    s.cells[(s.h - 2) * s.w + s.w - 2].kind = 3
+    generate(mut s)
+    s.value_out = u32.wrapping_add(s.value_out, s.cells[s.h / 2 * s.w + s.w / 2].kind)
+  } else {
+    s.path = if s.mode == 1 {
+      bfs(s)
+    } else {
+      astar(s)
+    }
+    s.value_out = u32.wrapping_add(s.value_out, int.truncate(list.len(s.path)))
+  }
+}
+
+fn checksum(s: State) -> u32 {
+  if s.mode == 0 {
+    let mut hash = 2166136261u32
+    for i in 0u64..list.len(s.cells) {
+      if s.cells[i].kind == 1 {
+        let value: u32 = int.truncate(i / s.w * (i % s.w))
+        hash = u32.wrapping_mul(hash ^ value, 16777619)
+      }
+    }
+    u32.wrapping_add(s.value_out, hash)
+  } else {
+    let mid: u32 = if list.len(s.path) > 0 {
+      let at = s.path[list.len(s.path) / 2]
+      int.truncate(at / s.w * (at % s.w))
+    } else {
+      0u32
+    }
+    u32.wrapping_add(s.value_out, mid)
+  }
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let width = harness.number(config, "w")
+  let height = harness.number(config, "h")
+  let w = if width < 5 {
+    5u64
+  } else {
+    width
+  }
+  let h = if height < 5 {
+    5u64
+  } else {
+    height
+  }
+  let mut s = State(
+    w: w,
+    h: h,
+    cells: [],
+    mode: if name == "Maze::Generator" {
+      0
+    } else if name == "Maze::BFS" {
+      1
+    } else {
+      2
+    },
+    path: [],
+    value_out: 0
+  )
+  list.reserve(mut s.cells, w * h)
+  let mut seed = 42u64
+  for y in 0u64..h {
+    for x in 0u64..w {
+      let border = x == 0 || y == 0 || x == w - 1 || y == h - 1
+      let mut neighbors: Inline[u64, 4] = [0, 0, 0, 0]
+      if !border {
+        neighbors = [(y - 1) * w + x, (y + 1) * w + x, y * w + x + 1, y * w + x - 1]
+        for _ in 0u64..4u64 {
+          let i = random(mut seed)
+          let j = random(mut seed)
+          if i != j {
+            let temp = neighbors[i]
+            neighbors[i] = neighbors[j]
+            neighbors[j] = temp
+          }
+        }
+      }
+      list.push(
+        mut s.cells,
+        Cell(
+          kind: if border {
+            4
+          } else {
+            0
+          },
+          neighbors: neighbors
+        )
+      )
+    }
+  }
+  s.cells[w + 1].kind = 2
+  s.cells[(h - 2) * w + w - 2].kind = 3
+  if s.mode != 0 {
+    generate(mut s)
+  }
+  harness.measure(rt, config, take s, step, checksum)
+}
