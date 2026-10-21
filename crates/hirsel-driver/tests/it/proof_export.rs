@@ -89,7 +89,7 @@ fn a_contracted_program_round_trips_with_its_obligation_table() {
         let (text, export) = exported(ADD);
         assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
         assert!(export.skipped.is_empty(), "{:?}", export.skipped);
-        assert!(text.starts_with("(Export\n  (Header \"hirsel.tir.export.v7\" 7"));
+        assert!(text.starts_with("(Export\n  (Header \"hirsel.tir.export.v8\" 8"));
         expect_file(
             include_str!("../fixtures/proof_seam/add.txt"),
             &(table(&export, "add") + &table(&export, "main")),
@@ -165,12 +165,12 @@ fn a_version_mismatch_is_refused_at_the_header() {
     with_compiler_stack(|| {
         let (text, _) = exported(ADD);
         let other = text.replacen(
-            "(Header \"hirsel.tir.export.v7\" 7",
-            "(Header \"hirsel.tir.export.v7\" 8",
+            "(Header \"hirsel.tir.export.v8\" 8",
+            "(Header \"hirsel.tir.export.v8\" 9",
             1,
         );
         assert_eq!(import(&other).unwrap_err().at, "header.tir_version");
-        let other = text.replacen("hirsel.tir.export.v7", "hirsel.tir.export.v0", 1);
+        let other = text.replacen("hirsel.tir.export.v8", "hirsel.tir.export.v0", 1);
         assert_eq!(import(&other).unwrap_err().at, "header.format");
         let engine = engine(ADD);
         let mut expected = engine.proof_environment();

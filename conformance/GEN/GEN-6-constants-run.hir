@@ -1,0 +1,60 @@
+// rule: GEN-6
+// expect: run
+// boundary: dictionary declarations preserve generic type/size actuals and data CT.
+type Op {
+  run: fn(u64) -> u64 uses {},
+  bytes: fn(Inline[u8, 3]) -> Inline[u8, 3] uses {},
+  tag: u64,
+  labels: List[String],
+}
+
+fn identity[T: plain](value: T) -> T uses {} {
+  value
+}
+
+fn inline_identity[n: size](value: Inline[u8, n]) -> Inline[u8, n] uses {} {
+  value
+}
+
+const FIRST: Op = Op(
+  run: identity,
+  bytes: inline_identity,
+  tag: comptime (3 + 4),
+  labels: ["one", "two"]
+)
+
+const ALIAS: Op = FIRST
+
+const SECOND: Op = Op(
+  run: identity,
+  bytes: inline_identity,
+  tag: 7,
+  labels: ["one", "two"]
+)
+
+@noalloc
+fn length() -> u64 uses {} {
+  list.len((FIRST).labels)
+}
+
+fn selected(flag: bool) -> u64 uses {} {
+  let op = if flag {
+    FIRST
+  } else {
+    SECOND
+  }
+  op.run(5)
+}
+
+pub fn main() -> Result[(), String] {
+  let first = FIRST
+  let alias = ALIAS
+  let second = SECOND
+  failure.check(first.run(9) == 9 && alias.run(4) == 4 && second.run(2) == 2, Bounds())
+  failure.check(first.bytes([1u8, 2u8, 3u8]) == [1u8, 2u8, 3u8], Bounds())
+  failure.check(
+    first.tag == 7 && length() == 2 && selected(true) == 5 && selected(false) == 5,
+    Bounds()
+  )
+  Ok(())
+}

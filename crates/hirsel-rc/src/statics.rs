@@ -11,16 +11,16 @@
 //! cell naming another static block, and a String or Bytes slice names a whole
 //! byte sequence block (its `sequence_slice_start`) and its length.
 //! Flat data is one pointer-free block, sized from the materialized value.
-//! A value this cannot lay out (a callable, a non-flat Packed extent, a handle) is a `StaticError`, never a guessed image. Only a
-//! library constant holds a function today (`u32.order`'s comparator, an
-//! operation): user constants of function type are not data.
+//! Named callables use explicit code relocations and empty environments.
+//! A value this cannot lay out (a non-flat Packed extent or a handle) is a
+//! `StaticError`, never a guessed image.
 use hirsel_layout::layout::LayoutBuilder;
 use hirsel_lir::ir::Symbol;
 use hirsel_lir::layout::{
     SEQUENCE_CAPACITY_OFFSET, sequence_elements_offset, sequence_slice_start,
 };
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, ScalarKind, SizeSpec, TagForm};
-use hirsel_lir::statics::{StaticBlock, StaticData, StaticReference};
+use hirsel_lir::statics::{StaticBlock, StaticData, StaticFunction, StaticReference};
 use hirsel_tir::{Constant, Constructor, Materialized, ValueKind, ValueNode};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,12 +37,28 @@ pub fn encode(
     symbol: Symbol,
     value: &Materialized,
 ) -> Result<StaticData, StaticError> {
+    encode_functions(layouts, types, symbol, value, &mut |path, _| {
+        unsupported(format!("unresolved static callable {path}"))
+    })
+}
+
+pub fn encode_functions(
+    layouts: &mut LayoutBuilder<'_>,
+    types: &hirsel_types::TypeInterner,
+    symbol: Symbol,
+    value: &Materialized,
+    functions: &mut dyn FnMut(
+        &hirsel_syntax::DefPath,
+        &[hirsel_types::GenericArgument],
+    ) -> Result<Symbol, StaticError>,
+) -> Result<StaticData, StaticError> {
     let layout = layouts
         .layout(types, value.root.ty)
         .map_err(|e| StaticError(format!("the constant's layout: {e:?}")))?;
     let mut encoder = Encoder {
         layouts,
         blocks: Vec::new(),
+        functions,
     };
     match encoder.kind(layout) {
         // A reference constant is its block: block 0 is that payload.
@@ -117,6 +133,10 @@ pub fn nullary_variant(
 struct Encoder<'a, 'o> {
     layouts: &'a mut LayoutBuilder<'o>,
     blocks: Vec<StaticBlock>,
+    functions: &'a mut dyn FnMut(
+        &hirsel_syntax::DefPath,
+        &[hirsel_types::GenericArgument],
+    ) -> Result<Symbol, StaticError>,
 }
 
 impl Encoder<'_, '_> {
@@ -136,6 +156,7 @@ impl Encoder<'_, '_> {
             layout,
             bytes: vec![0; size as usize],
             references: Vec::new(),
+            functions: Vec::new(),
         });
         (self.blocks.len() - 1) as u32
     }
@@ -380,9 +401,35 @@ impl Encoder<'_, '_> {
                 }
                 Ok(())
             }
-            (LayoutKind::Callable { .. }, ValueKind::FunctionReference(function)) => unsupported(
-                format!("a function value ({}) in static data", function.0.name),
-            ),
+            (
+                LayoutKind::Callable { .. },
+                ValueKind::FunctionReference {
+                    definition,
+                    arguments,
+                },
+            ) => {
+                let symbol = (self.functions)(definition, arguments)?;
+                let code = record
+                    .fields
+                    .iter()
+                    .find(|f| f.ordinal == 0)
+                    .ok_or_else(|| StaticError("callable code layout".into()))?
+                    .offset;
+                let environment = record
+                    .fields
+                    .iter()
+                    .find(|f| f.ordinal == 1)
+                    .ok_or_else(|| StaticError("callable environment layout".into()))?
+                    .offset;
+                // A capture-free named callable uses the runtime's empty environment.
+                // A zero word is the existing null/empty environment representation.
+                self.put(block, offset + environment, &0u64.to_le_bytes());
+                self.blocks[block as usize].functions.push(StaticFunction {
+                    offset: offset + code,
+                    symbol,
+                });
+                Ok(())
+            }
             (
                 LayoutKind::Opaque { owner },
                 ValueKind::Construct {

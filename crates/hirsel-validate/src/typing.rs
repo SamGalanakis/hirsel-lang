@@ -2876,6 +2876,18 @@ impl<'a> Checker<'a> {
                     self.error(ViolationKind::InvalidOrigin(destination));
                     return;
                 };
+                if hirsel_types::constant_identity(definition.clone(), &mut |id| {
+                    self.signatures
+                        .get(id.path())
+                        .cloned()
+                        .map(std::sync::Arc::new)
+                        .ok_or(hirsel_types::QueryError::NotImplemented)
+                })
+                .is_err()
+                {
+                    self.error(ViolationKind::InvalidOrigin(destination));
+                    return;
+                }
                 let SignatureKind::Const { ty: root, generics } = &signature.kind else {
                     self.error(ViolationKind::InvalidOrigin(destination));
                     return;

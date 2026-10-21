@@ -148,6 +148,9 @@ impl SignatureAdapter {
                 dependencies: hirsel_check_protocol::fact::fact_dependencies(&owner),
             });
         }
+        if let Some(signature) = crate::dictionaries::literal_signature(t, m, &syntax, provider)? {
+            return Ok(signature);
+        }
         let context = FileContext {
             package: item.definition.0.package.clone(),
             modules: item.definition.0.modules.clone(),

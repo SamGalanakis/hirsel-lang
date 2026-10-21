@@ -2,7 +2,7 @@
 // expect: fail SEM-3 at line 21
 // HKDF-SHA-1 expand of 5101 bytes exceeds 255 * 20 and fails before any HMAC.
 pub fn main() -> Result[(), ()] {
-  let okm = std@1/hkdf.expand(std@1/sha1.hash(), b"prk", b"info", 5101)
+  let okm = std@1/hkdf.expand(std@1/sha1.hash, b"prk", b"info", 5101)
   failure.check(bytes.len(okm) == 5101, TextInvariant())
   Ok(())
 }

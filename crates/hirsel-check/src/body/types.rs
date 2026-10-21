@@ -620,6 +620,16 @@ impl Checker<'_, '_> {
                         Ok(named)
                     }
                     SignatureKind::Const { ty: t, .. } => {
+                        if let Err(mut error) =
+                            constant_identity(p.clone(), &mut |id| self.snapshot(id))
+                        {
+                            if let QueryError::Diagnostics(ds) = &mut error {
+                                for d in ds {
+                                    d.primary = self.span(id);
+                                }
+                            }
+                            return Err(error);
+                        }
                         let root = self.import(*t)?;
                         // A counted named constant read shares program-lifetime
                         // storage, just as Copy does; it cannot acquire exclusivity.

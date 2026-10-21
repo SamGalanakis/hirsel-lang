@@ -1,0 +1,15 @@
+// rule: GEN-6
+// expect: reject GEN-6 at line 8
+// twin: GEN/GEN-6-literal-run.hir
+type Op {
+  run: fn(u64) -> u64 uses {},
+}
+
+const OP: Op = {
+  let captured = 4u64
+  Op(
+    run: fn(value: u64) -> u64 uses {} {
+      value + captured
+    }
+  )
+}

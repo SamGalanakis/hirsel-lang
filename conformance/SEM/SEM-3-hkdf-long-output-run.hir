@@ -3,7 +3,7 @@
 // HKDF-SHA-1 expand accepts a length within 255 * 20 bytes; the -fail twin
 // asks for 5101.
 pub fn main() -> Result[(), ()] {
-  let okm = std@1/hkdf.expand(std@1/sha1.hash(), b"prk", b"info", 32)
+  let okm = std@1/hkdf.expand(std@1/sha1.hash, b"prk", b"info", 32)
   failure.check(bytes.len(okm) == 32, TextInvariant())
   Ok(())
 }

@@ -1,0 +1,11 @@
+// rule: GEN-6
+// expect: reject GEN-6 at line 4
+// twin: GEN/GEN-6-brand-run.hir
+const FIRST: Order[u32] = SECOND
+
+const SECOND: Order[u32] = FIRST
+
+pub fn probe() -> u64 uses {} {
+  let value: SortedMap[u32, u8] = sorted_map.empty(FIRST)
+  sorted_map.len(FIRST, value)
+}

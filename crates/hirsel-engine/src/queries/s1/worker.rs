@@ -508,8 +508,21 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             };
             worker.register_staged(&body.analyzed.value)?;
             let types = worker.source.inputs().snapshot.types().clone();
-            let constants = prepare_values(&types, &body.analyzed.value, &[], &signature, worker)?;
-            let value = if let Some((_, value)) = constants.iter().find(|(id, _)| *id == value) {
+            let mut constants =
+                prepare_values(&types, &body.analyzed.value, &[], &signature, worker)?;
+            let root_expression = value;
+            let dictionary = crate::dictionaries::declaration(
+                &types,
+                &worker.source.inputs().memo.clone(),
+                &body.analyzed.value,
+                &signature,
+                &constants,
+                worker,
+            )?;
+            let is_dictionary = dictionary.is_some();
+            let value = if let Some(dictionary) = dictionary {
+                dictionary
+            } else if let Some((_, value)) = constants.iter().find(|(id, _)| *id == value) {
                 value.clone()
             } else {
                 let ty = body
@@ -533,6 +546,9 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                     sizes: &[],
                 })?
             };
+            if is_dictionary && !constants.iter().any(|(id, _)| *id == root_expression) {
+                constants.push((root_expression, value.clone()));
+            }
             Ok((value, constants))
         });
         let depth = self.stack.composed(self.depth_limit(), true);

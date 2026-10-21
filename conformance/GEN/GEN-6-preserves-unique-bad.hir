@@ -1,0 +1,21 @@
+// rule: GEN-6
+// expect: reject MODE-2 at line 20
+// twin: MODE/MODE-2-preserves-unique-direct-ok.hir
+type Op {
+  run: fn(mut List[u64]) -> () uses {},
+}
+
+@preserves_unique(xs)
+fn keep(mut xs: List[u64]) -> () uses {} {
+  list.push(mut xs, 1)
+}
+
+const OP: Op = Op(run: keep)
+
+fn need(mut xs: unique List[u64]) -> () uses {} {}
+
+fn probe(mut xs: unique List[u64]) -> () uses {} {
+  let op = OP
+  op.run(mut xs)
+  need(mut xs)
+}

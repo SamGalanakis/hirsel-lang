@@ -1,0 +1,12 @@
+// rule: GEN-6
+// expect: reject PROV-2 at line 9
+// twin: GEN/GEN-6-dependent-named-run.hir
+type Files {
+  keep: fn(d: Dir, take file: File of d) -> File of d uses {},
+}
+
+const FILES: Files = Files(
+  keep: fn(d: Dir, take file: File of d) -> File of d uses {} {
+    take file
+  }
+)

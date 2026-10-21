@@ -342,6 +342,7 @@ impl Weight {
         let hirsel_types::SignatureMetadata {
             visibility: _,
             alias: _,
+            constant_alias,
             track_caller: _,
             unsafe_ffi: _,
             wrapper: _,
@@ -349,6 +350,9 @@ impl Weight {
             schema,
             recursive_group: _,
         } = metadata;
+        if let Some(path) = constant_alias {
+            self.def_path(path);
+        }
         let hirsel_types::NominalRoles {
             unsafe_capability,
             result_type,

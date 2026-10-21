@@ -1,0 +1,18 @@
+// rule: GEN-6
+// expect: reject PROV-4 at line 17
+// twin: GEN/GEN-6-dependent-named-run.hir
+type Build {
+  make: fn(a: Arena) -> List[u8] in a uses {},
+}
+
+fn make(a: Arena) -> List[u8] in a uses {} {
+  let items: List[u8] in a = [1u8]
+  take items
+}
+
+const BUILD: Build = Build(make: make)
+
+pub fn escape(a: Arena) -> List[u8] {
+  let ops = BUILD
+  ops.make(a)
+}

@@ -3,7 +3,7 @@
 // RFC 6070 test 5 inputs at 2 iterations: PBKDF2-HMAC-SHA-1, 2 iterations, 25 bytes.
 pub fn main() -> Result[(), ()] {
   let key = std@1/pbkdf2.derive(
-    std@1/sha1.hash(),
+    std@1/sha1.hash,
     b"passwordPASSWORDpassword",
     b"saltSALTsaltSALTsaltSALTsaltSALTsalt",
     2,

@@ -1,6 +1,6 @@
 //! The prover-neutral proof seam: stable obligation ids,
 //! per-definition TIR digests and obligation checksums, and the canonical
-//! `hirsel.tir.export.v7` text that consumers read out of process. Import
+//! `hirsel.tir.export.v8` text that consumers read out of process. Import
 //! decodes, re-derives every signature fingerprint, recomputes every digest
 //! and table, and re-validates each definition with V; any difference is a
 //! located refusal.
@@ -9,6 +9,7 @@
 hirsel_guard::install!();
 
 mod annotations;
+mod constants;
 mod content;
 pub mod findings;
 mod obligations;
@@ -41,7 +42,8 @@ use std::sync::Arc;
 /// PS-8 format; bumped on TIR_VERSION or a ruled change, never on LIR churn.
 /// v7: each definition, signature and materialized value carries its
 /// canonical type table (first-encounter closure), not its producer's store.
-pub const FORMAT: &str = "hirsel.tir.export.v7";
+/// v8: declared dictionary callable actuals and explicit constant alias edges.
+pub const FORMAT: &str = "hirsel.tir.export.v8";
 /// PS-5.
 pub const TIR_DIGEST_DOMAIN: &str = "hirsel.tir.digest.v1";
 /// PS-6.
@@ -806,5 +808,5 @@ fn validate(export: &Export) -> Result<(), ImportError> {
             ));
         }
     }
-    Ok(())
+    constants::validate(export)
 }

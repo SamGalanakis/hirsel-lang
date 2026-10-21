@@ -790,6 +790,7 @@ impl Snapshot<Cx> for SignatureMetadata {
         self.track_caller.write(w);
         self.visibility.write(w);
         self.alias.write(w);
+        self.constant_alias.write(w);
         self.unsafe_ffi.write(w);
         self.wrapper.write(w);
         self.roles.write(w);
@@ -807,6 +808,7 @@ impl Snapshot<Cx> for SignatureMetadata {
             track_caller: Snapshot::read(r)?,
             visibility: Snapshot::read(r)?,
             alias: Snapshot::read(r)?,
+            constant_alias: Snapshot::read(r)?,
             unsafe_ffi: Snapshot::read(r)?,
             wrapper: Snapshot::read(r)?,
             roles: Snapshot::read(r)?,
@@ -1082,7 +1084,7 @@ impl Snapshot<Cx> for Materialized {
 snapshot_struct!(ValueNode { ty, kind } in Cx);
 snapshot_enum!(ValueKind {
     Constant(c),
-    FunctionReference(path),
+    FunctionReference { definition, arguments },
     Construct { constructor, fields }
 } in Cx);
 

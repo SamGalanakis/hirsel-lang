@@ -18,6 +18,7 @@ mod comptime;
 mod config;
 pub use compiler::Compiler;
 pub use config::CompileConfig;
+mod dictionaries;
 mod materialized;
 mod phases;
 pub mod registry;

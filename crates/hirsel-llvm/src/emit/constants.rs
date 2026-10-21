@@ -137,6 +137,19 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 };
                 references.push((r.offset, *target));
             }
+            for function in &block.functions {
+                let symbol = &function.symbol;
+                let thunk = function_thunk_name(&symbol.definition, symbol.instance.as_ref());
+                self.import_function(&thunk, &symbol.definition, None);
+                let code = self.module.function_address(&thunk);
+                let environment = self.empty_environment()?;
+                references.push((function.offset, code));
+                references.push((
+                    function.offset + u64::from(self.inputs.target.pointer_bytes),
+                    environment,
+                ));
+            }
+            references.sort_by_key(|(offset, _)| *offset);
             let block_name = match index {
                 0 => name.clone(),
                 _ => format!("{name}.{index}"),

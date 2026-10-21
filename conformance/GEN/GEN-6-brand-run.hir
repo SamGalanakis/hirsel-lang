@@ -1,0 +1,28 @@
+// rule: GEN-6
+// expect: run
+// boundary: constant aliases preserve terminal dictionary brands.
+fn compare(a: u32, b: u32) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
+
+const FIRST: Order[u32] = Order(compare: compare)
+
+const ALIAS: Order[u32] = FIRST
+
+const SECOND: Order[u32] = Order(compare: compare)
+
+fn count(value: SortedMap[u32, u8] of FIRST) -> u64 uses {} {
+  sorted_map.len(ALIAS, value)
+}
+
+pub fn main() -> Result[(), String] {
+  let value: SortedMap[u32, u8] of ALIAS = sorted_map.empty(FIRST)
+  failure.check(count(value) == 0, Bounds())
+  Ok(())
+}

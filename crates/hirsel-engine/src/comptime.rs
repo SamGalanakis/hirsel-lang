@@ -757,9 +757,19 @@ impl QueryEngine {
             let hirsel_syntax::ItemKind::Const { value, .. } = body.typed.syntax.item.kind else {
                 return Err(operational("constant artifact has a non-constant owner"));
             };
-            let constants = self.prepare_values(body, &[], &signature)?;
-            let constant = if let Some((_, constant)) = constants.iter().find(|(e, _)| *e == value)
-            {
+            let mut constants = self.prepare_values(body, &[], &signature)?;
+            let dictionary = crate::dictionaries::declaration(
+                &self.types.clone(),
+                &self.memo.clone(),
+                body,
+                &signature,
+                &constants,
+                &mut EngineComptimeValues(self),
+            )?;
+            let is_dictionary = dictionary.is_some();
+            let constant = if let Some(dictionary) = dictionary {
+                dictionary
+            } else if let Some((_, constant)) = constants.iter().find(|(e, _)| *e == value) {
                 constant.clone()
             } else {
                 let ty = body
@@ -772,6 +782,9 @@ impl QueryEngine {
                     .ty;
                 self.evaluate_value(body, &[], &signature, value, value, ty, &constants)?
             };
+            if is_dictionary && !constants.iter().any(|(id, _)| *id == value) {
+                constants.push((value, constant.clone()));
+            }
             let executed = self
                 .execution_stack
                 .last()

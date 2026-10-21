@@ -7,7 +7,7 @@ fn check(key: Bytes, data: Bytes, expected: String) -> () {
     return
   }
   failure.check(
-    std@1/hmac.verify(std@1/sha512_256.hash(), key, data, tag),
+    std@1/hmac.verify(std@1/sha512_256.hash, key, data, tag),
     TextInvariant()
   )
 }

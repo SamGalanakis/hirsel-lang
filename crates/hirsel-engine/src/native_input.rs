@@ -536,7 +536,25 @@ fn equal_native_value(
         }
         match (&left.kind, &right.kind) {
             (ValueKind::Constant(x), ValueKind::Constant(y)) if x == y => (),
-            (ValueKind::FunctionReference(x), ValueKind::FunctionReference(y)) if x == y => (),
+            (
+                ValueKind::FunctionReference {
+                    definition: x,
+                    arguments: xs,
+                },
+                ValueKind::FunctionReference {
+                    definition: y,
+                    arguments: ys,
+                },
+            ) if x == y
+                && xs.len() == ys.len()
+                && xs.iter().zip(ys).all(|(a, b)| {
+                    matches!((hirsel_types::encoding::canonical_argument_encoding(types, a),
+                        hirsel_types::encoding::canonical_argument_encoding(types, b)),
+                        (Ok(a), Ok(b)) if a == b)
+                }) =>
+            {
+                ()
+            }
             (
                 ValueKind::Construct {
                     constructor: x,

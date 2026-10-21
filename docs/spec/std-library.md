@@ -2318,7 +2318,7 @@ Input is absorbed into little-endian lanes, a whole lane at a time where it is
 lane-aligned, and output squeezed a byte at a time. SHA-3 pads with the domain byte
 0x06 and SHAKE with 0x1f, each followed by the final 0x80 bit of pad10*1. The sponge
 has no length field, so update accepts any total length. Keccak has no
-length-extension weakness. The SHA-3 digests return a `digest.Hash` from `hash()`,
+length-extension weakness. The SHA-3 digests declare a `digest.Hash` constant named `hash`,
 whose block size is the rate, so they key HMAC, HKDF and PBKDF2.
 
 Throughput: one permutation per rate-sized block, each round unrolled over the lanes
@@ -2374,14 +2374,12 @@ pub type digest.Hash[S: plain + inert, n: size] {
   finish: fn(take S) -> Inline[u8, n] uses {},
   block_size: u64,
 }
-fn <hash>.hash() -> digest.Hash[State, n] uses {}
+const <hash>.hash: digest.Hash[State, n]
 ```
 
 `sha1`, `sha224`, `sha256`, `sha384`, `sha512`, `sha512_256`, `sha3_224`,
-`sha3_256`, `sha3_384`, `sha3_512`, `blake2b` and `blake2s` each return theirs from
-`hash()`, with block sizes 64, 64, 64, 128, 128, 128, 144, 136, 104, 72, 128 and 64.
-`md5` has none, so it cannot key an HMAC, and the checksums have none. A record
-holding functions is not a compile-time constant, hence a function.
+`sha3_256`, `sha3_384`, `sha3_512`, `blake2b` and `blake2s` each declare `hash`, with block sizes 64, 64, 64, 128, 128, 128, 144, 136, 104, 72, 128 and 64.
+`md5` has none, so it cannot key an HMAC, and the checksums have none. These are explicit [GEN-6](generics.md#gen-6-dictionary-constants) dictionary constants.
 Every operation below is generic over `[S: plain + inert, n: size]`, takes the
 dictionary first, and is ordinary allocating source:
 

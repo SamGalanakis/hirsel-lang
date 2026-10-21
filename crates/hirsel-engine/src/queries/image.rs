@@ -264,6 +264,9 @@ impl QueryEngine {
             if let Some(helper) = crate::facts::snapshot(new) {
                 add(helper);
             }
+            for helper in crate::dictionaries::literal_snapshots(new) {
+                add(helper);
+            }
             add(new.clone());
         }
         self.declarations.place_file(file, listed, &self.sources);

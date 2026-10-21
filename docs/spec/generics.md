@@ -146,3 +146,26 @@ rejected. This is the one program-level check: it runs over the instantiation gr
 assembled from each definition's recorded calls and type arguments, and its verdict does
 not depend on compilation topology ([PROG-5](programs.md#prog-5-topology)). The diagnostic
 cites the earliest type-growing call edge of the cycle.
+
+### GEN-6: Dictionary constants
+
+A dictionary type is a transparent nominal record, neither distinct nor resource,
+with callable or `data` fields. A top-level `const` of this type declares a closed
+field graph. Every constructor argument is labelled. Callable fields name declared
+functions, instantiated from their complete expected field type, or capture-free
+function literals. Data fields use ordinary constant expressions, including legal
+`comptime` data. Calls returning dictionaries, runtime locals and captures cannot
+initialize this declaration. There is no runtime initializer.
+
+Named members retain existing callable compatibility: modes, effects, allocation,
+brands and dependent result relations are checked against the field contract.
+Capture-free literals retain their own-parameter result restriction. A field does
+not acquire a declaration-only `@preserves_unique` promise from its initializer.
+
+Each constructed constant has its own dictionary identity even when all fields
+are equal. `const alias: Dictionary = original` preserves the terminal constant's
+identity and brands; alias chains normalize before brand checking and cycles are
+GEN-6 with the complete chain. Reading a constant materializes its checked field
+graph in the interpreter and native backends, including non-scalar data fields.
+This declaration form does not permit publishing callable results from arbitrary
+`comptime` evaluation: that boundary remains data-only under CT-2.

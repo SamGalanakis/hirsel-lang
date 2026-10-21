@@ -75,9 +75,12 @@ impl BuiltinRegistry {
         };
         let compare = ValueNode {
             ty: compare.ty,
-            kind: ValueKind::FunctionReference(hirsel_syntax::DefPath::core(&format!(
-                "$intrinsic.OrderCompare_{name}"
-            ))),
+            kind: ValueKind::FunctionReference {
+                definition: hirsel_syntax::DefPath::core(&format!(
+                    "$intrinsic.OrderCompare_{name}"
+                )),
+                arguments: vec![],
+            },
         };
         Ok(Some(Materialized {
             root: ValueNode {

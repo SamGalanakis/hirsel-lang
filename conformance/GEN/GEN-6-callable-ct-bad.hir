@@ -1,0 +1,12 @@
+// rule: GEN-6
+// expect: reject CT-2 at line 12
+// twin: GEN/GEN-6-literal-run.hir
+type Op {
+  run: fn(u64) -> u64 uses {},
+}
+
+fn identity(value: u64) -> u64 uses {} {
+  value
+}
+
+const OP: Op = comptime Op(run: identity)

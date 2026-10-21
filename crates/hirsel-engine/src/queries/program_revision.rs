@@ -228,6 +228,23 @@ impl QueryEngine {
                 dependencies.extend(executed_definitions(&value.executed));
             }
         }
+        // A copied dictionary field can reach a lifted literal without naming
+        // its helper in source. Its callable graph is part of the executable
+        // closure, including for replay and checked interpretation.
+        if matches!(&signature.value.kind, SignatureKind::Const { generics, .. } if generics.is_empty())
+        {
+            let value = self.materialize_value(path)?;
+            let mut pending = vec![&value.root];
+            while let Some(node) = pending.pop() {
+                match &node.kind {
+                    hirsel_tir::ValueKind::FunctionReference { definition, .. } => {
+                        dependencies.insert(definition.clone());
+                    }
+                    hirsel_tir::ValueKind::Construct { fields, .. } => pending.extend(fields),
+                    _ => (),
+                }
+            }
+        }
         if let SignatureKind::Type(declaration) = &signature.value.kind {
             dependencies.extend(declaration.drop.iter().cloned());
             // FACT-2: construction runs the fact's helper, which closes over

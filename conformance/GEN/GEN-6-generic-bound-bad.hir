@@ -1,0 +1,12 @@
+// rule: GEN-6
+// expect: reject GEN-1 at line 12
+// twin: GEN/GEN-6-constants-run.hir
+type Op {
+  run: fn(f64) -> f64 uses {},
+}
+
+fn identity[T: key + plain](value: T) -> T uses {} {
+  value
+}
+
+const OP: Op = Op(run: identity)

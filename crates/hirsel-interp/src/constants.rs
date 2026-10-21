@@ -80,14 +80,17 @@ fn decode(data: &Materialized, runtime: &aggregate::RuntimeTypes) -> Result<Valu
                             .map_err(|_| invalid("materialized literal"))?,
                     );
                 }
-                ValueKind::FunctionReference(definition) => values.push(Value::FunctionReference(
-                    Box::new(crate::value::NamedFunction {
+                ValueKind::FunctionReference {
+                    definition,
+                    arguments,
+                } => values.push(Value::FunctionReference(Box::new(
+                    crate::value::NamedFunction {
                         definition: definition.clone(),
-                        arguments: vec![],
+                        arguments: arguments.clone(),
                         types: runtime.types.clone(),
                         ty: node.ty,
-                    }),
-                )),
+                    },
+                ))),
                 ValueKind::Construct { fields, .. } => {
                     pending.push(Work::Construct(node, fields.len()));
                     pending.extend(fields.iter().rev().map(Work::Visit));

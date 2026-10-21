@@ -31,6 +31,13 @@ impl<S: Stage> Program<S> {
         if self.layouts.target != self.target.digest() {
             return fail(V::Malformed, "layout table names another target");
         }
+        for data in &self.statics {
+            data.validate(&self.layouts, u64::from(self.target.pointer_bytes))
+                .map_err(|e| err(V::Malformed, e))?;
+            for function in data.blocks.iter().flat_map(|block| &block.functions) {
+                self.function(&function.symbol)?;
+            }
+        }
         for unit in &self.units {
             unit.check_identity(&self.layouts).map_err(|e| {
                 err(

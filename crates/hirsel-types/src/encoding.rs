@@ -62,6 +62,7 @@ fn encode_signature(
     let SignatureMetadata {
         visibility,
         alias,
+        constant_alias,
         track_caller,
         unsafe_ffi,
         wrapper,
@@ -84,6 +85,10 @@ fn encode_signature(
         hirsel_syntax::Visibility::PublicOpaque => "opaque",
     });
     e.boolean(*alias);
+    if let Some(target) = constant_alias {
+        e.tag("dictionary-alias-v1");
+        e.path(target);
+    }
     e.boolean(*track_caller);
     e.boolean(*unsafe_ffi);
     // None encodes as the retired exported-C flag's false.

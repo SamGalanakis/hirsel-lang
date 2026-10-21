@@ -814,11 +814,14 @@ impl Builder<'_, '_> {
                         message: format!("materialized type import: {e:?}"),
                     })?;
                     match &node.kind {
-                        ValueKind::FunctionReference(path) => values.push(self.rvalue(
+                        ValueKind::FunctionReference {
+                            definition: path,
+                            arguments,
+                        } => values.push(self.rvalue(
                             ty,
                             Rvalue::FunctionReference {
                                 definition: path.clone(),
-                                arguments: vec![],
+                                arguments: arguments.clone(),
                             },
                             self.span(expression)?,
                         )),

@@ -676,7 +676,21 @@ impl Checker<'_, '_> {
                     binding: binding.binding.clone(),
                 }
             }
-            Some(ResolvedName::Definition(d)) => SourceRoot::Definition(d.clone()),
+            Some(ResolvedName::Definition(d)) => {
+                let mut path = d.clone();
+                let mut seen = BTreeSet::new();
+                while seen.insert(path.clone()) {
+                    let Some(target) = self
+                        .snapshots
+                        .get(&DefId::intern(&path))
+                        .and_then(|s| s.metadata.constant_alias.as_ref())
+                    else {
+                        break;
+                    };
+                    path = target.clone();
+                }
+                SourceRoot::Definition(path)
+            }
             _ => SourceRoot::Value(id),
         }
     }

@@ -1,0 +1,12 @@
+// rule: GEN-6
+// expect: reject LANG-7 at line 12
+// twin: GEN/GEN-6-literal-run.hir
+type Op {
+  run: fn(u64) -> u64 uses {},
+}
+
+fn identity(value: u32) -> u32 uses {} {
+  value
+}
+
+const OP: Op = Op(run: identity)

@@ -1,0 +1,52 @@
+// rule: GEN-6
+// expect: run
+// boundary: named members preserve existing dependent result contracts.
+type Files {
+  keep: fn(d: Dir, take file: File of d) -> File of d uses {},
+}
+
+type Build {
+  make: fn(a: Arena) -> List[u8] in a uses {},
+}
+
+fn keep(d: Dir, take file: File of d) -> File of d uses {} {
+  take file
+}
+
+fn make(a: Arena) -> List[u8] in a uses {} {
+  let items: List[u8] in a = [1u8]
+  take items
+}
+
+const FILES: Files = Files(keep: keep)
+
+const BUILD: Build = Build(make: make)
+
+pub fn files(d: Dir, take file: File of d) -> File of d {
+  let ops = FILES
+  ops.keep(d, take file)
+}
+
+pub fn build(a: Arena) -> List[u8] in a {
+  let ops = BUILD
+  ops.make(a)
+}
+
+pub fn main() -> Result[(), ()] {
+  let outcome = arena.bounded(
+    8u64,
+    fn(a: Arena) -> u64 {
+      let ops = BUILD
+      let items = ops.make(a)
+      list.len(items)
+    }
+  )
+  match outcome {
+    Ok(n) => if n == 1u64 {
+      Ok(())
+    } else {
+      Error(())
+    },
+    Error(_) => Error(()),
+  }
+}

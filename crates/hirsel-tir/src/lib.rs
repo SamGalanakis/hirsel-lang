@@ -16,8 +16,9 @@ use hirsel_types::{
 /// v3 adds diverging calls; v4 retains named-entry caller attribution;
 /// v5 adds the order-bearing SortedMap constructor;
 /// v6 adds size actuals to constant reads;
-/// v7 qualifies body binders and origins with their owning definition occurrence.
-pub const TIR_VERSION: u32 = 7;
+/// v7 qualifies body binders and origins with their owning definition occurrence;
+/// v8 retains ordinary generic actuals in declared dictionary constant graphs.
+pub const TIR_VERSION: u32 = 8;
 
 pub mod representation;
 
@@ -708,7 +709,10 @@ pub struct ValueNode {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum ValueKind {
     Constant(Constant),
-    FunctionReference(DefPath),
+    FunctionReference {
+        definition: DefPath,
+        arguments: Vec<hirsel_types::GenericArgument>,
+    },
     Construct {
         constructor: Constructor,
         fields: Vec<ValueNode>,

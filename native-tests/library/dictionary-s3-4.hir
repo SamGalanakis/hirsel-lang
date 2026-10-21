@@ -1,0 +1,5 @@
+// steps: 5000000
+// Published AWS SigV4 vectors use the existing package_s3 Rust test budget.
+pub fn main(t: Test) -> Result[(), s3.S3Error] {
+  vectors.main(t)
+}

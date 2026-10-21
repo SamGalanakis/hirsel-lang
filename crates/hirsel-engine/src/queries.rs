@@ -970,6 +970,7 @@ impl QueryEngine {
             .filter(|old| {
                 from_source(self, old)
                     && hirsel_check_protocol::fact::fact_owner(&old.item.definition).is_none()
+                    && !old.item.definition.0.name.starts_with("$dictionary$")
             })
             .cloned()
             .collect();
@@ -1124,6 +1125,13 @@ impl QueryEngine {
             // Duplicate paths keep one semantic identity and multiple addressable items.
             // Task E diagnoses overloading as LANG-7 at the later definition's name.
             if let Some(helper) = crate::facts::snapshot(new) {
+                affected.insert(helper.item.definition.clone());
+                self.items
+                    .entry(helper.item.definition.clone())
+                    .or_default()
+                    .push(helper);
+            }
+            for helper in crate::dictionaries::literal_snapshots(new) {
                 affected.insert(helper.item.definition.clone());
                 self.items
                     .entry(helper.item.definition.clone())

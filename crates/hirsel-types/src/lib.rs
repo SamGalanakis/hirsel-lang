@@ -1250,3 +1250,37 @@ pub use nominal::*;
 pub mod testing;
 
 mod snapshot;
+
+/// Normalize explicit constant aliases before constructing nominal brand evidence.
+/// Lookup uses signatures only and detects cycles independently of evaluation.
+pub fn constant_identity(
+    mut path: DefPath,
+    read: &mut impl FnMut(DefId) -> Result<SignatureRef, QueryError>,
+) -> Result<DefPath, QueryError> {
+    let mut chain = Vec::new();
+    loop {
+        if chain.contains(&path) {
+            chain.push(path);
+            return Err(QueryError::Diagnostics(vec![
+                hirsel_diag::Diagnostic::error(
+                    const { hirsel_diag::RuleId::of("GEN-6") },
+                    hirsel_span::Span::default(),
+                    format!(
+                        "constant alias cycle: {}",
+                        chain
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" -> ")
+                    ),
+                ),
+            ]));
+        }
+        chain.push(path.clone());
+        let signature = read(DefId::intern(&path))?;
+        match &signature.metadata.constant_alias {
+            Some(target) => path = target.clone(),
+            None => return Ok(path),
+        }
+    }
+}

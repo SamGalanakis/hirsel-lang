@@ -66,7 +66,7 @@ Cost reports (where layer-0 code counts, copies or keeps checks) are tooling.
 | [Ownership and modes](ownership.md): places and loans, locality, uniqueness, once, sendable, passing modes, parts | MODE-1 to MODE-7, OWN-1 to OWN-8 |
 | [Brands and placement](brands.md) | PROV-1 to PROV-5 |
 | [Closures](closures.md), including declared state promises | CLO-1 to CLO-5 |
-| [Generics](generics.md): bounds and dictionaries | GEN-1 to GEN-5 |
+| [Generics](generics.md): bounds and dictionaries | GEN-1 to GEN-6 |
 | [Serialization](serialization.md): schemas and the canonical codec | SER-1, SER-2 |
 | [Memory](memory.md): counting, arenas, regions, layout, flat and packed data, slots | MEM-1 to MEM-14 |
 | [Capabilities and authority](capabilities.md) | CAP-1 to CAP-6 |

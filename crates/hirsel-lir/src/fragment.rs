@@ -93,6 +93,24 @@ impl UnitSummary {
         })
     }
 
+    /// Static callable relocations are ordinary named function references too.
+    /// Retain them in portable summaries, including when cached units have no bodies.
+    pub fn add_static_references(&mut self, statics: &[crate::statics::StaticData]) {
+        for data in statics
+            .iter()
+            .filter(|data| self.glue.statics.contains(&data.symbol))
+        {
+            for function in data.blocks.iter().flat_map(|block| &block.functions) {
+                self.glue
+                    .entries
+                    .insert((function.symbol.definition.clone(), function.symbol.instance));
+                if !self.references.contains(&function.symbol) {
+                    self.references.push(function.symbol.clone());
+                }
+            }
+        }
+    }
+
     /// Every program-local id the summary names, mutably: its FnAbi, then per codec the
     /// plan's layouts and the checks' FnAbis. Literal layouts are walked by `literals`.
     fn for_each_id(

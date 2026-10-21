@@ -39,8 +39,9 @@ explicit comptime result must have a data type, checked statically after ordinar
 type checking, including in unselected generic definitions. Never and recovery
 types do not impose this check; evaluation failures retain CT-1 precedence there.
 Evaluation may create and call callable values internally (closures and function
-references); only the published result must be data. Publishing callable results is
-reserved. Named constants materialize dependency first, with ties broken by stable source
+references); only the published result must be data. Publishing callable evaluation results is
+reserved. Explicit dictionary declarations follow [GEN-6](generics.md#gen-6-dictionary-constants);
+their checked callable references are declared without evaluating callable results. Named constants materialize dependency first, with ties broken by stable source
 path and declaration position, and decode once
 into immutable storage that lives for the whole program, before entry. Reads share that
 value and construct nothing in a noalloc reading frame; startup runs no initializer code.

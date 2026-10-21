@@ -695,6 +695,11 @@ impl<'m, 'a> ProgramEmitter<'m, 'a> {
     /// The static immortal blocks of `data`, exported: block 0 as `static_symbol`, the
     /// blocks it reaches as `<static_symbol>.<index>`, each with its payload.
     fn statics(&mut self, data: &StaticData) -> Glued {
+        data.validate(
+            self.inputs.layouts,
+            u64::from(self.inputs.target.pointer_bytes),
+        )
+        .map_err(|what| CodegenError::Glue { what })?;
         let name = static_symbol(&data.symbol);
         // A block names only blocks after it, so each is emitted after its targets.
         let mut emitted: Vec<Option<Value<'m>>> = vec![None; data.blocks.len()];
@@ -712,6 +717,34 @@ impl<'m, 'a> ProgramEmitter<'m, 'a> {
                 };
                 references.push((r.offset, *target));
             }
+            for function in &block.functions {
+                let symbol = &function.symbol;
+                let thunk = function_thunk_name(&symbol.definition, symbol.instance.as_ref());
+                self.manifested.import(
+                    &thunk,
+                    ObjectSymbolKind::Function,
+                    Some(&symbol.definition),
+                );
+                let code = self.module.function_address(&thunk);
+                let descriptor = self.module.const_int(self.module.int_type(32), 2);
+                let (_, environment) = static_block(
+                    self.module,
+                    self.inputs.target,
+                    "hirsel.env.empty",
+                    descriptor,
+                    1,
+                    &[],
+                    &[],
+                    false,
+                )
+                .map_err(|what| CodegenError::Glue { what })?;
+                references.push((function.offset, code));
+                references.push((
+                    function.offset + u64::from(self.inputs.target.pointer_bytes),
+                    environment,
+                ));
+            }
+            references.sort_by_key(|(offset, _)| *offset);
             self.descriptor_pointer(block.layout)?;
             self.descriptor_word(block.layout)?;
             let descriptor = self.const_u32(self.index(block.layout)?);

@@ -362,6 +362,20 @@ impl Collector<'_> {
         let mut todo = vec![&value.root];
         while let Some(node) = todo.pop() {
             roots.push(node.ty);
+            if let hirsel_tir::ValueKind::FunctionReference {
+                definition,
+                arguments,
+            } = &node.kind
+            {
+                let edge = Edge {
+                    owner,
+                    owner_binder: None,
+                    site,
+                    kind: InstanceKind::Reference,
+                };
+                self.push(&edge, definition, arguments);
+                roots.extend(type_arguments(arguments));
+            }
             if let hirsel_tir::ValueKind::Construct { fields, .. } = &node.kind {
                 todo.extend(fields);
             }

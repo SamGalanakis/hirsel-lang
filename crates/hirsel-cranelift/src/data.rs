@@ -370,6 +370,30 @@ impl Emitter<'_> {
         exported: bool,
         definition: &DefPath,
     ) -> Emitted<StaticBlock> {
+        self.static_block_functions(
+            name,
+            descriptor,
+            align,
+            bytes,
+            references,
+            &[],
+            exported,
+            definition,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn static_block_functions(
+        &mut self,
+        name: &str,
+        descriptor: u32,
+        align: u32,
+        bytes: &[u8],
+        references: &[(u64, StaticBlock)],
+        functions: &[hirsel_lir::statics::StaticFunction],
+        exported: bool,
+        definition: &DefPath,
+    ) -> Emitted<StaticBlock> {
         let physical = align.max(8);
         let start = match align_up(IMMORTAL_PREFIX_BYTES, u64::from(physical)) {
             Ok(n) => n,
@@ -412,6 +436,36 @@ impl Emitter<'_> {
                 .module
                 .declare_data_in_data(target.data, &mut description);
             description.write_data_addr((start + offset) as u32, gv, target.header as i64);
+        }
+        if !functions.is_empty() {
+            let environment = self.empty_environment(definition)?;
+            for function in functions {
+                if function.offset + 2 * word > bytes.len() as u64 {
+                    return Self::invalid_at(definition, "a static callable outside its block");
+                }
+                let symbol = &function.symbol;
+                let thunk = hirsel_lir::emission::function_thunk_name(
+                    &symbol.definition,
+                    symbol.instance.as_ref(),
+                );
+                self.manifested.import(
+                    &thunk,
+                    hirsel_lir::stage::ObjectSymbolKind::Function,
+                    Some(&symbol.definition),
+                );
+                let signature = self.module.make_signature();
+                let target = self.import_function(&thunk, &signature)?;
+                let code = self.module.declare_func_in_data(target, &mut description);
+                description.write_function_addr((start + function.offset) as u32, code);
+                let env = self
+                    .module
+                    .declare_data_in_data(environment.data, &mut description);
+                description.write_data_addr(
+                    (start + function.offset + word) as u32,
+                    env,
+                    environment.header as i64,
+                );
+            }
         }
         self.define_data(name, id, &description)?;
         Ok(StaticBlock { data: id, header })

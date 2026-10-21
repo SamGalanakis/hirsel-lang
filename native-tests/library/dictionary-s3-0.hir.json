@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "dictionary-s3-0.hir",
+      "module": []
+    },
+    {
+      "path": "../../packages/s3@1/tests/aws-0.hir",
+      "module": [
+        "vectors"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../packages/s3@1/hirsel.json",
+      "package": {
+        "name": "s3",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

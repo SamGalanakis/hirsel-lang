@@ -407,7 +407,7 @@ pub fn lower_cached(
         .into_iter()
         .map(|u| u.expect("every instance lowered or bound"))
         .collect();
-    let statics = statics(program, &units, &mut layouts)?;
+    let statics = statics(program, &instances, &units, &mut layouts)?;
     // Units name the table by digest: seal them once no layout is added.
     // The block header is the layout of a reuse token, which a
     // later stage creates after sealing.
@@ -475,6 +475,7 @@ pub fn nullary_variant() -> DefPath {
 /// each boxed nullary variant (its tag, at its payload layout).
 fn statics(
     program: &Program,
+    instances: &Instances,
     units: &[LirUnit<Value>],
     layouts: &mut LayoutBuilder<'_>,
 ) -> Result<Vec<hirsel_lir::statics::StaticData>, LowerError> {
@@ -545,7 +546,40 @@ fn statics(
                     "a constant without a materialized value".into(),
                 )));
             };
-            crate::statics::encode(layouts, &program.types, symbol, value).map_err(static_error)
+            crate::statics::encode_functions(
+                layouts,
+                &program.types,
+                symbol,
+                value,
+                &mut |path, arguments| {
+                    let actuals = Actuals {
+                        binder: program.binders.get(path).copied(),
+                        arguments: arguments.to_vec(),
+                        outer: vec![],
+                    };
+                    let id = instances
+                        .find(program, path, &actuals)
+                        .or_else(|error| {
+                            if arguments.is_empty() {
+                                instances
+                                    .ids()
+                                    .find(|id| instances.view(*id).definition.path.path() == path)
+                                    .ok_or(error)
+                            } else {
+                                Err(error)
+                            }
+                        })
+                        .map_err(|e| {
+                            crate::statics::StaticError(format!("static callable instance: {e:?}"))
+                        })?;
+                    Ok(Symbol {
+                        kind: SymbolKind::Function,
+                        definition: path.clone(),
+                        instance: Some(instances.view(id).key.digest()),
+                    })
+                },
+            )
+            .map_err(static_error)
         }))
         .collect()
 }

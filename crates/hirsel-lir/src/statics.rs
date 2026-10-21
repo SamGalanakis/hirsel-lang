@@ -31,6 +31,81 @@ pub struct StaticData {
 }
 
 impl StaticData {
+    /// Validate relocation cells before a backend or the checked heap installs them.
+    pub fn validate(
+        &self,
+        layouts: &crate::layout_types::LayoutTable,
+        word: u64,
+    ) -> Result<(), String> {
+        for (index, block) in self.blocks.iter().enumerate() {
+            let layout = layouts.layout(block.layout).ok_or("static block layout")?;
+            if let crate::layout_types::SizeSpec::Fixed(size) = layout.size
+                && size != block.bytes.len() as u64
+            {
+                return Err("static block extent".into());
+            }
+            let mut callable_offsets = std::collections::BTreeSet::new();
+            let mut pending = vec![(block.layout, 0u64)];
+            while let Some((layout, offset)) = pending.pop() {
+                let row = layouts.layout(layout).ok_or("static field layout")?;
+                if matches!(row.kind, crate::layout_types::LayoutKind::Callable { .. }) {
+                    callable_offsets.insert(offset);
+                } else if matches!(row.kind, crate::layout_types::LayoutKind::Aggregate) {
+                    for field in &row.fields {
+                        pending.push((
+                            field.layout,
+                            offset
+                                .checked_add(field.offset)
+                                .ok_or("static field overflow")?,
+                        ));
+                    }
+                }
+            }
+            let mut occupied = std::collections::BTreeSet::new();
+            let mut cell = |offset: u64| -> Result<(), String> {
+                let end = offset
+                    .checked_add(word)
+                    .ok_or("static relocation overflow")?;
+                if end > block.bytes.len() as u64
+                    || offset % word != 0
+                    || (offset..end).any(|at| !occupied.insert(at))
+                    || block.bytes[offset as usize..end as usize]
+                        .iter()
+                        .any(|b| *b != 0)
+                {
+                    return Err("invalid or overlapping static relocation".into());
+                }
+                Ok(())
+            };
+            for reference in &block.references {
+                if reference.target as usize <= index
+                    || reference.target as usize >= self.blocks.len()
+                {
+                    return Err("static reference must name a later block".into());
+                }
+                cell(reference.offset)?;
+            }
+            for function in &block.functions {
+                if function.symbol.kind != crate::ir::SymbolKind::Function
+                    || !callable_offsets.remove(&function.offset)
+                {
+                    return Err("static callable must name a function".into());
+                }
+                cell(function.offset)?;
+                cell(
+                    function
+                        .offset
+                        .checked_add(word)
+                        .ok_or("static callable overflow")?,
+                )?;
+            }
+            if !callable_offsets.is_empty() {
+                return Err("missing static callable relocation".into());
+            }
+        }
+        Ok(())
+    }
+
     /// A constant of one pointer-free block of `layout`.
     pub fn plain(symbol: Symbol, layout: LayoutId, bytes: Vec<u8>) -> Self {
         Self {
@@ -39,6 +114,7 @@ impl StaticData {
                 layout,
                 bytes,
                 references: Vec::new(),
+                functions: Vec::new(),
             }],
         }
     }
@@ -52,6 +128,30 @@ pub struct StaticBlock {
     pub layout: LayoutId,
     pub bytes: Vec<u8>,
     pub references: Vec<StaticReference>,
+    /// Named callable code cells, each followed by an immortal empty environment.
+    pub functions: Vec<StaticFunction>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StaticFunction {
+    pub offset: u64,
+    pub symbol: Symbol,
+}
+
+impl Snapshot for StaticFunction {
+    fn write(&self, w: &mut Writer) {
+        w.open("function");
+        w.uint(u128::from(self.offset));
+        self.symbol.write(w);
+        w.close();
+    }
+    fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        r.open("function")?;
+        let offset = u64::try_from(r.uint()?).map_err(|_| r.error("function offset"))?;
+        let symbol = Symbol::read(r)?;
+        r.close()?;
+        Ok(Self { offset, symbol })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,6 +182,7 @@ impl Snapshot for StaticBlock {
         self.layout.write(w);
         w.bytes(&self.bytes);
         self.references.write(w);
+        self.functions.write(w);
         w.close();
     }
     fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
@@ -90,6 +191,7 @@ impl Snapshot for StaticBlock {
             layout: LayoutId::read(r)?,
             bytes: r.bytes()?,
             references: Vec::read(r)?,
+            functions: Vec::read(r)?,
         };
         r.close()?;
         Ok(block)
@@ -173,6 +275,7 @@ pub fn constant_slots<'a, S>(
             && let Some(data) = statics.iter().find(|d| d.symbol == *symbol)
             && let [block] = data.blocks.as_slice()
             && block.references.is_empty()
+            && block.functions.is_empty()
             && let Some(slot) = statics_of.get_mut(result.index())
         {
             *slot = Some(block);

@@ -2,7 +2,7 @@
 // expect: run
 // RFC 7914 section 11: PBKDF2-HMAC-SHA-256, 1 iteration, 64 bytes.
 pub fn main() -> Result[(), ()] {
-  let key = std@1/pbkdf2.derive(std@1/sha256.hash(), b"passwd", b"salt", 1, 64)
+  let key = std@1/pbkdf2.derive(std@1/sha256.hash, b"passwd", b"salt", 1, 64)
   failure.check(
     std@1/hex.encode(key) == "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783",
     TextInvariant()

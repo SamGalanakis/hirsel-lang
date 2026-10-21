@@ -588,6 +588,17 @@ fn normalize_inner(
         }
     };
     n.finish_drop_summaries(&mut kind);
+    let constant_alias = match &item.kind {
+        ast::ItemKind::Const { value, .. } => {
+            match &input.syntax.tree.expressions[value.0 as usize].kind {
+                ast::ExprKind::Path(path) if matches!(&kind, SignatureKind::Const { ty, .. } if !n.satisfies(*ty, Bound::Data)) => {
+                    Some(n.definition(path, None)?)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
     let dependencies = n.ordered_dependencies();
     let owner = match &kind {
         SignatureKind::Type(declaration) => n.own_representation.map(|root| OwnerRepresentation {
@@ -602,6 +613,7 @@ fn normalize_inner(
     };
     let mut signature = Signature {
         metadata: SignatureMetadata {
+            constant_alias,
             track_caller: attrs.track_caller,
             visibility: item.visibility,
             alias: item.visibility != ast::Visibility::PublicOpaque
@@ -2055,7 +2067,9 @@ impl Normalizer<'_, '_> {
         } else if let Some((parameter, _)) = self.parameter(&name) {
             OriginRoot::Parameter(parameter)
         } else {
-            let d = self.definition(p, None)?;
+            let d = hirsel_types::constant_identity(self.definition(p, None)?, &mut |id| {
+                self.snapshot(id)
+            })?;
             return Ok((
                 Origin {
                     root: OriginRoot::Definition(d),

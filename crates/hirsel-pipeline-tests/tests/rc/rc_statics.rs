@@ -42,6 +42,38 @@ fn a_scalar_constant_is_one_block_of_its_bytes() {
 }
 
 #[test]
+fn dictionary_statics_relocate_named_callable_instances_and_reject_bad_cells() {
+    let (_, lowered) = lower(
+        "type Op { run: fn(u64) -> u64 uses {}, labels: List[String] }\n\
+         fn identity[T: plain](value: T) -> T uses {} { value }\n\
+         const OP: Op = Op(run: identity, labels: [\"one\", \"two\"])\n\
+         fn main() -> u64 { let op = OP; op.run(list.len(op.labels)) }",
+    );
+    let data = only(&lowered, "OP");
+    data.validate(&lowered.table, 8).unwrap();
+    let code = &data.blocks[0].functions;
+    assert_eq!(code.len(), 1);
+    assert_eq!(code[0].symbol.definition.0.name, "identity");
+    assert!(code[0].symbol.instance.is_some());
+    assert!(
+        data.blocks.len() > 1,
+        "non-scalar data remains immutable static blocks"
+    );
+    let encoded = hirsel_codec::to_text(&data);
+    let decoded: StaticData = hirsel_codec::from_text(&encoded).unwrap();
+    assert_eq!(decoded, data);
+    let mut forged = data.clone();
+    forged.blocks[0].functions[0].offset += 1;
+    assert!(forged.validate(&lowered.table, 8).is_err());
+    let mut forged = data.clone();
+    forged.blocks[0].functions.push(code[0].clone());
+    assert!(forged.validate(&lowered.table, 8).is_err());
+    let mut forged = data;
+    forged.blocks[0].functions.clear();
+    assert!(forged.validate(&lowered.table, 8).is_err());
+}
+
+#[test]
 fn a_constant_reaches_its_list_and_byte_blocks_through_reference_cells() {
     let (_, lowered) = lower(
         "type R {\n  xs: List[Bytes],\n}\nconst C: R = R(xs: [b\"x\", b\"yz\"])\nfn main() -> u64 { let built = copy (C).xs\n list.len(built) }",

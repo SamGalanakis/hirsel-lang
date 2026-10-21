@@ -1058,3 +1058,58 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   Ok(())
 }
 ";
+
+#[test]
+fn dictionary_literals_and_copied_fields_survive_package_images() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let library = "pub type Op { run: fn(u64) -> u64 uses {} }\n\
+            pub const OP: Op = Op(run: fn(value:u64) uses {} { value + 1 })\n\
+            pub const COPY: Op = Op(run: (OP).run)\n";
+        let client_source = "pub fn main() -> Result[(), ()] { let op = lib.COPY; failure.check(op.run(8) == 9, Arithmetic()); Ok(()) }\n";
+        let manifest = f.library(library);
+        let client = f.program("client", client_source, &manifest, "lib");
+        let mut fresh = load(&client, &StdImages::none());
+        let bytes = image(&f, &mut fresh, "lib").unwrap();
+        let images = StdImages::of(vec![StdImage::from_bytes(bytes).unwrap()]);
+        let mut imaged = load(&client, &images);
+        assert!(imaged.engine.imaged(&package("lib")));
+        fresh.check_for_execution().unwrap();
+        imaged.check_for_execution().unwrap();
+        assert_eq!(
+            fresh
+                .engine
+                .semantic_program_revision(&fresh.entry)
+                .unwrap(),
+            imaged
+                .engine
+                .semantic_program_revision(&imaged.entry)
+                .unwrap()
+        );
+        for program in [&mut fresh, &mut imaged] {
+            program.engine.closure_assertions = true;
+            let execution = run_observed_snapshot(
+                &mut program.engine,
+                &RunConfiguration {
+                    entry: program.entry.clone(),
+                    hash_seed: 0,
+                    inputs: vec![],
+                },
+                SimulationConfig::default(),
+            )
+            .unwrap();
+            assert!(
+                matches!(
+                    execution.outcome,
+                    Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+                ),
+                "{:?}",
+                execution.outcome
+            );
+            let exported = program.engine.export_tir(&program.entry).unwrap();
+            program.engine.import_tir(&exported).unwrap();
+            let input = program.engine.export_native_input().unwrap();
+            program.engine.import_native_input(input).unwrap();
+        }
+    });
+}

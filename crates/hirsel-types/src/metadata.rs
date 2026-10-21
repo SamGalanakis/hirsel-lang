@@ -45,6 +45,8 @@ pub struct Metadata {
 pub struct SignatureMetadata {
     pub visibility: ast::Visibility,
     pub alias: bool,
+    /// Explicit GEN-6 constant alias edge; consumers normalize terminal identity.
+    pub constant_alias: Option<ast::DefPath>,
     /// Caller attribution is a declaration property, not part of a function value type.
     pub track_caller: bool,
     pub unsafe_ffi: bool,
@@ -64,6 +66,7 @@ impl Default for SignatureMetadata {
         Self {
             visibility: ast::Visibility::Private,
             alias: false,
+            constant_alias: None,
             track_caller: false,
             unsafe_ffi: false,
             wrapper: None,

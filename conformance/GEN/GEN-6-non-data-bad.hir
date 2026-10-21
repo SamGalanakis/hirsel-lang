@@ -1,0 +1,13 @@
+// rule: GEN-6
+// expect: reject GEN-6 at line 13
+// twin: GEN/GEN-6-constants-run.hir
+type Op {
+  run: fn(u64) -> u64 uses {},
+  state: Shared[u64],
+}
+
+fn identity(value: u64) -> u64 uses {} {
+  value
+}
+
+const OP: Op = Op(run: identity, state: shared.freeze(7u64))

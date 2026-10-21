@@ -370,6 +370,10 @@ pub(crate) fn lower(
                         program.keys,
                         program.emit.manifest,
                     )
+                    .map(|mut summary| {
+                        summary.add_static_references(program.emit.statics);
+                        summary
+                    })
                     .map_err(|e| NativeError::of(StageName::Emission, definition, e))
                 };
                 let calls = if program.capture_plan {

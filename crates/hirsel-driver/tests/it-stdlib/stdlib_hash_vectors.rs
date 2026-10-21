@@ -131,7 +131,7 @@ fn hmac_case(row: &Value, module: &str, id: String) -> Case {
     let hash = if module == "md5" {
         "std@1/digest.Hash(new: std@1/md5.new, update: std@1/md5.update, finish: std@1/md5.finish, block_size: 64)".into()
     } else {
-        format!("std@1/{module}.hash()")
+        format!("std@1/{module}.hash")
     };
     let mut body = format!(
         "let actual = std@1/bytes.from_inline(std@1/hmac.mac({hash}, {key}, {msg}))\n\
@@ -212,7 +212,7 @@ fn pbkdf2_case(module: &str, row: &Value, id: String) -> Case {
     Case {
         id,
         body: format!(
-            "core@1/test.check(t, std@1/pbkdf2.derive(std@1/{module}.hash(), {}, {}, {}u64, {}u64) == {})",
+            "core@1/test.check(t, std@1/pbkdf2.derive(std@1/{module}.hash, {}, {}, {}u64, {}u64) == {})",
             bytes(field(row, "password")),
             bytes(field(row, "salt")),
             row["iterationCount"].as_u64().unwrap(),

@@ -1,0 +1,12 @@
+// rule: GEN-6
+// expect: reject CLO-4 at line 12
+// twin: GEN/GEN-6-literal-run.hir
+type Op {
+  run: fn(out: Stdout) -> () uses {},
+}
+
+fn emit(out: Stdout) -> () uses {out} {
+  ()
+}
+
+const OP: Op = Op(run: emit)

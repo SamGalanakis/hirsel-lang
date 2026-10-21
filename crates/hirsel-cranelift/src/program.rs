@@ -215,6 +215,14 @@ impl Emitter<'_> {
     /// blocks it reaches private beside it.
     fn statics(&mut self, data: &StaticData) -> Emitted {
         let definition = glue_definition();
+        data.validate(
+            self.inputs.layouts,
+            u64::from(self.inputs.target.pointer_bytes),
+        )
+        .map_err(|what| CodegenError::Invalid {
+            definition: glue_definition(),
+            what,
+        })?;
         let name = static_symbol(&data.symbol);
         let invalid = |what: &str| CodegenError::Invalid {
             definition: glue_definition(),
@@ -246,12 +254,13 @@ impl Emitter<'_> {
                 0 => name.clone(),
                 _ => format!("{name}.{index}"),
             };
-            emitted[index] = Some(self.static_block(
+            emitted[index] = Some(self.static_block_functions(
                 &block_name,
                 descriptor,
                 record.align,
                 &block.bytes,
                 &references,
+                &block.functions,
                 index == 0,
                 &definition,
             )?);

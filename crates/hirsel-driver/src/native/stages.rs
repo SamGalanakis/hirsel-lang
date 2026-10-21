@@ -355,6 +355,7 @@ impl ReadyProgram {
             &self.keys,
             &self.manifest,
         )?;
+        self.summaries[index].add_static_references(&self.statics);
         self.units[index] = unit;
         Ok(())
     }
@@ -671,6 +672,10 @@ pub fn build_program(
         .iter()
         .map(|u| {
             hirsel_lir::fragment::UnitSummary::of(u.unit(), &lowered.table, &keys, &manifest)
+                .map(|mut summary| {
+                    summary.add_static_references(&statics);
+                    summary
+                })
                 .map_err(|e| NativeError::of(StageName::Emission, &u.unit().header.definition, e))
         })
         .collect::<Result<_, _>>()?;

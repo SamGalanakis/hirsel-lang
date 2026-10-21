@@ -585,41 +585,10 @@ impl Importer<'_> {
                 };
                 let instance = hirsel_tir::constant_instance_path(definition, &values);
                 let definition = &instance;
-                if let Some(value) = self.program.constants.get(definition)
-                    && let tir::ValueKind::Construct {
-                        constructor: tir::Constructor::Record(record),
-                        fields,
-                    } = &value.root.kind
-                    && *record == hirsel_syntax::DefPath::core("Order")
-                    && let [field] = fields.as_slice()
-                    && let tir::ValueKind::FunctionReference(function) = &field.kind
-                    && crate::library::body_index(function).is_some()
-                {
-                    let value = value.clone();
-                    let tir::ValueKind::Construct { fields, .. } = &value.root.kind else {
-                        unreachable!()
-                    };
-                    let callable = self.layout(fields[0].ty)?;
-                    let callable = self.intern(callable);
-                    let (symbol, _) = self.direct(function, &[])?;
-                    let compare = self.fresh(callable);
-                    self.push(Inst::FunctionRef {
-                        result: compare,
-                        symbol,
-                    });
-                    let record = self.symbol(SymbolKind::Type, record, None);
-                    self.construct_inline(
-                        self.layout_of(ty),
-                        self.layout_of(ty),
-                        ConstructorKind::Record(record),
-                        &[compare],
-                    )?
-                } else {
-                    let symbol = self.symbol(SymbolKind::Constant, definition, None);
-                    let result = self.fresh(ty);
-                    self.push(Inst::ReadStatic { result, symbol });
-                    result
-                }
+                let symbol = self.symbol(SymbolKind::Constant, definition, None);
+                let result = self.fresh(ty);
+                self.push(Inst::ReadStatic { result, symbol });
+                result
             }
             V::FunctionReference {
                 definition,

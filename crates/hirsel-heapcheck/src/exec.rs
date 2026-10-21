@@ -5708,6 +5708,16 @@ impl<'p, S: Stage> Machine<'p, S> {
                     .put_cell(r.offset, word, cell);
             }
         }
+        for (block, at) in data.blocks.iter().zip(&blocks) {
+            for function in &block.functions {
+                let code = self.program.function(&function.symbol)?;
+                self.ledger.get_mut(at.alloc).extent.put_cell(
+                    function.offset,
+                    self.word,
+                    Cell::Code(Some(code)),
+                );
+            }
+        }
         for (block, &at) in data.blocks.iter().zip(&blocks) {
             if let LayoutKind::SoaColumns { element } = self.record(block.layout)?.kind {
                 self.clear_column_spare(at, element)?;

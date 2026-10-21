@@ -5052,7 +5052,19 @@ impl Checker<'_> {
                         Rvalue::ReadConstant { definition, .. }
                         | Rvalue::FunctionReference { definition, .. } => {
                             BTreeSet::from([Origin {
-                                root: OriginRoot::Definition(definition.clone()),
+                                root: OriginRoot::Definition(
+                                    hirsel_types::constant_identity(
+                                        definition.clone(),
+                                        &mut |id| {
+                                            self.signatures
+                                                .get(id.path())
+                                                .cloned()
+                                                .map(std::sync::Arc::new)
+                                                .ok_or(hirsel_types::QueryError::NotImplemented)
+                                        },
+                                    )
+                                    .unwrap_or_else(|_| definition.clone()),
+                                ),
                                 fields: vec![].into(),
                             }])
                         }

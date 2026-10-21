@@ -1536,6 +1536,9 @@ impl Checker<'_> {
                 Some(b.ty),
             )
         } else if let Some(ResolvedName::Definition(d)) = resolved {
+            let d = hirsel_types::constant_identity(d, &mut |id| self.reader.borrow_mut().read(id))
+                .ok()?;
+            self.record_reads();
             // The resolved definition is the whole path, module segments
             // included: a definition origin has no fields (PROV-1).
             return Some((
