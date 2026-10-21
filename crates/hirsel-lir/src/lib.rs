@@ -51,7 +51,7 @@ pub use stage::{
 /// The front-end interface version these schemas consume
 /// (`QueryEnvironment.interface_version`). A change invalidates every artifact.
 pub const INTERFACE_VERSION: u32 = 11;
-pub const LIR_VERSION: u32 = 48;
+pub const LIR_VERSION: u32 = 49;
 pub const LAYOUT_VERSION: u32 = 8;
 /// Hirsel cross-unit ABI v3: scalar register results are (value, status).
 pub const ABI_VERSION: u32 = 3;
