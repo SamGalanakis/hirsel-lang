@@ -638,7 +638,11 @@ impl Scheduler {
             .is_some_and(|t| matches!(self.task(t).state, State::Holding | State::Done))
     }
     fn vacate_task(&mut self, index: u32) {
-        let mut task = self.tasks[index as usize]
+        drop(self.retire_task(index));
+    }
+    /// Detach the row without destroying owned storage in a recording section.
+    fn retire_task(&mut self, index: u32) -> Task {
+        let task = self.tasks[index as usize]
             .take()
             .unwrap_or_else(|| fault("a task completed twice"));
         if task.stack.is_some() {
@@ -653,7 +657,7 @@ impl Scheduler {
             if let Some(&moved) = children.get(pos) {
                 self.task(moved).parent = Some((parent, pos));
             }
-            for child in std::mem::take(&mut task.children) {
+            for &child in &task.children {
                 let pos = self.task(parent).children.len();
                 self.task(child).parent = Some((parent, pos));
                 self.task(parent).children.push(child);
@@ -665,6 +669,7 @@ impl Scheduler {
             );
         }
         self.vacant_tasks.push(index);
+        task
     }
 
     fn link_child(&mut self, parent: u32, child: u32) {
@@ -2623,6 +2628,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
             crate::stop::check(
                 ctx,
                 ordered::lifecycle::join(ctx, scope, task, slot, size, caller_site),
+            )
+        };
+    }
+    if free::enabled(ctx) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                free::lifecycle::join(ctx, scope.read(), task.read(), slot, size, caller_site),
             )
         };
     }

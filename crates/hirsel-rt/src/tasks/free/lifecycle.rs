@@ -4,6 +4,84 @@
 use super::super::*;
 
 /// # Safety
+/// As for TaskJoin: handles are live and slot is this owner's None image.
+pub(crate) unsafe fn join(
+    ctx: *mut TaskCtx,
+    scope: u64,
+    task: u64,
+    slot: *mut u8,
+    size: u64,
+    caller_site: u64,
+) -> Stopped<u8> {
+    super::record::begin(ctx);
+    let s = scheduler(ctx);
+    let scope = s.scope_handle(scope);
+    let child = s.task_handle(task, scope);
+    let state = if readiness::saved(s, child) {
+        s.task(child).state
+    } else {
+        State::Parked
+    };
+    match state {
+        State::Done => {}
+        State::Holding => {
+            super::record::publish(ctx, Phase::Entered, |_| ())?;
+            let held = scheduler(ctx)
+                .task(child)
+                .slot
+                .take()
+                .expect("a saved held result");
+            unsafe {
+                deliver(held, slot, size);
+                hand_off(&mut *ctx, child);
+            }
+        }
+        State::Ready | State::Parked => {
+            super::record::publish(ctx, Phase::Entered, |_| ())?;
+            unsafe {
+                try_block(
+                    &mut *ctx,
+                    Wait::Join { child, slot, size },
+                    false,
+                    caller_site,
+                )
+            }?;
+            if scheduler(ctx).task(child).state == State::Holding {
+                // The saved-frame poll moved the result. Only its owner
+                // resumes the rest, outside the recorder section.
+                unsafe { hand_off(&mut *ctx, child) };
+            }
+        }
+    }
+    let s = scheduler(ctx) as *mut Scheduler;
+    unsafe {
+        assert_eq!((*s).task(child).state, State::Done);
+        assert!(readiness::saved(&*s, child));
+        (*s).vacant_tasks.reserve(1);
+        let row = (*s).task(child);
+        if let Some((parent, _)) = row.parent {
+            let children = row.children.len();
+            (*s).task(parent).children.reserve(children);
+        }
+    }
+    let (retired, chain) = super::record::publish(ctx, Phase::Done, |_| unsafe {
+        let s = &mut *s;
+        let chain = s.task(child).failure.take();
+        s.scope(scope).children.retain(|&id| id != child);
+        (s.retire_task(child), chain)
+    })?;
+    drop(retired);
+    let status = if let Some(chain) = chain {
+        unsafe { (*ctx).failure.append_chain(chain) };
+        STATUS_FAILURE
+    } else {
+        STATUS_OK
+    };
+    unsafe { try_yield(&mut *ctx) }?;
+    Ok(status)
+}
+
+/// # Safety
 /// As for TaskFinish: the current child's result slot remains live at save.
 pub(crate) unsafe fn finish(
     ctx: *mut TaskCtx,
@@ -232,16 +310,64 @@ mod tests {
 
     #[test]
     fn a_holding_native_result_has_published_its_end_before_its_saved_image_is_observed() {
-        unsafe extern "C" fn result(ctx: *mut TaskCtx, _: *mut Header, _: u64, _: u64) -> u8 {
+        #[derive(Default)]
+        struct Rest {
+            started: std::sync::atomic::AtomicBool,
+            resume: std::sync::atomic::AtomicBool,
+        }
+        unsafe extern "C" fn result(
+            ctx: *mut TaskCtx,
+            environment: *mut Header,
+            _: u64,
+            _: u64,
+        ) -> u8 {
+            let rest = unsafe {
+                Box::from_raw(
+                    environment
+                        .add(1)
+                        .cast::<*mut std::sync::Arc<Rest>>()
+                        .read(),
+                )
+            };
             let mut image = [1u64, 99];
             let none = [0u64; 2];
-            unsafe {
+            let status = unsafe {
                 hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16)
+            };
+            assert_eq!(image, none);
+            rest.started.store(true, Ordering::Release);
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !rest.resume.load(Ordering::Acquire) {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "the rest's cut must finish"
+                );
+                std::thread::yield_now();
             }
+            status
         }
         let recording = record::Recording::new(b"native holding end", false);
         let install = recording.clone();
         let cutter = recording.clone();
+        let rest = std::sync::Arc::new(Rest::default());
+        let watched = rest.clone();
+        let in_call = recording.clone();
+        let observer = std::thread::spawn(move || {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !watched.started.load(Ordering::Acquire) {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "the joined rest must start"
+                );
+                std::thread::yield_now();
+            }
+            let cut = in_call.recorder.flush().unwrap().unwrap();
+            assert_eq!(
+                cut.progress[&Vec::new()],
+                hirsel_free::phase::Progress::new(3, Phase::Entered)
+            );
+            watched.resume.store(true, Ordering::Release);
+        });
         let layout = crate::Layout {
             magic: crate::LAYOUT_MAGIC,
             version: crate::LAYOUT_VERSION,
@@ -273,6 +399,10 @@ mod tests {
                 hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
                 let environment =
                     crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+                environment
+                    .add(1)
+                    .cast::<*mut std::sync::Arc<Rest>>()
+                    .write(Box::into_raw(Box::new(rest.clone())));
                 let mut child = 0;
                 hirsel_rt_v2_task_spawn(
                     ctx,
@@ -306,18 +436,26 @@ mod tests {
                     cut.progress[&vec![0]],
                     hirsel_free::phase::Progress::new(1, Phase::Done)
                 );
-                // This admission fixture resumes the rest directly. General
-                // recorded join/call boundaries are a separate integration.
-                let _role = role::Guard::new(ctx);
-                let held = scheduler(ctx).task(id).slot.take().unwrap();
                 let mut out = [0u64; 2];
-                deliver(held, out.as_mut_ptr().cast(), 16);
+                assert_eq!(
+                    hirsel_rt_v2_task_join(
+                        ctx,
+                        0,
+                        0,
+                        &scope,
+                        &mut child,
+                        out.as_mut_ptr().cast(),
+                        16
+                    ),
+                    STATUS_OK
+                );
                 assert_eq!(out, [1, 99]);
-                hand_off(&mut *ctx, id);
-                assert_eq!(scheduler(ctx).task(id).state, State::Done);
+                let _role = role::Guard::new(ctx);
+                assert!(scheduler(ctx).tasks[id as usize].is_none());
                 STATUS_OK
             },
         );
+        observer.join().unwrap();
         assert_eq!(outcome.ended, Ok(STATUS_OK));
         assert_eq!(outcome.pending, 0);
         let cut = recording
@@ -330,6 +468,45 @@ mod tests {
             cut.progress[&vec![0]],
             hirsel_free::phase::Progress::new(1, Phase::Done)
         );
+        let trace = recording.trace();
+        let marked = std::sync::Arc::try_unwrap(recording)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink();
+        for end in marked.marks {
+            let bytes = &marked.bytes[..end];
+            let tape = hirsel_free::tape::parse(bytes).unwrap();
+            let mut replay = hirsel_free::session::Session::replay(bytes).unwrap();
+            assert!(replay.start(&[]));
+            assert!(replay.start(&[0]));
+            for _ in 0..2 {
+                replay.begin(&[]);
+                replay.publish(&[], Phase::Done).unwrap();
+            }
+            replay.begin(&[0]);
+            replay.publish(&[0], Phase::Entered).unwrap();
+            replay.publish(&[0], Phase::Done).unwrap();
+            if tape.cut[&Vec::new()].op == 3 {
+                replay.begin(&[]);
+                replay.publish(&[], Phase::Entered).unwrap();
+                if tape.cut[&Vec::new()].phase == Phase::Done {
+                    replay.publish(&[], Phase::Done).unwrap();
+                }
+            }
+            assert_eq!(
+                replay.finish().unwrap(),
+                hirsel_free::projection::Projection::new(
+                    if end == marked.bytes.len() {
+                        "returned"
+                    } else {
+                        "truncated"
+                    },
+                    &tape.cut,
+                    &trace
+                )
+            );
+        }
     }
 
     #[test]
