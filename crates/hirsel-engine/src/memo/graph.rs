@@ -231,8 +231,15 @@ impl MemoGraph {
 
     fn mark(&mut self, key: MemoKey, why: Invalidation) {
         self.stats.touched += 1;
-        if self.dirty.contains_key(&key) {
-            return;
+        // A text mark outranks a read mark: a read-marked memo is deep-verified
+        // and may be kept, but one whose own items changed is recomputed. A
+        // change set marks its reads first, so the text mark must replace one.
+        match (self.dirty.get(&key), why) {
+            (Some(Invalidation::Text), _)
+            | (Some(Invalidation::Read(_)), Invalidation::Read(_)) => {
+                return;
+            }
+            _ => {}
         }
         self.dirty.insert(key, why);
         match why {
@@ -412,6 +419,33 @@ mod tests {
     }
     fn reads(list: &[(ReadKey, &str)]) -> Arc<Reads> {
         Arc::new(Reads::from_vec(list.iter().map(|(k, v)| (*k, h(v))).collect()).unwrap())
+    }
+
+    /// A memo both reading a changed candidate list and owning a replaced item
+    /// is recomputed: the text mark replaces the read mark the change set made
+    /// first, so deep verification cannot keep spans at the old item's anchor.
+    #[test]
+    fn a_text_mark_outranks_a_read_mark_in_one_change_set() {
+        let mut graph = MemoGraph::default();
+        let a = def("a");
+        let key = MemoKey::new(QueryKind::Lower, a);
+        let memo = graph.insert::<()>(
+            key,
+            h("a body"),
+            Ok(Arc::new(())),
+            reads(&[(ReadKey::DeclarationCandidates(a), "one")]),
+            Durability::Low,
+            false,
+        );
+        let mut moved = ChangeSet::default();
+        moved.read(ReadKey::DeclarationCandidates(a), Durability::Low);
+        moved.text(a, Durability::Low);
+        graph.apply(&moved);
+        assert_eq!(graph.check(&memo), Verdict::Dirty(Invalidation::Text));
+        let mut again = ChangeSet::default();
+        again.read(ReadKey::DeclarationCandidates(a), Durability::Low);
+        graph.apply(&again);
+        assert_eq!(graph.check(&memo), Verdict::Dirty(Invalidation::Text));
     }
 
     /// A chain of 1000 callers of `callee`, plus 1000 unrelated memos. A body

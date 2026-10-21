@@ -415,9 +415,12 @@ impl QueryEngine {
         match self.graph.check(&entry.memo) {
             Verdict::Valid => true,
             Verdict::Missing => false,
+            // The definition's own items changed: an item replaced rather than
+            // moved has a new anchor, which the cached spans do not name.
+            Verdict::Dirty(crate::memo::Invalidation::Text) => false,
             // The definition's own text is compared above; its other inputs
             // (candidates, cited text) are reads.
-            Verdict::Dirty(_) => {
+            Verdict::Dirty(crate::memo::Invalidation::Read(_)) => {
                 hirsel_intern::work::count(hirsel_intern::work::Counter::CacheValidationRows);
                 let reads = entry.memo.reads.clone();
                 if reads
@@ -531,7 +534,12 @@ impl QueryEngine {
                     if b.names != n.names {
                         names_changed = true;
                     }
-                    if b.anchors != n.anchors || b.body != n.body || b.header != n.header {
+                    // A replaced item has a new anchor, which no text covers, and
+                    // a header edit changes the signature a fast hit skips the
+                    // text compare for: the definition's memos are recomputed. A
+                    // body-only edit marks nothing here; each body memo compares
+                    // its own text when read.
+                    if b.anchors != n.anchors || b.header != n.header {
                         changes.text(id, durability);
                     }
                 }
@@ -650,7 +658,7 @@ impl QueryEngine {
 
     /// The environment is a public input: a change since the last query marks
     /// every memo that read it.
-    fn note_environment(&mut self) {
+    pub(super) fn note_environment(&mut self) {
         let now = (
             self.environment.clone(),
             self.comptime_limits,
