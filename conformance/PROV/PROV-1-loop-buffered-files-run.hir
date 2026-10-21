@@ -1,0 +1,19 @@
+// rule: PROV-1
+// expect: run
+pub type AppError = Files(FileError) | Read(bufio.ReadError[FileError])
+
+pub fn main(t: Test) -> Result[(), AppError] {
+  let sources: List[String] = ["x", "y"]
+  let mut count = 0u64
+  for source in sources {
+    let d = test.dir(t, [(path.of(source), b"one\ntwo\n")])
+    let mut f = file.open(d, path.of(source)) ? Files
+    let mut reader = bufio.new(3)
+    while let Some(line) = bufio.file_read_line(d, mut f, mut reader, 16) ? Read {
+      test.check(t, string.byte_len(line) == 4)
+      count += 1
+    }
+  }
+  test.check(t, count == 4)
+  Ok(())
+}

@@ -1,0 +1,31 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 28
+// twin: PROV/PROV-1-nested-loop-owner-ok.hir
+type R {
+  x: u64,
+}
+
+fn owner() -> R {
+  R(x: 0)
+}
+
+fn brand(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: R, token: Option[u8 of r]) {}
+
+fn probe() {
+  let mut r = owner()
+  let token = brand(r)
+  let ns: List[u64] = [0, 1]
+  'outer: for n in ns {
+    while true {
+      r = owner()
+      continue 'outer
+    }
+  }
+  inspect(r, token)
+}
+
+pub fn main() {}

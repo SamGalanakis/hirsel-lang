@@ -1305,3 +1305,50 @@ fn main() {}
         assert_eq!(kinds(&probe, &signatures), []);
     });
 }
+
+#[test]
+fn nested_loop_origins_remain_live_until_their_own_iteration_or_explicit_end() {
+    with_compiler_stack(|| {
+        let prelude = "type R { x:u64 }\nfn owner()->R{R(x:0)}\nfn brand(r:R)->Option[u8 of r]{None}\nfn read(r:R,mut token:Option[u8 of r])->Result[Option[String],()]{Ok(None)}";
+        for middle in [
+            "let r=owner();let mut token=brand(r);while let Some(line)=read(r,mut token)?{}",
+            "while true {let r=owner();let mut token=brand(r);while let Some(line)=read(r,mut token)?{};break}",
+            "let r=owner();let mut token=brand(r);while let Some(line)=read(r,mut token)?{continue 'outer}",
+            "let r=owner();let mut token=brand(r);while let Some(line)=read(r,mut token)?{break 'outer}",
+        ] {
+            let source = format!(
+                "{prelude}\nfn probe()->Result[(),()]{{let ns:List[u64]=[0,1];'outer:for n in ns{{{middle}}};Ok(())}}\nfn main(){{}}"
+            );
+            let (probe, signatures) = lowered(&source, "probe");
+            assert_eq!(kinds(&probe, &signatures), [], "{source}");
+            let mut forged = probe;
+            let body = &mut forged.bodies[0];
+            let mut ended = 0;
+            for block in &mut body.blocks {
+                if let hirsel_tir::Terminator::Call {
+                    callee: hirsel_tir::Callee::Definition { path, .. },
+                    arguments,
+                    ..
+                } = &block.terminator
+                {
+                    if path.0.name.as_str() == "read" {
+                        block.instructions.push(hirsel_tir::Instruction {
+                            kind: hirsel_tir::InstructionKind::EndOrigin(arguments[0].value.place),
+                            span: block.span,
+                            on_failure: hirsel_tir::CleanupId(0),
+                        });
+                        ended += 1;
+                    }
+                }
+            }
+            assert_eq!(ended, 1);
+            let violations = kinds(&forged, &signatures);
+            assert!(
+                violations
+                    .iter()
+                    .any(|v| matches!(v, ViolationKind::InvalidOrigin(_))),
+                "{source}: {violations:?}"
+            );
+        }
+    });
+}

@@ -1,0 +1,27 @@
+// rule: PROV-1
+// expect: accept
+type R {
+  x: u64,
+}
+
+fn owner() -> R {
+  R(x: 0u64)
+}
+
+fn brand(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn read(r: R, mut token: Option[u8 of r]) -> Result[Option[String], ()] {
+  Ok(None)
+}
+
+pub fn main() -> Result[(), ()] {
+  let ns: List[u64] = [0, 1]
+  for n in ns {
+    let r = owner()
+    let mut token = brand(r)
+    while let Some(line) = read(r, mut token)? {}
+  }
+  Ok(())
+}

@@ -572,7 +572,9 @@ pub(super) fn remember(
 }
 
 /// DFS feedback edges break every directed cycle, including irreducible CFGs.
-/// Expire exact introduction prefixes on a path around that cycle. A whole
+/// Reducible feedback expires introductions in its natural loop, stopping at
+/// the dominating header. Irreducible components retain the conservative SCC
+/// region. A whole
 /// introduction subsumes all fields; a field introduction preserves disjoint
 /// siblings. No block-number ordering stands in for CFG reachability.
 pub(super) fn loop_expirations(body: &Body) -> BTreeMap<(u32, u32), BTreeSet<Origin>> {
@@ -585,6 +587,24 @@ pub(super) fn loop_expirations(body: &Body) -> BTreeMap<(u32, u32), BTreeSet<Ori
     for (a, targets) in graph.iter().enumerate() {
         for b in targets {
             reverse[b.0 as usize].push(BlockId(a as u32));
+        }
+    }
+    let dense: Vec<Vec<usize>> = graph
+        .iter()
+        .map(|targets| targets.iter().map(|b| b.0 as usize).collect())
+        .collect();
+    let dominators = hirsel_graph::Dominators::new(&dense, body.entry.0 as usize);
+    let mut irreducible = vec![false; graph.len()];
+    for component in hirsel_graph::components(&dense) {
+        // A dominating header must precede every member in reverse postorder.
+        let header = *component
+            .iter()
+            .min_by_key(|&&b| dominators.order(b).unwrap_or(usize::MAX))
+            .unwrap();
+        if component.iter().any(|&b| !dominators.dominates(header, b)) {
+            for b in component {
+                irreducible[b] = true;
+            }
         }
     }
     let mut color = vec![0u8; graph.len()];
@@ -620,9 +640,29 @@ pub(super) fn loop_expirations(body: &Body) -> BTreeMap<(u32, u32), BTreeSet<Ori
     }
     let mut result = BTreeMap::new();
     for (source, target) in feedback {
-        let forward = reachable(target, &graph);
-        let backward = reachable(source, &reverse);
-        let region: BTreeSet<u32> = forward.intersection(&backward).copied().collect();
+        let region: BTreeSet<u32> = if !irreducible[source.0 as usize]
+            && dominators.dominates(target.0 as usize, source.0 as usize)
+        {
+            // LLVM GenericLoopInfoImpl.h's backward natural-loop traversal:
+            // the header is already visited, so do not cross its predecessors.
+            let mut region = BTreeSet::from([target.0]);
+            let mut pending = vec![source];
+            while let Some(node) = pending.pop() {
+                if region.insert(node.0) {
+                    pending.extend(
+                        reverse[node.0 as usize]
+                            .iter()
+                            .copied()
+                            .filter(|p| dominators.dominates(target.0 as usize, p.0 as usize)),
+                    );
+                }
+            }
+            region
+        } else {
+            let forward = reachable(target, &graph);
+            let backward = reachable(source, &reverse);
+            forward.intersection(&backward).copied().collect()
+        };
         // A name introduced in the loop is a new incarnation each iteration
         // (PROV-1), so the backedge ends it. A name introduced before the loop
         // (a parameter, or a binding bound outside it), and each of its
@@ -860,5 +900,102 @@ mod environment_tests {
             sequence.project(&[EnvironmentField::Index]).expired(),
             BTreeSet::from([owner])
         );
+    }
+}
+
+#[cfg(test)]
+mod loop_region_tests {
+    use super::*;
+    use crate::support::{Fixture, block, inst, lexical};
+
+    // Independent graph oracle: one distinct fresh owner at every node. This
+    // tests expiration membership without using a producer's loan summaries.
+    fn expirations(graph: &[&[u32]]) -> BTreeMap<(u32, u32), BTreeSet<u32>> {
+        let mut fixture = Fixture::unit();
+        let body = fixture.body();
+        let base = body.places[0].clone();
+        body.places = (0..graph.len())
+            .map(|node| Place {
+                binding: Some(Origin {
+                    root: OriginRoot::Local(lexical(), hirsel_types::LocalId(node as u32)),
+                    fields: vec![].into(),
+                }),
+                ..base.clone()
+            })
+            .collect();
+        body.blocks = graph
+            .iter()
+            .enumerate()
+            .map(|(node, edges)| {
+                let term = match *edges {
+                    [] => Terminator::Unreachable,
+                    [target] => Terminator::Goto(BlockId(*target)),
+                    [yes, no] => Terminator::Branch {
+                        condition: Operand {
+                            place: PlaceId(0),
+                            usage: UseKind::Copy,
+                        },
+                        yes: BlockId(*yes),
+                        no: BlockId(*no),
+                    },
+                    _ => panic!("fixture supports at most two successors"),
+                };
+                block(
+                    vec![inst(
+                        InstructionKind::BindOrigin {
+                            source: PlaceId(node as u32),
+                            place: PlaceId(node as u32),
+                            kind: OriginBindingKind::Fresh,
+                        },
+                        0,
+                    )],
+                    term,
+                )
+            })
+            .collect();
+        loop_expirations(body)
+            .into_iter()
+            .map(|(edge, origins)| {
+                (
+                    edge,
+                    origins
+                        .into_iter()
+                        .map(|origin| match origin.root {
+                            OriginRoot::Local(_, local) => local.0,
+                            _ => unreachable!(),
+                        })
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn nested_natural_loop_expires_inner_owners_but_keeps_preheader_owners() {
+        let regions = expirations(&[&[1], &[2, 6], &[3], &[4, 5], &[3], &[1], &[]]);
+        assert_eq!(regions[&(4, 3)], BTreeSet::from([3, 4]));
+        // The enclosing iteration still ends both its own and inner owners.
+        assert_eq!(regions[&(5, 1)], BTreeSet::from([1, 2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn continue_outer_expires_owners_and_break_outer_does_not_add_feedback() {
+        // Node 4 continues directly to outer header 1; node 5 either breaks
+        // to exit 7 or takes the ordinary enclosing feedback through node 6.
+        let regions = expirations(&[&[1], &[2, 7], &[3], &[4, 5], &[1], &[7, 6], &[1], &[]]);
+        assert_eq!(regions[&(4, 1)], BTreeSet::from([1, 2, 3, 4]));
+        assert_eq!(regions[&(6, 1)], BTreeSet::from([1, 2, 3, 5, 6]));
+        assert!(!regions.contains_key(&(5, 7)));
+    }
+
+    #[test]
+    fn irreducible_component_keeps_scc_expiration_even_for_its_natural_subloop() {
+        // The SCC {1,2,3,4} has two entries, 1 and 2. Its internal self-loop
+        // at 3 has a dominating header, but must retain the SCC fallback.
+        let regions = expirations(&[&[1, 2], &[3], &[3], &[3, 4], &[1, 2]]);
+        for region in regions.values() {
+            assert_eq!(*region, BTreeSet::from([1, 2, 3, 4]));
+        }
+        assert!(regions.contains_key(&(3, 3)));
     }
 }
