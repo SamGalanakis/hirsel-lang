@@ -92,6 +92,8 @@ pub(crate) unsafe fn run_close(
 fn shielded(ctx: &mut TaskCtx, call: impl FnOnce(*mut TaskCtx) -> u8) -> u8 {
     let work = ctx.work;
     ctx.shield += 1;
+    // SAFETY: this semantic entry owns the role, or W1's run token.
+    unsafe { crate::tasks::shield_changed(ctx) };
     let status = {
         // SAFETY: the finalizer receives only task-local work, with no live
         // scheduler borrow. Its semantic entries acquire their own role.
@@ -99,6 +101,8 @@ fn shielded(ctx: &mut TaskCtx, call: impl FnOnce(*mut TaskCtx) -> u8) -> u8 {
         call(ctx)
     };
     ctx.shield -= 1;
+    // SAFETY: Segment reacquired the role before returning above.
+    unsafe { crate::tasks::shield_changed(ctx) };
     if ctx.work != work {
         fault("a finalizer returned with release work still pending");
     }
@@ -184,7 +188,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_finalize_begin(ctx: *mut TaskCtx, _anchor:
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract.
-    unsafe { (*ctx).shield += 1 }
+    unsafe {
+        (*ctx).shield += 1;
+        crate::tasks::shield_changed(ctx);
+    }
 }
 
 /// T15 FinalizeEnd: the drop body called after [`hirsel_rt_v2_finalize_begin`] has returned,
@@ -204,6 +211,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_finalize_end(ctx: *mut TaskCtx, _anchor: u
             fault("a finalizer end without its begin: the context is not shielded");
         }
         ctx.shield -= 1;
+        crate::tasks::shield_changed(ctx);
     }
 }
 

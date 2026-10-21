@@ -155,6 +155,9 @@ struct Task {
     path: Vec<u32>,
     spawned: u32,
     canceled: Option<u32>,
+    /// Role-owned finalizer-shield snapshot. Remote cancellation/poll readers
+    /// never borrow TaskCtx while its owner executes task-local runtime code.
+    shield: u32,
     /// Scopes this task has entered and not yet exited, innermost last.
     scopes: Vec<u32>,
     code: Option<(TaskCode, *mut Header, u64)>,
@@ -597,6 +600,7 @@ impl Task {
             path,
             spawned: 0,
             canceled,
+            shield: 0,
             scopes: Vec::new(),
             code: None,
             slot: None,
@@ -622,10 +626,9 @@ impl Task {
 }
 
 impl Task {
-    /// Its finalizer shield, which its context keeps.
+    /// Its shield at the last role handoff, without accessing its context.
     fn shield(&self) -> u32 {
-        // SAFETY: a task's context lives as long as its row.
-        unsafe { (*self.ctx).shield }
+        self.shield
     }
 }
 
@@ -697,6 +700,34 @@ pub(crate) fn scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
     }
 }
 
+/// A finalizer changed this owner's shield. Publish while its semantic entry
+/// owns the role (or W1's cooperative token); do not create a scheduler here.
+/// # Safety
+/// `ctx` is the calling task's, and no scheduler borrow survives this call.
+pub(crate) unsafe fn shield_changed(ctx: *mut TaskCtx) {
+    // SAFETY: caller owns this context and the run's scheduler role/token.
+    unsafe {
+        if let Some(scheduler) = (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut() {
+            snapshot_shield(scheduler, ctx);
+        }
+    }
+}
+
+/// Publish the current owner's task-local shield while the role is held.
+/// A completed task may already have vacated its row before its final leave.
+/// # Safety
+/// `ctx` belongs to the role owner, so reading its task-local fields is legal.
+unsafe fn snapshot_shield(s: &mut Scheduler, ctx: *mut TaskCtx) {
+    // SAFETY: caller owns this task and the scheduler role.
+    unsafe {
+        if let Some(Some(row)) = s.tasks.get_mut((*ctx).task_id as usize)
+            && row.ctx == ctx
+        {
+            row.shield = (*ctx).shield;
+        }
+    }
+}
+
 /// [`scheduler`]'s first call, kept out of every caller.
 #[cold]
 #[inline(never)]
@@ -705,7 +736,9 @@ fn create_scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
     unsafe {
         let run = (*ctx).run_ptr();
         let schedule = (*run).schedule.clone();
-        (*(*run).tasks.get()).insert(Box::new(Scheduler::new(schedule, ctx)))
+        let scheduler = (*(*run).tasks.get()).insert(Box::new(Scheduler::new(schedule, ctx)));
+        snapshot_shield(scheduler, ctx);
+        scheduler
     }
 }
 
@@ -1370,8 +1403,23 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
 /// # Safety
 /// `ctx` is live and `task` is parked; a join's slot is in its frame.
 unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stopped<bool> {
+    // A logical park precedes the idle continuation's physical save. In that
+    // interval the owner can still hold &mut TaskCtx and frame-slot borrows.
+    // The after-save policy must wake/re-poll waits deferred by this check.
+    // SAFETY: callers hold the scheduler role and task is a live parked row.
+    if !unsafe { crate::pool::free::is_saved((*ctx).run_ptr(), task) } {
+        return Ok(false);
+    }
+    let wait = scheduler(ctx).task(task).wait;
+    if let Some(Wait::Join { child, .. }) = wait
+        // SAFETY: the role owns the child's live row. Its Holding state
+        // alone cannot expose the result until its stack has been saved.
+        && !unsafe { crate::pool::free::is_saved((*ctx).run_ptr(), child) }
+    {
+        return Ok(false);
+    }
     let s = scheduler(ctx);
-    Ok(match s.task(task).wait {
+    Ok(match wait {
         Some(Wait::Join { child, slot, size }) => match s.task(child).state {
             State::Holding => {
                 let held = s.task(child).slot.take().unwrap();
@@ -3477,6 +3525,63 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
 #[cfg(test)]
 mod free_policy_tests {
     use super::*;
+
+    #[test]
+    fn a_logically_parked_running_frame_cannot_be_polled_before_idle_save() {
+        let mut run = crate::host::BodyRun::new(2, false);
+        // SAFETY: the body uses the root's existing physical-dispatch end and
+        // restores its logical state; it never schedules a second task.
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |_| {},
+            |ctx| {
+                unsafe {
+                    role::enter(ctx);
+                    let current = (*ctx).task_id;
+                    assert!(!crate::pool::free::is_saved((*ctx).run_ptr(), current));
+                    let row = scheduler(ctx).task(current);
+                    row.state = State::Parked;
+                    // No live output/channel is needed: a poll is forbidden
+                    // from reaching either while the frame remains running.
+                    row.wait = Some(Wait::Receive {
+                        channel: u32::MAX,
+                        slot: std::ptr::dangling_mut(),
+                    });
+                    assert!(!poll(ctx, current, &crate::io::Ready::Tokens(Vec::new())).unwrap());
+                    let row = scheduler(ctx).task(current);
+                    row.state = State::Ready;
+                    row.wait = None;
+                    // An already-saved awaiter also cannot read the result
+                    // of a Holding child whose physical stack is still live.
+                    row.state = State::Holding;
+                    row.slot = Some(Slot {
+                        slot: std::ptr::dangling_mut(),
+                        none: std::ptr::dangling(),
+                        size: 1,
+                    });
+                    let s = scheduler(ctx);
+                    let mut waiter = Task::new(1, std::ptr::null_mut(), None, vec![0], None);
+                    waiter.state = State::Parked;
+                    waiter.wait = Some(Wait::Join {
+                        child: current,
+                        slot: std::ptr::dangling_mut(),
+                        size: 1,
+                    });
+                    let waiter_id = s.tasks.len() as u32;
+                    s.tasks.push(Some(waiter));
+                    assert!(!poll(ctx, waiter_id, &crate::io::Ready::Tokens(Vec::new())).unwrap());
+                    let s = scheduler(ctx);
+                    s.tasks.pop();
+                    s.task(current).state = State::Ready;
+                    s.task(current).slot = None;
+                    role::release(ctx);
+                }
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+    }
 
     fn scope() -> Scope {
         Scope {

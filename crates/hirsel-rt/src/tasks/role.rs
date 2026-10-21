@@ -10,7 +10,12 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
-use crate::TaskCtx;
+use crate::{TaskCtx, context::RunShared};
+
+// Task contexts are aligned pointers; temporary claims use a u32 task ID.
+// This marker is used only by acquire_idle, which never permits re-entry.
+// The marker is even but not aligned like TaskCtx, and claims are odd.
+const IDLE_OWNER: usize = usize::MAX - 1;
 
 pub(crate) mod cell;
 
@@ -38,11 +43,67 @@ impl Role {
         *owner = Some(task);
     }
 
+    fn acquire_idle(&self) {
+        let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
+        // Unlike task acquisition, even the same marker must wait. Distinct
+        // idle workers have no task identity and cannot share ownership.
+        while owner.is_some() {
+            owner = self
+                .available
+                .wait(owner)
+                .unwrap_or_else(|e| e.into_inner());
+        }
+        *owner = Some(IDLE_OWNER);
+    }
+
     fn release(&self, task: usize) {
+        self.release_with(task, || {});
+    }
+
+    fn release_with(&self, task: usize, before: impl FnOnce()) {
         let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
         if *owner == Some(task) {
+            before();
             *owner = None;
             self.available.notify_one();
+        }
+    }
+}
+
+/// Role ownership for an idle callback, independent of any task context.
+/// Its Drop may run after the callback vacates a completed task's row/stack.
+/// No task identity or scheduler.current is installed by this guard.
+pub(crate) struct IdleGuard {
+    run: *mut RunShared,
+    // A guard must stay on its idle thread and never cross a fiber switch.
+    _local: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl IdleGuard {
+    /// # Safety
+    /// The caller is on an idle stack and holds no role or runtime borrow.
+    /// `run` outlives the guard. Enabled callbacks must raw-project role-owned
+    /// fields and cannot re-enter through scheduler(ctx), release the role,
+    /// call a home bridge, or switch fibers while this guard is live.
+    pub(crate) unsafe fn new(run: *mut RunShared) -> Self {
+        // SAFETY: caller retains the run for the callback's entire lifetime.
+        let role = unsafe { &(*run).role };
+        let enabled = role.enabled.load(Ordering::Acquire);
+        if enabled {
+            role.acquire_idle();
+        }
+        Self {
+            run: if enabled { run } else { std::ptr::null_mut() },
+            _local: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for IdleGuard {
+    fn drop(&mut self) {
+        if !self.run.is_null() {
+            // SAFETY: the callback retains RunShared, even if its task is gone.
+            unsafe { (*self.run).role.release(IDLE_OWNER) };
         }
     }
 }
@@ -104,6 +165,7 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx) {
     unsafe {
         if let Some(scheduler) = (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut() {
             scheduler.current = (*ctx).task_id;
+            super::snapshot_shield(scheduler, ctx);
         }
     }
 }
@@ -118,7 +180,15 @@ pub(crate) unsafe fn release(ctx: *mut TaskCtx) {
     // SAFETY: caller contract.
     let role = unsafe { &(*(*ctx).run_ptr()).role };
     if role.enabled.load(Ordering::Acquire) {
-        role.release(ctx.addr());
+        role.release_with(ctx.addr(), || {
+            // SAFETY: release_with still owns the role. Completed tasks may
+            // already have vacated their row, so snapshot only a matching row.
+            unsafe {
+                if let Some(scheduler) = (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut() {
+                    super::snapshot_shield(scheduler, ctx);
+                }
+            }
+        });
     }
 }
 
@@ -202,6 +272,129 @@ impl Drop for Segment {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    struct Run(*mut TaskCtx);
+    impl Run {
+        fn new(enabled: bool) -> Self {
+            let mut ctx = std::ptr::null_mut();
+            // SAFETY: fresh context, no workers started.
+            unsafe {
+                assert_eq!(
+                    crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx),
+                    0
+                );
+                if enabled {
+                    enable(ctx);
+                }
+            }
+            Self(ctx)
+        }
+        fn shared(&self) -> *mut RunShared {
+            // SAFETY: test retains the context until every scoped thread joins.
+            unsafe { (*self.0).run_ptr() }
+        }
+    }
+    impl Drop for Run {
+        fn drop(&mut self) {
+            // SAFETY: the test has joined all workers and released all guards.
+            unsafe { crate::context::hirsel_rt_v2_ctx_destroy(self.0) };
+        }
+    }
+
+    #[test]
+    fn idle_callbacks_exclude_each_other_and_task_owners() {
+        let run = Run::new(true);
+        let address = run.shared().addr();
+        let inside = std::sync::atomic::AtomicUsize::new(0);
+        let start = std::sync::Barrier::new(8);
+        std::thread::scope(|threads| {
+            for worker in 0..8 {
+                let (inside, start) = (&inside, &start);
+                threads.spawn(move || {
+                    let shared = address as *mut RunShared;
+                    start.wait();
+                    for _ in 0..1000 {
+                        // SAFETY: the scoped test retains the run; these idle
+                        // threads hold no ctx, service borrow, or other guard.
+                        let idle = if worker < 4 {
+                            Some(unsafe { IdleGuard::new(shared) })
+                        } else {
+                            unsafe { (*shared).role.acquire((worker + 1) * 2) };
+                            None
+                        };
+                        assert_eq!(inside.fetch_add(1, Ordering::SeqCst), 0);
+                        std::thread::yield_now();
+                        assert_eq!(inside.fetch_sub(1, Ordering::SeqCst), 1);
+                        if idle.is_none() {
+                            unsafe { (*shared).role.release((worker + 1) * 2) };
+                        }
+                        drop(idle);
+                    }
+                });
+            }
+        });
+        assert_eq!(unsafe { *(*run.shared()).role.owner.lock().unwrap() }, None);
+    }
+
+    #[test]
+    fn idle_guard_can_drop_after_its_callback_vacates_task_metadata() {
+        let run = Run::new(true);
+        super::super::scheduler(run.0);
+        unsafe { release(run.0) };
+        let guard = unsafe { IdleGuard::new(run.shared()) };
+        // No ctx-dependent guard may remain when completion vacates a row.
+        unsafe {
+            (*(*run.shared()).tasks.get())
+                .as_deref_mut()
+                .unwrap()
+                .tasks
+                .clear();
+        }
+        drop(guard);
+        assert_eq!(unsafe { *(*run.shared()).role.owner.lock().unwrap() }, None);
+    }
+
+    #[test]
+    fn finalizer_shield_is_published_with_and_without_role_guards() {
+        for enabled in [false, true] {
+            let run = Run::new(enabled);
+            let s = super::super::scheduler(run.0);
+            s.task(0).canceled = Some(super::super::CANCEL_REQUESTED);
+            unsafe { release(run.0) };
+            assert_eq!(super::super::task_canceled(run.0, 0), Some(0));
+            unsafe {
+                crate::finalize::hirsel_rt_v2_finalize_begin(run.0, 0);
+                assert_eq!(super::super::task_canceled(run.0, 0), None);
+                crate::finalize::hirsel_rt_v2_finalize_begin(run.0, 0);
+                crate::finalize::hirsel_rt_v2_finalize_end(run.0, 0);
+                assert_eq!(super::super::task_canceled(run.0, 0), None);
+                crate::finalize::hirsel_rt_v2_finalize_end(run.0, 0);
+                assert_eq!(super::super::task_canceled(run.0, 0), Some(0));
+                release(run.0);
+            }
+        }
+    }
+
+    #[test]
+    fn remote_shield_reads_use_the_snapshot_while_local_state_changes() {
+        let run = Run::new(true);
+        let s = super::super::scheduler(run.0);
+        s.task(0).canceled = Some(super::super::CANCEL_REQUESTED);
+        unsafe {
+            (*run.0).shield = 1;
+            release(run.0);
+            // Stand in for an owner's task-local entry with exclusive ctx
+            // access. Remote metadata must retain the published value.
+            (*run.0).shield = 0;
+            let _idle = IdleGuard::new(run.shared());
+            let s = (*(*run.shared()).tasks.get()).as_deref_mut().unwrap();
+            assert_eq!(s.task(0).shield(), 1);
+            assert_eq!(
+                s.canceled_task(0, s.tasks[0].as_ref().unwrap().shield()),
+                None
+            );
+        }
+    }
 
     #[test]
     fn owner_predicate_serializes_threads_and_reenters_for_the_same_task() {

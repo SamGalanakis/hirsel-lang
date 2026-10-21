@@ -41,6 +41,17 @@ those locks before joining. The Io binding pointer uses release/acquire
 publication. These projections remove whole-run aliasing; they do not replace
 the role or prove individual concurrent service implementations safe.
 
+Idle callbacks use a run-scoped `role::IdleGuard`; its nonreentrant acquisition
+excludes other idle callbacks even though they share an owner marker. Dropping
+it reads no task context, so it can follow task-row retirement. Callbacks must
+raw-project role-owned fields and retain the run; they cannot enter through a
+task context, switch fibers or call a home bridge while holding this guard.
+Remote cancellation and readiness read a task-row shield snapshot. The owner
+publishes it at role handoff and finalizer shield changes, including width 1.
+Parked receive slots and both join frames are inaccessible until physical idle
+save; the logical policy's after-save hook must retry those deferred polls.
+Completion, direct handoffs and stack recycling still need policy integration.
+
 Native descriptor version 14 (introduced in runtime ABI 34) adds an independent holder scan
 pointer and word count, taking the C descriptor from 72 to 88 bytes. Both
 native emitters lower the existing `LayoutRecord.scan`; destruction programs
