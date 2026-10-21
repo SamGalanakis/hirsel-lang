@@ -305,7 +305,15 @@ unsafe extern "C" fn held_result(ctx: *mut TaskCtx, env: *mut Header, _: u64, _:
     let scope = unsafe { crate::alloc::payload(env).cast::<u64>().read() };
     let mut image = [1u64, 7];
     let none = [0u64; 2];
-    unsafe { hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16) };
+    unsafe {
+        hirsel_rt_v2_task_finish(
+            ctx,
+            image.as_mut_ptr().cast(),
+            none.as_ptr().cast(),
+            16,
+            u32::MAX,
+        )
+    };
     assert_eq!(image, [1, 7], "scope exit discards in the child's frame");
     // Force the home readiness probe while the parent is at exit/Entered,
     // rather than relying on an incidental idle-loop scheduling window.

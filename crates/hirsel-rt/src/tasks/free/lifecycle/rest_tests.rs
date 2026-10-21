@@ -9,7 +9,15 @@ unsafe extern "C" fn result(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64)
     let [root, fail] = unsafe { crate::alloc::payload(env).cast::<[u64; 2]>().read() };
     let mut image = [1u64, 42];
     let none = [0u64; 2];
-    unsafe { hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16) };
+    unsafe {
+        hirsel_rt_v2_task_finish(
+            ctx,
+            image.as_mut_ptr().cast(),
+            none.as_ptr().cast(),
+            16,
+            u32::MAX,
+        )
+    };
     assert_eq!(image, none);
     unsafe { crate::roots::hirsel_rt_v2_root_release(ctx, root as *mut Header) };
     assert!(

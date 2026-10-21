@@ -331,7 +331,15 @@ unsafe extern "C" fn held_child(
     };
     let mut result = [1u64, 7];
     let none = [0u64; 2];
-    unsafe { hirsel_rt_v2_task_finish(ctx, result.as_mut_ptr().cast(), none.as_ptr().cast(), 16) };
+    unsafe {
+        hirsel_rt_v2_task_finish(
+            ctx,
+            result.as_mut_ptr().cast(),
+            none.as_ptr().cast(),
+            16,
+            u32::MAX,
+        )
+    };
     if let Some(recording) = &probe.recording {
         let cut = recording.recorder.flush().unwrap().unwrap();
         assert_eq!(cut.progress[&Vec::new()], Progress::new(3, Phase::Entered));

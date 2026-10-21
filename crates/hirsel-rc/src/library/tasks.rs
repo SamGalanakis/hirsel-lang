@@ -683,6 +683,7 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let (option_layout, size) = option_of(cx, result)?;
     let entry = intrinsic(cx, "TaskFinish", vec![GenericArgument::Type(result)])?;
+    let descriptor_layout = cx.primitive(hirsel_types::Primitive::U32)?;
     let environment = cx
         .environment()
         .ok_or_else(|| PassError::Malformed("a task main without environment".into()))?;
@@ -743,6 +744,7 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let none = option(&mut b, option_layout, 0, &[]);
     let (none_slot, none_address) = local(&mut b, none)?;
     let size = b.u64(size)?;
+    let descriptor = b.constant(descriptor_layout, ConstantValue::Descriptor(option_layout));
     let (none, none_loan) = b.borrow(none_address, false)?;
     let failure = b.failure(None);
     let callee = operation(&mut b, &entry);
@@ -750,6 +752,7 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         exclusive(&mut b, 0, slot, address),
         argument(1, Passing::Borrow, none),
         argument(2, Passing::Borrow, size),
+        argument(3, Passing::Borrow, descriptor),
     ];
     invoke(
         &mut b,

@@ -48,7 +48,13 @@ unsafe extern "C" fn yielding(
     let mut slot = [1u64, id * 100];
     assert_eq!(
         unsafe {
-            hirsel_rt_v2_task_finish(ctx, slot.as_mut_ptr().cast(), NONE.as_ptr().cast(), 16)
+            hirsel_rt_v2_task_finish(
+                ctx,
+                slot.as_mut_ptr().cast(),
+                NONE.as_ptr().cast(),
+                16,
+                u32::MAX,
+            )
         },
         0
     );
@@ -281,7 +287,15 @@ fn overdue_timers_resume_by_deadline_with_suspension_order_for_ties() {
         assert_eq!(unsafe { result.assume_init() }.tag, 0);
         trace(id);
         let mut slot = [1u64, id];
-        unsafe { hirsel_rt_v2_task_finish(ctx, slot.as_mut_ptr().cast(), NONE.as_ptr().cast(), 16) }
+        unsafe {
+            hirsel_rt_v2_task_finish(
+                ctx,
+                slot.as_mut_ptr().cast(),
+                NONE.as_ptr().cast(),
+                16,
+                u32::MAX,
+            )
+        }
     }
     let ctx = Ctx::diagnostic();
     index(ctx.0, environment());

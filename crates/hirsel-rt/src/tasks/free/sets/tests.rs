@@ -56,7 +56,15 @@ unsafe extern "C" fn reordered_result(ctx: *mut TaskCtx, env: *mut Header, _: u6
     }
     let mut image = [1u64, id];
     let none = [0u64; 2];
-    unsafe { hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16) }
+    unsafe {
+        hirsel_rt_v2_task_finish(
+            ctx,
+            image.as_mut_ptr().cast(),
+            none.as_ptr().cast(),
+            16,
+            u32::MAX,
+        )
+    }
 }
 
 unsafe fn reordered_set_body(ctx: *mut TaskCtx, order: &CompletionOrder) {
@@ -285,7 +293,13 @@ unsafe extern "C" fn result(ctx: *mut TaskCtx, environment: *mut Header, _: u64,
     let mut image = [1u64, id];
     let none = [0u64; 2];
     let status = unsafe {
-        hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16)
+        hirsel_rt_v2_task_finish(
+            ctx,
+            image.as_mut_ptr().cast(),
+            none.as_ptr().cast(),
+            16,
+            u32::MAX,
+        )
     };
     assert_eq!(image, none);
     status

@@ -154,7 +154,13 @@ mod tests {
         }
         let mut result = [1u64, 42];
         unsafe {
-            hirsel_rt_v2_task_finish(ctx, result.as_mut_ptr().cast(), NONE.as_ptr().cast(), 16)
+            hirsel_rt_v2_task_finish(
+                ctx,
+                result.as_mut_ptr().cast(),
+                NONE.as_ptr().cast(),
+                16,
+                u32::MAX,
+            )
         };
         assert_eq!(result, NONE, "the child cleans up a moved result");
         STATUS_OK
@@ -321,7 +327,15 @@ mod store_load_gate {
         drop(shared);
         let mut slot = [1u64, value];
         let none = [0u64; 2];
-        unsafe { hirsel_rt_v2_task_finish(ctx, slot.as_mut_ptr().cast(), none.as_ptr().cast(), 16) }
+        unsafe {
+            hirsel_rt_v2_task_finish(
+                ctx,
+                slot.as_mut_ptr().cast(),
+                none.as_ptr().cast(),
+                16,
+                u32::MAX,
+            )
+        }
     }
 
     #[test]
@@ -473,7 +487,13 @@ mod benchmark {
             let mut slot = [1u64, value + 1];
             let none = [0u64; 2];
             unsafe {
-                hirsel_rt_v2_task_finish(ctx, slot.as_mut_ptr().cast(), none.as_ptr().cast(), 16)
+                hirsel_rt_v2_task_finish(
+                    ctx,
+                    slot.as_mut_ptr().cast(),
+                    none.as_ptr().cast(),
+                    16,
+                    u32::MAX,
+                )
             }
         }
         let flags: u64 = std::env::var("HIRSEL_SPAWN_FLAGS")

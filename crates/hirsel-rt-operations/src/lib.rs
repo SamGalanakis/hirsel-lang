@@ -734,7 +734,12 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_task_finish",
         destination: false,
         result: None,
-        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I32,
+        ],
     },
     AbiExport {
         caller_site: true,

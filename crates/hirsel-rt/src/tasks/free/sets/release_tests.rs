@@ -15,7 +15,15 @@ unsafe extern "C" fn child(ctx: *mut TaskCtx, environment: *mut Header, _: u64, 
     let (id, trace) = unsafe { environment.add(1).cast::<(u64, Arc<Trace>)>().read() };
     let mut image = [1u64, id];
     let none = [0u64; 2];
-    unsafe { hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16) };
+    unsafe {
+        hirsel_rt_v2_task_finish(
+            ctx,
+            image.as_mut_ptr().cast(),
+            none.as_ptr().cast(),
+            16,
+            u32::MAX,
+        )
+    };
     assert_eq!(
         image,
         [1, id],

@@ -203,7 +203,7 @@ uint8_t hirsel_rt_v2_task_scope_exit(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t
 uint8_t hirsel_rt_v2_task_scope_enter_until(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_task_scope_exit_until(hirsel_rt_v2_ctx*, uint8_t*, const uint64_t*, uint8_t);
 uint8_t hirsel_rt_v2_task_spawn(hirsel_rt_v2_ctx*, uint64_t, uint64_t, void*, uint64_t*, const uint64_t*, uint8_t (*)(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*, uint64_t, uint64_t), hirsel_rt_v2_header*);
-uint8_t hirsel_rt_v2_task_finish(hirsel_rt_v2_ctx*, uint8_t*, const uint8_t*, uint64_t);
+uint8_t hirsel_rt_v2_task_finish(hirsel_rt_v2_ctx*, uint8_t*, const uint8_t*, uint64_t, uint32_t);
 uint8_t hirsel_rt_v2_task_join(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*, uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_task_cancel(hirsel_rt_v2_ctx*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_task_detach(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);

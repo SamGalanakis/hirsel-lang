@@ -309,7 +309,13 @@ mod tests {
         }
         let mut result = [1u64, 9];
         unsafe {
-            hirsel_rt_v2_task_finish(ctx, result.as_mut_ptr().cast(), NONE.as_ptr().cast(), 16)
+            hirsel_rt_v2_task_finish(
+                ctx,
+                result.as_mut_ptr().cast(),
+                NONE.as_ptr().cast(),
+                16,
+                u32::MAX,
+            )
         }
     }
 

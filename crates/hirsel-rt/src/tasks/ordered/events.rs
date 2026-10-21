@@ -179,6 +179,14 @@ pub(super) struct Unsupported {
     pub op: Option<&'static str>,
 }
 
+/// Result snapshot supplied by the compiled task wrapper before its slot is
+/// delivered or discarded. Unknown metadata is explicit, never raw bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct TaskResult {
+    pub descriptor: u32,
+    pub payload: Option<Vec<u8>>,
+}
+
 #[derive(Default)]
 pub(super) struct Log {
     ordinals: BTreeMap<Vec<u32>, u64>,
@@ -188,6 +196,7 @@ pub(super) struct Log {
     pub host_polls: Vec<HostPollCompletion>,
     host_polled: BTreeSet<(Vec<u32>, u64)>,
     pub owner_completions: Vec<OwnerCompletion>,
+    pub task_results: BTreeMap<Vec<u32>, TaskResult>,
     pub receive_polls: Vec<ReceivePollCompletion>,
     receivers: BTreeMap<Vec<u32>, (ObjectId, u32)>,
     receive_polled: BTreeSet<(Vec<u32>, u64)>,
@@ -304,6 +313,52 @@ pub(super) unsafe fn install_value(
         .as_mut()
         .expect("evidence enabled at admission");
     assert!(log.values.insert(descriptor, program).is_none());
+}
+
+/// # Safety
+/// The running child owns a live Some result of `descriptor`. The sentinel
+/// u32::MAX in Rust stand-ins deliberately supplies no observation metadata.
+pub(super) unsafe fn task_result(ctx: *mut TaskCtx, descriptor: u32, slot: *const u8) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    if descriptor != u32::MAX
+        && let std::collections::btree_map::Entry::Vacant(entry) = log.values.entry(descriptor)
+        && let Ok(program) = unsafe { super::values::Program::linked(ctx, descriptor) }
+    {
+        entry.insert(program);
+    }
+    let payload = log.values.get(&descriptor).and_then(|program| unsafe {
+        program
+            .encode(slot, |kind, word| {
+                use crate::ordered::objects::Kind;
+                match kind {
+                    Kind::Task => log.tasks.get(&word),
+                    Kind::TaskSet => log.sets.get(&word),
+                    _ => driver.objects.identity(kind, word),
+                }
+                .cloned()
+            })
+            .ok()
+    });
+    assert!(
+        log.task_results
+            .insert(
+                path,
+                TaskResult {
+                    descriptor,
+                    payload
+                }
+            )
+            .is_none(),
+        "one task result publication"
+    );
 }
 
 /// Compile immutable metadata in the running owner's entry window. The idle
@@ -1002,6 +1057,7 @@ mod tests {
                 result.as_mut_ptr().cast(),
                 [0u64; 2].as_ptr().cast(),
                 16,
+                u32::MAX,
             )
         }
     }
@@ -2656,6 +2712,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn unavailable_task_result_metadata_never_reads_a_result_carrier() {
+        let mut run = crate::host::BodyRun::new(1, true);
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe {
+                super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
+                enable(ctx);
+            },
+            |ctx| unsafe {
+                let _role = crate::tasks::role::Guard::new(ctx);
+                task_result(ctx, u32::MAX, std::ptr::null());
+                let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                assert_eq!(
+                    log.task_results[&Vec::new()],
+                    TaskResult {
+                        descriptor: u32::MAX,
+                        payload: None
+                    }
+                );
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
     }
 
     #[test]

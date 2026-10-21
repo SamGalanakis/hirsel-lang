@@ -2662,13 +2662,15 @@ unsafe fn spawn_child(
 ///
 /// # Safety
 /// `ctx` is live; `slot` and `none` are `Option[R]` images of `size` bytes, `slot` in the
-/// running child's frame.
+/// running child's frame. ABI38 adds its linked descriptor; u32::MAX is
+/// unavailable only for legacy Rust stand-ins and never certifies payload bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     ctx: *mut TaskCtx,
     slot: *mut u8,
     none: *const u8,
     size: u64,
+    descriptor: u32,
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
@@ -2676,7 +2678,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     let _segment = profile::Operation::new(ctx, "task_finish");
     if ordered::engine::on(ctx) {
         return unsafe {
-            crate::stop::check(ctx, ordered::lifecycle::finish(ctx, slot, none, size))
+            crate::stop::check(
+                ctx,
+                ordered::lifecycle::finish(ctx, slot, none, size, descriptor),
+            )
         };
     }
     if free::enabled(ctx) {

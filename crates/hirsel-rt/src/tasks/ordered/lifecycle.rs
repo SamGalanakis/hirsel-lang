@@ -236,9 +236,11 @@ pub(crate) unsafe fn finish(
     slot: *mut u8,
     none: *const u8,
     size: u64,
+    descriptor: u32,
 ) -> Stopped<u8> {
     engine::at_head(ctx)?;
     let me = scheduler(ctx).current;
+    unsafe { super::events::task_result(ctx, descriptor, slot) };
     if scheduler(ctx).task(me).detached {
         // A detached body retains its result for its own cleanup. Its actual
         // end commits after that cleanup, in complete().
@@ -775,6 +777,7 @@ mod tests {
                         result.as_mut_ptr().cast(),
                         NONE.as_ptr().cast(),
                         16,
+                        u32::MAX,
                     )
                 },
                 STATUS_OK
@@ -1166,7 +1169,13 @@ mod tests {
         let mut result = [1, id * 100];
         assert_eq!(
             unsafe {
-                hirsel_rt_v2_task_finish(ctx, result.as_mut_ptr().cast(), NONE.as_ptr().cast(), 16)
+                hirsel_rt_v2_task_finish(
+                    ctx,
+                    result.as_mut_ptr().cast(),
+                    NONE.as_ptr().cast(),
+                    16,
+                    u32::MAX,
+                )
             },
             STATUS_OK
         );
@@ -1436,7 +1445,7 @@ mod tests {
         );
         let mut result = [1u64, 9];
         unsafe {
-            hirsel_rt_v2_task_finish(ctx, result.as_mut_ptr().cast(), NONE.as_ptr().cast(), 16)
+            hirsel_rt_v2_task_finish(ctx, result.as_mut_ptr().cast(), NONE.as_ptr().cast(), 16, 3)
         }
     }
 
@@ -1618,6 +1627,21 @@ mod tests {
                     STATUS_OK
                 );
                 assert_eq!(result, [1, 9]);
+                result.fill(0);
+                if observing {
+                    let _role = role::Guard::new(ctx);
+                    let log = engine::driver(ctx).events.as_ref().unwrap();
+                    assert_eq!(
+                        log.task_results[&vec![0]],
+                        super::super::events::TaskResult {
+                            descriptor: 3,
+                            payload: Some(
+                                [1u32.to_le_bytes().as_slice(), &9u64.to_le_bytes()].concat()
+                            ),
+                        },
+                        "task result remains owned after delivery and row retirement"
+                    );
+                }
                 assert_eq!(
                     hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
                     STATUS_OK

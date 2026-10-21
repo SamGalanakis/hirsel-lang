@@ -623,7 +623,13 @@ mod tests {
             let mut image = [1u64, id];
             let none = [0u64; 2];
             unsafe {
-                hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16)
+                hirsel_rt_v2_task_finish(
+                    ctx,
+                    image.as_mut_ptr().cast(),
+                    none.as_ptr().cast(),
+                    16,
+                    u32::MAX,
+                )
             };
             assert_eq!(
                 image,
@@ -762,7 +768,13 @@ mod tests {
             let mut image = [1u64, 99];
             let none = [0u64; 2];
             let status = unsafe {
-                hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16)
+                hirsel_rt_v2_task_finish(
+                    ctx,
+                    image.as_mut_ptr().cast(),
+                    none.as_ptr().cast(),
+                    16,
+                    u32::MAX,
+                )
             };
             assert_eq!(image, if rest.detach { [1, 99] } else { none });
             rest.started.store(true, Ordering::Release);

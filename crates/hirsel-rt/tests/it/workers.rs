@@ -133,6 +133,7 @@ unsafe extern "C" fn yielding(
             slot.as_mut_ptr().cast(),
             NONE.as_ptr().cast(),
             16,
+            u32::MAX,
         )
     }
 }
@@ -589,6 +590,7 @@ fn a_stop_racing_another_workers_allocation_ends_the_run() {
                 slot.as_mut_ptr().cast(),
                 NONE.as_ptr().cast(),
                 16,
+                u32::MAX,
             )
         }
     }
@@ -1013,6 +1015,7 @@ unsafe extern "C" fn free_quantum_child(ctx: *mut TaskCtx, _: *mut Header, _: u6
             slot.as_mut_ptr().cast(),
             NONE.as_ptr().cast(),
             16,
+            u32::MAX,
         )
     }
 }

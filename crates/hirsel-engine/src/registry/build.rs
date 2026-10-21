@@ -838,7 +838,7 @@ pub(super) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         (
             "R",
             "$intrinsic.TaskFinish",
-            "mut slot: Option[R], none: Option[R], size: u64",
+            "mut slot: Option[R], none: Option[R], size: u64, descriptor: u32",
             "()",
         ),
         (

@@ -299,7 +299,15 @@ mod tests {
         }
         assert_eq!(local, [id; 32]);
         let mut slot = [1, id * 100];
-        unsafe { hirsel_rt_v2_task_finish(ctx, slot.as_mut_ptr().cast(), NONE.as_ptr().cast(), 16) }
+        unsafe {
+            hirsel_rt_v2_task_finish(
+                ctx,
+                slot.as_mut_ptr().cast(),
+                NONE.as_ptr().cast(),
+                16,
+                u32::MAX,
+            )
+        }
     }
 
     static STARTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

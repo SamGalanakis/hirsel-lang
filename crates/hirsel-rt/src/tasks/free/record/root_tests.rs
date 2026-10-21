@@ -201,7 +201,15 @@ unsafe extern "C" fn root_child(ctx: *mut TaskCtx, env: *mut crate::Header, _: u
     }
     let mut image = [1u64, 42];
     let none = [0u64; 2];
-    unsafe { hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16) };
+    unsafe {
+        hirsel_rt_v2_task_finish(
+            ctx,
+            image.as_mut_ptr().cast(),
+            none.as_ptr().cast(),
+            16,
+            u32::MAX,
+        )
+    };
     assert_eq!(image, none);
     crate::STATUS_OK
 }

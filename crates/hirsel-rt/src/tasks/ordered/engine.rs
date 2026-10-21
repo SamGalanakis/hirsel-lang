@@ -1440,6 +1440,7 @@ mod tests {
                     result.as_mut_ptr().cast(),
                     [0u64; 2].as_ptr().cast(),
                     16,
+                    u32::MAX,
                 )
             },
             0
