@@ -761,7 +761,11 @@ fn join_usage(a: UseKind, b: UseKind) -> UseKind {
     }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Slot {
+struct Slot(std::rc::Rc<SlotData>);
+/// A radix leaf copies pointers; only a mutated binding clones its flow facts.
+/// Borrowed from Rust alloc/src/rcs/rc.rs:2220-2226 (Rc::make_mut).
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SlotData {
     available: u8,
     value: Value,
     /// The relation fixed at the slot's declaration (LANG-15): its receiving
@@ -771,11 +775,22 @@ struct Slot {
 }
 impl Default for Slot {
     fn default() -> Self {
-        Self {
+        Self::new(SlotData {
             available: DEAD,
             value: Value::new(Modes::global()),
             declared: Relation::global(),
-        }
+        })
+    }
+}
+impl std::ops::Deref for Slot {
+    type Target = SlotData;
+    fn deref(&self) -> &SlotData {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Slot {
+    fn deref_mut(&mut self) -> &mut SlotData {
+        std::rc::Rc::make_mut(&mut self.0)
     }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -791,6 +806,9 @@ struct State {
 }
 type SlotJoins = hirsel_types::rows::JoinCache<Slot, fn(&mut Slot, &Slot)>;
 impl Slot {
+    fn new(data: SlotData) -> Self {
+        Self(std::rc::Rc::new(data))
+    }
     fn join(&mut self, other: &Self) {
         if other.available & LIVE != 0 {
             self.declared = if self.available & LIVE == 0 {
@@ -963,19 +981,19 @@ impl InitialStorage {
         }
         self.inactive.set(
             index,
-            Slot {
+            Slot::new(SlotData {
                 available: DEAD,
                 value: value.clone(),
                 declared: declared.clone(),
-            },
+            }),
         );
         self.owned.set(
             index,
-            Slot {
+            Slot::new(SlotData {
                 available: LIVE,
                 value: value.clone(),
                 declared: declared.clone(),
-            },
+            }),
         );
         value.set_alias(Some((index, Site::Binding(index))));
         if !plain {
@@ -983,11 +1001,11 @@ impl InitialStorage {
         }
         self.scoped.set(
             index,
-            Slot {
+            Slot::new(SlotData {
                 available: LIVE,
                 value,
                 declared,
-            },
+            }),
         );
     }
     pub(super) fn postcondition_inputs(
@@ -4030,11 +4048,11 @@ impl Checker<'_, '_> {
                     let initial = Value::new(self.t.get(ty).unwrap().modes.clone());
                     let mut value = self.capture_value(state, expression, false, false, initial);
                     value.usage = UseKind::Take;
-                    state.slots[index] = Slot {
+                    state.slots[index] = Slot::new(SlotData {
                         available: LIVE,
                         value: value.clone(),
                         declared: value.modes.relation.clone(),
-                    };
+                    });
                     if self.emit {
                         self.body.bindings[index].usage = UseKind::Take;
                         if value.environment_local() {
@@ -5539,7 +5557,7 @@ impl Checker<'_, '_> {
                             self.tree.expressions[source.0 as usize].origin.span,
                             Some(index),
                         );
-                        state.slots[index] = Slot {
+                        state.slots[index] = Slot::new(SlotData {
                             available: LIVE,
                             value: part.clone(),
                             // A borrowed pattern alias keeps its physical source
@@ -5549,7 +5567,7 @@ impl Checker<'_, '_> {
                             } else {
                                 storage_modes.relation.clone()
                             },
-                        };
+                        });
                         if self.emit && !test {
                             self.body.bindings[site.unwrap_or(index)].usage = usage;
                             self.binding_modes.insert(index, storage_modes.clone());
@@ -5828,11 +5846,11 @@ impl Checker<'_, '_> {
                     if self.once_storage(place.binding) {
                         value.modes.multiplicity = Multiplicity::Once;
                     }
-                    state.slots[place.binding] = Slot {
+                    state.slots[place.binding] = Slot::new(SlotData {
                         available: LIVE,
                         declared: state.slots[place.binding].declared.clone(),
                         value,
-                    };
+                    });
                 } else if !self.property(*rhs).is_some_and(|p| p.plain || p.shared)
                     && value.modes.uniqueness != Uniqueness::Unique
                 {
@@ -7809,6 +7827,40 @@ fn annotation_modes(
 #[cfg(test)]
 mod loan_tests {
     use super::*;
+
+    #[test]
+    fn slot_snapshots_isolate_branch_updates_and_join_the_same_flow_facts() {
+        let mut base = hirsel_types::rows::Rows::new(Slot::default(), 16);
+        for index in [1, 9] {
+            base[index].available = LIVE;
+            base[index].value.modes.uniqueness = Uniqueness::Unique;
+        }
+        base[1].value.bound_by(3, Site::Frame);
+        let mut left = base.clone();
+        let mut right = base.clone();
+        left[1].value.share();
+        left[9].available = MOVED;
+        right[1].value.bound_by(3, Site::Binding(7));
+
+        assert_eq!(base[1].value.modes.uniqueness, Uniqueness::Unique);
+        assert_eq!(base[9].available, LIVE);
+        assert_eq!(right[1].value.modes.uniqueness, Uniqueness::Unique);
+        // Changing a neighboring row does not clone this binding's payload.
+        assert!(std::rc::Rc::ptr_eq(&base[2].0, &left[2].0));
+        assert!(std::rc::Rc::ptr_eq(&base[10].0, &left[10].0));
+
+        let mut joins = SlotJoins::new(Slot::join);
+        assert!(left.join_cached(&right, &mut joins));
+        assert_eq!(left[1].value.modes.uniqueness, Uniqueness::Aliased);
+        assert_eq!(left[9].available, LIVE | MOVED);
+        assert_eq!(
+            left[1].value.content.summary().scopes().collect::<Vec<_>>(),
+            vec![(Kind::Bound, 3, Site::Binding(7))]
+        );
+        assert_eq!(base[1].value.modes.uniqueness, Uniqueness::Unique);
+        assert_eq!(right[9].available, LIVE);
+        assert!(!left.join_cached(&right, &mut joins));
+    }
 
     #[test]
     fn a_join_keeps_the_earliest_issue_site_of_each_loan() {
