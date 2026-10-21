@@ -3,6 +3,51 @@ use super::*;
 use hirsel_syntax::ExprKind;
 use hirsel_types::ResolvedName;
 
+/// Compact classification of the final mode body's check-time lowering needs.
+/// Referenced declarations are interpreted against current source/image kind;
+/// membership is never inferred from a producer fingerprint.
+#[derive(Clone)]
+pub(crate) struct LoweringUse {
+    constant: bool,
+    comptime: bool,
+    referenced: Vec<DefId>,
+}
+impl LoweringUse {
+    pub(crate) fn capture(typed: &TypedBody) -> Self {
+        let tree = &typed.syntax.tree;
+        Self {
+            constant: matches!(typed.syntax.item.kind, ItemKind::Const { .. }),
+            comptime: typed.checked.expressions.iter().any(|row| {
+                matches!(
+                    tree.expressions[row.expression.0 as usize].kind,
+                    ExprKind::Comptime(_)
+                )
+            }),
+            referenced: typed
+                .checked
+                .resolution
+                .expressions
+                .iter()
+                .filter_map(|(_, name)| {
+                    if let ResolvedName::Definition(path) = name {
+                        Some(DefId::intern(path))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        }
+    }
+    fn needed(&self, engine: &QueryEngine) -> bool {
+        self.constant
+            || self.comptime
+            || self
+                .referenced
+                .iter()
+                .any(|id| engine.source_constant(id.path()))
+    }
+}
+
 impl QueryEngine {
     /// Whether a file check under `policy` lowers this mode-checked definition.
     /// A file's own reachable closure is every body it declares.
@@ -18,25 +63,24 @@ impl QueryEngine {
             return true;
         }
         let id = hirsel_syntax::DefId::intern(definition);
+        if let Some(inputs) = self.front_products.lowering_inputs.get(&id)
+            && self
+                .summaries
+                .get(&id)
+                .is_some_and(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
+        {
+            return inputs.needed(self);
+        }
         let Some(Ok(analyzed)) = self.modes.get(&id).map(|e| e.memo.value.as_ref()) else {
             return true;
         };
         let typed = &analyzed.value.typed;
-        let tree = &typed.syntax.tree;
-        if matches!(typed.syntax.item.kind, ItemKind::Const { .. }) {
-            return true;
-        }
-        typed.checked.expressions.iter().any(|row| {
-            matches!(
-                tree.expressions[row.expression.0 as usize].kind,
-                ExprKind::Comptime(_)
-            )
-        }) || typed
-            .checked
-            .resolution
-            .expressions
-            .iter()
-            .any(|(_, name)| matches!(name, ResolvedName::Definition(path) if self.source_constant(path)))
+        matches!(typed.syntax.item.kind, ItemKind::Const { .. })
+            || typed.checked.expressions.iter().any(|row| {
+                matches!(typed.syntax.tree.expressions[row.expression.0 as usize].kind, ExprKind::Comptime(_))
+            }) || typed.checked.resolution.expressions.iter().any(|(_, name)| {
+                matches!(name, ResolvedName::Definition(path) if self.source_constant(path))
+            })
     }
 
     fn source_constant(&self, path: &DefPath) -> bool {

@@ -23,7 +23,7 @@ pub use definition_hash::DefinitionHashes;
 mod dependencies;
 pub(crate) mod generation;
 pub use generation::GeneratedSource;
-mod lowering;
+pub(crate) mod lowering;
 pub(crate) mod memos;
 pub(crate) use memos::{Entry, Observed, Table};
 mod program_revision;
@@ -133,6 +133,7 @@ pub struct QueryEngine {
     pub(crate) result_store: Option<Arc<dyn crate::store::ResultStore>>,
     /// Whether V validates what this session lowers; `run_v` is its only reader.
     pub verify: Verify,
+    pub(crate) retention: crate::memo::Retention,
     /// A `Compiler` opened this engine as a session (`free_sessions`).
     pub(crate) session: bool,
     /// Image construction requires closure-local evidence. Until worker V
@@ -427,6 +428,7 @@ impl QueryEngine {
             lower_verdicts: Default::default(),
             result_store: None,
             verify: Verify::On,
+            retention: crate::memo::Retention::Resident,
             session: false,
             portable_products: false,
             comptime_limits: hirsel_interp::Limits::default(),
@@ -1416,6 +1418,40 @@ impl QueryEngine {
 
     pub fn diagnostic_phase(&self, diagnostic: &Diagnostic) -> Option<String> {
         for entry in self.modes.values() {
+            if let Some((_, phase)) = entry
+                .products
+                .mode_diagnostics
+                .iter()
+                .find(|(d, _)| d.rule == diagnostic.rule && d.primary == diagnostic.primary)
+            {
+                return Some(phase.clone());
+            }
+        }
+        for (id, entry) in &self.summaries {
+            // A detached or edited owner's receipt no longer attributes a
+            // warning, even if its old summary awaits adoption/retirement.
+            if entry.products.mode_diagnostics.is_empty()
+                || !entry.consistent
+                || self.graph.is_dirty(&entry.memo.key)
+            {
+                continue;
+            }
+            let Some(body) = self.implementation_hash(id.path()) else {
+                continue;
+            };
+            let manifest = self
+                .package_manifests
+                .get(&id.path().0.package)
+                .copied()
+                .unwrap_or(self.environment.package_manifest_hash);
+            if entry.memo.text
+                != ContentHash::of_parts(
+                    "hirsel.query.text.v1",
+                    [body.0.as_slice(), manifest.0.as_slice()],
+                )
+            {
+                continue;
+            }
             if let Some((_, phase)) = entry
                 .products
                 .mode_diagnostics

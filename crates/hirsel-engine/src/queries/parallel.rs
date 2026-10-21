@@ -468,6 +468,9 @@ impl QueryEngine {
 
     fn compact_front_outcome(&mut self, outcome: ModeResult, release: bool) -> PublishedResult {
         let definition = DefId::intern(&outcome.definition);
+        if release {
+            self.remember_front_facts(definition);
+        }
         let result = outcome.result.and_then(|output| {
             outcome
                 .summary
@@ -516,6 +519,46 @@ impl QueryEngine {
             FrontResult::Compact(self.compact_front_outcome(outcome, true))
         } else {
             FrontResult::Resident(outcome)
+        }
+    }
+
+    /// Select whether completed program fronts retain intermediate bodies.
+    /// Explicit body-returning queries still fulfill their ordinary contract.
+    pub fn set_retention(&mut self, retention: crate::memo::Retention) {
+        self.retention = retention;
+    }
+
+    fn remember_front_facts(&mut self, id: DefId) {
+        if let Some(entry) = self.checked.get(&id)
+            && entry.consistent
+            && !self.graph.is_dirty(&entry.memo.key)
+            && let Ok(output) = entry.result()
+            && self.checked_summaries.get(&id).is_some_and(|summary| {
+                summary.consistent && !self.graph.is_dirty(&summary.memo.key)
+            })
+        {
+            let signature = self
+                .signatures
+                .get(&id)
+                .and_then(|entry| entry.result().ok());
+            let inputs = dead_arms::body_use(
+                &self.types,
+                signature.as_ref().map(|output| &*output.value),
+                &output.value,
+            );
+            self.front_products.dead_arms.insert(id, inputs);
+        }
+        if let Some(entry) = self.modes.get(&id)
+            && entry.consistent
+            && !self.graph.is_dirty(&entry.memo.key)
+            && let Ok(output) = entry.result()
+            && self.summaries.get(&id).is_some_and(|summary| {
+                summary.consistent && !self.graph.is_dirty(&summary.memo.key)
+            })
+        {
+            self.front_products
+                .lowering_inputs
+                .insert(id, lowering::LoweringUse::capture(&output.value.typed));
         }
     }
 

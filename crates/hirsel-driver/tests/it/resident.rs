@@ -1301,3 +1301,180 @@ fn persistent_frontier_control(compact: bool) {
         }
     });
 }
+
+#[test]
+fn production_batch_preserves_lint_and_lowering_facts_after_front_bodies_drop() {
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        let source = fixture.0.join("main.hir");
+        let mut text = String::from(
+            "type Failure = Used() | Stale()\nfn parse()->Result[u8,Failure]{Error(Used())}\nfn helper()->u8{2u8}\nconst N:u8=comptime helper()\nfn main(){let _=N}\n",
+        );
+        for i in 0..64 {
+            text.push_str(&format!("fn ordinary{i}()->u8{{{i}u8}}\n"));
+        }
+        std::fs::write(&source, &text).unwrap();
+        let mut batch = COMPILER
+            .with_retention(memo::Retention::Batch)
+            .load_program_source_with_images(&source, None, &StdImages::none())
+            .unwrap();
+        let mut resident = COMPILER
+            .with_retention(memo::Retention::Resident)
+            .load_program_source_with_images(&source, None, &StdImages::none())
+            .unwrap();
+        let first = batch.check(LoweringPolicy::Comptime).unwrap();
+        let expected = resident.check(LoweringPolicy::Comptime).unwrap();
+        assert_eq!(diagnostics(&first), diagnostics(&expected));
+        assert_eq!(first.diagnostics.len(), 1);
+        assert!(first.diagnostics[0].message.contains("`Stale`"));
+        for i in 0..64 {
+            let owner = path(&format!("ordinary{i}"));
+            assert!(batch.engine.memo_reads(&owner, QueryKind::Check).is_none());
+            assert!(batch.engine.memo_reads(&owner, QueryKind::Modes).is_none());
+            assert!(
+                batch.engine.memo_reads(&owner, QueryKind::Lower).is_none(),
+                "ordinary body unnecessarily lowered"
+            );
+            assert_eq!(batch.engine.recompute_count(&owner, QueryKind::Check), 1);
+            assert_eq!(batch.engine.recompute_count(&owner, QueryKind::Modes), 1);
+            assert!(
+                resident
+                    .engine
+                    .memo_reads(&owner, QueryKind::Modes)
+                    .is_some()
+            );
+        }
+        let before = batch.engine.memo_stats().recomputed.clone();
+        let warm = batch.check(LoweringPolicy::Comptime).unwrap();
+        assert_eq!(diagnostics(&warm), diagnostics(&first));
+        assert_eq!(
+            batch.engine.memo_stats().recomputed,
+            before,
+            "unchanged compact inputs must need no body demand"
+        );
+        let mut last_export = None;
+        for (old, new) in [
+            ("Error(Used())", "Error(Stale())"),
+            ("fn helper()->u8{2u8}", "fn helper()->u8{3u8}"),
+        ] {
+            let edited = text.replace(old, new);
+            assert!(batch.replace_source(&source, edited.clone()).unwrap());
+            let actual = batch.check(LoweringPolicy::Comptime).unwrap();
+            let mut cold = COMPILER
+                .with_retention(memo::Retention::Resident)
+                .load_program_source_with_images(&source, Some(&edited), &StdImages::none())
+                .unwrap();
+            let expected = cold.check(LoweringPolicy::Comptime).unwrap();
+            assert_eq!(diagnostics(&actual), diagnostics(&expected));
+            assert_eq!(actual.completion, expected.completion);
+            for i in 0..64 {
+                assert_eq!(
+                    batch
+                        .engine
+                        .recompute_count(&path(&format!("ordinary{i}")), QueryKind::Modes),
+                    1,
+                    "{old} -> {new}: ordinary{i}"
+                );
+            }
+            last_export = Some(cold.engine.export_tir(&path("N")).unwrap());
+        }
+        let before = batch
+            .engine
+            .recompute_count(&path("ordinary0"), QueryKind::Modes);
+        batch.engine.mode_definition(&path("ordinary0")).unwrap();
+        assert_eq!(
+            batch
+                .engine
+                .recompute_count(&path("ordinary0"), QueryKind::Modes),
+            before + 1
+        );
+        // PS-9 export explicitly demands every body in the entry package.
+        // Keep it after the retention assertions and the ordinary miss probe.
+        assert_eq!(
+            batch.engine.export_tir(&path("N")).unwrap(),
+            last_export.unwrap()
+        );
+    });
+}
+
+#[test]
+fn batch_warning_phase_lives_with_the_summary_and_retires_with_its_owner() {
+    struct Warning(Arc<dyn ModesPhase>);
+    impl ModesPhase for Warning {
+        fn check_modes(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: Arc<TypedBody>,
+            signature: &Signature,
+            products: &mut PhaseProducts,
+            provider: &mut dyn SignatureProvider,
+        ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
+            let syntax = body.syntax.clone();
+            let mut output = self
+                .0
+                .check_modes(t, m, body, signature, products, provider)?;
+            if syntax.item.definition.0.name == "warn" {
+                let mut warning = hirsel_diag::Diagnostic::error(
+                    const { hirsel_diag::RuleId::of("LANG-1") },
+                    syntax.item.name_span,
+                    "fixture mode warning",
+                );
+                warning.severity = hirsel_diag::Severity::Warning;
+                products
+                    .mode_diagnostics
+                    .push((warning.clone(), "ownership".into()));
+                output.diagnostics.push(warning);
+            }
+            Ok(output)
+        }
+    }
+    with_compiler_stack(|| {
+        let mut adapters = compiler_adapters();
+        adapters.modes = Some(Arc::new(Warning(adapters.modes.take().unwrap())));
+        let mut baseline_adapters = compiler_adapters();
+        baseline_adapters.modes = Some(Arc::new(Warning(baseline_adapters.modes.take().unwrap())));
+        let mut baseline = QueryEngine::new(default_environment(), baseline_adapters);
+        let file = baseline
+            .sources
+            .add("warnings.hir", "fn warn(){}\n".into())
+            .unwrap();
+        baseline.parse_file(file, &default_context()).unwrap();
+        let expected = baseline.mode_definition(&path("warn")).unwrap();
+        assert_eq!(expected.diagnostics.len(), 1);
+        let expected_phase = baseline.diagnostic_phase(&expected.diagnostics[0]);
+        assert_eq!(expected_phase, Some("ownership".into()));
+        let mut engine = QueryEngine::new(default_environment(), adapters);
+        let file = engine
+            .sources
+            .add("warnings.hir", "fn warn(){}\n".into())
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let outcomes = engine.publish_definitions(
+            vec![path("warn")],
+            hirsel_intern::jobs::Jobs::new(2),
+            memo::Retention::Batch,
+        );
+        let diagnostic = outcomes[0].result.as_ref().unwrap().diagnostics[0].clone();
+        assert_eq!(
+            diagnostic.render_human(&engine.sources),
+            expected.diagnostics[0].render_human(&baseline.sources)
+        );
+        assert_eq!(engine.diagnostic_phase(&diagnostic), expected_phase);
+        assert!(engine.memo_reads(&path("warn"), QueryKind::Check).is_none());
+        assert!(engine.memo_reads(&path("warn"), QueryKind::Modes).is_none());
+        let file = engine
+            .sources
+            .add("warnings.hir", "fn quiet(){}\n".into())
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let outcomes = engine.publish_definitions(
+            vec![path("quiet")],
+            hirsel_intern::jobs::Jobs::new(2),
+            memo::Retention::Batch,
+        );
+        assert!(outcomes[0].result.as_ref().unwrap().diagnostics.is_empty());
+        engine.last_phase = None;
+        assert_eq!(engine.diagnostic_phase(&diagnostic), None);
+    });
+}

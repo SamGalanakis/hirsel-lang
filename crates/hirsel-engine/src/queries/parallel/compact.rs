@@ -108,6 +108,8 @@ pub(crate) struct CompactCompleted {
     checked: Option<CompactStage>,
     modes: Option<CompactStage>,
     checked_summary: Option<CheckedSummary>,
+    dead_arms: Option<crate::tools::DeadArmUse>,
+    lowering_inputs: Option<lowering::LoweringUse>,
     payload: Option<Vec<u8>>,
     outcome: PublishedResult,
 }
@@ -134,6 +136,21 @@ impl CompactCompleted {
             let (summary, growth) = summarize(worker.types, &output.value);
             CheckedSummary { summary, growth }
         });
+        let dead_arms = checked_output.as_ref().map(|output| {
+            dead_arms::body_use(
+                worker.types,
+                worker
+                    .snapshot
+                    .signature(DefId::intern(&done.definition))
+                    .and_then(Result::ok)
+                    .map(|signature| &**signature),
+                &output.value,
+            )
+        });
+        let lowering_inputs = result
+            .as_ref()
+            .ok()
+            .map(|output| lowering::LoweringUse::capture(&output.value.typed));
         let diagnostic_phases: Vec<_> = diagnostics
             .iter()
             .map(|d| {
@@ -243,6 +260,8 @@ impl CompactCompleted {
             checked,
             modes,
             checked_summary,
+            dead_arms,
+            lowering_inputs,
             payload: consistent.then_some(payload).flatten(),
             outcome: PublishedResult {
                 definition: done.definition,
@@ -263,6 +282,8 @@ impl QueryEngine {
             checked,
             modes,
             checked_summary,
+            dead_arms,
+            lowering_inputs,
             payload,
             mut outcome,
             ..
@@ -282,6 +303,9 @@ impl QueryEngine {
             if stage.consistent
                 && let Some(summary) = checked_summary
             {
+                if let Some(inputs) = dead_arms {
+                    self.front_products.dead_arms.insert(id, inputs);
+                }
                 self.start(path, QueryKind::CheckedSummary)
                     .expect("front workers cannot reenter queries");
                 self.record_checked_summary(
@@ -331,7 +355,18 @@ impl QueryEngine {
             if let Ok(published) = &outcome.result {
                 self.start(path, QueryKind::Summary)
                     .expect("front workers cannot reenter queries");
-                self.record_summary(published.summary.clone(), detail, false);
+                self.record_summary_products(
+                    published.summary.clone(),
+                    detail,
+                    false,
+                    Arc::new(PhaseProducts {
+                        mode_diagnostics: outcome.diagnostic_phases.clone(),
+                        ..Default::default()
+                    }),
+                );
+                if let Some(inputs) = lowering_inputs {
+                    self.front_products.lowering_inputs.insert(id, inputs);
+                }
                 self.active.remove(&(path.clone(), QueryKind::Summary));
             }
         }

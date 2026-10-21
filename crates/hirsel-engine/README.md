@@ -271,6 +271,15 @@ owners precede independent source ordering. The frozen Diagnostic lacks obligati
 kinds, so known producer messages distinguish generic copying from other bounds
 and repeat invocation from required multiplicity.
 
+Compiler-created program fronts use `Retention::Batch`: each worker captures
+independent checked/final summaries, diagnostic stages, complete reads and the
+compact lowering/lint inputs, then releases its intermediate bodies before
+accepting another task. Explicit body demands still take the ordinary memo miss
+path. `Compiler::with_retention(Resident)` retains front bodies for resident
+hosts; the driver's `Session` selects it. Low-level `QueryEngine::new` keeps
+Resident behavior unless `set_retention` selects Batch. Image proof construction
+retains its source products while records are captured.
+
 `mode_definition` exposes the enriched body without requiring executable code for
 a type or bodyless declaration. File checking obtains source diagnostics from all
 independent definitions before lowering error-free executable bodies. `lower_to_tir`

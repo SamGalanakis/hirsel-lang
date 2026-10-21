@@ -76,6 +76,12 @@ signature, lookup, representation and execution reads before using a result.
 Lowered TIR carries the validator's own recorded reads; missing or stale
 validation evidence runs V before use. A corrupt entry is a cache miss.
 
+One-shot compiler fronts release checked and analyzed bodies on publication.
+Their summaries, diagnostics and dependency receipts remain cached. Library
+hosts can select `Compiler::with_retention(Retention::Resident)` to retain front
+bodies; resident `Session` instances do so. This choice changes retention and
+recomputation, not program output.
+
 `HIRSEL_RESULTS` selects `dir@1` (the default), `mem@1`, `none@1` or `sim@1`;
 `HIRSEL_RESULTS_DIR` overrides the disk directory. `HIRSEL_VERIFY_CACHE=1`
 recomputes disk hits and compares their canonical bytes. Use `none@1` with

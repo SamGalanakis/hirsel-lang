@@ -12,6 +12,7 @@ pub struct Compiler {
     identity: [u8; 32],
     /// Whether the sessions this compiler starts run V.
     verify: Verify,
+    retention: crate::memo::Retention,
     comptime_limits: Option<hirsel_interp::Limits>,
 }
 impl Compiler {
@@ -21,12 +22,17 @@ impl Compiler {
             phases,
             identity,
             verify: Verify::On,
+            retention: crate::memo::Retention::Batch,
             comptime_limits: None,
         }
     }
     /// This compiler with V `verify` (`--no-verify` selects `Verify::Off`).
     pub const fn with_verify(self, verify: Verify) -> Self {
         Self { verify, ..self }
+    }
+    /// Retain intermediate front bodies only for an explicit resident host.
+    pub const fn with_retention(self, retention: crate::memo::Retention) -> Self {
+        Self { retention, ..self }
     }
     pub fn verify(&self) -> Verify {
         self.verify
@@ -45,6 +51,7 @@ impl Compiler {
     pub(crate) fn engine(&self, environment: QueryEnvironment) -> QueryEngine {
         let mut engine = QueryEngine::new(environment, self.adapters());
         engine.verify = self.verify;
+        engine.set_retention(self.retention);
         engine.comptime_limits = self.comptime_limits();
         engine.session = true;
         engine.store_identity = self.identity();

@@ -89,6 +89,17 @@ impl QueryEngine {
             return entry.result().map(|o| o.value.clone());
         }
         let analyzed = completed.result()?;
+        let products = Arc::new(PhaseProducts {
+            mode_diagnostics: analyzed
+                .diagnostics
+                .iter()
+                .filter_map(|diagnostic| {
+                    self.diagnostic_phase(diagnostic)
+                        .map(|phase| (diagnostic.clone(), phase))
+                })
+                .collect(),
+            ..Default::default()
+        });
         self.start(path, QueryKind::Summary)?;
         let (summary, growth) = summarize(self.types(), &analyzed.value.typed);
         let reads = completed.memo.reads.clone();
@@ -109,7 +120,7 @@ impl QueryEngine {
             reads,
             text,
         });
-        self.record_summary(published.clone(), completed.detail.clone(), false);
+        self.record_summary_products(published.clone(), completed.detail.clone(), false, products);
         self.active.remove(&(path.clone(), QueryKind::Summary));
         Ok(published)
     }
@@ -175,6 +186,16 @@ impl QueryEngine {
         detail: DependencyReads,
         adopted: bool,
     ) {
+        self.record_summary_products(summary, detail, adopted, Default::default());
+    }
+
+    pub(super) fn record_summary_products(
+        &mut self,
+        summary: Arc<PublishedSummary>,
+        detail: DependencyReads,
+        adopted: bool,
+        products: Arc<PhaseProducts>,
+    ) {
         let definition = summary.definition;
         let durability = summary
             .reads
@@ -201,7 +222,7 @@ impl QueryEngine {
             std::sync::Arc::new(crate::queries::Entry {
                 memo,
                 detail,
-                products: Default::default(),
+                products,
                 covered: vec![],
                 depth: None,
                 consistent: true,

@@ -12,6 +12,7 @@ pub(crate) struct FrontProducts {
     lowered: DefMap<LowerProduct>,
     selection: DefMap<std::sync::Arc<PublishedSummary>>,
     pub(crate) dead_arms: DefMap<DeadArmUse>,
+    pub(crate) lowering_inputs: DefMap<crate::queries::lowering::LoweringUse>,
     verify: Option<Verify>,
     invalidated: DefMap<u64>,
 }
@@ -38,6 +39,7 @@ impl FrontProducts {
         self.lowered.remove(&definition);
         self.selection.remove(&definition);
         self.dead_arms.remove(&definition);
+        self.lowering_inputs.remove(&definition);
         self.invalidated.insert(definition, generation);
     }
     pub(crate) fn forget(&mut self, key: &crate::memo::MemoKey) {
@@ -45,6 +47,7 @@ impl FrontProducts {
             QueryKind::Summary => {
                 self.outcomes.remove(&key.def);
                 self.selection.remove(&key.def);
+                self.lowering_inputs.remove(&key.def);
             }
             QueryKind::CheckedSummary => {
                 self.checked.remove(&key.def);
@@ -311,17 +314,21 @@ impl QueryEngine {
             })
             .cloned()
             .collect();
-        let refreshed = self.publish_definitions(missing, jobs, crate::memo::Retention::Resident);
+        let refreshed = self.publish_definitions(missing, jobs, self.retention);
         let mut current = DefMap::default();
         let mut acknowledged = vec![];
         for outcome in refreshed {
             let definition = DefId::intern(&outcome.definition);
             if !outcome.reads.is_empty()
-                && outcome.phase.is_some_and(|phase| {
-                    self.graph
-                        .memos_of(definition)
-                        .any(|key| key.kind == phase && !self.graph.is_dirty(key))
-                })
+                && (outcome
+                    .result
+                    .as_ref()
+                    .is_ok_and(|published| self.current_front_summary(&published.summary))
+                    || outcome.phase.is_some_and(|phase| {
+                        self.graph
+                            .memos_of(definition)
+                            .any(|key| key.kind == phase && !self.graph.is_dirty(key))
+                    }))
                 && !outcome
                     .result
                     .as_ref()

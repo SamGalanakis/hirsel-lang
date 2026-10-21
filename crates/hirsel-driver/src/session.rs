@@ -158,6 +158,7 @@ impl Session {
             .insert(sidecar.clone(), (false, std::fs::read(sidecar).ok()));
         let program = crate::COMPILER
             .with_verify(self.verify)
+            .with_retention(hirsel_engine::memo::Retention::Resident)
             .load_program(&self.entry)?;
         // A source is watched with the text the program holds, so an edit
         // racing the load is applied on the next use.
