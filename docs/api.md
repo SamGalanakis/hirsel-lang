@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1983 exported definitions; 825 variants.
+1999 exported definitions; 831 variants.
 
 ## Types and roots
 
@@ -8282,6 +8282,137 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_4
 - `@preserves_unique(builder) pub fn json.write_text_into(text: String, mut builder: List[u8]) -> () uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8)
+
+
+## json_document
+
+<a id="def-std_401_2fjson_5fdocument_2fDocument"></a>
+
+- `pub opaque type json_document.Document: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fjson_5fdocument_2fKind"></a>
+
+- `pub type json_document.Kind = Null | Bool | Number | Text | Array | Object`
+
+<a id="def-std_401_2fjson_5fdocument_2fKind_23Array"></a>
+
+- `Array -> json_document.Kind`
+
+Variant of json_document.Kind.
+
+<a id="def-std_401_2fjson_5fdocument_2fKind_23Bool"></a>
+
+- `Bool -> json_document.Kind`
+
+Variant of json_document.Kind.
+
+<a id="def-std_401_2fjson_5fdocument_2fKind_23Null"></a>
+
+- `Null -> json_document.Kind`
+
+Variant of json_document.Kind.
+
+<a id="def-std_401_2fjson_5fdocument_2fKind_23Number"></a>
+
+- `Number -> json_document.Kind`
+
+Variant of json_document.Kind.
+
+<a id="def-std_401_2fjson_5fdocument_2fKind_23Object"></a>
+
+- `Object -> json_document.Kind`
+
+Variant of json_document.Kind.
+
+<a id="def-std_401_2fjson_5fdocument_2fKind_23Text"></a>
+
+- `Text -> json_document.Kind`
+
+Variant of json_document.Kind.
+
+<a id="def-std_401_2fjson_5fdocument_2fbool_5fvalue"></a>
+
+- `pub fn json_document.bool_value(doc: Document, at: u64) -> Option[bool] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2fcount"></a>
+
+- `pub fn json_document.count(doc: Document, at: u64) -> Option[u64] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2ffirst_5fchild"></a>
+
+- `pub fn json_document.first_child(doc: Document, at: u64) -> Option[u64] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2fkey_5fbytes"></a>
+
+- `pub fn json_document.key_bytes(doc: Document, at: u64) -> Option[Bytes] in doc uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2fkind"></a>
+
+- `pub fn json_document.kind(doc: Document, at: u64) -> Option[Kind] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument), [`std@1/json_document/Kind`](#def-std_401_2fjson_5fdocument_2fKind)
+
+<a id="def-std_401_2fjson_5fdocument_2fmember"></a>
+
+- `pub fn json_document.member(doc: Document, at: u64, key: String) -> Option[u64] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2fnext_5fsibling"></a>
+
+- `pub fn json_document.next_sibling(doc: Document, at: u64) -> Option[u64] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2fnumber_5fbytes"></a>
+
+- `pub fn json_document.number_bytes(doc: Document, at: u64) -> Option[Bytes] in doc uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2froot"></a>
+
+- `pub fn json_document.root(doc: Document) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2fstringify"></a>
+
+- `pub fn json_document.stringify(doc: Document) -> Result[unique String, json.JsonError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2ftext_5fbytes"></a>
+
+- `pub fn json_document.text_bytes(doc: Document, at: u64) -> Option[Bytes] in doc uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2ftext_5fowned"></a>
+
+- `pub fn json_document.text_owned(doc: Document, at: u64) -> Option[String] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2fto_5fowned"></a>
+
+- `pub fn json_document.to_owned(doc: Document, at: u64) -> Option[json.Value] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
+
+<a id="def-std_401_2fjson_5fdocument_2fwith_5fdocument"></a>
+
+- `pub fn json_document.with_document[R](take input: String, body: fn(doc: Document) -> R) -> Result[ R, json.JsonError ] uses {body}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json_document/Document`](#def-std_401_2fjson_5fdocument_2fDocument)
 
 
 ## jwt
