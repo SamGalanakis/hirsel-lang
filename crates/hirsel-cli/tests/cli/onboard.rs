@@ -70,6 +70,33 @@ fn new_creates_tested_runnable_packages_and_refuses_existing_contents() {
         let tested = success(&["test", manifest.to_str().unwrap(), "--json"]);
         let tests: serde_json::Value = serde_json::from_slice(&tested.stdout).unwrap();
         assert_eq!(tests["summary"]["passed"], 1, "{tests}");
+        success(&["check", manifest.to_str().unwrap()]);
+        success(&["check", "--safe", manifest.to_str().unwrap()]);
+        success(&["doc", manifest.to_str().unwrap()]);
+        if library {
+            for (command, status) in [("run", 3), ("build", 1)] {
+                let executable = directory.join("unused");
+                let mut args = vec![command, manifest.to_str().unwrap()];
+                if command == "build" {
+                    args.extend(["-o", executable.to_str().unwrap()]);
+                }
+                let refused = cli(&args);
+                assert_eq!(refused.status.code(), Some(status), "{refused:?}");
+                assert!(
+                    String::from_utf8_lossy(&refused.stderr)
+                        .contains("launch manifest requires entry"),
+                    "{refused:?}"
+                );
+            }
+            std::fs::write(
+                directory.join("main.hir"),
+                "pub fn greeting() -> u64 { true }\n",
+            )
+            .unwrap();
+            let rejected = cli(&["check", manifest.to_str().unwrap()]);
+            assert_eq!(rejected.status.code(), Some(1), "{rejected:?}");
+            assert!(String::from_utf8_lossy(&rejected.stderr).contains("LANG-7"));
+        }
         if !library {
             let source = directory.join("main.hir");
             let grants = directory.join("grants.json");

@@ -165,7 +165,13 @@ impl Compiler {
         replacement: Option<&str>,
         images: &StdImages,
     ) -> Result<LoadedProgram, ToolError> {
-        crate::package::load_program_source_with_images(self, path, replacement, images, false)
+        crate::package::load_program_source_with_images(
+            self,
+            path,
+            replacement,
+            images,
+            crate::package::EntrySelection::Launch,
+        )
     }
     /// Load exclusively from explicit input observations and immutable image
     /// handles. Discovery closes the package/input set without source parsing,
@@ -185,10 +191,20 @@ impl Compiler {
             crate::package::Loading {
                 replacement: None,
                 images,
-                package_only: false,
+                entry_selection: crate::package::EntrySelection::Launch,
                 parse_sources,
                 rebuild_images: false,
             },
+        )
+    }
+    /// Load sources for checking, accepting a package with no launch entry.
+    pub fn load_check_package(&self, path: &Path) -> Result<LoadedProgram, ToolError> {
+        crate::package::load_program_source_with_images(
+            self,
+            path,
+            None,
+            &StdImages::toolchain(),
+            crate::package::EntrySelection::Check,
         )
     }
     /// Load an explicit test package without requiring a launch entry. The root
@@ -199,7 +215,7 @@ impl Compiler {
             manifest,
             None,
             &StdImages::toolchain(),
-            true,
+            crate::package::EntrySelection::Test,
         )
     }
     /// Write to `output` the std image of the package `manifest` describes,
@@ -266,7 +282,7 @@ impl Compiler {
     /// A partial pipeline can produce rejection diagnostics, but never a clean acceptance.
     pub fn check_path(&self, path: &Path) -> Result<CheckOutput, ToolError> {
         with_compiler_stack(|| {
-            let mut program = self.load_program(path)?;
+            let mut program = self.load_check_package(path)?;
             program
                 .check(self.lowering)
                 .map_err(|error| program.error(error))
@@ -280,13 +296,16 @@ impl Compiler {
         path: &Path,
     ) -> Result<(CheckOutput, Option<(DefPath, Option<UnsafeReach>)>), ToolError> {
         with_compiler_stack(|| {
-            let mut program = self.load_program(path)?;
+            let mut program = self.load_check_package(path)?;
             let output = program
                 .check(self.lowering)
                 .map_err(|error| program.error(error))?;
             if crate::queries::has_errors(&output.diagnostics)
                 || output.completion != CheckCompletion::Complete
             {
+                return Ok((output, None));
+            }
+            if program.launch_entry().is_none() {
                 return Ok((output, None));
             }
             let reach = program.unsafe_reach()?;

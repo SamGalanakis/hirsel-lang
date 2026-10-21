@@ -83,6 +83,9 @@ pub fn check_safe_path(
         {
             return Ok((output, None));
         }
+        if program.launch_entry().is_none() {
+            return Ok((output, None));
+        }
         let reach = program.unsafe_reach()?;
         Ok((output, Some((program.entry.clone(), reach))))
     })

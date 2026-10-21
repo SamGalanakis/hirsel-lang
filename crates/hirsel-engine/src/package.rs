@@ -110,6 +110,7 @@ pub struct LoadedProgram {
     pub engine: QueryEngine,
     pub files: Vec<(FileId, FileContext)>,
     pub entry: DefPath,
+    has_launch_entry: bool,
     pub primary: FileId,
     /// The selected packages marked `unsafe ffi`, in package order (PROG-4).
     pub unsafe_ffi: Vec<UnsafeFfiPackage>,
@@ -243,7 +244,14 @@ impl LoadedProgram {
             unsafe_ffi: self.unsafe_ffi.clone(),
         })
     }
+    /// The manifest-selected entry, if this package can be launched.
+    pub fn launch_entry(&self) -> Option<&DefPath> {
+        self.has_launch_entry.then_some(&self.entry)
+    }
     pub fn check_for_execution(&mut self) -> Result<(), ToolError> {
+        if !self.has_launch_entry {
+            return Err(invalid("launch manifest requires entry"));
+        }
         let result = self.check(LoweringPolicy::Reachable).and_then(|output| {
             if crate::queries::has_errors(&output.diagnostics) {
                 Err(QueryError::Diagnostics(output.diagnostics))
@@ -497,7 +505,7 @@ pub(crate) fn load_program_source_with_images(
     path: &Path,
     replacement: Option<&str>,
     images: &StdImages,
-    package_only: bool,
+    entry_selection: EntrySelection,
 ) -> Result<LoadedProgram, ToolError> {
     load_program_inputs(
         compiler,
@@ -506,17 +514,23 @@ pub(crate) fn load_program_source_with_images(
         Loading {
             replacement,
             images,
-            package_only,
+            entry_selection,
             parse_sources: true,
             rebuild_images: true,
         },
     )
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum EntrySelection {
+    Launch,
+    Check,
+    Test,
+}
 pub(crate) struct Loading<'a> {
     pub replacement: Option<&'a str>,
     pub images: &'a StdImages,
-    pub package_only: bool,
+    pub entry_selection: EntrySelection,
     pub parse_sources: bool,
     pub rebuild_images: bool,
 }
@@ -529,19 +543,21 @@ pub(crate) fn load_program_inputs(
     let Loading {
         replacement,
         images,
-        package_only,
+        entry_selection,
         parse_sources,
         rebuild_images,
     } = loading;
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
     let (graph, package) = Graph::program_inputs(path, inputs)?;
     let root = graph.packages.get(&package).unwrap();
-    let entry = if package_only {
+    let entry = if matches!(entry_selection, EntrySelection::Test)
+        || (matches!(entry_selection, EntrySelection::Check) && root.entry.is_none())
+    {
         entry_path(
             &root
                 .sources
                 .first()
-                .ok_or_else(|| invalid("test package has no sources"))?
+                .ok_or_else(|| invalid("package has no sources"))?
                 .1,
         )
     } else {
@@ -685,6 +701,7 @@ pub(crate) fn load_program_inputs(
         engine,
         files: ids,
         entry,
+        has_launch_entry: root.entry.is_some(),
         primary: primary.ok_or_else(|| invalid("missing primary source"))?,
         unsafe_ffi,
         image_notes: vec![],

@@ -231,7 +231,7 @@ impl Session {
             Some(config) => compiler.with_config(config.clone()),
             None => compiler,
         };
-        let program = match compiler.load_program(&self.entry) {
+        let program = match compiler.load_check_package(&self.entry) {
             Ok(program) => program,
             Err(error) => {
                 // A first manifest load can fail after reading an imported

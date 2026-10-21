@@ -2363,3 +2363,50 @@ fn cold_compact_publication_observes_each_owners_notification_once() {
         );
     });
 }
+
+#[test]
+fn library_session_checks_every_source_and_cannot_launch() {
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        fixture.write("first.hir", "pub fn value() -> u8 { 1u8 }\n");
+        fixture.write("other.hir", "pub fn main() -> u8 { true }\n");
+        let manifest = fixture.0.join("hirsel.json");
+        let mut value = serde_json::json!({
+            "schema": 1, "package": {"name":"library", "version":"1"},
+            "sources":[{"path":"first.hir", "module":["first"]},
+                       {"path":"other.hir", "module":["other"]}], "dependencies":[]
+        });
+        std::fs::write(&manifest, value.to_string()).unwrap();
+        let mut session = session::Session::open(&manifest, Verify::On);
+        let rejected = session.check().unwrap();
+        assert!(
+            rejected
+                .diagnostics
+                .iter()
+                .any(|d| d.rule.as_str() == "LANG-7")
+        );
+        fixture.write("other.hir", "pub fn main() -> u8 { 2u8 }\n");
+        assert!(session.check().unwrap().diagnostics.is_empty());
+        assert_eq!(session.stats().loads, 1);
+        let program = session.program().unwrap();
+        assert!(program.launch_entry().is_none());
+        assert!(
+            program
+                .check_for_execution()
+                .unwrap_err()
+                .to_string()
+                .contains("launch manifest requires entry")
+        );
+        let compiler = hirsel_driver::COMPILER;
+        let (checked, entry) = compiler.check_safe_path(&manifest).unwrap();
+        assert!(checked.diagnostics.is_empty());
+        assert!(entry.is_none());
+        value["entry"] = serde_json::json!({"module":["other"], "name":"main"});
+        std::fs::write(&manifest, value.to_string()).unwrap();
+        assert!(session.check().unwrap().diagnostics.is_empty());
+        assert_eq!(
+            session.program().unwrap().launch_entry().unwrap().0.modules,
+            ["other"]
+        );
+    });
+}

@@ -52,7 +52,7 @@ checking an example into this repository, use `../../stdlib/std@1/hirsel.json`
 from its manifest so another checkout selects its matching std. Keep absolute
 paths for a package tied to an installed toolchain.
 
-`test` and `doc` accept a library manifest without `entry`; `check`, `build` and
+`check`, `test` and `doc` accept a library manifest without `entry`; `build` and
 `run` require a launch manifest with an entry. To add a CLI without turning a
 library into an application, keep a second launch manifest listing the library
 sources plus a driver. [snapshift](../examples/snapshift/README.md) shows both
