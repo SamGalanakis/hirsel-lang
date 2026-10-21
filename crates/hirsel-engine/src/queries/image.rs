@@ -24,6 +24,63 @@ pub(crate) struct AdoptedImage {
     parsed: BTreeSet<u32>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // An invalid hand-built TIR control: it names an entry body that is absent.
+    // Skipping V would accept it, so these tests exercise evidence admission.
+    fn invalid_lowering() -> ImageLowering {
+        ImageLowering {
+            definition: Arc::new(hirsel_tir::Definition {
+                caller_bodies: vec![],
+                protocol_associations: vec![],
+                types: Arc::from([]),
+                path: DefId::intern(&DefPath::core("image_evidence_control")),
+                signature_hash: ContentHash::of_bytes(b"control"),
+                bodies: vec![],
+                entry: hirsel_tir::BodyId(0),
+                contracts: vec![],
+            }),
+            dependencies: vec![],
+            execution: Reads::empty(),
+            verdict: None,
+        }
+    }
+
+    #[test]
+    fn absent_or_stale_image_verdict_requires_v() {
+        crate::with_compiler_stack(|| {
+            let mut engine = QueryEngine::new(default_environment(), PhaseAdapters::default());
+            let mut lowering = invalid_lowering();
+            assert!(engine.admit_image_lowering(&lowering).is_err());
+            lowering.verdict = Some(vec![hirsel_validate::VRead::View(
+                lowering.definition.path,
+                hirsel_validate::ValidationDigest(ContentHash::of_bytes(b"obsolete view")),
+            )]);
+            assert!(engine.admit_image_lowering(&lowering).is_err());
+            assert!(!engine.lowered_verdict_holds(&lowering.definition));
+        });
+    }
+
+    #[test]
+    fn image_verification_off_does_not_create_acceptance_evidence() {
+        crate::with_compiler_stack(|| {
+            let mut engine = QueryEngine::new(default_environment(), PhaseAdapters::default());
+            let lowering = invalid_lowering();
+            engine.verify = Verify::Off;
+            assert!(engine.admit_image_lowering(&lowering).is_ok());
+            assert!(
+                !engine
+                    .lower_verdicts
+                    .contains_key(&lowering.definition.path)
+            );
+            engine.verify = Verify::On;
+            assert!(engine.admit_image_lowering(&lowering).is_err());
+        });
+    }
+}
+
 fn corrupt(message: impl std::fmt::Display) -> QueryError {
     QueryError::Operational(hirsel_types::OperationalFailure {
         operation: "std image".into(),
@@ -267,11 +324,31 @@ impl QueryEngine {
     pub(super) fn image_lowering(
         &mut self,
         path: &DefPath,
-    ) -> Option<QueryOutput<hirsel_tir::DefinitionRef>> {
-        let record = self.image_record(path)?;
-        let lowering = record.lowering.as_ref()?;
+    ) -> Result<Option<QueryOutput<hirsel_tir::DefinitionRef>>, QueryError> {
+        let Some(record) = self.image_record(path) else {
+            return Ok(None);
+        };
+        let Some(lowering) = record.lowering.as_ref() else {
+            return Ok(None);
+        };
+        self.admit_image_lowering(lowering).map(Some)
+    }
+    fn admit_image_lowering(
+        &mut self,
+        lowering: &ImageLowering,
+    ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
+        if self.verify == Verify::On {
+            if !self.lowered_verdict_holds(&lowering.definition)
+                && let Some(reads) = &lowering.verdict
+            {
+                self.remember_lowered_verdict(lowering.definition.clone(), reads.clone());
+            }
+            // The image key binds its producer and sources, but acceptance also
+            // depends on the importing snapshot's independently checked views.
+            self.ensure_lowered_verdict(&lowering.definition)?;
+        }
         self.merge_execution(&lowering.execution);
-        Some(QueryOutput {
+        Ok(QueryOutput {
             value: lowering.definition.clone(),
             diagnostics: vec![],
             dependencies: lowering.dependencies.clone(),
@@ -316,10 +393,14 @@ impl QueryEngine {
             if !lowered.diagnostics.is_empty() {
                 return Ok(None);
             }
+            let verdict = self
+                .lowered_verdict_holds(&lowered.value)
+                .then(|| self.lower_verdicts[&lowered.value.path].1.clone());
             Some(ImageLowering {
                 definition: lowered.value,
                 dependencies: lowered.dependencies,
                 execution,
+                verdict,
             })
         } else {
             None
