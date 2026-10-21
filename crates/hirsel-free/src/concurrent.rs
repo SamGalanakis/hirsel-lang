@@ -35,7 +35,23 @@ pub struct Task {
     spawned: u32,
 }
 
+/// An allocated child log that has not joined the recorder registry. A cut
+/// before its parent's spawn section must not publish this child's START.
+pub struct PreparedChild(Task);
+
 impl Task {
+    /// Allocate the next child before opening its parent's spawn section.
+    /// One owner may prepare only its next spawn; committing a different
+    /// child first makes this reservation stale and is rejected.
+    pub fn prepare_child(&self) -> PreparedChild {
+        let mut path = self.path().to_vec();
+        path.push(self.spawned);
+        PreparedChild(unregistered_task(
+            self.identity.clone(),
+            path,
+            self.trace.is_some(),
+        ))
+    }
     pub fn path(&self) -> &[u32] {
         self.log.path()
     }
@@ -364,11 +380,15 @@ fn chunks(scanned: Vec<Scanned>) -> Vec<TaskChunk> {
         .collect()
 }
 fn new_task(section: &Section<'_>, identity: Arc<()>, path: Vec<u32>, trace: bool) -> Task {
-    let log = TaskLog::new(path);
-    section.register(&log);
+    let task = unregistered_task(identity, path, trace);
+    section.register(&task.log);
+    task
+}
+
+fn unregistered_task(identity: Arc<()>, path: Vec<u32>, trace: bool) -> Task {
     Task {
         identity,
-        log,
+        log: TaskLog::new(path),
         encoder: Encoder::default(),
         last: HashMap::new(),
         epochs: HashMap::new(),
@@ -391,19 +411,26 @@ pub struct Writer<'g, 't> {
 
 impl Writer<'_, '_> {
     pub fn spawn(&mut self) -> Task {
-        let mut path = self.task.path().to_vec();
-        path.push(self.task.spawned);
+        self.spawn_prepared(self.task.prepare_child())
+    }
+    /// Register a preallocated log as this owner's next child, in the same
+    /// section as its runtime task-row and handle publication.
+    pub fn spawn_prepared(&mut self, child: PreparedChild) -> Task {
+        let child = child.0;
+        assert!(
+            Arc::ptr_eq(&child.identity, &self.task.identity),
+            "a child belongs to its recorder"
+        );
+        let (index, parent) = child.path().split_last().expect("a child has a parent");
+        assert_eq!(parent, self.task.path(), "a child belongs to its parent");
+        assert_eq!(*index, self.task.spawned, "a child is the next spawn");
         self.task.spawned = self
             .task
             .spawned
             .checked_add(1)
             .expect("spawn path ordinal overflow");
-        new_task(
-            &self.section,
-            self.task.identity.clone(),
-            path,
-            self.task.trace.is_some(),
-        )
+        self.section.register(&child.log);
+        child
     }
     pub fn prepare<B>(&mut self, request: &Request<B>) {
         assert_eq!(self.progress.phase, Phase::Entered);

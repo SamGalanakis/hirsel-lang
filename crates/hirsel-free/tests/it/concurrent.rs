@@ -13,6 +13,44 @@ fn done(op: u64) -> Progress {
 }
 
 #[test]
+fn prepared_children_join_the_cut_only_when_their_spawn_section_commits() {
+    let recorder =
+        Recorder::<Vec<u8>>::new(Vec::new(), b"prepared child", 1, false, true, None).unwrap();
+    let mut worker = recorder.worker(0).unwrap();
+    let mut root = recorder.root(&mut worker).unwrap();
+    let prepared = root.prepare_child();
+    let first = recorder.flush().unwrap().unwrap();
+    assert_eq!(first.progress.len(), 1);
+    assert!(!first.progress.contains_key(&vec![0]));
+    let child = recorder
+        .phase(&mut worker, &mut root, done(1), |writer| {
+            writer.spawn_prepared(prepared)
+        })
+        .unwrap();
+    let second = recorder.flush().unwrap().unwrap();
+    assert_eq!(child.path(), &[0]);
+    assert_eq!(second.progress[&vec![]], done(1));
+    assert_eq!(second.progress[&vec![0]], Progress::START);
+    let prepared = root.prepare_child();
+    let stopped = recorder.stop("cut", None).unwrap().unwrap().0;
+    assert!(!stopped.progress.contains_key(&vec![1]));
+    let mut acted = false;
+    assert!(
+        recorder
+            .phase(&mut worker, &mut root, done(2), |writer| {
+                acted = true;
+                writer.spawn_prepared(prepared)
+            })
+            .is_err()
+    );
+    assert!(!acted);
+    drop(worker);
+    let bytes = recorder.into_sink();
+    let tape = tape::parse(&bytes).unwrap();
+    assert_eq!(tape.cut, stopped.progress);
+}
+
+#[test]
 fn eight_workers_record_object_actions_and_replay_at_one_permit() {
     const TASKS: usize = 8;
     const OPS: u64 = 32;

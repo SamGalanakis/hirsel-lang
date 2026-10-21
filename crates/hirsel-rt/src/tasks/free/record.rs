@@ -249,7 +249,8 @@ impl Task {
 #[cfg(test)]
 pub(crate) fn child(ctx: *mut TaskCtx) -> Stopped<Task> {
     let shared = unsafe { (*ctx).recording.as_ref().unwrap().shared.clone() };
-    let log = phase(ctx, |writer| writer.unwrap().spawn())?;
+    let prepared = unsafe { (*ctx).recording.as_ref().unwrap().log.prepare_child() };
+    let log = phase(ctx, |writer| writer.unwrap().spawn_prepared(prepared))?;
     Ok(Task {
         shared,
         log,
