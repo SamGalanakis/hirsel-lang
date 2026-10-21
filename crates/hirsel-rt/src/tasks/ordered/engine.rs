@@ -448,6 +448,19 @@ pub(crate) unsafe fn atomic_store(
     Ok(())
 }
 
+pub(super) fn is_sender(ctx: *mut TaskCtx, word: u64) -> bool {
+    driver(ctx).carriers.contains_key(&(Kind::Sender, word))
+}
+
+pub(super) fn sender_close(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
+    let footprint = footprint(ctx, Kind::Sender, word, true);
+    submit(
+        ctx,
+        Command::SenderClose { sender: word }.operation(footprint),
+    )?;
+    Ok(())
+}
+
 pub(super) fn carrier_descriptor(ctx: *mut TaskCtx, kind: Kind, word: u64) -> u32 {
     driver(ctx).carriers[&(kind, word)].descriptor
 }

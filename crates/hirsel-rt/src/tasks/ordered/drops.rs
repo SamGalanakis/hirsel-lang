@@ -32,6 +32,12 @@ pub(crate) unsafe fn endpoint(
         assert!(matches!(progress, Progress::Absorbed(_)));
         return Ok(STATUS_OK);
     }
+    // A sender is statically drop.trivial, including a provisional duplicate
+    // whose earlier initialization is still in this same owner's log.
+    if engine::is_sender(ctx, word) {
+        engine::sender_close(ctx, word)?;
+        return Ok(STATUS_OK);
+    }
     engine::at_head(ctx)?;
     let (_, sender) = scheduler(ctx).channels.endpoint_of(word);
     let name = if sender {

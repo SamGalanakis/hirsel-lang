@@ -20,6 +20,13 @@ use hirsel_rt_operations::descriptors::op_descriptor;
 /// Mutex wrappers remain owner-local allocations outside these cell effects.
 /// Drops and task/host effects still need retirement/credit adapters.
 pub(crate) enum Command {
+    TaskCancel {
+        scope: u64,
+        child: u64,
+    },
+    SenderClose {
+        sender: u64,
+    },
     /// A strict-head, same-owner callback. This marker is never offered or
     /// retained in a speculative log; Objects cannot execute it by itself.
     Head {
@@ -72,6 +79,8 @@ pub(crate) enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::TaskCancel { .. } => "task.cancel",
+            Self::SenderClose { .. } => "drop.trivial",
             Self::Head { name } => name,
             Self::AtomicCreate { .. } => "atomic.create",
             Self::MutexCreate { .. } => "mutex.create",
@@ -180,7 +189,9 @@ impl Backend<Command> for Objects<'_> {
     fn can_commit_early(&mut self, op: &Operation<Command>) -> bool {
         let s = super::scheduler(self.ctx);
         match &op.payload {
-            Command::Head { .. } => false,
+            Command::Head { .. } | Command::TaskCancel { .. } | Command::SenderClose { .. } => {
+                false
+            }
             Command::AtomicLoad { word, .. }
             | Command::AtomicStore { word, .. }
             | Command::MutexPut { word, .. } => s.sync.initialized(*word),
@@ -205,6 +216,21 @@ impl Backend<Command> for Objects<'_> {
         let (result, next) = unsafe {
             match &op.payload {
                 Command::Head { .. } => panic!("strict head effect requires its owner callback"),
+                Command::TaskCancel { scope, child } => {
+                    assert!(!early, "cancellation only retires");
+                    let scope = s.scope_handle(*scope);
+                    let child = s.task_handle(*child, scope);
+                    s.cancel(child, super::CANCEL_REQUESTED);
+                    (Outcome::image(0, Vec::new()), Next::Yield)
+                }
+                Command::SenderClose { sender } => {
+                    assert!(!early, "a sender close only retires");
+                    assert!(
+                        s.channels.close(*sender).is_none(),
+                        "sender close has no leftovers"
+                    );
+                    (Outcome::image(0, Vec::new()), Next::Keep)
+                }
                 Command::AtomicCreate { reservation, image } => {
                     let reservation = reservation
                         .borrow_mut()
@@ -437,6 +463,166 @@ mod tests {
             scan: std::ptr::null(),
             scan_words: 0,
         }
+    }
+
+    #[test]
+    fn a_logged_native_cancel_is_invisible_to_older_waiter_polls() {
+        let run = Run::new();
+        let anchor = unsafe { atomic(run.0, 0) };
+        let (scope, generation) = super::super::open_scope(run.0, None);
+        let scope_word = super::super::handle(scope, generation);
+        let child = super::super::Task::new(3, std::ptr::null_mut(), Some(scope), vec![0], None);
+        let s = super::super::scheduler(run.0);
+        s.tasks.push(Some(child));
+        s.task(1).state = super::super::State::Parked;
+        s.task(1).wait = Some(super::super::Wait::Host { token: 7 });
+        let child_word = super::super::handle(1, 3);
+        let mut observations = Vec::new();
+        let mut poll = || {
+            let s = super::super::scheduler(run.0);
+            observations.push((s.canceled_task(1, 0), s.task(1).woken));
+            Vec::new()
+        };
+        let mut events = Vec::new();
+        let mut record = |task, name, _: &Outcome, retirement| {
+            events.push((task, name, retirement));
+        };
+        let mut backend = unsafe { Objects::new(run.0, &mut record, &mut poll) };
+        let mut f = Frontier::new(
+            0,
+            policy(),
+            Settled {
+                level: 0,
+                limit: u64::MAX,
+                fuel: u64::MAX,
+            },
+        );
+        f.held.insert(0, Held::empty());
+        f.enqueue(1, Held::empty());
+        f.enqueue(2, Held::empty());
+        let load = || {
+            Command::AtomicLoad {
+                word: anchor,
+                bytes: 8,
+            }
+            .operation(footprint(0, false))
+        };
+        f.apply_head(empty(), load(), &mut backend).unwrap();
+        let cancel = Command::TaskCancel {
+            scope: scope_word,
+            child: child_word,
+        }
+        .operation(Footprint {
+            writes: BTreeSet::from([Item::Cancel(child_word), Item::Task(child_word)]),
+            ..Footprint::default()
+        });
+        assert!(!backend.can_commit_early(&cancel));
+        assert_eq!(f.offer(2, empty(), cancel, &mut backend).0, Offer::Logged);
+        assert_eq!(super::super::scheduler(run.0).canceled_task(1, 0), None);
+        assert!(!super::super::scheduler(run.0).task(1).woken);
+        f.apply_head(empty(), load(), &mut backend).unwrap();
+        f.absorb(&mut backend).unwrap();
+        assert_eq!(
+            observations,
+            vec![
+                (None, false),
+                (None, false),
+                (Some(super::super::CANCEL_REQUESTED), true)
+            ]
+        );
+        assert_eq!(
+            events,
+            vec![
+                (0, "atomic.load", 0),
+                (1, "atomic.load", 1),
+                (2, "task.cancel", 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_logged_sender_close_keeps_older_polls_open_and_blocks_conflicting_early_ops() {
+        let layout = layout();
+        let run = Run::with_layouts(&[&layout]);
+        let anchor = unsafe { atomic(run.0, 0) };
+        let independent = unsafe { atomic(run.0, 0) };
+        let element =
+            unsafe { crate::channels::Element::new(0, &layout, [0u64; 2].as_ptr().cast()) };
+        let (sender, receiver) = super::super::scheduler(run.0)
+            .channels
+            .open(element, &layout);
+        let channel = super::super::scheduler(run.0)
+            .channels
+            .channel(sender, true);
+        super::super::scheduler(run.0).channels.wait(channel, 0, 9);
+        let mut observations = Vec::new();
+        let mut poll = || {
+            let channels = &mut super::super::scheduler(run.0).channels;
+            let mut touched = Vec::new();
+            channels.take_touched(&mut touched);
+            observations.push((channels.ready(channel), touched.contains(&channel)));
+            Vec::new()
+        };
+        let mut events = Vec::new();
+        let mut record = |_, name, _: &Outcome, retirement| events.push((name, retirement));
+        let mut backend = unsafe { Objects::new(run.0, &mut record, &mut poll) };
+        let mut f = Frontier::new(
+            0,
+            policy(),
+            Settled {
+                level: 0,
+                limit: u64::MAX,
+                fuel: u64::MAX,
+            },
+        );
+        f.held.insert(0, Held::empty());
+        f.enqueue(1, Held::empty());
+        f.enqueue(2, Held::empty());
+        let load = || {
+            Command::AtomicLoad {
+                word: anchor,
+                bytes: 8,
+            }
+            .operation(footprint(0, false))
+        };
+        f.apply_head(empty(), load(), &mut backend).unwrap();
+        let close = Command::SenderClose { sender }.operation(footprint(1, true));
+        assert!(!backend.can_commit_early(&close));
+        assert_eq!(f.offer(2, empty(), close, &mut backend).0, Offer::Logged);
+        assert!(!super::super::scheduler(run.0).channels.ready(channel));
+        // A later operation on this channel cannot pass the uncommitted close.
+        let conflicting = Command::Send {
+            sender,
+            image: RefCell::new([bytes(1), bytes(9)].concat()),
+        }
+        .operation(footprint(1, true));
+        assert!(!f.eligible(2, &conflicting));
+        // An independent store can pass it within this same turn.
+        let store = Command::AtomicStore {
+            word: independent,
+            image: bytes(17),
+        }
+        .operation(footprint(2, true));
+        assert_eq!(f.offer(2, empty(), store, &mut backend).0, Offer::Early);
+        f.apply_head(empty(), load(), &mut backend).unwrap();
+        f.absorb(&mut backend).unwrap();
+        assert!(super::super::scheduler(run.0).channels.ready(channel));
+        // Close keeps the turn: only the following store runs its poll.
+        f.absorb(&mut backend).unwrap();
+        assert_eq!(
+            observations,
+            vec![(false, false), (false, false), (true, true)]
+        );
+        assert_eq!(
+            events,
+            vec![
+                ("atomic.load", 0),
+                ("atomic.load", 1),
+                ("drop.trivial", 2),
+                ("atomic.store", 2)
+            ]
+        );
+        super::super::scheduler(run.0).channels.close(receiver);
     }
 
     #[test]

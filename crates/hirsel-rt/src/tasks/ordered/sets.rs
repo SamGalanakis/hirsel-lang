@@ -1,4 +1,4 @@
-//! Strict-head task sets and cancellation. Iteration follows native add order;
+//! Task sets and cancellation. Iteration follows native add order;
 //! the rest of a holding member is a call, and only the final detach-all phase
 //! yields. Keep operations refresh obtainable handles before returning.
 
@@ -181,16 +181,23 @@ pub(crate) unsafe fn await_any(
 }
 
 /// # Safety
-/// As for TaskCancel; no cancellation state may be read or changed off-head.
+/// As for TaskCancel. Copy the handles before logging; cancellation changes
+/// only at retirement, before that turn's poll.
 pub(crate) unsafe fn cancel(ctx: *mut TaskCtx, scope: *const u64, task: *const u64) -> Stopped<u8> {
-    let (_, progress) = engine::head_effect(ctx, "task.cancel", || {
-        let s = scheduler(ctx);
-        let scope = s.scope_handle(unsafe { scope.read() });
-        let child = s.task_handle(unsafe { task.read() }, scope);
-        s.cancel(child, CANCEL_REQUESTED);
-        ((), Next::Yield)
-    })?;
-    engine::continue_at_head(ctx, progress)?;
+    let scope = unsafe { scope.read() };
+    let child = unsafe { task.read() };
+    engine::submit(
+        ctx,
+        super::Command::TaskCancel { scope, child }.operation(
+            crate::ordered::footprint::Footprint {
+                writes: std::collections::BTreeSet::from([
+                    crate::ordered::footprint::Item::Cancel(child),
+                    crate::ordered::footprint::Item::Task(child),
+                ]),
+                ..Default::default()
+            },
+        ),
+    )?;
     Ok(STATUS_OK)
 }
 

@@ -113,7 +113,12 @@ Spawn scans the unstarted environment with the linked capture program. Task
 result types remain erased by the native spawn ABI, so captured Task handles
 are conservatively unknown, including the spawning parent's obtainable footprint.
 Receive outputs are scanned into their owner's next-turn held set. Native task sets, add/has/take/await-any, member detach/cancel
-and cancel checks now have strict-head adapters too. TaskSetTake refreshes the
+and cancel checks now have adapters too. Cancellation and sender close use owned
+D commands: later tasks may log them, but older polls see neither effect.
+Sender close keeps the turn and blocks a conflicting early channel operation;
+an independent E operation can still pass it. Provisional sender duplicates use
+the retained carrier binding before their initialization retires.
+TaskSetTake refreshes the
 same-turn obtainable closure, conservatively unknown for erased Task results.
 Await-any chooses by completion rank, independent of member add order.
 Detach-all calls holding rests in add order and yields once after its members;
