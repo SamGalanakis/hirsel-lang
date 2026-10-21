@@ -109,6 +109,12 @@ pub trait Backend<P> {
     fn commit(&mut self, task: TaskId, op: &Operation<P>, early: bool) -> Receipt<Self::Result>;
     fn record(&mut self, task: TaskId, op: &Operation<P>, result: &Self::Result, retirement: u64);
     fn publish(&mut self, task: TaskId, op: &Operation<P>, result: &Self::Result);
+    /// Native polling can call a home adapter and release the scheduler role.
+    /// Return true to request an owned polling continuation instead of calling
+    /// poll while Frontier is borrowed. Complete it with Frontier::complete_poll.
+    fn defer_poll(&self) -> bool {
+        false
+    }
     /// Poll once, returning woken tasks in the reference scheduler's order.
     fn poll(&mut self) -> Vec<TaskId>;
 }
@@ -171,6 +177,9 @@ pub enum Progress {
     Absorbed(TaskId),
     Called(TaskId),
     Retired,
+    /// Restore policy metadata before a host bridge; no head is selected
+    /// until the resulting wake list has been passed to complete_poll.
+    Poll,
     Idle,
     Stopped,
 }
@@ -181,6 +190,7 @@ pub struct Frontier<P, R> {
     policy: Policy,
     tasks: BTreeMap<TaskId, Task<P, R>>,
     head: Option<TaskId>,
+    polling: Option<(TaskId, Next)>,
     queue: VecDeque<TaskId>,
     /// Rule 1: queue and first turn captured when this head started.
     eligible_turns: BTreeMap<TaskId, u64>,
@@ -203,6 +213,7 @@ impl<P, R> Frontier<P, R> {
             policy,
             tasks,
             head: Some(root),
+            polling: None,
             queue: VecDeque::new(),
             eligible_turns: BTreeMap::new(),
             held,
@@ -245,7 +256,10 @@ impl<P, R> Frontier<P, R> {
     /// Worker claim, performed while holding the scheduler role.
     pub fn start(&mut self, task: TaskId, worker: u16) {
         let row = self.tasks.get_mut(&task).expect("a live task");
-        assert!(matches!(row.state, State::Queued | State::Ahead));
+        assert!(
+            matches!(row.state, State::Queued | State::Ahead)
+                || (self.head == Some(task) && row.state == State::Pending && row.log.is_empty())
+        );
         row.state = State::Running(worker);
     }
 
@@ -345,6 +359,9 @@ impl<P, R> Frontier<P, R> {
         if self.stopped {
             return (Offer::Stopped, Some((before, operation)));
         }
+        if self.polling.is_some() {
+            return (Offer::Full, Some((before, operation)));
+        }
         assert_ne!(self.head, Some(task), "head ops use apply_head");
         let row = &self.tasks[&task];
         assert!(!matches!(
@@ -417,6 +434,10 @@ impl<P, R> Frontier<P, R> {
         if self.stopped {
             return Ok(Progress::Stopped);
         }
+        assert!(
+            self.polling.is_none(),
+            "complete the poll before new head work"
+        );
         let task = self.head.expect("a head");
         assert!(
             self.tasks[&task].log.is_empty(),
@@ -433,6 +454,9 @@ impl<P, R> Frontier<P, R> {
     ) -> Result<Progress, BudgetKind> {
         if self.stopped {
             return Ok(Progress::Stopped);
+        }
+        if self.polling.is_some() {
+            return Ok(Progress::Poll);
         }
         let Some(task) = self.head else {
             return Ok(Progress::Idle);
@@ -489,10 +513,7 @@ impl<P, R> Frontier<P, R> {
                 self.stopped = true;
                 Ok(Progress::Stopped)
             }
-            next => {
-                self.finish_turn(task, next, backend);
-                Ok(Progress::Retired)
-            }
+            next => Ok(self.finish_turn(task, next, backend)),
         }
     }
 
@@ -524,8 +545,7 @@ impl<P, R> Frontier<P, R> {
         }
         let (_, then_yield) = self.tasks.get_mut(&task).unwrap().calls.take().unwrap();
         if then_yield {
-            self.finish_turn(task, Next::Yield, backend);
-            Progress::Retired
+            self.finish_turn(task, Next::Yield, backend)
         } else {
             Progress::Absorbed(task)
         }
@@ -536,7 +556,8 @@ impl<P, R> Frontier<P, R> {
         task: TaskId,
         next: Next,
         backend: &mut B,
-    ) {
+    ) -> Progress {
+        assert!(self.polling.is_none(), "one retirement poll at a time");
         let row = self.tasks.get_mut(&task).unwrap();
         row.retiring += 1;
         row.producing = row.producing.max(row.retiring);
@@ -552,7 +573,22 @@ impl<P, R> Frontier<P, R> {
             Next::End => State::Done,
             _ => unreachable!("only scheduling transitions finish a turn"),
         };
-        for woken in backend.poll() {
+        self.head = None;
+        self.polling = Some((task, next));
+        if backend.defer_poll() {
+            Progress::Poll
+        } else {
+            self.complete_poll(backend.poll())
+        }
+    }
+
+    /// Complete exactly one retirement's poll after restoring the policy into
+    /// its role-owned slot. Wake order precedes the yielding task's requeue;
+    /// only then is the next head and rule-1 eligibility snapshot selected.
+    pub fn complete_poll(&mut self, woken: Vec<TaskId>) -> Progress {
+        let (task, next) = self.polling.take().expect("a deferred retirement poll");
+        assert!(!self.stopped, "poll completion after a terminal prefix");
+        for woken in woken {
             let waiter = self.tasks.get_mut(&woken).expect("poll names a live task");
             assert_eq!(waiter.state, State::Parked);
             waiter.state = State::Queued;
@@ -568,6 +604,7 @@ impl<P, R> Frontier<P, R> {
             .iter()
             .map(|&task| (task, self.tasks[&task].retiring))
             .collect();
+        Progress::Retired
     }
 }
 

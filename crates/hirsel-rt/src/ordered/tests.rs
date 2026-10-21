@@ -18,6 +18,7 @@ struct Objects {
     published: Vec<TaskId>,
     polls: u64,
     wakes: Vec<TaskId>,
+    deferred: bool,
 }
 
 impl Backend<Command> for Objects {
@@ -48,6 +49,9 @@ impl Backend<Command> for Objects {
     }
     fn publish(&mut self, task: TaskId, _: &Operation<Command>, _: &u64) {
         self.published.push(task);
+    }
+    fn defer_poll(&self) -> bool {
+        self.deferred
     }
     fn poll(&mut self) -> Vec<TaskId> {
         self.polls += 1;
@@ -510,4 +514,49 @@ fn differential_width_jitter_reorder_matrix() {
             }
         }
     }
+}
+
+#[test]
+fn a_deferred_poll_selects_no_head_and_preserves_wake_before_requeue_order() {
+    let (mut f, mut b) = frontier();
+    b.deferred = true;
+    assert_eq!(f.offer(2, empty(), store(7, 1), &mut b).0, Offer::Early);
+    assert_eq!(
+        f.apply_head(empty(), step("task.check_canceled", Next::Yield), &mut b),
+        Ok(Progress::Poll)
+    );
+    assert_eq!(f.head(), None);
+    assert_eq!(f.retired(), 1);
+    assert_eq!(b.polls, 0);
+    let committed = b.committed.len();
+    assert_eq!(f.absorb(&mut b), Ok(Progress::Poll));
+    let (offer, retained) = f.offer(2, empty(), store(8, 1), &mut b);
+    assert_eq!(offer, Offer::Full);
+    assert!(retained.is_some());
+    assert_eq!(b.committed.len(), committed);
+    assert_eq!(f.complete_poll(vec![0]), Progress::Retired);
+    assert_eq!(f.head(), Some(2));
+    assert_eq!(f.queue().collect::<Vec<_>>(), vec![0, 1]);
+    assert_eq!(f.absorb(&mut b), Ok(Progress::Poll));
+    assert_eq!(b.published, vec![2], "publish precedes the deferred poll");
+    assert_eq!(b.polls, 0);
+    assert_eq!(f.complete_poll(vec![]), Progress::Retired);
+    assert_eq!(f.head(), Some(0));
+    assert_eq!(f.queue().collect::<Vec<_>>(), vec![1, 2]);
+}
+
+#[test]
+fn a_pending_keep_can_resume_its_saved_frame_after_absorption() {
+    let (mut f, mut b) = frontier();
+    assert_eq!(
+        f.offer(2, empty(), step("shared.thaw", Next::Keep), &mut b)
+            .0,
+        Offer::Pending
+    );
+    f.apply_head(empty(), step("task.check_canceled", Next::Park), &mut b)
+        .unwrap();
+    assert_eq!(f.head(), Some(2));
+    assert_eq!(f.absorb(&mut b), Ok(Progress::Absorbed(2)));
+    f.start(2, 3);
+    assert_eq!(f.state(2), State::Running(3));
 }

@@ -96,6 +96,16 @@ Mutex wrappers still belong to their owner's allocation/budget path.
 These adapters are not yet installed in the fiber entry path. Drops, task
 operations and host operations still need native boundary adapters.
 
+Native object retirement can return an owned `Progress::Poll` continuation.
+The caller restores policy metadata before accessing host readiness; wake merge
+then precedes the yielding task's requeue and next-head selection. There is no
+head during that interval. New commands are retained by their caller, and an
+early send publishes and touches before the deferred poll is requested.
+`tasks::ordered::driver` tracks selection separately from logical turns and
+physical saved-frame ownership. It suppresses duplicate notifications and
+requires both a physical save and head promotion for full logs or allocation
+pauses. It is policy metadata awaiting installation in native boundary paths.
+
 ## Integration status
 
 This is a protocol and guarded migration substrate, not an enabled concurrent

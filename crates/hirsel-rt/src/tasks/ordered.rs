@@ -2,6 +2,8 @@
 //! ABI images; none retains a pointer into a caller's carrier across run-ahead.
 //! This module does not select a physical worker or run a scheduling point.
 
+pub(crate) mod driver;
+
 use std::cell::RefCell;
 
 use crate::TaskCtx;
@@ -111,7 +113,7 @@ impl Outcome {
 pub(crate) struct Objects<'a> {
     ctx: *mut TaskCtx,
     record: &'a mut dyn FnMut(TaskId, &'static str, &Outcome, u64),
-    poll: &'a mut dyn FnMut() -> Vec<TaskId>,
+    poll: Option<&'a mut dyn FnMut() -> Vec<TaskId>>,
 }
 
 impl<'a> Objects<'a> {
@@ -124,7 +126,26 @@ impl<'a> Objects<'a> {
         record: &'a mut dyn FnMut(TaskId, &'static str, &Outcome, u64),
         poll: &'a mut dyn FnMut() -> Vec<TaskId>,
     ) -> Self {
-        Self { ctx, record, poll }
+        Self {
+            ctx,
+            record,
+            poll: Some(poll),
+        }
+    }
+
+    /// Native retirement returns Progress::Poll so the caller restores its
+    /// driver before readiness accesses a home service and releases the role.
+    /// # Safety
+    /// As for new; the caller completes every returned poll once, in order.
+    pub(crate) unsafe fn deferred(
+        ctx: *mut TaskCtx,
+        record: &'a mut dyn FnMut(TaskId, &'static str, &Outcome, u64),
+    ) -> Self {
+        Self {
+            ctx,
+            record,
+            poll: None,
+        }
     }
 }
 
@@ -283,8 +304,15 @@ impl Backend<Command> for Objects<'_> {
         }
     }
 
+    fn defer_poll(&self) -> bool {
+        self.poll.is_none()
+    }
+
     fn poll(&mut self) -> Vec<TaskId> {
-        (self.poll)()
+        (self
+            .poll
+            .as_mut()
+            .expect("restore driver before deferred poll"))()
     }
 }
 
@@ -382,6 +410,89 @@ mod tests {
             scan: std::ptr::null(),
             scan_words: 0,
         }
+    }
+
+    #[test]
+    fn deferred_native_retirement_publishes_send_before_requesting_its_poll() {
+        let layout = layout();
+        let run = Run::with_layouts(&[&layout]);
+        let anchor = unsafe { atomic(run.0, 0) };
+        let element =
+            unsafe { crate::channels::Element::new(2, &layout, [0u64; 2].as_ptr().cast()) };
+        let (sender, receiver) = super::super::scheduler(run.0)
+            .channels
+            .open(element, &layout);
+        let channel = super::super::scheduler(run.0)
+            .channels
+            .channel(sender, true);
+        super::super::scheduler(run.0).channels.wait(channel, 0, 9);
+        let mut events = Vec::new();
+        let mut record =
+            |task, name, _: &Outcome, retirement| events.push((task, name, retirement));
+        let mut backend = unsafe { Objects::deferred(run.0, &mut record) };
+        let mut f = Frontier::new(
+            0,
+            policy(),
+            Settled {
+                level: 0,
+                limit: u64::MAX,
+                fuel: u64::MAX,
+            },
+        );
+        f.held.insert(0, Held::empty());
+        f.enqueue(1, Held::empty());
+        f.enqueue(2, Held::empty());
+        let load = || {
+            Command::AtomicLoad {
+                word: anchor,
+                bytes: 8,
+            }
+            .operation(footprint(0, false))
+        };
+        assert_eq!(
+            f.apply_head(empty(), load(), &mut backend),
+            Ok(crate::ordered::Progress::Poll)
+        );
+        assert_eq!(f.head(), None);
+        f.complete_poll(Vec::new());
+        assert_eq!(
+            f.offer(
+                2,
+                empty(),
+                Command::Send {
+                    sender,
+                    image: RefCell::new([bytes(1), bytes(99)].concat())
+                }
+                .operation(footprint(1, true)),
+                &mut backend
+            )
+            .0,
+            Offer::Early
+        );
+        assert!(!super::super::scheduler(run.0).channels.ready(channel));
+        assert_eq!(
+            f.apply_head(empty(), load(), &mut backend),
+            Ok(crate::ordered::Progress::Poll)
+        );
+        assert!(!super::super::scheduler(run.0).channels.ready(channel));
+        f.complete_poll(Vec::new());
+        assert_eq!(f.absorb(&mut backend), Ok(crate::ordered::Progress::Poll));
+        let channels = &mut super::super::scheduler(run.0).channels;
+        assert!(channels.ready(channel));
+        let mut touched = Vec::new();
+        channels.take_touched(&mut touched);
+        assert_eq!(touched, vec![channel]);
+        f.complete_poll(Vec::new());
+        assert_eq!(
+            events,
+            vec![
+                (0, "atomic.load", 0),
+                (1, "atomic.load", 1),
+                (2, "channel.send", 2)
+            ]
+        );
+        super::super::scheduler(run.0).channels.close(sender);
+        super::super::scheduler(run.0).channels.close(receiver);
     }
 
     #[test]
