@@ -12,6 +12,7 @@
 hirsel_guard::install!();
 
 pub mod claim;
+pub mod frame;
 pub mod keys;
 pub mod pending;
 pub mod phase;

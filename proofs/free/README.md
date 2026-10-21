@@ -16,6 +16,13 @@ expected result; the gate runs it when these models or the kernel source they co
   each with an SC fence; the `weak` feature drops the fences and must fail. Runs use one
   preemption: a second lets loom keep a spin wait reading a stale value forever, a liveness
   artefact of its unbounded-path limit.
+- The ready queue, scheduling state and saved-frame ownership models in
+  `loom/tests/schedule.rs` separately run at preemption bound **2**. They check
+  steal/overflow ownership, wake versus park and completion, visibility of the
+  saved image before another worker starts it, and shutdown discarding a queued
+  image. This does not establish bound-2 coverage for the section gate above:
+  `every_cut_is_causally_closed` and `old_receive_new_send` exhausted both the
+  1000- and 10000-branch budgets at that bound without an assertion verdict.
 - `genmc/` holds C11 models with the SC accesses exactly as the kernel writes them, checked by
   GenMC v0.19.0 under RC11 (and IMM for the gate), exhaustively: `gate.c` (two workers, a flush
   and the stop; GenMC's race detector checks the cutter's plain reads), `claim.c` (one request

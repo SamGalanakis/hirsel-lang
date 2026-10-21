@@ -76,16 +76,17 @@ done
 # liveness artefact; GenMC above explores the same handshake exhaustively. The `weak` mutation
 # drops the SC fences that model the SC accesses and must fail.
 loom_runs=(
-  "loom||pass"
-  "mutation-loom-weak-handshake|--features weak|fail"
+  "loom||1|pass"
+  "loom-schedule-bound2|--test schedule|2|pass"
+  "mutation-loom-weak-handshake|--features weak|1|fail"
 )
 for row in "${loom_runs[@]}"; do
-  IFS='|' read -r name features expected <<<"$row"
+  IFS='|' read -r name features preemptions expected <<<"$row"
   [[ "$name" =~ $filter ]] || continue
   total=$((total + 1))
   set +e
   # shellcheck disable=SC2086
-  out="$(cd "$here/loom" && LOOM_MAX_PREEMPTIONS=1 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/loom/target}" \
+  out="$(cd "$here/loom" && LOOM_MAX_PREEMPTIONS="$preemptions" CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/loom/target}" \
     cargo test --release --locked --offline $features 2>&1)"
   code=$?
   set -e

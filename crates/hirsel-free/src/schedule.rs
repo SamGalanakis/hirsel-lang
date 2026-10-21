@@ -122,6 +122,13 @@ impl TaskState {
         let previous = self.0.swap(COMPLETE, Ordering::AcqRel);
         assert_ne!(previous & RUNNING, 0, "only a running task completes");
     }
+
+    /// The sole queue-token owner discarded a task during shutdown. It must
+    /// never have started that publication; late notifications stay inert.
+    pub(crate) fn discard_queued(&self) {
+        let previous = self.0.swap(COMPLETE, Ordering::AcqRel);
+        assert_eq!(previous, QUEUED, "only the queue owner discards a task");
+    }
 }
 
 /// Worker-owned LIFO slot and its fairness bound. A replacement returns the

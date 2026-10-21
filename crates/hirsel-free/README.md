@@ -3,7 +3,7 @@
 The free-mode protocol of `tasks.free@1` (docs/spec/determinism.md, S-12): what an engine
 running tasks freely records, how a cut is taken while tasks run, and how a tape is replayed.
 It is backend-neutral: the runtime and the interpreter drive the same recorder and replayer,
-and F1's threaded runtime uses the same gate, logs and claim words. Allowed dependencies: `std`
+and F1's concurrent recorder uses the same gate, logs and claim words. Allowed dependencies: `std`
 only (`LeafUtility`, enforced by `hirsel-lir/tests/it/dependencies.rs`).
 
 - `phase`: op phases (entered, claimed, attempt i, ended i, cleanup i, done) and a task's
@@ -20,6 +20,14 @@ only (`LeafUtility`, enforced by `hirsel-lir/tests/it/dependencies.rs`).
   observations and completions, `blocked`/`ready`) and the tape of CRC-framed flush and stop
   chunks; a torn final frame reads as the last flush's cut (a truncated tape).
 - `keys`: mode-aware host-key epochs.
+- `queue`, `schedule`, `work`: bounded steal-half queues, the 128-op budget,
+  three-poll LIFO slot, wake/park state word and worker-local ready search.
+- `frame`: a non-cloneable queue token and exclusive running image. Only a
+  saved idle image can be newly queued; a running notification is remembered
+  until its idle continuation saves it. Discard and completion invalidate late
+  wakes before dropping the image. Native dispatch integration remains separate.
+- `concurrent`: task-local encoders and exclusive gate-slot tokens, with
+  concurrent cuts and the same tape and replay decoder as the width-1 session.
 - `pending`: a task's pending `Shared` releases, coalesced per root. A walk that ends a phase
   applies its nested releases at once (see the module's Walks note: deferring them to the
   walker strands them in some replays).

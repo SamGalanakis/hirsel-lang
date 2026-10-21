@@ -313,3 +313,56 @@ fn eight_workers_requeue_and_steal_started_tasks_through_live_shrink() {
     );
     assert_eq!(ready.width(), 1);
 }
+
+#[test]
+fn exclusive_saved_images_migrate_through_eight_queues_and_drop_at_completion() {
+    use hirsel_free::{frame, work};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    const TASKS: usize = 256;
+    const SAVES: usize = 12;
+    struct Image {
+        saves: usize,
+        freed: Arc<AtomicUsize>,
+    }
+    impl Drop for Image {
+        fn drop(&mut self) {
+            assert_eq!(self.saves, SAVES);
+            self.freed.fetch_add(1, Ordering::Release);
+        }
+    }
+    let freed = Arc::new(AtomicUsize::new(0));
+    let (ready, workers) = work::workers(8, None);
+    let mut notifications = Vec::new();
+    for _ in 0..TASKS {
+        let (notification, queued) = frame::prepared(Image {
+            saves: 0,
+            freed: freed.clone(),
+        });
+        notifications.push(notification);
+        ready.inject([queued]);
+    }
+    let barrier = Arc::new(std::sync::Barrier::new(8));
+    std::thread::scope(|threads| {
+        for mut worker in workers {
+            let (freed, ready, barrier) = (freed.clone(), ready.clone(), barrier.clone());
+            threads.spawn(move || {
+                barrier.wait();
+                while freed.load(Ordering::Acquire) != TASKS {
+                    let Some(queued) = worker.next(&ready) else {
+                        std::thread::yield_now();
+                        continue;
+                    };
+                    let mut running = queued.start();
+                    if running.value().saves == SAVES {
+                        drop(running);
+                    } else {
+                        running.value_mut().saves += 1;
+                        worker.push(&ready, running.save(true).unwrap(), true);
+                    }
+                }
+            });
+        }
+    });
+    assert_eq!(freed.load(Ordering::Acquire), TASKS);
+    assert!(notifications.iter().all(|wake| wake.notify().is_none()));
+}

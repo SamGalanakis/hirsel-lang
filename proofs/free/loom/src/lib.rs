@@ -13,5 +13,8 @@ pub mod section;
 #[path = "../../../../crates/hirsel-free/src/schedule.rs"]
 pub mod schedule;
 
+#[path = "../../../../crates/hirsel-free/src/frame.rs"]
+pub mod frame;
+
 #[path = "../../../../crates/hirsel-free/src/queue.rs"]
 pub mod queue;
