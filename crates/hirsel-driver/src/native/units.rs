@@ -207,9 +207,13 @@ pub(crate) fn lower(
         .map(|unit| unit.retained_bytes() as u64)
         .collect();
     timings::count_peak(Count::NativeValueBytes, structural.iter().sum());
-    let context = match program.objects.backend {
-        Backend::Llvm => 32 << 20,
-        Backend::Cranelift => 16 << 20,
+    // LLVM's tasks/e2e later-phase high-water growth substantially exceeds
+    // eight times the structural rows. The larger factor is a conservative
+    // empirical admission heuristic, not an isolated per-unit allocation bound:
+    // allocator retention and other later-phase work also contribute to RSS.
+    let (context, scratch_factor) = match program.objects.backend {
+        Backend::Llvm => (32 << 20, 256),
+        Backend::Cranelift => (16 << 20, 8),
     };
     let weights: Vec<u64> = copies
         .iter()
@@ -218,7 +222,7 @@ pub(crate) fn lower(
             copied
                 .iter()
                 .fold(structural[i], |sum, &j| sum.saturating_add(structural[j]))
-                .saturating_mul(8)
+                .saturating_mul(scratch_factor)
                 .saturating_add(context)
         })
         .collect();
