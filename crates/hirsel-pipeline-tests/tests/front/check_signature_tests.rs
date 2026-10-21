@@ -28,7 +28,7 @@ fn flat_storage_proves_actual_nominal_and_generic_fields() {
             .add("flat-owner.hir", source.clone())
             .unwrap();
         let parsed = engine.parse_file(file, &default_context()).unwrap();
-        let result = engine.signature(&parsed.value.items.last().unwrap().item.definition);
+        let result = engine.item_signature(&parsed.value.items.last().unwrap().item.definition);
         if accepted {
             assert!(result.is_ok(), "{source}: {result:?}");
         } else {

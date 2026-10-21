@@ -29,7 +29,7 @@ impl TirProvider for Provider {
     fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
         self.0
             .iter()
-            .find(|d| &d.path == path)
+            .find(|d| d.path.path() == path)
             .cloned()
             .map(Arc::new)
             .ok_or(QueryError::NotImplemented)
@@ -65,9 +65,10 @@ fn source_engine(source: &str) -> QueryEngine {
     engine
 }
 
-pub fn source_definition(source: &str) -> Definition {
+pub fn source_definition(source: &str) -> (Arc<hirsel_types::TypeInterner>, Definition) {
     let mut engine = source_engine(source);
-    (*engine.lower_to_tir(&path("main")).unwrap().value).clone()
+    let definition = (*engine.lower_to_tir(&path("main")).unwrap().value).clone();
+    (engine.types().clone(), definition)
 }
 
 pub fn execute_source(source: &str) -> Execution {

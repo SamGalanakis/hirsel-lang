@@ -187,7 +187,7 @@ fn destructured_parts_keep_physical_modes_and_receive_deep_uniqueness() {
     let parts: Vec<_> = checked
         .patterns
         .iter()
-        .map(|p| checked.types.get(p.ty).unwrap())
+        .map(|p| engine.types().get(p.ty).unwrap())
         .filter(|t| matches!(t.kind, TypeKind::Primitive(Primitive::Bytes)))
         .collect();
     assert_eq!(parts.len(), 1);
@@ -198,7 +198,7 @@ fn destructured_parts_keep_physical_modes_and_receive_deep_uniqueness() {
         .iter()
         .find(|row| {
             matches!(
-                checked.types.get(row.ty).unwrap().kind,
+                engine.types().get(row.ty).unwrap().kind,
                 TypeKind::Primitive(Primitive::Bytes)
             )
         })
@@ -210,7 +210,7 @@ fn destructured_parts_keep_physical_modes_and_receive_deep_uniqueness() {
         .find(|row| row.site == NameSite::Pattern(pattern))
         .unwrap();
     assert_eq!(
-        checked.types.get(binding.ty).unwrap().modes.uniqueness,
+        engine.types().get(binding.ty).unwrap().modes.uniqueness,
         Uniqueness::Unique
     );
     {
@@ -241,13 +241,12 @@ fn every_step_over_a_computed_root_publishes_its_physical_row() {
     definition.0.name = "probe".into();
     let out = engine.mode_definition(&definition).unwrap();
     assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
-    let checked = &out.value.typed.checked;
     let rows: Vec<_> = out
         .value
         .ownership
         .physical_projections
         .iter()
-        .map(|(_, ty)| checked.types.get(*ty).unwrap())
+        .map(|(_, ty)| engine.types().get(*ty).unwrap())
         .collect();
     assert_eq!(rows.len(), 2, "{rows:?}");
     for row in rows {
@@ -300,9 +299,9 @@ fn physical_pattern_modes_are_distinct_from_the_bound_values_modes() {
             output.diagnostics
         );
         let checked = &output.value.typed.checked;
-        let pattern=checked.patterns.iter().find(|row|matches!(checked.types.get(row.ty).unwrap().kind,TypeKind::Primitive(p) if p==primitive)).unwrap();
+        let pattern=checked.patterns.iter().find(|row|matches!(engine.types().get(row.ty).unwrap().kind,TypeKind::Primitive(p) if p==primitive)).unwrap();
         assert_eq!(
-            checked.types.get(pattern.ty).unwrap().modes.uniqueness,
+            engine.types().get(pattern.ty).unwrap().modes.uniqueness,
             Uniqueness::Unique,
             "physical: {source}"
         );
@@ -312,7 +311,7 @@ fn physical_pattern_modes_are_distinct_from_the_bound_values_modes() {
             .find(|row| row.site == NameSite::Pattern(pattern.pattern))
             .unwrap();
         assert_eq!(
-            checked.types.get(binding.ty).unwrap().modes.uniqueness == Uniqueness::Unique,
+            engine.types().get(binding.ty).unwrap().modes.uniqueness == Uniqueness::Unique,
             receiving_unique,
             "receiving: {source}"
         );
@@ -456,7 +455,7 @@ fn constant_field_receipts_preserve_the_physical_declaration() {
             .iter()
             .find(|(_, ty)| {
                 matches!(
-                    checked.types.get(*ty).unwrap().kind,
+                    engine.types().get(*ty).unwrap().kind,
                     TypeKind::Builtin {
                         kind: BuiltinType::List,
                         ..
@@ -465,7 +464,7 @@ fn constant_field_receipts_preserve_the_physical_declaration() {
             })
             .unwrap();
         assert_eq!(
-            checked.types.get(*physical).unwrap().modes.uniqueness,
+            engine.types().get(*physical).unwrap().modes.uniqueness,
             Uniqueness::Unique
         );
         let receipt = checked
@@ -474,7 +473,7 @@ fn constant_field_receipts_preserve_the_physical_declaration() {
             .find(|row| row.expression == *expression)
             .unwrap();
         assert_eq!(
-            checked.types.get(receipt.ty).unwrap().modes.uniqueness,
+            engine.types().get(receipt.ty).unwrap().modes.uniqueness,
             Uniqueness::Aliased
         );
         engine

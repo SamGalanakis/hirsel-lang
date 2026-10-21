@@ -56,13 +56,13 @@ fn matrix_ir(width: usize, rows: &[Vec<u8>]) -> (Definition, hirsel_validate::Si
     let table = &mut body.matches[0];
     let target = table.arms[0].target;
     let root = body.places[table.scrutinee.0 as usize].clone();
-    let TypeKind::Tuple(types) = &definition.types.get(root.ty).unwrap().kind else {
+    let TypeKind::Tuple(types) = &engine.types().get(root.ty).unwrap().kind else {
         panic!("tuple source")
     };
     let mut columns = vec![];
     for (column, ty) in types.iter().enumerate() {
         assert_eq!(
-            definition.types.get(*ty).unwrap().kind,
+            engine.types().get(*ty).unwrap().kind,
             TypeKind::Primitive(Primitive::Bool)
         );
         let mut place = root.clone();
@@ -98,10 +98,9 @@ fn matrix_ir(width: usize, rows: &[Vec<u8>]) -> (Definition, hirsel_validate::Si
             target,
         });
     }
-    (
-        definition,
-        [(signature.definition.clone(), (*signature).clone())].into(),
-    )
+    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
+    signatures.insert(signature.definition, (*signature).clone());
+    (definition, signatures)
 }
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(128))]
@@ -119,7 +118,7 @@ proptest! {
             Err(e) => return Err(TestCaseError::fail(format!("unexpected source result {e:?}"))),
         };
         let (definition, signatures) = matrix_ir(4, &rows);
-        let report = hirsel_validate::validate(&definition, &signatures, &mut vec![]);
+        let report = hirsel_validate::validate(&definition, signatures.types(), &signatures, &mut vec![]);
         let v = report.violations.is_empty();
         prop_assert_eq!(h, v, "{:?}", report.violations);
         prop_assert!(report.violations.iter().all(|e| e.kind == hirsel_validate::ViolationKind::MatchCoverage));
@@ -129,13 +128,13 @@ proptest! {
 fn missing_product_case_and_pattern_edge_mutations_fail_closed() {
     let rows = vec![vec![1, 2], vec![0, 1], vec![0, 0]];
     let (mut definition, signatures) = matrix_ir(2, &rows);
-    hirsel_validate::assert_valid(&definition, &signatures);
+    hirsel_validate::assert_valid(&definition, signatures.types(), &signatures);
     let original = definition.clone();
     definition.bodies[0].matches[0].arms.pop();
     // Remove the now unused nodes to isolate the missing-case coverage obligation.
     definition.bodies[0].matches[0].patterns.truncate(6);
     assert!(
-        hirsel_validate::validate(&definition, &signatures, &mut vec![])
+        hirsel_validate::validate(&definition, signatures.types(), &signatures, &mut vec![])
             .violations
             .iter()
             .any(|v| v.kind == hirsel_validate::ViolationKind::MatchCoverage)
@@ -145,7 +144,7 @@ fn missing_product_case_and_pattern_edge_mutations_fail_closed() {
         fields[0].1 = MatchPatternId(2);
     }
     assert!(
-        !hirsel_validate::validate(&definition, &signatures, &mut vec![])
+        !hirsel_validate::validate(&definition, signatures.types(), &signatures, &mut vec![])
             .violations
             .is_empty()
     );
@@ -153,7 +152,7 @@ fn missing_product_case_and_pattern_edge_mutations_fail_closed() {
     definition.bodies[0].matches[0].patterns[0].kind =
         MatchPatternKind::Literal(Constant::Integer(1));
     assert!(
-        hirsel_validate::validate(&definition, &signatures, &mut vec![])
+        hirsel_validate::validate(&definition, signatures.types(), &signatures, &mut vec![])
             .violations
             .iter()
             .any(|v| matches!(
@@ -201,7 +200,8 @@ fn adversarial_product_coverage_has_a_deterministic_work_budget() {
         let cells = rows.len() * n * (n - 1);
         let (definition, signatures) = matrix_ir(n * (n - 1), &rows);
         let before = hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateMatchWork);
-        let report = hirsel_validate::validate(&definition, &signatures, &mut vec![]);
+        let report =
+            hirsel_validate::validate(&definition, signatures.types(), &signatures, &mut vec![]);
         let work =
             hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateMatchWork) - before;
         eprintln!(
@@ -273,9 +273,9 @@ fn guard_restarts_require_their_own_false_edge_and_preserve_earlier_coverage() {
     );
     let mut definition = (*source.lower_to_tir(&path("main")).unwrap().value).clone();
     let sig = source.item_signature(&path("main")).unwrap().value;
-    let signatures: hirsel_validate::SignatureMap =
-        [(sig.definition.clone(), (*sig).clone())].into();
-    hirsel_validate::assert_valid(&definition, &signatures);
+    let mut signatures = hirsel_validate::SignatureMap::new(source.types().clone());
+    signatures.insert(sig.definition, (*sig).clone());
+    hirsel_validate::assert_valid(&definition, signatures.types(), &signatures);
     let body = &definition.bodies[0];
     let restarts: Vec<_> = body
         .blocks
@@ -291,14 +291,14 @@ fn guard_restarts_require_their_own_false_edge_and_preserve_earlier_coverage() {
     bypass.bodies[0].blocks[target.0 as usize].terminator =
         Terminator::Goto(BlockId(restarts[0] as u32));
     assert!(
-        hirsel_validate::validate(&bypass, &signatures, &mut vec![])
+        hirsel_validate::validate(&bypass, signatures.types(), &signatures, &mut vec![])
             .violations
             .iter()
             .any(|e| e.kind == hirsel_validate::ViolationKind::MatchCoverage)
     );
     definition.bodies[0].entry = BlockId(restarts[0] as u32);
     assert!(
-        hirsel_validate::validate(&definition, &signatures, &mut vec![])
+        hirsel_validate::validate(&definition, signatures.types(), &signatures, &mut vec![])
             .violations
             .iter()
             .any(|e| e.kind == hirsel_validate::ViolationKind::MatchCoverage)
@@ -329,9 +329,9 @@ fn binding_metadata_cannot_disguise_guard_takes_or_commit_borrows() {
         engine("fn main(take s:String)->u8 {match take s {x if x==\"yes\"=>1,_=>2}}".into());
     let definition = source.lower_to_tir(&path("main")).unwrap().value;
     let sig = source.item_signature(&path("main")).unwrap().value;
-    let signatures: hirsel_validate::SignatureMap =
-        [(sig.definition.clone(), (*sig).clone())].into();
-    hirsel_validate::assert_valid(&definition, &signatures);
+    let mut signatures = hirsel_validate::SignatureMap::new(source.types().clone());
+    signatures.insert(sig.definition, (*sig).clone());
+    hirsel_validate::assert_valid(&definition, signatures.types(), &signatures);
     let mut forged = (*definition).clone();
     let node = forged.bodies[0].matches[0]
         .patterns
@@ -342,7 +342,7 @@ fn binding_metadata_cannot_disguise_guard_takes_or_commit_borrows() {
         *usage = hirsel_types::UseKind::Borrow;
     }
     assert!(
-        hirsel_validate::validate(&forged, &signatures, &mut vec![])
+        hirsel_validate::validate(&forged, signatures.types(), &signatures, &mut vec![])
             .violations
             .iter()
             .any(|v| matches!(v.kind, hirsel_validate::ViolationKind::InvalidUse(_)))
@@ -357,7 +357,7 @@ fn binding_metadata_cannot_disguise_guard_takes_or_commit_borrows() {
         *guard_usage = hirsel_types::UseKind::Take;
     }
     assert!(
-        hirsel_validate::validate(&forged, &signatures, &mut vec![])
+        hirsel_validate::validate(&forged, signatures.types(), &signatures, &mut vec![])
             .violations
             .iter()
             .any(|v| matches!(v.kind, hirsel_validate::ViolationKind::InvalidUse(_)))
@@ -370,9 +370,9 @@ fn a_failed_guard_cannot_replace_the_value_covered_by_earlier_arms() {
         engine("fn main(b:bool)->u8 {match b {true=>1,false if false=>2,false=>3}}".into());
     let definition = source.lower_to_tir(&path("main")).unwrap().value;
     let sig = source.item_signature(&path("main")).unwrap().value;
-    let signatures: hirsel_validate::SignatureMap =
-        [(sig.definition.clone(), (*sig).clone())].into();
-    hirsel_validate::assert_valid(&definition, &signatures);
+    let mut signatures = hirsel_validate::SignatureMap::new(source.types().clone());
+    signatures.insert(sig.definition, (*sig).clone());
+    hirsel_validate::assert_valid(&definition, signatures.types(), &signatures);
     let mut forged = (*definition).clone();
     let body = &mut forged.bodies[0];
     let table = &body.matches[0];
@@ -430,7 +430,7 @@ fn a_failed_guard_cannot_replace_the_value_covered_by_earlier_arms() {
     // The guard remains false. Replacing false with true would otherwise resume
     // after the true arm and leave no arm to select despite whole-table coverage.
     assert!(
-        hirsel_validate::validate(&forged, &signatures, &mut vec![])
+        hirsel_validate::validate(&forged, signatures.types(), &signatures, &mut vec![])
             .violations
             .iter()
             .any(|v| v.kind == hirsel_validate::ViolationKind::MatchCoverage)

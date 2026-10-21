@@ -136,8 +136,8 @@ pub fn replay_interpreter_with_fixture(
                 id: 1
             }
         );
-        let mut types = hirsel_types::TypeStore::default();
-        let result_type = types.push(hirsel_types::Type::unit());
+        let types = hirsel_types::TypeInterner::new(None);
+        let result_type = types.intern(hirsel_types::Type::unit());
         let sources = SourceMap::default();
         let mut output = vec![];
         let mut trace = vec![];
@@ -420,7 +420,7 @@ pub fn replay_interpreter_with_fixture(
             let result = library
                 .call(
                     OperationCall {
-                        runtime: &Default::default(),
+                        runtime: &hirsel_interp::aggregate::RuntimeTypes::new(types.clone()),
                         path: &path,
                         generics: &[],
                         arguments: &mut args.to_vec(),
