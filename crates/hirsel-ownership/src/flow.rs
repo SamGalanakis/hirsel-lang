@@ -1,5 +1,5 @@
 use super::cfg::{Context, Graph, Op, expression_type, place};
-use super::liveness::Holder;
+use super::liveness::{Holder, LiveSet, LiveSets};
 use super::properties::{Properties, PropertyTable};
 use super::*;
 use hirsel_diag::{Obligation, RuleId};
@@ -1311,7 +1311,7 @@ struct Checker<'a, 's> {
     unique_proof: Option<ParamId>,
     arenas: crate::arenas::Arenas,
     /// The holders live after each graph node (LANG-3).
-    live: &'a [BTreeSet<Holder>],
+    live: &'a LiveSets,
     /// Each constant temporary and, once evaluated, its value. A plain fresh
     /// leaf's value depends on its expression alone, so it is held here once
     /// instead of in every state its temporary is live in.
@@ -1972,11 +1972,7 @@ fn constant_temporaries(
         .collect()
 }
 /// The converged input of every node.
-fn solve(
-    checker: &mut Checker<'_, '_>,
-    initial: State,
-    live: &[BTreeSet<Holder>],
-) -> Vec<Option<State>> {
+fn solve(checker: &mut Checker<'_, '_>, initial: State, live: &LiveSets) -> Vec<Option<State>> {
     let graph = checker.graph;
     let mut inputs: Vec<Option<State>> = vec![None; graph.nodes.len()];
     inputs[graph.entry] = Some(initial);
@@ -2005,7 +2001,7 @@ fn solve(
         work::count_by(Counter::OwnershipStateRows, output.values.len() as u64);
         checker.node = id;
         checker.transfer(&graph.nodes[id].op, &mut output);
-        checker.release_temporaries(&mut output, &live[id]);
+        checker.release_temporaries(&mut output, live.at(id));
         for successor in &graph.nodes[id].next {
             let changed = if let Some(input) = &mut inputs[*successor] {
                 input.join(&output, &mut slots)
@@ -2759,7 +2755,7 @@ impl Checker<'_, '_> {
     /// A loan lasts until the last use of each value holding it (LANG-3): only
     /// holders live after this operation keep their loans.
     fn holder_live(&self, holder: Holder) -> bool {
-        self.live[self.node].contains(&holder)
+        self.live.at(self.node).contains(&holder)
     }
     fn loaned(&self, state: &State, place: &Place) -> bool {
         self.lender(state, place).is_some()
@@ -2777,7 +2773,8 @@ impl Checker<'_, '_> {
         // Backward demand already indexes the live binding holders in binding
         // order. Preserve that order and the same availability filter without
         // walking every tracked slot at each access.
-        self.live[self.node]
+        self.live
+            .at(self.node)
             .iter()
             .filter_map(move |holder| match holder {
                 Holder::Binding(index) if *index != root => Some(*index),
@@ -3130,7 +3127,7 @@ impl Checker<'_, '_> {
     /// Temporaries past their last use leave the flow state. One that may
     /// hold a related call result's share stays parked on that storage until
     /// its statement releases it (MODE-2).
-    fn release_temporaries(&self, state: &mut State, live: &BTreeSet<Holder>) {
+    fn release_temporaries(&self, state: &mut State, live: LiveSet<'_>) {
         let released: Vec<ExprId> = state
             .values
             .keys()

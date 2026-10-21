@@ -454,7 +454,7 @@ impl Checker<'_, '_> {
             .any(|(_, p)| p.moved.is_some() || p.installed.is_some())
     }
     /// Recover trace sites for this graph's explanations, then render them.
-    pub(super) fn explain(&mut self, initial: State, live: &[BTreeSet<Holder>]) {
+    pub(super) fn explain(&mut self, initial: State, live: &LiveSets) {
         if self.explanations.is_empty() {
             return;
         }
