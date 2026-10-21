@@ -475,6 +475,9 @@ impl Checker<'_> {
         self.set_ty(e, ty);
     }
     pub(super) fn join_types(&mut self, base: TypeId, ids: &[TypeId]) -> TypeId {
+        if ids.is_empty() {
+            return base;
+        }
         let mut t = self.out.body.types.get(base).unwrap().clone();
         let ts: Vec<_> = ids
             .iter()
@@ -514,6 +517,7 @@ impl Checker<'_> {
         let modes = ts.iter().fold(
             Modes {
                 relation: Relation::global(),
+                uniqueness: Uniqueness::Unique,
                 sendability: Sendability::Sendable,
                 ..t.modes.clone()
             },

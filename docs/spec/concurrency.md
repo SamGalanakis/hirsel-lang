@@ -161,6 +161,10 @@ fn tally(tasks: Tasks) -> u64 {
 }
 ```
 
+An inline lock callback joins the ownership and crossing evidence of its continuing
+branches just as a named function does; a weak contextual result row does not erase
+proof that every returned branch constructs a unique, sendable value.
+
 ### CONC-6: Channels
 
 `channel.open(tasks) -> (Sender[T], Receiver[T])` for sendable `T`. A Sender is a

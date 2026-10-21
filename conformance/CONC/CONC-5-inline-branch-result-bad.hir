@@ -1,0 +1,20 @@
+// rule: CONC-5
+// expect: reject CONC-5 at line 13
+// twin: CONC/CONC-5-inline-branch-result-ok.hir
+fn render(xs: List[String]) -> unique String uses {} {
+  unique xs[0]
+}
+
+pub fn first(tasks: Tasks, m: Mutex[List[String]]) -> Option[String] {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut v: unique List[String]) -> unique Option[String] uses {} {
+      if list.len(v) == 0 {
+        None()
+      } else {
+        Some(copy v[0])
+      }
+    }
+  )
+}

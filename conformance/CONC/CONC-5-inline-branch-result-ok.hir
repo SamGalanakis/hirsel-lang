@@ -1,0 +1,20 @@
+// rule: CONC-5
+// expect: accept
+// boundary: An inline mutex callback joins the crossing proofs of its branch results.
+fn render(xs: List[String]) -> unique String uses {} {
+  unique xs[0]
+}
+
+pub fn first(tasks: Tasks, m: Mutex[List[String]]) -> Option[String] {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut v: unique List[String]) -> unique Option[String] uses {} {
+      if list.len(v) == 0 {
+        None()
+      } else {
+        Some(render(v))
+      }
+    }
+  )
+}

@@ -6509,3 +6509,5 @@ conformance/STORE/STORE-6-simd-key-ok.hir
 conformance/GEN/GEN-2-schema-evolution-report-run.hir
 conformance/GEN/GEN-2-schema-evolution-run.hir
 conformance/SEM/SEM-1-http-server-informational-run.hir
+conformance/CONC/CONC-5-inline-branch-result-ok.hir
+conformance/CONC/CONC-5-inline-branch-result-bad.hir

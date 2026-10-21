@@ -478,21 +478,16 @@ pub fn page(svc: Services, query: model.Query, selected: u64) -> httpd.Reply {
     svc.tasks,
     svc.state,
     fn(mut board: unique model.Board) -> unique Option[String] uses {} {
-      found_page(board, screen)
+      if screen.selected != 0 && option.is_none(model.find(board, screen.selected)) {
+        None()
+      } else {
+        Some(view.page(board, screen))
+      }
     }
   )
   match take document {
     Some(text) => html_reply(200, take text),
     None() => html_reply(404, view.not_found_page()),
-  }
-}
-
-// The page, or None when it selects a task the board does not hold.
-fn found_page(board: model.Board, screen: view.Screen) -> unique Option[String] uses {} {
-  if screen.selected != 0 && option.is_none(model.find(board, screen.selected)) {
-    None()
-  } else {
-    Some(view.page(board, screen))
   }
 }
 
@@ -582,17 +577,6 @@ fn screen_of(request: http.ServerRequest, wall: Option[WallClock]) -> unique vie
   }
 }
 
-// The live elements and their revision, unless the board is still at `shown`.
-fn changed_live(board: model.Board, screen: view.Screen, first: bool, shown: u64) -> unique Option[
-  (u64, String)
-] uses {} {
-  if first || board.revision > shown {
-    Some((board.revision, view.live(board, screen)))
-  } else {
-    None()
-  }
-}
-
 /// GET /updates: the long-lived stream of one browser. It renders the live elements
 /// now and again after every published revision, until the browser goes or the
 /// server stops.
@@ -620,7 +604,11 @@ pub fn stream_updates(
       svc.tasks,
       svc.state,
       fn(mut board: unique model.Board) -> unique Option[(u64, String)] uses {} {
-        changed_live(board, screen, first, shown)
+        if first || board.revision > shown {
+          Some((board.revision, view.live(board, screen)))
+        } else {
+          None()
+        }
       }
     )
     if let Some((revision, elements)) = take patch {
