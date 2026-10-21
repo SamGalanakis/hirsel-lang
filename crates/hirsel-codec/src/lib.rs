@@ -668,6 +668,106 @@ mod tests {
         assert_eq!(to_text(&-7i64), "-7");
     }
 
+    // Go encoding/hex/hex_test.go:21-51: canonical vectors and append semantics.
+    #[test]
+    fn hex_matches_reference_vectors_and_every_byte() {
+        for (expected, bytes) in [
+            ("", &[][..]),
+            ("0001020304050607", &[0, 1, 2, 3, 4, 5, 6, 7][..]),
+            ("08090a0b0c0d0e0f", &[8, 9, 10, 11, 12, 13, 14, 15][..]),
+            (
+                "f0f1f2f3f4f5f6f7",
+                &[0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7][..],
+            ),
+            (
+                "f8f9fafbfcfdfeff",
+                &[0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff][..],
+            ),
+            ("67", b"g".as_slice()),
+            ("e3a1", &[0xe3, 0xa1][..]),
+        ] {
+            let mut appended = String::from("lead");
+            push_hex(&mut appended, bytes);
+            assert_eq!(appended, format!("lead{expected}"));
+        }
+        let bytes: Vec<u8> = (0..=255).collect();
+        let expected: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        let mut writer = Writer::default();
+        writer.bytes(&bytes);
+        writer.bytes(&[]);
+        let (text, ()) = writer.finish();
+        assert_eq!(text, format!("#{expected} #"));
+        let mut reader = Reader::new(&text);
+        assert_eq!(reader.bytes().unwrap(), bytes);
+        assert!(reader.bytes().unwrap().is_empty());
+        reader.finish().unwrap();
+    }
+
+    #[test]
+    fn integer_writer_matches_fmt_at_width_and_decimal_boundaries() {
+        let mut values = vec![0, 1, u64::MAX as u128, u64::MAX as u128 + 1, u128::MAX];
+        let mut power = 10u128;
+        loop {
+            values.extend([power - 1, power, power + 1]);
+            let Some(next) = power.checked_mul(10) else {
+                break;
+            };
+            power = next;
+        }
+        for value in values {
+            let mut writer = Writer::default();
+            writer.uint(value);
+            let (text, ()) = writer.finish();
+            assert_eq!(text, format!("{value}"));
+            assert_eq!(from_text::<u128>(&text).unwrap(), value);
+            if let Ok(signed) = i128::try_from(value) {
+                for signed in [signed, -signed] {
+                    let mut writer = Writer::default();
+                    writer.int(signed);
+                    let (text, ()) = writer.finish();
+                    assert_eq!(text, format!("{signed}"));
+                }
+            }
+        }
+        for signed in [i128::MIN, i128::MIN + 1, i128::MAX] {
+            let mut writer = Writer::default();
+            writer.int(signed);
+            let (text, ()) = writer.finish();
+            assert_eq!(text, format!("{signed}"));
+        }
+    }
+
+    #[test]
+    fn indentation_matches_canonical_text_across_multiple_runs() {
+        let mut writer = Writer::default();
+        let mut expected = String::new();
+        for depth in 0..100 {
+            if depth != 0 {
+                expected.push('\n');
+                expected.push_str(&"  ".repeat(depth));
+            }
+            expected.push_str("(node");
+            writer.open("node");
+        }
+        writer.uint(0);
+        expected.push_str(" 0");
+        for _ in 0..100 {
+            writer.close();
+            expected.push(')');
+        }
+        let (text, ()) = writer.finish();
+        assert_eq!(text, expected);
+        let mut reader = Reader::new(&text);
+        for _ in 0..100 {
+            reader.open("node").unwrap();
+        }
+        assert_eq!(reader.uint().unwrap(), 0);
+        for _ in 0..100 {
+            reader.close().unwrap();
+        }
+        reader.finish().unwrap();
+    }
+
     #[test]
     fn primitive_decode_errors() {
         assert_eq!(
