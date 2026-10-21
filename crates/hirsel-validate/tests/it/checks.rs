@@ -2005,6 +2005,13 @@ fn irreducible_cfg_terminates_at_a_fixed_point() {
 }
 #[test]
 fn random_mutations_never_panic_and_arbitrary_cfgs_terminate() {
+    mutation_verdicts();
+}
+
+/// The same fault corpus also feeds the three-salt byte differential.
+pub(super) fn mutation_verdicts() -> String {
+    use std::fmt::Write;
+    let mut verdicts = String::new();
     // Reproducible dependency-free property campaign, including foreign type
     // IDs, broken arenas, malformed cleanup and cyclic/irreducible CFGs.
     let mut seed = 0x72134a20cafe1234u64;
@@ -2065,7 +2072,9 @@ fn random_mutations_never_panic_and_arbitrary_cfgs_terminate() {
             &mut vec![],
         );
         assert_eq!(first, second);
+        writeln!(verdicts, "{first:?}").unwrap();
     }
+    verdicts
 }
 
 #[test]
@@ -7614,12 +7623,6 @@ fn literal_result_promises_weaken_but_cannot_invent_evidence() {
     child.body().parameter_scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(1)));
     child.body().blocks[0].terminator = ret(1, 0);
     let mut child_body = child.definition.bodies.remove(0);
-    for local in &mut child_body.locals {
-        local.ty = local.ty;
-    }
-    for place in &mut child_body.places {
-        place.ty = place.ty;
-    }
     child_body.result = child_body.places[1].ty;
     let body_result = child_body.result;
     f.definition.bodies.push(child_body);

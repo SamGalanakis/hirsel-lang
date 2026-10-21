@@ -48,7 +48,7 @@ pub(super) fn declaration(
                 .chain([function.result])
                 .chain(function.error)
                 .collect();
-            let mut seen = HashSet::new();
+            let mut seen = HashSet::default();
             while let Some(ty) = pending.pop() {
                 if !seen.insert(ty) {
                     continue;
@@ -142,7 +142,7 @@ fn instantiate(
     let formal = function.parameters.first()?.ty;
     let mut arguments: Vec<Option<GenericArgument>> = vec![None; function.generics.len()];
     let mut pairs = vec![(formal, actual, 0)];
-    let mut visited = HashSet::new();
+    let mut visited = HashSet::default();
     while let Some((left, right, depth)) = pairs.pop() {
         if !visited.insert((left, right, depth)) {
             continue;
@@ -155,11 +155,7 @@ fn instantiate(
             let slot = arguments.get_mut(p.parameter().0 as usize)?;
             match slot {
                 None => *slot = Some(GenericArgument::Type(right)),
-                Some(GenericArgument::Type(previous))
-                    if t.shape_eq(*previous, right).ok()? =>
-                {
-                    ()
-                }
+                Some(GenericArgument::Type(previous)) if t.shape_eq(*previous, right).ok()? => (),
                 _ => return None,
             }
             continue;
@@ -493,7 +489,7 @@ pub(super) fn selectors(
         signatures: &Reader<'_>,
     ) -> bool {
         for field in fields {
-            let mut seen = HashSet::new();
+            let mut seen = HashSet::default();
             loop {
                 let Some(row) = t.get(ty) else {
                     return false;
@@ -570,7 +566,7 @@ pub(super) fn selectors(
             }
         }
     }
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some((ty, mut scopes)) = pending.pop() {
         let key: Vec<_> = scopes
             .iter()

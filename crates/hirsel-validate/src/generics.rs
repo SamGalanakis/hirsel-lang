@@ -35,11 +35,12 @@ impl Checker<'_> {
     /// A copy of this row is an independent global value: plain bits and
     /// `Shared`, `Mutex` or `Atomic` handles only (MEM-11, CONC-2).
     pub(super) fn copy_detaches(&self, source: &TypeInterner, root: TypeId) -> bool {
-        hirsel_types::copy_detaches(source, root, self.generic_declarations(), &mut |p| {
-            Ok::<_, hirsel_types::QueryError>(
-                self.signatures.get(p).cloned().map(std::sync::Arc::new),
-            )
-        })
+        self.holds(
+            source,
+            root,
+            super::proofs::Proof::Detaches,
+            self.generic_declarations(),
+        )
         .unwrap_or_else(|error| self.proof_failure(error, false))
     }
     pub(super) fn bound(
@@ -60,33 +61,23 @@ impl Checker<'_> {
             .unwrap_or_else(|error| self.proof_failure(error, false));
         }
         if matches!(bound, Bound::Data | Bound::Key) {
-            return structural_equality(source, root, bound, generics, &mut |path| {
-                Ok::<_, hirsel_types::QueryError>(
-                    self.signatures.get(path).cloned().map(std::sync::Arc::new),
-                )
-            })
-            .unwrap_or_else(|error| self.proof_failure(error, false));
+            return self.proven(
+                source,
+                root,
+                super::proofs::Proof::Equality(bound),
+                generics,
+            );
         }
-        if let Some(property) = match bound {
-            Bound::Plain => Some(StructuralProperty::Plain),
-            Bound::Copyable => Some(StructuralProperty::Copyable),
-            Bound::Sendable => Some(StructuralProperty::Sendable),
+        if let Some(query) = match bound {
+            Bound::Plain => Some(super::proofs::Proof::Plain),
+            Bound::Copyable => Some(super::proofs::Proof::Copyable),
+            Bound::Sendable => Some(super::proofs::Proof::Sendable),
             _ => None,
         } {
-            return structural_property(source, root, property, generics, &mut |p| {
-                Ok::<_, hirsel_types::QueryError>(
-                    self.signatures.get(p).cloned().map(std::sync::Arc::new),
-                )
-            })
-            .unwrap_or_else(|error| self.proof_failure(error, false));
+            return self.proven(source, root, query, generics);
         }
         if bound == Bound::Flat {
-            return structural_flat(source, root, generics, &mut |p| {
-                Ok::<_, hirsel_types::QueryError>(
-                    self.signatures.get(p).cloned().map(std::sync::Arc::new),
-                )
-            })
-            .unwrap_or_else(|error| self.proof_failure(error, false));
+            return self.proven(source, root, super::proofs::Proof::Flat, generics);
         }
         if bound == Bound::Inert {
             return self.authority_with_generics(source, root, generics)
@@ -95,7 +86,7 @@ impl Checker<'_> {
         debug_assert_eq!(bound, Bound::NoallocDrop);
         let store = source;
         let mut pending = vec![(root, false)];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         let mut nominals = NominalExpansions::default();
         while let Some((t, exit)) = pending.pop() {
             if exit {
@@ -396,7 +387,7 @@ impl Checker<'_> {
                     formal.ty,
                     TypeParamId(ordinal as u32),
                     0,
-                    &mut HashSet::new(),
+                    &mut HashSet::default(),
                 ) {
                     let roots = self.complete_callable(value.value.place, actual_store);
                     for root in roots {
@@ -434,13 +425,11 @@ impl Checker<'_> {
                 if malformed
                     || evidence.iter().any(|t| {
                         if *bound == Bound::Sendable {
-                            hirsel_types::content_sendability(
+                            self.proof(
                                 actual_store,
                                 *t,
+                                super::proofs::Proof::Content,
                                 &self.generic_declarations(),
-                                &mut |path| {
-                                    Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
-                                },
                             )
                             .unwrap_or_else(|error| {
                                 self.proof_failure(error, Sendability::NotSendable)

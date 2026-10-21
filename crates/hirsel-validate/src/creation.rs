@@ -210,13 +210,14 @@ impl Checker<'_> {
         let row = types.get(ty).unwrap();
         if row.drop_allocation != DropAllocation::NoAlloc
             || row.modes.multiplicity != Multiplicity::Many
-            || hirsel_types::content_sendability(
-                types,
-                ty,
-                self.generic_declarations(),
-                &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
-            )
-            .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
+            || self
+                .proof(
+                    types,
+                    ty,
+                    super::proofs::Proof::Content,
+                    self.generic_declarations(),
+                )
+                .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
                 != Sendability::Sendable
             || self.authority_with_generics(types, ty, self.generic_declarations())
                 != AuthoritySummary::inert()
@@ -224,7 +225,7 @@ impl Checker<'_> {
             return false;
         }
         let mut pending = vec![ty];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -261,13 +262,14 @@ impl Checker<'_> {
 
     pub(super) fn copy_creation(&self, place: PlaceId) -> bool {
         self.inert_creation(self.place_type(place))
-            && hirsel_types::sendability_after_sharing(
-                self.t,
-                self.place_type(place),
-                &self.generic_declarations(),
-                &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
-            )
-            .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
+            && self
+                .proof(
+                    self.t,
+                    self.place_type(place),
+                    super::proofs::Proof::AfterSharing,
+                    &self.generic_declarations(),
+                )
+                .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
                 == Sendability::Sendable
             || self.bound(
                 self.t,

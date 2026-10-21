@@ -4,8 +4,8 @@ use hirsel_type_analysis::cleanup::{CleanupLeaf, cleanup_summary};
 use hirsel_types::*;
 
 /// How a place receives a value, which decides what its nested rows may forget.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Reception {
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub(super) enum Reception {
     /// A readonly argument or a whole taken value: nothing writes it back.
     View,
     /// A copy whose source stays live beside the receiving place.
@@ -13,6 +13,11 @@ enum Reception {
     /// A `mut` argument, written back through the parameter.
     HandBack,
 }
+
+pub(super) type Relations = crate::hashed::HashMap<
+    (TypeId, TypeId, TypeRelation, Reception),
+    Result<bool, hirsel_types::QueryError>,
+>;
 
 pub(super) fn declaration_tables(
     t: &TypeInterner,
@@ -187,7 +192,7 @@ fn value_parameters_valid(store: &TypeInterner, f: &FunctionType) -> bool {
         .chain(f.error)
         .map(|t| (t, vec![f.parameters.len()]))
         .collect();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some((t, mut scopes)) = pending.pop() {
         if !seen.insert((t, scopes.clone())) {
             continue;
@@ -310,20 +315,12 @@ impl<'a> Checker<'a> {
                 parent.fields.push(field);
                 Some(parent)
             });
-            let expected = expected.map(|root| {
-                canonical_plain_type(store, root, &mut |path| {
-                    Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
-                })
-                .unwrap_or(root)
-            });
+            let expected = expected.map(|root| self.canonical_plain(store, root));
             let current = self.global_root_projection(store, p);
             let current = self.receiving_root(p.root).then_some(current).flatten();
             let actual = p.ty;
             let physical = store.get(actual).unwrap().modes.clone();
-            let actual = canonical_plain_type(store, actual, &mut |path| {
-                Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
-            })
-            .unwrap_or(actual);
+            let actual = self.canonical_plain(store, actual);
             let actual = if !p.projection.is_empty() {
                 let mut row = store.get(actual).unwrap().clone();
                 row.modes.relation = physical.relation;
@@ -1007,7 +1004,7 @@ impl<'a> Checker<'a> {
                             return false;
                         }
                         let mut todo: Vec<_> = selected.fields.iter().map(|f| f.1).collect();
-                        let mut types = HashSet::new();
+                        let mut types = HashSet::default();
                         while let Some(ty) = todo.pop() {
                             if !types.insert(ty) {
                                 continue;
@@ -1037,7 +1034,7 @@ impl<'a> Checker<'a> {
         // Matching written contracts need no second proof in this shape
         // comparison. Executable transfers check current owned-part evidence.
         let (expected, actual) =
-            matching_crossing_contracts(store, expected, actual, &mut HashMap::new());
+            matching_crossing_contracts(store, expected, actual, &mut HashMap::default());
         let actual = self.comparison_evidence(store, expected, actual);
         let mut receiving = store.get(expected).unwrap().clone();
         receiving.sendability_requirement = hirsel_types::SendabilityRequirement::None;
@@ -1170,7 +1167,7 @@ impl<'a> Checker<'a> {
         entity: &'static str,
     ) {
         let (expected, actual) =
-            matching_crossing_contracts(store, expected, actual, &mut HashMap::new());
+            matching_crossing_contracts(store, expected, actual, &mut HashMap::default());
         let actual = self.comparison_evidence(store, expected, actual);
         let receiving = receiving_storage(store, expected);
         let mut receiving = store.get(receiving).unwrap().clone();
@@ -1301,7 +1298,13 @@ impl<'a> Checker<'a> {
             seen.insert(ty, result);
             result
         }
-        visit(self, store, root, &mut HashMap::new(), &mut HashSet::new())
+        visit(
+            self,
+            store,
+            root,
+            &mut HashMap::default(),
+            &mut HashSet::default(),
+        )
     }
 
     pub(super) fn compatible(
@@ -1349,6 +1352,36 @@ impl<'a> Checker<'a> {
         reception: Reception,
         context: &hirsel_types::GenericDeclarations,
     ) -> bool {
+        // A relation is a pure proof over this body's declarations: asked
+        // once per body, its tooling limit reported at every site that asks.
+        let memoized =
+            std::ptr::eq(store, self.t) && std::ptr::eq(context, self.generic_declarations());
+        let key = (expected, actual, relation, reception);
+        let relations = &self.scratch.relations[self.site.body.0 as usize];
+        let known = memoized
+            .then(|| relations.borrow().get(&key).cloned())
+            .flatten();
+        let answer = match known {
+            Some(answer) => answer,
+            None => {
+                let answer = self.relate(store, expected, actual, relation, reception, context);
+                if memoized {
+                    relations.borrow_mut().insert(key, answer.clone());
+                }
+                answer
+            }
+        };
+        answer.unwrap_or_else(|error| self.proof_failure(error, false))
+    }
+    fn relate(
+        &self,
+        store: &TypeInterner,
+        expected: TypeId,
+        actual: TypeId,
+        relation: TypeRelation,
+        reception: Reception,
+        context: &hirsel_types::GenericDeclarations,
+    ) -> Result<bool, hirsel_types::QueryError> {
         let authorities = self.scratch.parameter_authorities[self.site.body.0 as usize]
             .get_or_init(|| {
                 let mut authorities = BTreeMap::new();
@@ -1374,28 +1407,27 @@ impl<'a> Checker<'a> {
                 Some(authorities)
             });
         let Some(authorities) = authorities else {
-            return false;
+            return Ok(false);
         };
         let Ok(expected) = instantiate_parameter_authorities(store, expected, authorities) else {
-            return false;
+            return Ok(false);
         };
         let Ok(actual) = instantiate_parameter_authorities(store, actual, authorities) else {
-            return false;
+            return Ok(false);
         };
         let mut lookup = |path: DefId| {
             Ok::<_, hirsel_types::QueryError>(
                 self.signatures.get(path).cloned().map(std::sync::Arc::new),
             )
         };
-        let expected = canonical_plain_type(store, expected, &mut lookup).unwrap_or(expected);
-        let actual = canonical_plain_type(store, actual, &mut lookup).unwrap_or(actual);
+        let expected = self.canonical_plain(store, expected);
+        let actual = self.canonical_plain(store, actual);
         let mut memo = hirsel_types::ContextMemo::new(store, context, &mut lookup);
         match reception {
             Reception::View => memo.view(expected, actual, relation),
             Reception::Holder => memo.compatible_type(expected, actual, relation),
             Reception::HandBack => memo.handback(expected, actual),
         }
-        .unwrap_or_else(|error| self.proof_failure(error, false))
     }
     pub(super) fn comparison_evidence(
         &self,
@@ -1407,13 +1439,13 @@ impl<'a> Checker<'a> {
             store,
             expected,
             actual,
-            &mut HashMap::new(),
+            &mut HashMap::default(),
             &mut |store, root| {
-                hirsel_types::sendability_after_sharing(
+                self.proof(
                     store,
                     root,
+                    super::proofs::Proof::AfterSharing,
                     &self.generic_declarations(),
-                    &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
                 )
                 .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
                     == Sendability::Sendable
@@ -1563,7 +1595,7 @@ impl<'a> Checker<'a> {
 
     fn cross_type(
         &mut self,
-        source: &TypeInterner,
+        _source: &TypeInterner,
         root: TypeId,
         actual: TypeId,
         args: &[GenericArgument],
@@ -1711,7 +1743,7 @@ impl<'a> Checker<'a> {
         }
         store.intern(row)
     }
-    fn capture_type(&mut self, source: &TypeInterner, root: TypeId, operand: &Operand) {
+    fn capture_type(&mut self, _source: &TypeInterner, root: TypeId, operand: &Operand) {
         let actual = self.place_type(operand.place);
         if matches!(operand.usage, UseKind::Borrow | UseKind::Mut) {
             let store = self.t;
@@ -1940,7 +1972,22 @@ impl<'a> Checker<'a> {
     }
 
     /// Expand only the required nominal root, importing all representation edges.
+    /// The structural kind `ty` is laid out as, through nominal representations.
+    /// A layout is found once per body: only `None` reports anything, so a
+    /// found one is memoized and an absent one recomputed, reporting again.
     pub(super) fn layout(&mut self, store: &TypeInterner, ty: TypeId) -> Option<TypeKind> {
+        if !std::ptr::eq(store, self.t) {
+            return self.find_layout(store, ty);
+        }
+        let layouts = &self.scratch.layouts[self.site.body.0 as usize];
+        if let Some(kind) = layouts.borrow().get(&ty) {
+            return Some(kind.clone());
+        }
+        let kind = self.find_layout(store, ty)?;
+        layouts.borrow_mut().insert(ty, kind.clone());
+        Some(kind)
+    }
+    fn find_layout(&mut self, store: &TypeInterner, ty: TypeId) -> Option<TypeKind> {
         let mut ty = ty;
         let mut expansions = hirsel_types::NominalExpansions::default();
         let mut packed = false;
@@ -2419,13 +2466,14 @@ impl<'a> Checker<'a> {
                 && row.modes.uniqueness == Uniqueness::Aliased
                 && matches!(row.kind, TypeKind::Parameter(_))
             {
-                row.modes.sendability = hirsel_types::sendability_after_sharing(
-                    &target,
-                    root,
-                    &self.generic_declarations(),
-                    &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
-                )
-                .unwrap_or(Sendability::NotSendable);
+                row.modes.sendability = self
+                    .proof(
+                        &target,
+                        root,
+                        super::proofs::Proof::AfterSharing,
+                        &self.generic_declarations(),
+                    )
+                    .unwrap_or(Sendability::NotSendable);
             }
             target.intern(row)
         });
@@ -2478,7 +2526,7 @@ impl<'a> Checker<'a> {
     fn retains_scoped_placement(&self, root: TypeId) -> bool {
         let types = self.t;
         let mut pending = vec![root];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -2543,7 +2591,7 @@ impl<'a> Checker<'a> {
             }
             false
         }
-        visit(self, self.t, root, &mut HashSet::new())
+        visit(self, self.t, root, &mut HashSet::default())
     }
     fn data(&self, root: TypeId) -> bool {
         self.bound(self.t, root, Bound::Data, &self.generic_declarations())
@@ -2746,9 +2794,7 @@ impl<'a> Checker<'a> {
                     _ => None,
                 };
                 let matches = match (callback, entry) {
-                    (Some(signature), _) => {
-                        store.shape_eq(signature, derived).unwrap_or(false)
-                    }
+                    (Some(signature), _) => store.shape_eq(signature, derived).unwrap_or(false),
                     (None, Some(signature)) => {
                         declared.foreign.is_none()
                             && declared.generics.is_empty()
@@ -3341,17 +3387,16 @@ impl<'a> Checker<'a> {
                                     ..
                                 }
                         ) {
-                            row.modes.sendability = hirsel_types::content_sendability(
-                                &target,
-                                expected,
-                                &self.declarations[body.0 as usize],
-                                &mut |path| {
-                                    Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
-                                },
-                            )
-                            .unwrap_or_else(|error| {
-                                self.proof_failure(error, Sendability::NotSendable)
-                            });
+                            row.modes.sendability = self
+                                .proof(
+                                    &target,
+                                    expected,
+                                    super::proofs::Proof::Content,
+                                    &self.declarations[body.0 as usize],
+                                )
+                                .unwrap_or_else(|error| {
+                                    self.proof_failure(error, Sendability::NotSendable)
+                                });
                         }
                         target.intern(row)
                     });

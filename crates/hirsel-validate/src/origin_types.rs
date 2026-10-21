@@ -1,10 +1,7 @@
 //! Per-body immutable type-origin queries. Proof identities remain flow facts.
+use crate::hashed::{HashMap, HashSet};
 use hirsel_types::{GraphError, Origin, Reach, TypeId, TypeInterner};
-use std::{
-    cell::RefCell,
-    collections::{BTreeSet, HashMap, HashSet},
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
 #[derive(Clone)]
 struct Summary {
@@ -25,7 +22,7 @@ impl Types {
             return Ok(summary.clone());
         }
         let mut pending = vec![(root, false)];
-        let mut active = HashSet::new();
+        let mut active = HashSet::default();
         while let Some((id, exit)) = pending.pop() {
             if summaries.contains_key(&id) {
                 continue;

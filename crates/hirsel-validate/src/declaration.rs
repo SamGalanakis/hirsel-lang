@@ -65,7 +65,7 @@ pub(super) fn valid(t: &TypeInterner, s: &Signature, signatures: &Reader<'_>) ->
     {
         return false;
     }
-    if d.layout.flat && !flat_storage(t, root, &declarations, signatures, &mut HashSet::new()) {
+    if d.layout.flat && !flat_storage(t, root, &declarations, signatures, &mut HashSet::default()) {
         return false;
     }
     if s.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque && d.capability.is_none() {
@@ -154,7 +154,7 @@ pub(super) fn valid(t: &TypeInterner, s: &Signature, signatures: &Reader<'_>) ->
             }
             Bound::NoallocDrop => {
                 (!d.resource || d.destructor_allocation == Allocation::NoAlloc)
-                    && cleanup(t, root, &declarations, signatures, &mut HashSet::new())
+                    && cleanup(t, root, &declarations, signatures, &mut HashSet::default())
                         == DropAllocation::NoAlloc
             }
             Bound::Plain | Bound::Copyable | Bound::Sendable => {
@@ -191,7 +191,7 @@ fn global_representation(
         return false;
     }
     let mut pending = vec![root];
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     while let Some(id) = pending.pop() {
         if !seen.insert(id) {
             continue;

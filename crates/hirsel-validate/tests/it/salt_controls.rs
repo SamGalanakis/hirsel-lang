@@ -55,9 +55,15 @@ fn fixtures() -> Vec<(String, Fixture)> {
 fn verdicts() -> String {
     let mut out = String::new();
     for (name, f) in fixtures() {
-        let kinds = format!("{:?}", f.kinds());
-        out += &format!("{name}: {}\n", without_ids(&kinds));
+        let verdict = hirsel_validate::validate(
+            &tabled(&f.definition),
+            interner(),
+            &f.signatures,
+            &mut vec![],
+        );
+        out += &format!("{name}: {}\n", without_ids(&format!("{verdict:?}")));
     }
+    out += &without_ids(&crate::checks::mutation_verdicts());
     out
 }
 
@@ -82,5 +88,9 @@ fn verdicts_do_not_depend_on_id_assignment() {
         return;
     };
     assert!(runs.iter().all(|run| *run == runs[0]), "{runs:#?}");
-    assert_eq!(runs[0], verdicts(), "salted runs agree with the unsalted one");
+    assert_eq!(
+        runs[0],
+        verdicts(),
+        "salted runs agree with the unsalted one"
+    );
 }

@@ -1,5 +1,6 @@
 use super::shared::Shared;
 use super::*;
+use crate::bit_rows::BitRows;
 use hirsel_syntax::PassingMode;
 use hirsel_type_analysis::parametric::{ParametricInput, parametric_inputs, unique_rows};
 use hirsel_type_analysis::representation::{
@@ -65,6 +66,32 @@ impl MustFacts {
     }
 }
 
+impl crate::bit_rows::Value for MustFacts {
+    const BITS: usize = 8;
+    fn bits(self) -> u8 {
+        self.0
+    }
+    fn value(bits: u8) -> &'static Self {
+        const VALUES: [MustFacts; 32] = {
+            let mut out = [MustFacts(0); 32];
+            let mut i = 0;
+            while i < 32 {
+                out[i] = MustFacts(i as u8);
+                i += 1;
+            }
+            out
+        };
+        &VALUES[bits as usize]
+    }
+}
+impl BitRows<MustFacts> {
+    fn set_fact(&mut self, index: usize, fact: u8, value: bool) {
+        let mut row = self[index];
+        row.set(fact, value);
+        self.set(index, row);
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub(super) struct State {
     envelopes: Rows<Option<BTreeSet<usize>>>,
@@ -77,27 +104,27 @@ pub(super) struct State {
     cleanup_maybe_loans: usize,
     contract_readonly: Shared<BTreeSet<usize>>,
     origins: super::flow_origins::OriginState,
-    places: Rows<u8>,
+    places: BitRows<u8>,
     /// A finalizer suppressed by an explicit committed whole destructure (#97).
-    defused: Rows<u8>,
+    defused: BitRows<u8>,
     /// Ownership, deep Global content, current Iter sendability and permitted
     /// authority must hold on every path where this canonical place is live.
-    must: Rows<MustFacts>,
-    ownership_conflicts: Rows<bool>,
-    shared: Rows<bool>,
+    must: BitRows<MustFacts>,
+    ownership_conflicts: BitRows<bool>,
+    shared: BitRows<bool>,
     /// MODE-2: a shared root whose only aliases are a related call result's
     /// counted shares. They are local to its borrow, so none outlives the
     /// body except through a counted result: the hand-back of a body
     /// returning no counted content still finds it unique.
-    borrow_only: Rows<bool>,
+    borrow_only: BitRows<bool>,
     /// The roots whose related call result shares a local's content may
     /// hold, through every value transfer from that result (MODE-2).
     borrowed_shares: Rows<BTreeSet<usize>>,
     /// Current content evidence, independent of the receiving storage contract.
-    current_unique: Rows<bool>,
+    current_unique: BitRows<bool>,
     crossing_parts: Rows<crossing::Parts>,
     tags: Shared<tags::Facts>,
-    loans: Rows<u8>,
+    loans: BitRows<u8>,
     /// Known installed-content partitions, with correlated expiration when
     /// each retained permission ends. Access loans remain separate.
     content_loans: Rows<loan_content::Content>,
@@ -184,10 +211,8 @@ impl State {
                 self.must[i].join_live(other.must[i], live, incoming_live),
             );
         }
-        self.places
-            .join_since(&base.places, &other.places, |a, b| *a |= b);
-        self.loans
-            .join_since(&base.loans, &other.loans, |a, b| *a |= b);
+        self.places.or_since(&base.places, &other.places);
+        self.loans.or_since(&base.loans, &other.loans);
         // A borrow-only root is shared (every write keeps that), so a root
         // whose two rows agree in `base` and `other` already holds its join.
         let sharing: BTreeSet<_> = base
@@ -205,14 +230,13 @@ impl State {
                 self.borrow_only.set(i, only);
             }
         }
-        self.shared
-            .union_since(&base.shared, &other.shared, |a, b| *a |= b);
+        self.shared.or_since(&base.shared, &other.shared);
         self.borrowed_shares
             .union_since(&base.borrowed_shares, &other.borrowed_shares, |a, b| {
                 a.extend(b)
             });
         self.current_unique
-            .join_since(&base.current_unique, &other.current_unique, |a, b| *a &= b);
+            .and_since(&base.current_unique, &other.current_unique);
         self.crossing_parts
             .join_since(&base.crossing_parts, &other.crossing_parts, |a, b| {
                 a.join(b)
@@ -257,7 +281,7 @@ struct Model {
     root_accesses: Vec<Vec<usize>>,
     /// Unnamed preparation/cursor holders of independently checked for protocols.
     protocol_holders: BTreeSet<usize>,
-    canonical: std::collections::HashMap<(u32, hirsel_types::SharedPath<Projection>), usize>,
+    canonical: crate::hashed::HashMap<(u32, hirsel_types::SharedPath<Projection>), usize>,
     root_parts: Vec<Vec<usize>>,
     roots: Vec<usize>,
     loans: Vec<(LoanId, PlaceId, bool)>,
@@ -349,7 +373,7 @@ impl Model {
             })
             .collect();
         let roots = (0..places.len()).collect();
-        let mut canonical: std::collections::HashMap<_, _> = places
+        let mut canonical: crate::hashed::HashMap<_, _> = places
             .iter()
             .enumerate()
             .map(|(i, p)| ((p.root.0, p.projection.clone()), i))
@@ -530,7 +554,7 @@ impl Model {
         // observed place. Keep that direct sibling distinct instead of
         // summarizing it at the parent and poisoning the observed child.
         // Only typed places contribute children: no recursive path closure.
-        let mut children = HashMap::new();
+        let mut children = HashMap::default();
         let store = checker.t;
         for place in &body.places {
             if place.projection.is_empty() {
@@ -674,7 +698,20 @@ impl Model {
                         })
                 })
             });
-        let mut cleanup_sets = super::cleanup_proof::Sets::default();
+        // Its keys are roots (locals) and loan ids, from begun loans and from
+        // the cleanup chain's own loan ends.
+        let largest_key = body
+            .cleanup_nodes
+            .iter()
+            .filter_map(|node| match node.action {
+                CleanupAction::EndLoan { loan, .. } => Some(loan.0),
+                _ => None,
+            })
+            .chain(loans.iter().map(|(id, _, _)| id.0))
+            .chain(body.locals.len().checked_sub(1).map(|i| i as u32))
+            .max()
+            .unwrap_or(0);
+        let mut cleanup_sets = super::cleanup_proof::Sets::new(largest_key);
         let mut cleanup_chains: Vec<Option<super::cleanup_proof::Chain>> = Vec::new();
         for node in &body.cleanup_nodes {
             if !simple_cleanup {
@@ -771,7 +808,7 @@ impl Model {
                 origin_paths.insert(path);
             }
         }
-        let mut typed_origin_paths = HashMap::new();
+        let mut typed_origin_paths = HashMap::default();
         for place in body.places.iter().chain(&places) {
             typed_origin_paths.entry(place.ty).or_insert_with(|| {
                 origin_paths
@@ -781,7 +818,7 @@ impl Model {
                     .collect()
             });
         }
-        let mut authorities = HashMap::new();
+        let mut authorities = HashMap::default();
         let inert = places
             .iter()
             .map(|place| {
@@ -796,7 +833,7 @@ impl Model {
             .collect();
         let noalloc_drop_checks = if checker.noalloc_body() {
             let declarations = checker.generic_declarations();
-            let mut effects = HashMap::new();
+            let mut effects = HashMap::default();
             body.locals.iter().any(|local| {
                 *effects.entry(local.ty).or_insert_with(|| {
                     !checker.bound(
@@ -813,7 +850,7 @@ impl Model {
         // Successive destructuring can consume a complete typed payload path
         // through several temporary roots. Retain that path, rather than only
         // the longest projection on one root. Callable headers are not payload.
-        let mut function_depths = HashMap::new();
+        let mut function_depths = HashMap::default();
         for local in &body.locals {
             let mut pending = vec![(local.ty, false)];
             while let Some((id, leaving)) = pending.pop() {
@@ -1090,25 +1127,27 @@ impl Model {
                 .filter(|root| self.borrowed[*root] && !self.mutable_parameters[*root])
                 .collect(),
             origins: super::flow_origins::OriginState::new(self.places.len()),
-            places: Rows::new(DEAD, self.places.len())
+            places: BitRows::new(DEAD, self.places.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
-            defused: Rows::new(1, self.places.len()).with_copy_counter(Counter::ValidateCopiedRows),
-            must: Rows::new(MustFacts::default(), self.places.len())
+            defused: BitRows::new(1, self.places.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
-            ownership_conflicts: Rows::new(false, body.locals.len())
+            must: BitRows::new(MustFacts::default(), self.places.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
-            shared: Rows::new(false, body.locals.len())
+            ownership_conflicts: BitRows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
-            borrow_only: Rows::new(false, body.locals.len())
+            shared: BitRows::new(false, body.locals.len())
+                .with_copy_counter(Counter::ValidateCopiedRows),
+            borrow_only: BitRows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
             borrowed_shares: Rows::new(BTreeSet::new(), body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
-            current_unique: Rows::new(false, body.locals.len())
+            current_unique: BitRows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
             crossing_parts: Rows::new(crossing::Parts::default(), body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
             tags: BTreeMap::new().into(),
-            loans: Rows::new(DEAD, self.loans.len()).with_copy_counter(Counter::ValidateCopiedRows),
+            loans: BitRows::new(DEAD, self.loans.len())
+                .with_copy_counter(Counter::ValidateCopiedRows),
             content_loans: Rows::new(loan_content::Content::default(), body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
             sources: Rows::new(BTreeSet::new(), self.places.len())
@@ -1119,7 +1158,7 @@ impl Model {
             if body.parameters.contains(&LocalId(i as u32)) || l.storage == Storage::Capture {
                 for &p in &self.root_parts[i] {
                     {
-                        state.places[p] = LIVE;
+                        state.places.set(p, LIVE);
                         if self.borrowed[i] && !self.mutable_parameters[i]
                             || !self.borrowed[i] && !lifetime_global(l.ty)
                         {
@@ -1127,15 +1166,20 @@ impl Model {
                         }
                     }
                 }
-                state.must[i].set(MustFacts::OWNED, !self.borrowed[i]);
-                state.must[i].set(MustFacts::GLOBAL, lifetime_global(l.ty));
-                state.must[i].set(
+                state.must.set_fact(i, MustFacts::OWNED, !self.borrowed[i]);
+                state
+                    .must
+                    .set_fact(i, MustFacts::GLOBAL, lifetime_global(l.ty));
+                state.must.set_fact(
+                    i,
                     MustFacts::SENDABLE,
                     types.get(l.ty).unwrap().modes.sendability
                         == hirsel_types::Sendability::Sendable,
                 );
-                state.current_unique[i] =
-                    types.get(l.ty).unwrap().modes.uniqueness == hirsel_types::Uniqueness::Unique;
+                state.current_unique.set(
+                    i,
+                    types.get(l.ty).unwrap().modes.uniqueness == hirsel_types::Uniqueness::Unique,
+                );
             }
         }
         for root in 0..body.locals.len() {
@@ -1190,7 +1234,7 @@ impl Model {
             let root = self.roots[local];
             state.crossing_parts[local] = capture.crossing.clone();
             if capture.crossing.get(&[]) == Some(true) {
-                state.must[local].set(MustFacts::SENDABLE, true);
+                state.must.set_fact(local, MustFacts::SENDABLE, true);
             }
             tags::capture(&mut state, local as u32, &capture.tags);
             state.origins.identities[root] = capture.identities.clone().into();
@@ -1421,23 +1465,12 @@ fn structural_property(
     source: &TypeInterner,
     bound: hirsel_types::Bound,
 ) -> bool {
-    let property = match bound {
-        hirsel_types::Bound::Plain => hirsel_types::StructuralProperty::Plain,
-        hirsel_types::Bound::Copyable => hirsel_types::StructuralProperty::Copyable,
+    let query = match bound {
+        hirsel_types::Bound::Plain => super::proofs::Proof::Plain,
+        hirsel_types::Bound::Copyable => super::proofs::Proof::Copyable,
         _ => unreachable!(),
     };
-    hirsel_types::structural_property(
-        source,
-        root,
-        property,
-        &c.generic_declarations(),
-        &mut |path| {
-            Ok::<_, hirsel_types::QueryError>(
-                c.signatures.get(path).cloned().map(std::sync::Arc::new),
-            )
-        },
-    )
-    .unwrap_or_else(|error| c.proof_failure(error, false))
+    c.proven(source, root, query, c.generic_declarations())
 }
 
 pub(super) fn needs_release(c: &Checker<'_>, t: TypeId, store: &TypeInterner) -> bool {
@@ -1496,21 +1529,22 @@ impl Checker<'_> {
             {
                 continue;
             }
-            let proof = hirsel_types::content_sendability(
-                self.t,
-                local.ty,
-                &self.generic_declarations(),
-                &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
-            )
-            .unwrap_or_else(|error| {
-                self.proof_failure(error, hirsel_types::Sendability::NotSendable)
-            });
+            let proof = self
+                .proof(
+                    self.t,
+                    local.ty,
+                    super::proofs::Proof::Content,
+                    &self.generic_declarations(),
+                )
+                .unwrap_or_else(|error| {
+                    self.proof_failure(error, hirsel_types::Sendability::NotSendable)
+                });
             if proof == hirsel_types::Sendability::Sendable {
-                initial.must[root].set(MustFacts::SENDABLE, true);
+                initial.must.set_fact(root, MustFacts::SENDABLE, true);
                 // This is referent evidence. The parameter's borrowed access
                 // remains Local, while owned extraction can acquire its Global
                 // content independently of the access relation.
-                initial.must[root].set(MustFacts::GLOBAL, true);
+                initial.must.set_fact(root, MustFacts::GLOBAL, true);
             }
         }
         // MODE-2: the selection and every taken parameter enter unique; another
@@ -1519,7 +1553,7 @@ impl Checker<'_> {
             for local in &self.body.parameters {
                 let root = local.0 as usize;
                 if root == selected || !model.borrowed[root] && !model.mutable_parameters[root] {
-                    initial.current_unique[root] = true;
+                    initial.current_unique.set(root, true);
                 }
             }
         }
@@ -2180,18 +2214,10 @@ impl Checker<'_> {
         });
         let actual =
             super::flow_origins::canonical(store, access.ty, &proof, &|o| self.arena_place(o)).ok();
-        let expected = expected.map(|root| {
-            hirsel_types::canonical_plain_type(store, root, &mut |path| {
-                Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
-            })
-            .unwrap_or(root)
-        });
+        let expected = expected.map(|root| self.canonical_plain(store, root));
         let actual = actual.map(|root| {
             let physical = store.get(root).unwrap().modes.clone();
-            let root = hirsel_types::canonical_plain_type(store, root, &mut |path| {
-                Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
-            })
-            .unwrap_or(root);
+            let root = self.canonical_plain(store, root);
             let mut row = store.get(root).unwrap().clone();
             row.modes.relation = physical.relation;
             row.modes.uniqueness = physical.uniqueness;
@@ -2764,14 +2790,24 @@ impl Checker<'_> {
         let index = model.mapping[place.0 as usize];
         for i in model.contents(index) {
             {
-                state.places[i] = mask;
+                state.places.set(i, mask);
                 state.defused.set(i, 1);
             }
         }
         if model.places[index].projection.is_empty() {
-            state.must[model.places[index].root.0 as usize].set(MustFacts::GLOBAL, false);
-            state.must[model.places[index].root.0 as usize].set(MustFacts::SENDABLE, false);
-            state.must[model.places[index].root.0 as usize].set(MustFacts::OWNED, false);
+            state.must.set_fact(
+                model.places[index].root.0 as usize,
+                MustFacts::GLOBAL,
+                false,
+            );
+            state.must.set_fact(
+                model.places[index].root.0 as usize,
+                MustFacts::SENDABLE,
+                false,
+            );
+            state
+                .must
+                .set_fact(model.places[index].root.0 as usize, MustFacts::OWNED, false);
             state
                 .ownership_conflicts
                 .set(model.places[index].root.0 as usize, false);
@@ -3029,14 +3065,16 @@ impl Checker<'_> {
         let mut referent = operand.clone();
         referent.usage = UseKind::Borrow;
         let current = self.transferred_type(state, &referent, store);
-        let independent = hirsel_types::sendability_after_sharing(
-            &store,
-            current,
-            &self.generic_declarations(),
-            &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
-        )
-        .unwrap_or_else(|error| self.proof_failure(error, hirsel_types::Sendability::NotSendable))
-            == hirsel_types::Sendability::Sendable;
+        let independent =
+            self.proof(
+                &store,
+                current,
+                super::proofs::Proof::AfterSharing,
+                &self.generic_declarations(),
+            )
+            .unwrap_or_else(|error| {
+                self.proof_failure(error, hirsel_types::Sendability::NotSendable)
+            }) == hirsel_types::Sendability::Sendable;
         share_root(state, access.root.0 as usize);
         if !independent {
             let path = crossing::path(&access.projection);
@@ -3046,7 +3084,9 @@ impl Checker<'_> {
             }
             self.share_crossing_parts(&mut parts, operand.place);
             state.crossing_parts[access.root.0 as usize].install(&path, &parts);
-            state.must[access.root.0 as usize].set(MustFacts::SENDABLE, false);
+            state
+                .must
+                .set_fact(access.root.0 as usize, MustFacts::SENDABLE, false);
             for path in stable_functions {
                 // Copying an owner shares function handles without changing
                 // their immutable environments. Preserve the proved fact.
@@ -3067,7 +3107,7 @@ impl Checker<'_> {
             share_root(state, root);
             if !independent && root != access.root.0 as usize {
                 state.crossing_parts[root].set(&[], false);
-                state.must[root].set(MustFacts::SENDABLE, false);
+                state.must.set_fact(root, MustFacts::SENDABLE, false);
             }
         }
         for loan in self.dependencies(model, state, &source) {
@@ -3491,7 +3531,7 @@ impl Checker<'_> {
         Self::forget_written_partition(model, state, &self.body.places[place.0 as usize]);
         for i in model.contents(index) {
             {
-                state.places[i] = LIVE;
+                state.places.set(i, LIVE);
                 state.defused.set(i, 1);
                 state.origins.identities[i].clear();
                 state.origins.parts[i].clear();
@@ -3506,7 +3546,9 @@ impl Checker<'_> {
             }
         }
         if model.places[index].projection.is_empty() {
-            state.must[root].set(MustFacts::OWNED, owned && !model.borrowed[root]);
+            state
+                .must
+                .set_fact(root, MustFacts::OWNED, owned && !model.borrowed[root]);
             state.ownership_conflicts.set(root, false);
             if state.before.iter().any(|(a, b)| *a == root || *b == root) {
                 state.before.retain(|(a, b)| *a != root && *b != root);
@@ -3688,7 +3730,7 @@ impl Checker<'_> {
                 }
             }
         }
-        state.loans[index] = DEAD;
+        state.loans.set(index, DEAD);
         model.refresh_cleanup_loan(state, index);
     }
     fn cleanup(
@@ -3983,7 +4025,7 @@ impl Checker<'_> {
         if (local_receiver || related_receiver || self.lifetime(&store.get(actual).unwrap().modes.relation).is_global())
             && store.get(actual).unwrap().brand == store.get(expected).unwrap().brand
             && {
-                let (expected, actual) = super::typing::matching_crossing_contracts(store, expected, actual, &mut HashMap::new());
+                let (expected, actual) = super::typing::matching_crossing_contracts(store, expected, actual, &mut HashMap::default());
                 self.compatible(store, actual, expected, hirsel_types::TypeRelation::Value)
             })
         {
@@ -4128,7 +4170,7 @@ impl Checker<'_> {
         self.write(model, state, displaced, true, false, report);
         if if_live {
             for part in model.parts(displaced) {
-                state.places[part] = LIVE | DEAD;
+                state.places.set(part, LIVE | DEAD);
             }
             model.refresh_cleanup(state, old_root);
         }
@@ -4814,7 +4856,7 @@ impl Checker<'_> {
                                 continue;
                             }
                             if state.places[part] != DEAD {
-                                state.places[part] = DEAD;
+                                state.places.set(part, DEAD);
                             }
                             if !state.origins.identities[part].is_empty() {
                                 state.origins.identities[part].clear();
@@ -4857,9 +4899,11 @@ impl Checker<'_> {
                         }
                     }
                     for &p in &model.root_parts[local.0 as usize] {
-                        state.places[p] = DEAD;
+                        state.places.set(p, DEAD);
                     }
-                    state.must[local.0 as usize].set(MustFacts::OWNED, false);
+                    state
+                        .must
+                        .set_fact(local.0 as usize, MustFacts::OWNED, false);
                     model.refresh_cleanup(state, local.0 as usize);
                 }
                 InstructionKind::Replace {
@@ -5391,7 +5435,7 @@ impl Checker<'_> {
                             );
                         }
                     }
-                    state.loans[index] = LIVE;
+                    state.loans.set(index, LIVE);
                     model.refresh_cleanup_loan(state, index);
                 }
                 InstructionKind::EndLoan {
@@ -5507,7 +5551,7 @@ impl Checker<'_> {
                             return true;
                         }
                         let mut pending = vec![parameter.ty];
-                        let mut seen = HashSet::new();
+                        let mut seen = HashSet::default();
                         while let Some(ty) = pending.pop() {
                             if !seen.insert(ty) {
                                 continue;
@@ -6490,12 +6534,12 @@ mod nominal_limit_tests {
             );
             let root_local = checker.body.places[holder as usize].root.0 as usize;
             for &index in &model.root_parts[root_local] {
-                state.places[index] = LIVE;
+                state.places.set(index, LIVE);
             }
             let leaf_index = model.mapping[moved_id];
-            state.places[leaf_index] = MOVED;
+            state.places.set(leaf_index, MOVED);
             assert!(!checker.remaining_drop_allocates(&model, &state, PlaceId(holder)));
-            state.places[leaf_index] = LIVE;
+            state.places.set(leaf_index, LIVE);
             assert!(checker.remaining_drop_allocates(&model, &state, PlaceId(holder)));
             assert!(checker.proof_errors.borrow().is_empty());
         }

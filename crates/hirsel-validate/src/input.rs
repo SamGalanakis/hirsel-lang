@@ -9,10 +9,10 @@
 //! signature, the first heap role's selection, and the universe's errors. A
 //! verdict is reusable exactly while its reads still hold (`read_holds`).
 use super::*;
+use crate::hashed::HashMap;
 use hirsel_syntax::{ContentHash, DefId};
 use hirsel_types::{HeapRole, TypeInterner};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 /// V's identity of one signature view: a hash over every field it holds.
@@ -126,7 +126,9 @@ pub fn read_holds(read: &VRead, signatures: &dyn SignatureLookup) -> bool {
 /// The recording lookup V's checks read through, for one validation.
 pub(crate) struct Reader<'a> {
     signatures: &'a dyn SignatureLookup,
-    reads: RefCell<Vec<VRead>>,
+    /// A set: a check reads the same views many times, and V's verdict reads
+    /// each once.
+    reads: RefCell<crate::hashed::HashSet<VRead>>,
 }
 impl<'a> Reader<'a> {
     pub(crate) fn new(signatures: &'a dyn SignatureLookup) -> Self {
@@ -139,11 +141,11 @@ impl<'a> Reader<'a> {
         let d = d.into();
         match self.signatures.view(d) {
             Some((signature, digest)) => {
-                self.reads.borrow_mut().push(VRead::View(d, digest));
+                self.reads.borrow_mut().insert(VRead::View(d, digest));
                 Some(signature)
             }
             None => {
-                self.reads.borrow_mut().push(VRead::Missing(d));
+                self.reads.borrow_mut().insert(VRead::Missing(d));
                 None
             }
         }
@@ -153,7 +155,7 @@ impl<'a> Reader<'a> {
     pub(crate) fn first_heap(&self) -> Option<HeapRole> {
         let first = self.signatures.first_heap();
         let selected = first.as_ref().map(|(d, _)| *d);
-        self.reads.borrow_mut().push(VRead::FirstHeap(selected));
+        self.reads.borrow_mut().insert(VRead::FirstHeap(selected));
         if let Some(d) = selected {
             self.get(d);
         }
@@ -161,14 +163,15 @@ impl<'a> Reader<'a> {
     }
     pub(crate) fn universe_errors(&self) -> &'a [Violation] {
         let (digest, errors) = self.signatures.universe_errors();
-        self.reads.borrow_mut().push(VRead::UniverseErrors(digest));
+        self.reads
+            .borrow_mut()
+            .insert(VRead::UniverseErrors(digest));
         errors
     }
     /// The reads made so far, sorted and without duplicates.
     pub(crate) fn finish(self, reads: &mut Vec<VRead>) {
-        let mut own = self.reads.into_inner();
-        own.sort();
-        own.dedup();
+        let mut own: Vec<_> = self.reads.into_inner().into_iter().collect();
+        own.sort_unstable();
         reads.extend(own);
     }
 }

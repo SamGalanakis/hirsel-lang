@@ -10,7 +10,7 @@ pub(super) struct Scratch {
     pub(super) frame_authorities: Vec<std::cell::OnceCell<Option<hirsel_types::AuthoritySummary>>>,
     definition_inputs: std::cell::OnceCell<DefinitionInputs>,
     pub(super) fixed_constructions:
-        Vec<RefCell<std::collections::HashMap<hirsel_types::TypeId, bool>>>,
+        Vec<RefCell<crate::hashed::HashMap<hirsel_types::TypeId, bool>>>,
     pub(super) escaping_roots: Vec<std::cell::OnceCell<std::collections::BTreeSet<u32>>>,
     pub(super) content_inputs: Vec<std::cell::OnceCell<super::flow::lifetimes::ContentInputs>>,
     /// Per body: operands typing received only as deep Global content, by
@@ -28,6 +28,16 @@ pub(super) struct Scratch {
         >,
     >,
     pub(super) variant_inputs: Vec<std::cell::OnceCell<super::variant_brands::Inputs>>,
+    /// Per body: its structural property proofs (`proofs`).
+    pub(super) proofs: Vec<RefCell<super::proofs::Proofs>>,
+    /// Canonical Plain rows (`Checker::canonical_plain`), for every body.
+    pub(super) canonical:
+        RefCell<crate::hashed::HashMap<hirsel_types::TypeId, hirsel_types::TypeId>>,
+    /// Per body: the type relations `Checker::related` proved.
+    pub(super) relations: Vec<RefCell<super::typing::Relations>>,
+    /// Per body: the layouts `Checker::layout` found.
+    pub(super) layouts:
+        Vec<RefCell<crate::hashed::HashMap<hirsel_types::TypeId, hirsel_types::TypeKind>>>,
 }
 impl Scratch {
     pub(super) fn new(bodies: usize) -> Self {
@@ -38,13 +48,17 @@ impl Scratch {
             frame_authorities: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
             definition_inputs: std::cell::OnceCell::new(),
             fixed_constructions: (0..bodies)
-                .map(|_| RefCell::new(std::collections::HashMap::new()))
+                .map(|_| RefCell::new(crate::hashed::HashMap::default()))
                 .collect(),
             escaping_roots: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
             content_inputs: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
             acquisitions: (0..bodies).map(|_| RefCell::default()).collect(),
             parameter_authorities: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
             variant_inputs: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
+            proofs: (0..bodies).map(|_| RefCell::default()).collect(),
+            layouts: (0..bodies).map(|_| RefCell::default()).collect(),
+            relations: (0..bodies).map(|_| RefCell::default()).collect(),
+            canonical: RefCell::default(),
         }
     }
     pub(super) fn definition_inputs(

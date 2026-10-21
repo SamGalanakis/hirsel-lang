@@ -1203,14 +1203,7 @@ fn exhaustive_switch_defaults_also_validate_their_closure_bodies() {
     f.assign(c, Rvalue::Constant(Constant::Bool(true)), 0);
     let mut nested = Fixture::string();
     nested.body().blocks[0].terminator = ret(0, 0);
-    let mut body = nested.definition.bodies.remove(0);
-    for local in &mut body.locals {
-        local.ty = local.ty;
-    }
-    for place in &mut body.places {
-        place.ty = place.ty;
-    }
-    body.result = body.result;
+    let body = nested.definition.bodies.remove(0);
     f.definition.bodies.push(body);
     let unit = unit_ty(&mut f);
     let closure = f.slot(
@@ -5095,11 +5088,13 @@ fn validation_interns_working_rows_bounded_by_the_owner() {
         owner_sig(&mut f, &[]);
         let rows = f.definition.types.len();
         let definition = tabled(&f.definition);
-        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize;
+        let before =
+            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize;
         let result = validate(&definition, interner(), &f.signatures, &mut vec![]);
         assert!(result.violations.is_empty(), "{:?}", result.violations);
-        let interned =
-            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize - before;
+        let interned = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows)
+            as usize
+            - before;
         assert!(
             interned <= 4 * rows,
             "{count} assignments interned {interned} type rows for {rows} owner rows"
@@ -5132,10 +5127,12 @@ fn closure_bodies_intern_working_rows_bounded_by_the_owner() {
         }
         f.body().blocks[0].terminator = ret(0, cleanup);
         let rows = f.definition.types.len();
-        let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize;
+        let before =
+            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize;
         f.valid();
-        let interned =
-            hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows) as usize - before;
+        let interned = hirsel_intern::work::read(hirsel_intern::work::Counter::InternedTypeRows)
+            as usize
+            - before;
         assert!(
             interned <= 4 * rows,
             "{count} bodies interned {interned} rows for {rows}"

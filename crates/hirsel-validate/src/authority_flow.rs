@@ -12,7 +12,7 @@ impl Checker<'_> {
                             .is_subset_of(allowed)
                     });
             for &part in &model.root_parts[root] {
-                state.must[part].set(MustFacts::AUTHORITY, valid);
+                state.must.set_fact(part, MustFacts::AUTHORITY, valid);
             }
         }
     }
@@ -32,7 +32,7 @@ impl Checker<'_> {
         valid: bool,
     ) {
         for part in model.parts(place) {
-            state.must[part].set(MustFacts::AUTHORITY, valid);
+            state.must.set_fact(part, MustFacts::AUTHORITY, valid);
         }
     }
 

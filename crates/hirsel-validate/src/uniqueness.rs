@@ -22,19 +22,16 @@ impl Checker<'_> {
             let mut row = store.get(ty).unwrap().clone();
             row.modes.relation = self.placement(&row.modes.relation);
             let root = store.intern(row.clone());
-            row.modes.sendability = hirsel_types::structural_sendability(
-                store,
-                root,
-                &self.generic_declarations(),
-                &mut |p| {
-                    Ok::<_, hirsel_types::QueryError>(
-                        self.signatures.get(p).cloned().map(std::sync::Arc::new),
-                    )
-                },
-            )
-            .unwrap_or_else(|error| {
-                self.proof_failure(error, hirsel_types::Sendability::NotSendable)
-            });
+            row.modes.sendability = self
+                .proof(
+                    store,
+                    root,
+                    super::proofs::Proof::Sendability,
+                    &self.generic_declarations(),
+                )
+                .unwrap_or_else(|error| {
+                    self.proof_failure(error, hirsel_types::Sendability::NotSendable)
+                });
             return store.intern(row);
         }
         if !self.flat_value(value.place) {
@@ -43,17 +40,16 @@ impl Checker<'_> {
         let mut row = store.get(ty).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
         let root = store.intern(row.clone());
-        row.modes.sendability = hirsel_types::content_sendability(
-            store,
-            root,
-            &self.generic_declarations(),
-            &mut |p| {
-                Ok::<_, hirsel_types::QueryError>(
-                    self.signatures.get(p).cloned().map(std::sync::Arc::new),
-                )
-            },
-        )
-        .unwrap_or_else(|error| self.proof_failure(error, hirsel_types::Sendability::NotSendable));
+        row.modes.sendability = self
+            .proof(
+                store,
+                root,
+                super::proofs::Proof::Content,
+                &self.generic_declarations(),
+            )
+            .unwrap_or_else(|error| {
+                self.proof_failure(error, hirsel_types::Sendability::NotSendable)
+            });
         store.intern(row)
     }
     pub(crate) fn weakened_type(
@@ -68,12 +64,8 @@ impl Checker<'_> {
             row.modes.sendability = Sendability::NotSendable;
         }
         let root = store.intern(row.clone());
-        row.modes.sendability =
-            hirsel_types::sendability_after_sharing(store, root, generics, &mut |p| {
-                Ok::<_, hirsel_types::QueryError>(
-                    self.signatures.get(p).cloned().map(std::sync::Arc::new),
-                )
-            })
+        row.modes.sendability = self
+            .proof(store, root, super::proofs::Proof::AfterSharing, generics)
             .unwrap_or_else(|error| {
                 self.proof_failure(error, hirsel_types::Sendability::NotSendable)
             });
@@ -101,11 +93,11 @@ impl Checker<'_> {
             {
                 row.modes.sendability.clone()
             } else {
-                hirsel_types::sendability_after_sharing(
+                self.proof(
                     store,
                     ty,
+                    super::proofs::Proof::AfterSharing,
                     &self.generic_declarations(),
-                    &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
                 )
                 .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
             };
@@ -132,13 +124,14 @@ impl Checker<'_> {
         let part_path = crossing::path(&self.body.places[value.place.0 as usize].projection);
         let part_proof = state.crossing_parts[root].get(&part_path);
         let independent = (!part_path.is_empty() || part_proof.is_some())
-            && hirsel_types::sendability_after_sharing(
-                store,
-                ty,
-                &self.generic_declarations(),
-                &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
-            )
-            .is_ok_and(|proof| proof == Sendability::Sendable);
+            && self
+                .proof(
+                    store,
+                    ty,
+                    super::proofs::Proof::AfterSharing,
+                    &self.generic_declarations(),
+                )
+                .is_ok_and(|proof| proof == Sendability::Sendable);
         if independent && !part_path.is_empty() && !erased_environment(&row.kind) {
             row.modes.sendability = Sendability::Sendable;
         }
@@ -251,23 +244,12 @@ impl Checker<'_> {
             }),
             Rvalue::Closure { captures, .. } => captures.iter().all(|capture| {
                 let ty = self.transferred_type(state, capture, store);
-                let mut lookup =
-                    |path: DefId| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new));
-                let proof = if capture.usage == UseKind::Copy {
-                    hirsel_types::sendability_after_sharing(
-                        &store,
-                        ty,
-                        &self.generic_declarations(),
-                        &mut lookup,
-                    )
+                let query = if capture.usage == UseKind::Copy {
+                    super::proofs::Proof::AfterSharing
                 } else {
-                    hirsel_types::content_sendability(
-                        &store,
-                        ty,
-                        &self.generic_declarations(),
-                        &mut lookup,
-                    )
+                    super::proofs::Proof::Content
                 };
+                let proof = self.proof(store, ty, query, self.generic_declarations());
                 proof.unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
                     == Sendability::Sendable
             }),
@@ -328,7 +310,7 @@ impl Checker<'_> {
         // A graph with no written owned requirement owes no part receipt.
         // Inspect declarations before expanding recursive generic instances.
         let mut pending = vec![root];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(id) = pending.pop() {
             if !seen.insert(id) {
                 continue;
@@ -576,9 +558,13 @@ impl Checker<'_> {
                 .set(&crossing::path(&place.projection), true);
         }
         if place.projection.is_empty() {
-            state.must[place.root.0 as usize].set(MustFacts::SENDABLE, sendable);
+            state
+                .must
+                .set_fact(place.root.0 as usize, MustFacts::SENDABLE, sendable);
         } else if !sendable {
-            state.must[place.root.0 as usize].set(MustFacts::SENDABLE, false);
+            state
+                .must
+                .set_fact(place.root.0 as usize, MustFacts::SENDABLE, false);
         }
     }
 
@@ -879,17 +865,16 @@ impl Checker<'_> {
         row.modes.uniqueness = Uniqueness::Unique;
         let root = store.intern(row);
         let mut row = store.get(root).unwrap().clone();
-        row.modes.sendability = hirsel_types::structural_sendability(
-            store,
-            root,
-            &self.generic_declarations(),
-            &mut |path| {
-                Ok::<_, hirsel_types::QueryError>(
-                    self.signatures.get(path).cloned().map(std::sync::Arc::new),
-                )
-            },
-        )
-        .unwrap_or_else(|error| self.proof_failure(error, hirsel_types::Sendability::NotSendable));
+        row.modes.sendability = self
+            .proof(
+                store,
+                root,
+                super::proofs::Proof::Sendability,
+                &self.generic_declarations(),
+            )
+            .unwrap_or_else(|error| {
+                self.proof_failure(error, hirsel_types::Sendability::NotSendable)
+            });
         store.intern(row)
     }
     pub(super) fn operand_fresh_receipt(&self, state: &State, value: &Operand) -> bool {
@@ -916,7 +901,9 @@ impl Checker<'_> {
     pub(super) fn set_fresh_receipt(&self, state: &mut State, destination: PlaceId, fresh: bool) {
         let place = &self.body.places[destination.0 as usize];
         if place.projection.is_empty() {
-            state.must[place.root.0 as usize].set(MustFacts::FRESH_RECEIPT, fresh);
+            state
+                .must
+                .set_fact(place.root.0 as usize, MustFacts::FRESH_RECEIPT, fresh);
         }
     }
     pub(super) fn operand_unique(&self, state: &State, value: &Operand) -> bool {
@@ -987,7 +974,7 @@ impl Checker<'_> {
     pub(super) fn set_current_unique(&self, state: &mut State, destination: PlaceId, unique: bool) {
         let place = &self.body.places[destination.0 as usize];
         if place.projection.is_empty() {
-            state.current_unique[place.root.0 as usize] = unique;
+            state.current_unique.set(place.root.0 as usize, unique);
         } else if needs_release(self, place.ty, self.t)
             && !matches!(
                 self.t.get(place.ty).unwrap().kind,
@@ -999,7 +986,10 @@ impl Checker<'_> {
         {
             // Plain bits introduce no counted aliases; Shared is an explicit
             // boundary of the parent's uniquely owned graph (MODE-2).
-            state.current_unique[place.root.0 as usize] &= unique;
+            state.current_unique.set(
+                place.root.0 as usize,
+                state.current_unique[place.root.0 as usize] & unique,
+            );
         }
     }
     pub(super) fn reset_unique(&self, state: &mut State, destination: PlaceId) {

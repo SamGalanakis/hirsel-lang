@@ -164,7 +164,7 @@ pub(super) fn eligible(
     signatures: &Reader<'_>,
 ) -> Result<bool, QueryError> {
     let mut pending = vec![(root, false)];
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut expansions = NominalExpansions::default();
     while let Some((id, exit)) = pending.pop() {
         if exit {

@@ -113,7 +113,7 @@ impl Checker<'_> {
     /// callable slot's root row is only its call-bounded view.
     pub(super) fn closed(&self, types: &TypeInterner, root: TypeId, view: bool) -> bool {
         let mut pending = vec![root];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -167,7 +167,7 @@ impl Checker<'_> {
     fn fixed_inert_data(&self, root: TypeId) -> bool {
         let types = self.t;
         let mut pending = vec![root];
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -214,11 +214,12 @@ impl Checker<'_> {
         }
         let store = self.t;
         let ty = self.transferred_type(state, value, store);
-        hirsel_types::content_sendability(&store, ty, &self.generic_declarations(), &mut |path| {
-            Ok::<_, hirsel_types::QueryError>(
-                self.signatures.get(path).cloned().map(std::sync::Arc::new),
-            )
-        })
+        self.proof(
+            &store,
+            ty,
+            super::proofs::Proof::Content,
+            &self.generic_declarations(),
+        )
         .is_ok_and(|proof| proof == hirsel_types::Sendability::Sendable)
     }
 

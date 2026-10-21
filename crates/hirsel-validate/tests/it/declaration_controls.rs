@@ -306,7 +306,6 @@ fn seal_structural_bounds_have_independent_ir_controls() {
         let SignatureKind::Function(mut callback) = signature.kind else {
             unreachable!()
         };
-        callback.result = callback.result;
         callback.authority = AuthoritySummary::inert();
         let root = interner().intern(ty(TypeKind::Function(callback)));
         let SignatureKind::Type(d) = &mut good.kind else {

@@ -218,10 +218,10 @@ impl Checker<'_> {
         let access = &self.body.places[destination.0 as usize];
         let root = access.root.0 as usize;
         if access.projection.is_empty() {
-            state.must[root].set(MustFacts::GLOBAL, global);
+            state.must.set_fact(root, MustFacts::GLOBAL, global);
         } else if needs_release(self, access.ty, self.t) {
             if !global {
-                state.must[root].set(MustFacts::GLOBAL, false);
+                state.must.set_fact(root, MustFacts::GLOBAL, false);
             }
         }
     }

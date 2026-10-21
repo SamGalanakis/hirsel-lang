@@ -873,3 +873,10 @@ Constant reads independently check complete size actuals, their lexical declarat
 and the substituted constant result. Constant declarations admit size parameters
 only. The hand-built constant-size controls include a valid read, missing actuals,
 an undeclared size and a wrong instantiated Inline length.
+
+Set `HIRSEL_VALIDATE_PROFILE=1` to print one tab-separated stderr row per
+validation: `hirsel-validate-profile`, definition path, elapsed nanoseconds,
+type-closure rows and violation count. This includes import and compile-time
+validation. Use a profiling build and `perf record --call-graph fp` for stacks;
+use `--timings=json` for aggregate thread CPU time. The opt-in wall clock rows
+identify heavy definitions; compare times only in an interleaved session.

@@ -18,6 +18,7 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+use hashed::{HashMap, HashSet};
 use hirsel_intern::work::{self, Counter};
 use hirsel_syntax::{DefId, DefPath};
 use hirsel_tir::*;
@@ -25,8 +26,13 @@ use hirsel_types::{
     Destination, GenericArgument, QueryError, Signature, TypeId, TypeInterner, TypeKind, TypeMemo,
     UseKind,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+mod bit_rows;
+mod hashed {
+    pub(super) type HashMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
+    pub(super) type HashSet<K> = std::collections::HashSet<K, hirsel_intern::IdHasher>;
+}
 mod cleanup_proof;
 mod declaration;
 mod effects;
@@ -39,6 +45,7 @@ mod instances;
 mod matching;
 mod origin_dependencies;
 mod origin_types;
+mod proofs;
 mod protocol;
 mod scope_locals;
 mod scratch;
@@ -169,9 +176,24 @@ pub fn validate(
     signatures: &dyn SignatureLookup,
     reads: &mut Vec<VRead>,
 ) -> Validation {
+    // Opt-in per-definition profiling, independent of the driver's phase
+    // accounting (including V invoked by import and compile-time execution).
+    static PROFILE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let started = PROFILE
+        .get_or_init(|| std::env::var_os("HIRSEL_VALIDATE_PROFILE").is_some())
+        .then(std::time::Instant::now);
     let reader = Reader::new(signatures);
     let validation = validate_input(definition, t, &reader);
     reader.finish(reads);
+    if let Some(started) = started {
+        eprintln!(
+            "hirsel-validate-profile\t{}\t{}\t{}\t{}",
+            definition.path,
+            started.elapsed().as_nanos(),
+            definition.types.len(),
+            validation.violations.len()
+        );
+    }
     validation
 }
 
@@ -737,8 +759,8 @@ fn carrier_rows_valid(t: &TypeInterner, rows: &[TypeId], signatures: &Reader<'_>
 /// caller checked membership), and the graph is acyclic with no recovery row.
 /// Iterative DFS also bounds recursion before invoking recursive shared helpers.
 fn graph_valid(t: &TypeInterner, rows: &[TypeId]) -> bool {
-    let members: std::collections::HashSet<TypeId> = rows.iter().copied().collect();
-    let mut colour = std::collections::HashMap::<TypeId, u8>::new();
+    let members: crate::hashed::HashSet<TypeId> = rows.iter().copied().collect();
+    let mut colour = crate::hashed::HashMap::<TypeId, u8>::default();
     for &root in rows {
         let mut stack = vec![(root, false)];
         while let Some((id, leaving)) = stack.pop() {
@@ -814,7 +836,7 @@ fn graph_valid(t: &TypeInterner, rows: &[TypeId]) -> bool {
 pub fn validate_structure(definition: &Definition, t: &TypeInterner) -> Vec<Violation> {
     // TypeIds carry no provenance: a row belongs to this definition exactly
     // when its closure table lists it.
-    let members: std::collections::HashSet<TypeId> = definition
+    let members: crate::hashed::HashSet<TypeId> = definition
         .types
         .iter()
         .copied()
