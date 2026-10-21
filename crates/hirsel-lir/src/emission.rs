@@ -53,9 +53,9 @@ pub struct FailureCodes {
 /// The rule a bounded arena's exhaustion fails with (MEM-6).
 pub const BOUNDED_RULE: &str = "MEM-6";
 
-/// Whether every-stage validation is on (`--validate-stages` sets
-/// `HIRSEL_VALIDATE_STAGES=1`, as the harnesses do): the backends then also run their
-/// own IR verifiers, which shipped builds skip.
+/// The harness environment default for every-stage validation. Drivers with an
+/// explicit policy pass `EmitInputs::verify_backend` directly; shipped builds skip
+/// backend IR verification unless that policy requests it.
 pub fn validate_stages() -> bool {
     std::env::var_os("HIRSEL_VALIDATE_STAGES").is_some_and(|v| v == "1")
 }

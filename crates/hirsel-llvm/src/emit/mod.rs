@@ -215,8 +215,8 @@ fn optimize_and_emit(
 }
 
 /// Whether unit emission runs LLVM's module verifier before and after its passes: with
-/// every-stage validation (`--validate-stages`, which sets `HIRSEL_VALIDATE_STAGES=1`,
-/// as the harnesses do) and in builds with debug assertions, never in the shipped
+/// the explicit `EmitInputs::verify_backend` harness policy and in builds with
+/// debug assertions, never by default in the shipped
 /// compiler: the verifier walks the whole module twice. This is cg_clif's policy
 /// (rustc_codegen_cranelift src/lib.rs:257, `-Zverify-llvm-ir` or debug assertions or
 /// its env switch; rustc's own `verify_llvm_ir` defaults off, rustc_session
@@ -467,7 +467,7 @@ fn lower<T>(
                 if abi.shape == CallableShape::Definition {
                     // A library operation can be a FunctionRef (integer Order
                     // dictionaries). Its callable thunk has the same linkage
-                    // as its body and is present in every calling object.
+                    // as its body: retained by its owner, optimizer-only in callers.
                     let name =
                         function_thunk_name(&unit.header.definition, Some(&unit.header.instance));
                     let thunk = define_function_thunk(&module, &name, entry, &external);
