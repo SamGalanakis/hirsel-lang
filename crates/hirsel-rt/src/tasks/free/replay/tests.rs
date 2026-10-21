@@ -481,3 +481,266 @@ unsafe fn rest_body(ctx: *mut TaskCtx, probe: &Arc<RestProbe>) {
         hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
     }
 }
+
+#[test]
+fn native_thaw_replay_forces_a_recorded_failure_even_when_the_root_is_sole() {
+    let scalar = crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size: 8,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 1,
+        flags: crate::LAYOUT_FROZEN,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: 0,
+    };
+    let layouts = [&raw const scalar];
+    for durable in [false, true] {
+        let recording = super::super::record::Recording::new(b"native thaw replay", durable);
+        let install = recording.clone();
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 1;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                install.root(ctx);
+            },
+            |ctx| unsafe {
+                let root =
+                    crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+                crate::alloc::payload(root).cast::<u64>().write(7);
+                crate::roots::hirsel_rt_v2_root_dup(ctx, root);
+                let mut last = 99;
+                crate::shared::hirsel_rt_v2_thaw_turn(ctx, &mut last, root);
+                assert_eq!(last, 0);
+                // Fixture disposal after observing the op, without inventing
+                // another semantic boundary in the tape.
+                crate::roots::immediate(ctx, || {
+                    crate::roots::hirsel_rt_v2_root_release(ctx, root);
+                    crate::roots::hirsel_rt_v2_root_release(ctx, root);
+                });
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        let cut = recording
+            .recorder
+            .stop("returned", None)
+            .unwrap()
+            .unwrap()
+            .0;
+        let trace = recording.trace();
+        let bytes = Arc::try_unwrap(recording)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink()
+            .bytes;
+        for width in [2, 8] {
+            let replay = Replay::new(&bytes).unwrap();
+            let install = replay.clone();
+            let observed = Arc::new(std::sync::atomic::AtomicU8::new(99));
+            let out = observed.clone();
+            let mut run = crate::host::BodyRun::new(width, false);
+            run.free = true;
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe { install.root(ctx) },
+                move |ctx| unsafe {
+                    let root = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        2,
+                        8,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    crate::alloc::payload(root).cast::<u64>().write(7);
+                    assert!(crate::roots::sole(root));
+                    crate::shared::hirsel_rt_v2_thaw_turn(ctx, out.as_ptr(), root);
+                    panic!("a thaw replay passed its cut");
+                },
+            );
+            assert!(
+                matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
+                "{outcome:?}"
+            );
+            assert_eq!(observed.load(Ordering::Acquire), 0);
+            assert_eq!(
+                replay.finish().unwrap(),
+                Projection::new("returned", &cut.progress, &trace)
+            );
+        }
+    }
+}
+
+unsafe extern "C" fn release_child(
+    ctx: *mut TaskCtx,
+    environment: *mut crate::Header,
+    _: u64,
+    _: u64,
+) -> u8 {
+    let root = unsafe {
+        crate::alloc::payload(environment)
+            .cast::<*mut crate::Header>()
+            .read()
+    };
+    unsafe { crate::roots::hirsel_rt_v2_root_release(ctx, root) };
+    STATUS_OK
+}
+
+#[test]
+fn a_recorded_successful_native_thaw_saves_its_wait_until_another_task_releases() {
+    const CHILD: &str = "HIRSEL_F1_REPLAY_THAW_WAIT";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tasks::free::replay::tests::a_recorded_successful_native_thaw_saves_its_wait_until_another_task_releases", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        return;
+    }
+    crate::pool::set_compute_grant(1);
+    let scalar = crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size: 8,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 1,
+        flags: crate::LAYOUT_FROZEN,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: 0,
+    };
+    let environment = crate::Layout { flags: 0, ..scalar };
+    let layouts = [&raw const scalar, &raw const environment];
+    for durable in [false, true] {
+        let recording = super::super::record::Recording::new(b"native thaw wait", durable);
+        let install = recording.clone();
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 2;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                install.root(ctx);
+            },
+            |ctx| unsafe {
+                thaw_wait_body(ctx, false, std::ptr::null());
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        let cut = recording
+            .recorder
+            .stop("returned", None)
+            .unwrap()
+            .unwrap()
+            .0;
+        let trace = recording.trace();
+        let bytes = Arc::try_unwrap(recording)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink()
+            .bytes;
+        for width in [2, 8] {
+            let replay = Replay::new(&bytes).unwrap();
+            let install = replay.clone();
+            let waited = Arc::new(AtomicBool::new(false));
+            let checked = waited.clone();
+            let mut run = crate::host::BodyRun::new(width, false);
+            run.free = true;
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 2;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe { install.root(ctx) },
+                move |ctx| unsafe {
+                    thaw_wait_body(ctx, true, Arc::as_ptr(&checked));
+                    panic!("replay passed the scope-exit cut");
+                },
+            );
+            assert!(
+                matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
+                "{outcome:?}"
+            );
+            assert!(
+                waited.load(Ordering::Acquire),
+                "a saved wait released the sole permit"
+            );
+            assert_eq!(
+                replay.finish().unwrap(),
+                Projection::new("returned", &cut.progress, &trace)
+            );
+        }
+    }
+}
+
+unsafe fn thaw_wait_body(ctx: *mut TaskCtx, replay: bool, waited: *const AtomicBool) {
+    unsafe {
+        let mut scope = 0;
+        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
+        let root = crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+        crate::alloc::payload(root).cast::<u64>().write(7);
+        crate::roots::hirsel_rt_v2_root_dup(ctx, root);
+        let env = crate::alloc::hirsel_rt_v2_alloc(ctx, 3, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+        crate::alloc::payload(env)
+            .cast::<*mut crate::Header>()
+            .write(root);
+        let mut task = 0;
+        hirsel_rt_v2_task_spawn(
+            ctx,
+            0,
+            0,
+            std::ptr::null_mut(),
+            &mut task,
+            &scope,
+            release_child,
+            env,
+            0,
+        );
+        let _role = role::Guard::new(ctx);
+        if !replay {
+            // Perturb only the physical schedule, without adding tape ops.
+            while !crate::roots::sole(root) {
+                super::super::suspend(&mut *ctx, true);
+            }
+        } else {
+            assert_eq!(
+                crate::roots::count(&*ctx, root),
+                2,
+                "the sole permit keeps the releasing child queued"
+            );
+        }
+        let parks = scheduler(ctx).parks;
+        let mut last = 99;
+        crate::shared::hirsel_rt_v2_thaw_turn(ctx, &mut last, root);
+        assert_eq!(last, 1);
+        assert!(crate::roots::sole(root));
+        if replay {
+            assert!(
+                scheduler(ctx).parks > parks,
+                "recorded Ok waited instead of failing or spinning"
+            );
+            (*waited).store(true, Ordering::Release);
+        }
+        crate::roots::hirsel_rt_v2_root_release(ctx, root);
+        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
+    }
+}

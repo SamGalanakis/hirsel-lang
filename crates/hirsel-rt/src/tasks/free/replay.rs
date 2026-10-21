@@ -6,10 +6,12 @@ use super::super::*;
 use hirsel_free::projection::Projection;
 use hirsel_free::replay::Diverged;
 use hirsel_free::session::Session;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub(crate) struct Replay {
     session: Mutex<Option<Session>>,
+    published: AtomicBool,
 }
 
 impl Replay {
@@ -19,14 +21,15 @@ impl Replay {
         session.start(&[]);
         Ok(Arc::new(Self {
             session: Mutex::new(Some(session)),
+            published: AtomicBool::new(false),
         }))
     }
 
     /// # Safety
     /// Admission only, before any task runs. This initial replay slice admits
-    /// scalar atomics, administrative task-tree operations and pending Shared
-    /// root tails only; no host requests or shared-object/cancellation outcome
-    /// substitution yet.
+    /// scalar atomics, administrative task-tree operations, pending Shared
+    /// root tails and thaw outcomes only; no host requests or versioned
+    /// shared-object/cancellation outcome substitution yet.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
@@ -120,6 +123,76 @@ pub(super) fn begin(ctx: *mut TaskCtx) {
     state.with(|session| session.begin(&path));
 }
 
+/// A publication can enable replay waits. Drain the notification only under
+/// scheduler ownership, outside independent cell accesses and session locks.
+pub(super) fn wake(s: &mut Scheduler) {
+    let Logical::Free(driver) = &s.logical else {
+        return;
+    };
+    let Some(replay) = &driver.replay else { return };
+    if !replay.published.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    for task in std::mem::take(&mut s.retrying) {
+        if let Some(Some(row)) = s.tasks.get_mut(task as usize)
+            && matches!(row.wait, Some(Wait::Retry { .. }))
+        {
+            row.retried = true;
+            s.wake(task);
+        }
+    }
+}
+
+/// # Safety
+/// Thaw's ordinal has begun, the role is held, root is live, out writable.
+pub(super) unsafe fn thaw(
+    ctx: *mut TaskCtx,
+    root: *mut crate::Header,
+    out: *mut u8,
+) -> Stopped<()> {
+    let mut entered = false;
+    loop {
+        // All owners of session state leave this scope before the save.
+        let complete = {
+            let token = token(ctx).expect("an admitted native replay");
+            token.entry(ctx, Phase::Done)?;
+            let last = unsafe { crate::roots::sole(root) };
+            if token
+                .shared
+                .with(|session| session.thaw_ready(&token.path, last))
+            {
+                token.publish(ctx, Phase::Done, || {
+                    let last = token
+                        .shared
+                        .with(|session| session.thaw(&token.path, last))
+                        .map_err(|error| Stop::Diverged(error.0))?;
+                    unsafe { out.write(u8::from(last)) };
+                    Ok(())
+                })??;
+                true
+            } else {
+                if !entered {
+                    token.publish(ctx, Phase::Entered, || ())?;
+                    entered = true;
+                }
+                false
+            }
+        };
+        if complete {
+            return unsafe { super::try_yield(&mut *ctx) };
+        }
+        if at_cut(ctx) {
+            return Err(Stop::Requested);
+        }
+        let s = scheduler(ctx);
+        let me = s.current;
+        if !s.retrying.contains(&me) {
+            s.retrying.push(me);
+        }
+        unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
+    }
+}
+
 /// An owner-local replay reservation captured under the scheduler role,
 /// before taking any independent atomic/object access. No scheduler lookup
 /// or role acquisition occurs while this token publishes or substitutes.
@@ -145,13 +218,18 @@ impl Token {
         phase: Phase,
         action: impl FnOnce() -> T,
     ) -> Stopped<T> {
+        self.entry(ctx, phase)?;
+        self.publish_phase(ctx, phase, action)
+    }
+
+    fn entry(&self, ctx: *mut TaskCtx, phase: Phase) -> Stopped<()> {
         // Immediate ops still have an entry when roots are pending. Admit
         // its deterministic nested tail even if this cut rejects Done, just
         // as record::publish_with_replay does on the recording path.
         if phase == Phase::Done && unsafe { (*ctx).roots.has_pending() } {
             self.publish_phase(ctx, Phase::Entered, || ())?;
         }
-        self.publish_phase(ctx, phase, action)
+        Ok(())
     }
 
     fn publish_phase<T>(
@@ -175,6 +253,9 @@ impl Token {
             .shared
             .with(|session| session.publish(&self.path, phase));
         roots.finish(ctx);
+        if publication.is_ok() {
+            self.shared.published.store(true, Ordering::Release);
+        }
         publication
             .map(|()| result)
             .map_err(|error| crate::stop::Stop::Diverged(error.0))

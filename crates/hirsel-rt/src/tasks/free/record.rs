@@ -219,6 +219,9 @@ pub(crate) unsafe fn thaw(
     out: *mut u8,
 ) -> Stopped<()> {
     begin(ctx);
+    if super::replay::on(ctx) {
+        return unsafe { super::replay::thaw(ctx, root, out) };
+    }
     publish(ctx, Phase::Done, |writer| unsafe {
         let last = crate::roots::sole(root);
         if let Some(writer) = writer {

@@ -63,6 +63,7 @@ pub(super) unsafe fn publish_ready(s: &mut Scheduler, run: *mut crate::context::
 /// # Safety
 /// The running task holds the role; its operation's borrows have ended.
 pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
+    replay::wake(scheduler(ctx));
     if replay::at_cut(ctx) {
         park_final(ctx);
     }
@@ -134,6 +135,7 @@ pub(super) unsafe fn after_save(
     completed: bool,
     pool_available: bool,
 ) -> Vec<(u32, Owner)> {
+    replay::wake(s);
     if let Some(Some(row)) = s.tasks.get(task as usize) {
         if completed && row.finishing {
             let row = s.task(task);
