@@ -353,16 +353,30 @@ impl Scheduler {
     /// Cancel `task` with `cause` and its descendants with `Parent`; an earlier cause stays.
     /// Each canceled parked task is woken: its cancellation may end its wait.
     fn cancel(&mut self, task: u32, cause: u32) {
+        let targets = self.prepare_cancel(task);
+        self.cancel_prepared(task, cause, &targets);
+    }
+    /// Freeze the linked-child walk and reserve all wake capacity before a
+    /// recording section. The role protects this topology until publication.
+    fn prepare_cancel(&mut self, task: u32) -> Vec<u32> {
         // Go context's linked-child walk, rather than scanning unrelated run
         // rows. Links stay until the child row is vacated, including scope exit.
         let mut pending = vec![task];
-        let mut changed = false;
+        let mut targets = Vec::new();
         while let Some(index) = pending.pop() {
-            let row = self.task(index);
-            changed |= row
-                .canceled
-                .cancel(if index == task { cause } else { CANCEL_PARENT });
-            pending.extend_from_slice(&row.children);
+            targets.push(index);
+            pending.extend_from_slice(&self.tasks[index as usize].as_ref().unwrap().children);
+        }
+        self.woken.reserve(targets.len());
+        targets
+    }
+    fn cancel_prepared(&mut self, task: u32, cause: u32, targets: &[u32]) {
+        let mut changed = false;
+        for &index in targets {
+            changed |=
+                self.task(index)
+                    .canceled
+                    .cancel(if index == task { cause } else { CANCEL_PARENT });
             self.wake(index);
         }
         if changed {
@@ -2677,6 +2691,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel(
     if ordered::engine::on(ctx) {
         return unsafe { crate::stop::check(ctx, ordered::sets::cancel(ctx, scope, task)) };
     }
+    if free::enabled(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                free::cancellation::cancel(ctx, scope.read(), task.read()),
+            )
+        };
+        return STATUS_OK;
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -3143,6 +3166,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_canceled(
     let _segment = profile::Operation::new(ctx, "task_canceled");
     if ordered::engine::on(ctx) {
         return unsafe { crate::stop::check(ctx, ordered::sets::canceled(ctx, out)) };
+    }
+    if free::enabled(ctx) {
+        unsafe { crate::stop::check(ctx, free::cancellation::check(ctx, out)) };
+        return STATUS_OK;
     }
     crate::free::enter(ctx, Phase::Done);
     // SAFETY: the context is live.
