@@ -36,7 +36,7 @@ pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
 /// # Safety
 /// Admission only, with physical dispatch installed and before root start.
 /// The body uses only supported ordered boundaries and explicit dispatch end;
-/// no memory budgets, host or terminal effects. Native task tests
+/// no host or terminal effects. Native task tests
 /// use supported task/receive boundaries and dropless closure environments;
 /// no deadlines or host-bearing finalizers are admitted. Resource finalizers
 /// use only installed task/E/drop boundaries. Root releases are strict-head;
@@ -70,19 +70,13 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
         .insert(root, Held::empty());
     assert_eq!(driver.select(), vec![root]);
     scheduler(ctx).logical = Logical::Ordered(driver);
+    unsafe { (*ctx).heap_ref().meter.ordered((*ctx).run_ptr()) };
     unsafe {
         (*ctx)
             .run_ref()
             .ordered_mode
             .store(true, std::sync::atomic::Ordering::Release)
     };
-}
-
-fn empty() -> Stretch {
-    Stretch::new(Budgets {
-        fuel: true,
-        memory: false,
-    })
 }
 
 /// Switch-in/out run under the scheduler role. Leases belong to a task, never
@@ -109,11 +103,30 @@ fn fuel_state(ctx: *mut TaskCtx) -> (TaskId, &'static mut Driver) {
 
 pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
     let initial = unsafe { (*ctx).run_ref().fuel.remaining() };
+    let memory_limit = unsafe { (*ctx).heap_ref().meter.limit() };
+    let memory_level = unsafe { (*ctx).heap_ref().meter.held() };
     let (task, driver) = fuel_state(ctx);
     driver.enter(task, crate::pool::compute_index().unwrap_or(0));
     let frontier = driver.frontier.as_mut().expect("restored fuel frontier");
     if !driver.fuel_initialized {
         frontier.settled.fuel = initial;
+        frontier.settled.limit = if memory_limit == 0 {
+            u64::MAX
+        } else {
+            memory_limit
+        };
+        frontier.settled.level = memory_level;
+        driver.memory = memory_limit != 0;
+        driver.budgets = Budgets {
+            fuel: initial != u64::MAX,
+            memory: driver.memory,
+        };
+        unsafe {
+            (*ctx)
+                .run_ref()
+                .ordered_memory
+                .store(driver.memory, std::sync::atomic::Ordering::Release)
+        };
         driver.fuel_initialized = true;
     }
     let fuel = driver
@@ -124,6 +137,8 @@ pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
     let room = frontier.settled.fuel.saturating_sub(fuel);
     let grant = room.min(crate::budget::FUEL_CHUNK);
     driver.fuel_grants.insert(task, grant);
+    let level = frontier.settled.level;
+    unsafe { (*ctx).heap_ref().meter.settled(level) };
     unsafe { (*ctx).heap().set_fuel(grant as i64) };
 }
 
@@ -131,6 +146,20 @@ fn capture_fuel(ctx: *mut TaskCtx) {
     let word = unsafe { (*ctx).view.compiled.fuel };
     let remaining = word.max(0) as u64;
     let (task, driver) = fuel_state(ctx);
+    let budgets = driver.budgets;
+    let freed = unsafe { (*ctx).ordered_freed.replace(0) };
+    if freed != 0 {
+        driver
+            .stretches
+            .entry(task)
+            .or_insert_with(|| Stretch::new(budgets))
+            .free(freed);
+        // A free may be older settled storage; only currently reserved
+        // speculative bytes can replenish the speculative allowance.
+        if let Some(frontier) = &mut driver.frontier {
+            frontier.credit_speculative(task, freed);
+        }
+    }
     let grant = driver
         .fuel_grants
         .insert(task, remaining)
@@ -142,7 +171,7 @@ fn capture_fuel(ctx: *mut TaskCtx) {
         driver
             .stretches
             .entry(task)
-            .or_insert_with(empty)
+            .or_insert_with(|| Stretch::new(budgets))
             .fuel_points(consumed);
     }
     // A negative word denotes the failed point already counted above. Clear
@@ -162,7 +191,10 @@ pub(crate) fn fuel_out(ctx: *mut TaskCtx) {
 fn stretch(ctx: *mut TaskCtx) -> Stretch {
     capture_fuel(ctx);
     let (task, driver) = fuel_state(ctx);
-    driver.stretches.remove(&task).unwrap_or_else(empty)
+    driver
+        .stretches
+        .remove(&task)
+        .unwrap_or_else(|| Stretch::new(driver.budgets))
 }
 
 /// Before taking a worker heap/pool borrow. A denied reservation leaves the
@@ -172,6 +204,16 @@ pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
     driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
     capture_fuel(ctx);
     advance(ctx)?;
+    let memory = driver(ctx).memory;
+    let budgets = driver(ctx).budgets;
+    let envelope_full = memory
+        && driver(ctx)
+            .stretches
+            .get(&task)
+            .is_some_and(|stretch| stretch.allocation_pauses(bytes));
+    if envelope_full {
+        at_head(ctx)?;
+    }
     let reserved = {
         let driver = driver(ctx);
         let frontier = driver
@@ -186,7 +228,58 @@ pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
     if reserved.is_err() {
         at_head(ctx)?;
     }
+    if memory {
+        let head = driver(ctx).frontier.as_ref().unwrap().head() == Some(task);
+        if head {
+            let before = stretch(ctx);
+            let frontier = driver(ctx).frontier.as_mut().unwrap();
+            frontier
+                .settled
+                .settle(&before)
+                .map_err(Stop::BudgetExceeded)?;
+            let mut allocation = Stretch::new(budgets);
+            allocation
+                .alloc(bytes)
+                .expect("one allocation fits an envelope");
+            frontier
+                .settled
+                .settle(&allocation)
+                .map_err(Stop::BudgetExceeded)?;
+        } else {
+            driver(ctx)
+                .stretches
+                .entry(task)
+                .or_insert_with(|| Stretch::new(budgets))
+                .alloc(bytes)
+                .expect("preflighted allocation envelope");
+        }
+        assert_eq!(
+            unsafe { (*ctx).ordered_allocation.replace(bytes) },
+            0,
+            "one upcoming heap/pool charge"
+        );
+        let level = driver(ctx).frontier.as_ref().unwrap().settled.level;
+        unsafe { (*ctx).heap_ref().meter.settled(level) };
+    }
     Ok(())
+}
+
+/// These callbacks execute with a worker heap/pool borrowed. They touch only
+/// the originating task's disjoint cells: no policy, role, stop or switch.
+pub(crate) fn memory_charged(ctx: *mut TaskCtx, bytes: u64) {
+    assert_eq!(
+        unsafe { (*ctx).ordered_allocation.replace(0) },
+        bytes,
+        "ordered allocation must preflight its exact charge"
+    );
+}
+
+pub(crate) fn memory_freed(ctx: *mut TaskCtx, bytes: u64) {
+    unsafe {
+        (*ctx)
+            .ordered_freed
+            .set((*ctx).ordered_freed.get().saturating_add(bytes))
+    };
 }
 
 /// A refill is a physical budget boundary, never a semantic operation or poll.
@@ -244,6 +337,8 @@ fn with_frontier<T>(
         }
         *ordinal += 1;
     }
+    let level = driver.frontier.as_ref().unwrap().settled.level;
+    unsafe { (*ctx).heap_ref().meter.settled(level) };
     result
 }
 
@@ -837,6 +932,172 @@ pub(crate) unsafe fn mutex_cause(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn ordered_native_region_credits_and_first_stop_match_warm_and_cold_pools() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        };
+        for width in [2, 4, 8] {
+            for warm in [false, true] {
+                let layout = image_layout(16);
+                let layouts = [&layout as *const crate::Layout];
+                let allocated = Arc::new(AtomicU64::new(0));
+                let seen = allocated.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 1;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        let limit = crate::region::SEGMENT_SIZE as u64;
+                        (*ctx).set_budgets(None, Some(limit));
+                        enable(ctx, Policy::admit(&Default::default(), Some(limit)));
+                    },
+                    move |ctx| unsafe {
+                        if warm {
+                            for _ in 0..2 {
+                                let mut region =
+                                    std::mem::MaybeUninit::<crate::region::Region>::uninit();
+                                crate::region::hirsel_rt_v2_arena_enter(ctx, region.as_mut_ptr());
+                                crate::region::hirsel_rt_v2_arena_alloc(
+                                    ctx,
+                                    region.as_mut_ptr(),
+                                    2,
+                                    16,
+                                    8,
+                                    0,
+                                );
+                                seen.fetch_add(1, Ordering::Relaxed);
+                                assert_eq!(
+                                    crate::region::hirsel_rt_v2_region_exit(
+                                        ctx,
+                                        region.as_mut_ptr(),
+                                        0,
+                                        0
+                                    ),
+                                    0
+                                );
+                            }
+                        }
+                        let mut outer = std::mem::MaybeUninit::<crate::region::Region>::uninit();
+                        crate::region::hirsel_rt_v2_arena_enter(ctx, outer.as_mut_ptr());
+                        crate::region::hirsel_rt_v2_arena_alloc(
+                            ctx,
+                            outer.as_mut_ptr(),
+                            2,
+                            16,
+                            8,
+                            0,
+                        );
+                        seen.fetch_add(1, Ordering::Relaxed);
+                        let mut inner = std::mem::MaybeUninit::<crate::region::Region>::uninit();
+                        crate::region::hirsel_rt_v2_arena_enter(ctx, inner.as_mut_ptr());
+                        crate::region::hirsel_rt_v2_arena_alloc(
+                            ctx,
+                            inner.as_mut_ptr(),
+                            2,
+                            16,
+                            8,
+                            0,
+                        );
+                        panic!("a second live canonical region segment must stop");
+                    },
+                );
+                assert_eq!(
+                    outcome.ended,
+                    Err(Stop::BudgetExceeded(hirsel_run_schema::BudgetKind::Memory))
+                );
+                assert_eq!(allocated.load(Ordering::Relaxed), if warm { 3 } else { 1 });
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_native_memory_and_fuel_stop_in_request_order_and_frees_restore_room() {
+        use hirsel_run_schema::BudgetKind;
+        for width in [2, 4, 8] {
+            for case in 0..3 {
+                let layout = image_layout(16);
+                let layouts = [&layout as *const crate::Layout];
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 1;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe {
+                        let charge = crate::alloc::allocation_charge(ctx, 2, 16, 8);
+                        (*ctx).set_budgets(
+                            Some(1),
+                            Some(if case == 2 { charge } else { 2 * charge - 1 }),
+                        );
+                        enable(ctx, Policy::admit(&Default::default(), Some(charge)));
+                    },
+                    move |ctx| unsafe {
+                        let allocate = || {
+                            crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                2,
+                                16,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            )
+                        };
+                        let first = allocate();
+                        if case == 1 {
+                            charge(ctx);
+                            charge(ctx);
+                        }
+                        if case == 2 {
+                            assert_eq!(
+                                crate::release::hirsel_rt_v2_release(
+                                    ctx,
+                                    first,
+                                    2,
+                                    std::ptr::null(),
+                                    0,
+                                    0
+                                ),
+                                0
+                            );
+                        }
+                        let second = allocate();
+                        assert_eq!(case, 2, "the second request should stop");
+                        assert_eq!(
+                            crate::release::hirsel_rt_v2_release(
+                                ctx,
+                                second,
+                                2,
+                                std::ptr::null(),
+                                0,
+                                0
+                            ),
+                            0
+                        );
+                        let _role = super::super::super::role::Guard::new(ctx);
+                        at_head(ctx).unwrap();
+                        assert_eq!(driver(ctx).frontier.as_ref().unwrap().settled.level, 0);
+                        assert_eq!((*ctx).heap_ref().meter.held(), 0);
+                        assert_eq!((*ctx).ordered_allocation.get(), 0);
+                        let task = current(ctx);
+                        driver(ctx).finishing(task);
+                        0
+                    },
+                );
+                assert_eq!(
+                    outcome.ended,
+                    match case {
+                        0 => Err(Stop::BudgetExceeded(BudgetKind::Memory)),
+                        1 => Err(Stop::BudgetExceeded(BudgetKind::Fuel)),
+                        _ => Ok(0),
+                    },
+                    "width {width}, case {case}"
+                );
+            }
+        }
+    }
+
     unsafe fn charge(ctx: *mut TaskCtx) {
         unsafe {
             (*ctx).view.compiled.fuel -= 1;
@@ -865,7 +1126,7 @@ mod tests {
         let [probe, mode, atomic] =
             unsafe { crate::alloc::payload(environment).cast::<[u64; 3]>().read() };
         let probe = unsafe { &*(probe as *const FuelOrder) };
-        if mode == 0 {
+        if matches!(mode, 0 | 10) {
             while !probe.start.load(Ordering::Acquire) {
                 let mut cause = 0;
                 assert_eq!(
@@ -890,21 +1151,99 @@ mod tests {
                 std::thread::yield_now();
             }
             assert!(!probe.younger_passed.load(Ordering::Acquire));
-            unsafe { charge(ctx) };
+            if mode == 0 {
+                unsafe { charge(ctx) };
+            }
             let _role = unsafe { role::Guard::new(ctx) };
             let value = 7u64;
             assert_eq!(
                 unsafe { hirsel_rt_v2_atomic_store(ctx, &atomic, (&raw const value).cast(), 8) },
                 0
             );
-            assert!(driver(ctx).frontier.as_ref().unwrap().settled.fuel <= 19);
+            if mode == 0 {
+                assert!(driver(ctx).frontier.as_ref().unwrap().settled.fuel <= 19);
+            }
             probe.older_retired.store(true, Ordering::Release);
         } else {
             {
                 let _role = unsafe { role::Guard::new(ctx) };
                 probe.younger.store(current(ctx), Ordering::Release);
             }
-            if mode >= 3 {
+            if matches!(mode, 5 | 6 | 7) {
+                if mode == 6 {
+                    unsafe {
+                        charge(ctx);
+                        charge(ctx);
+                    }
+                }
+                let block = unsafe {
+                    crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 16, 8, crate::alloc::DOMAIN_HEAP, 0)
+                };
+                if mode == 7 {
+                    assert_eq!(
+                        unsafe {
+                            crate::release::hirsel_rt_v2_release(
+                                ctx,
+                                block,
+                                2,
+                                std::ptr::null(),
+                                0,
+                                0,
+                            )
+                        },
+                        0
+                    );
+                }
+                unsafe {
+                    charge(ctx);
+                    charge(ctx);
+                }
+                probe.younger_passed.store(true, Ordering::Release);
+                panic!("combined-budget exhausted segment must stop on promotion");
+            } else if matches!(mode, 8 | 9) {
+                let mut blocks = Vec::new();
+                for _ in 0..=crate::budget::stretch::ENVELOPE_MAX {
+                    unsafe { charge(ctx) };
+                    blocks.push(unsafe {
+                        crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            24,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        )
+                    });
+                }
+                if mode == 9 {
+                    let _role = unsafe { role::Guard::new(ctx) };
+                    let task = current(ctx);
+                    let d = driver(ctx);
+                    assert!(!d.budgets.fuel);
+                    assert_eq!(
+                        d.stretches[&task].pieces().next().unwrap().1.envelope.len(),
+                        1
+                    );
+                }
+                for block in blocks {
+                    assert_eq!(
+                        unsafe {
+                            crate::release::hirsel_rt_v2_release(
+                                ctx,
+                                block,
+                                2,
+                                std::ptr::null(),
+                                0,
+                                0,
+                            )
+                        },
+                        0
+                    );
+                }
+                if mode == 8 {
+                    probe.younger_passed.store(true, Ordering::Release);
+                }
+            } else if mode >= 3 {
                 unsafe {
                     if mode == 3 {
                         let block = crate::alloc::hirsel_rt_v2_alloc(
@@ -984,6 +1323,9 @@ mod tests {
             },
             0
         );
+        if mode == 9 {
+            probe.younger_passed.store(true, Ordering::Release);
+        }
         0
     }
 
@@ -1007,13 +1349,39 @@ mod tests {
             let mut run = crate::host::BodyRun::new(width, true);
             run.config.layouts = layouts.as_ptr();
             run.config.layout_count = 1;
-            run.fuel = Some(20);
+            if mode < 5 {
+                run.fuel = Some(20);
+            }
             unsafe { run.use_physical_dispatch() };
             let outcome = run.run(
                 move |ctx| unsafe {
-                    let mut policy = Policy::admit(&Default::default(), None);
-                    if mode >= 3 {
+                    let memory = if mode >= 5 {
+                        let environment = crate::alloc::allocation_charge(ctx, 2, 24, 8);
+                        let small = crate::alloc::allocation_charge(ctx, 2, 16, 8);
+                        let limit = if matches!(mode, 8 | 9) {
+                            environment * (crate::budget::stretch::ENVELOPE_MAX as u64 + 4)
+                        } else {
+                            2 * environment + small - 1
+                        };
+                        (*ctx).set_budgets(
+                            if mode == 9 {
+                                None
+                            } else if mode == 8 {
+                                Some(1_000_000)
+                            } else {
+                                Some(1)
+                            },
+                            Some(limit),
+                        );
+                        Some(limit)
+                    } else {
+                        None
+                    };
+                    let mut policy = Policy::admit(&Default::default(), memory);
+                    if matches!(mode, 3 | 4) {
                         policy.speculation_bytes = 0;
+                    } else if mode >= 5 {
+                        policy.speculation_bytes = 1024 * 1024;
                     }
                     enable(ctx, policy);
                 },
@@ -1036,7 +1404,7 @@ mod tests {
                         0
                     );
                     let mut last_child = 0;
-                    for mode in [0, mode] {
+                    for mode in [if mode >= 5 { 10 } else { 0 }, mode] {
                         let environment = crate::alloc::hirsel_rt_v2_alloc(
                             ctx,
                             2,
@@ -1048,7 +1416,7 @@ mod tests {
                         crate::alloc::payload(environment)
                             .cast::<[u64; 3]>()
                             .write([Arc::as_ptr(&seen) as u64, mode, atomic]);
-                        if mode != 0 {
+                        if !matches!(mode, 0 | 10) {
                             seen.start.store(true, Ordering::Release);
                         }
                         let mut child = 0;
@@ -1083,7 +1451,7 @@ mod tests {
                         0
                     );
                     assert!(
-                        mode >= 3,
+                        matches!(mode, 3 | 4 | 8 | 9),
                         "the younger fuel stop must precede root continuation"
                     );
                     assert_eq!(hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0), 0);
@@ -1095,14 +1463,21 @@ mod tests {
             );
             assert_eq!(
                 outcome.ended,
-                if mode >= 3 {
+                if matches!(mode, 3 | 4 | 8 | 9) {
                     Ok(0)
                 } else {
-                    Err(Stop::BudgetExceeded(hirsel_run_schema::BudgetKind::Fuel))
+                    Err(Stop::BudgetExceeded(if matches!(mode, 5 | 7) {
+                        hirsel_run_schema::BudgetKind::Memory
+                    } else {
+                        hirsel_run_schema::BudgetKind::Fuel
+                    }))
                 }
             );
             assert!(probe.older_retired.load(Ordering::Acquire));
-            assert_eq!(probe.younger_passed.load(Ordering::Acquire), mode >= 3);
+            assert_eq!(
+                probe.younger_passed.load(Ordering::Acquire),
+                matches!(mode, 3 | 4 | 8 | 9)
+            );
         }
     }
 
@@ -1114,6 +1489,16 @@ mod tests {
     #[test]
     fn ordered_native_heap_and_region_allowance_pauses_resume_only_after_head_promotion() {
         younger_budget(&[3, 4]);
+    }
+
+    #[test]
+    fn ordered_native_speculative_envelopes_choose_the_first_memory_or_fuel_stop() {
+        younger_budget(&[5, 6, 7]);
+    }
+
+    #[test]
+    fn ordered_native_envelope_overflow_saves_before_borrowing_the_heap() {
+        younger_budget(&[8, 9]);
     }
 
     #[test]

@@ -2189,7 +2189,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_alloc(
 /// charge mirrors Heap::allocate, including the optional bare-system path.
 /// No worker reference may survive this call, since it may migrate the task.
 pub(crate) unsafe fn ordered_preflight(ctx: *mut TaskCtx, _index: u32, extent: u64, align: u64) {
-    if unsafe {
+    if !unsafe {
+        (*ctx)
+            .run_ref()
+            .ordered_memory
+            .load(std::sync::atomic::Ordering::Acquire)
+    } && unsafe {
         (*ctx)
             .run_ref()
             .ordered_allowance
@@ -2199,7 +2204,18 @@ pub(crate) unsafe fn ordered_preflight(ctx: *mut TaskCtx, _index: u32, extent: u
         return;
     }
     check_request(extent, align);
-    let bytes = {
+    let bytes = unsafe { allocation_charge(ctx, _index, extent, align) };
+    unsafe { ordered_reserve(ctx, bytes) };
+}
+
+pub(crate) unsafe fn allocation_charge(
+    ctx: *mut TaskCtx,
+    _index: u32,
+    extent: u64,
+    align: u64,
+) -> u64 {
+    let _ = ctx;
+    {
         #[cfg(feature = "system-allocator")]
         let bare = unsafe { (*ctx).heap_ref().bare_capacity(_index, extent, align) };
         #[cfg(not(feature = "system-allocator"))]
@@ -2214,12 +2230,16 @@ pub(crate) unsafe fn ordered_preflight(ctx: *mut TaskCtx, _index: u32, extent: u
         } else {
             crate::budget::large_charge(request_capacity(extent, align))
         }
-    };
-    unsafe { ordered_reserve(ctx, bytes) };
+    }
 }
 
 pub(crate) unsafe fn ordered_reserve(ctx: *mut TaskCtx, bytes: u64) {
-    if unsafe {
+    if !unsafe {
+        (*ctx)
+            .run_ref()
+            .ordered_memory
+            .load(std::sync::atomic::Ordering::Acquire)
+    } && unsafe {
         (*ctx)
             .run_ref()
             .ordered_allowance

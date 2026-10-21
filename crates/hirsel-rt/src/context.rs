@@ -152,6 +152,10 @@ pub struct TaskCtx {
     /// Owner-local native recorder and ordinal. It moves with this task;
     /// cutters read only its stable shared log, never the context.
     pub(crate) recording: Option<Box<crate::tasks::free::record::Task>>,
+    /// Meter callbacks reach only these owner-local cells while a heap is
+    /// borrowed. Policy accounting and every possible pause happen outside it.
+    pub(crate) ordered_allocation: std::cell::Cell<u64>,
+    pub(crate) ordered_freed: std::cell::Cell<u64>,
     /// The task's measurement site while it is switched out.
     #[cfg(feature = "measurement")]
     site: u64,
@@ -274,6 +278,7 @@ pub(crate) struct RunShared {
     pub(crate) ordered_mode: std::sync::atomic::AtomicBool,
     /// Fast allocation preflight selector; MAX means no physical allowance cap.
     pub(crate) ordered_allowance: std::sync::atomic::AtomicU64,
+    pub(crate) ordered_memory: std::sync::atomic::AtomicBool,
     /// The exact counts of roots past the finite maximum (`crate::roots`).
     pub(crate) root_overflow: crate::roots::Overflow,
     /// Every worker's heap, until the run ends (`crate::heaps`).
@@ -323,6 +328,8 @@ impl TaskCtx {
             callback_permits: 0,
             callback_depth: 0,
             recording: None,
+            ordered_allocation: Default::default(),
+            ordered_freed: Default::default(),
             #[cfg(feature = "measurement")]
             site: 0,
         }
@@ -819,6 +826,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         free_mode: false,
         ordered_mode: Default::default(),
         ordered_allowance: std::sync::atomic::AtomicU64::new(u64::MAX),
+        ordered_memory: Default::default(),
         root_overflow: Default::default(),
         heaps,
         fuel: Default::default(),

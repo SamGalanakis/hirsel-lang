@@ -88,6 +88,18 @@ impl Stretch {
             .iter()
             .fold(0, |total, (_, piece)| total.saturating_add(piece.fuel))
     }
+    /// Whether appending this allocation needs an envelope pause. Inspecting
+    /// the last piece avoids cloning a growing summary at every allocation.
+    pub fn allocation_pauses(&self, bytes: u64) -> bool {
+        let piece = &self.pieces.last().expect("a stretch has a piece").1;
+        let level = piece.level.saturating_add(bytes as i64);
+        let high = piece.envelope.last().map_or(0, |&(_, high)| high);
+        let fuel = if self.budgets.fuel { piece.fuel } else { 0 };
+        self.budgets.memory
+            && level > high
+            && piece.envelope.len() == ENVELOPE_MAX
+            && piece.envelope.last().is_none_or(|&(u, _)| u != fuel)
+    }
     /// An allocation of `bytes`.
     pub fn alloc(&mut self, bytes: u64) -> Result<(), Pause> {
         let memory = self.budgets.memory;

@@ -407,6 +407,41 @@ fn speculation_allowance_does_not_charge_or_block_the_head() {
 }
 
 #[test]
+fn a_full_command_keeps_its_open_allocation_reservation_after_the_last_logged_turn() {
+    let (mut f, mut b) = frontier();
+    f.policy.speculation_bytes = 16;
+    b.deferred = true;
+    f.enqueue(3, Held::empty());
+    f.reserve(2, 8, 0).unwrap();
+    assert_eq!(f.offer(2, empty(), store(7, 1), &mut b).0, Offer::Early);
+    f.reserve(2, 8, 0).unwrap();
+    // This may free older logged storage; it does not prove that any of the
+    // eight bytes in the open stretch have died.
+    f.credit_speculative(2, 4);
+    assert_eq!(
+        f.apply_head(empty(), step("task.check_canceled", Next::Park), &mut b),
+        Ok(Progress::Poll)
+    );
+    let (offer, retained) = f.offer(2, empty(), store(8, 1), &mut b);
+    assert_eq!(offer, Offer::Full);
+    f.complete_poll(Vec::new());
+    assert_eq!(f.absorb(&mut b), Ok(Progress::Poll));
+    assert_eq!(f.physical, 8, "unsubmitted stretch still owns its storage");
+    f.complete_poll(Vec::new());
+    assert_eq!(f.head(), Some(3));
+    assert_eq!(f.reserve(2, 9, 0), Err(Pause::Allowance));
+    assert_eq!(
+        f.apply_head(empty(), step("task.check_canceled", Next::Park), &mut b),
+        Ok(Progress::Poll)
+    );
+    f.complete_poll(Vec::new());
+    assert_eq!(f.head(), Some(2));
+    let (before, operation) = retained.unwrap();
+    assert_eq!(f.apply_head(before, operation, &mut b), Ok(Progress::Poll));
+    assert_eq!(f.physical, 0);
+}
+
+#[test]
 fn measured_losing_windows_fall_back_and_periodic_probes_recover() {
     let (mut f, _) = frontier();
     f.tune(AutoSample::default());

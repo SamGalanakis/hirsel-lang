@@ -135,6 +135,9 @@ struct Task<P, R> {
     retiring: u64,
     log: VecDeque<Entry<P, R>>,
     speculative_bytes: u64,
+    /// Bytes in a still-running segment or an unaccepted Full command. They
+    /// cannot be reclaimed merely because its last accepted log entry retires.
+    open_speculative_bytes: u64,
     calls: Option<(VecDeque<TaskId>, bool)>,
 }
 
@@ -146,6 +149,7 @@ impl<P, R> Task<P, R> {
             retiring: 0,
             log: VecDeque::new(),
             speculative_bytes: 0,
+            open_speculative_bytes: 0,
             calls: None,
         }
     }
@@ -292,10 +296,9 @@ impl<P, R> Frontier<P, R> {
         if bytes > room {
             return Err(Pause::Allowance);
         }
-        self.tasks
-            .get_mut(&task)
-            .expect("a live task")
-            .speculative_bytes += bytes;
+        let row = self.tasks.get_mut(&task).expect("a live task");
+        row.speculative_bytes += bytes;
+        row.open_speculative_bytes += bytes;
         self.physical += bytes;
         Ok(())
     }
@@ -304,7 +307,16 @@ impl<P, R> Frontier<P, R> {
         let row = self.tasks.get_mut(&task).expect("a live task");
         assert!(bytes <= row.speculative_bytes);
         row.speculative_bytes -= bytes;
+        // A free may release storage from an already logged stretch. Without
+        // allocation identities, retain the open reservation conservatively;
+        // only the total remaining storage is a proven smaller bound.
+        row.open_speculative_bytes = row.open_speculative_bytes.min(row.speculative_bytes);
         self.physical -= bytes;
+    }
+
+    pub(crate) fn credit_speculative(&mut self, task: TaskId, bytes: u64) {
+        let bytes = bytes.min(self.tasks[&task].speculative_bytes);
+        self.free_speculative(task, bytes);
     }
 
     /// Fuel already consumed in this task's logged future turns.
@@ -416,6 +428,7 @@ impl<P, R> Frontier<P, R> {
             committed,
             turn: row.producing,
         });
+        row.open_speculative_bytes = 0;
         if ends {
             row.producing += 1;
         }
@@ -456,6 +469,7 @@ impl<P, R> Frontier<P, R> {
             self.tasks[&task].log.is_empty(),
             "absorb the log before new head work"
         );
+        self.tasks.get_mut(&task).unwrap().open_speculative_bytes = 0;
         self.apply(task, before, operation, None, backend)
     }
 
@@ -525,6 +539,7 @@ impl<P, R> Frontier<P, R> {
             self.stopped = true;
             return Err(kind);
         }
+        self.tasks.get_mut(&task).unwrap().open_speculative_bytes = 0;
         self.transition(task, effect(), backend)
     }
 
@@ -606,7 +621,8 @@ impl<P, R> Frontier<P, R> {
         // A log may span future turns. Their allocated storage remains part
         // of the physical allowance until those entries have been absorbed.
         if row.log.is_empty() {
-            self.physical -= std::mem::take(&mut row.speculative_bytes);
+            self.physical -= row.speculative_bytes - row.open_speculative_bytes;
+            row.speculative_bytes = row.open_speculative_bytes;
         }
         row.state = match next {
             Next::Yield => State::Queued,

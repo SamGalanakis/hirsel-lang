@@ -24,7 +24,7 @@
 use crate::TaskCtx;
 use crate::alloc::HEADER_SIZE;
 use hirsel_run_schema::BudgetKind;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 
 pub mod stretch;
 
@@ -50,6 +50,9 @@ pub(crate) fn large_charge(capacity: u64) -> u64 {
 /// Its counters move only under a budget, so an unbudgeted run pays nothing for them.
 #[derive(Debug, Default)]
 pub(crate) struct Meter {
+    /// Ordered charges were checked before borrowing the heap. Callbacks may
+    /// validate a charge or record a free, but never suspend or stop here.
+    ordered: AtomicPtr<crate::context::RunShared>,
     limit: AtomicU64,
     held: AtomicU64,
     /// Charges and credits applied (headroom metric `meter_ops_per_s`).
@@ -58,6 +61,27 @@ pub(crate) struct Meter {
     allocations: AtomicU64,
 }
 impl Meter {
+    pub(crate) fn ordered(&self, run: *mut crate::context::RunShared) {
+        self.ordered.store(run, Ordering::Release);
+    }
+    pub(crate) fn limit(&self) -> u64 {
+        self.limit.load(Ordering::Relaxed)
+    }
+    pub(crate) fn settled(&self, bytes: u64) {
+        self.held.store(bytes, Ordering::Relaxed);
+    }
+    fn ordered_charge(&self, bytes: u64) -> bool {
+        let run = self.ordered.load(Ordering::Acquire);
+        if run.is_null() {
+            return false;
+        }
+        let ctx = crate::stop::running();
+        if !ctx.is_null() && unsafe { (*ctx).run_ptr() } == run {
+            crate::tasks::ordered::engine::memory_charged(ctx, bytes);
+        }
+        self.ops.fetch_add(1, Ordering::Relaxed);
+        true
+    }
     pub(crate) fn set_limit(&self, limit: u64) {
         self.limit.store(limit, Ordering::Relaxed);
     }
@@ -74,7 +98,9 @@ impl Meter {
     #[inline]
     pub(crate) fn charge(&self, bytes: u64) {
         if self.metered() {
-            self.charge_metered(bytes);
+            if !self.ordered_charge(bytes) {
+                self.charge_metered(bytes);
+            }
         }
     }
     #[cold]
@@ -101,7 +127,9 @@ impl Meter {
     #[inline]
     pub(crate) fn charge_allocation(&self, bytes: u64) {
         if self.metered() {
-            self.charge_metered(bytes);
+            if !self.ordered_charge(bytes) {
+                self.charge_metered(bytes);
+            }
             self.allocations.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -109,6 +137,15 @@ impl Meter {
     #[inline]
     pub(crate) fn credit(&self, bytes: u64) {
         if self.metered() {
+            let run = self.ordered.load(Ordering::Acquire);
+            if !run.is_null() {
+                let ctx = crate::stop::running();
+                if !ctx.is_null() && unsafe { (*ctx).run_ptr() } == run {
+                    crate::tasks::ordered::engine::memory_freed(ctx, bytes);
+                }
+                self.ops.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
             let previous = self.held.fetch_sub(bytes, Ordering::Relaxed);
             if previous < bytes {
                 crate::fault("the memory meter credited more than it charged");
