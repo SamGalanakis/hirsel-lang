@@ -17,6 +17,7 @@ pub(crate) struct Entry<T> {
     /// What the adapter read, as it reported it (diagnostic tooling and
     /// the program revision read it; validity never does).
     pub detail: DependencyReads,
+    pub products: Arc<PhaseProducts>,
     /// A signature's fingerprint coverage: the adapter's own dependency list,
     /// before the query's reads join it in the output (PS-9).
     pub covered: Vec<SignatureDependency>,
@@ -48,6 +49,7 @@ pub(crate) type Table<T> = hirsel_syntax::DefMap<Arc<Entry<T>>>;
 /// refines) or merged by executing something.
 #[derive(Default)]
 pub(crate) struct Observed {
+    pub products: Arc<PhaseProducts>,
     pub representations: BTreeMap<DefPath, ContentHash>,
     pub merged: ReadsBuilder,
 }
@@ -58,6 +60,7 @@ impl Observed {
             merged.merge(reads);
         }
         Self {
+            products: Default::default(),
             representations: BTreeMap::new(),
             merged,
         }
@@ -466,6 +469,7 @@ impl QueryEngine {
             .graph
             .insert(key, text, result, Arc::new(reads), durability, false);
         Entry {
+            products: observed.products.clone(),
             memo,
             detail,
             covered: vec![],

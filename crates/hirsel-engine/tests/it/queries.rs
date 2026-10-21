@@ -5,7 +5,7 @@ use hirsel_span::{FileId, SourceMap, Span};
 use hirsel_syntax::Origin;
 use hirsel_syntax::*;
 use hirsel_types::*;
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::sync::{Arc, Mutex};
 
 fn out<T>(value: T) -> QueryOutput<T> {
     QueryOutput {
@@ -30,13 +30,13 @@ fn error(span: Span) -> QueryError {
 }
 #[derive(Clone)]
 struct Fake {
-    events: Rc<RefCell<Vec<String>>>,
+    events: Arc<Mutex<Vec<String>>>,
     reject: Option<&'static str>,
     missing_lookup: bool,
 }
 impl Fake {
     fn event(&self, phase: &str) {
-        self.events.borrow_mut().push(phase.into());
+        self.events.lock().unwrap().push(phase.into());
     }
     fn fail(&self, phase: &str, span: Span) -> Result<(), QueryError> {
         self.event(phase);
@@ -150,6 +150,8 @@ impl ResolverPhase for Fake {
         _t: &hirsel_types::TypeInterner,
         _m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
+        _declarations: &Declarations,
+        _products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError> {
         let item = &syntax.item;
@@ -178,6 +180,8 @@ impl SignaturePhase for Fake {
         t: &hirsel_types::TypeInterner,
         _m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
+        _: &Declarations,
+        _: &mut PhaseProducts,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let item = &syntax.item;
@@ -246,8 +250,9 @@ impl ModesPhase for Fake {
         &self,
         _t: &hirsel_types::TypeInterner,
         _m: &hirsel_types::TypeMemo,
-        body: TypedBody,
+        body: Arc<TypedBody>,
         _signature: &Signature,
+        _: &mut PhaseProducts,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
         self.fail("modes", body.syntax.item.origin.span)?;
@@ -361,9 +366,9 @@ fn unit_body(signature: &Signature, syntax: &ItemSyntax, span: Span) -> hirsel_t
 fn make_engine(
     reject: Option<&'static str>,
     missing_lookup: bool,
-) -> (QueryEngine, Rc<RefCell<Vec<String>>>) {
-    let events = Rc::new(RefCell::new(vec![]));
-    let fake = Rc::new(Fake {
+) -> (QueryEngine, Arc<Mutex<Vec<String>>>) {
+    let events = Arc::new(Mutex::new(vec![]));
+    let fake = Arc::new(Fake {
         events: events.clone(),
         reject,
         missing_lookup,
@@ -404,7 +409,8 @@ fn invalid_tir_is_never_published_and_operational_failures_retry_on_compiler_thr
     }
     assert_eq!(
         events
-            .borrow()
+            .lock()
+            .unwrap()
             .iter()
             .filter(|phase| phase.as_str() == "lower")
             .count(),
@@ -447,7 +453,7 @@ fn phases_run_in_order_and_stop_at_every_error_boundary_on_compiler_thread() {
             check_snapshot(&mut engine, file, &default_context()),
             Err(QueryError::Diagnostics(_))
         ));
-        assert_eq!(*events.borrow(), phases[..=stop]);
+        assert_eq!(*events.lock().unwrap(), phases[..=stop]);
     }
     let (mut engine, events) = make_engine(None, false);
     let file = engine
@@ -459,7 +465,7 @@ fn phases_run_in_order_and_stop_at_every_error_boundary_on_compiler_thread() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(*events.borrow(), phases);
+    assert_eq!(*events.lock().unwrap(), phases);
 }
 #[test]
 fn changing_one_body_recomputes_only_that_definition() {
@@ -598,6 +604,8 @@ impl SignaturePhase for ContractSignatures {
         t: &hirsel_types::TypeInterner,
         _m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
+        _declarations: &Declarations,
+        _products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let item = &syntax.item;
@@ -653,7 +661,7 @@ fn contract_signature_reads_invalidate_the_owner_and_its_users() {
 }
 fn contract_signature_reads_invalidate_the_owner_and_its_users_on_compiler_thread() {
     let (mut engine, _) = make_engine(None, false);
-    engine.adapters.signature = Some(Rc::new(ContractSignatures));
+    engine.adapters.signature = Some(Arc::new(ContractSignatures));
     parse(
         &mut engine,
         "fn a () { 1 }\nfn b () { 2 }\nfn contract () { 3 }\n",
@@ -710,6 +718,8 @@ impl SignaturePhase for ObserveDuplicates {
         _t: &hirsel_types::TypeInterner,
         _m: &hirsel_types::TypeMemo,
         _syntax: Arc<ItemSyntax>,
+        _: &Declarations,
+        _: &mut PhaseProducts,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         unreachable!("candidate-aware entry point must be used")
@@ -719,6 +729,8 @@ impl SignaturePhase for ObserveDuplicates {
         _t: &hirsel_types::TypeInterner,
         _m: &hirsel_types::TypeMemo,
         candidates: &[Arc<ItemSyntax>],
+        _: &Declarations,
+        _: &mut PhaseProducts,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         assert_eq!(candidates.len(), 2);
@@ -753,7 +765,7 @@ fn duplicate_items_keep_one_identity_and_reach_the_signature_phase_on_compiler_t
         assert_eq!(syntax.item.definition, path("a"));
         assert_eq!(syntax.occurrence, occurrence as u32);
     }
-    engine.adapters.signature = Some(Rc::new(ObserveDuplicates));
+    engine.adapters.signature = Some(Arc::new(ObserveDuplicates));
     let Err(QueryError::Diagnostics(errors)) = engine.item_signature(&path("a")) else {
         panic!("signature phase owns overloading");
     };
@@ -819,8 +831,8 @@ fn operational_signature_failures_retry_and_are_not_rejection_cache_entries() {
 }
 fn operational_signature_failures_retry_and_are_not_rejection_cache_entries_on_compiler_thread() {
     struct Flaky {
-        original: Rc<dyn SignaturePhase>,
-        calls: std::cell::Cell<u32>,
+        original: Arc<dyn SignaturePhase>,
+        calls: std::sync::atomic::AtomicU32,
     }
     impl SignaturePhase for Flaky {
         fn signature(
@@ -828,22 +840,28 @@ fn operational_signature_failures_retry_and_are_not_rejection_cache_entries_on_c
             t: &hirsel_types::TypeInterner,
             m: &hirsel_types::TypeMemo,
             syntax: Arc<ItemSyntax>,
+            _declarations: &Declarations,
+            _products: &mut PhaseProducts,
             provider: &mut dyn SignatureProvider,
         ) -> Result<QueryOutput<Signature>, QueryError> {
-            self.calls.set(self.calls.get() + 1);
-            if self.calls.get() == 1 {
+            if self
+                .calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                == 0
+            {
                 return Err(QueryError::Operational(OperationalFailure {
                     operation: "signature provider".into(),
                     message: "temporarily offline".into(),
                 }));
             }
-            self.original.signature(t, m, syntax, provider)
+            self.original
+                .signature(t, m, syntax, _declarations, _products, provider)
         }
     }
     let (mut engine, _) = make_engine(None, false);
-    let adapter = Rc::new(Flaky {
+    let adapter = Arc::new(Flaky {
         original: engine.adapters.signature.take().unwrap(),
-        calls: std::cell::Cell::new(0),
+        calls: std::sync::atomic::AtomicU32::new(0),
     });
     engine.adapters.signature = Some(adapter.clone());
     parse(&mut engine, "fn a {}\n");
@@ -853,7 +871,7 @@ fn operational_signature_failures_retry_and_are_not_rejection_cache_entries_on_c
     ));
     assert!(engine.signature(DefId::intern(&path("a"))).is_ok());
     assert!(engine.signature(DefId::intern(&path("a"))).is_ok());
-    assert_eq!(adapter.calls.get(), 2);
+    assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::Relaxed), 2);
 }
 #[test]
 fn partial_check_preserves_diagnostics_and_reports_the_missing_phase() {
@@ -891,7 +909,7 @@ fn signature_hits_track_later_duplicate_headers_and_positions() {
             .add("other.hir", "fn a () { 2 }\n".into())
             .unwrap();
         engine.parse_file(duplicate, &default_context()).unwrap();
-        engine.adapters.signature = Some(Rc::new(ObserveDuplicates));
+        engine.adapters.signature = Some(Arc::new(ObserveDuplicates));
         let diagnose = |engine: &mut QueryEngine| {
             let Err(QueryError::Diagnostics(errors)) = engine.item_signature(&path("a")) else {
                 panic!("duplicate signature must reject");

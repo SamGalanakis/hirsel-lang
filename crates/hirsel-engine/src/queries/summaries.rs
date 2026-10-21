@@ -103,6 +103,7 @@ impl QueryEngine {
             std::sync::Arc::new(crate::queries::Entry {
                 memo,
                 detail,
+                products: Default::default(),
                 covered: vec![],
                 depth: None,
                 consistent: true,

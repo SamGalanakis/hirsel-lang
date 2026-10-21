@@ -11,8 +11,10 @@ impl QueryEngine {
     /// `path`'s private shape as its signature's normalization recorded it,
     /// here or in the std image.
     pub(crate) fn owner_record(&self, path: &DefPath) -> Option<OwnerRecord> {
-        let state = self.adapters.compiler_state.as_ref()?;
-        if let Some(record) = state.borrow().representations.get(path) {
+        if let Some(record) = self
+            .signature_products(DefId::intern(path))
+            .and_then(|products| products.representation.as_ref())
+        {
             return Some(record.clone());
         }
         self.image_signature(path)?.owner.clone()
@@ -36,11 +38,10 @@ impl QueryEngine {
         {
             return Ok((image.private.clone(), self.implementation_hash(path)));
         }
-        let Some(state) = &self.adapters.compiler_state else {
-            return Ok((public, None));
-        };
-        let state = state.borrow();
-        let Some(record) = state.representations.get(public.definition.path()) else {
+        let Some(record) = self
+            .signature_products(public.definition)
+            .and_then(|products| products.representation.as_ref())
+        else {
             // Absence is a private input too: adding a source shape must retry
             // an owner body's previously cached constructor rejection.
             let revision = self.implementation_hash(public.definition.path());

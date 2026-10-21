@@ -7,8 +7,8 @@ use hirsel_syntax::{PackageId, Path};
 use hirsel_types::LookupError;
 
 impl QueryEngine {
-    pub(super) fn manifest_index(&mut self, package: &PackageId) -> Option<Rc<ManifestIndex>> {
-        Some(Rc::new(self.declarations.frozen().index(package.clone())))
+    pub(super) fn manifest_index(&mut self, package: &PackageId) -> Option<Arc<ManifestIndex>> {
+        Some(Arc::new(self.declarations.frozen().index(package.clone())))
     }
     fn provider_result(
         &mut self,

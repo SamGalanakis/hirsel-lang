@@ -26,7 +26,7 @@ fn path(name: &str) -> DefPath {
     p.0.name = name.into();
     p
 }
-fn typed(engine: &mut QueryEngine, name: &str) -> TypedBody {
+fn typed(engine: &mut QueryEngine, name: &str) -> std::sync::Arc<TypedBody> {
     engine.mode_definition(&path(name)).unwrap().value.typed
 }
 

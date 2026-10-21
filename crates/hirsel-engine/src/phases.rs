@@ -6,7 +6,7 @@ use crate::*;
 use hirsel_check_protocol::header::{Input, NormalizedDeclaration};
 use hirsel_span::Span;
 use hirsel_types::{NameSite, TypeId};
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 /// H's complete definition-local result. Every TypeId is a session interner row.
 #[derive(Clone, Debug)]
@@ -20,7 +20,7 @@ pub struct TypedBody {
 /// J/I's complete result, refined together and cached as one artifact.
 #[derive(Clone, Debug)]
 pub struct AnalyzedBody {
-    pub typed: TypedBody,
+    pub typed: Arc<TypedBody>,
     pub ownership: hirsel_types::OwnershipFacts,
     pub results: Vec<(NameSite, TypeId)>,
     pub call_allocations: Vec<(hirsel_syntax::ExprId, hirsel_types::Allocation)>,
@@ -36,7 +36,7 @@ pub struct Comptime {
 
 /// The compiler's front phases. [`PhaseAdapters::compiler`] installs them beside
 /// the engine's own lexer, parser, resolver, formatter and interpreter adapters.
-pub trait Phases {
+pub trait Phases: Send + Sync {
     /// Normalizes one written header and its private defining shape (LANG-6).
     fn normalize_signature(
         &self,
@@ -70,14 +70,14 @@ pub trait Phases {
         span: Span,
         provider: &mut dyn SignatureProvider,
     ) -> Result<(), QueryError>;
-    fn checker(&self) -> Rc<dyn CheckerPhase>;
-    /// Modes record their diagnostics in the session's shared compiler state.
-    fn modes(&self, state: Rc<RefCell<CompilerState>>) -> Rc<dyn ModesPhase>;
-    fn lowering(&self) -> Rc<dyn LoweringPhase>;
+    fn checker(&self) -> Arc<dyn CheckerPhase>;
+    /// Modes publish diagnostic-stage products with their query result.
+    fn modes(&self) -> Arc<dyn ModesPhase>;
+    fn lowering(&self) -> Arc<dyn LoweringPhase>;
 }
 
 /// A compiler without front phases: the engine's own adapters, for unit tests
-/// that only parse, resolve or read compiler state.
+/// that only parse or resolve.
 #[cfg(test)]
 pub(crate) fn engine_only_adapters() -> PhaseAdapters {
     struct Absent;
@@ -119,30 +119,25 @@ pub(crate) fn engine_only_adapters() -> PhaseAdapters {
         ) -> Result<(), QueryError> {
             Err(QueryError::NotImplemented)
         }
-        fn checker(&self) -> Rc<dyn CheckerPhase> {
+        fn checker(&self) -> Arc<dyn CheckerPhase> {
             unreachable!("engine_only_adapters installs no checker")
         }
-        fn modes(&self, _: Rc<RefCell<CompilerState>>) -> Rc<dyn ModesPhase> {
+        fn modes(&self) -> Arc<dyn ModesPhase> {
             unreachable!("engine_only_adapters installs no modes")
         }
-        fn lowering(&self) -> Rc<dyn LoweringPhase> {
+        fn lowering(&self) -> Arc<dyn LoweringPhase> {
             unreachable!("engine_only_adapters installs no lowering")
         }
     }
-    let state = Rc::new(RefCell::new(CompilerState::default()));
-    let phases: Rc<dyn Phases> = Rc::new(Absent);
+    let phases: Arc<dyn Phases> = Arc::new(Absent);
     PhaseAdapters {
-        lexer: Some(Rc::new(LexerAdapter)),
-        parser: Some(Rc::new(ParserAdapter)),
-        resolver: Some(Rc::new(ResolverAdapter {
-            state: state.clone(),
-        })),
-        signature: Some(Rc::new(SignatureAdapter {
-            state: state.clone(),
+        lexer: Some(Arc::new(LexerAdapter)),
+        parser: Some(Arc::new(ParserAdapter)),
+        resolver: Some(Arc::new(ResolverAdapter)),
+        signature: Some(Arc::new(SignatureAdapter {
             phases: phases.clone(),
         })),
-        compiler_state: Some(state),
-        formatter: Some(Rc::new(FormatterAdapter)),
+        formatter: Some(Arc::new(FormatterAdapter)),
         phases: Some(phases),
         ..Default::default()
     }

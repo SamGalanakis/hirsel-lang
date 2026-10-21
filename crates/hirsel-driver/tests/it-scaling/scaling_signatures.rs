@@ -33,16 +33,20 @@ fn publications_validate_one_complete_signature_input() {
     });
 }
 
-struct MalformedUnrelated(std::rc::Rc<dyn SignaturePhase>);
+struct MalformedUnrelated(std::sync::Arc<dyn SignaturePhase>);
 impl SignaturePhase for MalformedUnrelated {
     fn signature_items(
         &self,
         t: &hirsel_types::TypeInterner,
         m: &hirsel_types::TypeMemo,
         items: &[std::sync::Arc<hirsel_syntax::ItemSyntax>],
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<hirsel_types::Signature>, QueryError> {
-        let mut output = self.0.signature_items(t, m, items, provider)?;
+        let mut output = self
+            .0
+            .signature_items(t, m, items, declarations, products, provider)?;
         if output.value.definition.path().0.name == "poison" {
             // A malformed row must be checked even if the producer
             // incorrectly retains its original semantic fingerprint.
@@ -60,14 +64,16 @@ impl SignaturePhase for MalformedUnrelated {
         t: &hirsel_types::TypeInterner,
         m: &hirsel_types::TypeMemo,
         syntax: std::sync::Arc<hirsel_syntax::ItemSyntax>,
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<hirsel_types::Signature>, QueryError> {
-        self.signature_items(t, m, &[syntax], provider)
+        self.signature_items(t, m, &[syntax], declarations, products, provider)
     }
 }
 fn poisoned_engine() -> QueryEngine {
     let mut adapters = compiler_adapters();
-    adapters.signature = Some(std::rc::Rc::new(MalformedUnrelated(
+    adapters.signature = Some(std::sync::Arc::new(MalformedUnrelated(
         adapters.signature.take().unwrap(),
     )));
     QueryEngine::new(default_environment(), adapters)

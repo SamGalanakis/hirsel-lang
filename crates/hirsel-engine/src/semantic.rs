@@ -1,7 +1,7 @@
 //! Driver-owned syntax snapshots, header isolation and explicit manifest composition.
 use crate::*;
 use hirsel_types::DeclarationSite;
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct ResolverSnapshot {
@@ -15,27 +15,13 @@ impl std::ops::Deref for ResolverSnapshot {
     }
 }
 
-/// These snapshots retain syntax owners and shared resolver data, including failed reads.
-/// Native resolver envelopes stay at the adapter boundary; consumers use Resolution.
-#[derive(Default)]
-pub struct CompilerState {
-    pub materialization_environment: Option<QueryEnvironment>,
-    pub(crate) materialization_limits: Option<hirsel_interp::Limits>,
-    pub(crate) constant_values: BTreeMap<DefPath, crate::comptime::EvaluatedConstant>,
-    pub(crate) representations: BTreeMap<DefPath, crate::representation::OwnerRecord>,
+/// Products a single phase invocation publishes with its memo. The sink is
+/// local to the invocation, including when normalization returns diagnostics.
+#[derive(Clone, Debug, Default)]
+pub struct PhaseProducts {
+    pub resolution: Option<ResolverSnapshot>,
+    pub(crate) representation: Option<crate::representation::OwnerRecord>,
     pub mode_diagnostics: Vec<(Diagnostic, String)>,
-    /// The frozen declaration index the engine publishes before resolution
-    /// and signature normalization read it.
-    pub(crate) declarations: Option<Arc<crate::snapshot::Declarations>>,
-    pub resolver_outputs: BTreeMap<DefPath, ResolverSnapshot>,
-    pub signature_resolutions: BTreeMap<DefPath, ResolverSnapshot>,
-}
-impl CompilerState {
-    fn declarations(&self) -> Arc<crate::snapshot::Declarations> {
-        self.declarations
-            .clone()
-            .expect("the engine publishes its declarations before resolving")
-    }
 }
 fn resolver_expected() -> hirsel_resolve::ExpectedTypes {
     hirsel_resolve::ExpectedTypes {
@@ -43,19 +29,18 @@ fn resolver_expected() -> hirsel_resolve::ExpectedTypes {
         ..Default::default()
     }
 }
-pub struct ResolverAdapter {
-    pub state: Rc<RefCell<CompilerState>>,
-}
+pub struct ResolverAdapter;
 impl ResolverPhase for ResolverAdapter {
     fn resolve(
         &self,
         t: &hirsel_types::TypeInterner,
         _: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError> {
         let item = &syntax.item;
-        let declarations = self.state.borrow().declarations();
         let index = declarations.index(item.definition.0.package.clone());
         let siblings = declarations.siblings(&syntax);
         let result = hirsel_resolve::resolve_view(
@@ -67,13 +52,10 @@ impl ResolverPhase for ResolverAdapter {
             provider,
             &resolver_expected(),
         );
-        self.state.borrow_mut().resolver_outputs.insert(
-            item.definition.clone(),
-            ResolverSnapshot {
-                syntax: syntax.clone(),
-                output: result.query.clone(),
-            },
-        );
+        products.resolution = Some(ResolverSnapshot {
+            syntax: syntax.clone(),
+            output: result.query.clone(),
+        });
         if let Some(error) = result.operational_failure {
             return Err(QueryError::Operational(error));
         }
@@ -81,8 +63,7 @@ impl ResolverPhase for ResolverAdapter {
     }
 }
 pub struct SignatureAdapter {
-    pub state: Rc<RefCell<CompilerState>>,
-    pub phases: Rc<dyn Phases>,
+    pub phases: Arc<dyn Phases>,
 }
 impl SignaturePhase for SignatureAdapter {
     fn signature_items(
@@ -90,6 +71,8 @@ impl SignaturePhase for SignatureAdapter {
         t: &hirsel_types::TypeInterner,
         m: &hirsel_types::TypeMemo,
         candidates: &[Arc<ItemSyntax>],
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         // Visit the later duplicate first so normalization reports overloading before
@@ -98,22 +81,35 @@ impl SignaturePhase for SignatureAdapter {
             .get(1)
             .or_else(|| candidates.first())
             .ok_or(QueryError::NotImplemented)?;
-        self.signature_with_candidates(t, m, syntax.clone(), provider, Some(candidates), None)
+        self.signature_with_candidates(
+            t,
+            m,
+            syntax.clone(),
+            declarations,
+            products,
+            provider,
+            Some(candidates),
+            None,
+        )
     }
     fn signature(
         &self,
         t: &hirsel_types::TypeInterner,
         m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
-        self.signature_with_candidates(t, m, syntax, provider, None, None)
+        self.signature_with_candidates(t, m, syntax, declarations, products, provider, None, None)
     }
     fn staged_signature(
         &self,
         t: &hirsel_types::TypeInterner,
         m: &hirsel_types::TypeMemo,
         candidates: &[Arc<ItemSyntax>],
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
         stage: hirsel_types::GroupStage,
     ) -> Result<Signature, QueryError> {
@@ -122,6 +118,8 @@ impl SignaturePhase for SignatureAdapter {
             t,
             m,
             syntax.clone(),
+            declarations,
+            products,
             provider,
             Some(candidates),
             Some(stage),
@@ -135,6 +133,8 @@ impl SignatureAdapter {
         t: &hirsel_types::TypeInterner,
         m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
         candidates: Option<&[Arc<ItemSyntax>]>,
         stage: Option<hirsel_types::GroupStage>,
@@ -152,7 +152,7 @@ impl SignatureAdapter {
             package: item.definition.0.package.clone(),
             modules: item.definition.0.modules.clone(),
         };
-        let module = self.state.borrow().declarations();
+        let module = declarations;
         let index = module.index(context.package.clone());
         let declaration_sites = module.sites(&item.definition);
         let siblings = module.siblings(&syntax);
@@ -195,13 +195,10 @@ impl SignatureAdapter {
             let diagnostics = resolved.query.diagnostics.clone();
             // A provisional signature publishes nothing for its declaration.
             if stage.is_none() {
-                self.state.borrow_mut().signature_resolutions.insert(
-                    item.definition.clone(),
-                    ResolverSnapshot {
-                        syntax: syntax.clone(),
-                        output: resolved.query,
-                    },
-                );
+                products.resolution = Some(ResolverSnapshot {
+                    syntax: syntax.clone(),
+                    output: resolved.query,
+                });
             }
             if crate::queries::has_errors(&diagnostics) {
                 return Err(QueryError::Diagnostics(diagnostics));
@@ -223,21 +220,13 @@ impl SignatureAdapter {
         if stage.is_some() {
             return Ok(output.public);
         }
-        if let Some(owner) = output.owner {
-            self.state.borrow_mut().representations.insert(
-                item.definition.clone(),
-                crate::representation::OwnerRecord {
-                    text_hash: syntax.text_hash,
-                    representation: owner,
-                    dependencies: output.public.dependencies.clone(),
-                },
-            );
-        } else {
-            self.state
-                .borrow_mut()
-                .representations
-                .remove(&item.definition);
-        }
+        products.representation = output
+            .owner
+            .map(|owner| crate::representation::OwnerRecord {
+                text_hash: syntax.text_hash,
+                representation: owner,
+                dependencies: output.public.dependencies.clone(),
+            });
         Ok(output.public)
     }
 }

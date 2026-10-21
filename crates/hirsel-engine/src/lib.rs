@@ -241,13 +241,13 @@ pub trait DefinitionQueries {
 }
 /// Shared leaf phase signatures; implementations may expose equivalent free functions (LANG-1).
 /// These traits live in the driver boundary; implementation crates need only the data crates.
-pub trait LexerPhase {
+pub trait LexerPhase: Send + Sync {
     fn lex(&self, file: FileId, sources: &SourceMap)
     -> Result<QueryOutput<Vec<Token>>, QueryError>;
 }
 /// Parsing receives tokens and file naming context; it does not resolve types
 /// (LANG-1/2). It places one anchor per item in `sources`.
-pub trait ParserPhase {
+pub trait ParserPhase: Send + Sync {
     fn parse(
         &self,
         file: FileId,
@@ -257,7 +257,7 @@ pub trait ParserPhase {
     ) -> Result<QueryOutput<SyntaxFile>, QueryError>;
 }
 /// Formatting uses the complete token tape including error recovery and comments (LANG-1).
-pub trait FormatterPhase {
+pub trait FormatterPhase: Send + Sync {
     fn format(&self, file: &SyntaxFile, sources: &SourceMap) -> Result<String, Vec<Diagnostic>>;
     /// Additive driver wrapper: adapters can distinguish conservative fallback from success.
     fn format_query(&self, file: &SyntaxFile, sources: &SourceMap) -> Result<String, QueryError> {
@@ -265,17 +265,19 @@ pub trait FormatterPhase {
     }
 }
 /// Names are resolved against signatures, never implementation internals (LANG-4/6).
-pub trait ResolverPhase {
+pub trait ResolverPhase: Send + Sync {
     fn resolve(
         &self,
         t: &hirsel_types::TypeInterner,
         m: &hirsel_types::TypeMemo,
         syntax: std::sync::Arc<ItemSyntax>,
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         signatures: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError>;
 }
 /// Type checking produces body tables; modes then enrich/check them before lowering (LANG-6, MODE-7).
-pub trait CheckerPhase {
+pub trait CheckerPhase: Send + Sync {
     fn check(
         &self,
         t: &hirsel_types::TypeInterner,
@@ -287,18 +289,19 @@ pub trait CheckerPhase {
     ) -> Result<QueryOutput<TypedBody>, QueryError>;
 }
 /// Modes consume the complete typed artifact and refine its shared tables (OWN-1/8).
-pub trait ModesPhase {
+pub trait ModesPhase: Send + Sync {
     fn check_modes(
         &self,
         t: &hirsel_types::TypeInterner,
         m: &hirsel_types::TypeMemo,
-        body: TypedBody,
+        body: std::sync::Arc<TypedBody>,
         signature: &Signature,
+        products: &mut PhaseProducts,
         signatures: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<AnalyzedBody>, QueryError>;
 }
 /// Lowering makes evaluation order and cleanup explicit before execution (LANG-3, DROP-2).
-pub trait LoweringPhase {
+pub trait LoweringPhase: Send + Sync {
     fn lower(
         &self,
         t: &hirsel_types::TypeInterner,
@@ -324,7 +327,7 @@ pub trait LoweringPhase {
     fn entry_body(&self) -> hirsel_tir::BodyId;
 }
 /// Runtime output includes failure cause data; stdout is delivered as exact bytes (FAIL-2; issue #12).
-pub trait InterpreterPhase {
+pub trait InterpreterPhase: Send {
     fn prepare(
         &mut self,
         _signature: hirsel_types::SignatureRef,

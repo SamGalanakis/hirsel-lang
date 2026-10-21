@@ -36,8 +36,13 @@ fn real_signature_reads_only_headers_and_real_resolver_retains_failed_reads_on_c
         r,
         hirsel_resolve::DependencyRead::Lookup { result: Err(_), .. }
     )));
-    let state = engine.adapters.compiler_state.as_ref().unwrap().borrow();
-    assert!(!state.resolver_outputs[&path("main")].reads.is_empty());
+    assert!(
+        !engine
+            .resolver_snapshot(&path("main"), QueryKind::Resolve)
+            .unwrap()
+            .reads
+            .is_empty()
+    );
 }
 #[test]
 fn real_adapters_track_sibling_signatures_across_body_and_signature_edits() {
@@ -370,8 +375,9 @@ fn header_views_retain_the_original_syntax_and_exclude_execution_reads_on_compil
     for name in ["main", "c", "Token", "Positive"] {
         engine.item_signature(&path(name)).unwrap();
         let original = engine.parse_definition(&path(name)).unwrap().value;
-        let state = engine.adapters.compiler_state.as_ref().unwrap().borrow();
-        let header = &state.signature_resolutions[&path(name)];
+        let header = engine
+            .resolver_snapshot(&path(name), QueryKind::Signature)
+            .unwrap();
         assert!(std::sync::Arc::ptr_eq(&original, &header.syntax));
         assert!(!header.reads.iter().any(|read| matches!(
             read,
@@ -395,10 +401,12 @@ fn header_views_retain_the_original_syntax_and_exclude_execution_reads_on_compil
         Err(QueryError::Diagnostics(_))
     ));
     let original = engine.parse_definition(&path("main")).unwrap().value;
-    let state = engine.adapters.compiler_state.as_ref().unwrap().borrow();
     assert!(std::sync::Arc::ptr_eq(
         &original,
-        &state.resolver_outputs[&path("main")].syntax
+        &engine
+            .resolver_snapshot(&path("main"), QueryKind::Resolve)
+            .unwrap()
+            .syntax
     ));
 }
 
@@ -447,4 +455,51 @@ fn header_dependencies_ignore_sibling_bodies_but_track_contract_changes_on_compi
         engine.recompute_count(&path("main"), QueryKind::Signature),
         2
     );
+}
+
+#[test]
+fn shared_phase_adapters_keep_success_and_failure_products_with_each_engine() {
+    use std::sync::Arc;
+    let mut first = QueryEngine::new(default_environment(), compiler_adapters());
+    let shared = first.adapters.phases.as_ref().unwrap().clone();
+    let mut second = QueryEngine::new(default_environment(), PhaseAdapters::compiler(shared));
+    // The resolver itself can also be shared: it owns no per-engine snapshots.
+    second.adapters.resolver = first.adapters.resolver.clone();
+    assert!(Arc::ptr_eq(
+        first.adapters.resolver.as_ref().unwrap(),
+        second.adapters.resolver.as_ref().unwrap()
+    ));
+    let good = "fn main(value: u64) -> u64 { value }\n";
+    let bad = "fn main(other: u8) -> u8 { missing() }\n";
+    let (first, second) = std::thread::scope(|scope| {
+        let first = scope.spawn(move || {
+            with_compiler_stack(move || {
+                parse(&mut first, good);
+                first.resolve_definition(&path("main")).unwrap();
+                first
+            })
+        });
+        let second = scope.spawn(move || {
+            with_compiler_stack(move || {
+                parse(&mut second, bad);
+                assert!(matches!(
+                    second.resolve_definition(&path("main")),
+                    Err(QueryError::Diagnostics(_))
+                ));
+                second
+            })
+        });
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    let good = first
+        .resolver_snapshot(&path("main"), QueryKind::Resolve)
+        .unwrap();
+    let bad = second
+        .resolver_snapshot(&path("main"), QueryKind::Resolve)
+        .unwrap();
+    assert!(good.output.diagnostics.is_empty());
+    assert!(!bad.output.diagnostics.is_empty());
+    assert!(!Arc::ptr_eq(&good.syntax, &bad.syntax));
+    assert_ne!(good.syntax.text_hash, bad.syntax.text_hash);
+    assert!(!bad.reads.is_empty());
 }

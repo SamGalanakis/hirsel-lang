@@ -206,16 +206,16 @@ available, and fake adapters need implement only that method. Production formatt
 uses the fallible wrapper after rejecting parser errors, so unsupported syntax
 cannot produce a false successful `fmt --check` result.
 
-`CompilerState` retains shared Resolution outputs (reads, primitive/generic
-bindings, contextual names, qualifier paths, local functions, reference scopes and
-deferred names), together with the owning AST/item snapshots. Signature normalization
-uses explicit Item/Header resolver views over the original syntax. Header traversal
-excludes implementation/destructor/constant execution expressions while retaining
-contracts, distinct facts and finalizer binders. Adapters pass the same Arc syntax
-owner to both resolver snapshots. Sibling
-header reads go through SignatureProvider, avoiding stale same-file shortcuts.
-Duplicate items keep one DefPath plus addressable candidate ordinals; Metadata
-receives every declaration; Item supplies exact name-token spans for LANG-7 diagnostics.
+Phase invocations publish `PhaseProducts` with their owning memo, including
+resolver snapshots, the private owner representation and diagnostic stages on
+rejection. Immutable `Arc` phase adapters implement `Send + Sync`; the engine
+owns mutable evaluation values, and no adapter owns a session side cache.
+Signature normalization takes explicit declaration/header views over the
+original syntax. Header traversal excludes implementation/destructor/constant
+execution expressions while retaining contracts, facts and finalizer binders.
+Sibling header reads go through SignatureProvider. Duplicate items keep one
+DefPath plus addressable candidate ordinals; metadata includes every declaration,
+and item views retain exact name spans for LANG-7 diagnostics.
 Recursive type groups (`queries/type_groups.rs`) come from the written type paths
 of a package's type declarations and manifest lookups, never from a signature, with
 Tarjan components and `hirsel_graph::scc_keys` over the members' paths and texts. A

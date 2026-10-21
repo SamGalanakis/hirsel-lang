@@ -375,7 +375,11 @@ impl QueryEngine {
             return Err(QueryError::NotImplemented);
         };
         let constant = self.recorded(definition, reads, |t, m, r| {
-            signer.signature(t, m, file.clone(), r)
+            let declarations = r.engine.frozen_declarations();
+            let mut products = PhaseProducts::default();
+            let output = signer.signature(t, m, file.clone(), &declarations, &mut products, r);
+            r.observed.products = Arc::new(products);
+            output
         })?;
         if has_errors(&constant.diagnostics) {
             return Err(QueryError::Diagnostics(constant.diagnostics));
@@ -389,7 +393,11 @@ impl QueryEngine {
                 })
             })?;
         let resolution = self.recorded(definition, reads, |t, m, r| {
-            resolver.resolve(t, m, file.clone(), r)
+            let declarations = r.engine.frozen_declarations();
+            let mut products = PhaseProducts::default();
+            let output = resolver.resolve(t, m, file.clone(), &declarations, &mut products, r);
+            r.observed.products = Arc::new(products);
+            output
         })?;
         if has_errors(&resolution.diagnostics) {
             return Err(QueryError::Diagnostics(resolution.diagnostics));
@@ -401,7 +409,11 @@ impl QueryEngine {
             return Err(QueryError::Diagnostics(typed.diagnostics));
         }
         let analyzed = self.recorded(definition, reads, |t, m, r| {
-            modes.check_modes(t, m, typed.value, &constant, r)
+            let mut products = (*r.observed.products).clone();
+            let output =
+                modes.check_modes(t, m, Arc::new(typed.value), &constant, &mut products, r);
+            r.observed.products = Arc::new(products);
+            output
         })?;
         if has_errors(&analyzed.diagnostics) {
             return Err(QueryError::Diagnostics(analyzed.diagnostics));
@@ -570,13 +582,21 @@ impl QueryEngine {
         let header = Arc::new(header);
         let literal = Arc::new(literal);
         let normalized = self.recorded(definition, reads, |t, m, r| {
-            signer.signature(t, m, literal.clone(), r)
+            let declarations = r.engine.frozen_declarations();
+            let mut products = PhaseProducts::default();
+            let output = signer.signature(t, m, literal.clone(), &declarations, &mut products, r);
+            r.observed.products = Arc::new(products);
+            output
         })?;
         if has_errors(&normalized.diagnostics) {
             return Err(QueryError::Diagnostics(normalized.diagnostics));
         }
         let declared = self.recorded(definition, reads, |t, m, r| {
-            signer.signature(t, m, header.clone(), r)
+            let declarations = r.engine.frozen_declarations();
+            let mut products = PhaseProducts::default();
+            let output = signer.signature(t, m, header.clone(), &declarations, &mut products, r);
+            r.observed.products = Arc::new(products);
+            output
         })?;
         if has_errors(&declared.diagnostics) {
             return Err(QueryError::Diagnostics(declared.diagnostics));
@@ -640,7 +660,11 @@ impl QueryEngine {
         );
         let syntax = Arc::new(syntax);
         let resolution = self.recorded(definition, reads, |t, m, r| {
-            resolver.resolve(t, m, syntax.clone(), r)
+            let declarations = r.engine.frozen_declarations();
+            let mut products = PhaseProducts::default();
+            let output = resolver.resolve(t, m, syntax.clone(), &declarations, &mut products, r);
+            r.observed.products = Arc::new(products);
+            output
         })?;
         if has_errors(&resolution.diagnostics) {
             return Err(QueryError::Diagnostics(resolution.diagnostics));
@@ -771,7 +795,11 @@ impl QueryEngine {
         self.start(definition, QueryKind::Check)?;
         let result = self
             .recorded(definition, &mut reads, |t, m, r| {
-                resolver.resolve(t, m, file.clone(), r)
+                let declarations = r.engine.frozen_declarations();
+                let mut products = PhaseProducts::default();
+                let output = resolver.resolve(t, m, file.clone(), &declarations, &mut products, r);
+                r.observed.products = Arc::new(products);
+                output
             })
             .and_then(|resolution| {
                 if has_errors(&resolution.diagnostics) {

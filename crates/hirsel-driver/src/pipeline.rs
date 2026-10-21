@@ -6,13 +6,13 @@ use hirsel_engine::*;
 use hirsel_lower as lower;
 use hirsel_syntax::ItemSyntax;
 use hirsel_types::{NameSite, Resolution, Signature, TypeId, TypeKind};
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 /// The compiler's front phases, installed by [`crate::COMPILER`].
 pub struct FrontPhases;
 impl FrontPhases {
-    pub fn shared() -> Rc<dyn Phases> {
-        Rc::new(FrontPhases)
+    pub fn shared() -> Arc<dyn Phases> {
+        Arc::new(FrontPhases)
     }
 }
 impl Phases for FrontPhases {
@@ -53,14 +53,14 @@ impl Phases for FrontPhases {
     ) -> Result<(), QueryError> {
         hirsel_signature::protocol::validate_serializable_check(t, signature, span, provider)
     }
-    fn checker(&self) -> Rc<dyn CheckerPhase> {
-        Rc::new(BodyAdapter)
+    fn checker(&self) -> Arc<dyn CheckerPhase> {
+        Arc::new(BodyAdapter)
     }
-    fn modes(&self, state: Rc<RefCell<CompilerState>>) -> Rc<dyn ModesPhase> {
-        Rc::new(ModeAdapter { state })
+    fn modes(&self) -> Arc<dyn ModesPhase> {
+        Arc::new(ModeAdapter)
     }
-    fn lowering(&self) -> Rc<dyn LoweringPhase> {
-        Rc::new(LowerAdapter)
+    fn lowering(&self) -> Arc<dyn LoweringPhase> {
+        Arc::new(LowerAdapter)
     }
 }
 
@@ -117,18 +117,18 @@ impl CheckerPhase for BodyAdapter {
         })
     }
 }
-pub struct ModeAdapter {
-    pub state: Rc<RefCell<CompilerState>>,
-}
+pub struct ModeAdapter;
 impl ModesPhase for ModeAdapter {
     fn check_modes(
         &self,
         t: &hirsel_types::TypeInterner,
         m: &hirsel_types::TypeMemo,
-        mut typed: TypedBody,
+        typed: Arc<TypedBody>,
         signature: &Signature,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
+        let mut typed = Arc::unwrap_or_clone(typed);
         let syntax = typed.syntax.clone();
         let intrinsics = hirsel_types::core_roles::intrinsic_roles()
             .into_iter()
@@ -156,7 +156,7 @@ impl ModesPhase for ModeAdapter {
             &loops,
             &clauses,
         );
-        self.state.borrow_mut().mode_diagnostics.extend(
+        products.mode_diagnostics.extend(
             output
                 .diagnostics
                 .iter()
@@ -195,8 +195,7 @@ impl ModesPhase for ModeAdapter {
         let owned = match owned {
             Ok(value) => value,
             Err(QueryError::Diagnostics(ds)) => {
-                self.state
-                    .borrow_mut()
+                products
                     .mode_diagnostics
                     .extend(ds.iter().cloned().map(|d| (d, "ownership".into())));
                 output.diagnostics.extend(ds);
@@ -244,7 +243,7 @@ impl ModesPhase for ModeAdapter {
                     )?);
             }
         }
-        self.state.borrow_mut().mode_diagnostics.extend(
+        products.mode_diagnostics.extend(
             owned
                 .diagnostics
                 .iter()
@@ -275,7 +274,7 @@ impl ModesPhase for ModeAdapter {
             },
             provider,
         )?;
-        self.state.borrow_mut().mode_diagnostics.extend(
+        products.mode_diagnostics.extend(
             audited
                 .diagnostics
                 .iter()
@@ -287,7 +286,7 @@ impl ModesPhase for ModeAdapter {
         typed.checked = output.body;
         Ok(QueryOutput {
             value: AnalyzedBody {
-                typed,
+                typed: Arc::new(typed),
                 ownership: owned.value,
                 results: output.result_types,
                 call_allocations: output.call_allocations,

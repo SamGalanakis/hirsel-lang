@@ -383,18 +383,7 @@ impl QueryEngine {
     }
     /// The frozen declaration index, published to the phases that read it.
     pub(crate) fn frozen_declarations(&mut self) -> Arc<Declarations> {
-        let frozen = self.declarations.frozen();
-        if let Some(state) = &self.adapters.compiler_state {
-            let mut state = state.borrow_mut();
-            if !state
-                .declarations
-                .as_ref()
-                .is_some_and(|old| Arc::ptr_eq(old, &frozen))
-            {
-                state.declarations = Some(frozen.clone());
-            }
-        }
-        frozen
+        self.declarations.frozen()
     }
     /// Signatures changed outside a source revision (a staged constant).
     pub(crate) fn retire_snapshot(&mut self) {

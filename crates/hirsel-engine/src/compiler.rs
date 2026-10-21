@@ -2,11 +2,11 @@
 //! entry points start fresh sessions on the compiler thread, so a compiler is
 //! the plain constructor of its phases and crosses threads freely.
 use crate::*;
-use std::{io::Write, path::Path, rc::Rc};
+use std::{io::Write, path::Path, sync::Arc};
 
 #[derive(Clone, Copy)]
 pub struct Compiler {
-    phases: fn() -> Rc<dyn Phases>,
+    phases: fn() -> Arc<dyn Phases>,
     /// Digest of the compiler's own sources; std images record the one they
     /// were checked under (docs/building.md, "The std image").
     identity: [u8; 32],
@@ -16,7 +16,7 @@ pub struct Compiler {
 }
 impl Compiler {
     /// A compiler whose sessions run V.
-    pub const fn new(phases: fn() -> Rc<dyn Phases>, identity: [u8; 32]) -> Self {
+    pub const fn new(phases: fn() -> Arc<dyn Phases>, identity: [u8; 32]) -> Self {
         Self {
             phases,
             identity,
@@ -52,7 +52,7 @@ impl Compiler {
     pub(crate) fn identity(&self) -> ContentHash {
         ContentHash(self.identity)
     }
-    /// A fresh complete adapter set with its own compiler state.
+    /// A fresh complete adapter set with immutable shared front phases.
     pub fn adapters(&self) -> PhaseAdapters {
         PhaseAdapters::compiler((self.phases)())
     }

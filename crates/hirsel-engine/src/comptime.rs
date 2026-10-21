@@ -93,8 +93,7 @@ impl QueryEngine {
     /// The views `constant`'s retained evaluation reflected or decoded
     /// (`Representation(d)`), each with the digest it saw.
     pub fn representation_reads(&self, constant: &DefPath) -> Option<Vec<(DefPath, ContentHash)>> {
-        let state = self.adapters.compiler_state.as_ref()?.borrow();
-        let value = state.constant_values.get(constant)?;
+        let value = self.constant_values.get(constant)?;
         Some(
             value
                 .executed
@@ -160,12 +159,7 @@ impl QueryEngine {
                 depth: DepthEvidence::leaf(self.depth_limit()),
             });
         }
-        let state = self
-            .adapters
-            .compiler_state
-            .clone()
-            .ok_or(QueryError::NotImplemented)?;
-        let cached = state.borrow().constant_values.get(path).cloned();
+        let cached = self.constant_values.get(path).cloned();
         if let Some(value) = cached {
             if self.execution_valid(path, &value.executed) {
                 self.depth_admit(&value.depth, reference)?;
@@ -173,7 +167,7 @@ impl QueryEngine {
                 self.depth_requested(&value.depth, reference);
                 return Ok(value);
             }
-            state.borrow_mut().constant_values.remove(path);
+            self.constant_values.remove(path);
         }
         if let Some(start) = self.s1.on_stack(path) {
             self.s1.fail_cycle();
@@ -243,10 +237,7 @@ impl QueryEngine {
         })();
         self.execution_stack.pop();
         if let Ok(evaluated) = &result {
-            state
-                .borrow_mut()
-                .constant_values
-                .insert(path.clone(), evaluated.clone());
+            self.constant_values.insert(path.clone(), evaluated.clone());
         }
         self.s1.leave();
         if let Ok(evaluated) = &result {
@@ -292,7 +283,7 @@ impl QueryEngine {
     ) -> Result<Comptime, QueryError> {
         self.prepare_materialization_environment();
         let staged = self.prepare_staged_types(analyzed)?;
-        if self.adapters.compiler_state.is_none() {
+        if self.adapters.phases.is_none() {
             return Ok(Comptime {
                 materialized: vec![],
                 staged,
@@ -482,10 +473,6 @@ impl QueryEngine {
         sizes: &[(SizeParameterRef, u64)],
     ) -> Result<(hirsel_interp::Value, TypeId), QueryError> {
         let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Comptime);
-        self.adapters
-            .compiler_state
-            .as_ref()
-            .ok_or(QueryError::NotImplemented)?;
         let file = &analyzed.typed.syntax;
         let lowering = self
             .adapters

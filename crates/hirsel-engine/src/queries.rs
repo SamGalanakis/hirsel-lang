@@ -25,28 +25,31 @@ use hirsel_span::Span;
 use hirsel_syntax::{DefId, ItemKind, ItemPath, ItemSyntax};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    rc::Rc,
     sync::Arc,
 };
 
 /// Signature normalization only reads the declared header and its contracts (LANG-6).
 /// Revision-1 construction seam; the driver publishes its owned output as SignatureRef.
-pub trait SignaturePhase {
+pub trait SignaturePhase: Send + Sync {
     fn signature_items(
         &self,
         t: &hirsel_types::TypeInterner,
         m: &hirsel_types::TypeMemo,
         items: &[Arc<ItemSyntax>],
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let syntax = items.first().ok_or(QueryError::NotImplemented)?;
-        self.signature(t, m, syntax.clone(), provider)
+        self.signature(t, m, syntax.clone(), declarations, products, provider)
     }
     fn signature(
         &self,
         t: &hirsel_types::TypeInterner,
         m: &hirsel_types::TypeMemo,
         syntax: Arc<ItemSyntax>,
+        declarations: &Declarations,
+        products: &mut PhaseProducts,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError>;
     /// A recursive type group member's provisional signature at `stage`,
@@ -56,6 +59,8 @@ pub trait SignaturePhase {
         _t: &hirsel_types::TypeInterner,
         _m: &hirsel_types::TypeMemo,
         _items: &[Arc<ItemSyntax>],
+        _declarations: &Declarations,
+        _products: &mut PhaseProducts,
         _provider: &mut dyn SignatureProvider,
         _stage: hirsel_types::GroupStage,
     ) -> Result<Signature, QueryError> {
@@ -67,18 +72,17 @@ pub trait SignaturePhase {
 /// Installed leaf adapters may also return unavailable or operational errors.
 #[derive(Default)]
 pub struct PhaseAdapters {
-    pub lexer: Option<Rc<dyn LexerPhase>>,
-    pub parser: Option<Rc<dyn ParserPhase>>,
-    pub formatter: Option<Rc<dyn FormatterPhase>>,
-    pub resolver: Option<Rc<dyn ResolverPhase>>,
-    pub signature: Option<Rc<dyn SignaturePhase>>,
-    pub checker: Option<Rc<dyn CheckerPhase>>,
-    pub modes: Option<Rc<dyn ModesPhase>>,
-    pub lowering: Option<Rc<dyn LoweringPhase>>,
+    pub lexer: Option<Arc<dyn LexerPhase>>,
+    pub parser: Option<Arc<dyn ParserPhase>>,
+    pub formatter: Option<Arc<dyn FormatterPhase>>,
+    pub resolver: Option<Arc<dyn ResolverPhase>>,
+    pub signature: Option<Arc<dyn SignaturePhase>>,
+    pub checker: Option<Arc<dyn CheckerPhase>>,
+    pub modes: Option<Arc<dyn ModesPhase>>,
+    pub lowering: Option<Arc<dyn LoweringPhase>>,
     pub interpreter: Option<Box<dyn InterpreterPhase>>,
-    pub compiler_state: Option<Rc<std::cell::RefCell<CompilerState>>>,
     /// The front phases a complete compiler was built from (`PhaseAdapters::compiler`).
-    pub phases: Option<Rc<dyn Phases>>,
+    pub phases: Option<Arc<dyn Phases>>,
 }
 
 /// Reads survive errors and missing phases, rather than being lost in QueryError.
@@ -114,6 +118,8 @@ pub struct QueryEngine {
     /// instances with their requests' depth evidence, claimed through the
     /// session's coordinator (design §1c).
     pub(crate) s1: crate::memo::S1Worker<DefPath, Span>,
+    pub(crate) constant_values: BTreeMap<DefPath, crate::comptime::EvaluatedConstant>,
+    materialization_environment: Option<(QueryEnvironment, hirsel_interp::Limits)>,
     pub(crate) staged_constants: BTreeMap<DefPath, crate::comptime::StagedConstant>,
     pub(crate) staged_values: BTreeMap<(DefPath, Vec<u64>), crate::comptime::EvaluatedConstant>,
     /// Generated function bodies (CT-5), by declaration.
@@ -194,6 +200,12 @@ pub struct QueryEngine {
     /// debug assertions; the conformance runner turns it on in every build.
     pub closure_assertions: bool,
 }
+const _: () = {
+    const fn movable<T: Send>() {}
+    movable::<QueryEngine>();
+    const fn shared<T: Send + Sync>() {}
+    shared::<PhaseProducts>();
+};
 /// Dropping an engine drops its tables as the teardown phase. With a heap
 /// meter (`--mem-usage`) it records the bytes each table frees; tables still
 /// shared with a package image free nothing here, and the image's bytes are
@@ -230,21 +242,7 @@ impl Drop for QueryEngine {
         released("engine: generated", take(&mut self.generated));
         released("engine: recomputes", take(&mut self.recomputes));
         released("engine: image", take(&mut self.image));
-        if let Some(state) = self.adapters.compiler_state.take() {
-            if let Ok(mut state) = state.try_borrow_mut() {
-                released(
-                    "engine: resolver outputs",
-                    take(&mut state.resolver_outputs),
-                );
-                released(
-                    "engine: signature resolutions",
-                    take(&mut state.signature_resolutions),
-                );
-                released("engine: representations", take(&mut state.representations));
-                released("engine: constant values", take(&mut state.constant_values));
-            }
-            released("engine: compiler state", state);
-        }
+        released("engine: constant values", take(&mut self.constant_values));
         released("engine: sources", take(&mut self.sources));
         released("engine: adapters", take(&mut self.adapters));
         released("engine: builtins", take(&mut self.builtins));
@@ -338,17 +336,12 @@ impl QueryEngine {
             .dictionary_value(&self.types, &self.memo, path)
     }
     pub(crate) fn prepare_materialization_environment(&mut self) {
-        if let Some(state) = &self.adapters.compiler_state {
-            let mut state = state.borrow_mut();
-            if state.materialization_environment.as_ref() != Some(&self.environment)
-                || state.materialization_limits != Some(self.comptime_limits)
-            {
-                state.constant_values.clear();
-                self.staged_values.clear();
-                self.lowered.clear();
-                state.materialization_environment = Some(self.environment.clone());
-                state.materialization_limits = Some(self.comptime_limits);
-            }
+        let now = (self.environment.clone(), self.comptime_limits);
+        if self.materialization_environment.as_ref() != Some(&now) {
+            self.constant_values.clear();
+            self.staged_values.clear();
+            self.lowered.clear();
+            self.materialization_environment = Some(now);
         }
     }
 
@@ -389,6 +382,8 @@ impl QueryEngine {
             comptime_limits: hirsel_interp::Limits::default(),
             last_comptime_limit: None,
             s1: crate::memo::S1Coordinator::new().worker(),
+            constant_values: BTreeMap::new(),
+            materialization_environment: None,
             staged_constants: BTreeMap::new(),
             staged_values: BTreeMap::new(),
             generated: BTreeMap::new(),
@@ -622,8 +617,9 @@ impl QueryEngine {
         }
         self.start(definition, QueryKind::Signature)?;
         let candidates = self.definition_items(definition)?;
-        self.frozen_declarations();
+        let declarations = self.frozen_declarations();
         let adapter = self.adapters.signature.clone();
+        let mut products = PhaseProducts::default();
         let mut recorder = Recorder {
             owner: definition.clone(),
             private_shapes: false,
@@ -635,10 +631,18 @@ impl QueryEngine {
         recorder.engine.signature_stack.push(definition.clone());
         let (types, memo) = (recorder.engine.types.clone(), recorder.engine.memo.clone());
         let result = match adapter {
-            Some(adapter) => adapter.signature_items(&types, &memo, &candidates, &mut recorder),
+            Some(adapter) => adapter.signature_items(
+                &types,
+                &memo,
+                &candidates,
+                &declarations,
+                &mut products,
+                &mut recorder,
+            ),
             None => recorder.engine.missing(QueryKind::Signature),
         };
         recorder.engine.signature_stack.pop();
+        recorder.observed.products = Arc::new(products);
         let observed = recorder.observed;
         let reads = recorder.reads;
         let covered = result
@@ -734,16 +738,8 @@ impl QueryEngine {
         if let Some(error) = &reads.operational_failure {
             result = Err(QueryError::Operational(error.clone()));
         }
-        if let Some(state) = &self.adapters.compiler_state {
-            let state = state.borrow();
-            let native = match key.kind {
-                QueryKind::Resolve => state.resolver_outputs.get(definition),
-                QueryKind::Signature => state.signature_resolutions.get(definition),
-                _ => None,
-            };
-            if let Some(native) = native {
-                reads.resolver = native.reads.clone();
-            }
+        if let Some(resolution) = &observed.products.resolution {
+            reads.resolver = resolution.reads.clone();
         }
         self.active.remove(&(definition.clone(), key.kind));
         if result.is_err() {
@@ -1091,7 +1087,8 @@ impl QueryEngine {
         }
         self.start(definition, QueryKind::Resolve)?;
         let snapshot = self.snapshot(definition)?;
-        self.frozen_declarations();
+        let declarations = self.frozen_declarations();
+        let mut products = PhaseProducts::default();
         let adapter = self.adapters.resolver.clone();
         let mut recorder = Recorder {
             owner: definition.clone(),
@@ -1103,9 +1100,17 @@ impl QueryEngine {
         };
         let (types, memo) = (recorder.engine.types.clone(), recorder.engine.memo.clone());
         let result = match adapter {
-            Some(adapter) => adapter.resolve(&types, &memo, snapshot.clone(), &mut recorder),
+            Some(adapter) => adapter.resolve(
+                &types,
+                &memo,
+                snapshot.clone(),
+                &declarations,
+                &mut products,
+                &mut recorder,
+            ),
             None => recorder.engine.missing(QueryKind::Resolve),
         };
+        recorder.observed.products = Arc::new(products);
         let observed = recorder.observed;
         let reads = recorder.reads;
         let key = MemoKey::new(QueryKind::Resolve, id);
@@ -1139,6 +1144,7 @@ impl QueryEngine {
             _ => {
                 self.start(definition, QueryKind::Modes)?;
                 let adapter = self.adapters.modes.clone();
+                let mut products = PhaseProducts::default();
                 let previous = self.checked.get(&id).cloned();
                 let reads = previous
                     .as_ref()
@@ -1160,12 +1166,14 @@ impl QueryEngine {
                     Some(adapter) => adapter.check_modes(
                         &types,
                         &memo,
-                        checked.value.clone(),
+                        Arc::new(checked.value.clone()),
                         &signature.value,
+                        &mut products,
                         &mut recorder,
                     ),
                     None => recorder.engine.missing(QueryKind::Modes),
                 };
+                recorder.observed.products = Arc::new(products);
                 let observed = recorder.observed;
                 let reads = recorder.reads;
                 let key = MemoKey::new(QueryKind::Modes, id);
@@ -1282,10 +1290,29 @@ impl QueryEngine {
         }
         Ok(bodies)
     }
+    pub(crate) fn signature_products(&self, definition: DefId) -> Option<&PhaseProducts> {
+        self.signatures
+            .get(&definition)
+            .map(|entry| &*entry.products)
+    }
+    pub fn resolver_snapshot(
+        &self,
+        definition: &DefPath,
+        kind: QueryKind,
+    ) -> Option<&ResolverSnapshot> {
+        let id = DefId::intern(definition);
+        let entry = match kind {
+            QueryKind::Resolve => self.resolutions.get(&id).map(|e| &e.products),
+            QueryKind::Signature => self.signatures.get(&id).map(|e| &e.products),
+            _ => None,
+        }?;
+        entry.resolution.as_ref()
+    }
+
     pub fn diagnostic_phase(&self, diagnostic: &Diagnostic) -> Option<String> {
-        if let Some(state) = &self.adapters.compiler_state {
-            if let Some((_, phase)) = state
-                .borrow()
+        for entry in self.modes.values() {
+            if let Some((_, phase)) = entry
+                .products
                 .mode_diagnostics
                 .iter()
                 .find(|(d, _)| d.rule == diagnostic.rule && d.primary == diagnostic.primary)
@@ -1868,7 +1895,7 @@ struct Recorder<'a> {
     engine: &'a mut QueryEngine,
     reads: DependencyReads,
     /// Recursive type groups found so far, by member.
-    groups: BTreeMap<DefPath, Option<Rc<type_groups::TypeGroup>>>,
+    groups: BTreeMap<DefPath, Option<Arc<type_groups::TypeGroup>>>,
 }
 impl SignatureProvider for Recorder<'_> {
     fn signature(&mut self, id: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {

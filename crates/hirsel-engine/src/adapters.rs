@@ -1,7 +1,7 @@
 //! Implementation crates expose free functions; the engine composes those it may
 //! depend on and reaches the rest through [`Phases`].
 use crate::*;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub struct LexerAdapter;
 impl LexerPhase for LexerAdapter {
@@ -254,25 +254,20 @@ impl FormatterPhase for FormatterAdapter {
 }
 impl PhaseAdapters {
     /// The complete compiler: the engine's own adapters around `phases`, all
-    /// sharing one compiler state.
-    pub fn compiler(phases: Rc<dyn Phases>) -> Self {
-        let state = Rc::new(std::cell::RefCell::new(CompilerState::default()));
+    /// using immutable phase adapters.
+    pub fn compiler(phases: Arc<dyn Phases>) -> Self {
         Self {
-            lexer: Some(Rc::new(LexerAdapter)),
-            parser: Some(Rc::new(ParserAdapter)),
-            resolver: Some(Rc::new(ResolverAdapter {
-                state: state.clone(),
-            })),
-            signature: Some(Rc::new(SignatureAdapter {
-                state: state.clone(),
+            lexer: Some(Arc::new(LexerAdapter)),
+            parser: Some(Arc::new(ParserAdapter)),
+            resolver: Some(Arc::new(ResolverAdapter)),
+            signature: Some(Arc::new(SignatureAdapter {
                 phases: phases.clone(),
             })),
             checker: Some(phases.checker()),
-            modes: Some(phases.modes(state.clone())),
+            modes: Some(phases.modes()),
             lowering: Some(phases.lowering()),
-            compiler_state: Some(state),
             interpreter: Some(Box::new(InterpreterAdapter::default())),
-            formatter: Some(Rc::new(FormatterAdapter)),
+            formatter: Some(Arc::new(FormatterAdapter)),
             phases: Some(phases),
         }
     }

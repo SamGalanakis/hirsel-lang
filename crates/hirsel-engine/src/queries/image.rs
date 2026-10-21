@@ -623,14 +623,13 @@ impl QueryEngine {
                     .all(|e| reads_closed(e.reads(), &inside))
             };
         }
-        let state = self.adapters.compiler_state.as_ref().unwrap().borrow();
         closed!(signatures)
             && closed!(resolutions)
             && closed!(checked)
             && closed!(modes)
             && closed!(lowered)
             && closed!(summaries)
-            && state
+            && self
                 .constant_values
                 .iter()
                 .filter(|(p, _)| &p.0.package == package)
