@@ -68,3 +68,21 @@ retention. User instructions rise 1.137x; most extra instructions are kernel
 page reclamation/fault work. The separate ten-round seeded app comparison
 reduces idle RSS from 29.17 to 15.94 MiB; restart instructions fall from 376.83M
 to 360.05M. This still misses the 2x RSS target against 7.25 MiB Rust.
+
+`slice_copy.hir` retains 10,000 independent 64-byte String copies viewed from
+one 1 MiB String. On an unfixed runtime it requires roughly 10 GiB; always
+run that baseline under an address-space limit. Run the interpreter benchmark
+with `hirsel run bench/tasks-perf/slice_copy.hir --max-steps unbounded`; its
+10k workload exceeds the corpus step budget, so the permanent 10k allocation
+assertion lives in the runtime integration tests. The fixed runtime requests
+80 bytes per interval (64 data bytes plus its 16-byte sequence header).
+[The measurements](results/slice-copy.json) distinguish process RSS from
+runtime copy storage: the interpreter includes compiler state and boxed input
+construction, and already materializes String/Bytes views when it creates them.
+
+The [restart comparison](results/slice-copy-restart.json) contains ten seeded,
+interleaved rounds of before, after and Rust (30 complete samples). Median
+instructions are 319.843M before and 319.959M after (1.00036x); median idle RSS
+is 15.441 MiB before and 15.451 MiB after (1.00063x). Both Hirsel binaries use
+the same compiler/runtime and differ only in DOM JSON input sharing. Current
+tasks uses the direct typed reader, so this is a neutral result.

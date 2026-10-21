@@ -2652,6 +2652,7 @@ conformance/MEM/MEM-6-map-value-copy-charge-run.hir
 conformance/MEM/MEM-6-outer-arena-exhaustion-run.hir
 conformance/MEM/MEM-6-packed-list-push-charges-run.hir
 conformance/MEM/MEM-6-set-insert-charges-member-run.hir
+conformance/MEM/MEM-6-slice-copy-run.hir
 conformance/MEM/MEM-6-soa-list-push-charges-run.hir
 conformance/MEM/MEM-6-soa-list-push-run.hir
 conformance/MEM/MEM-6-sorted-map-arena-run.hir

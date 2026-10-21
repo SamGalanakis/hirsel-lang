@@ -34,7 +34,7 @@ use crate::{STATUS_OK, fault};
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
 /// `Layout::version` of this descriptor format.
-pub const LAYOUT_VERSION: u32 = 14;
+pub const LAYOUT_VERSION: u32 = 15;
 /// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
 /// finalizer ends the process (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
@@ -164,6 +164,7 @@ pub struct Step {
     /// belong to it.
     pub span: u32,
     pub offset: u64,
+    /// On RELEASE/RELEASE_LAST, 24 marks a String/Bytes slice triple (version 15).
     pub stride: u64,
     pub count: u64,
     pub count_offset: u64,
@@ -354,7 +355,14 @@ fn check_frame(
                 if step.kind == STEP_RELEASE_LAST && loops > 0 {
                     fault("a last release inside a loop");
                 }
-                if !fits(step.offset, 8) {
+                if !fits(
+                    step.offset,
+                    if releases(step.kind) && step.stride == 24 {
+                        24
+                    } else {
+                        8
+                    },
+                ) {
                     fault("a drop step lies outside its layout");
                 }
             }

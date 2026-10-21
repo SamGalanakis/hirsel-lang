@@ -1,0 +1,32 @@
+// Retain 10k independent 64-byte strings sliced from a 1 MiB String.
+// Run under an address-space limit on an unfixed runtime: it copies ~10 GiB.
+fn short(take data: Bytes, start: u64) -> String uses {} {
+  let view = bytes.slice(data, start, start + 64)
+  match string.from_bytes(copy view) {
+    Ok(text) => take text,
+    Error(_) => "",
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut storage: List[u8] = [120u8]
+  for i in 0u64..20 {
+    let current = bytes.from_list(unique copy storage)
+    bytes.append(mut storage, current)
+  }
+  let Ok(source) = string.from_bytes(bytes.from_list(take storage)) else {
+    return Error(())
+  }
+  let bytes = string.as_bytes(source)
+  let mut copies: List[String] = []
+  list.reserve(mut copies, 10000)
+  for i in 0u64..10000 {
+    let view = short(copy bytes, i * 64)
+    list.push(mut copies, unique view)
+  }
+  if list.len(copies) == 10000 && string.byte_len(copies[9999]) == 64 {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

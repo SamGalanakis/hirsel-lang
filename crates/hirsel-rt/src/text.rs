@@ -65,7 +65,7 @@ static BYTES_LIST_STEPS: BytesListSteps = BytesListSteps([
         variant: 0,
         span: 0,
         offset: 0,
-        stride: 0,
+        stride: 24,
         count: 0,
         count_offset: crate::NO_OFFSET,
         layout: std::ptr::null(),

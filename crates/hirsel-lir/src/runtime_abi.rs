@@ -185,7 +185,7 @@ pub const REGION_RECORD_BYTES: u64 = 64;
 /// Layout descriptor constants (`hirsel_rt_v2_layout`, `hirsel_rt_v2_step`);
 /// `rt_program` lowers layout drop programs to these steps.
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
-pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 14;
+pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 15;
 /// The finalizer belongs to an `unsafe ffi` package: its failure terminates (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
 /// The size is dynamic; the descriptor's size is the extent every value has.

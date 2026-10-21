@@ -170,8 +170,12 @@ Invariants and boundary:
   and a resource or handle is an invariant fault. Runtime ABI 6 takes an explicit destination:
   null selects the counted heap; an active region selects immortal arena blocks for the
   entire copied graph, with no outgoing heap credits. Fixed arena copies use descriptor
-  size/alignment; other copies retain source capacity. Its visited map and
-  work stacks are runtime-owned, so the native stack stays constant over any depth.
+  size/alignment; whole-block copies retain source capacity. A String/Bytes interval
+  copies only its viewed bytes into a fresh byte sequence, resetting its start. Equal
+  intervals share one copy within the graph; different intervals of one owner copy
+  separately. Descriptor version 15 marks a slice's release with stride 24 without
+  changing the holder scan or the entry ABI. Its visited map and work stacks are
+  runtime-owned, so the native stack stays constant over any depth.
 - `unique_copy_value` is `unique_copy` from an inline value (an aggregate, variant or inline
   array holding blocks): the caller's bit copy, whose holder slots (read through the value's
   layout descriptor) it rewrites in place to deep copies, one visited map for the whole value.

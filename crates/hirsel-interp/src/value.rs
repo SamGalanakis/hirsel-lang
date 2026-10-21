@@ -599,6 +599,8 @@ impl Value {
                 Value::F32(x) => Value::F32(*x),
                 Value::F64(x) => Value::F64(*x),
                 Value::Char(x) => Value::Char(*x),
+                // String/Bytes slices are materialized on construction in this model:
+                // cloning copies their viewed bytes, never an owner's backing extent.
                 Value::String(x) => Value::String(x.clone()),
                 Value::Bytes(x) => Value::Bytes(x.clone()),
                 Value::Handle { kind, id } => Value::Handle {

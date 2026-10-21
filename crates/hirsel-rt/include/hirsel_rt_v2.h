@@ -153,7 +153,7 @@ _Static_assert(HIRSEL_RT_V2_PAGE_XTHREAD_FREE_OFFSET == HIRSEL_RT_V2_PAGE_OWNER_
  * LayoutRecord drop program to it). Step offsets are from the enclosing frame's base: the value,
  * a loop's element, or a column's element. */
 #define HIRSEL_RT_V2_LAYOUT_MAGIC 0x484e4c31u
-#define HIRSEL_RT_V2_LAYOUT_VERSION 14
+#define HIRSEL_RT_V2_LAYOUT_VERSION 15
 #define HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI 1
 #define HIRSEL_RT_V2_LAYOUT_DYNAMIC 2
 #define HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR 4
@@ -237,7 +237,8 @@ typedef struct hirsel_rt_v2_step {
     uint32_t span;    /* STEP_TAG, STEP_NONNULL, STEP_LOOP, STEP_COLUMN: the steps that follow and
                          belong to it */
     uint64_t offset;
-    uint64_t stride;       /* STEP_LOOP, STEP_COLUMN: bytes between consecutive elements */
+    uint64_t stride;       /* STEP_LOOP, STEP_COLUMN: bytes between consecutive elements;
+                              RELEASE/RELEASE_LAST: 24 denotes a String/Bytes slice (layout v15) */
     uint64_t count;        /* STEP_LOOP: static element count; STEP_COLUMN: earlier columns' bytes
                               per element, so the column starts capacity * count further in */
     uint64_t count_offset; /* STEP_LOOP: offset of the u64 element count, or HIRSEL_RT_V2_NO_OFFSET

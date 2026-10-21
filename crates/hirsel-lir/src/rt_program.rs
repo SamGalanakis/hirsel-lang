@@ -121,7 +121,8 @@ pub struct Step {
     /// `Tag`, `NonNull`, `Loop`, `Column`: the steps that follow and belong to this one.
     pub span: u32,
     pub offset: u64,
-    /// `Loop`, `Column`: bytes between consecutive elements.
+    /// `Loop`, `Column`: bytes between consecutive elements. On a release, 24
+    /// identifies a String/Bytes slice triple (descriptor version 15).
     pub stride: u64,
     /// `Loop`: the static element count. `Column`: the bytes per element of
     /// the columns before it, so the column starts `capacity * count` in.
@@ -198,6 +199,8 @@ fn descriptor_with_storage(
         table,
         steps: Vec::new(),
         loops: 0,
+        scope: (id, 0),
+        arms: Vec::new(),
     };
     let field_count = match &record.tag {
         Some(tag) => {
@@ -218,7 +221,9 @@ fn descriptor_with_storage(
                             ));
                         };
                         let at = lower.arm(tag.form, *ordinal, tag.offset)?;
+                        lower.arms.push((tag.offset, *ordinal));
                         lower.fields(&variant.fields, steps, &record.scan, None)?;
+                        lower.arms.pop();
                         lower.close(at)?;
                     }
                 }
@@ -534,9 +539,47 @@ struct Lower<'t> {
     steps: Vec<Step>,
     /// Loops enclosing the steps being lowered.
     loops: u32,
+    scope: (LayoutId, u64),
+    arms: Vec<(u64, u32)>,
 }
 
 impl Lower<'_> {
+    /// Resolve a release through the active fields, preserving the distinction between
+    /// a slice owner and a whole-block holder even when variant arms overlap.
+    fn slice_owner(&self, offset: u64) -> bool {
+        let (mut id, mut base) = self.scope;
+        loop {
+            let Some(record) = self.table.layout(id) else {
+                return false;
+            };
+            if matches!(record.kind, LayoutKind::Slice { .. }) {
+                return offset == base;
+            }
+            let fields = match &record.tag {
+                Some(tag) => {
+                    let Some((_, active)) = self
+                        .arms
+                        .iter()
+                        .rev()
+                        .find(|(at, _)| *at == base + tag.offset)
+                    else {
+                        return false;
+                    };
+                    let Some(variant) = tag.variants.iter().find(|v| v.ordinal == *active) else {
+                        return false;
+                    };
+                    &variant.fields
+                }
+                None => &record.fields,
+            };
+            let Some(field) = fields.iter().find(|f| {
+                matches!(self.table.layout(f.layout).map(|r| &r.size), Some(SizeSpec::Fixed(size)) if base + f.offset <= offset && offset - base - f.offset < *size)
+            }) else { return false };
+            id = field.layout;
+            base += field.offset;
+        }
+    }
+
     fn push(&mut self, kind: StepKind, offset: u64) -> usize {
         self.steps.push(Step {
             kind,
@@ -713,7 +756,10 @@ impl Lower<'_> {
                     return malformed("a Finalize step that is not first in its layout's program");
                 }
                 DropStep::Release { offset } | DropStep::Environment { offset } => {
-                    self.push(StepKind::Release, at + offset);
+                    let slice = self.slice_owner(at + offset);
+                    let step = self.push(StepKind::Release, at + offset);
+                    // Descriptor v15: release stride 24 marks a String/Bytes triple.
+                    self.steps[step].stride = if slice { 24 } else { 0 };
                 }
                 DropStep::ReleaseRoot { offset } => {
                     self.push(StepKind::ReleaseRoot, at + offset);
@@ -733,7 +779,9 @@ impl Lower<'_> {
                 } => {
                     for (ordinal, steps) in variants {
                         let open = self.arm(*form, *ordinal, at + tag_offset)?;
+                        self.arms.push((at + tag_offset, *ordinal));
                         self.program(steps, at)?;
+                        self.arms.pop();
                         self.close(open)?;
                     }
                 }
@@ -816,7 +864,11 @@ impl Lower<'_> {
             self.steps[step].layout = Some(id);
             drop = &drop[1..];
         }
-        self.program(drop, at)
+        let scope = self.scope;
+        self.scope = (id, at);
+        let result = self.program(drop, at);
+        self.scope = scope;
+        result
     }
 }
 

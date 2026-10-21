@@ -640,3 +640,180 @@ fn a_bounded_arena_recovers_only_its_own_sole_out_of_space() {
         assert_eq!(hirsel_rt_v2_region_exit(ctx.0, outer, 0, 0), 0);
     }
 }
+
+#[test]
+fn a_short_byte_view_copies_only_its_interval() {
+    let mut step = release_step(0, 0);
+    // Descriptor v15: a release with stride 24 owns a String/Bytes slice.
+    step.stride = 24;
+    let view = layout(24, 1, None, vec![step]);
+    let ctx = Ctx::diagnostic();
+    index(ctx.0, view);
+    let source = unsafe { hirsel_rt::text::allocate_bytes(ctx.0, &vec![b'x'; 1024 * 1024]) };
+    let mut slice = hirsel_rt::views::Slice {
+        start: source.start + 123,
+        length: 7,
+        ..source
+    };
+    assert_eq!(
+        unsafe {
+            hirsel_rt_v2_unique_copy_value(
+                ctx.0,
+                index(ctx.0, view),
+                (&raw mut slice).cast(),
+                ptr::null_mut(),
+                0,
+            )
+        },
+        0
+    );
+    assert_ne!(slice.owner, source.owner);
+    assert_eq!(
+        read_u64(slice.owner, 0),
+        7,
+        "copy count must be the viewed length"
+    );
+    assert_eq!(
+        slice.start, 8,
+        "the copied interval begins after its sequence header"
+    );
+    assert_eq!(slice.length, 7);
+    release(ctx.0, slice.owner);
+    release(ctx.0, source.owner);
+    assert_eq!(ctx.stats().live_blocks, 0);
+}
+
+#[test]
+fn copied_views_distinguish_intervals_and_share_only_equal_intervals() {
+    let steps = (0..4)
+        .rev()
+        .map(|i| {
+            let mut step = release_step(i, u64::from(i) * 24);
+            step.stride = 24;
+            step
+        })
+        .collect();
+    let views = layout(96, 4, None, steps);
+    let ctx = Ctx::diagnostic();
+    index(ctx.0, views);
+    let data: Vec<u8> = (0..200).collect();
+    let source = unsafe { hirsel_rt::text::allocate_bytes(ctx.0, &data) };
+    let left = hirsel_rt::views::Slice {
+        start: source.start + 7,
+        length: 13,
+        ..source
+    };
+    let right = hirsel_rt::views::Slice {
+        start: source.start + 12,
+        length: 13,
+        ..source
+    };
+    let empty = hirsel_rt::views::Slice {
+        start: source.start + 200,
+        length: 0,
+        ..source
+    };
+    let mut values = [left, right, left, empty];
+    assert_eq!(
+        unsafe {
+            hirsel_rt_v2_unique_copy_value(
+                ctx.0,
+                index(ctx.0, views),
+                values.as_mut_ptr().cast(),
+                ptr::null_mut(),
+                0,
+            )
+        },
+        0
+    );
+    assert_eq!(values[0].owner, values[2].owner);
+    assert_ne!(values[0].owner, values[1].owner);
+    assert_eq!(count(values[0].owner), 2);
+    for (view, expected) in
+        values
+            .iter()
+            .zip([&data[7..20], &data[12..25], &data[7..20], &data[200..]])
+    {
+        assert_eq!(view.start, 8);
+        assert_eq!(read_u64(view.owner, 0), expected.len() as u64);
+        assert_eq!(read_u64(view.owner, 8), expected.len() as u64);
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(payload(view.owner).add(16), expected.len()) },
+            expected
+        );
+    }
+    assert_eq!(count(source.owner), 1);
+    for view in values {
+        release(ctx.0, view.owner);
+    }
+    release(ctx.0, source.owner);
+    assert_eq!(ctx.stats().live_blocks, 0);
+}
+
+#[test]
+fn a_whole_byte_view_keeps_the_whole_block_copy_path() {
+    let mut step = release_step(0, 0);
+    step.stride = 24;
+    let view = layout(24, 1, None, vec![step]);
+    let ctx = Ctx::diagnostic();
+    index(ctx.0, view);
+    let source = unsafe { hirsel_rt::text::allocate_bytes(ctx.0, b"whole") };
+    let mut copied = source;
+    assert_eq!(
+        unsafe {
+            hirsel_rt_v2_unique_copy_value(
+                ctx.0,
+                index(ctx.0, view),
+                (&raw mut copied).cast(),
+                ptr::null_mut(),
+                0,
+            )
+        },
+        0
+    );
+    assert_ne!(copied.owner, source.owner);
+    assert_eq!((copied.start, copied.length), (source.start, source.length));
+    assert_eq!(read_u64(copied.owner, 8), read_u64(source.owner, 8));
+    release(ctx.0, copied.owner);
+    release(ctx.0, source.owner);
+    assert_eq!(ctx.stats().live_blocks, 0);
+}
+
+#[test]
+fn ten_thousand_short_views_use_less_than_twice_the_copied_byte_storage() {
+    let mut step = release_step(0, 0);
+    step.stride = 24;
+    let view = layout(24, 1, None, vec![step]);
+    let ctx = Ctx::diagnostic();
+    index(ctx.0, view);
+    let source = unsafe { hirsel_rt::text::allocate_bytes(ctx.0, &vec![b'x'; 1024 * 1024]) };
+    let before = ctx.stats().live_bytes;
+    let mut copies = Vec::with_capacity(10_000);
+    for i in 0..10_000 {
+        let mut slice = hirsel_rt::views::Slice {
+            start: source.start + i * 64,
+            length: 64,
+            ..source
+        };
+        assert_eq!(
+            unsafe {
+                hirsel_rt_v2_unique_copy_value(
+                    ctx.0,
+                    index(ctx.0, view),
+                    (&raw mut slice).cast(),
+                    ptr::null_mut(),
+                    0,
+                )
+            },
+            0
+        );
+        copies.push(slice.owner);
+    }
+    let copied = ctx.stats().live_bytes - before;
+    assert!(copied <= 2 * 10_000 * 64, "copy storage: {copied}");
+    for owner in copies {
+        release(ctx.0, owner);
+    }
+    release(ctx.0, source.owner);
+    assert_eq!(ctx.stats().live_blocks, 0);
+}

@@ -79,13 +79,25 @@ fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
   Ok(())
 }
 
-// Token strings have independent storage. A later `unique` conversion must
-// copy only this token, rather than the whole document's backing block.
+// An explicitly owned decoder token has independent, exact-length storage.
 fn json_owned_text(data: Bytes, start: u64, end: u64) -> unique String uses {} {
   let mut output: List[u8] = []
   core@1/bytes.append(mut output, core@1/bytes.slice(data, start, end))
   match text.finish(take output) {
     Ok(s) => s,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+// Tokens without escapes share the consumed input's immutable storage. Taking
+// `data` makes the slice global; no borrow of the parser's stack escapes.
+fn json_shared_text(take data: Bytes, start: u64, end: u64) -> String uses {} {
+  let token = core@1/bytes.slice(data, start, end)
+  match core@1/string.from_bytes(copy token) {
+    Ok(s) => take s,
     Error(_) => {
       core@1/failure.check(false, TextInvariant())
       ""
@@ -110,6 +122,24 @@ fn json_hex4(data: Bytes, mut pos: u64) -> Result[u64, JsonError] uses {} {
     i += 1
   }
   Ok(n)
+}
+
+// The owning DOM parser can retain a plain token as a slice. Escaped text
+// uses the same decoder as the borrowed pull reader.
+fn json_shared_quoted(take data: Bytes, mut pos: u64) -> Result[String, JsonError] uses {} {
+  if json_peek(data, pos) != 34 {
+    return Error(Syntax(pos))
+  }
+  let start = pos + 1
+  let mut end = start
+  while end < core@1/bytes.len(data) && data[end] >= 32 && data[end] != 34 && data[end] != 92 {
+    end += 1
+  }
+  if end < core@1/bytes.len(data) && data[end] == 34 {
+    pos = end + 1
+    return Ok(json_shared_text(copy data, start, end))
+  }
+  Ok(json_quoted(data, mut pos)?)
 }
 
 // Adapted serde_json src/read.rs parse_str_bytes/parse_escape/parse_unicode_escape,
@@ -223,7 +253,7 @@ fn json_keyword(data: Bytes, mut pos: u64, word: String) -> Result[(), JsonError
 // 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8; Zig lib/std/json/dynamic.zig
 // handleCompleteValue at bff490a23889750de7096d9057c0a432efc929a8 supplies
 // ordered-object duplicate rejection. Ordinary owned locals clean up on every ?.
-fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] uses {} {
+fn json_node(take data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] uses {} {
   json_whitespace(data, mut pos)
   let c = json_peek(data, pos)
   if c == 110 {
@@ -239,12 +269,12 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
     return Ok(Bool(false))
   }
   if c == 34 {
-    return Ok(Text(json_quoted(data, mut pos)?))
+    return Ok(Text(json_shared_quoted(copy data, mut pos)?))
   }
   if c == 45 || std@1/ascii.is_digit(c) {
     let start = pos
     json_number_end(data, mut pos)?
-    return Ok(Number(json_owned_text(data, start, pos)))
+    return Ok(Number(json_shared_text(copy data, start, pos)))
   }
   if c != 91 && c != 123 {
     return Error(Syntax(pos))
@@ -262,7 +292,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
       return Ok(take array_value)
     }
     while true {
-      let child = json_node(data, mut pos, depth + 1)?
+      let child = json_node(copy data, mut pos, depth + 1)?
       core@1/list.push(mut items, take child)
       json_whitespace(data, mut pos)
       let next = json_peek(data, pos)
@@ -286,7 +316,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
   while true {
     json_whitespace(data, mut pos)
     let key_pos = pos
-    let key = json_quoted(data, mut pos)?
+    let key = json_shared_quoted(copy data, mut pos)?
     if let Some(_) = core@1/map.get(entries, key) {
       return Error(DuplicateKey(key_pos))
     }
@@ -295,7 +325,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
       return Error(Syntax(pos))
     }
     pos += 1
-    let child = json_node(data, mut pos, depth + 1)?
+    let child = json_node(copy data, mut pos, depth + 1)?
     core@1/map.insert(mut entries, take key, take child)
     json_whitespace(data, mut pos)
     let next = json_peek(data, pos)
@@ -317,7 +347,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
 pub fn parse(take text: String) -> Result[Value, JsonError] uses {} {
   let data = core@1/string.as_bytes(text)
   let mut pos: u64 = 0
-  let value = json_node(data, mut pos, 0)?
+  let value = json_node(copy data, mut pos, 0)?
   json_whitespace(data, mut pos)
   if pos != core@1/bytes.len(data) {
     return Error(Syntax(pos))

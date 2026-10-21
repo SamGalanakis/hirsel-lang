@@ -8,7 +8,9 @@
 //! Children are found through each block's own descriptor: its `RELEASE` steps are exactly
 //! its counted holders (`TAG` and a niche's `NONNULL` select the active variant's, `LOOP` and `COLUMN` reach
 //! elements).
-//! A copy keeps the original's class capacity and bytes, then each counted slot is rewritten
+//! A whole-block copy keeps its class capacity and bytes. A String/Bytes interval
+//! gets a fresh byte sequence holding only its viewed bytes; equal intervals share
+//! their copy, while different intervals of one owner copy independently. Each counted slot is rewritten
 //! to the child's copy, so every copy holds exactly the credits its slots name. Immortal and
 //! static blocks are copied like any other: the copy is unique, so a `unique` parameter
 //! writes it in place without a test (MODE-2), which a shared static block would not survive.
@@ -120,6 +122,14 @@ pub(crate) unsafe fn holders(
     value: *mut u8,
     visit: &mut dyn FnMut(*mut u8),
 ) {
+    unsafe { holder_views(layout, value, &mut |slot, _| visit(slot)) }
+}
+
+unsafe fn holder_views(
+    layout: *const Layout,
+    value: *mut u8,
+    visit: &mut dyn FnMut(*mut u8, bool),
+) {
     // SAFETY: `layout` is the descriptor of the value at `value`.
     unsafe {
         let steps: *const Step = (*layout).steps;
@@ -143,7 +153,8 @@ pub(crate) unsafe fn holders(
                 pc += 1;
                 let at = base.wrapping_add(step.offset as usize);
                 match step.kind {
-                    STEP_RELEASE | STEP_RELEASE_LAST | STEP_RELEASE_ROOT => visit(at),
+                    STEP_RELEASE | STEP_RELEASE_LAST => visit(at, step.stride == 24),
+                    STEP_RELEASE_ROOT => visit(at, false),
                     STEP_TAG | STEP_NONNULL | STEP_LIVE_BIT => {
                         if variant_inactive(step, at) {
                             pc += step.span as usize;
@@ -215,29 +226,104 @@ const INLINE_COPIES: usize = 8;
 
 /// The deep copy walk's visited map, original to copy: a small graph's lives inline, so a
 /// copy of a few blocks allocates nothing for it.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
+struct CopyKey {
+    block: usize,
+    view: Option<(u64, u64)>,
+}
+
 #[derive(Default)]
 struct Copies {
-    inline: [(usize, usize); INLINE_COPIES],
+    inline: [(CopyKey, usize); INLINE_COPIES],
     len: usize,
-    spilled: HashMap<*mut Header, *mut Header>,
+    spilled: HashMap<CopyKey, *mut Header>,
 }
 
 impl Copies {
-    fn get(&self, original: *mut Header) -> Option<*mut Header> {
-        let key = original.addr();
+    fn get(&self, key: CopyKey) -> Option<*mut Header> {
         match self.inline[..self.len].iter().find(|(o, _)| *o == key) {
-            Some(&(_, copy)) => Some(original.with_addr(copy)),
-            None => self.spilled.get(&original).copied(),
+            Some(&(_, copy)) => Some(ptr::with_exposed_provenance_mut(copy)),
+            None => self.spilled.get(&key).copied(),
         }
     }
 
-    fn insert(&mut self, original: *mut Header, copy: *mut Header) {
+    fn insert(&mut self, key: CopyKey, copy: *mut Header) {
         if self.len < INLINE_COPIES {
-            self.inline[self.len] = (original.addr(), copy.addr());
+            self.inline[self.len] = (key, copy.expose_provenance());
             self.len += 1;
         } else {
-            self.spilled.insert(original, copy);
+            self.spilled.insert(key, copy);
         }
+    }
+}
+
+/// An interval needing compact storage, or None for a whole byte sequence. Flat
+/// owners also become ordinary byte sequences: unrelated fields never follow a view.
+unsafe fn view_key(ctx: &TaskCtx, slot: *mut u8, slice: bool) -> CopyKey {
+    unsafe {
+        let block = slot.cast::<*mut Header>().read_unaligned();
+        let view = if slice {
+            let view = slot.cast::<crate::views::Slice>().read_unaligned();
+            let layout = &*ctx.descriptor((*block).index());
+            let whole = layout.flags & LAYOUT_SEQUENCE != 0
+                && layout.step_count == 0
+                && layout.logical == 1
+                && view.start == 8
+                && view.length == payload(block).cast::<u64>().read_unaligned();
+            (!whole).then_some((view.start, view.length))
+        } else {
+            None
+        };
+        CopyKey {
+            block: block.expose_provenance(),
+            view,
+        }
+    }
+}
+
+// Rust alloc/src/slice.rs:446-459 (a7c37f9f0ee5): allocate for the slice length,
+// then copy that interval. Hirsel additionally writes its sequence header and uses
+// the explicit heap/arena destination.
+unsafe fn clone_view(
+    ctx: &mut TaskCtx,
+    block: *mut Header,
+    start: u64,
+    length: u64,
+    destination: *mut Region,
+    tracked: bool,
+) -> *mut Header {
+    unsafe {
+        let size = length
+            .checked_add(16)
+            .unwrap_or_else(|| fault("a slice copy extent overflow"));
+        let copy = if destination.is_null() {
+            crate::alloc::hirsel_rt_v2_alloc(ctx, 0, size, 8, DOMAIN_HEAP, 0)
+        } else {
+            crate::region::hirsel_rt_v2_arena_alloc(
+                ctx,
+                destination,
+                0,
+                size,
+                8,
+                if tracked { ALLOC_TRACKED } else { 0 },
+            )
+        };
+        payload(copy).cast::<u64>().write_unaligned(length);
+        payload(copy).add(8).cast::<u64>().write_unaligned(length);
+        ptr::copy_nonoverlapping(
+            payload(block).add(8 + start as usize),
+            payload(copy).add(16),
+            length as usize,
+        );
+        #[cfg(feature = "measurement")]
+        {
+            let measurement = &mut ctx.heap().measurement;
+            measurement.record("copied_blocks", 1);
+            measurement.copied_blocks += 1;
+            measurement.record("copied_bytes", size);
+            measurement.copied_bytes += size;
+        }
+        copy
     }
 }
 
@@ -253,7 +339,7 @@ unsafe fn copy_graph(
     destination: *mut Region,
     first: Option<bool>,
     track: bool,
-    root: impl FnOnce(&mut dyn FnMut(*mut u8)),
+    root: impl FnOnce(&mut dyn FnMut(*mut u8, bool)),
 ) {
     // SAFETY: caller contract of the entries below.
     unsafe {
@@ -274,7 +360,7 @@ unsafe fn copy_graph(
         let arena = !destination.is_null() && (*destination).bound != 0;
         let below = std::cell::Cell::new(track && arena);
         let mut first = first;
-        let mut redirect = |slot: *mut u8| {
+        let mut redirect = |slot: *mut u8, slice: bool| {
             let child = slot.cast::<*mut Header>().read_unaligned();
             if diagnostic {
                 check_live_block(ctx, child);
@@ -284,14 +370,19 @@ unsafe fn copy_graph(
                 crate::roots::hirsel_rt_v2_root_dup(raw, child);
                 return;
             }
-            let target = match copies.get(child) {
+            let key = view_key(&*raw, slot, slice);
+            let target = match copies.get(key) {
                 Some(target) => {
                     // Another holder of a block already copied.
                     crate::count::hirsel_rt_v2_dup(raw, target);
                     target
                 }
                 None => {
-                    let flags = (*(*raw).descriptor((*child).index())).flags;
+                    let flags = if key.view.is_some() {
+                        LAYOUT_SEQUENCE
+                    } else {
+                        (*(*raw).descriptor((*child).index())).flags
+                    };
                     let parent = walked.get();
                     let index = !parent.is_null()
                         && keyed_index((*raw).descriptor((*parent).index()), payload(parent), slot);
@@ -308,7 +399,12 @@ unsafe fn copy_graph(
                                     != 0
                         }
                     };
-                    let target = clone_block(&mut *raw, child, destination, tracked);
+                    let target = match key.view {
+                        Some((start, length)) => {
+                            clone_view(&mut *raw, child, start, length, destination, tracked)
+                        }
+                        None => clone_block(&mut *raw, child, destination, tracked),
+                    };
                     if tracked && (*(*raw).descriptor((*target).index())).step_count != 0 {
                         crate::region::hirsel_rt_v2_region_schedule(
                             raw,
@@ -317,7 +413,7 @@ unsafe fn copy_graph(
                             payload(target),
                         );
                     }
-                    copies.insert(child, target);
+                    copies.insert(key, target);
                     // A copy whose layout holds nothing has no holders to walk.
                     if (*(*raw).descriptor((*target).index())).step_count != 0 {
                         let tracks = below && flags & LAYOUT_UNTRACKED_BELOW == 0;
@@ -327,6 +423,9 @@ unsafe fn copy_graph(
                 }
             };
             slot.cast::<*mut Header>().write_unaligned(target);
+            if key.view.is_some() {
+                slot.add(8).cast::<u64>().write_unaligned(8);
+            }
         };
         root(&mut redirect);
         loop {
@@ -335,7 +434,7 @@ unsafe fn copy_graph(
             };
             below.set(tracks);
             walked.set(copy);
-            holders(
+            holder_views(
                 (*ctx).descriptor((*copy).index()),
                 payload(copy),
                 &mut redirect,
@@ -387,25 +486,29 @@ pub(crate) unsafe fn block_charge(ctx: &TaskCtx, block: *mut Header) -> u64 {
 
 /// The MEM-6 charge of the tree whose holder slots `root` visits: every block once per
 /// reference to it, each block's subtree charged once and memoized, without recursion.
-unsafe fn tree_charge(ctx: &TaskCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8))) -> u64 {
+unsafe fn tree_charge(ctx: &TaskCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8, bool))) -> u64 {
     // SAFETY: caller contract of the entries below.
     unsafe {
-        let child = |slot: *mut u8| slot.cast::<*mut Header>().read_unaligned();
+        let child = |slot: *mut u8, slice: bool| view_key(ctx, slot, slice);
         // A Map's or Set's index is not charged (`LAYOUT_KEYED`).
-        let children = |block: *mut Header| {
+        let children = |block: CopyKey| {
             let mut out = Vec::new();
-            let layout = ctx.descriptor((*block).index());
-            holders(layout, payload(block), &mut |slot| {
-                if !keyed_index(layout, payload(block), slot) {
-                    out.push(child(slot));
+            if block.view.is_some() {
+                return out;
+            }
+            let owner = ptr::with_exposed_provenance_mut::<Header>(block.block);
+            let layout = ctx.descriptor((*owner).index());
+            holder_views(layout, payload(owner), &mut |slot, slice| {
+                if !keyed_index(layout, payload(owner), slot) {
+                    out.push(child(slot, slice));
                 }
             });
             out
         };
         let mut roots = Vec::new();
-        root(&mut |slot| roots.push(child(slot)));
-        let mut charges: HashMap<*mut Header, u64> = HashMap::new();
-        let mut work: Vec<(*mut Header, bool)> = roots.iter().map(|&b| (b, false)).collect();
+        root(&mut |slot, slice| roots.push(child(slot, slice)));
+        let mut charges: HashMap<CopyKey, u64> = HashMap::new();
+        let mut work: Vec<(CopyKey, bool)> = roots.iter().map(|&b| (b, false)).collect();
         while let Some((block, expanded)) = work.pop() {
             if charges.contains_key(&block) {
                 continue;
@@ -421,9 +524,13 @@ unsafe fn tree_charge(ctx: &TaskCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8)))
                 );
                 continue;
             }
-            let total = below.iter().fold(block_charge(ctx, block), |total, c| {
-                total.saturating_add(charges[c])
-            });
+            let charge = match block.view {
+                Some((_, length)) => length,
+                None => block_charge(ctx, ptr::with_exposed_provenance_mut(block.block)),
+            };
+            let total = below
+                .iter()
+                .fold(charge, |total, c| total.saturating_add(charges[c]));
             charges.insert(block, total);
         }
         roots
@@ -436,7 +543,7 @@ unsafe fn tree_charge(ctx: &TaskCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8)))
 unsafe fn charge_copy(
     ctx: &TaskCtx,
     destination: *mut Region,
-    root: impl FnOnce(&mut dyn FnMut(*mut u8)),
+    root: impl FnOnce(&mut dyn FnMut(*mut u8, bool)),
 ) -> bool {
     // SAFETY: `destination` is null or an active arena record.
     unsafe {
@@ -481,7 +588,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
         }
         let charged = charge_copy(&*ctx, destination, |visit| {
             let mut slot = block;
-            visit((&raw mut slot).cast::<u8>());
+            visit((&raw mut slot).cast::<u8>(), false);
         });
         if !charged {
             return STATUS_EXHAUSTED;
@@ -512,10 +619,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
             return STATUS_OK;
         }
         let mut root: *mut Header = ptr::null_mut();
-        let walk = |redirect: &mut dyn FnMut(*mut u8)| {
+        let walk = |redirect: &mut dyn FnMut(*mut u8, bool)| {
             let slot = (&raw mut root).cast::<u8>();
             slot.cast::<*mut Header>().write_unaligned(block);
-            redirect(slot);
+            redirect(slot, false);
         };
         copy_graph(ctx, destination, Some(root_tracked), true, walk);
         out_block.write(root);
@@ -544,12 +651,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy_value(
     // SAFETY: caller contract.
     unsafe {
         let layout = (*ctx).descriptor(index);
-        if !charge_copy(&*ctx, destination, |visit| holders(layout, value, visit)) {
+        if !charge_copy(&*ctx, destination, |visit| {
+            holder_views(layout, value, visit)
+        }) {
             return STATUS_EXHAUSTED;
         }
         let below = (*layout).flags & LAYOUT_UNTRACKED_BELOW == 0;
         copy_graph(ctx, destination, None, below, |redirect| {
-            holders(layout, value, redirect)
+            holder_views(layout, value, redirect)
         });
         STATUS_OK
     }

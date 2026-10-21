@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "slice_copy",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "slice_copy.hir",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}

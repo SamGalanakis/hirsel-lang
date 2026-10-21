@@ -1,0 +1,31 @@
+// rule: MEM-6
+// expect: run
+// boundary: distinct and repeated byte views copy independently of their backing block.
+// A copy charges and materializes the viewed bytes, including empty intervals.
+fn small(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let source = b"0123456789abcdefghijklmnopqrstuvwxyz"
+      let view = bytes.slice(source, 11, 14)
+      let copied: Bytes in a = copy_to(a, view)
+      failure.check(copied == b"bcd", TextInvariant())
+      bytes.len(copied)
+    }
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, small(3) == Ok(3u64))
+  test.check(t, small(2) == Error(OutOfSpace()))
+  let source = b"0123456789abcdefghijklmnopqrstuvwxyz"
+  let left = bytes.slice(source, 1, 4)
+  let right = bytes.slice(source, 20, 24)
+  let views: List[Bytes] = [copy left, right, copy left, bytes.slice(source, 36, 36)]
+  let copied = unique views
+  test.check(t, copied[0] == b"123")
+  test.check(t, copied[1] == b"klmn")
+  test.check(t, copied[2] == b"123")
+  test.check(t, copied[3] == b"")
+  Ok(())
+}

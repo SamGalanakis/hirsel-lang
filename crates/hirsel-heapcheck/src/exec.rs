@@ -4761,7 +4761,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
                 let val = self.read_use(f, value)?;
                 if deep && let Some(region) = self.bounded_region(f, site.placement)? {
-                    let bytes = self.copy_charge(&val)?;
+                    let layout = self.value_type(unit, value)?.layout;
+                    let bytes = self.copy_charge(&val, layout)?;
                     if !self.charge(region, bytes) {
                         return self.exhaust(f, failure, region);
                     }
@@ -5892,20 +5893,45 @@ impl<'p, S: Stage> Machine<'p, S> {
         Ok(total)
     }
 
+    fn copy_children(
+        &self,
+        image: &Extent,
+        layout: LayoutId,
+        root: bool,
+    ) -> Checked<(Vec<Ptr>, u64)> {
+        let slices = self.scan_cell_offsets_kind(image, layout, true, true)?;
+        let mut bytes = 0u64;
+        for offset in &slices {
+            bytes = bytes.saturating_add(u64::from_le_bytes(
+                image.read_bytes(offset + 16, 8).try_into().unwrap(),
+            ));
+        }
+        let keyed = hirsel_lir::layout::keyed(&self.program.layouts, layout);
+        let children = image
+            .cells
+            .iter()
+            .filter(|(o, _)| (!keyed || **o == 0) && !slices.contains(o))
+            .filter_map(|(_, c)| {
+                if root {
+                    self.block_target(c)
+                } else {
+                    self.holder_target(c)
+                }
+            })
+            .collect();
+        Ok((children, bytes))
+    }
+
     /// A deep copy's charge: every block of the copied tree, once per
     /// reference to it, independently of sharing.
-    fn copy_charge(&self, val: &Val) -> Checked<u64> {
-        let roots: Vec<Ptr> = match val {
+    fn copy_charge(&self, val: &Val, layout: LayoutId) -> Checked<u64> {
+        let (roots, viewed): (Vec<Ptr>, u64) = match val {
             Val::Callable {
                 env: Some(root), ..
             }
-            | Val::Ptr(root) => vec![*root],
-            Val::Image(image) => image
-                .cells
-                .values()
-                .filter_map(|c| self.block_target(c))
-                .collect(),
-            _ => Vec::new(),
+            | Val::Ptr(root) => (vec![*root], 0),
+            Val::Image(image) => self.copy_children(image, layout, true)?,
+            _ => (Vec::new(), 0),
         };
         let mut charges: BTreeMap<AllocId, u64> = BTreeMap::new();
         let mut work: Vec<(Ptr, bool)> = roots.iter().map(|&p| (p, false)).collect();
@@ -5914,15 +5940,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                 continue;
             }
             let a = self.ledger.check(p)?;
-            // A Map's or Set's index is not charged.
-            let keyed = hirsel_lir::layout::keyed(&self.program.layouts, a.layout.expect("live"));
-            let children: Vec<Ptr> = a
-                .extent
-                .cells
-                .iter()
-                .filter(|(o, _)| !keyed || **o == 0)
-                .filter_map(|(_, c)| self.holder_target(c))
-                .collect();
+            let (children, views) =
+                self.copy_children(&a.extent, a.layout.expect("live"), false)?;
             if !expanded {
                 work.push((p, true));
                 work.extend(
@@ -5940,7 +5959,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 | LayoutKind::SoaColumns { .. } => self.logical_count(p, layout)?,
                 _ => 1,
             };
-            let mut total = self.block_charge(layout, count)?;
+            let mut total = self.block_charge(layout, count)?.saturating_add(views);
             for c in children {
                 total = total.saturating_add(charges[&c.alloc]);
             }
@@ -5948,7 +5967,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
         Ok(roots
             .iter()
-            .fold(0u64, |total, r| total.saturating_add(charges[&r.alloc])))
+            .fold(viewed, |total, r| total.saturating_add(charges[&r.alloc])))
     }
 
     /// Whether no block below one of `layout` is tracked: a SortedMap's,
@@ -6553,6 +6572,16 @@ impl<'p, S: Stage> Machine<'p, S> {
         layout: LayoutId,
         owning: bool,
     ) -> Checked<Vec<u64>> {
+        self.scan_cell_offsets_kind(image, layout, owning, false)
+    }
+
+    fn scan_cell_offsets_kind(
+        &self,
+        image: &Extent,
+        layout: LayoutId,
+        owning: bool,
+        slices: bool,
+    ) -> Checked<Vec<u64>> {
         use hirsel_lir::layout_types::ScanStep;
         let mut work: Vec<_> = self
             .record(layout)?
@@ -6566,14 +6595,18 @@ impl<'p, S: Stage> Machine<'p, S> {
             match step {
                 ScanStep::Counted { offset }
                 | ScanStep::Root { offset }
-                | ScanStep::SliceOwner { offset }
                 | ScanStep::Environment { offset } => {
+                    if owning && !slices {
+                        offsets.push(base + offset);
+                    }
+                }
+                ScanStep::SliceOwner { offset } => {
                     if owning {
                         offsets.push(base + offset);
                     }
                 }
                 ScanStep::Uncounted { offset } => {
-                    if !owning {
+                    if !owning && !slices {
                         offsets.push(base + offset);
                     }
                 }
@@ -6957,6 +6990,89 @@ impl<'p, S: Stage> Machine<'p, S> {
             .map(|_| *ptr)
     }
 
+    /// A partial String/Bytes view owns a fresh byte sequence containing exactly its
+    /// interval. Whole-block holders retain the graph copy's existing identity rules.
+    fn copy_view_intervals(
+        &mut self,
+        f: &Frame,
+        destination: (Option<Placement>, bool),
+        layout: LayoutId,
+        image: &mut Extent,
+        copies: &mut BTreeMap<AllocId, Ptr>,
+        views: &mut BTreeMap<(AllocId, u64, u64), Ptr>,
+    ) -> Checked<()> {
+        for offset in self.scan_cell_offsets_kind(image, layout, true, true)? {
+            let Some(old) = image.cells.get(&offset).and_then(|c| self.block_target(c)) else {
+                return fail(V::ForgedPointer, "slice copy has no owner");
+            };
+            let start = u64::from_le_bytes(image.read_bytes(offset + 8, 8).try_into().unwrap());
+            let length = u64::from_le_bytes(image.read_bytes(offset + 16, 8).try_into().unwrap());
+            let a = self.ledger.check(old)?;
+            let payload = a.layout.expect("live");
+            if matches!(self.record(payload)?.kind, LayoutKind::Sequence { element }
+                if self.record(element)?.kind == LayoutKind::Scalar(ScalarKind::U8))
+                && start == 8
+                && self.logical_count(old, payload)? == length
+            {
+                continue;
+            }
+            let key = (old.alloc, start, length);
+            let copy = if let Some(copy) = views.get(&key) {
+                *copy
+            } else {
+                let at = old
+                    .offset
+                    .checked_add(8)
+                    .and_then(|n| n.checked_add(start))
+                    .ok_or_else(|| err(V::OutOfExtent, "slice copy interval overflow"))?;
+                a.extent.check_range(at, length)?;
+                if !a.extent.all_init(at, length) {
+                    return fail(V::UninitializedRead, "slice copy of unwritten bytes");
+                }
+                let bytes = a.extent.read_bytes(at, length).to_vec();
+                let (payload, element) = self
+                    .program
+                    .layouts
+                    .layouts
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, r)| match r.kind {
+                        LayoutKind::Sequence { element }
+                            if self.record(element).ok()?.kind
+                                == LayoutKind::Scalar(ScalarKind::U8) =>
+                        {
+                            Some((LayoutId(i as u32), element))
+                        }
+                        _ => None,
+                    })
+                    .ok_or_else(|| err(V::Malformed, "slice copy has no byte sequence layout"))?;
+                let (stored, _) = self.byte_sequence(element, &bytes)?;
+                let copy = self.place_sized(f, destination.0, payload, stored.len() as u64)?;
+                if destination.1 {
+                    self.ledger.get_mut(copy.alloc).count = Some(Count::Arena { shared: false });
+                }
+                self.ledger
+                    .get_mut(copy.alloc)
+                    .extent
+                    .write_bytes(0, &stored);
+                copies.insert(copy.alloc, copy);
+                views.insert(key, copy);
+                copy
+            };
+            image.put_cell(
+                offset,
+                self.word,
+                Cell::Data {
+                    ptr: copy,
+                    counted: true,
+                    borrow: None,
+                },
+            );
+            image.write_bytes(offset + 8, &8u64.to_le_bytes());
+        }
+        Ok(())
+    }
+
     /// Deep-copy every headered block reachable from `val` into its destination
     /// through holder cells, each once, so sharing inside the graph is kept.
     /// Static and immortal blocks are copied too: the copy is unique, so a
@@ -7004,6 +7120,17 @@ impl<'p, S: Stage> Machine<'p, S> {
             _ => return fail(V::Unsupported, "unique copy of a non-block value"),
         };
         let mut copies: BTreeMap<AllocId, Ptr> = BTreeMap::new();
+        let mut views = BTreeMap::new();
+        if let Some(image) = &mut image {
+            self.copy_view_intervals(
+                f,
+                (placement, arena && !self.untracked_below(layout)?),
+                layout,
+                image,
+                &mut copies,
+                &mut views,
+            )?;
+        }
         // `Shared` roots the graph reaches, which gain a root per new holder
         // instead of a copy: copying never traverses a frozen graph (MEM-11).
         let mut kept: std::collections::BTreeSet<AllocId> = Default::default();
@@ -7037,7 +7164,15 @@ impl<'p, S: Stage> Machine<'p, S> {
                 return fail(V::TypeConfusion, "unique copy of a resource");
             }
             let (layout, size) = (a.layout.expect("live"), a.extent.len());
-            let image = a.extent.copy(0, size, None);
+            let mut image = a.extent.copy(0, size, None);
+            self.copy_view_intervals(
+                f,
+                (placement, below && !self.untracked_below(layout)?),
+                layout,
+                &mut image,
+                &mut copies,
+                &mut views,
+            )?;
             let sequence = matches!(
                 self.record(layout)?.kind,
                 LayoutKind::Sequence { .. }
