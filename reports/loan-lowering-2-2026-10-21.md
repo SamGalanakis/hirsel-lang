@@ -1,73 +1,57 @@
-# Loop and joined-view producer repair
+# Loop, pattern payload and joined-view repair
 
-The three historical families were reproduced on origin/main 0a0d9aed835ce1808f18342a139835935187df05 before implementation. The source checkout is isolated; the shared checkout is unchanged. Raw evidence and manifests are retained in `/workspace/code/hirsel-briefs/loan-lowering-2/evidence` and `/tmp/loan-lowering-2`.
+All three historical families now pass: the original wc2 file loop, all33affected tar programs with unchanged assertions, and nested joined global views. The wc2 application again reads files inside its outer source loop; its reader-helper workaround is removed. The original repro files remain unchanged.
+
+The baseline was origin/main0a0d9aed835ce1808f18342a139835935187df05. Work used an isolated checkout. Raw evidence, source certificates and manifests are retained under `/workspace/code/hirsel-briefs/loan-lowering-2/evidence` and `/tmp/loan-lowering-2`. Landing identities and the final diff counts are recorded in the external disposition after `tools/land` completes.
 
 ## Mechanisms and prior art
 
 Rust reference a7c37f9f0ee5e93396106e9de20f4a86b4154e63:
 
-- `compiler/rustc_mir_build/src/builder/expr/into.rs:23` lowers nested expressions into a receiving destination; lines105–128 join both paths at a block.
-- `compiler/rustc_mir_build/src/builder/scope.rs:1383` schedules a value's destruction in its owning scope; `:1470` separates storage end from value destruction.
-- `compiler/rustc_mir_build/src/builder/expr/as_place.rs:308` records a field projection with its physical field type.
+- `compiler/rustc_mir_build/src/builder/expr/into.rs:23,105–128`: nested expressions lower into a receiving destination and join at a block.
+- `compiler/rustc_mir_build/src/builder/scope.rs:1383,1470`: value destruction belongs to its owning scope and is separate from storage end.
+- `compiler/rustc_mir_build/src/builder/expr/as_place.rs:308`: projections carry physical field types.
 
-The producer follows those separations. Hirsel has value-mode and brand loans rather than Rust references: a joined view of global content still requires source access permission until its last use. This is the reason for promoting held access loans even when the type has no locality bound. Physical pattern payloads retain J's substituted identity evidence and the declaration's locality; receiving bindings retain their separately checked receipt types. This uses additive `OwnershipFacts.physical_patterns`, with no TIR/LIR or native ABI change.
+Hirsel's deviations follow its value-mode and brand semantics. Global content can still require access loans, so block extraction promotes the permissions held by its returned view. Physical pattern payloads preserve J-substituted identities but use declaration locality; receiving bindings retain their separately checked receipt types. The additive `OwnershipFacts.physical_patterns` field is covered by pre-release format standing approval. No TIR/LIR construct or native ABI changed.
 
-Go reference ebe2feefc400f813aefdc8a036e66d2619da6649, `src/archive/tar/reader_test.go:793` (`TestReadTruncation`), is the original source of the tar vectors. All existing truncation, short-refill and GNU-incremental assertions are retained.
+Source replay recreates owners declared inside loops. Renewal removes a previous incarnation's expiry only for rows local to the current lexical item/body, not rows held outside or referring to external origins. Escape and move twins remain rejected.
 
-Source replay also recreates owners declared inside a loop. Expiration from a previous incarnation must not poison a fresh producer receipt at the same syntax site. Renewal conservatively retains rows held by bindings outside the body and rows referring to external origins; no escape or mutation permission is added.
+Native verification additionally found that whole borrowed assignments of existing joined SSA views lost their classification. After coordination with the borrowed-encoding lane (messages583776,583826,583833), the importer follows a forwarding assignment only to a proven alias or joined view. It preserves the existing holding, invents no loan and takes no SSA address. The ordinary borrowed-storage rejection guard, C and H are unchanged. A forged graph stripped of original loan evidence still rejects at that guard.
 
-## Evidence and limits
+Go reference ebe2feefc400f813aefdc8a036e66d2619da6649, `src/archive/tar/reader_test.go:793` (`TestReadTruncation`), supplied the original tar vectors. Existing truncation, short-refill and GNU-incremental assertions were not edited.
 
-Before: tar truncation27 and the reduced tar program both fail TIR InvalidProjection at places46,47,65–68. The same truncation27 failure reproduces with the frozen original std source at49b749429bfff937c183b0d277923a9d899f0f48. The11-line nested joined-loop program fails ExpiredLoan1/2 and MissingLoan. wc2 initially reports PROV-1 during source replay; repairing replay exposes its historical InvalidOrigin.
+## Authorized validator precision correction
 
-The CLI `test` command on a source whose entry is `main(t: Test)` executes zero `@test` bodies. Those logs are setup/export evidence only. The conformance runner executes those entries and their assertions. Buck `root//:*` is rejected by the current version; target inventories use `root//:`. Selected conformance configuration uses literal paths, split into explicit semicolon-separated slices.
+The original brief required unchanged V. Consultation583154 received explicit orchestrator authorization in message584632 to correct natural-loop membership, retain all rejection guards, preserve conservative irreducible handling, add rejected controls, and use a separate commit. That authorization is recorded in commit8f28570d's body.
 
-The initial four-slice selection executed63 cases:60 passed,3 failed. All33 original affected tar cases passed. Two new entries had an invalid Unit return contract and were repaired to return Result; the third failure is the existing `PROV-1-refreshed-owner-loop-ok` diagnostic, reproduced unchanged using the frozen baseline compiler and already listed in known-failures.tsv. Later exact retries are recorded separately.
+Before correction, `forward(header) ∩ reverse(latch)` includes the whole enclosing SCC. An inner backedge consequently expires an owner introduced before the inner loop. Removing either feedback edge from the reduced program made it pass. The independent seven-block graph oracle uses no checker/validator state.
 
-Unit execution: lower18/18 and validate34/34; authority27passed/1existing corpus failure; ownership34passed/1existing corpus failure. The latter failures exactly match the checked-in ledger. Agreement selected24:22passed/2failed, including all3new producer controls; a physical sibling-evidence regression was corrected and retried separately. A pristine0a0d9aed exact two-test control proves the forged-container diagnostic ratchet is inherited (1passed/1failed); its independent validator still rejects the forged graph.
+LLVM reference3623fe661ae35c6c80ac221f14d85be76aa870f1, `llvm/include/llvm/Support/GenericLoopInfoImpl.h:459–485,578–596`, identifies feedback whose header dominates its latch and walks predecessors backward, stopping at the header. Hirsel uses its existing dominator/SCC algorithms and that traversal. Its explicit deviation is to retain the old SCC region for every feedback edge in an SCC without a single dominating header, including natural subloops inside an irreducible component.
 
-No performance or adoption gate was requested or measured. Native, final exact counts, wc2 disposition and landing identities are recorded below after completion.
+Tests independently assert inner-loop membership, enclosing-backedge expiration, outer continue/break behavior and irreducible fallback. Driver controls end the real owner named by a branded token in nested, inner-owner, outer-break and outer-continue shapes; each forged graph rejects InvalidOrigin. Ending a copied call argument was an inadequate initial mutation and is retained only as diagnostic evidence. The existing outer-loop forged fresh-rebinding rejection also passes.
 
-The separate wc2 package Rust integration test executed1test and asserted4passed interpreted plus4passed LLVM package bodies. The direct CLI package invocation later independently executed4/4 interpreted tests. Initial native selections include53cases (50tar-read corpus entries plus3producer controls); this is scoped input, not a whole native campaign.
+## Before and after evidence
 
-## Remaining nested-loop origin rejection
+Before implementation, tar truncation27 and its reduction rejected InvalidProjection at places46,47,65–68; the frozen std source49b749429bfff937c183b0d277923a9d899f0f48 reproduces it. The11-line joined-loop program rejected ExpiredLoan1/2 and MissingLoan. wc2 initially rejected PROV-1; producer renewal exposed the historical InvalidOrigin at its mutable File argument.
 
-The original `examples/wc2/repros/invalid-origin.hir` is still open. Neither its source nor the package's existing workaround was changed. After source replay is repaired, TIR validation rejects the mutable File argument with InvalidOrigin. This smaller program, with no std dependency, isolates the remaining condition:
+After implementation:
 
-```hir
-type R { x: u64 }
-fn owner() -> R { R(x: 0u64) }
-fn brand(r: R) -> Option[u8 of r] { None }
-fn read(r: R, mut token: Option[u8 of r]) -> Result[Option[String], ()] { Ok(None) }
-pub fn main() -> Result[(), ()] {
-  let ns: List[u64] = [0, 1]
-  for n in ns {
-    let r = owner()
-    let mut token = brand(r)
-    while let Some(line) = read(r, mut token)? {}
-  }
-  Ok(())
-}
-```
+- All33original affected tar programs execute successfully interpreted and natively. Native evidence is nine explicit four-case smoke batches; the initial batch's joined-view failure was separately fixed and retried. All33tar sources/assertions are byte-identical to baseline. Their33obsolete known-failure rows are removed.
+- Joined-view smoke passes4configurations, real-Io replay, Cranelift and runner/executable comparison (11image runs); separate Cranelift parity passes1/1. The original joined source also runs interpreted. The augmented driver control passes native build/stage validation and forged-loan rejection.
+- The buffered-files regression executes two files and four lines, passes native smoke and separate parity, and has a matched std manifest. The exact original wc2 source and restored application execute under interpreter, LLVM and Cranelift:6CLI runs asserted by one integration test at22:38:28. Each fixture has a private XDG_CACHE_HOME and uses the production object-store path.
+- The restored wc2 package test asserts4interpreted and4LLVM test bodies, and passes. An earlier independent CLI package run also executed4/4interpreted bodies.
+- Post-V compiler SHA256d25c7d3456819addd7064e53bd41d9a30934b1ade53cdd9cded5e5397d33ca97 exports both the exact original wc source and the no-std minimal source successfully. Binary/image identities after automatic image refresh are in `post-v/sha256-after`; earlier image bytes are not described as final.
 
-Source checking accepts it; export rejects InvalidOrigin(PlaceId(33)). Removing either feedback edge makes export pass. In `hirsel-validate/src/flow_origins.rs`, loop expiration takes forward reachability from a feedback target intersected with reverse reachability from its source. For an inner loop inside an outer cycle this includes the enclosing strongly connected component, including the owner introduced before the inner loop. The inner backedge therefore expires that still-live owner. An independent seven-block graph oracle confirms the region error; it uses no validator/checker state.
+The wc minimal accepted twin is `PROV-1-nested-loop-owner-ok.hir`. Its core is an outer `for`, a fresh R and branded mutable token in that body, and an inner `while let Some(line) = read(r, mut token)?`. New rejected twins cover inner-owner escape and invalidated brands across outer break/continue. The four earlier joined/loop escape and move twins retain their expected rejections.
 
-The proposed follow-up is to compute reducible natural loops by walking predecessors from the latch, stopping at the dominating header, and preserve the current conservative behavior for irreducible feedback. This lane changes no validator or native importer rejection guard. Its brief explicitly excludes validator changes; the scope consultation is retained as message583154. The failing buffered-files fixture is preserved with the evidence, outside the passing corpus. No workaround restoration or claim that all three families pass is made.
+## Counts and inherited failures
 
-## Final producer scope
+Scoped unit results: lower18/18; V34/34 before the precision correction, then37/37 with its3new graph tests; RC9/9. Authority27passed/1inherited corpus failure and ownership34passed/1inherited corpus failure match existing ledger rows. Final producer controls passed4/4; augmented native joined-view control passed1/1; real-owner expiry control passed1/1 (four accepted/forged pairs); existing outer-expiry control passed1/1.
 
-Implementation commits before landing/rebase:117ea76a (joined access permissions), f9ed2e2c (physical payload locality), 0cac4925 (fresh loop-local brand replay), and69d9c8c7 (current lexical item guard). Commit8907adf5 records the independently reproduced forged-container diagnostic mismatch. Final source identities are in `final-compiler-source-certificate.json`; earlier CLI artifacts are separately labelled and are not the final compiler.
+Initial explicit conformance selection:63cases,60passed/3failed. Two new fixtures initially had invalid Unit entry results, were corrected, and passed2/2 on exact retry. The remaining refreshed-owner failure reproduces with the baseline compiler and stays ledgered. Thus62distinct cases in that selection pass; no repeated green execution is implied.
 
-The final exact driver selection executed4/4 tests: sibling identity preservation, fresh loop-local owners, nested joined views and physical payload locality (`loan-lowering-2-final-producer-controls.log`,21:33:53). The33obsolete tar InvalidProjection ledger rows are removed because all33original programs executed successfully. The inherited authority/ownership corpus and refreshed-owner failures remain recorded. Native batch and landing results are appended to the external disposition once those commands finish.
+The authorized rejection sweep selected all1438current `-bad.hir` cases plus2positives. Conformance validated1426:1421expected outcomes passed and5inherited diagnostic mismatches remained. Those5still reject (3source diagnostic mismatches and2Vconstructor-field rejections for inherited missing J diagnostics). Fourteen cases lack required twin headers and were not executed by conformance; the post-V CLI independently checked and rejected all14. Therefore all1438bad programs remain rejected, while the conformance gate itself is explicitly red for inherited metadata/diagnostic issues. All are ledgered; the2missing-J cases have new per-case rows in addition to the existing ownership corpus row.
 
-## Native joined-view proof transport
+Zero-body CLI tar `test` runs and an over-filtered RC target are setup evidence only. The initial53case native smoke timed out; a subsequent broad Cranelift selection and a queued speculative transport experiment were cancelled. No successful execution count is inferred from those attempts. Failed fixture setup attempts (missing std manifest, compile-input inventory, package identifier, object-cache environment) are retained separately; only corrected executions are counted.
 
-Native checking exposed a second stage of the joined-view family: a whole borrowed assignment of an existing joined view was classified as ordinary storage rather than an SSA view. The existing importer rejection for a borrowed read of counted storage outside any loan correctly refused that representation. After coordination with the borrowed-encoding lane (messages583776,583826,583833), `view_assignments` records whole forwarding separately. The alias analysis follows it only to a proven alias; joined-view propagation follows it only to an eligible joined view. Forwarding adds no loan, takes no address of an SSA view and preserves its existing holding. C/H and the ordinary-storage guard remain unchanged. This extends the current native proof representation rather than adding a TIR/LIR construct.
-
-The joined fixture's first native smoke and parity runs failed at the guard. After proof transport, native smoke passed all4configurations, real-Io replay, Cranelift and runner/executable comparisons (11image runs), and the separate Cranelift parity selection passed1/1 (`loan-lowering-2-native-joined-forward.log`,21:52:17). The augmented driver regression forwards through another match, reuses the source view and strips the original loan evidence in a forged graph to require continued importer rejection. The speculative transport-usage change was cancelled before execution and fully reverted.
-
-The corrected two conformance entries executed2/2 successfully at21:43:38. Across the original63case selection and those exact repairs,62distinct cases pass and the inherited refreshed-owner case remains red. All4new rejected twins retain their expected diagnostics. The initial53case smoke selection timed out remotely; no execution count is inferred from that attempt. The subsequent broad Cranelift selection was cancelled and contributes no pass count. Native tar evidence comes from explicit four-case batches.
-
-The augmented driver regression passed1/1 at21:54:10, including native build through the stage validators and the forged-loan rejection. The separate unfiltered RC unit target executed9/9 at21:54:13. The initially over-filtered RC target executed0tests and is not counted.
-
-The final CLI build independently ran the original joined-loop source successfully. With the same final compiler, the original wc repro rejects InvalidOrigin(PlaceId(70)) in block19 and the no-std reduction rejects InvalidOrigin(PlaceId(33)) in block10. `final-cli-repros.log` records each status separately; its script completion status is not a claim that the two expected failures passed. Final binary/image identities are retained in `final/identity.json` and `sha256-after-repros`; the image automatically refreshed during these checks.
+Native batch8's remote executable began22:18:30 before the V edit was detected22:21:18, so it is pre-V evidence. Batch9 built the V correction separately. Source certificates and `native-batch-source-intervals.md` pin these epochs; earlier successful cases are not claimed to have consumed later source edits. No performance or adoption gate was requested or measured.
