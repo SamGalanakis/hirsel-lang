@@ -20,6 +20,128 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
     scheduler(ctx).logical = Logical::Free(Driver);
 }
 
+pub(super) fn enabled(ctx: *mut TaskCtx) -> bool {
+    matches!(scheduler(ctx).logical, Logical::Free(_))
+}
+
+/// # Safety
+/// The calling task holds the role and no table borrow crosses publication.
+pub(super) unsafe fn dispatch_ready(ctx: *mut TaskCtx) {
+    let run = unsafe { (*ctx).run_ptr() };
+    let ready = {
+        let s = scheduler(ctx);
+        std::mem::take(&mut s.runnable)
+            .into_iter()
+            .map(|task| (task, s.task(task).owner))
+            .collect::<Vec<_>>()
+    };
+    for (task, owner) in ready {
+        unsafe { crate::pool::free::schedule_saved(run, task, owner) };
+    }
+}
+
+/// # Safety
+/// The running task holds the role; its operation's borrows have ended.
+pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
+    // This experimental policy supports runtime waits only. Its home/driver
+    // readiness bridge is not activated; no table borrow crosses a bridge.
+    unsafe { poll_ready(scheduler(ctx)) };
+    unsafe { dispatch_ready(ctx) };
+    let s = scheduler(ctx);
+    let me = s.current;
+    let row = s.task(me);
+    unpin(row);
+    if row.budget.proceed() {
+        if let Some(metrics) = &ctx.run_ref().worker_metrics {
+            metrics.elision();
+        }
+        unsafe { migrate(ctx) };
+    } else {
+        row.budget.reset();
+        unsafe { suspend(ctx, true) };
+    }
+    crate::stop::observe(ctx)
+}
+
+/// # Safety
+/// The running task owns the role and retains no runtime borrow at save.
+pub(super) unsafe fn suspend(ctx: &mut TaskCtx, yielded: bool) {
+    if let Some(metrics) = &ctx.run_ref().worker_metrics {
+        metrics.switch();
+    }
+    unsafe { crate::pool::free::suspend_current(ctx, yielded) };
+}
+
+/// # Safety
+/// As for try_yield, including any foreign-affine ownership transition.
+pub(super) unsafe fn migrate(ctx: &mut TaskCtx) {
+    let s = scheduler(ctx);
+    let me = s.current;
+    let (owner, last) = {
+        let row = s.task(me);
+        (row.owner, row.last)
+    };
+    if crate::pool::target(ctx, owner, last).is_some() {
+        unsafe {
+            crate::pool::free::schedule_saved(ctx.run_ptr(), me, owner);
+            suspend(ctx, false);
+        }
+    }
+}
+
+/// Record logical completion but leave its stack and Done publication to
+/// after_save. No Rust-owned value remains on the abandoned fiber.
+/// # Safety
+/// This is the running child, holding the scheduler role after body cleanup.
+pub(super) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
+    {
+        let path = scheduler(ctx).task(index).path.clone();
+        let first_end = !std::mem::replace(&mut scheduler(ctx).task(index).ended, true);
+        if first_end {
+            crate::free::end(ctx, &path);
+        }
+        let chain = ctx.failure.take_chain(&path);
+        let failed = status != STATUS_OK;
+        if failed != !chain.is_empty() {
+            fault("a task's status disagrees with its failure state");
+        }
+        if let Some(metrics) = &ctx.run_ref().worker_metrics {
+            metrics.complete();
+        }
+        let s = scheduler(ctx);
+        let row = s.task(index);
+        row.finishing = true;
+        row.state = State::Ready;
+        if !failed && first_end {
+            // Detached children skip TaskFinish's holding phase, but every
+            // child end still takes its parent scope's completion rank.
+            s.order(index);
+        }
+        if failed {
+            let row = s.task(index);
+            row.failure = Some(chain);
+            let scope = row.scope.expect("a child has a scope");
+            s.order(index);
+            let scope_row = s.scope(scope);
+            scope_row.canceled.get_or_insert(CANCEL_CHILD_FAILED);
+            let siblings = scope_row.children.clone();
+            s.wake_owner(scope);
+            for sibling in siblings {
+                if sibling != index {
+                    s.cancel(sibling, CANCEL_CHILD_FAILED);
+                }
+            }
+        }
+    }
+    if ctx.failure.active() || ctx.shield != 0 || !ctx.work.is_null() || !ctx.region.is_null() {
+        fault("a task completed with context state left");
+    }
+    drop(std::mem::take(&mut ctx.failure));
+    drop(std::mem::take(&mut ctx.frozen));
+    drop(std::mem::take(&mut ctx.isolated));
+    unsafe { crate::pool::free::finish_current(ctx) }
+}
+
 fn saved(s: &Scheduler, task: u32) -> bool {
     s.tasks[task as usize]
         .as_ref()
@@ -104,8 +226,27 @@ pub(super) unsafe fn after_save(
     completed: bool,
 ) -> Vec<(u32, Owner)> {
     if let Some(Some(row)) = s.tasks.get(task as usize) {
+        if completed && row.finishing {
+            let row = s.task(task);
+            row.finishing = false;
+            row.state = State::Done;
+            if let Some(stack) = row.stack.take() {
+                // SAFETY: the completed physical image was invalidated before
+                // this callback, and its last runtime frame consumed ctx state.
+                unsafe {
+                    std::ptr::drop_in_place(row.ctx);
+                    crate::pool::free::recycle_stack(stack);
+                }
+            }
+        }
+        let row = s.task(task);
         match row.state {
             State::Parked if row.wait.is_some() => s.wake(task),
+            State::Holding if row.detached => {
+                row.slot = None;
+                row.state = State::Ready;
+                s.runnable.push_back(task);
+            }
             State::Holding | State::Done => s.settle(task),
             _ => {}
         }
@@ -121,11 +262,29 @@ pub(super) unsafe fn after_save(
             }
         }
     }
+    unsafe { poll_ready(s) };
+    let ready = std::mem::take(&mut s.runnable);
+    ready
+        .into_iter()
+        .map(|task| (task, s.task(task).owner))
+        .collect()
+}
+
+/// # Safety
+/// The role owns the table and every stack access is gated on a saved image.
+unsafe fn poll_ready(s: &mut Scheduler) {
     s.wake_receivers();
     // Keep unsupported service waits pending. No host bridge, allocation of
     // pool threads, or scheduler(ctx) reentry is permitted under IdleGuard.
     let woken = std::mem::take(&mut s.woken);
     for task in woken {
+        let Some(Some(row)) = s.tasks.get_mut(task as usize) else {
+            continue;
+        };
+        if row.wait.is_none() {
+            row.woken = false;
+            continue;
+        }
         // SAFETY: after-save publication protects every inspected stack slot.
         match unsafe { poll(s, task) } {
             Some(ready) => {
@@ -137,20 +296,275 @@ pub(super) unsafe fn after_save(
             None => s.woken.push(task),
         }
     }
-    let ready = std::mem::take(&mut s.runnable);
-    ready
-        .into_iter()
-        .map(|task| (task, s.task(task).owner))
-        .collect()
+}
+
+/// CONC-8 requires every logical task to be blocked and every physical image
+/// saved. An empty ready-queue search alone proves neither. Host requests and
+/// deadlines are external event sources and prevent this runtime-only verdict.
+/// # Safety
+/// The caller holds IdleGuard; no Scheduler borrow survives this call.
+pub(super) unsafe fn check_quiet(run: *mut crate::context::RunShared) {
+    let waits = {
+        let run = unsafe { &*run };
+        if run.host_waits.load(Ordering::Acquire) != 0 {
+            return;
+        }
+        let Some(s) = (unsafe { (*run.tasks.get()).as_deref_mut() }) else {
+            return;
+        };
+        if !matches!(s.logical, Logical::Free(_))
+            || s.tasks.iter().flatten().any(|row| {
+                row.state == State::Ready
+                    || row.dispatch.as_ref().is_some_and(|frame| !frame.is_saved())
+            })
+        {
+            return;
+        }
+        s.parked()
+            .into_iter()
+            .map(|(task, wait)| {
+                let row = s.task(task);
+                let site = run
+                    .failure_table
+                    .filter(|_| row.wait_site != 0)
+                    .map(|table| table.located(row.wait_site))
+                    .unwrap_or_default();
+                let spawn_path = row.path.clone();
+                let (kind, targets) = match wait {
+                    Wait::Join { child, .. } => ("task.await", vec![u64::from(child)]),
+                    Wait::Exit { scope } => (
+                        "task.scope",
+                        s.scope(scope)
+                            .children
+                            .iter()
+                            .map(|&child| u64::from(child))
+                            .collect(),
+                    ),
+                    Wait::Receive { channel, .. } => ("channel.receive", vec![u64::from(channel)]),
+                    Wait::Any { set, .. } => (
+                        "task.await_any",
+                        s.set(set)
+                            .members
+                            .iter()
+                            .flatten()
+                            .map(|word| u64::from(*word as u32))
+                            .collect(),
+                    ),
+                    Wait::Drain { set } => (
+                        "task.cancel_all",
+                        s.set(set)
+                            .members
+                            .iter()
+                            .flatten()
+                            .map(|word| u64::from(*word as u32))
+                            .collect(),
+                    ),
+                    Wait::Final => ("free.final", vec![]),
+                    Wait::Retry { .. } => ("free.retry", vec![]),
+                    Wait::Gate { gate } => ("foreign.gate", vec![u64::from(gate)]),
+                    Wait::Pool => ("foreign.pool", vec![]),
+                    Wait::Host { token } => ("host request", vec![token]),
+                };
+                hirsel_run_schema::Wait {
+                    spawn_path,
+                    site,
+                    kind: kind.into(),
+                    targets,
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut waits = waits;
+    waits.sort_by(|a, b| a.spawn_path.cmp(&b.spawn_path));
+    // The current saved continuation still holds its Lease. Its final drop
+    // wakes home after busy is cleared, avoiding an invented pending worker.
+    unsafe { (*run).control.request_inside(Stop::Blocked(waits)) };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const NONE: [u64; 2] = [0, 0];
+
+    unsafe extern "C" fn result_child(
+        ctx: *mut TaskCtx,
+        environment: *mut Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        let id = unsafe { environment.add(1).cast::<u64>().read() };
+        // A started task yields many times while its result and locals remain
+        // on the same stack. Logical scheduling must retain one image owner.
+        let local = [id; 32];
+        for _ in 0..260 {
+            unsafe { yield_now(&mut *ctx) };
+        }
+        assert_eq!(local, [id; 32]);
+        let mut slot = [1, id * 100];
+        unsafe { hirsel_rt_v2_task_finish(ctx, slot.as_mut_ptr().cast(), NONE.as_ptr().cast(), 16) }
+    }
+
+    static STARTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    fn rendezvous() {
+        STARTED.fetch_add(1, Ordering::AcqRel);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while STARTED.load(Ordering::Acquire) != 8 {
+            assert!(
+                std::time::Instant::now() < until,
+                "native segments did not overlap"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    unsafe extern "C" fn parallel_child(
+        ctx: *mut TaskCtx,
+        environment: *mut Header,
+        caller: u64,
+        site: u64,
+    ) -> u8 {
+        rendezvous();
+        unsafe { result_child(ctx, environment, caller, site) }
+    }
+
+    fn children_run(parallel: bool, detach: bool) {
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&layout as *const crate::Layout];
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 1;
+        // SAFETY: these bodies use the free task policy and no host services.
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe { enable(ctx) },
+            move |ctx| unsafe {
+                for _ in 0..if parallel { 1 } else { 4 } {
+                    let mut scope = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                        STATUS_OK
+                    );
+                    let mut handles = Vec::new();
+                    for id in 1..=if parallel { 7 } else { 16u64 } {
+                        let environment = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            8,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        environment.add(1).cast::<u64>().write(id);
+                        let mut task = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_spawn(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut task,
+                                &scope,
+                                if parallel {
+                                    parallel_child
+                                } else {
+                                    result_child
+                                },
+                                environment
+                            ),
+                            STATUS_OK
+                        );
+                        if detach && id % 2 == 0 {
+                            assert_eq!(hirsel_rt_v2_task_detach(ctx, &scope, &mut task), STATUS_OK);
+                        } else {
+                            handles.push((task, id));
+                        }
+                    }
+                    if parallel {
+                        rendezvous();
+                    }
+                    for (mut task, id) in handles {
+                        let mut slot = NONE;
+                        assert_eq!(
+                            hirsel_rt_v2_task_join(
+                                ctx,
+                                0,
+                                0,
+                                &scope,
+                                &mut task,
+                                slot.as_mut_ptr().cast(),
+                                16
+                            ),
+                            STATUS_OK
+                        );
+                        assert_eq!(slot, [1, id * 100]);
+                    }
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                        STATUS_OK
+                    );
+                }
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+    }
+
+    #[test]
+    fn native_children_finish_join_and_reuse_saved_stacks_through_the_free_policy() {
+        children_run(false, false);
+    }
+
+    #[test]
+    fn scope_exit_joins_and_discards_detached_native_results_after_idle_save() {
+        children_run(false, true);
+    }
+
+    #[test]
+    fn eight_native_task_segments_overlap_before_their_spawner_suspends() {
+        const CHILD: &str = "HIRSEL_F1_LOGICAL_PARALLEL";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tasks::free::tests::eight_native_task_segments_overlap_before_their_spawner_suspends",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            return;
+        }
+        crate::pool::set_compute_grant(8);
+        for _ in 0..16 {
+            STARTED.store(0, Ordering::Release);
+            children_run(true, false);
+            assert_eq!(STARTED.load(Ordering::Acquire), 8);
+        }
+    }
+
     #[test]
     fn idle_save_repolls_a_wait_deferred_while_its_stack_was_still_running() {
         let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
         // SAFETY: this body uses only explicit dispatch and the Retry wait
         // below, without a home service, stack delivery or logical completion.
         unsafe { run.use_physical_dispatch() };
@@ -181,6 +595,28 @@ mod tests {
             },
         );
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+    }
+
+    #[test]
+    fn the_last_saved_wait_reports_blocked_without_retaining_a_compute_permit() {
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        // SAFETY: only a runtime wait, with no host or foreign service.
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe { enable(ctx) },
+            |ctx| {
+                park_retry(ctx, false);
+                crate::STATUS_OK
+            },
+        );
+        let Err(Stop::Blocked(waits)) = outcome.ended else {
+            panic!("{outcome:?}");
+        };
+        assert_eq!(waits.len(), 1);
+        assert_eq!(waits[0].kind, "free.retry");
+        assert!(waits[0].spawn_path.is_empty());
         assert_eq!(outcome.pending, 0);
     }
 }

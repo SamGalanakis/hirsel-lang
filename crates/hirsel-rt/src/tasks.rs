@@ -184,6 +184,9 @@ struct Task {
     retried: bool,
     /// Free mode: its end op ran (when it came to hold its result, else at completion).
     ended: bool,
+    /// The child left its last runtime frame; only idle save may publish Done
+    /// and recycle the stack. A join must not retire a still-running stack.
+    finishing: bool,
     /// Its scheduling priority under `pct@1`, drawn when it was created.
     priority: u64,
     /// The threads that may resume it (`crate::pool`): any compute worker, the home thread
@@ -507,9 +510,11 @@ impl Scheduler {
     /// Whether every child of `scope` holds its result or completed.
     fn settled(&mut self, scope: u32) -> bool {
         let children = self.scope(scope).children.clone();
-        children
-            .iter()
-            .all(|&c| matches!(self.task(c).state, State::Holding | State::Done))
+        children.iter().all(|&c| {
+            let row = self.task(c);
+            matches!(row.state, State::Holding | State::Done)
+                && row.dispatch.as_ref().is_none_or(|frame| frame.is_saved())
+        })
     }
     /// Vacate task set row `set`; its members stay children of their scope.
     fn close_set(&mut self, set: u32) {
@@ -627,6 +632,7 @@ impl Task {
             awaited_by: None,
             retried: false,
             ended: false,
+            finishing: false,
             priority: 0,
             owner: Owner::Any,
             pinned: false,
@@ -955,6 +961,10 @@ fn record_worker(row: &mut Task, here: Option<u16>, metrics: Option<&crate::pool
 /// # Safety
 /// `ctx` is the running task's; the caller holds nothing a stop must drop.
 unsafe fn migrate_self(ctx: &mut TaskCtx) {
+    if free::enabled(ctx) {
+        unsafe { free::migrate(ctx) };
+        return;
+    }
     let s = scheduler(ctx);
     let me = s.current;
     let Some(Some(row)) = s.tasks.get_mut(me as usize) else {
@@ -1194,6 +1204,20 @@ pub(crate) fn dispatch_owner(ctx: *mut TaskCtx) -> Owner {
     s.task(me).owner
 }
 
+/// Record a physical claim without invoking a stop-aware task entry before
+/// the idle worker has installed its Running token.
+/// # Safety
+/// The idle claimant owns the scheduler role and the exclusive saved image.
+pub(crate) unsafe fn record_dispatch(
+    run: *mut crate::context::RunShared,
+    task: u32,
+    here: Option<u16>,
+) {
+    let run = unsafe { &*run };
+    let s = unsafe { (*run.tasks.get()).as_deref_mut().unwrap() };
+    record_worker(s.task(task), here, run.worker_metrics.as_deref());
+}
+
 /// A physical stack reached idle, before its dispatch activity reservation
 /// is released. Under the idle role this publishes its saved flag. Policies
 /// may now expose parked slots and settle completion, including vacating a
@@ -1233,6 +1257,7 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
         // SAFETY: the idle guard owns the role and the policy retained rows.
         unsafe { crate::pool::free::schedule_saved(run, task, owner) };
     }
+    unsafe { free::check_quiet(run) };
 }
 
 /// Dispatch the running task's foreign interval to a blocking-pool thread (S-13): it waits
@@ -1255,6 +1280,10 @@ pub(crate) unsafe fn to_pool(ctx: &mut TaskCtx, site: u64) -> u16 {
     let row = s.task(me);
     unpin(row);
     row.owner = Owner::Pool(slot);
+    if free::enabled(ctx) {
+        unsafe { free::migrate(ctx) };
+        return slot;
+    }
     let to = crate::pool::target(ctx, Owner::Pool(slot), None)
         .unwrap_or_else(|| fault("a pool dispatch from its own pool thread"));
     ctx.switch_out();
@@ -1535,6 +1564,14 @@ unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stoppe
 /// # Safety
 /// `ctx` is live.
 unsafe fn run_next(ctx: &mut TaskCtx) -> Stopped<()> {
+    if free::enabled(ctx) {
+        unsafe {
+            free::dispatch_ready(ctx);
+            free::suspend(ctx, false);
+        }
+        recycle(ctx);
+        return crate::stop::observe(ctx);
+    }
     // SAFETY: the context is live.
     let next = unsafe { next_task(ctx) }?;
     unsafe { switch_to(ctx, next) };
@@ -1736,6 +1773,9 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
         metrics.op();
     }
+    if free::enabled(ctx) {
+        return unsafe { free::try_yield(ctx) };
+    }
     // In free mode, semantic ordinals and publications still happen for
     // every op, while immediate ops keep this worker for at most 128 ops.
     // F0's injected schedule retains its one-op quantum for reference tests.
@@ -1828,6 +1868,19 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
         metrics.op();
     }
+    if free::enabled(ctx) {
+        let s = scheduler(ctx);
+        let me = s.current;
+        let row = s.task(me);
+        row.budget.reset();
+        row.wait_site = site;
+        unpin(row);
+        s.park(wait);
+        if let Wait::Host { token } = wait {
+            unsafe { crate::host_waits::park(ctx, token, me) };
+        }
+        return unsafe { run_next(ctx) };
+    }
     if yielded {
         // SAFETY: the context is live.
         unsafe { poll_parked(ctx) }?;
@@ -1871,6 +1924,17 @@ pub(crate) unsafe fn park_host(ctx: &mut TaskCtx, token: u64, yielded: bool) -> 
 /// # Safety
 /// `ctx` is live and `child` is holding.
 unsafe fn hand_off(ctx: &mut TaskCtx, child: u32) {
+    if free::enabled(ctx) {
+        let s = scheduler(ctx);
+        let me = s.current;
+        s.task(me).state = State::Parked;
+        let row = s.task(child);
+        row.state = State::Ready;
+        row.handoff = Some(me);
+        s.runnable.push_back(child);
+        unsafe { crate::stop::check(ctx, run_next(ctx)) };
+        return;
+    }
     let s = scheduler(ctx);
     let current = s.current;
     s.task(current).state = State::Parked;
@@ -1922,6 +1986,9 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
 /// # Safety
 /// `ctx` is live and `index` is the running child.
 unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
+    if free::enabled(ctx) {
+        unsafe { free::complete(ctx, index, status) }
+    }
     // This fiber is abandoned at the departure, so nothing it owns may still be live then.
     let next = unsafe { crate::stop::check(ctx, completed(ctx, index, status)) };
     // SAFETY: the context is live; this fiber is never resumed.
@@ -2187,11 +2254,10 @@ unsafe fn exit_scope(
         // SAFETY: the context is live; the exit is not a yield.
         unsafe { block(ctx, Wait::Exit { scope: index }, false, caller_site) };
     }
-    let s = scheduler(ctx);
-    let children = s.scope(index).children.clone();
+    let children = scheduler(ctx).scope(index).children.clone();
     for &child in children.iter().rev() {
-        if s.task(child).state == State::Holding {
-            s.task(child).slot = None;
+        if scheduler(ctx).task(child).state == State::Holding {
+            scheduler(ctx).task(child).slot = None;
             // SAFETY: the child is holding; its own cleanup drops the result.
             unsafe { hand_off(ctx, child) };
         }
@@ -2415,10 +2481,13 @@ unsafe fn join(
     size: u64,
     caller_site: u64,
 ) -> u8 {
-    let s = scheduler(ctx);
-    match s.task(child).state {
+    let mut state = scheduler(ctx).task(child).state;
+    if free::enabled(ctx) && !unsafe { crate::pool::free::is_saved(ctx.run_ptr(), child) } {
+        state = State::Parked;
+    }
+    match state {
         State::Holding => {
-            let held = s.task(child).slot.take().unwrap();
+            let held = scheduler(ctx).task(child).slot.take().unwrap();
             // SAFETY: the child is stopped in its finish, its slot live.
             unsafe {
                 deliver(held, slot, size);
@@ -2516,9 +2585,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
 /// # Safety
 /// `ctx` is live and `child` a child of live `scope`.
 unsafe fn detach(ctx: &mut TaskCtx, scope: u32, child: u32) {
+    let saved = !free::enabled(ctx) || unsafe { crate::pool::free::is_saved(ctx.run_ptr(), child) };
     let s = scheduler(ctx);
     s.task(child).detached = true;
-    if s.task(child).state == State::Holding {
+    if saved && s.task(child).state == State::Holding {
         s.task(child).slot = None;
         // SAFETY: the child is holding; its own cleanup drops the result.
         unsafe { hand_off(ctx, child) };
@@ -2527,6 +2597,7 @@ unsafe fn detach(ctx: &mut TaskCtx, scope: u32, child: u32) {
     if let Some(row) = s.tasks[child as usize].as_ref()
         && row.state == State::Done
         && row.failure.is_none()
+        && saved
     {
         s.scope(scope).children.retain(|&c| c != child);
         s.vacate_task(child);
@@ -3703,6 +3774,12 @@ mod free_policy_tests {
             return;
         }
         crate::pool::set_compute_grant(8);
+        for _ in 0..32 {
+            concurrent_segments_run();
+        }
+    }
+
+    fn concurrent_segments_run() {
         let mut run = crate::host::BodyRun::new(8, false);
         // SAFETY: these bodies use only explicit physical dispatch, never a
         // home service, logical wait, or another task's stack slots.

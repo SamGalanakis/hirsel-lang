@@ -155,6 +155,16 @@ pub(super) fn pending(execs: &Execs) -> bool {
         .is_some_and(|dispatch| dispatch.count.live.load(Ordering::Acquire) != 0)
 }
 
+/// # Safety
+/// Idle only, after notifications were invalidated and the context's values
+/// were consumed. No pointer into this stack may be accessed again.
+pub(crate) unsafe fn recycle_stack(stack: Stack) {
+    let me = own_exec();
+    assert!(!me.is_null(), "stack retirement requires its idle worker");
+    // SAFETY: this worker belongs exclusively to this idle thread.
+    unsafe { (*(*me).worker.get()).idle_stacks.push(stack) };
+}
+
 /// Notify a task selected by the logical policy. A running notification
 /// never publishes: its idle continuation does that after saving the stack.
 ///
@@ -362,6 +372,15 @@ pub(super) fn next(execs: &Execs, exec: &Exec) -> Option<Saved> {
         .or_else(|| dispatch.locals.lock().unwrap().pop())?;
     let saved = local.next(&dispatch.ready);
     exec.ready.set(Some(local));
+    if saved.is_some() {
+        // An injection/steal can leave more work behind while the selected
+        // segment never yields again. Mark this claimant before choosing a
+        // sleeper, so a burst of notifications cannot keep waking it instead
+        // of a worker that can start the remaining work. Tokio similarly
+        // notifies after searching (worker.rs:647-651,1207-1226 at ce685ee6).
+        exec.busy.store(true, Ordering::SeqCst);
+        wake_ready(execs);
+    }
     saved
 }
 
@@ -412,6 +431,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
     unsafe {
         crate::tasks::role::enter(ctx);
         debug_assert_eq!((*ctx).task_id, task);
+        crate::tasks::record_dispatch(run, task, compute_index());
         frame.saved.store(false, Ordering::Release);
         TaskCtx::switch_in(ctx, exec.worker.get());
         crate::tasks::role::release(ctx);
