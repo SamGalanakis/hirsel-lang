@@ -12,6 +12,7 @@ const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] 
 mod allocator;
 mod execution_policy;
 mod measure;
+mod serve;
 use execution_policy::{DEFAULT_BENCH_MILLISECONDS, DEFAULT_RUN_MAX_STEPS};
 
 fn main() -> ExitCode {
@@ -763,6 +764,18 @@ fn take_flag(args: &mut Vec<OsString>, flag: &str) -> bool {
 
 /// Run the command, then report what `--timings` and `--mem-usage` measured.
 fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
+    if args.first().is_some_and(|a| a == "serve") {
+        return serve::serve(&args[1..]);
+    }
+    // A running resident compiler for this workspace takes the command.
+    if let Some(code) = serve::client(&args) {
+        return code;
+    }
+    if args.first().is_some_and(|a| a == "check") && take_flag(&mut args, "--watch") {
+        return serve::watch(args);
+    }
+    // The process exits right after its one session: leave its memory to the OS.
+    hirsel_engine::free_sessions(false);
     // `--verbose` reports how dependency packages were checked (a missing or
     // stale std image) on stderr.
     hirsel_engine::report_images(take_flag(&mut args, "--verbose"));
@@ -790,9 +803,19 @@ fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
     code
 }
 
+/// Run one command in a process that keeps its sessions (`serve`, `check
+/// --watch`): the global flags `execute` takes, without measurement.
+fn execute_resident(mut args: Vec<OsString>) -> u8 {
+    hirsel_engine::report_prechecks(take_flag(&mut args, "--verbose"));
+    let verify = if take_flag(&mut args, "--no-verify") {
+        Verify::Off
+    } else {
+        Verify::On
+    };
+    execute_command(args, verify)
+}
+
 fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
-    // The process exits right after its one session: leave its memory to the OS.
-    hirsel_engine::free_sessions(false);
     let command = match parse_command(args) {
         Ok(command) => command,
         Err(error) => {

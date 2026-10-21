@@ -236,7 +236,7 @@ fn span_json(span: Span, sources: &SourceMap) -> serde_json::Value {
     let end = sources
         .file_slice(span)
         .and_then(|_| file?.location(span.end));
-    json!({"file_id": span.file.0, "file": file.map(|f| f.path.to_string_lossy()),
+    json!({"file_id": file.map_or(span.file.0, |f| f.ordinal()), "file": file.map(|f| f.path.to_string_lossy()),
         "start": span.start, "end": span.end,
         "line": location.map(|l| l.line), "column": location.map(|l| l.column),
         "end_line": end.map(|l| l.line), "end_column": end.map(|l| l.column)})

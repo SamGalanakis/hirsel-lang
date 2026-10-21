@@ -491,9 +491,11 @@ dependencies = [
  "hirsel-guard",
  "hirsel-intern",
  "hirsel-run-schema",
+ "libc",
  "mimalloc",
  "rustls",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

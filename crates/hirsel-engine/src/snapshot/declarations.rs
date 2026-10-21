@@ -120,23 +120,29 @@ impl From<RowImage> for Row {
 
 /// The module input resolution and signature normalization read, frozen.
 pub struct Declarations {
+    rows: Arc<FrozenRows>,
+    files: BTreeMap<FileId, Arc<[Arc<ItemSyntax>]>>,
+    anchors: HashMap<Anchor, FileId>,
+}
+/// What the rows and the explicit inputs alone decide: frozen again only when
+/// a row or an input changes, so a body edit, which moves no row, reuses it.
+struct FrozenRows {
     index: ManifestIndex,
     package_indexes: BTreeMap<PackageId, ManifestIndex>,
     metadata: Metadata,
     sites: BTreeMap<DefPath, Arc<[DeclarationSite]>>,
-    files: BTreeMap<FileId, Arc<[Arc<ItemSyntax>]>>,
-    anchors: HashMap<Anchor, FileId>,
 }
 impl Declarations {
     /// `package`'s resolution index.
     pub fn index(&self, package: PackageId) -> ManifestIndex {
-        self.package_indexes
+        self.rows
+            .package_indexes
             .get(&package)
-            .unwrap_or(&self.index)
+            .unwrap_or(&self.rows.index)
             .for_package(package)
     }
     pub fn metadata(&self) -> &Metadata {
-        &self.metadata
+        &self.rows.metadata
     }
     /// The items of `syntax`'s file in position order; a derived item reads
     /// its source's.
@@ -149,7 +155,8 @@ impl Declarations {
     }
     /// Every declaration site of `path`, in occurrence order.
     pub fn sites(&self, path: &DefPath) -> Arc<[DeclarationSite]> {
-        self.sites
+        self.rows
+            .sites
             .get(path)
             .cloned()
             .unwrap_or_else(|| Arc::from([]))
@@ -169,6 +176,8 @@ pub struct DeclarationIndex {
     identity: [u64; 4],
     inputs: ModuleInputs,
     frozen: OnceLock<Arc<Declarations>>,
+    /// The rows' part of `frozen`, which outlives a change of files only.
+    frozen_rows: OnceLock<Arc<FrozenRows>>,
 }
 
 /// A CT-5 instance's generated item (`instance$<hash>`, generation.rs): its
@@ -270,6 +279,7 @@ impl DeclarationIndex {
         *self = Self {
             inputs,
             frozen: OnceLock::new(),
+            frozen_rows: OnceLock::new(),
             ..image.clone()
         };
     }
@@ -461,6 +471,7 @@ impl DeclarationIndex {
             }
         }
         self.frozen = OnceLock::new();
+        self.frozen_rows = OnceLock::new();
     }
     /// The FileIds whose items stand in snapshots of the source at `path`.
     pub(crate) fn snapshots(&self, path: &std::path::Path) -> std::collections::BTreeSet<FileId> {
@@ -485,7 +496,18 @@ impl DeclarationIndex {
     }
     /// The frozen module input, built after a row or an input changed.
     pub fn frozen(&self) -> Arc<Declarations> {
-        self.frozen.get_or_init(|| Arc::new(self.freeze())).clone()
+        self.frozen
+            .get_or_init(|| {
+                Arc::new(Declarations {
+                    rows: self
+                        .frozen_rows
+                        .get_or_init(|| Arc::new(self.freeze()))
+                        .clone(),
+                    files: self.files.clone(),
+                    anchors: self.anchors.clone(),
+                })
+            })
+            .clone()
     }
     pub fn inputs(&self) -> &ModuleInputs {
         &self.inputs
@@ -493,9 +515,10 @@ impl DeclarationIndex {
     /// The explicit inputs, to change; the next freeze reads them.
     pub fn inputs_mut(&mut self) -> &mut ModuleInputs {
         self.frozen = OnceLock::new();
+        self.frozen_rows = OnceLock::new();
         &mut self.inputs
     }
-    fn freeze(&self) -> Declarations {
+    fn freeze(&self) -> FrozenRows {
         let mut metadata = self.inputs.signature_metadata.clone();
         let roles = crate::registry::nominal_roles();
         metadata.unsafe_capability = roles.unsafe_capability;
@@ -580,7 +603,7 @@ impl DeclarationIndex {
                 )
             })
             .collect();
-        Declarations {
+        FrozenRows {
             index,
             package_indexes,
             metadata,
@@ -589,8 +612,6 @@ impl DeclarationIndex {
                 .iter()
                 .map(|(path, row)| (path.clone(), row.sites.clone()))
                 .collect(),
-            files: self.files.clone(),
-            anchors: self.anchors.clone(),
         }
     }
 }
