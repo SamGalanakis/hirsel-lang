@@ -224,7 +224,7 @@ fn an_authorized_empty_virtual_mount_issues_a_directory_in_each_simulation() {
     };
     use hirsel_span::{SourceMap, Span};
     use hirsel_tir::RunConfiguration;
-    use hirsel_types::TypeStore;
+    use hirsel_types::TypeInterner;
     let tree = Tree::new(BTreeMap::new()).unwrap();
     let tape = vec![hirsel_rt::io::Event {
         request: R::Directory {
@@ -269,7 +269,7 @@ fn an_authorized_empty_virtual_mount_issues_a_directory_in_each_simulation() {
     )
     .unwrap();
     let io = reference.simulation.grant_root("Io").unwrap();
-    let mut types = TypeStore::default();
+    let mut types = TypeInterner::default();
     let result_type = types.push(hirsel_types::Type::unit());
     let sources = SourceMap::default();
     let mut stdout = vec![];

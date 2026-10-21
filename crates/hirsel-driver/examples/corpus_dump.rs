@@ -30,7 +30,7 @@ fn main() {
                                 println!("diagnostic\t{diagnostic:?}");
                             }
                             let text = if canonical {
-                                canonical_tir::definition(&definition.value)
+                                canonical_tir::definition(engine.types(), &definition.value)
                             } else {
                                 hirsel_lower::print::definition(&definition.value)
                             };
