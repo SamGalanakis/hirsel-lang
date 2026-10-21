@@ -12,6 +12,7 @@
 pub mod capture;
 pub mod footprint;
 pub mod native;
+pub mod objects;
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -97,6 +98,13 @@ pub struct Receipt<R> {
 /// alone writes external observations; `commit(early=true)` must never do so.
 pub trait Backend<P> {
     type Result;
+
+    /// Dynamic readiness is separate from footprint independence. In
+    /// particular an unavailable mutex must wait at its boundary, even when
+    /// its type/object footprint would otherwise permit early commit.
+    fn can_commit_early(&mut self, _op: &Operation<P>) -> bool {
+        true
+    }
 
     fn commit(&mut self, task: TaskId, op: &Operation<P>, early: bool) -> Receipt<Self::Result>;
     fn record(&mut self, task: TaskId, op: &Operation<P>, result: &Self::Result, retirement: u64);
@@ -347,7 +355,7 @@ impl<P, R> Frontier<P, R> {
         if row.log.len() > usize::from(self.policy.run_ahead) {
             return (Offer::Full, Some((before, operation)));
         }
-        let early = self.eligible(task, &operation);
+        let early = self.eligible(task, &operation) && backend.can_commit_early(&operation);
         let can_log = operation.descriptor.class() == Class::D
             && row.log.len() < usize::from(self.policy.run_ahead);
         let committed = early.then(|| backend.commit(task, &operation, true));

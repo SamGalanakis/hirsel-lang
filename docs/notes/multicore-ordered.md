@@ -53,6 +53,19 @@ unknown. Zero scan words certify an empty holder set; `u64::MAX` means unknown.
 The raw handle set still needs typed object resolution and obtainable-type
 closure before it can supply `Held`; ambiguous words never certify independence.
 
+`ordered::objects::Registry` supplies stable identities and obtainable-type
+bindings. A raw word shared by multiple native handle families contributes all
+their possible footprints; an unclassified binding keeps the result unknown.
+The typed operation boundary resolves its own family exactly. A future object
+registered after a capture still participates in that capture's type closure.
+`tasks::ordered` connects the frontier to native atomic load/store, channel
+send, and mutex take/put effects using owned ABI images. Unavailable mutexes
+cannot commit early. Its record and poll callbacks run only at retirement;
+an early send's receipt publishes and touches the channel before that poll.
+These adapters are not yet installed in the fiber entry path. Creation,
+provisional handles, drops, task operations and host operations still need
+native boundary adapters.
+
 ## Integration status
 
 This is a protocol and guarded migration substrate, not an enabled concurrent

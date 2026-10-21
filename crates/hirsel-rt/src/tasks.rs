@@ -44,6 +44,7 @@
 //! Handles are run-local: a Scope or Task word is a table index with a generation, so a stale
 //! or foreign word is an invariant fault rather than another task's row.
 
+pub(crate) mod ordered;
 #[cfg(feature = "measurement")]
 pub(crate) mod profile;
 pub mod role;
