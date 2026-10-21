@@ -853,7 +853,7 @@ pub fn read[S, E](
   }
   let mut last_input = false
   while true {
-    let data = bufio.contents(r)
+    let data = bufio.peek(r, bufio.buffered(r))
     let start = core@1/list.len(d.window)
     let status = match run_inflate(
       data,
@@ -901,7 +901,7 @@ pub fn read[S, E](
     }
     match status {
       Hungry() => {
-        if bufio.read_more(mut r, mut source, refill, 65536) ? == 0 {
+        if bufio.read_more(mut r, mut source, refill, 65536)? == 0 {
           last_input = true
         }
       },

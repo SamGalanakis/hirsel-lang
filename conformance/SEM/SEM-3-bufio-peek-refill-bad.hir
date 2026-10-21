@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: reject MODE-1 at line 25
+// twin: SEM/SEM-3-bufio-peek-run.hir
+// The view is still used after the refill invalidates its reader borrow.
+type Input {
+  at: u64,
+}
+
+fn refill(mut source: Input, mut out: List[u8], max: u64) -> Result[u64, ()] uses {} {
+  let data = b"abcdefghijklmnop"
+  let mut n: u64 = 0
+  while n < max && source.at < bytes.len(data) {
+    list.push(mut out, data[source.at])
+    source.at += 1
+    n += 1
+  }
+  Ok(n)
+}
+
+pub fn main(t: Test) -> Result[(), bufio.ReadError[()]] {
+  let mut r = bufio.new(4)
+  let mut source = Input(at: 0)
+  bufio.read_more(mut r, mut source, refill, 4)?
+  let view = bufio.peek(r, 4)
+  bufio.read_more(mut r, mut source, refill, 4)?
+  test.check(t, view == b"abcd")
+  Ok(())
+}

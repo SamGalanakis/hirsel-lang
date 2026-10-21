@@ -1,0 +1,73 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef src/bufio/bufio_test.go:843 TestPeek, adapted to explicit refill.
+type Input {
+  at: u64,
+}
+
+fn refill(mut source: Input, mut out: List[u8], max: u64) -> Result[u64, ()] uses {} {
+  let data = b"abcdefghijklmnop"
+  let mut n: u64 = 0
+  while n < max && source.at < bytes.len(data) {
+    list.push(mut out, data[source.at])
+    source.at += 1
+    n += 1
+  }
+  Ok(n)
+}
+
+// A refill can append a partial prefix before reporting its source error.
+fn partial_error(mut source: (), mut out: List[u8], max: u64) -> Result[u64, u8] uses {} {
+  list.push(mut out, b'z')
+  Error(7)
+}
+
+pub fn main(t: Test) -> Result[(), bufio.ReadError[()]] {
+  let mut r = bufio.new(4)
+  let mut source = Input(at: 0)
+  test.check(t, bufio.peek(r, 99) == b"")
+  test.check(t, bufio.read_more(mut r, mut source, refill, 0)? == 0)
+  test.check(t, source.at == 0)
+  test.check(t, bufio.read_more(mut r, mut source, refill, 99)? == 4)
+  test.check(t, bufio.peek(r, 0) == b"")
+  test.check(t, bufio.peek(r, 1) == b"a")
+  test.check(t, bufio.peek(r, 4) == b"abcd")
+  test.check(t, bufio.peek(r, 32) == b"abcd")
+  test.check(t, source.at == 4 && bufio.buffered(r) == 4)
+  let snapshot = bufio.contents(r)
+  bufio.consume(mut r, 0)
+  test.check(t, bufio.peek(r, 2) == b"ab")
+  bufio.consume(mut r, 3)
+  test.check(t, bufio.peek(r, 1) == b"d")
+  // A dead borrow permits refill; unread d is compacted before efgh.
+  test.check(t, bufio.read_more(mut r, mut source, refill, 99)? == 4)
+  test.check(t, bufio.peek(r, 2) == b"de")
+  test.check(t, bufio.peek(r, 99) == b"defgh")
+  test.check(t, snapshot == b"abcd")
+  // Reader copies keep their own logical cursor and storage across a refill.
+  let saved = copy r
+  bufio.consume(mut r, 999)
+  test.check(t, bufio.buffered(r) == 0)
+  test.check(t, bufio.peek(r, 99) == b"")
+  test.check(t, bufio.read_more(mut r, mut source, refill, 4)? == 4)
+  test.check(t, bufio.peek(r, 4) == b"ijkl")
+  test.check(t, bufio.peek(saved, 99) == b"defgh")
+  bufio.consume(mut r, 4)
+  test.check(t, bufio.read_more(mut r, mut source, refill, 4)? == 4)
+  test.check(t, bufio.peek(r, 4) == b"mnop")
+  bufio.consume(mut r, 4)
+  test.check(t, bufio.read_more(mut r, mut source, refill, 4)? == 0)
+  test.check(t, bufio.peek(r, 1) == b"")
+  // new(0) still bounds refills to one byte.
+  let mut one = bufio.new(0)
+  source = Input(at: 0)
+  test.check(t, bufio.read_more(mut one, mut source, refill, 99)? == 1)
+  test.check(t, bufio.peek(one, 99) == b"a")
+  let mut state = ()
+  test.check(
+    t,
+    bufio.read_more(mut one, mut state, partial_error, 1) == Error(Source(7u8))
+  )
+  test.check(t, bufio.peek(one, 99) == b"az")
+  Ok(())
+}

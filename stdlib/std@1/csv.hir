@@ -26,8 +26,7 @@ pub type ReadError[E] = Source(E) | Csv(CsvError) | InvalidRead
 
 pub opaque type Reader: copyable + inert + noalloc_drop uses {} {
   config: Config,
-  input: List[u8],
-  cursor: u64,
+  input: bufio.Reader,
   row: List[String],
   field: List[u8],
   mode: u8,
@@ -61,8 +60,7 @@ pub fn reader(config: Config) -> Result[Reader, CsvError] uses {} {
   Ok(
     Reader(
       config: config,
-      input: [],
-      cursor: 0,
+      input: bufio.new(65536),
       row: [],
       field: [],
       mode: 0,
@@ -227,7 +225,7 @@ pub fn feed(mut r: Reader, chunk: Bytes, eof: bool) -> Result[
   CsvError
 ] uses {} {
   let len = core@1/bytes.len(chunk)
-  if r.failed || r.cursor != core@1/list.len(r.input) || r.ended && len != 0 {
+  if r.failed || bufio.buffered(r.input) != 0 || r.ended && len != 0 {
     r.failed = true
     return Error(Syntax(position(r)))
   }
@@ -274,25 +272,23 @@ pub fn read_record[S, E](
     return Ok(None())
   }
   while true {
-    if r.cursor == core@1/list.len(r.input) {
-      r.input = []
-      r.cursor = 0
+    if bufio.buffered(r.input) == 0 {
       let remaining = r.config.max_record_bytes - r.record_bytes
       let capacity: u64 = if remaining >= 4095 {
         4096
       } else {
         remaining + 1
       }
-      let count = match refill(mut source, mut r.input, capacity) {
+      let count = match bufio.read_more(mut r.input, mut source, refill, capacity) {
         Ok(count) => count,
-        Error(error) => {
+        Error(Source(error)) => {
           r.failed = true
           return Error(Source(take error))
         },
-      }
-      if count > capacity || core@1/list.len(r.input) != count {
-        r.failed = true
-        return Error(InvalidRead())
+        Error(_) => {
+          r.failed = true
+          return Error(InvalidRead())
+        },
       }
       if count == 0 {
         match end(mut r) {
@@ -304,8 +300,8 @@ pub fn read_record[S, E](
         }
       }
     }
-    let byte = r.input[r.cursor]
-    r.cursor += 1
+    let byte = bufio.peek(r.input, 1)[0]
+    bufio.consume(mut r.input, 1)
     let outcome = csv_step(mut r, byte)
     match take outcome {
       Ok(Some(row)) => return Ok(Some(take row)),
@@ -426,7 +422,7 @@ pub fn fold_scoped[S, A, E](
     let mut row: Option[List[String]] = None()
     let mut complete = false
     while !complete {
-      if r.cursor == core@1/list.len(r.input) {
+      if bufio.buffered(r.input) == 0 {
         // EOF finalized the last unterminated row; no extra refill is needed.
         if r.ended {
           return Ok(take accumulator)
@@ -438,8 +434,6 @@ pub fn fold_scoped[S, A, E](
         if remaining == 0 {
           return Error(Limit())
         }
-        r.input = []
-        r.cursor = 0
         let carry = r.config.max_record_bytes - r.record_bytes
         let mut capacity = config.refill_bytes
         // The extra byte permits a terminator at exactly the record ceiling.
@@ -449,9 +443,10 @@ pub fn fold_scoped[S, A, E](
         if remaining < capacity {
           capacity = remaining
         }
-        let count = refill(mut input, mut r.input, capacity) ? Source
-        if count > capacity || core@1/list.len(r.input) != count {
-          return Error(InvalidRead())
+        let count = match bufio.read_more(mut r.input, mut input, refill, capacity) {
+          Ok(count) => count,
+          Error(Source(error)) => return Error(Source(error)),
+          Error(_) => return Error(InvalidRead()),
         }
         remaining -= count
         if count == 0 {
@@ -460,8 +455,8 @@ pub fn fold_scoped[S, A, E](
         }
       }
       if !complete {
-        let byte = r.input[r.cursor]
-        r.cursor += 1
+        let byte = bufio.peek(r.input, 1)[0]
+        bufio.consume(mut r.input, 1)
         row = csv_step(mut r, byte) ? Csv
         if let Some(_) = row {
           complete = true

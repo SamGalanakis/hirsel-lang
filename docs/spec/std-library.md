@@ -1359,6 +1359,7 @@ existing list prefix.
 ```text
 fn bufio.new(capacity: u64) -> Reader uses {}
 fn bufio.buffered(r: Reader) -> u64 uses {}
+fn bufio.peek(r: Reader, max: u64) -> Bytes in r uses {}
 fn bufio.contents(r: Reader) -> unique Bytes uses {}
 fn bufio.consume(mut r: Reader, count: u64) -> () uses {}
 fn bufio.read_more[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], max: u64) -> Result[u64,ReadError[E]]
@@ -1386,8 +1387,29 @@ fn bufio.stdin_read_line(s: Stdin, mut r: Reader, limit: u64) -> Result[Option[u
 `new(0)` uses capacity one. Capacity bounds each refill, not accumulated unread data.
 `read_more` compacts consumed bytes and appends a single bounded refill even if bytes
 remain; bounded protocol parsers must also bound their accumulated input. `buffered`
-reports unread bytes, `contents` returns an owned snapshot of them without reading, and
-`consume` advances by the smaller of its count and the unread length.
+reports unread bytes. `peek(r, max)` returns a borrowed view of the first
+`min(max, buffered(r))` unread bytes without advancing, refilling, allocating or
+copying their contents. Zero `max` and an empty reader return an empty view. The
+result is `in r`: finish using it before mutating the reader, including `consume`
+or any read/refill. A view used after a refill is rejected by MODE-1; use `unique`
+or `contents` for bytes that must survive it. `contents` returns an independent
+owned snapshot without reading. `consume` advances by the smaller of its count
+and the unread length, performs no I/O, and returns `()` even when clamped.
+
+The view/advance structure follows Go ebe2feef `src/bufio/bufio.go:135-170`
+(`Peek`) and `:172-210` (`Discard`), and Rust's `std::io::BufRead::fill_buf` /
+`consume` (Rust 19833af7, re-exported at `library/std/src/io/mod.rs:311-320`,
+implemented in `library/alloc/src/io/buf_read.rs:57-110` and
+`library/alloc/src/io/buffered/bufreader.rs:484-492`). Deviations: Hirsel keeps
+refill explicit, so peek neither fills to the requested size (Go) nor fills an
+empty buffer (Rust), and cannot return source/short-buffer errors. Counts are
+unsigned. Unlike Go's Discard, consume never refills; unlike Rust's caller
+obligation to stay within the buffered length, it clamps, retaining the existing
+Hirsel contract. The borrow is statically tied to `r` rather than Go's dynamic
+next-read validity rule. Filled storage is immutable `Bytes`, frozen from a
+mutable refill list once per refill; peek is a constant-size slice. Flate, CSV
+and tar inspect via peek and advance via consume; flate no longer snapshots all
+buffered input for every decoded read.
 
 `read` appends at most `max` bytes, using unread bytes first, and returns zero at EOF.
 `read_exact` appends exactly `count` bytes or returns `UnexpectedEof`, preserving partial

@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Compare gzip reads against a stdlib revision, in two interleaved perf sessions."""
+import argparse
+import io
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tarfile
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[3]
+sys.path.insert(0, str(ROOT / 'bench/native'))
+from suite import buck2_build, native_environment  # noqa: E402
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--before', required=True, help='git revision of the original stdlib')
+    parser.add_argument('--output', required=True, type=Path)
+    args = parser.parse_args()
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    revision = subprocess.check_output(['git', 'rev-parse', args.before], cwd=ROOT, text=True).strip()
+    archive = subprocess.check_output(['git', 'archive', revision, 'stdlib/std@1'], cwd=ROOT)
+    baseline = output / 'baseline'
+    baseline.mkdir(exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(archive)) as files:
+        files.extractall(baseline, filter='data')
+    bundle = Path(buck2_build('//:hirsel-toolchain')['hirsel-toolchain'])
+    env = native_environment()
+    participants = []
+    for name, stdlib in [('before', baseline / 'stdlib/std@1'), ('after', ROOT / 'stdlib/std@1')]:
+        directory = output / name
+        directory.mkdir(exist_ok=True)
+        source = directory / 'gzip_read.hir'
+        source.write_text((HERE / source.name).read_text())
+        manifest = {'schema': 1, 'package': {'name': 'gzip_read', 'version': '1'},
+                    'entry': {'module': [], 'name': 'main'},
+                    'sources': [{'path': source.name, 'module': []}],
+                    'dependencies': [{'manifest': str(stdlib / 'hirsel.json'),
+                                      'package': {'name': 'std', 'version': '1'}, 'expose': []}]}
+        source.with_suffix('.hir.json').write_text(json.dumps(manifest, indent=2) + '\n')
+        executable = directory / 'gzip_read'
+        subprocess.run([str(ROOT / 'tools/capped'), '--timeout', '900', str(bundle / 'hirsel'),
+                        'build', '--release', str(source), '-o', str(executable)], env=env, check=True)
+        participants.append({'name': name, 'command': [str(executable), '--hirsel-grants',
+                             str(ROOT / 'bench/micro/grants.json')], 'cwd': str(ROOT)})
+    for chunk in (1, 4096):
+        entries = [dict(p, command=[*p['command'], str(chunk)]) for p in participants]
+        manifest = output / f'participants-{chunk}.json'
+        manifest.write_text(json.dumps(entries, indent=2) + '\n')
+        subprocess.run([str(ROOT / 'bench/micro/run'), str(manifest), '--rounds', '10',
+                        '--seed', '20261021', '--timeout', '900', '--output',
+                        str(output / f'result-{chunk}.json')], check=True)
+    (output / 'baseline.sha').write_text(revision + '\n')
+
+
+if __name__ == '__main__':
+    main()
