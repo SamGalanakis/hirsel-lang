@@ -341,6 +341,7 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
     layouts.table.fn_abis[0].result = Some(AbiResult {
         borrowed_parameters: vec![],
         layout: block_layout,
+        register: Some(hirsel_lir::layout_types::ScalarKind::Pointer),
         slots: vec![hirsel_lir::abi::slot(
             &layouts.target,
             hirsel_lir::layout_types::ScalarKind::Pointer,
@@ -350,6 +351,7 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
     abi.result = Some(AbiResult {
         borrowed_parameters: vec![],
         layout: number,
+        register: Some(hirsel_lir::layout_types::ScalarKind::U64),
         slots: vec![hirsel_lir::abi::slot(
             &layouts.target,
             hirsel_lir::layout_types::ScalarKind::Pointer,

@@ -49,6 +49,7 @@ fn fixture(heap_child: bool, escape: bool, held: Leaf) -> (Program<Rc>, ValueId)
         l.table.fn_abis[0].result = Some(hirsel_lir::abi_types::AbiResult {
             borrowed_parameters: vec![],
             layout: tuple,
+            register: None,
             slots: vec![hirsel_lir::abi::slot(&l.target, ScalarKind::Pointer)],
         });
     }

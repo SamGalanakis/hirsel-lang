@@ -4700,7 +4700,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
 }
 /// IterNext closure ABI: context, environment, the inert caller and operation
 /// site words every closure and iterator callable carries, hidden destination,
-/// output.
+/// output. WalkOption is an aggregate, so cross-unit ABI 3 retains the output
+/// pointer and bare status; it never applies the scalar register pair here.
 /// # Safety
 /// The environment is an exclusive live walk environment and out is writable.
 #[unsafe(no_mangle)]

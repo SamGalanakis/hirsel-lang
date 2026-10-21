@@ -65,7 +65,9 @@ use crate::pool::Owner;
 use crate::stop::{Stop, Stopped};
 use crate::{Header, STATUS_FAILURE, STATUS_OK, fault};
 
-/// A spawned task's entry: compiled closure code taking its environment.
+/// A spawned task's entry: the unit-result case of cross-unit ABI 3. It has
+/// no value word, so it returns bare status rather than a scalar result pair.
+/// The two-scalar callable carries this code pointer and its environment.
 pub type TaskCode = unsafe extern "C" fn(*mut TaskCtx, *mut Header, u64, u64) -> u8;
 
 /// `CancelCause` ordinals (core library).

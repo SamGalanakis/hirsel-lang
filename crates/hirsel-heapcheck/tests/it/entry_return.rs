@@ -23,12 +23,14 @@ fn returning_block(leak: bool, regional: bool) -> Program<Rc> {
     layouts.table.fn_abis[0].result = Some(AbiResult {
         borrowed_parameters: vec![],
         layout: block,
+        register: Some(ScalarKind::Pointer),
         slots: vec![hirsel_lir::abi::slot(&layouts.target, ScalarKind::Pointer)],
     });
     let mut abi = layouts.table.fn_abis[0].clone();
     abi.result = Some(AbiResult {
         borrowed_parameters: vec![],
         layout: number,
+        register: Some(ScalarKind::U64),
         slots: vec![hirsel_lir::abi::slot(&layouts.target, ScalarKind::Pointer)],
     });
     layouts.table.fn_abis.push(abi);

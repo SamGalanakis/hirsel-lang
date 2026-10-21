@@ -1783,6 +1783,33 @@ impl<'a> Validator<'a> {
                     "a result travels through one output pointer",
                 );
             }
+            if self.in_range(result.layout) {
+                // Reconstruct the physical result independently of the producer's
+                // register annotation. Never accept a forged aggregate or wide
+                // integer as a one-word return, or a different scalar encoding.
+                let expected = if foreign {
+                    None
+                } else {
+                    match self.get(result.layout).kind {
+                        LayoutKind::Scalar(ScalarKind::U128 | ScalarKind::I128) => None,
+                        LayoutKind::Scalar(kind) => Some(kind),
+                        LayoutKind::Path => Some(ScalarKind::U64),
+                        LayoutKind::Block { .. }
+                        | LayoutKind::Box { .. }
+                        | LayoutKind::Shared { .. }
+                        | LayoutKind::Header
+                        | LayoutKind::Arena => Some(ScalarKind::Pointer),
+                        _ => None,
+                    }
+                };
+                if result.register != expected {
+                    self.fail(
+                        s.clone(),
+                        Obligation::Abi,
+                        "typed register result differs from its layout",
+                    );
+                }
+            }
         } else if abi.destination {
             self.fail(
                 s.clone(),

@@ -393,6 +393,7 @@ conformance/CLO/CLO-2-capability-declared-authority.hir
 conformance/CLO/CLO-2-captured-capability-field-ok.hir
 conformance/CLO/CLO-2-context-capability.hir
 conformance/CLO/CLO-2-counted-copy-capture-run.hir
+conformance/CLO/CLO-2-erased-register-result-run.hir
 conformance/CLO/CLO-2-derived-capability-field-run.hir
 conformance/CLO/CLO-2-erased-carrier-handback-bad.hir
 conformance/CLO/CLO-2-erased-carrier-handback-ok.hir

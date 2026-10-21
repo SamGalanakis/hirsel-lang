@@ -7,10 +7,10 @@ pub(crate) enum PairField {
     Value,
 }
 
-/// The register pair's fields in order: `{ i8 status, word }` (`register_result`).
+/// The register pair's fields in order: `{ word, i8 status }` (`register_result`).
 /// Emission's return type and the fields it reads and writes, and the C typedefs every
 /// harness uses (`c_entry`), all come from here and [`PairField::word`].
-pub(crate) const REGISTER_PAIR: [PairField; 2] = [PairField::Status, PairField::Value];
+pub(crate) const REGISTER_PAIR: [PairField; 2] = [PairField::Value, PairField::Status];
 
 /// What a register pair field holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,10 +23,10 @@ pub(crate) enum PairWord {
 impl PairField {
     /// The field's index in the returned struct.
     pub(crate) fn index(self) -> u32 {
-        REGISTER_PAIR
-            .iter()
-            .position(|&field| field == self)
-            .expect("every pair field is in the pair") as u32
+        match self {
+            Self::Value => hirsel_lir::abi_types::REGISTER_VALUE_INDEX as u32,
+            Self::Status => hirsel_lir::abi_types::REGISTER_STATUS_INDEX as u32,
+        }
     }
 
     /// The field's member name in the C typedef.

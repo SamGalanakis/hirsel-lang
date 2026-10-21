@@ -343,6 +343,7 @@ fn fixture(mut l: Layouts, units: Vec<LirUnit<Rc>>, args: Vec<Arg>) -> Fixture {
     abi.result = Some(AbiResult {
         borrowed_parameters: vec![],
         layout: u64,
+        register: Some(hirsel_lir::layout_types::ScalarKind::U64),
         slots: vec![hirsel_lir::abi::slot(&l.target, ScalarKind::Pointer)],
     });
     if !args.is_empty() {

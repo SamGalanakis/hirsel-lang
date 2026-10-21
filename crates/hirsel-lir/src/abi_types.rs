@@ -1,10 +1,10 @@
-//! The Hirsel cross-unit ABI v2 schema (Target and ABI).
+//! The Hirsel cross-unit ABI v3 schema (Target and ABI).
 //!
 //! `FnAbi` is computed once from the specialized declared callable type and its
 //! layouts (`abi.rs`); both emitters and the heap executor consume it.
 //! A relation, brand or uniqueness mode never changes an `FnAbi`; only the
 //! declared parameter convention does.
-use crate::layout_types::LayoutId;
+use crate::layout_types::{LayoutId, ScalarKind};
 use hirsel_codec::{snapshot_enum, snapshot_struct};
 use hirsel_core_contract::Passing;
 use hirsel_syntax::ContentHash;
@@ -92,7 +92,8 @@ pub struct AbiParameter {
     pub extension: ScalarExtension,
 }
 
-/// The output pointer of a non-unit result.
+/// A typed non-unit result. Runtime primitives use the output pointer; Hirsel
+/// entries return a plain scalar beside status when `register` is present.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct AbiResult {
     /// Borrowed holders in the result are tied to these Borrow parameters.
@@ -100,7 +101,14 @@ pub struct AbiResult {
     pub borrowed_parameters: Vec<u32>,
     pub layout: LayoutId,
     pub slots: Vec<PhysicalSlot>,
+    pub register: Option<ScalarKind>,
 }
+
+/// Field positions of the native scalar result pair. Value first keeps arithmetic
+/// results in the platform's ordinary result register (RAX or X0). Runtime
+/// primitives and aggregate results retain their output pointer and bare status.
+pub const REGISTER_VALUE_INDEX: usize = 0;
+pub const REGISTER_STATUS_INDEX: usize = 1;
 
 /// Identity of an FnAbi: the declared specialized callable shape and ABI version.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -109,11 +117,13 @@ pub struct FnAbiKey {
     pub abi_version: u32,
 }
 
-/// Physical order: context, [environment], [caller destination], [result
-/// output pointer], then declared parameters in ordinal order; returns a u8
-/// status (0 success, 1 language failure). The LLVM lowering returns a plain
-/// scalar result of at most 64 bits beside the status in registers instead of
-/// through the output pointer (`hirsel-llvm` README, Register results).
+/// Physical order: context, [environment], [caller and operation sites],
+/// [caller destination], [result output pointer], then declared parameters.
+/// Both native backends return a typed scalar as (value, u8 status) in
+/// registers; all other results use the output pointer and return bare status
+/// (0 success, 1 language failure). A runtime primitive always uses its output
+/// pointer. Callable values are the two scalars (code, environment); direct,
+/// bound and erased entries share the same typed result convention.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FnAbi {
     pub key: FnAbiKey,
@@ -175,7 +185,8 @@ snapshot_struct!(AbiParameter {
 snapshot_struct!(AbiResult {
     borrowed_parameters,
     layout,
-    slots
+    slots,
+    register
 });
 snapshot_struct!(FnAbiKey {
     callable,

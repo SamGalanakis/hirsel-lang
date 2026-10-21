@@ -4,6 +4,13 @@ use crate::layout_types::{LayoutId, ScalarKind, TargetSpec};
 use crate::snapshot;
 use hirsel_syntax::ContentHash;
 
+/// The value word of a typed Hirsel result, when it fits beside its status.
+/// Wide integers and inline aggregates retain the output pointer.
+pub fn register_kind(kind: &crate::layout_types::LayoutKind) -> Option<ScalarKind> {
+    crate::emission::scalar_shape(kind)
+        .filter(|kind| !matches!(kind, ScalarKind::U128 | ScalarKind::I128))
+}
+
 /// The physical ABI digest: everything callers and callees must agree on,
 /// without table-local layout indices. Equal digests mean interchangeable
 /// entries.

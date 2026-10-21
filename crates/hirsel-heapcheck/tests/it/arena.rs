@@ -380,6 +380,7 @@ fn forged_result_summary(broken: bool) -> Program<Rc> {
     abi.result = Some(AbiResult {
         borrowed_parameters: vec![],
         layout: boxed,
+        register: Some(hirsel_lir::layout_types::ScalarKind::Pointer),
         slots: vec![pointer],
     });
     abi.parameters = vec![AbiParameter {

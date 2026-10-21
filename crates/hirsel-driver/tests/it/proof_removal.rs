@@ -249,7 +249,96 @@ fn an_accepted_bounds_check_removes_only_its_projection_guard() {
             before.matches("icmp uge").count() > after.matches("icmp uge").count(),
             "{before}\n{after}"
         );
+        // The second backend must consume V's exact projection evidence too.
+        // Previously Cranelift emitted the guard even though Ready licensed
+        // its removal, so the two Ready programs produced identical bounds IR.
+        let bump_clif = |program: &ReadyProgram| {
+            hirsel_driver::native::emit_clif(program)
+                .unwrap()
+                .split("; _H")
+                .find(|function| {
+                    function
+                        .lines()
+                        .next()
+                        .is_some_and(|name| name.contains("4bumpI") && !name.starts_with("1T"))
+                })
+                .expect("bump's Cranelift IR")
+                .to_owned()
+        };
+        let before = bump_clif(&reference);
+        let after = bump_clif(&ready);
+        assert!(
+            before.matches("icmp uge").count() > after.matches("icmp uge").count(),
+            "{before}\n{after}"
+        );
     })
+}
+
+#[test]
+fn immutable_callable_table_keeps_its_length_across_erased_calls() {
+    with_compiler_stack(|| {
+        let source = r#"
+type Stage { call: fn(u64, u64) -> u64 uses {}, environment: u64 }
+fn add(value: u64, environment: u64) -> u64 { value + environment }
+fn multiply(value: u64, environment: u64) -> u64 { value * environment }
+fn workload(n: u64) -> u64 {
+  let stages: List[Stage] = [Stage(call: add, environment: 3), Stage(call: multiply, environment: 2)]
+  let mut total: u64 = 0
+  for i in 0u64..n {
+    let value = stages[0].call(i, stages[0].environment)
+    if value % 2u64 == 0u64 { total += stages[1].call(value, stages[1].environment) }
+  }
+  total
+}
+pub fn main() -> Result[(), ()] { let n = workload(10); Ok(()) }
+"#;
+        let workload_ir = |program: &ReadyProgram| {
+            emit_ir(program, OptLevel::Speed)
+                .unwrap()
+                .split("\ndefine ")
+                .find(|function| {
+                    function
+                        .lines()
+                        .next()
+                        .is_some_and(|line| line.contains("108workloadI"))
+                })
+                .expect("workload's LLVM IR")
+                .split("\n}")
+                .next()
+                .unwrap()
+                .to_owned()
+        };
+        let (mut program, _) = ready(source, None);
+        let immutable = workload_ir(&program);
+        assert!(
+            !immutable.contains("@hirsel.fail.MEM-14.code"),
+            "{immutable}"
+        );
+        // A C callback program disables the local-root memory assumption.
+        program.callbacks.insert(entry_path(&default_context()));
+        let callback = workload_ir(&program);
+        assert!(callback.contains("@hirsel.fail.MEM-14.code"), "{callback}");
+        // The same table handed to a mutable callee must retain its check.
+        let changed = source
+            .replace("let stages:", "let mut stages:")
+            .replace("  let mut total:", "  clear(mut stages)\n  let mut total:")
+            .replace(
+                "fn workload",
+                "fn clear(mut stages: List[Stage]) -> () { stages = [] }\nfn workload",
+            );
+        let (program, _) = ready(&changed, None);
+        let mutable = workload_ir(&program);
+        assert!(mutable.contains("@hirsel.fail.MEM-14.code"), "{mutable}");
+        // A local closure captures the root; even borrowed captures conservatively
+        // disable companion state because closure environments can escape analysis.
+        let captured = source.replace(
+            "  let mut total:",
+            "  let count = fn() -> u64 { list.len(stages) }\n  let count_result = count()\n  let mut total:",
+        );
+        let (program, _) = ready(&captured, None);
+        let capture = workload_ir(&program);
+        assert!(capture.contains("@hirsel.fail.MEM-14.code"), "{capture}");
+    });
 }
 
 #[test]

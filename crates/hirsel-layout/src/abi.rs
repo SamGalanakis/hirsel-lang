@@ -149,6 +149,9 @@ impl<'o> LayoutBuilder<'o> {
                 borrowed_parameters,
                 layout: self.layout(types, function.result)?,
                 slots: vec![pointer],
+                register: (shape != CallableShape::Foreign)
+                    .then(|| hirsel_lir::abi::register_kind(&self.record(result_layout).kind))
+                    .flatten(),
             })
         };
         // C returns its admitted scalar/nullable pointer in a register. A

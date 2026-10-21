@@ -326,6 +326,7 @@ fn fixture_table(target: &TargetSpec) -> LayoutTable {
             result: (shape != CallableShape::IterDrop).then(|| AbiResult {
                 borrowed_parameters: vec![],
                 layout: id(2),
+                register: None,
                 slots: vec![slot(PhysicalType::Pointer, 8, 8)],
             }),
             result_arena: None,

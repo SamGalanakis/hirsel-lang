@@ -423,7 +423,13 @@ impl Emitter<'_> {
             let results = b.inst_results(call).to_vec();
             let bad = b.create_block();
             let normal = b.create_block();
-            b.ins().brif(results[0], bad, &[], normal, &[]);
+            b.ins().brif(
+                results[usize::from(sig.value.is_some())],
+                bad,
+                &[],
+                normal,
+                &[],
+            );
             b.switch_to_block(bad);
             let failed = self.module.declare_func_in_func(failed, b.func);
             b.ins().call(failed, &[run]);
@@ -434,7 +440,7 @@ impl Emitter<'_> {
             let leave = self.module.declare_func_in_func(leave, b.func);
             b.ins().call(leave, &[run]);
             if let Some(kind) = sig.value {
-                let word = results[1];
+                let word = results[hirsel_lir::abi_types::REGISTER_VALUE_INDEX];
                 let ty = scalar_type(kind);
                 let v = match kind {
                     ScalarKind::F64 => b.ins().bitcast(ty, ir::MemFlagsData::new(), word),

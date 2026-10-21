@@ -897,6 +897,7 @@ fn terminal_handle_close_failures_are_language_failures_with_a_clean_twin() {
     layouts.table.fn_abis[0].result = Some(hirsel_lir::abi_types::AbiResult {
         borrowed_parameters: vec![],
         layout: handle,
+        register: None,
         slots: vec![hirsel_lir::abi::slot(&layouts.target, ScalarKind::U64)],
     });
     let (target, table) = layouts.finish();

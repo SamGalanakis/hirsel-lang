@@ -1516,7 +1516,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                     Some(_) => return self.invalid("a register result of another shape"),
                     None => self.b.ins().iconst(types::I64, 0),
                 };
-                self.b.ins().return_(&[status, word]);
+                self.b.ins().return_(&[word, status]);
             }
             None => {
                 self.b.ins().return_(&[status]);
@@ -1925,7 +1925,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             let value = self.load(shape, temporary);
             self.scatter(destination, shape, value)?;
         }
-        let status = returned[0];
+        let status = returned[usize::from(signature.value.is_some())];
         let failure_block = self.failure_block(failure)?;
         let fail = if site.forward_caller {
             failure_block
@@ -1977,7 +1977,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         if let Some(result) = site.result {
             let value = match (signature.value, result_place) {
                 (Some(kind), _) => {
-                    let word = returned[1];
+                    let word = returned[hirsel_lir::abi_types::REGISTER_VALUE_INDEX];
                     V::One(self.decode_word(kind, word))
                 }
                 (None, Some(place)) => {

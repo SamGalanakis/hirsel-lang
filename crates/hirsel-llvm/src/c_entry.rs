@@ -254,7 +254,7 @@ mod tests {
     use crate::emit::pair_type;
 
     /// Every register result's C typedef is the struct emission returns, field for field,
-    /// and both are ABI v2's `{ i8 status, word }` (README, Register results): a change to
+    /// and both are ABI v3's `{ word, i8 status }` (README, Register results): a change to
     /// `REGISTER_PAIR` or `PairField::word` fails here, not in a harness that misreads it.
     #[test]
     fn c_pairs_are_the_emitted_pair_field_by_field() {
@@ -305,8 +305,8 @@ mod tests {
             let word = if kind == Pointer { "ptr" } else { "i64" };
             assert_eq!(
                 (emitted.as_slice(), names.as_slice()),
-                (&["i8", word][..], &["status", "value"][..]),
-                "{kind:?}: ABI v2 returns {{ i8 status, word }}"
+                (&[word, "i8"][..], &["value", "status"][..]),
+                "{kind:?}: ABI v3 returns {{ word, i8 status }}"
             );
         }
     }

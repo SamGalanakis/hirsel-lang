@@ -149,7 +149,7 @@ Invariants:
   `Propagate` returns 1. A rule without a code is an error, never an invented code.
   A diverging call (LIR revision 19) is not `noreturn`: its failure still returns
   status 1. A zero status branches to `unreachable`; nonzero takes the failure edge.
-- ABI v2 (`FnAbi`): context, [environment], [caller site, operation site], [caller destination], [result pointer], then
+- ABI v3 (`FnAbi`): context, [environment], [caller site, operation site], [caller destination], [result pointer], then
   each declared parameter's physical slots. Emitted code provides the declared scalar
   extension (call-site attributes) but never assumes it from a caller or callee, because
   AAPCS64 C code does not extend narrow integers.
@@ -177,11 +177,11 @@ Invariants:
   `hirsel_rt_v2_callback_failed` on a failure status.
 - Register results: a Hirsel entry whose result is a plain scalar of at most 64 bits (an
   integer, Bool, float, Path, arena token, or block, box or header reference) has no result pointer and
-  returns `{ i8 status, word }`, the word `ptr` for a reference and `i64` otherwise. On
+  returns `{ word, i8 status }`, the word `ptr` for a reference and `i64` otherwise. On
   success the word's low bits are the value's (Bool as a byte, floats by bit pattern),
   zero-extended by emitted code and never assumed; on failure it is zero. x86-64 returns
-  the pair in AL and RDX, AArch64 in W0 and X1: the C struct `{ uint8_t status;
-  uint64_t value; }` (or `void *value`). Definitions, function-reference thunks, closure
+  the pair in RAX and DL, AArch64 in X0 and W1: the C struct `{ uint64_t value;
+  uint8_t status; }` (or `void *value`). Definitions, function-reference thunks, closure
   and iterator bodies all follow it, so direct, private (`.roots9`, as one more word after
   the roots) and indirect calls agree and an erased call keeps no result cell. 128-bit and
   aggregate results, and runtime primitives, keep their result pointer. Every return of

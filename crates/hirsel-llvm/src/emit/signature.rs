@@ -1,6 +1,6 @@
 use super::*;
 
-/// An LLVM parameter of a Hirsel ABI v2 entry.
+/// An LLVM parameter of a Hirsel ABI v3 entry.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Hidden {
     Context,
@@ -40,7 +40,7 @@ impl Aliasing {
 /// The LLVM signature of one `FnAbi`: hidden slots in ABI order, then each declared
 /// parameter's physical slots, returning a zero-extended `u8` status. A Hirsel entry whose
 /// result is a plain scalar (`register_result`) has no result pointer and returns
-/// `{ i8 status, value word }` instead, in registers on x86-64 and AArch64.
+/// `{ value word, i8 status }` instead, in registers on x86-64 and AArch64.
 pub(super) struct Signature<'m, 'a> {
     pub(super) abi: &'a FnAbi,
     pub(super) ty: Type<'m>,

@@ -1,0 +1,44 @@
+// rule: CLO-2
+// expect: run
+// stdout: 90 0
+// A list keeps function values erased. Mutating another holder through a
+// callback detaches it; the original table still has both stages.
+type Stage {
+  call: fn(u64, u64) -> u64 uses {},
+  environment: u64,
+}
+
+fn add(value: u64, environment: u64) -> u64 {
+  value + environment
+}
+
+fn multiply(value: u64, environment: u64) -> u64 {
+  value * environment
+}
+
+fn shorten(mut stages: List[Stage]) -> () {
+  stages = []
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stages: List[Stage] = [
+    Stage(call: add, environment: 3),
+    Stage(call: multiply, environment: 2)
+  ]
+  let mut total: u64 = 0
+  for i in 0u64..10u64 {
+    let value = stages[0].call(i, stages[0].environment)
+    if value % 2u64 == 0u64 {
+      total += stages[1].call(value, stages[1].environment)
+    }
+  }
+  let mut changed = copy stages
+  let callback: fn(mut List[Stage]) -> () uses {} = shorten
+  callback(mut changed)
+  let kept = stages[1].call(5, stages[1].environment)
+  let _ = out.print(io.stdout(rt)?, u64.to_string(total + kept))
+  let _ = out.print(io.stdout(rt)?, " ")
+  let _ = out.print(io.stdout(rt)?, u64.to_string(list.len(changed)))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

@@ -57,7 +57,7 @@ pub(crate) fn scalar_type(kind: ScalarKind) -> ir::Type {
     }
 }
 
-/// A hidden parameter of a Hirsel ABI v2 entry.
+/// A hidden parameter of a Hirsel ABI v3 entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Hidden {
     Context,
@@ -70,7 +70,7 @@ pub(crate) enum Hidden {
 
 /// The Cranelift signature of one `FnAbi`: hidden slots in ABI order, then each declared
 /// parameter's physical slots, returning a zero-extended `u8` status, and with a register
-/// result (`register_result`) the value word after it instead of a result pointer.
+/// result (`register_result`) the value word before it instead of a result pointer.
 #[derive(Clone)]
 pub(crate) struct Sig<'a> {
     pub(crate) abi: &'a FnAbi,
@@ -131,10 +131,10 @@ pub(crate) fn signature<'a>(
                 });
         }
     }
-    ir.returns.push(AbiParam::new(types::I8).uext());
     if value.is_some() {
         ir.returns.push(AbiParam::new(types::I64));
     }
+    ir.returns.push(AbiParam::new(types::I8).uext());
     Ok(Sig {
         abi,
         ir,

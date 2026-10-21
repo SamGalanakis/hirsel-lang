@@ -538,6 +538,10 @@ fn file_walk_step_matches_the_derived_iter_next_abi_on_both_targets() {
         assert!(abi.context && abi.environment && abi.caller_site && abi.destination);
         assert!(abi.parameters.is_empty());
         let result = abi.result.as_ref().unwrap();
+        assert_eq!(
+            result.register, None,
+            "WalkOption uses the aggregate callback ABI"
+        );
         assert_eq!(result.slots.len(), 1);
         assert_eq!(result.slots[0].ty, PhysicalType::Pointer);
         let layout = table.layout(result.layout).unwrap();

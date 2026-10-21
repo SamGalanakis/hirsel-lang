@@ -437,6 +437,7 @@ fn the_validator_rejects_abi_mutations() {
         Box::new(|a| a.environment = false),
         Box::new(|a| a.context = false),
         Box::new(|a| a.result.as_mut().unwrap().slots = vec![PTR, PTR]),
+        Box::new(|a| a.result.as_mut().unwrap().register = Some(ScalarKind::U64)),
         Box::new(|a| a.parameters.swap(0, 1)),
     ];
     for (i, mutate) in mutations.iter().enumerate() {
@@ -447,6 +448,57 @@ fn the_validator_rejects_abi_mutations() {
             violations.iter().any(|v| v.obligation == Obligation::Abi),
             "mutation {i}: {violations:#?}"
         );
+    }
+}
+
+#[test]
+fn typed_register_results_agree_for_definitions_and_erased_entries() {
+    for target in TargetSpec::executed() {
+        let owners = Owners::default();
+        let mut t = crate::support::ty();
+        let mut b = LayoutBuilder::new(&target, &owners);
+        let cases = [
+            (Primitive::Bool, Some(ScalarKind::Bool)),
+            (Primitive::I8, Some(ScalarKind::I8)),
+            (Primitive::U64, Some(ScalarKind::U64)),
+            (Primitive::F32, Some(ScalarKind::F32)),
+            (Primitive::F64, Some(ScalarKind::F64)),
+            (Primitive::I128, None),
+            (Primitive::U128, None),
+        ];
+        let mut ids = Vec::new();
+        for (primitive, expected) in cases {
+            let result = t.p(primitive);
+            let f = t.function(&[], result, Multiplicity::Many, 0);
+            for shape in [CallableShape::Definition, CallableShape::Closure] {
+                let id = b.fn_abi(&t.store, f, shape).unwrap();
+                ids.push((id, expected));
+            }
+        }
+        let table = checked(b);
+        for (id, expected) in ids {
+            assert_eq!(
+                table.fn_abis[id.0 as usize]
+                    .result
+                    .as_ref()
+                    .unwrap()
+                    .register,
+                expected
+            );
+            let mut forged = table.clone();
+            forged.fn_abis[id.0 as usize]
+                .result
+                .as_mut()
+                .unwrap()
+                .register = if expected.is_some() {
+                None
+            } else {
+                Some(ScalarKind::U64)
+            };
+            let violations =
+                validate_table(&forged, &target).expect_err("forged result convention");
+            assert!(violations.iter().any(|v| v.obligation == Obligation::Abi));
+        }
     }
 }
 

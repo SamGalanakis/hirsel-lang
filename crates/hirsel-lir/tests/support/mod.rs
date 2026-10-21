@@ -748,6 +748,9 @@ impl<S: Stage> Lir<S> {
                 borrowed_parameters: vec![],
                 layout,
                 slots: vec![pointer],
+                register: hirsel_lir::abi::register_kind(
+                    &self.table.layouts[layout.0 as usize].kind,
+                ),
             }),
             result_arena: None,
             diverges: false,

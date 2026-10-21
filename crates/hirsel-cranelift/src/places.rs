@@ -94,8 +94,14 @@ impl FnEmitter<'_, '_, '_> {
                 }
             }
         }
-        for &step in steps {
-            place = self.project(place, step, failure)?;
+        let skipped = info.projection.len as usize - steps.len();
+        for (i, &step) in steps.iter().enumerate() {
+            place = self.project(
+                place,
+                step,
+                failure,
+                info.unchecked.contains(&((i + skipped) as u32)),
+            )?;
         }
         if place.layout != self.lir_type(info.ty)?.layout {
             return self.invalid("an address whose projection does not reach its type");
@@ -218,6 +224,7 @@ impl FnEmitter<'_, '_, '_> {
         place: Place,
         step: ProjectionStep,
         failure: FailureId,
+        unchecked: bool,
     ) -> Emitted<Place> {
         let mut place = place;
         if step == ProjectionStep::Payload {
@@ -285,12 +292,14 @@ impl FnEmitter<'_, '_, '_> {
                     return self.invalid("a field the variant does not have");
                 };
                 // MEM-13: the active tag must be the projected variant.
-                let active = self.load_tag(place.ptr, tag.offset, tag.form);
-                let wrong = self
-                    .b
-                    .ins()
-                    .icmp_imm_s(IntCC::NotEqual, active, i64::from(variant));
-                self.guard(wrong, failure)?;
+                if !unchecked {
+                    let active = self.load_tag(place.ptr, tag.offset, tag.form);
+                    let wrong =
+                        self.b
+                            .ins()
+                            .icmp_imm_s(IntCC::NotEqual, active, i64::from(variant));
+                    self.guard(wrong, failure)?;
+                }
                 self.field_place(place, field.offset, field.layout, field.unaligned)
             }
             ProjectionStep::Slot(index) => {
@@ -331,7 +340,7 @@ impl FnEmitter<'_, '_, '_> {
                     unreachable!("matched above")
                 };
                 let count = self.load_u64(place.ptr);
-                self.checked_index(index, count, failure)?;
+                self.projection_index(index, count, failure, unchecked)?;
                 let first = self.sequential_first(place.ptr, element)?;
                 self.flat_content = Some(first);
                 let offset = self.index64(offset)?;
@@ -345,7 +354,7 @@ impl FnEmitter<'_, '_, '_> {
             }
             ProjectionStep::FlatAt { index, offset } => {
                 let count = self.flat_count(place)?;
-                self.checked_index(index, count, failure)?;
+                self.projection_index(index, count, failure, unchecked)?;
                 let (element, variable) = self.flat_sequence(place.layout)?;
                 if !variable {
                     return self.invalid("a flat walk of a sequence of fixed elements");
@@ -368,7 +377,7 @@ impl FnEmitter<'_, '_, '_> {
                     unreachable!("matched above")
                 };
                 let count = self.load_u64(place.ptr);
-                let index = self.checked_index(index, count, failure)?;
+                let index = self.projection_index(index, count, failure, unchecked)?;
                 let first = self.sequential_first(place.ptr, element)?;
                 self.flat_content = Some(first);
                 let ptr = self.sequential_walk(first, element, index)?;
@@ -382,7 +391,7 @@ impl FnEmitter<'_, '_, '_> {
             }
             ProjectionStep::Index(index) if record.kind == LayoutKind::Flat => {
                 let count = self.flat_count(place)?;
-                let index = self.checked_index(index, count, failure)?;
+                let index = self.projection_index(index, count, failure, unchecked)?;
                 let (element, variable) = self.flat_sequence(place.layout)?;
                 let ptr = if variable {
                     let content = self.offset(place.ptr, 16);
@@ -409,7 +418,7 @@ impl FnEmitter<'_, '_, '_> {
                     unreachable!()
                 };
                 let count = self.load_u64(place.ptr);
-                let index = self.checked_index(index, count, failure)?;
+                let index = self.projection_index(index, count, failure, unchecked)?;
                 self.column_row(place, element, index)
             }
             ProjectionStep::Index(index) => {
@@ -463,7 +472,7 @@ impl FnEmitter<'_, '_, '_> {
                     _ => return self.unsupported("an index into this layout kind"),
                 };
                 let stride = self.fixed_size(element)?;
-                let index64 = self.checked_index(index, count, failure)?;
+                let index64 = self.projection_index(index, count, failure, unchecked)?;
                 let scaled = self.b.ins().imul_imm_s(index64, stride as i64);
                 let offset = self.b.ins().iadd_imm_s(scaled, element_offset as i64);
                 let align = base
@@ -491,6 +500,22 @@ impl FnEmitter<'_, '_, '_> {
             128 => self.b.ins().ireduce(types::I64, v),
             _ => self.b.ins().uextend(types::I64, v),
         })
+    }
+
+    /// Skip a guard only for the exact PS-13 projection accepted by V. Index
+    /// conversion still runs, including reduction of a proved-in-range i128.
+    fn projection_index(
+        &mut self,
+        index: ValueId,
+        count: Value,
+        failure: FailureId,
+        unchecked: bool,
+    ) -> Emitted<Value> {
+        if unchecked {
+            self.index64(index)
+        } else {
+            self.checked_index(index, count, failure)
+        }
     }
 
     /// The integer `index` as an `i64` below `count`; a negative, wider or outside index

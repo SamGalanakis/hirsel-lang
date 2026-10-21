@@ -537,13 +537,16 @@ impl Emitter<'_> {
             Some(address) => b.ins().load(types::I8, flags, address, 0),
             // A Bool is one byte, as in memory: any nonzero byte is true.
             None => {
-                let low = b.ins().ireduce(types::I8, results[1]);
+                let low = b.ins().ireduce(
+                    types::I8,
+                    results[hirsel_lir::abi_types::REGISTER_VALUE_INDEX],
+                );
                 b.ins()
                     .icmp_imm_u(cranelift_codegen::ir::condcodes::IntCC::NotEqual, low, 0)
             }
         };
         b.ins().store(flags, byte, verdict, 0);
-        b.ins().return_(&[results[0]]);
+        b.ins().return_(&[results[usize::from(thunk.register)]]);
         b.seal_all_blocks();
         b.finalize(self.module.target_config());
     }

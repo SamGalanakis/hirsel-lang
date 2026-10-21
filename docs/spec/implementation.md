@@ -152,10 +152,22 @@ executed. One `TargetSpec` fixes the triple, CPU features, endianness, pointer w
 alignments, C convention, object format and the layout and runtime versions.
 
 **Calling convention.** The Hirsel cross-unit ABI uses C-compatible primitives: an explicit
-context pointer, an optional caller allocation destination, an output pointer for every
-non-unit result, then the declared parameters in order; the function returns a status
-byte. Closure and iterator thunks also receive an environment pointer immediately after the
-context. Small scalars and block references are passed by value, borrowed inline aggregates
+context pointer, optional caller and operation site words, an optional caller allocation
+destination, then the declared parameters in order. Closure and iterator entries also
+receive an environment pointer immediately after the context. A function value is two
+scalars, `(code, environment)`, with the same typed `FnAbi` for bound and indirect calls.
+Cross-unit ABI 3 records the result register kind in `AbiResult.register`: plain scalars
+and block pointers of at most 64 bits return `(value word, u8 status)` in registers
+(RAX/DL on x86-64, X0/W1 on AArch64), with no result pointer. Narrow integers are
+zero-extended and floats carried by their bits; on failure the value word is zero and
+meaningless. Wide integers and inline aggregates use an output pointer before the declared
+parameters and return a bare status byte. Runtime primitives keep their output-pointer
+interface, and generated adapters bridge callbacks to it. Status 0 is success and 1 is
+language failure. Checked arithmetic can fail even for a callable with an empty `uses`
+row, so that row never licenses dropping the status test. A definition reference needs a
+thunk only to adapt the extra environment and site arguments; a closure body already has
+the callable convention and needs none. Existing PS-13 projection evidence licenses
+omitting only its exact bounds or tag guard; both backends consume that evidence. Small scalars and block references are passed by value, borrowed inline aggregates
 by read-only address, `mut` parameters by exclusive address, and taken inline aggregates by
 an address whose contents transfer at entry. The physical shape is computed once from the
 specialized declared callable type, so changing the unit partition never changes a

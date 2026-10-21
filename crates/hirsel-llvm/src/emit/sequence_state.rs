@@ -1,6 +1,52 @@
 use super::*;
 
 impl<'m, 'a> FnEmitter<'m, 'a> {
+    /// A local root initialized once and never handed out as an address. Its
+    /// length cannot change through an erased call: another holder must detach
+    /// before changing the sequence. Mutable captures are excluded by the
+    /// caller, and C callbacks retain ordinary memory semantics.
+    fn immutable_sequence_root(&self, slot: SlotId) -> bool {
+        if self.inputs.callbacks
+            || self.unit.header.origin == UnitOrigin::Library
+            || matches!(
+                self.unit.slots[slot.index()].kind,
+                SlotKind::Parameter(_) | SlotKind::Capture(_)
+            )
+        {
+            return false;
+        }
+        let mut stores = 0;
+        for inst in &self.unit.instructions {
+            let mut reaches = false;
+            inst.visit(&mut |reference| {
+                if let Ref::Address(address) = reference {
+                    reaches |= self.address_slot(address) == Some(slot);
+                }
+            });
+            if !reaches {
+                continue;
+            }
+            match *inst {
+                Inst::Store { address, .. } if self.whole_slot(address) == Some(slot) => {
+                    stores += 1
+                }
+                Inst::Address { .. }
+                | Inst::Read { .. }
+                | Inst::Copy { .. }
+                | Inst::BindOrigin { .. }
+                | Inst::BindFields { .. }
+                | Inst::BeginLoan { mutable: false, .. } => {}
+                _ => return false,
+            }
+        }
+        stores == 1 && self.unit.tables.calls.iter().all(|call| {
+            call.arguments.get(&self.unit.pools.call_arguments).is_some_and(|args| {
+                args.iter().all(|arg| !matches!(arg.value,
+                    ArgumentValue::Address { address, .. } if self.address_slot(address) == Some(slot)))
+            })
+        })
+    }
+
     /// Only a whole, private root has companion state. Captured addresses and
     /// externally passed roots retain ordinary memory semantics. Restrict the
     /// state to sequences of pointer-free, silently destroyed elements, so an
@@ -64,7 +110,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 continue;
             };
             let record = self.layout(element)?;
-            if record.finalizer.is_some() || !record.scan.is_empty() || !record.drop.is_empty() {
+            if (record.finalizer.is_some() || !record.scan.is_empty() || !record.drop.is_empty())
+                && !self.immutable_sequence_root(SlotId(i as u32))
+            {
                 continue;
             }
             let escaped = self.unit.tables.calls.iter().any(|call| {
