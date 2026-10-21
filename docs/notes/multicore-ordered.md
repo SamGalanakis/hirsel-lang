@@ -52,6 +52,10 @@ Parked receive slots and both join frames are inaccessible until physical idle
 save; the logical policy's after-save hook must retry those deferred polls.
 Completion, direct handoffs and stack recycling still need policy integration.
 
+The scan-format constants live in the data-only `hirsel-core-contract` crate;
+`hirsel-kernels::handle_scan` retains its public compatibility re-export. LIR
+therefore has no dependency on executable kernels.
+
 Native descriptor version 14 (introduced in runtime ABI 34) adds an independent holder scan
 pointer and word count, taking the C descriptor from 72 to 88 bytes. Both
 native emitters lower the existing `LayoutRecord.scan`; destruction programs

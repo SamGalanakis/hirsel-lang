@@ -7,7 +7,7 @@
 
 use crate::layout_types::{HandleKind, LayoutId, LayoutKind, LayoutRecord, ScanStep, TagForm};
 
-pub use hirsel_kernels::handle_scan::*;
+pub use hirsel_core_contract::handle_scan::*;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct Program {

@@ -6,6 +6,7 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+pub mod handle_scan;
 pub mod snapshot;
 use hirsel_syntax::{ContentHash, DefPath, PassingMode};
 

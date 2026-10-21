@@ -9,7 +9,6 @@ rust-version.workspace = true
 testing = []
 
 [dependencies]
-hirsel-kernels = { path = "../hirsel-kernels" }
 hirsel-span = { path = "../hirsel-span" }
 hirsel-graph = { path = "../hirsel-graph" }
 hirsel-codec = { path = "../hirsel-codec" }

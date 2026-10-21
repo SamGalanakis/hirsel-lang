@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use hirsel_kernels::handle_scan::*;
+use hirsel_core_contract::handle_scan::*;
 
 use crate::{Header, Layout, TaskCtx};
 
