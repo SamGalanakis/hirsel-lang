@@ -533,6 +533,19 @@ impl Backend<Command> for Objects<'_> {
                 Command::Send { sender, image } => {
                     let channel = s.channels.channel(*sender, true);
                     let mut image = image.borrow_mut();
+                    let observed = if events::enabled(s) {
+                        let descriptor = s.channels.payload(channel).element.descriptor;
+                        events::object_value(
+                            self.ctx,
+                            s,
+                            crate::ordered::objects::Kind::Sender,
+                            *sender,
+                            descriptor,
+                            image.as_ptr(),
+                        )
+                    } else {
+                        None
+                    };
                     let (status, pending) = if early {
                         s.channels.send_pending(channel, image.as_mut_ptr())
                     } else {
@@ -543,7 +556,7 @@ impl Backend<Command> for Objects<'_> {
                             status,
                             image: image.clone(),
                             chain: Vec::new(),
-                            canonical: None,
+                            canonical: events::value_subevent(observed, status),
                             pending: RefCell::new(pending),
                         },
                         Next::Yield,
@@ -557,12 +570,42 @@ impl Backend<Command> for Objects<'_> {
                         s.sync.take(*word, image.as_mut_ptr());
                         0
                     };
-                    (Outcome::image(status, image), Next::Keep)
+                    let observed = if events::enabled(s) {
+                        let descriptor = s.sync.mutex(*word).element.descriptor;
+                        events::object_value(
+                            self.ctx,
+                            s,
+                            crate::ordered::objects::Kind::Mutex,
+                            *word,
+                            descriptor,
+                            image.as_ptr(),
+                        )
+                    } else {
+                        None
+                    };
+                    let mut outcome = Outcome::image(status, image);
+                    outcome.canonical = events::value_subevent(observed, status);
+                    (outcome, Next::Keep)
                 }
                 Command::MutexPut { word, image } => {
                     let mut image = image.borrow_mut();
+                    let observed = if events::enabled(s) {
+                        let descriptor = s.sync.mutex(*word).element.descriptor;
+                        events::object_value(
+                            self.ctx,
+                            s,
+                            crate::ordered::objects::Kind::Mutex,
+                            *word,
+                            descriptor,
+                            image.as_ptr(),
+                        )
+                    } else {
+                        None
+                    };
                     s.sync.put(*word, image.as_mut_ptr());
-                    (Outcome::image(0, image.clone()), Next::Yield)
+                    let mut outcome = Outcome::image(0, image.clone());
+                    outcome.canonical = events::value_subevent(observed, 0);
+                    (outcome, Next::Yield)
                 }
             }
         };

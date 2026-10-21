@@ -116,6 +116,7 @@ pub(super) enum CanonicalOutcome {
     Created(ObjectId),
     Alias(ObjectId),
     Scalar(Vec<u8>),
+    Value { status: u32, payload: Vec<u8> },
     Unit,
 }
 
@@ -200,7 +201,11 @@ pub(crate) fn owned_host_result(
 /// observe a stop, including on the disabled native host path.
 pub(crate) fn observing(ctx: *mut TaskCtx) -> bool {
     let table = unsafe { &*(*(*ctx).run_ptr()).tasks.get() };
-    matches!(table.as_deref().map(|s| &s.logical), Some(Logical::Ordered(driver)) if driver.events.is_some())
+    table.as_deref().is_some_and(enabled)
+}
+
+pub(super) fn enabled(s: &super::super::Scheduler) -> bool {
+    matches!(&s.logical, Logical::Ordered(driver) if driver.events.is_some())
 }
 
 /// IdleGuard owns the scheduler, but no TaskCtx is installed or sampled.
@@ -342,6 +347,49 @@ pub(super) unsafe fn complete_receive(
         descriptor,
         payload,
     });
+}
+
+/// Snapshot while the effect still owns the initialized carrier. A successful
+/// send/put overwrites it with None, so retirement must use this owned evidence
+/// rather than inspect the command or mutable object again.
+/// # Safety
+/// `image` holds a live value of `descriptor`; caller owns the scheduler role.
+pub(super) unsafe fn object_value(
+    ctx: *mut TaskCtx,
+    s: &mut super::super::Scheduler,
+    kind: crate::ordered::objects::Kind,
+    word: u64,
+    descriptor: u32,
+    image: *const u8,
+) -> Option<(CanonicalItem, Vec<u8>)> {
+    let Logical::Ordered(driver) = &mut s.logical else {
+        return None;
+    };
+    let log = driver.events.as_mut()?;
+    let item = CanonicalItem::Object(driver.objects.identity(kind, word)?.clone());
+    if let std::collections::btree_map::Entry::Vacant(entry) = log.values.entry(descriptor) {
+        entry.insert(unsafe { super::values::Program::linked(ctx, descriptor) }.ok()?);
+    }
+    let bytes = unsafe {
+        log.values[&descriptor].encode(image, |kind, word| {
+            use crate::ordered::objects::Kind;
+            match kind {
+                Kind::Task => log.tasks.get(&word),
+                Kind::TaskSet => log.sets.get(&word),
+                _ => driver.objects.identity(kind, word),
+            }
+            .cloned()
+        })
+    }
+    .ok()?;
+    Some((item, bytes))
+}
+
+pub(super) fn value_subevent(
+    value: Option<(CanonicalItem, Vec<u8>)>,
+    status: u32,
+) -> Option<Subevents> {
+    value.map(|(item, payload)| vec![(item, CanonicalOutcome::Value { status, payload })])
 }
 
 /// Capture after the owned request returned, before its caller can yield.
@@ -2007,6 +2055,212 @@ mod tests {
                 },
             );
             assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        }
+    }
+
+    #[test]
+    fn channel_and_mutex_events_keep_initialized_payloads_after_moves() {
+        use hirsel_core_contract::handle_scan::*;
+        use std::sync::{Arc, Mutex};
+        // Option[u64]: tag at 0, padding at 4, initialized payload only in arm1.
+        let bits = [VALUE, VALUE_BITS, 8, 0, 0, 0, 0, 0];
+        let option = [
+            VALUE,
+            VALUE_VARIANT,
+            16,
+            0,
+            0,
+            0,
+            2,
+            0,
+            VALUE_FIELD,
+            8,
+            3,
+            1,
+            0,
+            0,
+            0,
+            0,
+        ];
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: option.as_ptr(),
+            scan_words: option.len() as u64,
+        };
+        let scalar = crate::Layout {
+            size: 8,
+            scan: bits.as_ptr(),
+            scan_words: bits.len() as u64,
+            ..layout
+        };
+        let layouts = [&layout as *const crate::Layout, &scalar];
+        let mut reference = None;
+        for width in [2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let output = Arc::new(Mutex::new(Vec::new()));
+                let saved = output.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 2;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        super::super::engine::enable(ctx, policy);
+                        enable(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let none = [0u64; 2];
+                        let mut endpoints = [0u64; 2];
+                        super::super::engine::channel_open(
+                            ctx,
+                            endpoints.as_mut_ptr(),
+                            none.as_ptr().cast(),
+                            2,
+                        )
+                        .unwrap();
+                        // Deliberately different padding must not enter the event.
+                        let mut payload = [1 | (0xdeadbeefu64 << 32), 42];
+                        let mut status = 99;
+                        super::super::engine::channel_send(
+                            ctx,
+                            endpoints[0],
+                            payload.as_mut_ptr().cast(),
+                            &mut status,
+                        )
+                        .unwrap();
+                        assert_eq!(status, crate::channels::DONE);
+                        assert_eq!(payload, none);
+                        payload = [1 | (0xabad1deau64 << 32), 42];
+                        let mut wrapper = 0;
+                        super::super::engine::mutex_create(
+                            ctx,
+                            &mut wrapper,
+                            payload.as_mut_ptr().cast(),
+                            none.as_ptr().cast(),
+                            2,
+                            2,
+                        )
+                        .unwrap();
+                        let word = crate::alloc::payload(wrapper as *mut crate::Header)
+                            .cast::<u64>()
+                            .read();
+                        assert_eq!(payload, none);
+                        super::super::engine::mutex_take(
+                            ctx,
+                            word,
+                            payload.as_mut_ptr().cast(),
+                            &mut status,
+                        )
+                        .unwrap();
+                        assert_eq!(status, 0);
+                        assert_eq!(payload[1], 42);
+                        payload[1] = 99;
+                        super::super::engine::mutex_put(ctx, word, payload.as_mut_ptr().cast())
+                            .unwrap();
+                        assert_eq!(payload, none);
+                        super::super::engine::mutex_take(
+                            ctx,
+                            word,
+                            payload.as_mut_ptr().cast(),
+                            &mut status,
+                        )
+                        .unwrap();
+                        payload.fill(0);
+                        let driver = super::super::engine::driver(ctx);
+                        let events = driver.events.as_ref().unwrap().canonical().unwrap();
+                        assert_eq!(events.len(), 6);
+                        assert_eq!(
+                            events.iter().map(|e| e.version).collect::<Vec<_>>(),
+                            [1, 2, 1, 2, 3, 4]
+                        );
+                        for (index, number) in [(1, 42u64), (3, 42), (4, 99), (5, 99)] {
+                            assert_eq!(
+                                events[index].outcome,
+                                CanonicalOutcome::Value {
+                                    status: 0,
+                                    payload: [1u32.to_le_bytes().as_slice(), &number.to_le_bytes()]
+                                        .concat()
+                                }
+                            );
+                        }
+                        *saved.lock().unwrap() = events.to_vec();
+                        // Exercise the actual early-effect path as well: it must
+                        // retain evidence without emitting an event or publishing.
+                        use crate::ordered::Backend;
+                        let id = super::super::engine::driver(ctx)
+                            .objects
+                            .identity(crate::ordered::objects::Kind::Sender, endpoints[0])
+                            .unwrap()
+                            .clone();
+                        let op = Command::Send {
+                            sender: endpoints[0],
+                            image: std::cell::RefCell::new(
+                                [1u64.to_ne_bytes(), 77u64.to_ne_bytes()].concat(),
+                            ),
+                        }
+                        .operation(crate::ordered::footprint::Footprint {
+                            writes: std::collections::BTreeSet::from([Item::Object(id.clone())]),
+                            ..Default::default()
+                        });
+                        let mut recorded =
+                            |_, _, _: &Outcome, _| panic!("early commit cannot record");
+                        let mut polled = || panic!("early commit cannot poll");
+                        let mut backend =
+                            super::super::Objects::new(ctx, &mut recorded, &mut polled);
+                        let receipt = backend.commit(0, &op, true);
+                        let Command::Send { image, .. } = &op.payload else {
+                            unreachable!()
+                        };
+                        image.borrow_mut().fill(0);
+                        assert_eq!(receipt.result.image, vec![0; 16]);
+                        assert_eq!(
+                            receipt.result.canonical,
+                            Some(vec![(
+                                CanonicalItem::Object(id),
+                                CanonicalOutcome::Value {
+                                    status: 0,
+                                    payload: [1u32.to_le_bytes().as_slice(), &77u64.to_le_bytes()]
+                                        .concat()
+                                }
+                            )])
+                        );
+                        assert_eq!(
+                            super::super::engine::driver(ctx)
+                                .events
+                                .as_ref()
+                                .unwrap()
+                                .canonical
+                                .len(),
+                            6
+                        );
+                        backend.publish(0, &op, &receipt.result);
+
+                        crate::STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                let events = output.lock().unwrap().clone();
+                if let Some(reference) = &reference {
+                    assert_eq!(&events, reference);
+                } else {
+                    reference = Some(events);
+                }
+            }
         }
     }
 
