@@ -1,0 +1,81 @@
+// langarena: Matmul::Single
+// langarena-blocked: Matmul::T4 | CPU parallel row execution with a fixed four-thread pool; in-run tasks share one cooperative run token
+// langarena-blocked: Matmul::T8 | CPU parallel row execution with a fixed eight-thread pool; in-run tasks share one cooperative run token
+// langarena-blocked: Matmul::T16 | CPU parallel row execution with a fixed sixteen-thread pool; in-run tasks share one cooperative run token
+// Port: rust/src/benchmarks/matmul.rs:9-65, 112-170 (3c9f84d).
+type Matrix = List[List[f64]]
+
+type State {
+  a: Matrix,
+  b: Matrix,
+  value_out: u32,
+}
+
+fn zeros(n: u64) -> Matrix {
+  let mut out: Matrix = []
+  for _ in 0u64..n {
+    let mut row: List[f64] = []
+    for _ in 0u64..n {
+      list.push(mut row, 0.0)
+    }
+    list.push(mut out, take row)
+  }
+  take out
+}
+
+fn matgen(n: u64) -> Matrix {
+  let tmp: f64 = 1.0 / float.from_int(n * n)
+  let mut out = zeros(n)
+  for i in 0u64..n {
+    let x: f64 = float.from_int(i)
+    for j in 0u64..n {
+      let y: f64 = float.from_int(j)
+      out[i][j] = tmp * (x - y) * (x + y)
+    }
+  }
+  take out
+}
+
+fn step(mut state: State, iteration: u64) {
+  let n = list.len(state.a)
+  let mut transposed = zeros(n)
+  for i in 0u64..n {
+    for j in 0u64..n {
+      transposed[j][i] = state.b[i][j]
+    }
+  }
+  let mut c = zeros(n)
+  for i in 0u64..n {
+    let row = state.a[i]
+    for j in 0u64..n {
+      let column = transposed[j]
+      let mut sum: f64 = 0.0
+      for k in 0u64..n {
+        sum += row[k] * column[k]
+      }
+      c[i][j] = sum
+    }
+  }
+  state.value_out = u32.wrapping_add(
+    state.value_out,
+    harness.hash_float(c[n / 2][n / 2])
+  )
+}
+
+fn checksum(s: State) -> u32 {
+  s.value_out
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let n = harness.number(config, "n")
+  harness.measure(
+    rt,
+    config,
+    State(a: matgen(n), b: matgen(n), value_out: 0),
+    step,
+    checksum
+  )
+}

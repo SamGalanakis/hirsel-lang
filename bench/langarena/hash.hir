@@ -1,0 +1,92 @@
+// langarena: Hash::SHA256
+// langarena: Hash::CRC32
+// Port: rust/src/benchmarks/buffer_hash_benchmark.rs:5-35,
+// buffer_hash_sha256.rs:7-84, buffer_hash_crc32.rs:4-57 (3c9f84d).
+// SHA256 is upstream's SimpleSHA256: an eight-lane toy hash, not real SHA-256.
+type State {
+  data: Bytes,
+  sha: bool,
+  value_out: u32,
+}
+
+fn crc32(data: Bytes) -> u32 {
+  let mut crc = 0xffffffffu32
+  for i in 0u64..bytes.len(data) {
+    let byte: u32 = int.widen(data[i])
+    crc = crc ^ byte
+    for _ in 0u64..8u64 {
+      crc = if crc & 1 != 0 {
+        crc >> 1 ^ 0xedb88320u32
+      } else {
+        crc >> 1
+      }
+    }
+  }
+  crc ^ 0xffffffffu32
+}
+
+fn simple_sha256(data: Bytes) -> List[u8] {
+  let mut hashes: List[u32] = [
+    0x6a09e667u32,
+    0xbb67ae85u32,
+    0x3c6ef372u32,
+    0xa54ff53au32,
+    0x510e527fu32,
+    0x9b05688cu32,
+    0x1f83d9abu32,
+    0x5be0cd19u32
+  ]
+  for i in 0u64..bytes.len(data) {
+    let byte: u32 = int.widen(data[i])
+    let mut hash = hashes[i % 8]
+    hash = u32.wrapping_add(u32.wrapping_add(hash << 5, hash), byte)
+    hash = u32.wrapping_add(hash, hash << 10) ^ hash >> 6
+    hashes[i % 8] = hash
+  }
+  let mut digest: List[u8] = []
+  for hash in hashes {
+    list.push(mut digest, int.truncate(hash >> 24))
+    list.push(mut digest, int.truncate(hash >> 16))
+    list.push(mut digest, int.truncate(hash >> 8))
+    list.push(mut digest, int.truncate(hash))
+  }
+  take digest
+}
+
+fn step(mut s: State, iteration: u64) {
+  let hash = if s.sha {
+    let digest = simple_sha256(s.data)
+    let a: u32 = int.widen(digest[0])
+    let b: u32 = int.widen(digest[1])
+    let c: u32 = int.widen(digest[2])
+    let d: u32 = int.widen(digest[3])
+    a | b << 8 | c << 16 | d << 24
+  } else {
+    crc32(s.data)
+  }
+  s.value_out = u32.wrapping_add(s.value_out, hash)
+}
+
+fn checksum(s: State) -> u32 {
+  s.value_out
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let mut data: List[u8] = []
+  let mut seed = 42u64
+  for _ in 0u64..harness.number(config, "size") {
+    seed = (seed * 3877 + 29573) % 139968
+    // helper.rs:22-26: next_int(256), equivalent positive integer truncation.
+    list.push(mut data, int.narrow(seed * 256 / 139968))
+  }
+  harness.measure(
+    rt,
+    config,
+    State(data: bytes.from_list(take data), sha: name == "Hash::SHA256", value_out: 0),
+    step,
+    checksum
+  )
+}

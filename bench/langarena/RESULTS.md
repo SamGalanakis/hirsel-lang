@@ -1,5 +1,9 @@
 # LangArena: Hirsel and a local Rust anchor
 
+The original full-size campaign below predates the port-1 additions. Current
+Brainfuck, Matmul, Base64, Hash and Calculator status is recorded in
+[Port-1 validation and quick comparison](#port-1-validation-and-quick-comparison).
+
 Config `run.js`; 10 seeded interleaved rounds, seed 20261021; 2026-10-21T19:54:42.688645+00:00.
 Local host: Linux turbo2-sam 6.8.0-137-generic #137-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 17 20:28:23 UTC 2026 x86_64. Hirsel: native LLVM release; Rust: upstream `cargo build --release`.
 Upstream `3c9f84ddaeec834c0631747cb789e8cfd602f993`. Published data: `2026-10-21-kostya-ms7c37.js`, SHA-256 `534c503f0785fe7772afe0f8df85ae0cdd59576415c9221ec9827587f267e319`.
@@ -387,3 +391,110 @@ Raw measurements and logs: ignored `build/la-port-4-quick-01/measurements.json`.
 The complete session and validation logs were also retained in the lane’s
 external evidence directory before worktree cleanup. No tasks in this group
 remain blocked.
+
+## Port-1 validation and quick comparison
+
+Nine tasks pass their unchanged `test.js` and `run.js` checksums, natively with
+LLVM release. Matmul T4/T8/T16 are **blocked** as described below. The scoped
+`//:gate-langarena` target ran all 10 protocol tests successfully; registered
+quick-checksum coverage increased from 7 to 16 tasks. No std/compiler changes
+were needed.
+
+`compare.py --quick` ran 10 seeded interleaved rounds on CPU 31, under the
+shared timing lock, using only Hirsel and unchanged upstream Rust at `3c9f84d`.
+Every implemented task passed all 10 rounds in both languages (180 samples).
+All Rust medians printed `0.000s`, below its 0.0005-second rounding boundary:
+**runtime H/R is unavailable for every task**. No zero denominators or wall-time
+substitutes are used. Instruction ratios include process startup and warmup;
+with these tiny workloads they are diagnostics, not full-size algorithm rankings.
+No published-host estimates are made from this quick session.
+
+| Task | Status | test.js checksum | run.js checksum | Quick runtime H/R | Quick instructions H/R |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Brainfuck::Array | pass (both configs; quick 10/10) | 3562897308 | 954437102 | — (Rust resolution) | 2.786 |
+| Brainfuck::Recursion | pass (both configs; quick 10/10) | 3562897308 | 954437102 | — (Rust resolution) | 2.522 |
+| Matmul::Single | pass (both configs; quick 10/10) | 720656960 | 3655420808 | — (Rust resolution) | 1.990 |
+| Matmul::T4 | blocked: CPU-parallel pool | — | — | — (blocked) | — |
+| Matmul::T8 | blocked: CPU-parallel pool | — | — | — (blocked) | — |
+| Matmul::T16 | blocked: CPU-parallel pool | — | — | — (blocked) | — |
+| Base64::Encode | pass (both configs; quick 10/10) | 3894061047 | 3516658482 | — (Rust resolution) | 3.714 |
+| Base64::Decode | pass (both configs; quick 10/10) | 732348015 | 1329134018 | — (Rust resolution) | 2.971 |
+| Hash::SHA256 | pass (both configs; quick 10/10) | 1036619072 | 2844672256 | — (Rust resolution) | 2.477 |
+| Hash::CRC32 | pass (both configs; quick 10/10) | 3031698216 | 2318723244 | — (Rust resolution) | 2.542 |
+| Calculator::Ast | pass (both configs; quick 10/10) | 774028720 | 1670614456 | — (Rust resolution) | 2.513 |
+| Calculator::Interpreter | pass (both configs; quick 10/10) | 3208680 | 38749936 | — (Rust resolution) | 2.077 |
+
+Matmul T4/T8/T16 require CPU-parallel row execution with exactly 4/8/16 worker
+threads, including a fresh pool per multiplication as in upstream
+`rust/src/benchmarks/matmul.rs:68-100`. Ordinary native task admission still
+uses the cooperative run token (`crates/hirsel-rt/src/pool.rs:15-18`,
+`launch.rs:2153-2163`; `docs/notes/multicore-workers.md:7-16,40-44`). The
+experimental physical dispatcher can be enabled only by hidden runtime test
+controls (`host.rs:455-512`), not a public Hirsel library call. Implementing a
+production parallel executor is beyond a small std addition. The owner was
+notified. Merely spawning 4/8/16 cooperative tasks would misrepresent the
+upstream algorithm's threading.
+
+Minimal example of the existing task surface, which still serializes CPU work
+on the admitted cooperative executor:
+
+```hirsel
+fn row() -> u64 {
+  let mut x = 1u64
+  for _ in 0u64..1000000u64 { x = u64.wrapping_mul(x, 33) }
+  x
+}
+fn rows(tasks: Tasks) -> (u64, u64) {
+  task.scope(tasks, fn(s: Scope) -> (u64, u64) {
+    let a = task.async(s, fn() -> u64 { row() })
+    let b = task.async(s, fn() -> u64 { row() })
+    (task.await(s, take a), task.await(s, take b))
+  })
+}
+```
+
+Port adaptations, with the upstream algorithm retained:
+
+- Brainfuck uses Hirsel lists for tape/jump arrays and recursive list variants
+  for loop bodies. Its recursive output folds directly into wrapping u32;
+  upstream's wrapping i64 is narrowed to u32, so the observable low bits agree.
+  Warmup parses/runs its separate program and discards the accumulator before
+  timing. Parsing remains inside each iteration in both variants.
+- Matmul uses nested lists for matrix rows, retaining the transpose and full
+  i/j/k multiplication. Threaded variants are unregistered, never run as serial
+  substitutes.
+- Base64 uses the existing scalar std RFC4648 codec, as Crystal's library
+  implementation does; upstream Rust uses base64_simd. Encode/decode state,
+  retained output and length accumulation follow upstream.
+- Hash preserves upstream's eight-lane **toy** SimpleSHA256 (including the
+  digest endian conversion), rather than substituting std SHA-256. CRC32 keeps
+  its bit-at-a-time loop. The seeded RNG uses positive integer division,
+  equivalent to upstream's floating-point truncation for these bounded values.
+- Calculator uses boxed AST roots as well as children so Hirsel's recursive
+  values have explicit ownership. Variable names are owned copies and the
+  interpreter uses the std map. Division guards MIN/-1 and remainder wraps
+  intermediates to keep checked arithmetic defined; the final checksum follows
+  upstream's wrapping i64 operations and low-u32 accumulation. Its parser,
+  generated program and precedence follow the upstream files cited in source.
+
+Reproduce from the repository root:
+
+```sh
+python3 bench/langarena/build.py
+# Repeat for Brainfuck, Matmul::Single, Base64, Hash and Calculator:
+bench/langarena/build/langarena --hirsel-grants bench/langarena/build/grants.json bench/langarena/test.js Brainfuck
+bench/langarena/build/langarena --hirsel-grants bench/langarena/build/grants.json bench/langarena/run.js Brainfuck
+.buck2/bin/buck2 test //:gate-langarena
+python3 bench/langarena/compare.py --quick --filter Brainfuck --filter Matmul --filter Base64 --filter Hash:: --filter Calculator --session port-1-recheck --output /tmp/port-1-quick.md
+```
+
+Session: `la-port-1-quick-01`, seed `20261021`, recorded 2026-10-21.
+Raw samples/counters/logs are in ignored
+`build/la-port-1-quick-01/measurements.json`; a retained evidence copy is outside
+worktrees at `/workspace/tmp/langarena-tools/evidence/la-port-1/`.
+Consumed Hirsel source SHA-256: `f0ab7d1b9fc2647b80d8c4d562fcd309fce507c689fb7d8c2b6d5452ea641b3e`.
+
+| Participant | Compiler SHA-256 | Executable SHA-256 |
+| --- | --- | --- |
+| hirsel | `03d450a061ab0ae62386f29067ba8495762412a4004e44cf207cb26b717ef25d` | `d7941780726fd300f7fedb339e4fa9f2c29c89a02f1ac38532ed42eb27b5dd70` |
+| rust | `f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f` | `34f46c760fcc739816add285f1328cd3fb8eef465143303f6c96ef7349dc8cb3` |

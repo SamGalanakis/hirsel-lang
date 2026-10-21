@@ -1,0 +1,93 @@
+// langarena: Base64::Encode
+// langarena: Base64::Decode
+// Port: rust/src/benchmarks/base64_{encode,decode}.rs:5-67 (3c9f84d).
+// The std codec uses scalar RFC4648 packing; upstream Rust uses base64_simd.
+type State {
+  data: Bytes,
+  encoded: String,
+  decoded: Bytes,
+  decode: bool,
+  value_out: u32,
+}
+
+fn step(mut s: State, iteration: u64) {
+  if s.decode {
+    s.decoded = results.unwrap_or(
+      std@1/base64.decode(s.encoded, Standard(), Required()),
+      b""
+    )
+    s.value_out = u32.wrapping_add(s.value_out, int.truncate(bytes.len(s.decoded)))
+  } else {
+    s.encoded = std@1/base64.encode(s.data, Standard(), Required())
+    s.value_out = u32.wrapping_add(
+      s.value_out,
+      int.truncate(string.byte_len(s.encoded))
+    )
+  }
+}
+
+fn prefix(data: Bytes) -> String {
+  let value = results.unwrap_or(
+    string.from_bytes(
+      unique bytes.slice(
+        data,
+        0,
+        if bytes.len(data) > 4 {
+          4
+        } else {
+          bytes.len(data)
+        }
+      )
+    ),
+    ""
+  )
+  if bytes.len(data) > 4 {
+    f"{value}..."
+  } else {
+    value
+  }
+}
+
+fn checksum(s: State) -> u32 {
+  let message = if s.decode {
+    f"decode {prefix(string.as_bytes(s.encoded))} to {prefix(s.decoded)}: {s.value_out}"
+  } else {
+    f"encode {prefix(s.data)} to {prefix(string.as_bytes(s.encoded))}: {s.value_out}"
+  }
+  harness.hash_bytes(string.as_bytes(message))
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let mut source: List[u8] = []
+  for _ in 0u64..harness.number(config, "size") {
+    list.push(mut source, b'a')
+  }
+  let data = bytes.from_list(take source)
+  let encoded = std@1/base64.encode(data, Standard(), Required())
+  let decode = name == "Base64::Decode"
+  let decoded = if decode {
+    results.unwrap_or(std@1/base64.decode(encoded, Standard(), Required()), b"")
+  } else {
+    b""
+  }
+  harness.measure(
+    rt,
+    config,
+    State(
+      data: if decode {
+        b""
+      } else {
+        take data
+      },
+      encoded: encoded,
+      decoded: decoded,
+      decode: decode,
+      value_out: 0
+    ),
+    step,
+    checksum
+  )
+}

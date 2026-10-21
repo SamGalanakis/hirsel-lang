@@ -1,0 +1,244 @@
+// langarena: Calculator::Ast
+// langarena: Calculator::Interpreter
+// Port: rust/src/benchmarks/calculator_ast.rs:30-392 and
+// calculator_interpreter.rs:6-123 (3c9f84d).
+type Node = Number(value: i64) | Variable(name: String) | Binary(
+  op: u8,
+  left: box Node,
+  right: box Node
+) | Assignment(name: String, value: box Node)
+
+type Parser {
+  source: Bytes,
+  pos: u64,
+}
+
+type State {
+  source: Bytes,
+  ast: List[box Node],
+  interpret: bool,
+  value_out: u32,
+}
+
+fn generate(n: u64) -> Bytes {
+  let mut out: List[u8] = []
+  text.append(mut out, "v0 = 1\n")
+  for i in 0u64..10u64 {
+    let v = i + 1
+    text.append(mut out, f"v{v} = v{v - 1} + {v}\n")
+  }
+  let mut seed = 42u64
+  for i in 0u64..n {
+    let v = i + 10
+    text.append(mut out, f"v{v} = v{v - 1} + ")
+    seed = (seed * 3877 + 29573) % 139968
+    let choice = seed * 10 / 139968
+    let snippet = match choice {
+      0 => f"(v{v - 1} / 3) * 4 - {i} / (3 + (18 - v{v - 2})) % v{v - 3} + 2 * ((9 - v{v - 6}) * (v{v - 5} + 7))",
+      1 => f"v{v - 1} + (v{v - 2} + v{v - 3}) * v{v - 4} - (v{v - 5} / v{v - 6})",
+      2 => f"(3789 - (((v{v - 7})))) + 1",
+      3 => f"4/2 * (1-3) + v{v - 9}/v{v - 5}",
+      4 => f"1+2+3+4+5+6+v{v - 1}",
+      5 => f"(99999 / v{v - 3})",
+      6 => f"0 + 0 - v{v - 8}",
+      7 => f"((((((((((v{v - 6})))))))))) * 2",
+      8 => f"{i} * (v{v - 1}%6)%7",
+      _ => f"(1)/(0-v{v - 5}) + (v{v - 7})",
+    }
+    text.append(mut out, snippet)
+    text.append(mut out, "\n")
+  }
+  bytes.from_list(take out)
+}
+
+fn current(p: Parser) -> u8 {
+  if p.pos < bytes.len(p.source) {
+    p.source[p.pos]
+  } else {
+    0
+  }
+}
+
+fn advance(mut p: Parser) {
+  p.pos += 1
+}
+
+fn digit(c: u8) -> bool {
+  c >= b'0' && c <= b'9'
+}
+
+fn letter(c: u8) -> bool {
+  c >= b'a' && c <= b'z' || c >= b'A' && c <= b'Z'
+}
+
+fn skip(mut p: Parser) {
+  while current(p) == b' ' || current(p) == b'\t' || current(p) == b'\n' || current(p) == b'\r' {
+    advance(mut p)
+  }
+}
+
+fn expression(mut p: Parser) -> box Node {
+  let mut left = term(mut p)
+  while true {
+    skip(mut p)
+    let op = current(p)
+    if op != b'+' && op != b'-' {
+      break
+    }
+    advance(mut p)
+    let right = term(mut p)
+    left = box Binary(op: op, left: take left, right: take right)
+  }
+  take left
+}
+
+fn term(mut p: Parser) -> box Node {
+  let mut left = factor(mut p)
+  while true {
+    skip(mut p)
+    let op = current(p)
+    if op != b'*' && op != b'/' && op != b'%' {
+      break
+    }
+    advance(mut p)
+    let right = factor(mut p)
+    left = box Binary(op: op, left: take left, right: take right)
+  }
+  take left
+}
+
+fn factor(mut p: Parser) -> box Node {
+  skip(mut p)
+  if digit(current(p)) {
+    let mut value = 0i64
+    while digit(current(p)) {
+      value = value * 10 + int.widen(current(p) - b'0')
+      advance(mut p)
+    }
+    box Number(value: value)
+  } else if letter(current(p)) {
+    let start = p.pos
+    while letter(current(p)) || digit(current(p)) {
+      advance(mut p)
+    }
+    let name = results.unwrap_or(
+      string.from_bytes(unique bytes.slice(p.source, start, p.pos)),
+      ""
+    )
+    skip(mut p)
+    if current(p) == b'=' {
+      advance(mut p)
+      box Assignment(name: name, value: expression(mut p))
+    } else {
+      box Variable(name: name)
+    }
+  } else if current(p) == b'(' {
+    advance(mut p)
+    let node = expression(mut p)
+    skip(mut p)
+    if current(p) == b')' {
+      advance(mut p)
+    }
+    take node
+  } else {
+    advance(mut p)
+    box Number(value: 0)
+  }
+}
+
+fn parse(source: Bytes) -> List[box Node] {
+  let mut p = Parser(source: source, pos: 0)
+  let mut ast: List[box Node] = []
+  while true {
+    skip(mut p)
+    if current(p) == 0 {
+      break
+    }
+    list.push(mut ast, expression(mut p))
+  }
+  take ast
+}
+
+fn divide(a: i64, b: i64) -> i64 {
+  if b == 0 {
+    0
+  } else if a == -9223372036854775808i64 && b == -1 {
+    a
+  } else {
+    a / b
+  }
+}
+
+fn evaluate(node: box Node, mut variables: Map[String, i64]) -> i64 {
+  match node {
+    Number(value: value) => value,
+    Variable(name: name) => option.unwrap_or(map.get(variables, name), 0),
+    Assignment(name: name, value: value) => {
+      let value_out = evaluate(value, mut variables)
+      map.insert(mut variables, unique name, value_out)
+      value_out
+    },
+    Binary(op: op, left: left, right: right) => {
+      let a = evaluate(left, mut variables)
+      let b = evaluate(right, mut variables)
+      match op {
+        b'+' => i64.wrapping_add(a, b),
+        b'-' => i64.wrapping_sub(a, b),
+        b'*' => i64.wrapping_mul(a, b),
+        b'/' => divide(a, b),
+        b'%' => if b == 0 {
+          0
+        } else {
+          i64.wrapping_sub(a, i64.wrapping_mul(divide(a, b), b))
+        },
+        _ => 0,
+      }
+    },
+  }
+}
+
+fn step(mut s: State, iteration: u64) {
+  if s.interpret {
+    let mut variables: Map[String, i64] = map.empty()
+    let mut value_out = 0i64
+    for node in s.ast {
+      value_out = evaluate(node, mut variables)
+    }
+    s.value_out = u32.wrapping_add(s.value_out, int.truncate(value_out))
+  } else {
+    s.ast = parse(s.source)
+    s.value_out = u32.wrapping_add(s.value_out, int.truncate(list.len(s.ast)))
+    if list.len(s.ast) > 0 {
+      if let Assignment(name: name, value: _) = s.ast[list.len(s.ast) - 1] {
+        s.value_out = u32.wrapping_add(
+          s.value_out,
+          harness.hash_bytes(string.as_bytes(name))
+        )
+      }
+    }
+  }
+}
+
+fn checksum(s: State) -> u32 {
+  s.value_out
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let source = generate(harness.number(config, "operations"))
+  let interpret = name == "Calculator::Interpreter"
+  let ast = if interpret {
+    parse(source)
+  } else {
+    []
+  }
+  harness.measure(
+    rt,
+    config,
+    State(source: source, ast: take ast, interpret: interpret, value_out: 0),
+    step,
+    checksum
+  )
+}

@@ -1,0 +1,191 @@
+// langarena: Brainfuck::Array
+// langarena: Brainfuck::Recursion
+// Port: rust/src/benchmarks/brainfuck_array.rs:10-175 and
+// brainfuck_recursion.rs:4-181 (3c9f84d). Parsing stays inside each iteration.
+type Op = Dec | Inc | Prev | Next | Print | Loop(body: List[Op])
+
+type Parser {
+  text: Bytes,
+  pos: u64,
+}
+
+type Tape {
+  cells: List[u8],
+  pos: u64,
+  value_out: u32,
+}
+
+type State {
+  text: String,
+  main_text: String,
+  recursive: bool,
+  value_out: u32,
+}
+
+fn parse(mut p: Parser) -> List[Op] {
+  let mut ops: List[Op] = []
+  while p.pos < bytes.len(p.text) {
+    let byte = p.text[p.pos]
+    p.pos += 1
+    match byte {
+      b'-' => list.push(mut ops, Dec()),
+      b'+' => list.push(mut ops, Inc()),
+      b'<' => list.push(mut ops, Prev()),
+      b'>' => list.push(mut ops, Next()),
+      b'.' => list.push(mut ops, Print()),
+      b'[' => {
+        let body = parse(mut p)
+        list.push(mut ops, Loop(body: take body))
+      },
+      b']' => break,
+      _ => {},
+    }
+  }
+  take ops
+}
+
+fn command(mut t: Tape, byte: u8) {
+  match byte {
+    b'+' => {
+      t.cells[t.pos] = u8.wrapping_add(t.cells[t.pos], 1)
+    },
+    b'-' => {
+      t.cells[t.pos] = u8.wrapping_sub(t.cells[t.pos], 1)
+    },
+    b'<' => {
+      if t.pos > 0 {
+        t.pos -= 1
+      }
+    },
+    b'>' => {
+      t.pos += 1
+      if t.pos >= list.len(t.cells) {
+        list.push(mut t.cells, 0)
+      }
+    },
+    b'.' => {
+      t.value_out = u32.wrapping_add(t.value_out << 2, int.widen(t.cells[t.pos]))
+    },
+    _ => {},
+  }
+}
+
+fn recursive_run(ops: List[Op], mut tape: Tape) {
+  for op in ops {
+    match op {
+      Dec() => command(mut tape, b'-'),
+      Inc() => command(mut tape, b'+'),
+      Prev() => command(mut tape, b'<'),
+      Next() => command(mut tape, b'>'),
+      Print() => command(mut tape, b'.'),
+      Loop(body: body) => {
+        while tape.cells[tape.pos] != 0 {
+          recursive_run(body, mut tape)
+        }
+      },
+    }
+  }
+}
+
+fn run(source: String, recursive: bool) -> Option[u32] {
+  let mut tape = Tape(cells: [], pos: 0, value_out: 0)
+  for _ in 0u64..if recursive {
+    1u64
+  } else {
+    30000u64
+  } {
+    list.push(mut tape.cells, 0)
+  }
+  if recursive {
+    let mut parser = Parser(text: string.as_bytes(source), pos: 0)
+    let ops = parse(mut parser)
+    recursive_run(ops, mut tape)
+  } else {
+    let text = string.as_bytes(source)
+    let mut commands: List[u8] = []
+    for i in 0u64..bytes.len(text) {
+      let c = text[i]
+      if c == b'+' || c == b'-' || c == b'>' || c == b'<' || c == b'[' || c == b']' || c == b'.' || c == b',' {
+        list.push(mut commands, c)
+      }
+    }
+    if list.len(commands) == 0 {
+      return None()
+    }
+    let mut jumps: List[u64] = []
+    for _ in 0u64..list.len(commands) {
+      list.push(mut jumps, 0)
+    }
+    let mut stack: List[u64] = []
+    for i in 0u64..list.len(commands) {
+      if commands[i] == b'[' {
+        list.push(mut stack, i)
+      }
+      if commands[i] == b']' {
+        let Some(start) = list.pop(mut stack) else {
+          return None()
+        }
+        jumps[start] = i
+        jumps[i] = start
+      }
+    }
+    if list.len(stack) != 0 {
+      return None()
+    }
+    let mut pc = 0u64
+    while pc < list.len(commands) {
+      let c = commands[pc]
+      if c == b',' {
+        return None()
+      }
+      if c == b'[' && tape.cells[tape.pos] == 0 || c == b']' && tape.cells[tape.pos] != 0 {
+        pc = jumps[pc]
+      } else {
+        command(mut tape, c)
+      }
+      pc += 1
+    }
+  }
+  Some(tape.value_out)
+}
+
+fn step(mut s: State, iteration: u64) {
+  if let Some(value) = run(s.text, s.recursive) {
+    s.value_out = u32.wrapping_add(s.value_out, value)
+  }
+}
+
+fn reset(mut s: State) {
+  s.text = unique s.main_text
+  s.value_out = 0
+}
+
+fn checksum(s: State) -> u32 {
+  s.value_out
+}
+
+fn config_text(config: harness.Config, key: String) -> String {
+  match map.get(config, key) {
+    Some(Text(value)) => unique value,
+    _ => "",
+  }
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  harness.measure_reset(
+    rt,
+    config,
+    State(
+      text: config_text(config, "warmup_program"),
+      main_text: config_text(config, "program"),
+      recursive: name == "Brainfuck::Recursion",
+      value_out: 0
+    ),
+    step,
+    reset,
+    checksum
+  )
+}
