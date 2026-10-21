@@ -3,11 +3,11 @@
 //! descriptor-aware value normalization before exporting a canonical trace.
 //! It never samples a parked context or records an early commit.
 use super::super::Logical;
-use super::Outcome;
+use super::{Command, Outcome};
 use crate::TaskCtx;
 use crate::budget::stretch::Stretch;
-use crate::ordered::footprint::TaskId;
-use crate::ordered::{Next, Retirement};
+use crate::ordered::footprint::{Item, ObjectId, TaskId};
+use crate::ordered::{Next, Operation, Retirement};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,10 +38,54 @@ pub(super) struct Boundary {
     pub native_outcome: Option<(u32, Vec<u8>)>,
 }
 
+/// Canonical scalar event: no native handle word or physical worker enters it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct CanonicalEvent {
+    pub task: Vec<u32>,
+    pub ordinal: u64,
+    pub subevent: u32,
+    pub op: &'static str,
+    pub transition: Transition,
+    pub item: ObjectId,
+    pub version: u64,
+    pub outcome: CanonicalOutcome,
+    pub retirement: u64,
+    pub before: Stretch,
+    pub credit: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum CanonicalOutcome {
+    Created(ObjectId),
+    Scalar(Vec<u8>),
+    Unit,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct Unsupported {
+    pub task: Vec<u32>,
+    pub ordinal: u64,
+    pub op: Option<&'static str>,
+}
+
 #[derive(Default)]
 pub(super) struct Log {
     ordinals: BTreeMap<Vec<u32>, u64>,
     pub boundaries: Vec<Boundary>,
+    versions: BTreeMap<ObjectId, u64>,
+    canonical: Vec<CanonicalEvent>,
+    unsupported: Vec<Unsupported>,
+}
+
+impl Log {
+    /// A partial projection must never be accepted as a complete trace.
+    pub(super) fn canonical(&self) -> Result<&[CanonicalEvent], &[Unsupported]> {
+        if self.unsupported.is_empty() {
+            Ok(&self.canonical)
+        } else {
+            Err(&self.unsupported)
+        }
+    }
 }
 
 /// Enable only at admission, before any operation can retire. No run identity
@@ -56,7 +100,7 @@ pub(super) fn enable(ctx: *mut TaskCtx) {
 pub(super) fn record(
     ctx: *mut TaskCtx,
     task: TaskId,
-    operation: Option<(&'static str, &Outcome)>,
+    operation: Option<(&Operation<Command>, &Outcome)>,
     retirement: Retirement<'_>,
 ) {
     // Default execution pays no summary, path or carrier copy. The role owns
@@ -96,6 +140,25 @@ pub(super) fn record(
             then_yield: *then_yield,
         },
     };
+    let canonical = operation.and_then(|(op, result)| {
+        let items: std::collections::BTreeSet<_> = op
+            .footprint
+            .reads
+            .iter()
+            .chain(&op.footprint.writes)
+            .collect();
+        let [Item::Object(item)] = items.into_iter().collect::<Vec<_>>().as_slice() else {
+            return None;
+        };
+        let outcome = match &op.payload {
+            Command::AtomicCreate { .. } => CanonicalOutcome::Created(item.clone()),
+            Command::AtomicLoad { .. } => CanonicalOutcome::Scalar(result.image.clone()),
+            Command::AtomicStore { .. } => CanonicalOutcome::Unit,
+            _ => return None,
+        };
+        assert_eq!(result.status, 0);
+        Some((item.clone(), outcome))
+    });
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
     };
@@ -109,10 +172,38 @@ pub(super) fn record(
         next.checked_sub(1)
             .expect("a continuation follows an operation")
     };
+    if let (Some((item, outcome)), Some((op, _))) = (canonical, operation) {
+        let version = log.versions.entry(item.clone()).or_default();
+        *version = version
+            .checked_add(1)
+            .expect("canonical object version overflow");
+        if matches!(outcome, CanonicalOutcome::Created(_)) {
+            assert_eq!(*version, 1, "creation is the first object subevent");
+        }
+        log.canonical.push(CanonicalEvent {
+            task: path.clone(),
+            ordinal,
+            subevent: 0,
+            op: op.descriptor.name,
+            transition: transition.clone(),
+            item,
+            version: *version,
+            outcome,
+            retirement: retirement.index,
+            before: retirement.before.clone(),
+            credit: retirement.credit,
+        });
+    } else {
+        log.unsupported.push(Unsupported {
+            task: path.clone(),
+            ordinal,
+            op: operation.map(|(op, _)| op.descriptor.name),
+        });
+    }
     log.boundaries.push(Boundary {
         task: path,
         ordinal,
-        op: operation.map(|(name, _)| name),
+        op: operation.map(|(op, _)| op.descriptor.name),
         transition,
         retirement: retirement.index,
         before: retirement.before.clone(),
@@ -170,6 +261,11 @@ mod tests {
                     );
                     assert_eq!(rows[0].native_outcome, Some((0, Vec::new())));
                     assert_eq!(rows[1].native_outcome, None);
+                    assert_eq!(
+                        log.canonical().unwrap_err().len(),
+                        3,
+                        "partial trace must be refused"
+                    );
                     crate::STATUS_OK
                 },
             );
@@ -222,6 +318,268 @@ mod tests {
             );
             assert_eq!(outcome.ended, Err(crate::stop::Stop::Requested));
             assert!(restored.load(Ordering::Acquire));
+        }
+    }
+    #[test]
+    fn native_atomic_events_normalize_identities_and_match_across_widths_and_reorder() {
+        use std::sync::{Arc, Mutex};
+        let mut reference = None;
+        for width in [2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let result = Arc::new(Mutex::new(Vec::new()));
+                let output = result.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        super::super::engine::enable(ctx, policy);
+                        enable(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let initial = 0x1122334455667788u64.to_le_bytes();
+                        let mut word = 0;
+                        super::super::engine::atomic_create(ctx, &mut word, initial.as_ptr(), 8)
+                            .unwrap();
+                        let mut loaded = [0u8; 8];
+                        super::super::engine::atomic_load(ctx, word, loaded.as_mut_ptr(), 8)
+                            .unwrap();
+                        assert_eq!(loaded, initial);
+                        super::super::engine::atomic_store(
+                            ctx,
+                            word,
+                            9u64.to_le_bytes().as_ptr(),
+                            8,
+                        )
+                        .unwrap();
+                        super::super::engine::atomic_load(ctx, word, loaded.as_mut_ptr(), 8)
+                            .unwrap();
+                        assert_eq!(loaded, 9u64.to_le_bytes());
+                        let driver = super::super::engine::driver(ctx);
+                        let log = driver.events.as_ref().unwrap();
+                        let events = log.canonical().expect("all four atomic events classified");
+                        assert_eq!(events.len(), 4);
+                        assert_eq!(
+                            events.iter().map(|event| event.version).collect::<Vec<_>>(),
+                            [1, 2, 3, 4]
+                        );
+                        assert_eq!(
+                            events.iter().map(|event| event.ordinal).collect::<Vec<_>>(),
+                            [0, 1, 2, 3]
+                        );
+                        let item = ObjectId {
+                            creator: Vec::new(),
+                            ordinal: 0,
+                        };
+                        assert!(
+                            events
+                                .iter()
+                                .all(|event| event.item == item && event.subevent == 0)
+                        );
+                        assert_eq!(events[0].outcome, CanonicalOutcome::Created(item));
+                        assert_eq!(
+                            events[1].outcome,
+                            CanonicalOutcome::Scalar(initial.to_vec())
+                        );
+                        assert_eq!(events[2].outcome, CanonicalOutcome::Unit);
+                        assert_eq!(
+                            events[3].outcome,
+                            CanonicalOutcome::Scalar(9u64.to_le_bytes().to_vec())
+                        );
+                        *output.lock().unwrap() = events.to_vec();
+                        crate::STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                let events = result.lock().unwrap().clone();
+                if let Some(reference) = &reference {
+                    assert_eq!(&events, reference);
+                } else {
+                    reference = Some(events);
+                }
+            }
+        }
+    }
+    #[derive(Default)]
+    struct AheadProbe {
+        issued: std::sync::atomic::AtomicBool,
+        word: std::sync::atomic::AtomicU64,
+        early: std::sync::atomic::AtomicBool,
+        auto: bool,
+    }
+
+    unsafe extern "C" fn unresolved_head(
+        ctx: *mut TaskCtx,
+        env: *mut crate::Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        use std::sync::atomic::Ordering;
+        let probe =
+            unsafe { &*(crate::alloc::payload(env).cast::<u64>().read() as *const AheadProbe) };
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !probe.issued.load(Ordering::Acquire) {
+            assert!(
+                std::time::Instant::now() < until,
+                "queued atomic creator did not pass the head"
+            );
+            std::thread::yield_now();
+        }
+        let _guard = unsafe { crate::tasks::role::Guard::new(ctx) };
+        let s = crate::tasks::scheduler(ctx);
+        let initialized = s.sync.initialized(probe.word.load(Ordering::Acquire));
+        assert_eq!(
+            initialized, probe.auto,
+            "actual internal commit follows reorder policy"
+        );
+        let Logical::Ordered(driver) = &s.logical else {
+            unreachable!()
+        };
+        assert!(
+            driver.events.as_ref().unwrap().canonical.is_empty(),
+            "unretired ops emit no canonical events"
+        );
+        probe.early.store(initialized, Ordering::Release);
+        crate::STATUS_OK
+    }
+
+    #[test]
+    fn an_actual_early_atomic_creation_emits_only_when_its_owner_retires() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex, atomic::Ordering};
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&layout as *const crate::Layout];
+        let mut reference = None;
+        for width in [2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let probe = Arc::new(AheadProbe {
+                    auto: reorder == hirsel_run_config::Reorder::Auto,
+                    ..Default::default()
+                });
+                let seen = probe.clone();
+                let result = Arc::new(Mutex::new(Vec::new()));
+                let output = result.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 1;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        super::super::engine::enable(ctx, policy);
+                        enable(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let mut scope = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_enter(
+                                ctx,
+                                std::ptr::null_mut(),
+                                &mut scope,
+                                &0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        let env = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            8,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(env)
+                            .cast::<u64>()
+                            .write(Arc::as_ptr(&seen) as u64);
+                        let mut child = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_spawn(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut child,
+                                &scope,
+                                unresolved_head,
+                                env,
+                                0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        let mut word = 0;
+                        super::super::engine::atomic_create(
+                            ctx,
+                            &mut word,
+                            7u64.to_le_bytes().as_ptr(),
+                            8,
+                        )
+                        .unwrap();
+                        seen.word.store(word, Ordering::Release);
+                        seen.issued.store(true, Ordering::Release);
+                        super::super::engine::atomic_store(
+                            ctx,
+                            word,
+                            9u64.to_le_bytes().as_ptr(),
+                            8,
+                        )
+                        .unwrap();
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                            crate::STATUS_OK
+                        );
+                        let mut loaded = [0u8; 8];
+                        super::super::engine::atomic_load(ctx, word, loaded.as_mut_ptr(), 8)
+                            .unwrap();
+                        assert_eq!(loaded, 9u64.to_le_bytes());
+                        let driver = super::super::engine::driver(ctx);
+                        let log = driver.events.as_ref().unwrap();
+                        assert!(
+                            log.canonical().is_err(),
+                            "task operations are still unclassified"
+                        );
+                        assert_eq!(log.canonical.len(), 3);
+                        assert_eq!(
+                            log.canonical
+                                .iter()
+                                .map(|event| event.version)
+                                .collect::<Vec<_>>(),
+                            [1, 2, 3]
+                        );
+                        *output.lock().unwrap() = log.canonical.clone();
+                        crate::STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                assert_eq!(probe.early.load(Ordering::Acquire), probe.auto);
+                let events = result.lock().unwrap().clone();
+                if let Some(reference) = &reference {
+                    assert_eq!(&events, reference);
+                } else {
+                    reference = Some(events);
+                }
+            }
         }
     }
 }

@@ -576,12 +576,7 @@ impl Backend<Command> for Objects<'_> {
         retirement: crate::ordered::Retirement<'_>,
     ) {
         self.record(task, op, result, retirement.index);
-        events::record(
-            self.ctx,
-            task,
-            Some((op.descriptor.name, result)),
-            retirement,
-        );
+        events::record(self.ctx, task, Some((op, result)), retirement);
     }
 
     fn record_continuation(&mut self, task: TaskId, retirement: crate::ordered::Retirement<'_>) {
