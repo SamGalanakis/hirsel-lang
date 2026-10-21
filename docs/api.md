@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1909 exported definitions; 809 variants.
+1926 exported definitions; 809 variants.
 
 ## Types and roots
 
@@ -4659,6 +4659,12 @@ References: [`core@1/f32`](#def-core_401_2ff32)
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/f32`](#def-core_401_2ff32)
 
+<a id="def-std_401_2ff32_2ftotal_5forder"></a>
+
+- `@noalloc pub fn f32.total_order(a: f32, b: f32) -> i32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32), [`core@1/i32`](#def-core_401_2fi32)
+
 <a id="def-std_401_2ff32_2ftrunc"></a>
 
 - `@noalloc pub fn f32.trunc(value: f32) -> f32 uses {}`
@@ -4913,6 +4919,12 @@ References: [`core@1/f64`](#def-core_401_2ff64)
 - `pub fn f64.to_string(value: f64) -> unique String uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2ftotal_5forder"></a>
+
+- `@noalloc pub fn f64.total_order(a: f64, b: f64) -> i32 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64), [`core@1/i32`](#def-core_401_2fi32)
 
 <a id="def-std_401_2ff64_2ftrunc"></a>
 
@@ -5267,6 +5279,18 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_40
 
 ## float
 
+<a id="def-core_401_2ffloat_2fabs"></a>
+
+- `@noalloc fn float.abs[F](value: F) -> F`
+
+<a id="def-core_401_2ffloat_2fceil"></a>
+
+- `@noalloc fn float.ceil[F](value: F) -> F`
+
+<a id="def-core_401_2ffloat_2ffloor"></a>
+
+- `@noalloc fn float.floor[F](value: F) -> F`
+
 <a id="def-core_401_2ffloat_2ffrom_5fint"></a>
 
 - `@noalloc fn float.from_int[I, F](value: I) -> F`
@@ -5291,13 +5315,21 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_40
 
 - `@noalloc fn float.mul_add[F](a: F, b: F, c: F) -> F`
 
+<a id="def-core_401_2ffloat_2fround"></a>
+
+- `@noalloc fn float.round[F](value: F) -> F`
+
+<a id="def-core_401_2ffloat_2fsqrt"></a>
+
+- `@noalloc fn float.sqrt[F](value: F) -> F`
+
 <a id="def-core_401_2ffloat_2fto_5fi32"></a>
 
 - `@noalloc fn float.to_i32[F](value: F) -> Result[i32, FloatIntError]`
 
-<a id="def-core_401_2ffloat_2ftotal_5forder"></a>
+<a id="def-core_401_2ffloat_2ftrunc"></a>
 
-- `@noalloc fn float.total_order[F](a: F, b: F) -> i32`
+- `@noalloc fn float.trunc[F](value: F) -> F`
 
 
 ## fnv
@@ -5650,7 +5682,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fhtml_2fesc"></a>
 
-- `pub fn html.esc(value: String) -> Escaped uses {}`
+- `@noalloc pub fn html.esc(value: String) -> Escaped in value uses {}`
 
 Wrap text so an f-string hole escapes it as HTML.
 
@@ -7507,6 +7539,18 @@ References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Option`]
 
 - `@noalloc fn int.checked_add[I](a: I, b: I) -> Option[I]`
 
+<a id="def-core_401_2fint_2fchecked_5fmul"></a>
+
+- `@noalloc fn int.checked_mul[I](a: I, b: I) -> Option[I]`
+
+<a id="def-core_401_2fint_2fchecked_5fsub"></a>
+
+- `@noalloc fn int.checked_sub[I](a: I, b: I) -> Option[I]`
+
+<a id="def-core_401_2fint_2fcount_5fones"></a>
+
+- `@noalloc fn int.count_ones[I](value: I) -> I`
+
 <a id="def-core_401_2fint_2fdiv_5fexact"></a>
 
 - `@noalloc fn int.div_exact[I](a: I, b: I) -> I`
@@ -7514,6 +7558,10 @@ References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Option`]
 <a id="def-core_401_2fint_2fdiv_5ffloor"></a>
 
 - `@noalloc fn int.div_floor[I](a: I, b: I) -> I`
+
+<a id="def-core_401_2fint_2fleading_5fzeros"></a>
+
+- `@noalloc fn int.leading_zeros[I](value: I) -> I`
 
 <a id="def-core_401_2fint_2fmod"></a>
 
@@ -7523,9 +7571,25 @@ References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Option`]
 
 - `@noalloc fn int.narrow[I, J](value: I) -> J`
 
+<a id="def-core_401_2fint_2freverse_5fbits"></a>
+
+- `@noalloc fn int.reverse_bits[I](value: I) -> I`
+
 <a id="def-core_401_2fint_2fsaturating_5fadd"></a>
 
 - `@noalloc fn int.saturating_add[I](a: I, b: I) -> I`
+
+<a id="def-core_401_2fint_2fsaturating_5fsub"></a>
+
+- `@noalloc fn int.saturating_sub[I](a: I, b: I) -> I`
+
+<a id="def-core_401_2fint_2fswap_5fbytes"></a>
+
+- `@noalloc fn int.swap_bytes[I](value: I) -> I`
+
+<a id="def-core_401_2fint_2ftrailing_5fzeros"></a>
+
+- `@noalloc fn int.trailing_zeros[I](value: I) -> I`
 
 <a id="def-core_401_2fint_2ftruncate"></a>
 
@@ -7546,6 +7610,14 @@ References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Option`]
 <a id="def-core_401_2fint_2fwrapping_5fadd"></a>
 
 - `@noalloc fn int.wrapping_add[I](a: I, b: I) -> I`
+
+<a id="def-core_401_2fint_2fwrapping_5fmul"></a>
+
+- `@noalloc fn int.wrapping_mul[I](a: I, b: I) -> I`
+
+<a id="def-core_401_2fint_2fwrapping_5fsub"></a>
+
+- `@noalloc fn int.wrapping_sub[I](a: I, b: I) -> I`
 
 
 ## io
@@ -7633,9 +7705,11 @@ References: [`core@1/Iter`](#def-core_401_2fIter)
 
 - `fn iter.from[S, T](take state: S, take next: fn(mut S) -> Option[T]) -> Iter[T] uses {state, next}`
 
-<a id="def-core_401_2fiter_2fmap"></a>
+<a id="def-std_401_2fiter_2fmap"></a>
 
-- `fn iter.map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f}`
+- `@captures(it, f) pub fn iter.map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f}`
+
+References: [`core@1/Iter`](#def-core_401_2fIter)
 
 <a id="def-core_401_2fiter_2fnext"></a>
 
