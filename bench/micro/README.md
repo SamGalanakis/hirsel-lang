@@ -124,6 +124,14 @@ features). It checks the total serialized byte length; object field ordering
 differs but lengths agree. This is separate from `bench/native`'s lossless
 spelling-preserving JSON algorithm. `map_str` preserves the original two-probe
 source; `map_str_upsert` measures the collections API introduced afterwards.
+The original Rust `map_str`/`map_str_upsert` control borrows with `get_mut` on
+hits and clones only on misses. Rust `map_str_two_probe` instead performs
+`get` followed by `insert(w.clone(), next)` on every selection, matching the
+original Hirsel caller. Rust `map_str_entry` performs
+`entry(w.clone()).or_insert(0)`, exposing the owned-key entry API's clone even
+on hits. All three use the same vocabulary, PRNG, final weighted checksum and
+cleanup. Include all three in a participants manifest when comparing String
+counters; Hirsel's borrowed-key upsert avoids that hit clone.
 
 See [http/README.md](http/README.md) for the finite HTTP keep-alive pair and its
 independent open-loop client.

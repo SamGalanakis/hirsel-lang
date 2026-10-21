@@ -817,3 +817,81 @@ fn ten_thousand_short_views_use_less_than_twice_the_copied_byte_storage() {
     release(ctx.0, source.owner);
     assert_eq!(ctx.stats().live_blocks, 0);
 }
+
+#[test]
+fn single_utf8_view_copies_keep_aliases_and_precharge_bounded_arenas() {
+    use hirsel_rt::region::{
+        hirsel_rt_v2_arena_bound, hirsel_rt_v2_arena_enter, hirsel_rt_v2_region_exit,
+    };
+    use std::mem::MaybeUninit;
+
+    let mut step = release_step(0, 0);
+    step.stride = 24;
+    let layout = layout(24, 1, None, vec![step]);
+    for diagnostic in [false, true] {
+        for sliced in [false, true] {
+            let ctx = Ctx::with(Config {
+                flags: if diagnostic { CONFIG_DIAGNOSTIC } else { 0 },
+                ..Config::new()
+            });
+            let view_index = index(ctx.0, layout);
+            let source = unsafe { hirsel_rt::text::allocate_bytes(ctx.0, "xéλy".as_bytes()) };
+            let original = if sliced {
+                hirsel_rt::views::Slice {
+                    start: source.start + 1,
+                    length: 4,
+                    ..source
+                }
+            } else {
+                source
+            };
+            let mut arena = MaybeUninit::<hirsel_rt::Region>::uninit();
+            unsafe {
+                let arena = arena.as_mut_ptr();
+                hirsel_rt_v2_arena_enter(ctx.0, arena);
+                hirsel_rt_v2_arena_bound(ctx.0, arena, original.length - 1);
+                let mut copied = original;
+                let before = ctx.stats().live_blocks;
+                assert_eq!(
+                    hirsel_rt_v2_unique_copy_value(
+                        ctx.0,
+                        view_index,
+                        (&raw mut copied).cast(),
+                        arena,
+                        0
+                    ),
+                    hirsel_rt::STATUS_EXHAUSTED
+                );
+                assert_eq!(
+                    (copied.owner, copied.start, copied.length),
+                    (original.owner, original.start, original.length)
+                );
+                assert_eq!(ctx.stats().live_blocks, before);
+                assert_eq!((*arena).remaining, original.length - 1);
+                hirsel_rt_v2_arena_bound(ctx.0, arena, original.length);
+                assert_eq!(
+                    hirsel_rt_v2_unique_copy_value(
+                        ctx.0,
+                        view_index,
+                        (&raw mut copied).cast(),
+                        arena,
+                        0
+                    ),
+                    0
+                );
+                assert_ne!(copied.owner, source.owner);
+                assert_eq!((*arena).remaining, 0);
+                assert_eq!((copied.start, copied.length), (8, original.length));
+                let expected = if sliced { "éλ" } else { "xéλy" }.as_bytes();
+                assert_eq!(
+                    std::slice::from_raw_parts(payload(copied.owner).add(16), expected.len()),
+                    expected
+                );
+                assert_eq!(count(source.owner), 1);
+                assert_eq!(hirsel_rt_v2_region_exit(ctx.0, arena, 0, 0), 0);
+            }
+            release(ctx.0, source.owner);
+            assert_eq!(ctx.stats().live_blocks, 0);
+        }
+    }
+}

@@ -76,6 +76,49 @@ fn map_str(n: u64, salt: u64) -> u64 {
     sum
 }
 
+fn map_str_two_probe(n: u64, salt: u64) -> u64 {
+    let vocab: Vec<String> = (0..4096u64).map(|i| format!("word{i}")).collect();
+    let mut g = Xo::seed(42 + salt);
+    let mut counts: HashMap<String, u64> = HashMap::new();
+    for _ in 0..n {
+        let w = &vocab[(g.next() % 4096) as usize];
+        let c = counts.get(w).copied().unwrap_or(0);
+        counts.insert(w.clone(), c + 1);
+    }
+    let mut sum = 0u64;
+    for (k, w) in vocab.iter().enumerate() {
+        sum = sum.wrapping_add(
+            counts
+                .get(w)
+                .copied()
+                .unwrap_or(0)
+                .wrapping_mul(k as u64 + 1),
+        );
+    }
+    sum
+}
+
+fn map_str_entry(n: u64, salt: u64) -> u64 {
+    let vocab: Vec<String> = (0..4096u64).map(|i| format!("word{i}")).collect();
+    let mut g = Xo::seed(42 + salt);
+    let mut counts: HashMap<String, u64> = HashMap::new();
+    for _ in 0..n {
+        let w = &vocab[(g.next() % 4096) as usize];
+        *counts.entry(w.clone()).or_insert(0) += 1;
+    }
+    let mut sum = 0u64;
+    for (k, w) in vocab.iter().enumerate() {
+        sum = sum.wrapping_add(
+            counts
+                .get(w)
+                .copied()
+                .unwrap_or(0)
+                .wrapping_mul(k as u64 + 1),
+        );
+    }
+    sum
+}
+
 fn html_row(n: u64, salt: u64) -> u64 {
     let mut out = String::with_capacity(n as usize * 64);
     for i in 0..n {
@@ -282,6 +325,8 @@ fn main() {
         sum = sum.wrapping_add(match which {
             "map_u64" => map_u64(n, r),
             "map_str" | "map_str_upsert" => map_str(n, r),
+            "map_str_two_probe" => map_str_two_probe(n, r),
+            "map_str_entry" => map_str_entry(n, r),
             "strbuild" => strbuild(n, r),
             "html_row" => html_row(n, r),
             "sha" => sha(n, r),

@@ -10,6 +10,10 @@ use hirsel_engine::{
 use hirsel_heapcheck::{Config, NoOperations, Observed};
 
 fn execute(body: &str, expected: u64) {
+    execute_with_collisions(body, expected, false);
+}
+
+fn execute_with_collisions(body: &str, expected: u64, collisions: bool) {
     let source = format!("{body}\npub fn main() -> Result[(), u64] {{ Error(value()) }}\n");
     with_compiler_stack(move || {
         let mut engine = if source.contains("std@1/") {
@@ -36,12 +40,34 @@ fn execute(body: &str, expected: u64) {
             &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
         )
         .unwrap_or_else(|e| panic!("{source}\n{e}"));
-        let p = hirsel_heapcheck::Program {
+        let mut p = hirsel_heapcheck::Program {
             target: ready.target.clone(),
             layouts: ready.table.clone(),
             units: ready.units.iter().map(|u| u.unit().clone()).collect(),
             statics: ready.statics.clone(),
         };
+        if collisions {
+            use hirsel_lir::ir::{ConstantData, ConstantId, ConstantValue, Inst};
+            let mut replaced = 0;
+            for unit in &mut p.units {
+                for instruction in &mut unit.instructions {
+                    if let Inst::Hash { result, .. } = *instruction {
+                        let constant = ConstantId(unit.tables.constants.len() as u32);
+                        unit.tables.constants.push(ConstantData {
+                            ty: unit.values[result.index()].ty,
+                            // Match the deletion sentinel's tag as well as every live key.
+                            value: ConstantValue::Integer(1 << 32),
+                        });
+                        *instruction = Inst::Const { result, constant };
+                        replaced += 1;
+                    }
+                }
+            }
+            assert!(
+                replaced > 0,
+                "collision control must replace the actual hash"
+            );
+        }
         let campaign = hirsel_heapcheck::fault_campaign(
             &p,
             &support::path("main"),
@@ -380,5 +406,32 @@ fn a_niche_key_after_a_plain_field_uses_its_declared_tag_offset() {
     execute(
         "type Key = End | Node(number: u64, pointer: box u64)\nfn value() -> u64 { let mut m: Map[Key,u64] = map.empty(); map.insert(mut m, Node(number: 7, pointer: box 8), 13); match map.get(m, Node(number: 7, pointer: box 8)) { Some(v) => v, None => 0 } }",
         13,
+    );
+}
+
+/// Hashbrown 1876e4f src/map.rs:5241-5270,5626-5673. Force the full hash
+/// (including tag) equal, retaining Hirsel's ordered entries and tombstones.
+#[test]
+fn forced_full_hash_collisions_keep_updates_removals_and_reinsertions_ordered() {
+    execute_with_collisions(
+        r#"fn value() -> u64 {
+ let mut m: Map[u64,u64] = map.empty()
+ for i in 0u64..24u64 { map.insert(mut m, i, i) }
+ map.insert(mut m, 5, 100)
+ let removed = match map.remove(mut m, 0) { Some(v) => v, None => 999 }
+ map.insert(mut m, 0, 200)
+ let mut expected: u64 = 1
+ let mut sum: u64 = removed
+ for (k,v) in m {
+   if expected == 24 { if k != 0 || v != 200 { return 9999 } }
+   else { if k != expected { return 9999 } }
+   sum += v
+   expected += 1
+ }
+ if map.get(m,99) != None || map.get(m,5) != Some(100) { return 9999 }
+ sum
+}"#,
+        571,
+        true,
     );
 }

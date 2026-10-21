@@ -657,6 +657,46 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy_value(
             return STATUS_EXHAUSTED;
         }
         let below = (*layout).flags & LAYOUT_UNTRACKED_BELOW == 0;
+        // A single String/Bytes holder is already the entire byte-copy graph.
+        // Rust alloc/src/slice.rs:446-459 (a7c37f9f0ee5) likewise allocates
+        // once and copies the interval. Keep the same precharge above and the
+        // existing whole-block/compact-view allocation semantics below.
+        if (*layout).size == 24 && (*layout).step_count == 1 {
+            let step = &*(*layout).steps;
+            if matches!(step.kind, STEP_RELEASE | STEP_RELEASE_LAST)
+                && step.offset == 0
+                && step.stride == 24
+            {
+                let child = value.cast::<*mut Header>().read_unaligned();
+                if (*ctx).heap().diagnostic {
+                    check_live_block(&*ctx, child);
+                }
+                if !crate::shared::is_root(&*ctx, child) {
+                    let key = view_key(&*ctx, value, true);
+                    // A compact view has only bytes; a whole slice's owner
+                    // was certified childless by view_key. No walk or memo
+                    // table is needed in either case.
+                    let tracked = below && !destination.is_null() && (*destination).bound != 0;
+                    #[cfg(feature = "measurement")]
+                    {
+                        let measurement = &mut (*ctx).heap().measurement;
+                        measurement.record("deep_copies", 1);
+                        measurement.deep_copies += 1;
+                    }
+                    let copy = match key.view {
+                        Some((start, length)) => {
+                            let copy =
+                                clone_view(&mut *ctx, child, start, length, destination, tracked);
+                            value.add(8).cast::<u64>().write_unaligned(8);
+                            copy
+                        }
+                        None => clone_block(&mut *ctx, child, destination, tracked),
+                    };
+                    value.cast::<*mut Header>().write_unaligned(copy);
+                    return STATUS_OK;
+                }
+            }
+        }
         copy_graph(ctx, destination, None, below, |redirect| {
             holder_views(layout, value, redirect)
         });

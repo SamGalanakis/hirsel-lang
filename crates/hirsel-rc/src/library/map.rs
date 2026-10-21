@@ -399,73 +399,9 @@ struct Probe {
     bucket: ValueId,
 }
 fn probe_call(b: &mut Body<'_, '_>) -> R<Probe> {
-    let k = b.cx.type_actual(0)?;
-    let types = if b.cx.arguments.len() == 2 {
-        vec![k, b.cx.type_actual(1)?]
-    } else {
-        vec![k]
-    };
-    let is_map = types.len() == 2;
-    let container = builtin(
-        b,
-        if is_map {
-            BuiltinType::Map
-        } else {
-            BuiltinType::Set
-        },
-        &types,
-    );
-    let u64_ty = add_type(b.cx.types, TypeKind::Primitive(Primitive::U64));
-    let result_ty = add_type(b.cx.types, TypeKind::Tuple(vec![u64_ty; 3].into()));
-    let actuals = b.cx.arguments.clone();
-    let direct = helper(
-        b,
-        if is_map { "map_probe" } else { "set_probe" },
-        &[(PassingMode::Borrow, container), (PassingMode::Borrow, k)],
-        result_ty,
-        Allocation::NoAlloc,
-        actuals,
-    )?;
-    let (m, ml) = b.borrow(b.parameters[0].address, false)?;
-    let (key, kl) = b.borrow(b.parameters[1].address, false)?;
-    let index = call(
-        b,
-        direct,
-        &[
-            argument(0, Passing::Borrow, m),
-            argument(1, Passing::Borrow, key),
-        ],
-    )?
-    .unwrap();
-    b.end_loan(kl);
-    b.end_loan(ml);
-    {
-        let layout = b.layout_of(index);
-        let (slot, tuple) = temporary(b, layout)?;
-        b.store(tuple, index)?;
-        let word = b.u64_layout()?;
-        let mut at = |field| {
-            let at = b.place(
-                AddressBase::Address(tuple),
-                &[ProjectionStep::Field(field)],
-                word,
-                None,
-            )?;
-            b.read_bits(at)
-        };
-        let result = Probe {
-            ordinal: at(0)?,
-            hash: at(1)?,
-            bucket: at(2)?,
-        };
-        b.take(tuple)?;
-        b.push(Inst::StorageDead {
-            slot,
-            if_live: false,
-        });
-        Ok(result)
-    }
+    probe_body(b)
 }
+
 fn probe(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     probe_map(cx)
 }
@@ -474,32 +410,47 @@ fn probe(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
 /// update and removal never search or hash the key a second time.
 fn probe_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let mut b = Body::new(cx)?;
+    let result = probe_body(&mut b)?;
+    probe_return(&mut b, result.ordinal, result.hash, result.bucket)?;
+    Ok(b.finish())
+}
+
+/// Emit the probe into its caller. Returning three plain block arguments
+/// avoids a tuple ABI round trip and lets the backend share the entry count
+/// and address calculations with the selected get/edit/remove branch.
+fn probe_body(b: &mut Body<'_, '_>) -> R<Probe> {
     let container = b.parameters[0].address;
     let key = b.parameters[1].address;
-    let query_hash = hash(&mut b, key)?;
-    let entries = field(&mut b, container, 0)?;
-    let index = field(&mut b, container, 1)?;
-    let hashes = field(&mut b, container, 2)?;
-    let count = len(&mut b, entries)?;
-    let capacity = len(&mut b, index)?;
-    let hashes_count = len(&mut b, hashes)?;
+    let query_hash = hash(b, key)?;
+    let entries = field(b, container, 0)?;
+    let index = field(b, container, 1)?;
+    let capacity = len(b, index)?;
     let zero = b.u64(0)?;
     let one = b.u64(1)?;
     let word = b.u64_layout()?;
+    let result = Probe {
+        ordinal: b.fresh(word),
+        hash: b.fresh(word),
+        bucket: b.fresh(word),
+    };
+    let done = b.block(
+        BlockKind::Body,
+        &[result.ordinal, result.hash, result.bucket],
+    );
     let miss = b.block(BlockKind::Body, &[]);
     let indexed = b.block(BlockKind::Body, &[]);
     let linear = b.block(BlockKind::Body, &[]);
     let has_index = b.compare(BinaryOp::Ne, capacity, zero)?;
     b.branch(has_index, indexed, linear);
     b.at(indexed);
-    let mask = sub(&mut b, capacity, one);
+    let mask = sub(b, capacity, one);
     let tag_mask = b.u64(0xffff_ffff_0000_0000)?;
     let ordinal_mask = b.u64(u64::from(u32::MAX))?;
-    let query_tag = binary(&mut b, BinaryOp::BitAnd, query_hash, tag_mask);
-    let start = binary(&mut b, BinaryOp::BitAnd, query_hash, mask);
+    let query_tag = binary(b, BinaryOp::BitAnd, query_hash, tag_mask);
+    let start = binary(b, BinaryOp::BitAnd, query_hash, mask);
     let position = b.fresh(word);
     let buckets = b.block(BlockKind::Body, &[position]);
-    let occupied = b.block(BlockKind::Body, &[]);
+    let check_empty = b.block(BlockKind::Body, &[]);
     let compare_key = b.block(BlockKind::Body, &[]);
     let advance = b.block(BlockKind::Body, &[]);
     let found = b.block(BlockKind::Body, &[]);
@@ -508,36 +459,42 @@ fn probe_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.at(buckets);
     let at = b.slot_place(index, position)?;
     let stored = b.read_bits(at)?;
-    let empty = b.compare(BinaryOp::Eq, stored, zero)?;
-    b.branch(empty, vacant, occupied);
-    b.at(occupied);
-    let encoded = binary(&mut b, BinaryOp::BitAnd, stored, ordinal_mask);
+    // Like hashbrown's tag-first lookup (1876e4f src/raw/mod.rs:2049),
+    // keep the successful candidate path ahead of the empty termination test.
+    // Unlike Swiss control bytes, our scalar word also holds an ordinal;
+    // ordinal zero excludes both empty buckets and tombstones from candidates.
+    let encoded = binary(b, BinaryOp::BitAnd, stored, ordinal_mask);
     let live = b.compare(BinaryOp::Ne, encoded, zero)?;
-    let tagged = b.block(BlockKind::Body, &[]);
-    b.branch(live, tagged, advance);
-    b.at(tagged);
-    let stored_tag = binary(&mut b, BinaryOp::BitAnd, stored, tag_mask);
+    let stored_tag = binary(b, BinaryOp::BitAnd, stored, tag_mask);
     let matches = b.compare(BinaryOp::Eq, stored_tag, query_tag)?;
-    b.branch(matches, compare_key, advance);
+    let candidate = binary(b, BinaryOp::BitAnd, live, matches);
+    b.branch(candidate, compare_key, check_empty);
+    b.at(check_empty);
+    let empty = b.compare(BinaryOp::Eq, stored, zero)?;
+    b.branch(empty, vacant, advance);
     b.at(compare_key);
-    let ordinal = sub(&mut b, encoded, one);
+    let ordinal = sub(b, encoded, one);
     let entry = b.slot_place(entries, ordinal)?;
-    let pair = live_pair(&mut b, entry)?;
-    let candidate = field(&mut b, pair, 0)?;
-    let equal = eq(&mut b, candidate, key)?;
+    let pair = live_pair(b, entry)?;
+    let candidate = field(b, pair, 0)?;
+    let equal = eq(b, candidate, key)?;
     b.branch(equal, found, advance);
     b.at(found);
-    probe_return(&mut b, ordinal, query_hash, position)?;
+    b.jump(done, &[ordinal, query_hash, position]);
     b.at(advance);
     let next = b.add(ArithMode::Wrapping, position, one);
-    let next = binary(&mut b, BinaryOp::BitAnd, next, mask);
+    let next = binary(b, BinaryOp::BitAnd, next, mask);
     b.jump(buckets, &[next]);
     b.at(vacant);
-    probe_return(&mut b, count, query_hash, position)?;
+    let count = len(b, entries)?;
+    b.jump(done, &[count, query_hash, position]);
 
     // An immutable static map has not acquired a run's hash seed yet. Reads
     // hash those keys without mutation; its first write caches them once.
     b.at(linear);
+    let count = len(b, entries)?;
+    let hashes = field(b, container, 2)?;
+    let hashes_count = len(b, hashes)?;
     let cached = b.compare(BinaryOp::Eq, hashes_count, count)?;
     let ordinal = b.fresh(word);
     let scan = b.block(BlockKind::Body, &[ordinal]);
@@ -568,8 +525,8 @@ fn probe_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.jump(next, &[]);
     b.at(live);
     b.end_loan(loan);
-    let pair = live_pair(&mut b, entry)?;
-    let candidate = field(&mut b, pair, 0)?;
+    let pair = live_pair(b, entry)?;
+    let candidate = field(b, pair, 0)?;
     let saved = b.block(BlockKind::Body, &[]);
     let fresh = b.block(BlockKind::Body, &[]);
     let candidate_hash = b.fresh(word);
@@ -580,7 +537,7 @@ fn probe_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let value = b.read_bits(at)?;
     b.jump(hashed, &[value]);
     b.at(fresh);
-    let value = hash(&mut b, candidate)?;
+    let value = hash(b, candidate)?;
     b.jump(hashed, &[value]);
     b.at(hashed);
     let same_hash = b.compare(BinaryOp::Eq, candidate_hash, query_hash)?;
@@ -588,16 +545,17 @@ fn probe_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let matched = b.block(BlockKind::Body, &[]);
     b.branch(same_hash, equal_key, next);
     b.at(equal_key);
-    let equal = eq(&mut b, candidate, key)?;
+    let equal = eq(b, candidate, key)?;
     b.branch(equal, matched, next);
     b.at(matched);
-    probe_return(&mut b, ordinal, query_hash, zero)?;
+    b.jump(done, &[ordinal, query_hash, zero]);
     b.at(next);
     let increment = b.add(ArithMode::Wrapping, ordinal, one);
     b.jump(scan, &[increment]);
     b.at(miss);
-    probe_return(&mut b, count, query_hash, zero)?;
-    Ok(b.finish())
+    b.jump(done, &[count, query_hash, zero]);
+    b.at(done);
+    Ok(result)
 }
 
 fn live_pair(b: &mut Body<'_, '_>, entry: AddressId) -> R<AddressId> {

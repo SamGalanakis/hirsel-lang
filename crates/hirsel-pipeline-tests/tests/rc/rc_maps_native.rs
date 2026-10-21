@@ -158,7 +158,7 @@ fn compiled_seed_law(composite: bool, slice: bool) {
                 );
                 for backend in [Backend::Llvm, Backend::Cranelift] {
                     for opt in [OptLevel::None, OptLevel::Speed] {
-                        let mut objects = emit_backend_objects(
+                        let objects = emit_backend_objects(
                             &ready,
                             backend,
                             opt,
@@ -167,18 +167,19 @@ fn compiled_seed_law(composite: bool, slice: bool) {
                             None,
                         )
                         .unwrap();
-                        assert_eq!(objects.len(), 1);
-                        let object = objects.pop().unwrap();
-                        let symbol = object
-                            .exports
+                        // Whole partitioning still returns a separate program-glue
+                        // object. Read exports across the complete link input.
+                        assert!(!objects.is_empty());
+                        let symbol = objects
                             .iter()
+                            .flat_map(|object| &object.exports)
                             .find(|e| e.definition.as_ref().is_some_and(|p| p.0.name == "build"))
                             .unwrap()
                             .name
                             .clone();
-                        let first = object
-                            .exports
+                        let first = objects
                             .iter()
+                            .flat_map(|object| &object.exports)
                             .find(|e| e.definition.as_ref().is_some_and(|p| p.0.name == "first"))
                             .unwrap()
                             .name
@@ -220,10 +221,17 @@ fn compiled_seed_law(composite: bool, slice: bool) {
                                 &(some.offset + pair.fields[1].offset).to_string(),
                             );
                         let harness = dir.join("seed.c");
-                        let obj = dir.join("map.o");
+                        let object_paths: Vec<_> = objects
+                            .iter()
+                            .enumerate()
+                            .map(|(i, object)| {
+                                let path = dir.join(format!("map-{i}.o"));
+                                std::fs::write(&path, &object.bytes).unwrap();
+                                path
+                            })
+                            .collect();
                         let exe = dir.join("program");
                         std::fs::write(&harness, c).unwrap();
-                        std::fs::write(&obj, object.bytes).unwrap();
                         let arm = target.triple.starts_with("aarch64");
                         let mut compiler = std::process::Command::new(if arm {
                             tools.aarch64_cc.as_ref().unwrap()
@@ -237,7 +245,7 @@ fn compiled_seed_law(composite: bool, slice: bool) {
                                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                                     .join("../hirsel-rt/include"),
                             )
-                            .arg(&obj)
+                            .args(&object_paths)
                             .arg(tools.archive(&target.triple).unwrap())
                             .args([
                                 "-lgcc_s",

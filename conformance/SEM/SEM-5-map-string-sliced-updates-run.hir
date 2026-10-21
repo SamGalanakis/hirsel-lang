@@ -1,0 +1,64 @@
+// rule: SEM-5
+// expect: run
+// Hashbrown 1876e4f src/map.rs:5626 entry update/remove/miss, with
+// Hirsel insertion order, copied aliases and nonzero UTF-8 slice offsets.
+fn clipped(s: String) -> String in s uses {} {
+  match string.position(s, 1) {
+    Some(a) => match string.position(s, 5) {
+      Some(b) => string.slice(s, a, b),
+      None() => s,
+    },
+    None() => s,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let source = f"xéλy"
+  let key = clipped(source)
+  let mut m: unique Map[String, u64] = map.empty()
+  for i in 0u64..40u64 {
+    map.insert(mut m, f"word{i}", i)
+  }
+  map.insert(mut m, unique key, 10)
+  let alias = copy m
+  m = unique m
+  map.insert(mut m, unique key, 100)
+  std@1/map.upsert(
+    mut m,
+    "éλ",
+    fn() -> unique u64 uses {} {
+      failure.check(false, Bounds())
+      0
+    },
+    fn(mut value: unique u64) -> () uses {} {
+      value += 1
+    }
+  )
+  failure.check(map.get(alias, key) == Some(10), Bounds())
+  failure.check(map.get(m, "éλ") == Some(101), Bounds())
+  for i in 0u64..20u64 {
+    failure.check(map.remove(mut m, f"word{i}") == Some(i), Bounds())
+  }
+  failure.check(map.remove(mut m, key) == Some(101), Bounds())
+  std@1/map.upsert(
+    mut m,
+    key,
+    fn() -> unique u64 uses {} {
+      7
+    },
+    fn(mut value: unique u64) -> () uses {} {
+      failure.check(false, Bounds())
+    }
+  )
+  let mut expected: u64 = 20
+  for (k, v) in m {
+    if expected < 40 {
+      failure.check(k == f"word{expected}" && v == expected, Bounds())
+    } else {
+      failure.check(k == key && v == 7, Bounds())
+    }
+    expected += 1
+  }
+  failure.check(expected == 41 && key == "éλ" && source == "xéλy", Bounds())
+  Ok(())
+}

@@ -6333,6 +6333,7 @@ conformance/SEM/SEM-5-map-consume-unused-entry-run.hir
 conformance/SEM/SEM-5-map-get-after-overwrite-run.hir
 conformance/SEM/SEM-5-map-get-hit-miss-run.hir
 conformance/SEM/SEM-5-map-sequence-key-hash-run.hir
+conformance/SEM/SEM-5-map-string-sliced-updates-run.hir
 conformance/SEM/SEM-5-map-tombstones-consume-shared-run.hir
 conformance/SEM/SEM-5-map-tombstones-nested-borrow-run.hir
 conformance/SEM/SEM-5-map-upsert-update-run.hir
