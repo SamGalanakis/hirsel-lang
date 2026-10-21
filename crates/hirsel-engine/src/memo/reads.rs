@@ -303,13 +303,46 @@ pub struct Reads(Box<[(ReadKey, ContentHash)]>);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Inconsistent(pub ReadKey);
 
+#[cfg(test)]
+thread_local! { static SORT_COMPARISONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 impl Reads {
     pub fn empty() -> Self {
         Self::default()
     }
     /// Sorts and de-duplicates; conflicting observations of one key are an error.
     pub fn from_vec(mut reads: Vec<(ReadKey, ContentHash)>) -> Result<Self, Inconsistent> {
-        reads.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.0.cmp(&b.1.0)));
+        // Rust ea137335 std/collections/hash/map.rs:1002-1014: Entry
+        // deduplicates by identity. Canonical spelling order is needed only
+        // for the final unique set, not every inherited observation.
+        if reads.len() >= 32 {
+            use std::collections::{HashMap, hash_map::Entry};
+            let mut unique = HashMap::with_hasher(hirsel_intern::IdHasher::default());
+            let mut conflict: Option<ReadKey> = None;
+            for (key, value) in reads {
+                match unique.entry(key) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(value);
+                    }
+                    Entry::Occupied(entry) => {
+                        if *entry.get() != value && conflict.is_none_or(|old| key < old) {
+                            conflict = Some(key);
+                        }
+                    }
+                }
+            }
+            // Match the first conflicting key of the original canonical sort,
+            // regardless of observation order or session identity assignment.
+            if let Some(key) = conflict {
+                return Err(Inconsistent(key));
+            }
+            reads = unique.into_iter().collect();
+        }
+        reads.sort_unstable_by(|a, b| {
+            #[cfg(test)]
+            SORT_COMPARISONS.with(|n| n.set(n.get() + 1));
+            a.0.cmp(&b.0).then(a.1.0.cmp(&b.1.0))
+        });
         reads.dedup();
         if let Some(w) = reads.windows(2).find(|w| w[0].0 == w[1].0) {
             return Err(Inconsistent(w[0].0));
@@ -582,6 +615,107 @@ mod tests {
                 (ReadKey::Signature(a), h("y"))
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn duplicate_read_observations_preserve_canonical_results_with_unique_sort_work() {
+        fn original(mut rows: Vec<(ReadKey, ContentHash)>) -> Result<Reads, Inconsistent> {
+            rows.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.0.cmp(&b.1.0)));
+            rows.dedup();
+            if let Some(w) = rows.windows(2).find(|w| w[0].0 == w[1].0) {
+                return Err(Inconsistent(w[0].0));
+            }
+            Ok(Reads(rows.into_boxed_slice()))
+        }
+        let (a, b) = (def("read_z"), def("read_a"));
+        let ctx = FileContext {
+            package: PackageId {
+                name: "p".into(),
+                version: "1".into(),
+            },
+            modules: vec!["m".into()],
+        };
+        let package = PackageKey::of(&ctx.package);
+        let keys = [
+            ReadKey::Signature(a),
+            ReadKey::Signature(b),
+            ReadKey::FailedSignature(b),
+            ReadKey::Lookup(LookupKey::of(
+                LookupSource::Provider,
+                &ctx,
+                None,
+                &["x".into()],
+            )),
+            ReadKey::Lookup(LookupKey::of(
+                LookupSource::Manifest,
+                &ctx,
+                Some(&ctx.package),
+                &["y".into()],
+            )),
+            ReadKey::Lookup(LookupKey::of(LookupSource::Head, &ctx, None, &["m".into()])),
+            ReadKey::NameSet(package, ModuleKey::of(&ctx.modules)),
+            ReadKey::Representation(a),
+            ReadKey::ExecutedBody(a),
+            ReadKey::ExecutedSignature(a),
+            ReadKey::CitedText(b),
+            ReadKey::DeclarationCandidates(b),
+            ReadKey::ValidationView(a),
+            ReadKey::UniverseErrors,
+            ReadKey::FirstHeap,
+            ReadKey::Environment,
+            ReadKey::ValidationUniverse(package),
+        ];
+        let base: Vec<_> = keys
+            .into_iter()
+            .enumerate()
+            .map(|(i, k)| (k, h(&i.to_string())))
+            .collect();
+        for seed in 0..24u64 {
+            let mut rows: Vec<_> = (0..128).flat_map(|_| base.iter().copied()).collect();
+            if seed % 2 != 0 {
+                // Discovering a later conflict first must still report the
+                // least key in the original canonical ordering.
+                rows.extend([
+                    (keys[12], h("bad-v")),
+                    (keys[0], h("bad-z")),
+                    (keys[1], h("bad-a")),
+                    (keys[16], h("bad-u")),
+                ]);
+            }
+            let mut random = seed + 1;
+            for i in (1..rows.len()).rev() {
+                random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+                rows.swap(i, random as usize % (i + 1));
+            }
+            let expected = original(rows.clone());
+            let got = Reads::from_vec(rows.clone());
+            assert_eq!(got, expected, "seed {seed}");
+            if let (Ok(got), Ok(expected)) = (got, expected) {
+                let mut bytes = vec![];
+                got.encode(&mut bytes);
+                let mut reference = vec![];
+                expected.encode(&mut reference);
+                assert_eq!(bytes, reference);
+                assert_eq!(got.digest(), expected.digest());
+                for (key, value) in &base {
+                    assert_eq!(got.get(key), Some(*value));
+                }
+                let mut builder = ReadsBuilder::new();
+                builder.merge(&got);
+                builder.merge(&got);
+                assert_eq!(builder.clone().finish(), Ok(expected));
+                assert_eq!(builder.finish(), Ok(got));
+            }
+        }
+        assert_eq!(Reads::from_vec(vec![]), Ok(Reads::empty()));
+        let repeated = (0..128).flat_map(|_| base.iter().copied()).collect();
+        let before = SORT_COMPARISONS.with(std::cell::Cell::get);
+        assert_eq!(Reads::from_vec(repeated), original(base));
+        let comparisons = SORT_COMPARISONS.with(std::cell::Cell::get) - before;
+        assert!(
+            comparisons < 256,
+            "sort unique read keys, not duplicate observations: {comparisons}"
         );
     }
 
