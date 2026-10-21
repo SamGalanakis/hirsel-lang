@@ -82,6 +82,7 @@ mod source_profile;
 mod source_std;
 mod summary;
 mod tail_calls;
+mod test_impact;
 mod tls_audit;
 mod value_transport;
 mod waits;

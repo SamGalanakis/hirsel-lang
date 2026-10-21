@@ -597,6 +597,7 @@ dependencies = [
  "hirsel-diag",
  "hirsel-engine",
  "hirsel-free",
+ "hirsel-graph",
  "hirsel-guard",
  "hirsel-heapcheck",
  "hirsel-intern",

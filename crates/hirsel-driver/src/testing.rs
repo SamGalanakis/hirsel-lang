@@ -13,6 +13,7 @@ use std::{
 };
 
 mod diff;
+pub mod impact;
 
 #[derive(Clone, Debug)]
 pub struct Test {

@@ -53,6 +53,16 @@ impl QueryEngine {
         self.semantic_program([entry.clone()])?.revision(entry)
     }
 
+    /// Read-only, batched graph product used by diagnostic shadow tools.
+    /// This is the existing semantic revision graph, not a certificate that all
+    /// execution dependency classes or host inputs have been established.
+    pub fn semantic_program_nodes(
+        &mut self,
+        roots: impl IntoIterator<Item = DefPath>,
+    ) -> Result<Vec<ProgramNode>, QueryError> {
+        Ok(self.semantic_program(roots)?.nodes)
+    }
+
     pub(crate) fn semantic_program(
         &mut self,
         roots: impl IntoIterator<Item = DefPath>,
