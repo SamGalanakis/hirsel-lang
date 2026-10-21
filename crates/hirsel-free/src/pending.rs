@@ -55,6 +55,10 @@ impl<R: Eq> Pending<R> {
         std::mem::take(&mut self.roots)
     }
 
+    pub fn len(&self) -> usize {
+        self.roots.len()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.roots.is_empty()
     }

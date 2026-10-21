@@ -319,6 +319,102 @@ pub(crate) fn apply_pending(ctx: *mut TaskCtx) {
     ctx.roots.in_phase = false;
 }
 
+/// Storage prepared before gate admission. Root credits stay on the task's
+/// pending list until an admitted prefix acquires the overflow table without
+/// waiting. A rejected prefix has no effect and can release its gate slot.
+pub(crate) struct PhaseRoots {
+    pending: Vec<(usize, u32)>,
+    dead: Vec<*mut Header>,
+}
+
+impl PhaseRoots {
+    pub(crate) fn prepare(ctx: *mut TaskCtx) -> Self {
+        Self {
+            pending: Vec::new(),
+            dead: Vec::with_capacity(unsafe { (*ctx).roots.pending.len() }),
+        }
+    }
+
+    /// Apply only the prepared primary decrements under cutter exclusion.
+    /// No overflow lock wait, traversal, allocation or deallocation occurs.
+    /// Dead roots retain their last credit until finish runs the phase tail.
+    pub(crate) fn apply(&mut self, ctx: *mut TaskCtx) -> bool {
+        let ctx = unsafe { &mut *ctx };
+        if ctx.roots.pending.is_empty() {
+            return true;
+        }
+        // Project the run's disjoint table before borrowing the task's heap.
+        let overflow = unsafe { &(*ctx.run_ptr()).root_overflow };
+        let mut table = match overflow.0.try_lock() {
+            Ok(table) => table,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return false,
+        };
+        self.pending = ctx.roots.pending.take();
+        for &(root, n) in &self.pending {
+            let block = root as *mut Header;
+            for _ in 0..n {
+                let word = unsafe { word(block) };
+                loop {
+                    let count = word.load(Ordering::Acquire);
+                    if count == 1 {
+                        self.dead.push(block);
+                        break;
+                    }
+                    if count == ROOT_OVERFLOW {
+                        // Entering/exiting overflow requires this same lock;
+                        // inline finite-count increments cannot change it.
+                        let exact = table.get_mut(&root).expect("an overflowed pending root");
+                        *exact -= 1;
+                        if *exact <= u64::from(ctx.run_ref().count_max) {
+                            let back = *exact as u32;
+                            table.remove(&root);
+                            word.store(back, Ordering::Release);
+                            measure(ctx, "root_overflow_exits");
+                        }
+                        break;
+                    }
+                    if word
+                        .compare_exchange_weak(
+                            count,
+                            count - 1,
+                            Ordering::Release,
+                            Ordering::Relaxed,
+                        )
+                        .is_ok()
+                    {
+                        measure(ctx, "root_atomics");
+                        break;
+                    }
+                }
+            }
+        }
+        drop(table);
+        true
+    }
+
+    /// Complete a published entered phase's deterministic tail, outside the
+    /// bounded section. Replay runs this whole tail whenever it admits that
+    /// entry, even if the cut preceded its live traversal (F0-1). Frozen graphs
+    /// cannot run user code or hold handles; nested releases apply immediately.
+    /// The owner finishes the tail before any op action or end Done can follow.
+    pub(crate) fn finish(&self, ctx: *mut TaskCtx) {
+        let ctx = unsafe { &mut *ctx };
+        let previous = std::mem::replace(&mut ctx.roots.in_phase, true);
+        for &block in &self.dead {
+            unsafe { walk(ctx, block) };
+        }
+        ctx.roots.in_phase = previous;
+    }
+}
+
+/// Wait outside gate admission after a failed try-lock. Never retain this
+/// lock while attempting admission: a cutter may be waiting for an older tail.
+pub(crate) fn wait_phase(ctx: *mut TaskCtx) {
+    let overflow = unsafe { &(*(*ctx).run_ptr()).root_overflow };
+    drop(overflow.lock());
+}
+
 /// Ordered mode: the running turn retires, so its deferred releases apply in program order.
 /// The ordered executor calls it once the turn is the head.
 #[allow(dead_code)]

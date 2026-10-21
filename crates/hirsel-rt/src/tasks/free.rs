@@ -28,7 +28,7 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
     scheduler(ctx).logical = Logical::Free(Driver);
 }
 
-pub(super) fn enabled(ctx: *mut TaskCtx) -> bool {
+pub(crate) fn enabled(ctx: *mut TaskCtx) -> bool {
     matches!(scheduler(ctx).logical, Logical::Free(_))
 }
 

@@ -289,3 +289,45 @@ fn a_task_log_cannot_be_written_under_another_runs_gate() {
     let mut task = a.root(&mut a_worker).unwrap();
     b.phase(&mut b_worker, &mut task, done(1), |_| ()).unwrap();
 }
+
+#[test]
+fn a_rejected_entry_prefix_leaves_no_progress_record_or_open_gate_slot() {
+    let recorder =
+        Recorder::<Vec<u8>>::new(Vec::new(), b"entry retry", 1, false, true, None).unwrap();
+    let mut worker = recorder.worker(0).unwrap();
+    let mut root = recorder.root(&mut worker).unwrap();
+    let mut acted = false;
+    let rejected = recorder.phase_if(
+        &mut worker,
+        &mut root,
+        done(1),
+        || false,
+        |_| {
+            acted = true;
+        },
+    );
+    assert_eq!(rejected.unwrap(), None);
+    assert!(!acted);
+    let cut = recorder.flush().unwrap().unwrap();
+    assert_eq!(cut.progress[&Vec::new()], Progress::START);
+    assert!(root.trace().is_empty());
+    recorder
+        .phase_if(
+            &mut worker,
+            &mut root,
+            done(1),
+            || true,
+            |writer| writer.load(77),
+        )
+        .unwrap()
+        .unwrap();
+    let cut = recorder.stop("returned", None).unwrap().unwrap().0;
+    assert_eq!(cut.progress[&Vec::new()], done(1));
+    drop(worker);
+    let tape = tape::parse(&recorder.into_sink()).unwrap();
+    let mut replay = Replayer::new(&tape).unwrap();
+    assert!(replay.starts(&[]));
+    assert_eq!(replay.load(&[], 1).unwrap(), 77);
+    replay.publish(&[], done(1)).unwrap();
+    replay.finish(&cut.progress).unwrap();
+}

@@ -4,8 +4,8 @@
 //! progress publication. No section or recorder borrow crosses a suspension.
 //!
 //! Admission is still limited to explicit runtime tests: atomic, mutex and
-//! channel boundaries and prepared children, without roots, mutex closes, host calls
-//! or other ops.
+//! channel/task boundaries, root entry tails and thaw, without mutex closes or
+//! host calls.
 //! General activation requires every boundary and stop to use this protocol.
 
 use crate::TaskCtx;
@@ -106,10 +106,6 @@ fn phase<T>(
 pub(super) fn begin(ctx: *mut TaskCtx) {
     entry(ctx);
     if let Some(task) = unsafe { (*ctx).recording.as_mut() } {
-        assert!(
-            !unsafe { (*ctx).roots.has_pending() },
-            "root phases not admitted"
-        );
         task.ordinal = task
             .ordinal
             .checked_add(1)
@@ -127,12 +123,20 @@ pub(super) fn publish<T>(
         // Live free mode has no recorder, section gate, ordinal, or encoder.
         return Ok(action(None));
     }
-    // Root walks need their own entered-phase integration; this admission
-    // fails before acting if an unsupported root release has been deferred.
-    assert!(
-        !unsafe { (*ctx).roots.has_pending() },
-        "root phases not admitted"
-    );
+    if phase == Phase::Done && unsafe { (*ctx).roots.has_pending() } {
+        // A nested phase tail may change the outcome this op observes. Finish
+        // entry before acting, under the same ordinal, even for an immediate op.
+        publish_phase(ctx, Phase::Entered, |_| ())?;
+    }
+    publish_phase(ctx, phase, action)
+}
+
+fn publish_phase<T>(
+    ctx: *mut TaskCtx,
+    phase: Phase,
+    action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
+) -> Stopped<T> {
+    let mut roots = crate::roots::PhaseRoots::prepare(ctx);
     let mut task = unsafe { (*ctx).recording.take() }.expect("an admitted native recorder");
     let shared = task.shared.clone();
     let mut worker = shared
@@ -140,12 +144,27 @@ pub(super) fn publish<T>(
         .worker(slot())
         .expect("one section owner per worker");
     let progress = Progress::new(task.ordinal, phase);
-    let result = shared
-        .recorder
-        .phase(&mut worker, &mut task.log, progress, |writer| {
-            action(Some(writer))
-        });
+    let mut action = Some(action);
+    let result = loop {
+        let attempt = shared.recorder.phase_if(
+            &mut worker,
+            &mut task.log,
+            progress,
+            || roots.apply(ctx),
+            |writer| action.take().expect("one admitted action")(Some(writer)),
+        );
+        match attempt {
+            Ok(Some(result)) => break Ok(result),
+            Err(stop) => break Err(stop),
+            Ok(None) => crate::roots::wait_phase(ctx),
+        }
+    };
     drop(worker);
+    if result.is_ok() {
+        // The entry is now published and no section/writer survives. A cut
+        // admitting it also admits its full deterministic frozen-graph tail.
+        roots.finish(ctx);
+    }
     unsafe { (*ctx).recording = Some(task) };
     result.map_err(|_| Stop::Requested)
 }
@@ -169,10 +188,28 @@ fn entry(ctx: *mut TaskCtx) {
     unsafe { super::spawn::flush(ctx) };
     if !on(ctx) {
         // Live entry releases happen under the role, before obtaining a cell
-        // or relinquishing scheduler ownership. Recorded roots are not yet
-        // part of this narrow admission and phase() rejects them.
+        // or relinquishing scheduler ownership. Recorded roots instead apply
+        // in the admitted prefix, with their deterministic tail afterward.
         crate::roots::apply_pending(ctx);
     }
+}
+
+/// # Safety
+/// The role is held; root is a live borrowed Shared root and out writable.
+pub(crate) unsafe fn thaw(
+    ctx: *mut TaskCtx,
+    root: *mut crate::Header,
+    out: *mut u8,
+) -> Stopped<()> {
+    begin(ctx);
+    publish(ctx, Phase::Done, |writer| unsafe {
+        let last = crate::roots::sole(root);
+        if let Some(writer) = writer {
+            writer.thaw(last);
+        }
+        out.write(u8::from(last));
+    })?;
+    unsafe { super::try_yield(&mut *ctx) }
 }
 
 /// # Safety
@@ -660,3 +697,6 @@ mod tests {
         assert_eq!(replay.finish().unwrap(), live);
     }
 }
+
+#[cfg(test)]
+mod root_tests;

@@ -230,6 +230,25 @@ impl<S: TapeSink, B> Recorder<S, B> {
         progress: Progress,
         action: impl FnOnce(&mut Writer<'_, '_>) -> T,
     ) -> Result<T, Stopped> {
+        self.phase_if(worker, task, progress, || true, action)
+            .map(|result| result.expect("an unconditional phase acts"))
+    }
+
+    /// Admit a nonblocking entry prefix before creating a writer. A false
+    /// prefix leaves progress/logs untouched and releases cutter exclusion;
+    /// the caller may wait for its contended runtime service only afterward.
+    /// A prefix that returns false must have made no observable change. A
+    /// successful prefix and the bounded action publish together. Any admitted
+    /// deterministic traversal tail belongs to the engine after this returns;
+    /// no writer or section can span that tail.
+    pub fn phase_if<T>(
+        &self,
+        worker: &mut Worker<'_>,
+        task: &mut Task,
+        progress: Progress,
+        prefix: impl FnOnce() -> bool,
+        action: impl FnOnce(&mut Writer<'_, '_>) -> T,
+    ) -> Result<Option<T>, Stopped> {
         self.check_worker(worker);
         assert!(
             Arc::ptr_eq(&task.identity, &self.identity),
@@ -244,6 +263,9 @@ impl<S: TapeSink, B> Recorder<S, B> {
             .gate()
             .unwrap()
             .enter_counted(worker.index, self.metrics.as_ref().map(|m| &m.pause_ns))?;
+        if !prefix() {
+            return Ok(None);
+        }
         let mut writer = Writer {
             section,
             task,
@@ -258,7 +280,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
             metrics.bytes.fetch_add(writer.bytes, Relaxed);
             metrics.events.fetch_add(writer.events, Relaxed);
         }
-        Ok(result)
+        Ok(Some(result))
     }
 
     /// Allocate request-owned buffers outside a section. A concurrent stop
