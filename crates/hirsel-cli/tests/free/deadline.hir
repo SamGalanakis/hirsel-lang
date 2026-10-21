@@ -1,0 +1,22 @@
+// A past deadline with a child whose joined result resumes its cleanup rest.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Ok(()),
+  }
+  let bounded = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: now),
+    fn(s: Scope) -> () {
+      let child = task.async(s, fn() -> u64 { 7u64 })
+      let _ = task.await(s, take child)
+      ()
+    }
+  )
+  let text = match bounded { Finished(_) => "finished\n", Expired(_) => "expired\n" }
+  let _ = out.print(out, text)
+  Ok(())
+}

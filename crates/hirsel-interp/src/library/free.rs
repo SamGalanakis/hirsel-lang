@@ -362,6 +362,7 @@ impl Library {
         if !self.free_admits(Phase::Done) {
             return Ok(self.free_final(context));
         }
+        let result = self.free_deadline_done(result)?;
         self.free_publish(Phase::Done)?;
         let path = self.tasks.path();
         if self.free.as_ref().unwrap().session.at_cut(&path) {

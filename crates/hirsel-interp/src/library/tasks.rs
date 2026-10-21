@@ -15,6 +15,8 @@ pub(super) struct Tasks {
     pub shielded: bool,
     /// Free mode gives every returned frame a distinct completion op.
     pub free_rests: bool,
+    /// Deadline scopes retained until their owner's called cleanup returns.
+    closing_deadlines: BTreeMap<u64, u64>,
     spawn_counts: BTreeMap<u64, u32>,
     active_scopes: BTreeMap<u64, Vec<u64>>,
     scope_canceled: BTreeMap<u64, u32>,
@@ -161,7 +163,11 @@ impl Tasks {
         self.tasks
             .get(&task)
             .and_then(|t| t.canceled)
-            .or_else(|| self.resting.get(&task)?.canceled)
+            .or_else(|| {
+                let rest = self.resting.get(&task)?;
+                rest.canceled
+                    .or_else(|| self.scope_canceled.get(&rest.scope).copied())
+            })
             .or_else(|| {
                 self.active_scopes
                     .get(&task)?
@@ -492,6 +498,40 @@ impl Tasks {
     }
 }
 impl Library {
+    /// Apply the bounded wrapper only when the scope exit can publish Done.
+    /// Its retained timer may expire while a child drops a discarded result.
+    pub(super) fn free_deadline_done(
+        &mut self,
+        mut result: OperationResult,
+    ) -> Result<OperationResult, Error> {
+        let Some(scope) = self.tasks.closing_deadlines.remove(&self.tasks.current) else {
+            return Ok(result);
+        };
+        let row = self
+            .tasks
+            .scopes
+            .remove(&scope)
+            .ok_or_else(|| invalid("missing closing deadline scope"))?;
+        let live = row
+            .deadline
+            .ok_or_else(|| invalid("closing scope has no deadline"))?
+            .expired;
+        self.tasks.scope_canceled.remove(&scope);
+        let path = self.tasks.path();
+        let expired = self
+            .free
+            .as_mut()
+            .unwrap()
+            .session
+            .expired(&path, live)
+            .map_err(|error| invalid(format!("free-mode {error}")))?;
+        if let OperationResult::Complete { value, .. } = &mut result {
+            let body = std::mem::replace(value, Value::Unit);
+            *value = variant(u32::from(expired), vec![body]);
+        }
+        Ok(result)
+    }
+
     fn task_callback(
         &mut self,
         pending: Pending,
@@ -980,8 +1020,25 @@ impl Library {
                 children,
             ));
         }
-        let scope_state = self.tasks.scopes.remove(&scope).unwrap();
-        let bounded = scope_state.deadline.as_ref().map(|d| d.expired);
+        let mut scope_state = self.tasks.scopes.remove(&scope).unwrap();
+        let bounded = if self.free.is_some() {
+            if let Some(deadline) = scope_state.deadline.take() {
+                self.tasks.scopes.insert(
+                    scope,
+                    ScopeState {
+                        owner: scope_state.owner,
+                        deadline: Some(deadline),
+                        ..Default::default()
+                    },
+                );
+                self.tasks
+                    .closing_deadlines
+                    .insert(self.tasks.current, scope);
+            }
+            None
+        } else {
+            scope_state.deadline.as_ref().map(|d| d.expired)
+        };
         let mut completed: Vec<_> = scope_state
             .failures
             .into_iter()
@@ -1024,7 +1081,9 @@ impl Library {
             self.tasks
                 .rest(id, scope, path, canceled, vec![value], true);
         }
-        self.tasks.scope_canceled.remove(&scope);
+        if !self.tasks.closing_deadlines.values().any(|&id| id == scope) {
+            self.tasks.scope_canceled.remove(&scope);
+        }
         // `task.scope_until`: `Finished(r)`, or `Expired(r)` when its deadline fired.
         if let (Some(expired), OperationResult::Complete { value, .. }) = (bounded, &mut result) {
             let body = std::mem::replace(value, Value::Unit);
@@ -1442,6 +1501,130 @@ mod tests {
                 cx,
             )
             .unwrap()
+    }
+
+    #[test]
+    fn free_deadline_outcome_waits_for_called_cleanup_and_substitutes_on_replay() {
+        use hirsel_free::session::{Recording, Session};
+        for expired in [false, true] {
+            let mut tape: Option<Vec<u8>> = None;
+            for replaying in [false, true] {
+                let run = RunConfiguration {
+                    entry: DefPath::core("main"),
+                    hash_seed: 0,
+                    inputs: vec![],
+                };
+                let sources = SourceMap::default();
+                let anchor = Anchor {
+                    definition: run.entry.clone(),
+                    body: BodyId(0),
+                    cleanup: None,
+                    site: Span::default(),
+                };
+                let mut stdout = vec![];
+                let mut trace = vec![];
+                let mut cx = OperationContext {
+                    configuration: &run,
+                    sources: &sources,
+                    stdout: &mut stdout,
+                    trace: &mut trace,
+                    trace_mode: TraceMode::Effects,
+                    anchor: Some(&anchor),
+                };
+                let mut library = Library::new(&run, Default::default()).unwrap();
+                let session = if replaying {
+                    Session::replay(tape.as_ref().unwrap()).unwrap()
+                } else {
+                    Session::record(b"scope rest deadline", Recording::default())
+                };
+                library.enable_free(session, 1);
+                let scope = library.tasks.fresh();
+                library.tasks.scopes.insert(
+                    scope,
+                    ScopeState {
+                        deadline: Some(ScopeDeadline {
+                            at: 100,
+                            expired: false,
+                            anchor: Some(anchor.clone()),
+                        }),
+                        ..Default::default()
+                    },
+                );
+                let closure = Value::Closure {
+                    definition: (&DefPath::core("child")).into(),
+                    body: BodyId(0),
+                    invoked: Some(Default::default()),
+                    captures: vec![],
+                    environment: Box::new(crate::value::Environment {
+                        owned_captures: vec![],
+                        sizes: Default::default(),
+                        type_arguments: Default::default(),
+                    }),
+                };
+                let OperationResult::Complete { value: child, .. } = call(
+                    &mut library,
+                    "task.async",
+                    &[handle("Scope", scope), closure],
+                    &mut cx,
+                ) else {
+                    panic!("spawn")
+                };
+                let child = id(&child, "Task").unwrap();
+                library.tasks.current = child;
+                crate::Operations::task_finished(
+                    &mut library,
+                    child,
+                    OperationResult::returned(u64_value(7)),
+                    &mut cx,
+                )
+                .unwrap();
+                library.tasks.current = 0;
+                library.free_enter_call(&cx).unwrap();
+                let joined = library
+                    .join_scope(
+                        Pending::Join {
+                            scope,
+                            result: OperationResult::returned(Value::Unit),
+                            released: vec![],
+                        },
+                        &cx,
+                    )
+                    .unwrap();
+                let mut result = library.free_waiting(joined, &cx).unwrap();
+                assert!(
+                    matches!(
+                        result,
+                        OperationResult::Complete {
+                            value: Value::Unit,
+                            ..
+                        }
+                    ),
+                    "no bounded wrapper before child cleanup"
+                );
+                assert!(library.deadline_pending(scope));
+                let rests = crate::Operations::take_rests(&mut library, 0);
+                assert_eq!(rests.len(), 1);
+                if expired != replaying {
+                    library.expire_scope(scope, &mut cx).unwrap();
+                }
+                library.tasks.current = child;
+                crate::Operations::rest_finished(&mut library, child, vec![]).unwrap();
+                library.tasks.current = 0;
+                library.free_rests_completed(0, &mut result, &cx).unwrap();
+                if replaying {
+                    // Done at the cut parks before the caller's next segment.
+                    assert!(matches!(result, OperationResult::Park { .. }));
+                    library.take_free().unwrap().finish().unwrap();
+                } else {
+                    assert!(
+                        matches!(result, OperationResult::Complete { value: Value::Variant { variant, .. }, .. } if variant == u32::from(expired))
+                    );
+                    assert!(!library.tasks.scopes.contains_key(&scope));
+                    library.free_stop("returned");
+                    tape = Some(library.take_free().unwrap().report().tape);
+                }
+            }
+        }
     }
 
     // A corpus program cannot inspect the runtime's private child tables. Exercise

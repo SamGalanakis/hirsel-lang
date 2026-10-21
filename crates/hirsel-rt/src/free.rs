@@ -261,6 +261,17 @@ pub(crate) fn thaw(ctx: *mut TaskCtx, last: impl Fn() -> bool) -> bool {
     check(ctx, result)
 }
 
+/// The deadline scope's exit observation, independent of the replay host's clock.
+pub(crate) fn expired(ctx: *mut TaskCtx, live: bool) -> bool {
+    match free(ctx) {
+        None => live,
+        Some(free) => {
+            let result = free.session.expired(&path(ctx), live);
+            check(ctx, result)
+        }
+    }
+}
+
 /// The cancellation an unshielded check observes: live its own, replayed the recorded one.
 pub(crate) fn cancel_check(ctx: *mut TaskCtx, live: Option<u32>) -> Option<u32> {
     match free(ctx) {

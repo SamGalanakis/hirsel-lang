@@ -384,6 +384,18 @@ impl Session {
         }
     }
 
+    /// A deadline scope's exit outcome: record only Expired, or substitute it.
+    pub fn expired(&mut self, path: &[u32], live: bool) -> Result<bool, Diverged> {
+        let op = self.op(path);
+        match &mut self.side {
+            Side::Live(recorder) => {
+                recorder.expired(path, op, live);
+                Ok(live)
+            }
+            Side::Replay(replayer) => replayer.expired(path, op),
+        }
+    }
+
     /// Whether a thaw can act now: a replayed `Ok` waits for count 1.
     pub fn thaw_ready(&self, path: &[u32], last: bool) -> bool {
         match &self.side {

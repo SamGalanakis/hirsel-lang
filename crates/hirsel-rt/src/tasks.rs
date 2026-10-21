@@ -2463,7 +2463,12 @@ unsafe fn exit_scope(
         // SAFETY: the context is live and its Io bound, as the entry armed it.
         unsafe { crate::host_waits::disarm(ctx, token) };
     }
-    let expired = deadline.is_some_and(|d| d.expired);
+    let expired = deadline.as_ref().is_some_and(|d| d.expired);
+    let expired = if deadline.is_some() {
+        crate::free::expired(ctx, expired)
+    } else {
+        expired
+    };
     if free {
         // A free op yields, unless it waited.
         crate::free::done(ctx);

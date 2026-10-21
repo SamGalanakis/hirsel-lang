@@ -366,3 +366,50 @@ fn exclusive_saved_images_migrate_through_eight_queues_and_drop_at_completion() 
     assert_eq!(freed.load(Ordering::Acquire), TASKS);
     assert!(notifications.iter().all(|wake| wake.notify().is_none()));
 }
+
+#[test]
+fn deadline_exit_substitutes_sparse_expired_outcomes_after_entered_cuts() {
+    use hirsel_free::phase::Phase;
+    use hirsel_free::session::{Recording, Session};
+    for durable in [false, true] {
+        let mut live = Session::record(
+            b"deadline exits",
+            Recording {
+                durable,
+                flush_one_in: 1,
+                seed: 0,
+            },
+        );
+        assert!(live.start(&[]));
+        let outcomes = [true, false, false, true];
+        for expired in outcomes {
+            live.begin(&[]);
+            live.publish(&[], Phase::Entered).unwrap();
+            assert_eq!(live.expired(&[], expired).unwrap(), expired);
+            live.publish(&[], Phase::Done).unwrap();
+        }
+        live.stop("returned", None);
+        let report = live.report();
+        for (end, expected) in &report.cuts {
+            for torn in [0, 5] {
+                let bytes = &report.tape[..(end + torn).min(report.tape.len())];
+                let mut replay = Session::replay(bytes).unwrap();
+                if let Some(cut) = expected.cut.get(&Vec::new()) {
+                    assert!(replay.start(&[]));
+                    for op in 1..=cut.op {
+                        replay.begin(&[]);
+                        replay.publish(&[], Phase::Entered).unwrap();
+                        if op < cut.op || cut.phase == Phase::Done {
+                            let expired = outcomes[(op - 1) as usize];
+                            assert_eq!(replay.expired(&[], !expired).unwrap(), expired);
+                            replay.publish(&[], Phase::Done).unwrap();
+                        }
+                    }
+                } else {
+                    assert!(!replay.start(&[]));
+                }
+                assert_eq!(replay.finish().unwrap(), *expected);
+            }
+        }
+    }
+}

@@ -43,6 +43,7 @@ const TORN: usize = 5;
 fn source(name: &str) -> &'static str {
     match name {
         "gap" => include_str!("free/gap.hir"),
+        "deadline" => include_str!("free/deadline.hir"),
         "finite_release" => include_str!("free/finite_release.hir"),
         "mutex_cycle" => include_str!("free/mutex_cycle.hir"),
         "parked_receive" => include_str!("free/parked_receive.hir"),
@@ -449,6 +450,35 @@ fn native_returned_rest_completion_replays_across_engines() {
                     );
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn recorded_deadline_exit_with_a_child_rest_replays_across_engines() {
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"args":[]}"#;
+    for durable in [false, true] {
+        let recorded = record(ENGINES[1], "deadline", grants, 1, durable);
+        assert_eq!(recorded.stdout, "expired\n", "{}", recorded.what);
+        let (_, live) = recorded.cuts.last().unwrap();
+        assert!(
+            live.contains("outcome: \"returned\""),
+            "{}: {live}",
+            recorded.what
+        );
+        for engine in ENGINES {
+            assert_eq!(
+                replayed(
+                    engine,
+                    &recorded.scratch.path("main.hir"),
+                    grants,
+                    &recorded.scratch.path("tape"),
+                    REPLAY_SEED
+                ),
+                format!("replayed {live}"),
+                "{} on {engine:?}",
+                recorded.what
+            );
         }
     }
 }
