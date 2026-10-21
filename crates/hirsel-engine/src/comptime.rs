@@ -931,11 +931,7 @@ impl QueryEngine {
             .lowering
             .clone()
             .ok_or(QueryError::NotImplemented)?;
-        let PreparedEvaluation {
-            definition,
-            signature: artifact,
-            ty,
-        } = EvaluationInput {
+        let prepared = EvaluationInput {
             analyzed,
             staged,
             signature,
@@ -946,34 +942,22 @@ impl QueryEngine {
             sizes,
         }
         .lower(&self.types, &self.memo, &*lowering)?;
-        self.validate_comptime(&definition, artifact)?;
+        let snapshot = (self.verify == Verify::On).then(|| self.signature_snapshot());
+        let validated = crate::queries::s1::ValidatedEvaluation::new(
+            prepared,
+            snapshot.as_deref(),
+            self.verify,
+            file.tree.expressions[expression.0 as usize].origin.span,
+        )?;
         let sources = self.sources.clone();
-        let configuration = RunConfiguration {
-            entry: definition.path.path().clone(),
-            hash_seed: 0,
-            inputs: vec![],
-        };
         let limits = self.comptime_limits;
         let runtime = self.comptime_runtime_types()?;
-        let task = EvaluationTask {
-            sources: &sources,
-            configuration,
-            limits,
-            runtime: &runtime,
-            site: file.tree.expressions[expression.0 as usize].origin.span,
-            ty,
-        };
-        let mut dependencies = EngineDependencies(self);
-        let mut provider =
-            crate::queries::s1::EvaluationProvider::new(Arc::new(definition), &mut dependencies);
-        let product = task.run(&mut provider);
-        let reads = provider.finish()?;
-        self.merge_execution(&reads);
-        self.read_representations(&product.reflected);
+        let product = validated.run(&sources, limits, &runtime, &mut EngineDependencies(self));
+        self.merge_execution(&product.value.reads);
         if let Some(limit) = product.limit {
             self.last_comptime_limit = Some(limit);
         }
-        product.result
+        product.value.result
     }
     pub(crate) fn comptime_limit(&mut self, limit: hirsel_tir::ToolingLimit) -> QueryError {
         self.last_comptime_limit = Some(limit.clone());

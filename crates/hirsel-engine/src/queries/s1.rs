@@ -32,6 +32,85 @@ pub(crate) trait DependencySource {
     ) -> DependencyProduct<Option<DefPath>>;
 }
 
+/// An immutable private artifact after V admission. It can execute with any
+/// task-local dependency source and a worker's runtime; it owns no session.
+/// Lowering stays in EvaluationInput::lower, so a failed lower never forces
+/// snapshot construction or runtime preparation in the serial delegate.
+pub(crate) struct ValidatedEvaluation {
+    definition: DefinitionRef,
+    ty: hirsel_types::TypeId,
+    site: Span,
+}
+
+pub(crate) struct EvaluationOutcome {
+    pub(crate) value: DependencyProduct<(hirsel_interp::Value, hirsel_types::TypeId)>,
+    pub(crate) limit: Option<hirsel_tir::ToolingLimit>,
+}
+impl ValidatedEvaluation {
+    pub(crate) fn new(
+        prepared: crate::comptime::PreparedEvaluation,
+        snapshot: Option<&SignatureSnapshot>,
+        verify: Verify,
+        site: Span,
+    ) -> Result<Self, QueryError> {
+        if verify == Verify::On {
+            crate::comptime::validate_evaluation(
+                snapshot.expect("verification requires a frozen snapshot"),
+                &prepared.definition,
+                prepared.signature,
+                verify,
+            )?;
+        }
+        Ok(Self {
+            definition: Arc::new(prepared.definition),
+            ty: prepared.ty,
+            site,
+        })
+    }
+    /// The caller clones RuntimeTypes once per worker. Nested evaluations
+    /// reuse that runtime so Serialization's recorder stack remains nested.
+    pub(crate) fn run(
+        self,
+        sources: &SourceMap,
+        limits: hirsel_interp::Limits,
+        runtime: &hirsel_interp::aggregate::RuntimeTypes,
+        source: &mut impl DependencySource,
+    ) -> EvaluationOutcome {
+        let configuration = RunConfiguration {
+            entry: self.definition.path.path().clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let mut provider = EvaluationProvider::new(self.definition, source);
+        let product = crate::comptime::EvaluationTask {
+            sources,
+            configuration,
+            limits,
+            runtime,
+            site: self.site,
+            ty: self.ty,
+        }
+        .run(&mut provider);
+        let mut reads = ReadsBuilder::new();
+        let recorded = provider.finish();
+        if let Ok(recorded) = &recorded {
+            reads.merge(recorded);
+        }
+        for (path, digest) in product.reflected {
+            reads.record(ReadKey::Representation(DefId::intern(&path)), digest);
+        }
+        let reads = reads.finish();
+        let (result, reads) = match (recorded, reads) {
+            (Ok(_), Ok(reads)) => (product.result, reads),
+            _ => (Err(QueryError::NotImplemented), Reads::empty()),
+        };
+        EvaluationOutcome {
+            value: DependencyProduct { result, reads },
+            limit: product.limit,
+        }
+    }
+}
+
 /// A private evaluation root plus its task-local dependency requestor. Every
 /// request merges its complete reads before returning its success or failure.
 /// Constants remain lazy: interpreting a root never enumerates other constants.
@@ -128,6 +207,145 @@ mod tests {
         ) -> DependencyProduct<Option<DefPath>> {
             self.product()
         }
+    }
+
+    /// A real private constant artifact that reads a dependency through the
+    /// interpreter. V admission and the returned type must remain independent
+    /// of whether the provider later succeeds or fails.
+    fn reading_artifact(
+        types: &hirsel_types::TypeInterner,
+        root: &DefPath,
+        dependency: &DefPath,
+    ) -> crate::comptime::PreparedEvaluation {
+        use hirsel_tir::*;
+        let ty = types.intern(hirsel_types::Type::unit());
+        let site = Span::default();
+        let body = Body {
+            parameter_scope: hirsel_syntax::LexicalOwner::first(root)
+                .site(hirsel_types::NameSite::Item),
+            locals: vec![Local {
+                ty,
+                storage: Storage::Temporary,
+                scope: ScopeId(0),
+                span: site,
+            }],
+            places: vec![Place {
+                loan: None,
+                binding: None,
+                root: LocalId(0),
+                projection: vec![].into(),
+                ty,
+            }],
+            scopes: vec![Scope {
+                parent: None,
+                span: site,
+            }],
+            blocks: vec![Block {
+                instructions: vec![
+                    Instruction {
+                        kind: InstructionKind::StorageLive(LocalId(0)),
+                        span: site,
+                        on_failure: CleanupId(0),
+                    },
+                    Instruction {
+                        kind: InstructionKind::Assign {
+                            destination: PlaceId(0),
+                            value: RvalueId(0),
+                        },
+                        span: site,
+                        on_failure: CleanupId(0),
+                    },
+                ],
+                terminator: Terminator::Return {
+                    value: Operand {
+                        place: PlaceId(0),
+                        usage: hirsel_types::UseKind::Take,
+                    },
+                    cleanup: CleanupId(0),
+                },
+                span: site,
+            }],
+            rvalues: vec![Rvalue::ReadConstant {
+                definition: dependency.clone(),
+                arguments: vec![],
+            }],
+            cleanups: vec![Cleanup::default()],
+            cleanup_nodes: vec![],
+            entry: BlockId(0),
+            parameters: vec![],
+            result: ty,
+            tail_sites: vec![],
+            matches: vec![],
+        };
+        let mut definition = Definition {
+            caller_bodies: vec![],
+            protocol_associations: vec![],
+            types: Arc::from([]),
+            path: DefId::intern(root),
+            signature_hash: ContentHash::default(),
+            bodies: vec![body],
+            entry: BodyId(0),
+            contracts: vec![],
+        };
+        definition.types = definition_types(types, &definition);
+        crate::comptime::PreparedEvaluation {
+            definition,
+            signature: Signature {
+                definition: DefId::intern(root),
+                kind: hirsel_types::SignatureKind::Const {
+                    ty,
+                    generics: Default::default(),
+                },
+                metadata: Default::default(),
+                fingerprint: ContentHash::default(),
+            },
+            ty,
+        }
+    }
+
+    #[test]
+    fn immutable_evaluation_keeps_dependency_and_reflection_reads_after_failure() {
+        crate::with_compiler_stack(|| {
+            let types = hirsel_types::TypeInterner::new(None);
+            let root = DefPath::core("private-evaluation");
+            let dependency = DefPath::core("constant-dependency");
+            let prepared = reading_artifact(&types, &root, &dependency);
+            let mut signature = prepared.signature.clone();
+            signature.definition = DefId::intern(&dependency);
+            let snapshot = SignatureSnapshot::new(
+                Revision::FIRST,
+                types.clone(),
+                [(signature.definition, Ok(Arc::new(signature)))],
+                [],
+                None,
+            );
+            let runtime = hirsel_interp::aggregate::RuntimeTypes::new(types);
+            let mut source = Failed {
+                calls: 0,
+                reads: Reads::from_vec(vec![(
+                    ReadKey::ExecutedBody(DefId::intern(&dependency)),
+                    ContentHash::of_bytes(b"body"),
+                )])
+                .unwrap(),
+            };
+            let admitted =
+                ValidatedEvaluation::new(prepared, Some(&snapshot), Verify::On, Span::default())
+                    .unwrap();
+            let result = admitted.run(
+                &SourceMap::default(),
+                Default::default(),
+                &runtime,
+                &mut source,
+            );
+            assert!(matches!(
+                result.value.result,
+                Err(QueryError::NotImplemented)
+            ));
+            assert_eq!(source.calls, 1);
+            assert_eq!(result.value.reads, source.reads);
+            assert!(result.limit.is_none());
+            assert!(runtime.serialization.finish().is_empty());
+        });
     }
 
     #[test]
