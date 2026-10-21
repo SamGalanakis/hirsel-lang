@@ -517,15 +517,23 @@ impl QueryEngine {
         definition: &DefPath,
         kind: QueryKind,
     ) -> Result<ContentHash, QueryError> {
-        self.materialize(definition)?;
-        let snapshot = self.snapshot(definition)?;
-        let text = if kind == QueryKind::Signature {
-            match self.inputs.get(&DefId::intern(definition)) {
-                Some(inputs) => inputs.header(),
-                None => self.headers_hash(definition),
+        let text = if let Some(inputs) = self.image_inputs(definition) {
+            if kind == QueryKind::Signature {
+                inputs.header
+            } else {
+                inputs.body
             }
         } else {
-            snapshot.text_hash
+            self.materialize(definition)?;
+            let snapshot = self.snapshot(definition)?;
+            if kind == QueryKind::Signature {
+                match self.inputs.get(&DefId::intern(definition)) {
+                    Some(inputs) => inputs.header(),
+                    None => self.headers_hash(definition),
+                }
+            } else {
+                snapshot.text_hash
+            }
         };
         let manifest = self
             .package_manifests
@@ -951,22 +959,21 @@ impl QueryEngine {
                 .cloned(),
         );
         self.note_detached(waiting);
-        let retired: Vec<DefPath> = self
+        let candidates: Vec<_> = self
             .staged_constants
             .iter()
-            .filter(|(_, constant)| {
-                affected.contains(&constant.owner)
-                    && !self
-                        .modes
-                        .get(&DefId::intern(&constant.owner))
-                        .is_some_and(|m| {
-                            !self.graph.is_dirty(&m.memo.key)
-                                && self
-                                    .key_text(&constant.owner, QueryKind::Modes)
-                                    .is_ok_and(|text| text == m.memo.text)
-                        })
+            .filter(|(_, constant)| affected.contains(&constant.owner))
+            .map(|(path, constant)| (path.clone(), constant.owner.clone()))
+            .collect();
+        let retired: Vec<DefPath> = candidates
+            .into_iter()
+            .filter(|(_, owner)| {
+                let current = self.key_text(owner, QueryKind::Modes).ok();
+                !self.modes.get(&DefId::intern(owner)).is_some_and(|entry| {
+                    !self.graph.is_dirty(&entry.memo.key) && current == Some(entry.memo.text)
+                })
             })
-            .map(|(path, _)| path.clone())
+            .map(|(path, _)| path)
             .collect();
         for path in &retired {
             self.staged_constants.remove(path);

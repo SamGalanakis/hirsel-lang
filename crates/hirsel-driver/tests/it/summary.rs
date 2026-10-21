@@ -438,9 +438,13 @@ fn published_summary_survives_body_release_and_rejects_stale_seeds() {
         let (mut engine, output) = check(source);
         assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
         let main = hirsel_syntax::DefId::intern(&path("main"));
+        let analyzed = engine.mode_definition(main.path()).unwrap();
+        let mode_summary = summarize(engine.types(), &analyzed.value.typed);
         let summary = engine
             .publish_definition(main, hirsel_engine::memo::Retention::Batch)
             .unwrap();
+        assert_eq!(summary.summary, mode_summary.0);
+        assert_eq!(summary.growth, mode_summary.1);
         let checks = engine.recompute_count(main.path(), QueryKind::Check);
         assert!(Arc::ptr_eq(
             &summary,

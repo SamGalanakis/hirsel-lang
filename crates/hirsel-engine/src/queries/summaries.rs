@@ -30,25 +30,25 @@ impl QueryEngine {
         {
             return entry.result().map(|output| output.value.clone());
         }
-        let typed = self.check_query(path)?;
-        // An incoherent check cannot publish a summary with missing reads.
-        // It remains a miss and can be retried under a coherent snapshot.
-        let checked = self.checked.get(&definition).cloned().ok_or_else(|| {
+        let analyzed = self.mode_query(path)?;
+        // Only the final mode result contains every planned call. Its complete
+        // reads include the checked body's, as well as mode refinements.
+        let completed = self.modes.get(&definition).cloned().ok_or_else(|| {
             QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "definition summary".into(),
-                message: "checked body did not produce a coherent memo".into(),
+                message: "mode result did not produce a coherent memo".into(),
             })
         })?;
         self.start(path, QueryKind::Summary)?;
-        let (summary, growth) = summarize(self.types(), &typed.value);
-        let reads = checked.memo.reads.clone();
+        let (summary, growth) = summarize(self.types(), &analyzed.value.typed);
+        let reads = completed.memo.reads.clone();
         let published = std::sync::Arc::new(PublishedSummary {
             summary,
             growth,
             reads,
             text,
         });
-        self.record_summary(published.clone(), checked.detail.clone(), false);
+        self.record_summary(published.clone(), completed.detail.clone(), false);
         self.active.remove(&(path.clone(), QueryKind::Summary));
         Ok(published)
     }
@@ -105,6 +105,16 @@ impl QueryEngine {
         );
     }
 
+    /// GEN-5's input before mode checking and S1 expansion. The final published
+    /// summary is produced separately, after mode refinements add planned calls.
+    pub fn checked_definition_summary(
+        &mut self,
+        definition: DefId,
+    ) -> Result<(DefinitionSummary, ParameterGrowth), QueryError> {
+        let checked = self.check_query(definition.path())?;
+        Ok(summarize(self.types(), &checked.value))
+    }
+
     /// The summary and growth edges of every program definition, from its
     /// checked body; prechecked packages carry their own verdicts.
     pub fn definition_summaries(
@@ -113,14 +123,11 @@ impl QueryEngine {
         let paths = self
             .item_paths()
             .into_iter()
-            .filter(|path| !self.prechecked(&path.0.package))
+            .filter(|path| !self.imaged(&path.0.package))
             .collect::<Vec<_>>();
         paths
             .into_iter()
-            .map(|path| {
-                let published = self.definition_summary(DefId::intern(&path))?;
-                Ok((published.summary.clone(), published.growth.clone()))
-            })
+            .map(|path| self.checked_definition_summary(DefId::intern(&path)))
             .collect()
     }
 }
