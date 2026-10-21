@@ -890,3 +890,58 @@ fn compact_lower_products_require_v_when_verification_is_enabled_after_reuse() {
         assert!(checked(&mut accepted, text).diagnostics.is_empty());
     });
 }
+
+#[test]
+fn compact_dead_arm_inputs_follow_edits_without_scanning_unchanged_body_memos() {
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        let source = fixture.0.join("main.hir");
+        let mut text = String::from(
+            "type Failure = Used() | Stale()\n\nfn parse() -> Result[u8, Failure] { Error(Used()) }\nfn main() {}\n",
+        );
+        for i in 0..256 {
+            text.push_str(&format!("fn unrelated{i}() -> u8 {{ 1u8 }}\n"));
+        }
+        std::fs::write(&source, &text).unwrap();
+        let mut session = session::Session::open(&source, Verify::On);
+        let first = session.check().unwrap();
+        assert_eq!(first.diagnostics.len(), 1, "{:?}", diagnostics(&first));
+        assert!(first.diagnostics[0].message.contains("`Stale`"));
+        let extra = "fn extra() -> Result[u8, Failure] { Error(Stale()) }\n";
+        for (edited, warning) in [
+            (
+                text.replace("Error(Used())", "Error(Stale())"),
+                Some("Used"),
+            ),
+            (format!("{text}{extra}"), None),
+            (text.clone(), Some("Stale")),
+            (format!("{text}{extra}"), None),
+            (text.replace("Stale()", "Renamed()"), Some("Renamed")),
+            (text.replace("Error(Used())", "Error(missing())"), None),
+            (text.clone(), Some("Stale")),
+        ] {
+            std::fs::write(&source, &edited).unwrap();
+            let actual = session.check().unwrap();
+            let touched = session.stats().touched;
+            let cold = check_path(&source).unwrap();
+            assert_eq!(diagnostics(&actual), diagnostics(&cold));
+            assert_eq!(actual.completion, cold.completion);
+            let lint: Vec<_> = actual
+                .diagnostics
+                .iter()
+                .filter(|d| d.rule.as_str() == "LANG-8")
+                .collect();
+            match warning {
+                Some(arm) => {
+                    assert_eq!(lint.len(), 1);
+                    assert!(lint[0].message.contains(&format!("`{arm}`")));
+                }
+                None => assert!(lint.is_empty()),
+            }
+            assert!(
+                touched < 100,
+                "one lint input edit touched {touched} memos among 259 definitions: {warning:?}"
+            );
+        }
+    });
+}

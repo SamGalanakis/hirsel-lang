@@ -889,3 +889,12 @@ The appended durable read tag encodes the package spelling, never its session ID
 Signature changes mark its live subscribers through a separate small graph index;
 body-only changes do not mark this broad input. This global input has Low
 durability and cannot establish a dependency image's closure-local receipt.
+
+CT-5 root and call traversal consume retained final summaries, merging their
+complete execution reads on hits too. The dead-error-arm lint retains only
+per-owner construction and error-type facts; coherent checked-summary receipts
+keep those facts subscribed after body release. A pending frontier generation
+retires old compact products once, while its acknowledgment remains available
+for P/S1 work that has not refreshed yet. Overlapping changed inputs combine
+their memo mark requests before applying them, retaining first-read provenance
+and text-mark priority without changing memo-touch accounting.

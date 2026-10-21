@@ -10,7 +10,17 @@ pub(crate) struct FrontProducts {
     outcomes: DefMap<PublishedResult>,
     pub(crate) checked: DefMap<CheckedSummary>,
     lowered: DefMap<LowerProduct>,
+    selection: DefMap<std::sync::Arc<PublishedSummary>>,
+    pub(crate) dead_arms: DefMap<DeadArmUse>,
     verify: Option<Verify>,
+    invalidated: DefMap<u64>,
+}
+/// The body facts the package's dead-error-arm lint consumes, independently
+/// of the H body that produced them.
+#[derive(Clone, Default)]
+pub(crate) struct DeadArmUse {
+    pub(crate) errors: std::collections::BTreeSet<DefPath>,
+    pub(crate) constructed: std::collections::BTreeSet<(DefPath, u32)>,
 }
 #[derive(Clone)]
 struct LowerProduct {
@@ -19,13 +29,26 @@ struct LowerProduct {
     reads: std::sync::Arc<Reads>,
 }
 impl FrontProducts {
+    fn invalidate(&mut self, definition: DefId, generation: u64) {
+        if self.invalidated.get(&definition) == Some(&generation) {
+            return;
+        }
+        self.outcomes.remove(&definition);
+        self.checked.remove(&definition);
+        self.lowered.remove(&definition);
+        self.selection.remove(&definition);
+        self.dead_arms.remove(&definition);
+        self.invalidated.insert(definition, generation);
+    }
     pub(crate) fn forget(&mut self, key: &crate::memo::MemoKey) {
         match key.kind {
             QueryKind::Summary => {
                 self.outcomes.remove(&key.def);
+                self.selection.remove(&key.def);
             }
             QueryKind::CheckedSummary => {
                 self.checked.remove(&key.def);
+                self.dead_arms.remove(&key.def);
             }
             QueryKind::Lower => {
                 self.lowered.remove(&key.def);
@@ -47,19 +70,52 @@ impl QueryEngine {
             self.front_products.lowered.clear();
             self.front_products.verify = Some(self.verify);
         }
-        for definition in changes
-            .changed
-            .iter()
-            .chain(&changes.affected)
-            .chain(&changes.removed)
-        {
-            self.front_products.outcomes.remove(definition);
-            self.front_products.checked.remove(definition);
-            self.front_products.lowered.remove(definition);
+        for (definition, generation) in changes.generations() {
+            self.front_products.invalidate(definition, generation);
         }
         let removed: Vec<_> = changes.removed.iter().copied().collect();
         self.acknowledge_frontier(&changes, &removed);
+        for definition in removed {
+            self.front_products.invalidated.remove(&definition);
+        }
         changes
+    }
+
+    /// Compact input of program selection. A hit reads no body memo, but
+    /// contributes exactly the same complete closure to an executing caller.
+    pub(crate) fn front_summary(
+        &mut self,
+        definition: DefId,
+    ) -> Result<std::sync::Arc<PublishedSummary>, QueryError> {
+        self.invalidate_front_products();
+        let summary = match self.front_products.selection.get(&definition) {
+            Some(summary) => summary.clone(),
+            None => {
+                let summary = self.definition_summary(definition)?;
+                if self.current_front_summary(&summary) {
+                    self.front_products
+                        .selection
+                        .insert(definition, summary.clone());
+                }
+                summary
+            }
+        };
+        self.merge_execution(&summary.reads);
+        Ok(summary)
+    }
+
+    fn current_front_summary(&self, summary: &std::sync::Arc<PublishedSummary>) -> bool {
+        !summary.reads.is_empty()
+            && self
+                .summaries
+                .get(&summary.definition)
+                .is_some_and(|entry| {
+                    entry.consistent
+                        && !self.graph.is_dirty(&entry.memo.key)
+                        && entry
+                            .result()
+                            .is_ok_and(|output| std::sync::Arc::ptr_eq(&output.value, summary))
+                })
     }
 
     /// Program-level lowering diagnostics. Lowered IR stays in the ordinary
@@ -147,6 +203,13 @@ impl QueryEngine {
                     .insert(definition, outcome.clone());
                 acknowledged.push(definition);
             }
+            if let Ok(published) = &outcome.result
+                && self.current_front_summary(&published.summary)
+            {
+                self.front_products
+                    .selection
+                    .insert(definition, published.summary.clone());
+            }
             current.insert(definition, outcome);
         }
         self.acknowledge_frontier(&changes, &acknowledged);
@@ -173,6 +236,21 @@ impl QueryEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pending_generation_invalidates_once_without_consuming_another_products_work() {
+        let definition = DefId::intern(&entry_path(&default_context()));
+        let mut products = FrontProducts::default();
+        products.dead_arms.insert(definition, DeadArmUse::default());
+        products.invalidate(definition, 1);
+        assert!(!products.dead_arms.contains_key(&definition));
+        // A summary or lint refresh must survive later observations of the
+        // same pending generation while P/S1 has not acknowledged its work.
+        products.dead_arms.insert(definition, DeadArmUse::default());
+        products.invalidate(definition, 1);
+        assert!(products.dead_arms.contains_key(&definition));
+        products.invalidate(definition, 2);
+        assert!(!products.dead_arms.contains_key(&definition));
+    }
     #[test]
     fn retiring_the_receipt_owner_retires_its_compact_failure() {
         let path = entry_path(&default_context());

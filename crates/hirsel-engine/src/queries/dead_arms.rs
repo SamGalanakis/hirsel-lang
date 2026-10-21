@@ -39,46 +39,15 @@ impl QueryEngine {
         if declarations.is_empty() {
             return vec![];
         }
+        self.invalidate_front_products();
         let mut errors = BTreeSet::new();
         let mut constructed = BTreeSet::new();
-        let types = self.types.clone();
         for definition in &bodies {
-            if let Ok(signature) = self.signature(DefId::intern(definition))
-                && let SignatureKind::Function(f) = &signature.kind
-                && let Some(error) = f.error
-                && let Some(TypeKind::Named { definition, .. }) = types.get(error).map(|t| &t.kind)
-            {
-                errors.insert(definition.path().clone());
-            }
-            let Ok(checked) = self.check_query(definition) else {
+            let Some(inputs) = self.dead_arm_use(definition) else {
                 return vec![];
             };
-            if has_errors(&checked.diagnostics) {
-                return vec![];
-            }
-            let body = &checked.value;
-            for plan in &body.plans.tries {
-                if let Some(TypeKind::Named { definition, .. }) =
-                    types.get(plan.error_type).map(|t| &t.kind)
-                {
-                    errors.insert(definition.path().clone());
-                }
-            }
-            let mappers = body.plans.tries.iter().filter_map(|p| p.mapper.as_ref());
-            let calls = body.checked.calls.iter().map(|c| &c.target);
-            for target in mappers.chain(calls) {
-                if let CallTarget::Constructor(ContextualName::Variant { owner, variant }) = target
-                {
-                    constructed.insert((owner.clone(), variant.0));
-                }
-            }
-            for (site, name) in &body.checked.resolution.contextual {
-                if let (NameSite::Expression(_), ContextualName::Variant { owner, variant }) =
-                    (site, name)
-                {
-                    constructed.insert((owner.clone(), variant.0));
-                }
-            }
+            errors.extend(inputs.errors);
+            constructed.extend(inputs.constructed);
         }
         let mut warnings = vec![];
         for (owner, snapshot) in declarations {
@@ -117,6 +86,61 @@ impl QueryEngine {
             }
         }
         warnings
+    }
+    fn dead_arm_use(&mut self, definition: &DefPath) -> Option<crate::tools::DeadArmUse> {
+        let id = DefId::intern(definition);
+        if let Some(inputs) = self.front_products.dead_arms.get(&id) {
+            return Some(inputs.clone());
+        }
+        let types = self.types.clone();
+        let mut inputs = crate::tools::DeadArmUse::default();
+        if let Ok(signature) = self.signature(DefId::intern(definition))
+            && let SignatureKind::Function(f) = &signature.kind
+            && let Some(error) = f.error
+            && let Some(TypeKind::Named { definition, .. }) = types.get(error).map(|t| &t.kind)
+        {
+            inputs.errors.insert(definition.path().clone());
+        }
+        let Ok(checked) = self.check_query(definition) else {
+            return None;
+        };
+        if has_errors(&checked.diagnostics) {
+            return None;
+        }
+        let body = &checked.value;
+        for plan in &body.plans.tries {
+            if let Some(TypeKind::Named { definition, .. }) =
+                types.get(plan.error_type).map(|t| &t.kind)
+            {
+                inputs.errors.insert(definition.path().clone());
+            }
+        }
+        let mappers = body.plans.tries.iter().filter_map(|p| p.mapper.as_ref());
+        let calls = body.checked.calls.iter().map(|c| &c.target);
+        for target in mappers.chain(calls) {
+            if let CallTarget::Constructor(ContextualName::Variant { owner, variant }) = target {
+                inputs.constructed.insert((owner.clone(), variant.0));
+            }
+        }
+        for (site, name) in &body.checked.resolution.contextual {
+            if let (NameSite::Expression(_), ContextualName::Variant { owner, variant }) =
+                (site, name)
+            {
+                inputs.constructed.insert((owner.clone(), variant.0));
+            }
+        }
+        if self
+            .checked
+            .get(&id)
+            .is_some_and(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
+            && self
+                .checked_summaries
+                .get(&id)
+                .is_some_and(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
+        {
+            self.front_products.dead_arms.insert(id, inputs.clone());
+        }
+        Some(inputs)
     }
 }
 

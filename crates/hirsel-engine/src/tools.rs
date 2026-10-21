@@ -1,6 +1,6 @@
 use crate::*;
 mod front;
-pub(crate) use front::FrontProducts;
+pub(crate) use front::{DeadArmUse, FrontProducts};
 use hirsel_syntax::PackageId;
 use std::{io, path::Path};
 

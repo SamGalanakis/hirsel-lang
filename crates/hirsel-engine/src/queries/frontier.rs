@@ -12,6 +12,15 @@ pub struct FrontChanges {
     pub affected: BTreeSet<DefId>,
     observations: BTreeMap<DefId, u64>,
 }
+impl FrontChanges {
+    /// Generation identity for each pending notification. An aggregate may
+    /// retire stale products once without acknowledging work still pending.
+    pub(crate) fn generations(&self) -> impl Iterator<Item = (DefId, u64)> + '_ {
+        self.observations
+            .iter()
+            .map(|(&definition, &generation)| (definition, generation))
+    }
+}
 #[derive(Default)]
 pub(super) struct FrontTracker {
     active: bool,

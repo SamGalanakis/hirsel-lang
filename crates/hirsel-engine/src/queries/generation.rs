@@ -1050,7 +1050,7 @@ impl QueryEngine {
         let mut pending: Vec<(DefPath, hirsel_types::ActualBindings)> = vec![];
         for root in roots {
             if self.items.contains_key(&root)
-                && self.item_signature(&root)?.value.generics().is_empty()
+                && !self.front_summary(DefId::intern(&root))?.summary.frames[0].generic
             {
                 pending.push((root, BTreeMap::new()));
             }
@@ -1081,7 +1081,7 @@ impl QueryEngine {
             {
                 continue;
             }
-            let published = self.definition_summary(DefId::intern(&path))?;
+            let published = self.front_summary(DefId::intern(&path))?;
             self.merge_execution(&published.reads);
             let summary = &published.summary;
             // Calls that name a definition: written ones, then planned instances.
