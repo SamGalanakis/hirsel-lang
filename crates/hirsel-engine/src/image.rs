@@ -96,6 +96,8 @@ pub(crate) struct ImageLowering {
     pub definition: hirsel_tir::DefinitionRef,
     pub dependencies: Vec<SignatureDependency>,
     pub execution: crate::memo::Reads,
+    /// Present only after V accepted these exact immutable TIR bytes.
+    pub verdict: Option<Vec<hirsel_validate::VRead>>,
 }
 
 /// One definition's checked products, decoded lazily and shared by every

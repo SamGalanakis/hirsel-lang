@@ -526,3 +526,63 @@ fn imaged_generic_comptime_materializes_selected_client_sizes() {
         cached.engine.import_native_input(actual).unwrap();
     });
 }
+
+/// V accepted the writer's exact TIR. Its receipt avoids body V while all
+/// contextual reads hold; a changed FirstHeap selection requires revalidation.
+#[test]
+fn imaged_lowering_reuses_validated_evidence() {
+    let run = || {
+        with_compiler_stack(|| {
+            use hirsel_intern::timings::{self, Count};
+            let f = Fixture::new();
+            let image = library_image(&f, LIBRARY).unwrap();
+            let library = f.0.join("lib.json");
+            let path = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+                package: package("lib"),
+                modules: vec!["lib".into()],
+                name: "value".into(),
+            });
+            // Both roots use the same source. Only `aaa` sorts before core's
+            // heap-role declaration, changing V's FirstHeap read.
+            for (name, expected_runs) in [("zzz", 0), ("aaa", 1)] {
+                let client = f.program(name, CLIENT, &library, "lib");
+                let mut program = load(&client, &StdImages::of(vec![image.clone()]));
+                assert!(program.engine.imaged(&package("lib")));
+                program.engine.signature_snapshot();
+                timings::enable();
+                let count = || {
+                    timings::report()
+                        .counts
+                        .into_iter()
+                        .find(|(c, _)| *c == Count::VRuns)
+                        .unwrap()
+                        .1
+                };
+                let before = count();
+                let first = program.engine.lower_to_tir(&path).unwrap();
+                assert_eq!(
+                    count() - before,
+                    expected_runs,
+                    "{name}: contextual V reads"
+                );
+                let second = program.engine.lower_to_tir(&path).unwrap();
+                assert!(Arc::ptr_eq(&first.value, &second.value));
+                assert_eq!(
+                    count() - before,
+                    expected_runs,
+                    "repeated demand must reuse its verdict"
+                );
+                assert_eq!(program.engine.recompute_count(&path, QueryKind::Lower), 0);
+            }
+            "reused".to_owned()
+        })
+    };
+    // Process isolation keeps timing counters independent of other harness tests.
+    if let Some(outputs) = hirsel_intern::under_salts(
+        "image::imaged_lowering_reuses_validated_evidence",
+        &[1],
+        run,
+    ) {
+        assert_eq!(outputs, ["reused"]);
+    }
+}

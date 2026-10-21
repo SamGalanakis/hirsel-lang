@@ -1640,7 +1640,7 @@ impl DefinitionQueries for QueryEngine {
         definition: &DefPath,
     ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
         self.prepare_materialization_environment();
-        if let Some(prechecked) = self.image_lowering(definition) {
+        if let Some(prechecked) = self.image_lowering(definition)? {
             if crate::comptime::has_staged_reads(&prechecked.value) {
                 let body = self.mode_query(definition)?;
                 self.register_staged(&body.value)?;
