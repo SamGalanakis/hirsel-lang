@@ -3452,6 +3452,14 @@ pub(crate) unsafe fn close_endpoint(
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "endpoint.close");
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::drops::endpoint(ctx, word, anchor, operation_site),
+            )
+        };
+    }
     if word & TASK_SET != 0 {
         // A dropped task set: its members stay children of their scope, joined at its exit.
         let s = scheduler(ctx);
@@ -3688,6 +3696,14 @@ pub(crate) unsafe fn close_mutex(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::drops::mutex(ctx, word, anchor, operation_site),
+            )
+        };
+    }
     if crate::free::close(ctx, (crate::free::MUTEX, word), "close mutex") == Some(false) {
         return STATUS_OK;
     }
@@ -3743,6 +3759,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u6
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_kill");
+    if ordered::engine::on(ctx) {
+        return unsafe { crate::stop::check(ctx, ordered::drops::kill(ctx, mutex_word(m))) };
+    }
     let s = scheduler(ctx);
     let current = s.current;
     let path = s.task(current).path.clone();

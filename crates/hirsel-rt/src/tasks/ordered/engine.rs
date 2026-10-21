@@ -36,9 +36,11 @@ pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
 /// # Safety
 /// Admission only, with physical dispatch installed and before root start.
 /// The body uses only supported ordered boundaries and explicit dispatch end;
-/// no budgets, fuel, root release, host or terminal effects. Native task tests
+/// no budgets, fuel, host or terminal effects. Native task tests
 /// use supported task/receive boundaries and dropless closure environments;
-/// no deadlines or resource-bearing finalizers are admitted.
+/// no deadlines or host-bearing finalizers are admitted. Resource finalizers
+/// use only installed task/E/drop boundaries. Root releases are strict-head;
+/// positional speculative release/credit logs are not installed.
 /// No native object exists before this admission.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
     let mut objects = Registry::default();
@@ -614,6 +616,12 @@ pub(crate) unsafe fn mutex_take(
     let operation =
         Command::MutexTake { word, none }.operation(footprint(ctx, Kind::Mutex, word, true));
     let returned = submit(ctx, operation)?.expect("take requires its outcome");
+    if returned.status == 0 {
+        let descriptor = carrier_descriptor(ctx, Kind::Mutex, word);
+        // MutexTake keeps the turn, so its obtained payload handles must
+        // constrain younger passes before any later op or finalizer runs.
+        unsafe { obtained_image(ctx, returned.image.as_ptr(), descriptor) };
+    }
     unsafe {
         std::ptr::copy_nonoverlapping(returned.image.as_ptr(), payload, returned.image.len());
         out.write(returned.status);
@@ -830,8 +838,8 @@ mod tests {
                     assert_eq!(hirsel_rt_v2_mutex_cause(ctx, &mutex), 0);
                     assert!((*ctx).failure.active());
                     (*ctx).failure.clear();
-                    // Quiescent destruction is explicit test cleanup; native
-                    // ordered drop boundaries remain a separate integration.
+                    // Last wrapper release now retires root.release and the
+                    // cell's drop.trivial through their strict head callbacks.
                     assert_eq!(
                         crate::roots::hirsel_rt_v2_root_drop(
                             ctx,
@@ -844,8 +852,8 @@ mod tests {
                     role::enter(ctx);
                     let task = current(ctx);
                     let driver = driver(ctx);
-                    assert_eq!(driver.submitted[&task], 9);
-                    assert_eq!(driver.recorded[&task], 9);
+                    assert_eq!(driver.submitted[&task], 11);
+                    assert_eq!(driver.recorded[&task], 11);
                     assert!(driver.returned.is_empty());
                     driver.finishing(task);
                     role::release(ctx);

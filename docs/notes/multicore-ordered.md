@@ -98,8 +98,15 @@ Mutex wrappers still belong to their owner's allocation/budget path.
 All ten E operations have native entry branches behind the ordered selector.
 The driver retains payload descriptors and None images alongside provisional
 handles, so later same-owner commands can be logged before creation commits.
-Duplicated senders retain the source's logical object binding. Drops, remaining task operations and host operations still need native
-boundary adapters. Strict-head adapters now cover scope entry, committed spawn,
+Duplicated senders retain the source's logical object binding. Native endpoint/TaskSet and mutex closes, exact root decrements and thaw tests
+now have strict-head adapters. A close first detaches owned images in a bounded
+callback, then scans and finalizes those images outside Frontier. Finalizers may
+yield and close nested handles without retaining a policy or object borrow.
+MutexTake also scans its output before same-turn operations can use those
+handles. Mutex-root decrements use the same head gate as Shared roots, before
+any last-wrapper finalizer. Root increments remain immediate. These strict
+boundaries do not yet implement positional speculative root logs or credit
+settlement. Host and remaining boundaries still need native adapters. Strict-head adapters now cover scope entry, committed spawn,
 holding result publication, join, detach, nonempty scope exit, receive and
 physical completion.
 Spawn scans the unstarted environment with the linked capture program. Task
@@ -152,9 +159,12 @@ stack, and recorded outcomes are delivered to the owner's continuation by
 ordinal. Bounded object commit temporarily removes the frontier from its driver
 slot, restoring it before host polling or suspension; during a home poll other
 boundaries wait. The test-only admission path accepts supported E and strict task boundaries,
-dropless closure environments, no budgets or root/host effects, and no deadlines. Endpoint cleanup is still explicit in the fixtures. Native controls at widths 2/4/8 cover both running and already
+dropless closure environments and installed resource finalizers, no budgets or
+host effects, and no deadlines. Endpoint cleanup is still explicit in the fixtures. Native controls at widths 2/4/8 cover both running and already
 holding joins, yielding rests, scope exit, detach, receive, runtime Blocked,
-physical completion and repeated row/stack reuse.
+physical completion and repeated row/stack reuse. Drop controls include FIFO
+receiver leftovers, nested sender closes, last-mutex-root finalizers that yield,
+exact overflowed root counts, and head-only thaw tests.
 The remaining native boundaries, budget hooks and production admission still
 need installation. These controls are not a parallel ordered
 corpus or speed gate.

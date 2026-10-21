@@ -228,6 +228,12 @@ pub(crate) unsafe fn consume(ctx: &mut TaskCtx, block: *mut Header) -> bool {
             ctx.heap().measurement.record("count_decrements", 1);
             ctx.heap().measurement.count_decrements += 1;
         }
+        if ctx.run_ref().tasks.is_some() && crate::tasks::ordered::engine::on(ctx) {
+            let ctx = std::ptr::from_mut(ctx);
+            // The same strict boundary includes mutex roots: their decrement
+            // must not bypass the head before the payload finalizer can run.
+            return crate::tasks::ordered::drops::root_release(ctx, || take(&mut *ctx, block));
+        }
         // A mutex may own finalizers. Its last release belongs to this task's
         // cleanup, so it cannot be deferred to an infallible Shared phase.
         if (*ctx.descriptor((*block).index())).flags & crate::LAYOUT_MUTEX_ROOT != 0 {

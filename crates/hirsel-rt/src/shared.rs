@@ -171,6 +171,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_thaw_turn(
     // SAFETY: caller contract; the borrowed root stays live through any wait. The sole-holder
     // test acquires every other holder's release before the thaw restores interior counts; an
     // overflowed root is never the last.
+    if unsafe { (*ctx).run_ref().tasks.is_some() } && crate::tasks::ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(ctx, crate::tasks::ordered::drops::thaw(ctx, root, out))
+        };
+    }
     let last = || unsafe { crate::roots::sole(root) };
     let answer = if crate::free::enter(ctx, hirsel_free::phase::Phase::Done) {
         let answer = crate::free::thaw(ctx, last);
