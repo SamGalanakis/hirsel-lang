@@ -1435,6 +1435,28 @@ fn restored_success_rechecks_private_shape_reads_under_unchanged_fingerprints() 
     );
     let recomputed = next.verdict_from(interner(), id("Hidden"), &signatures, Some(&restored));
     assert!(!std::sync::Arc::ptr_eq(&reused, &recomputed));
-    assert!(recomputed.error.is_some());
     assert_eq!(work::read(Counter::ValidateSignatureRows), before + 1);
+    // Hidden's own declared nominal bounds can still hold. Its newly recorded
+    // view receipt must match a fresh check, and the malformed Inner must make
+    // the enclosing universe fail independently.
+    assert_eq!(
+        *recomputed,
+        check_view(
+            interner(),
+            id("Hidden"),
+            signatures.get(id("Hidden")).unwrap(),
+            &signatures
+        )
+    );
+    let universe = next.universe(
+        interner(),
+        signatures.keys().collect::<Vec<_>>(),
+        &signatures,
+    );
+    assert!(
+        universe
+            .errors
+            .iter()
+            .any(|v| v.kind == ViolationKind::InvalidSignature(path("Inner")))
+    );
 }
