@@ -334,6 +334,213 @@ impl EvaluationTask<'_> {
     }
 }
 
+/// Dependency requests made while preparing one body's compile-time values.
+/// Implementations own their request stack, reads and local registrations;
+/// this algorithm never accesses a QueryEngine or publishes a shared memo.
+pub(crate) trait ComptimeValueSource {
+    fn signature(&mut self, path: &DefPath) -> Result<hirsel_types::SignatureRef, QueryError>;
+    fn constant(&mut self, path: &DefPath, site: Span) -> Result<Materialized, QueryError>;
+    fn evaluate(&mut self, input: EvaluationInput<'_>) -> Result<Materialized, QueryError>;
+}
+
+struct EngineComptimeValues<'a>(&'a mut QueryEngine);
+impl ComptimeValueSource for EngineComptimeValues<'_> {
+    fn signature(&mut self, path: &DefPath) -> Result<hirsel_types::SignatureRef, QueryError> {
+        self.0.item_signature(path).map(|output| output.value)
+    }
+    fn constant(&mut self, path: &DefPath, site: Span) -> Result<Materialized, QueryError> {
+        self.0.constant_at(path, site).map(|output| output.value)
+    }
+    fn evaluate(&mut self, input: EvaluationInput<'_>) -> Result<Materialized, QueryError> {
+        self.0.evaluate_sized_value(
+            input.analyzed,
+            input.staged,
+            input.signature,
+            input.expression,
+            input.child,
+            input.ty,
+            input.constants,
+            input.sizes,
+        )
+    }
+}
+
+/// Prepare in deterministic request order: constant references first, then
+/// innermost compile-time expressions. The caller installs this body's staged
+/// declarations in its local source before entering. Serial and frozen task
+/// sources use the same repeat validation and dependency-selection algorithm.
+pub(crate) fn prepare_values(
+    types: &hirsel_types::TypeInterner,
+    analyzed: &AnalyzedBody,
+    staged: &[(ExprId, TypeId)],
+    signature: &Signature,
+    source: &mut impl ComptimeValueSource,
+) -> Result<Vec<(ExprId, Materialized)>, QueryError> {
+    let file = &analyzed.typed.syntax;
+    let checked = &analyzed.typed.checked;
+    let mut constants = vec![];
+    for (expression, name) in &checked.resolution.expressions {
+        if let ResolvedName::Definition(path) = name {
+            if matches!(
+                source.signature(path)?.kind,
+                hirsel_types::SignatureKind::Const { ty: _, .. }
+            ) {
+                let mut value = source.constant(
+                    path,
+                    file.tree.expressions[expression.0 as usize].origin.span,
+                )?;
+                let ty = checked
+                    .expressions
+                    .iter()
+                    .find(|r| r.expression == *expression)
+                    .ok_or_else(|| operational("missing constant reference type"))?
+                    .ty;
+                // One session interner: the reference has the checked type.
+                value.root.ty = ty;
+                constants.push((*expression, value));
+            }
+        }
+    }
+    let mut expressions: Vec<_> = checked
+        .expressions
+        .iter()
+        .filter_map(|row| {
+            if let ExprKind::Comptime(child) = file.tree.expressions[row.expression.0 as usize].kind
+            {
+                Some((row.expression, child, row.ty))
+            } else {
+                None
+            }
+        })
+        .collect();
+    expressions.sort_by_key(|(id, _, _)| {
+        let s = file.tree.expressions[id.0 as usize].origin.span;
+        (s.end - s.start, s.start)
+    });
+    for (expression, child, ty) in expressions {
+        if !hirsel_check_protocol::body::comptime_inputs(types, file, checked, expression)
+            .is_empty()
+        {
+            continue;
+        }
+        let value = source.evaluate(EvaluationInput {
+            analyzed,
+            staged,
+            signature,
+            expression,
+            child,
+            ty,
+            constants: &constants,
+            sizes: &[],
+        })?;
+        constants.push((expression, value));
+    }
+    for repeat in &file.tree.repeats {
+        let Some(row) = checked
+            .expressions
+            .iter()
+            .find(|r| r.expression == repeat.sequence)
+        else {
+            continue;
+        };
+        let Some((_, value)) = constants
+            .iter()
+            .find(|(id, _)| *id == repeat.evaluated_count)
+        else {
+            return Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                const { hirsel_diag::RuleId::of("CT-2") },
+                file.tree.expressions[repeat.count.0 as usize].origin.span,
+                "repeat length must be known at definition time",
+            )]));
+        };
+        let ValueKind::Constant(Constant::Integer(length)) = value.root.kind else {
+            return Err(operational("repeat count is not an evaluated u64"));
+        };
+        let valid = match &types.row(row.ty).kind {
+            hirsel_types::TypeKind::Builtin {
+                kind: hirsel_types::BuiltinType::Array,
+                ..
+            } => true,
+            hirsel_types::TypeKind::Builtin {
+                kind: hirsel_types::BuiltinType::Inline,
+                arguments,
+            } => {
+                matches!(arguments.get(1), Some(GenericArgument::Size(Size::Constant(n))) if u128::from(*n) == length)
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                const { hirsel_diag::RuleId::of("LANG-7") },
+                file.tree.expressions[repeat.expression.0 as usize]
+                    .origin
+                    .span,
+                "repeat literal requires Array or an Inline of the same length",
+            )]));
+        }
+    }
+    Ok(constants)
+}
+
+/// Reception types for hidden size-generic constants, using only immutable
+/// checked input, structural type operations and a task-local signature reader.
+pub(crate) fn prepare_staged_types(
+    types: &hirsel_types::TypeInterner,
+    analyzed: &AnalyzedBody,
+    provider: &mut dyn SignatureProvider,
+) -> Result<Vec<(ExprId, TypeId)>, QueryError> {
+    let checked = &analyzed.typed.checked;
+    let mut staged = vec![];
+    let expressions: Vec<_> = checked
+        .expressions
+        .iter()
+        .filter(|row| {
+            matches!(
+                analyzed.typed.syntax.tree.expressions[row.expression.0 as usize].kind,
+                ExprKind::Comptime(_)
+            ) && !hirsel_check_protocol::body::comptime_inputs(
+                types,
+                &analyzed.typed.syntax,
+                checked,
+                row.expression,
+            )
+            .is_empty()
+        })
+        .map(|row| (row.expression, row.ty))
+        .collect();
+    for (expression, ty) in expressions {
+        let generics = &checked.resolution.generic_declarations;
+        let mut lookup = |d: DefId| provider.signature(d).map(Some);
+        let plain = hirsel_types::structural_property(
+            types,
+            ty,
+            hirsel_types::StructuralProperty::Plain,
+            generics,
+            &mut lookup,
+        )?;
+        let flat = hirsel_types::structural_flat(types, ty, generics, &mut lookup)?;
+        let protected = matches!(
+            types.row(ty).kind,
+            hirsel_types::TypeKind::Builtin {
+                kind: hirsel_types::BuiltinType::Shared,
+                ..
+            }
+        );
+        let shared = if plain || flat || protected {
+            ty
+        } else {
+            let mut row = types.row(ty).clone();
+            row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
+            let root = types.intern(row.clone());
+            row.modes.sendability =
+                hirsel_types::sendability_after_sharing(types, root, generics, &mut lookup)?;
+            types.intern(row)
+        };
+        staged.push((expression, shared));
+    }
+    Ok(staged)
+}
+
 fn operational_limit(limit: &hirsel_tir::ToolingLimit) -> QueryError {
     QueryError::Operational(hirsel_types::OperationalFailure {
         operation: "compile-time tooling limit".into(),
@@ -610,107 +817,15 @@ impl QueryEngine {
         staged: &[(ExprId, TypeId)],
         signature: &Signature,
     ) -> Result<Vec<(ExprId, Materialized)>, QueryError> {
-        let file = &analyzed.typed.syntax;
-        let checked = &analyzed.typed.checked;
-        let mut constants = vec![];
         self.register_staged(analyzed)?;
-        for (expression, name) in &checked.resolution.expressions {
-            if let ResolvedName::Definition(path) = name {
-                if matches!(
-                    self.item_signature(path)?.value.kind,
-                    hirsel_types::SignatureKind::Const { ty: _, .. }
-                ) {
-                    let mut value = self
-                        .constant_at(
-                            path,
-                            file.tree.expressions[expression.0 as usize].origin.span,
-                        )?
-                        .value;
-                    let ty = checked
-                        .expressions
-                        .iter()
-                        .find(|r| r.expression == *expression)
-                        .ok_or_else(|| operational("missing constant reference type"))?
-                        .ty;
-                    // One session interner: the reference has the checked type.
-                    value.root.ty = ty;
-                    constants.push((*expression, value));
-                }
-            }
-        }
-        let mut expressions: Vec<_> = checked
-            .expressions
-            .iter()
-            .filter_map(|row| {
-                if let ExprKind::Comptime(child) =
-                    file.tree.expressions[row.expression.0 as usize].kind
-                {
-                    Some((row.expression, child, row.ty))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        expressions.sort_by_key(|(id, _, _)| {
-            let s = file.tree.expressions[id.0 as usize].origin.span;
-            (s.end - s.start, s.start)
-        });
-        for (expression, child, ty) in expressions {
-            if !hirsel_check_protocol::body::comptime_inputs(&self.types, file, checked, expression)
-                .is_empty()
-            {
-                continue;
-            }
-            let value = self.evaluate_value(
-                analyzed, staged, signature, expression, child, ty, &constants,
-            )?;
-            constants.push((expression, value));
-        }
-        for repeat in &file.tree.repeats {
-            let Some(row) = checked
-                .expressions
-                .iter()
-                .find(|r| r.expression == repeat.sequence)
-            else {
-                continue;
-            };
-            let Some((_, value)) = constants
-                .iter()
-                .find(|(id, _)| *id == repeat.evaluated_count)
-            else {
-                return Err(QueryError::Diagnostics(vec![Diagnostic::error(
-                    const { hirsel_diag::RuleId::of("CT-2") },
-                    file.tree.expressions[repeat.count.0 as usize].origin.span,
-                    "repeat length must be known at definition time",
-                )]));
-            };
-            let ValueKind::Constant(Constant::Integer(length)) = value.root.kind else {
-                return Err(operational("repeat count is not an evaluated u64"));
-            };
-            let valid = match &self.types.row(row.ty).kind {
-                hirsel_types::TypeKind::Builtin {
-                    kind: hirsel_types::BuiltinType::Array,
-                    ..
-                } => true,
-                hirsel_types::TypeKind::Builtin {
-                    kind: hirsel_types::BuiltinType::Inline,
-                    arguments,
-                } => {
-                    matches!(arguments.get(1), Some(GenericArgument::Size(Size::Constant(n))) if u128::from(*n) == length)
-                }
-                _ => false,
-            };
-            if !valid {
-                return Err(QueryError::Diagnostics(vec![Diagnostic::error(
-                    const { hirsel_diag::RuleId::of("LANG-7") },
-                    file.tree.expressions[repeat.expression.0 as usize]
-                        .origin
-                        .span,
-                    "repeat literal requires Array or an Inline of the same length",
-                )]));
-            }
-        }
-        Ok(constants)
+        let types = self.types.clone();
+        prepare_values(
+            &types,
+            analyzed,
+            staged,
+            signature,
+            &mut EngineComptimeValues(self),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -834,57 +949,8 @@ impl QueryEngine {
         &mut self,
         analyzed: &AnalyzedBody,
     ) -> Result<Vec<(ExprId, TypeId)>, QueryError> {
-        let checked = &analyzed.typed.checked;
-        let mut staged = vec![];
-        let expressions: Vec<_> = checked
-            .expressions
-            .iter()
-            .filter(|row| {
-                matches!(
-                    analyzed.typed.syntax.tree.expressions[row.expression.0 as usize].kind,
-                    ExprKind::Comptime(_)
-                ) && !hirsel_check_protocol::body::comptime_inputs(
-                    &self.types,
-                    &analyzed.typed.syntax,
-                    checked,
-                    row.expression,
-                )
-                .is_empty()
-            })
-            .map(|row| (row.expression, row.ty))
-            .collect();
-        for (expression, ty) in expressions {
-            let generics = &checked.resolution.generic_declarations;
-            let types = self.types.clone();
-            let mut lookup = |d: DefId| self.signature(d).map(Some);
-            let plain = hirsel_types::structural_property(
-                &types,
-                ty,
-                hirsel_types::StructuralProperty::Plain,
-                generics,
-                &mut lookup,
-            )?;
-            let flat = hirsel_types::structural_flat(&types, ty, generics, &mut lookup)?;
-            let protected = matches!(
-                types.row(ty).kind,
-                hirsel_types::TypeKind::Builtin {
-                    kind: hirsel_types::BuiltinType::Shared,
-                    ..
-                }
-            );
-            let shared = if plain || flat || protected {
-                ty
-            } else {
-                let mut row = types.row(ty).clone();
-                row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
-                let root = types.intern(row.clone());
-                row.modes.sendability =
-                    hirsel_types::sendability_after_sharing(&types, root, generics, &mut lookup)?;
-                types.intern(row)
-            };
-            staged.push((expression, shared));
-        }
-        Ok(staged)
+        let types = self.types.clone();
+        prepare_staged_types(&types, analyzed, self)
     }
     pub(crate) fn register_staged(&mut self, analyzed: &AnalyzedBody) -> Result<(), QueryError> {
         let typed = &analyzed.typed;
