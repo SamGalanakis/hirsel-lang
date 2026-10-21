@@ -43,6 +43,12 @@ impl Adapter for Clock {
             Err(AdapterError::Blocked)
         }
     }
+    fn ready(&mut self) -> Result<crate::io::Ready, AdapterError> {
+        assert_eq!(std::thread::current().id(), self.home);
+        // This fixture's nonzero timer stays pending until disarm. The
+        // scripted default Ready::Every would reissue it during cleanup.
+        Ok(crate::io::Ready::Tokens(vec![]))
+    }
     fn finish(&mut self, _: u64) {
         assert_eq!(std::thread::current().id(), self.home);
         let cut = self.recording.recorder.flush().unwrap().unwrap();
@@ -155,6 +161,17 @@ unsafe extern "C" fn held_result(ctx: *mut TaskCtx, env: *mut Header, _: u64, _:
     let none = [0u64; 2];
     unsafe { hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16) };
     assert_eq!(image, [1, 7], "scope exit discards in the child's frame");
+    // Force the home readiness probe while the parent is at exit/Entered,
+    // rather than relying on an incidental idle-loop scheduling window.
+    let run = unsafe { (*ctx).run_ptr() };
+    let mut ready = None;
+    unsafe {
+        crate::pool::call_home(ctx, &mut || {
+            ready = Some(crate::host_waits::timers_home(run, false));
+        })
+        .unwrap();
+    }
+    assert!(ready.unwrap().unwrap().0.is_empty());
     for _ in 0..130 {
         let mut canceled = 99;
         unsafe { hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0) };
