@@ -91,11 +91,13 @@ pub enum Phase {
     Lex,
     /// Declaration indexing, including its signature demands.
     Declarations,
+    /// Header normalization, excluding header resolution and nested queries.
+    SignatureNormalize,
 }
 
 impl Phase {
     /// Every phase, in declaration order.
-    pub const ALL: [Phase; 20] = [
+    pub const ALL: [Phase; 21] = [
         Phase::Parse,
         Phase::Resolve,
         Phase::Signatures,
@@ -116,6 +118,7 @@ impl Phase {
         Phase::DebugObject,
         Phase::Lex,
         Phase::Declarations,
+        Phase::SignatureNormalize,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -140,6 +143,7 @@ impl Phase {
             Phase::DebugObject => "debug object",
             Phase::Lex => "lex",
             Phase::Declarations => "declarations",
+            Phase::SignatureNormalize => "signature normalize",
         }
     }
 }

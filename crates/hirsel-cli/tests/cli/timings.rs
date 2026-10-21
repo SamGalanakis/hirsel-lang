@@ -45,7 +45,7 @@ const INTERVALS: [&str; 11] = [
     "units",
     "link",
 ];
-const PHASES: [&str; 20] = [
+const PHASES: [&str; 21] = [
     "parse",
     "resolve",
     "signatures",
@@ -66,6 +66,7 @@ const PHASES: [&str; 20] = [
     "debug object",
     "lex",
     "declarations",
+    "signature normalize",
 ];
 const COUNTS: [&str; 49] = [
     "definitions",
@@ -455,7 +456,13 @@ fn check_timings_separate_serial_preparation_lexing_and_growth() {
             .unwrap();
         assert!(row["wall_ns"].as_u64().unwrap() > 0, "{name}: {report}");
     }
-    for name in ["lex", "parse", "declarations", "signatures"] {
+    for name in [
+        "lex",
+        "parse",
+        "declarations",
+        "signatures",
+        "signature normalize",
+    ] {
         let row = report["phases"]
             .as_array()
             .unwrap()

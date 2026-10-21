@@ -204,6 +204,8 @@ impl SignatureAdapter {
                 return Err(QueryError::Diagnostics(diagnostics));
             }
         }
+        let normalize =
+            hirsel_intern::timings::phase(hirsel_intern::timings::Phase::SignatureNormalize);
         let output = self.phases.normalize_signature(
             hirsel_check_protocol::header::Input {
                 types: t,
@@ -217,6 +219,7 @@ impl SignatureAdapter {
             },
             provider,
         )?;
+        drop(normalize);
         if stage.is_some() {
             return Ok(output.public);
         }

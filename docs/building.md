@@ -647,6 +647,8 @@ The report keeps three measures apart (`hirsel_intern::timings`):
   compile-time evaluation. Phases overlap the intervals and are not added up.
   `lex` times tokenization alone. `parse` excludes nested lexer work;
   `declarations` times declaration indexing, excluding nested signature phases.
+  `signature normalize` times header normalization alone, excluding header
+  resolution and nested queries. `signatures` is the remaining query work.
   Broad source/declaration startup is the `S0` interval, not lexer work.
 - **Wait** is time threads spend waiting for each other; 0 while compiling is
   single-threaded.
