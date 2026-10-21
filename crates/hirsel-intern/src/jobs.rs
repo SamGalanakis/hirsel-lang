@@ -51,16 +51,35 @@ pub fn map<T: Send, R: Send>(
     cost: impl Fn(&T) -> u64 + Sync,
     work: impl Fn(T) -> R + Sync,
 ) -> Vec<R> {
+    map_with_state(jobs, tasks, cost, || (), |_, task| work(task))
+}
+
+/// The same deterministic fan-out, with state constructed once per worker on
+/// that worker's thread. Nested work can borrow this state without sharing it
+/// with other workers. Like Go's backend workers (gc/compile.go:166-184), the
+/// worker owns reusable evaluation storage while task results remain ordered.
+/// Empty frontiers construct no state; jobs=1 keeps state on the caller.
+pub fn map_with_state<T: Send, R: Send, S>(
+    jobs: Jobs,
+    tasks: Vec<T>,
+    cost: impl Fn(&T) -> u64 + Sync,
+    initialize: impl Fn() -> S + Sync,
+    work: impl Fn(&mut S, T) -> R + Sync,
+) -> Vec<R> {
+    if tasks.is_empty() {
+        return vec![];
+    }
     let costs: Vec<u64> = tasks.iter().map(&cost).collect();
     let mut order: Vec<usize> = (0..tasks.len()).collect();
     order.sort_by(|&a, &b| costs[b].cmp(&costs[a]).then(a.cmp(&b)));
     let workers = jobs.get().min(tasks.len());
     if workers <= 1 {
+        let mut state = initialize();
         let mut slots: Vec<Option<T>> = tasks.into_iter().map(Some).collect();
         let mut results: Vec<Option<R>> = (0..slots.len()).map(|_| None).collect();
         for index in order {
             let task = slots[index].take().expect("each task starts once");
-            results[index] = Some(work(task));
+            results[index] = Some(work(&mut state, task));
         }
         return results
             .into_iter()
@@ -73,6 +92,7 @@ pub fn map<T: Send, R: Send>(
     let next = AtomicUsize::new(0);
     let stopped = AtomicBool::new(false);
     let worker = || {
+        let mut state = initialize();
         let mut panicked = None;
         while !stopped.load(Ordering::Relaxed) {
             let start = next.fetch_add(1, Ordering::Relaxed);
@@ -84,7 +104,7 @@ pub fn map<T: Send, R: Send>(
                 .unwrap_or_else(PoisonError::into_inner)
                 .take()
                 .expect("each task starts once");
-            match catch_unwind(AssertUnwindSafe(|| work(task))) {
+            match catch_unwind(AssertUnwindSafe(|| work(&mut state, task))) {
                 Ok(result) => {
                     *results[index]
                         .lock()
