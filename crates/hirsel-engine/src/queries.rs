@@ -6,6 +6,17 @@ pub use frontier::FrontChanges;
 mod parallel;
 pub(crate) mod s1;
 pub use parallel::{ModeResult, PublishedDefinition, PublishedResult};
+/// One S1 root's captured outcome. Phase, tooling limit and complete execution
+/// reads belong to this root, including when another root finished afterward.
+#[derive(Clone, Debug)]
+pub struct MaterializationResult {
+    pub definition: DefPath,
+    pub result: Result<hirsel_tir::Materialized, QueryError>,
+    pub phase: Option<QueryKind>,
+    pub limit: Option<hirsel_tir::ToolingLimit>,
+    pub reads: Arc<Reads>,
+}
+
 mod dead_arms;
 mod definition_hash;
 pub use definition_hash::DefinitionHashes;

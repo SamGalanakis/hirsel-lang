@@ -54,8 +54,11 @@ pub(crate) trait TirSource: Sync {
         path: &DefPath,
     ) -> DependencyProduct<Arc<TaskBody>>;
     fn dictionary_constant(&self, path: &DefPath) -> Result<Option<Materialized>, QueryError>;
-    fn supports_staged_declarations(&self) -> bool {
+    fn has_staged_declaration(&self, _: &StagedRegistration) -> bool {
         true
+    }
+    fn staged_constant(&self, _: &DefPath) -> Option<crate::comptime::StagedConstant> {
+        None
     }
     fn cached_constant(&self, _: &DefPath) -> Option<EvaluatedConstant> {
         None
@@ -81,6 +84,7 @@ pub(crate) trait TirSource: Sync {
 struct ConstantProduct {
     constant: EvaluatedConstant,
     registrations: Vec<StagedRegistration>,
+    staged: Option<(DefPath, Vec<u64>)>,
 }
 
 /// Reification sees the same private shape and executed implementation receipt
@@ -124,12 +128,24 @@ impl TaskShared {
     }
     pub(super) fn into_constants(
         self,
-    ) -> Vec<(DefPath, EvaluatedConstant, Vec<StagedRegistration>)> {
+    ) -> Vec<(
+        DefPath,
+        EvaluatedConstant,
+        Vec<StagedRegistration>,
+        Option<(DefPath, Vec<u64>)>,
+    )> {
         self.constants
             .into_inner()
             .unwrap_or_else(|e| e.into_inner())
             .into_iter()
-            .map(|(path, product)| (path, product.constant, product.registrations))
+            .map(|(path, product)| {
+                (
+                    path,
+                    product.constant,
+                    product.registrations,
+                    product.staged,
+                )
+            })
             .collect()
     }
 }
@@ -151,6 +167,7 @@ pub(crate) struct TaskWorker<'a, S: TirSource + ?Sized> {
     lowered: BTreeMap<DefPath, Arc<Lowered>>,
     pub(crate) registrations: Vec<StagedRegistration>,
     pub(crate) limit: Option<hirsel_tir::ToolingLimit>,
+    pub(super) phase: Option<QueryKind>,
     pub(super) pending: Vec<Requirement>,
 }
 impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
@@ -164,6 +181,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             lowered: BTreeMap::new(),
             registrations: vec![],
             limit: None,
+            phase: Some(QueryKind::Lower),
             pending: vec![],
         }
     }
@@ -186,6 +204,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
     }
     pub(super) fn root(&mut self, path: &DefPath) -> DependencyProduct<Materialized> {
         self.limit = None;
+        self.phase = Some(QueryKind::Lower);
         self.capture(|worker| {
             let site = worker.source.site(path)?;
             worker
@@ -216,11 +235,15 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         }
     }
     fn signature(&mut self, path: &DefPath) -> Result<hirsel_types::SignatureRef, QueryError> {
+        let previous = self.phase.replace(QueryKind::Signature);
         let inputs = self.source.inputs();
         let mut reads = ReadsBuilder::new();
         let result = FrozenProvider::new(&inputs.snapshot, path.0.package.clone(), &mut reads)
             .signature(DefId::intern(path));
         self.merge(&reads.finish().map_err(|_| QueryError::NotImplemented)?);
+        if result.is_ok() {
+            self.phase = previous;
+        }
         result
     }
     fn body(&mut self, path: &DefPath) -> Result<Arc<TaskBody>, QueryError> {
@@ -249,6 +272,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             limit: self.depth_limit() as u64,
             site: Some(site),
         };
+        self.phase = Some(QueryKind::Lower);
         let error = QueryError::Operational(hirsel_types::OperationalFailure {
             operation: "compile-time tooling limit".into(),
             message: format!("{limit:?}"),
@@ -377,6 +401,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                     ConstantProduct {
                         constant: value.clone(),
                         registrations: self.registrations[registration_start..].to_vec(),
+                        staged: None,
                     },
                 );
         }
@@ -390,6 +415,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
     fn register_staged(&mut self, analyzed: &AnalyzedBody) -> Result<(), QueryError> {
         let types = self.source.inputs().snapshot.types().clone();
         let memo = self.source.inputs().memo.clone();
+        let mut missing = false;
         for row in &analyzed.typed.checked.expressions {
             if !matches!(
                 analyzed.typed.syntax.tree.expressions[row.expression.0 as usize].kind,
@@ -407,28 +433,178 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 continue;
             }
             let owner = &analyzed.typed.syntax.item.definition;
-            if !self.source.supports_staged_declarations() {
-                self.pending.push(Requirement::Staged(owner.clone()));
-                return Err(QueryError::NotImplemented);
-            }
             let signature = self.signature(owner)?;
-            self.registrations.push(
-                StagedDeclarationInput {
-                    analyzed,
-                    expression: row.expression,
-                    ty: row.ty,
-                    inputs,
-                }
-                .prepare(&types, &memo, &signature)?,
-            );
+            let registration = StagedDeclarationInput {
+                analyzed,
+                expression: row.expression,
+                ty: row.ty,
+                inputs,
+            }
+            .prepare(&types, &memo, &signature)?;
+            if !self.source.has_staged_declaration(&registration) {
+                self.pending.push(Requirement::Staged(owner.clone()));
+                missing = true;
+            }
+            self.registrations.push(registration);
         }
-        Ok(())
+        if missing {
+            Err(QueryError::NotImplemented)
+        } else {
+            Ok(())
+        }
+    }
+    /// A size-specialized constant is a normal coordinated S1 request. Its
+    /// declaration was merged before this frozen epoch; execution stays local.
+    pub(super) fn staged_at(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> Result<EvaluatedConstant, QueryError> {
+        let Some(constant) = self.source.staged_constant(path) else {
+            self.pending.push(Requirement::ConstantInstance(
+                path.clone(),
+                arguments.to_vec(),
+            ));
+            return Err(QueryError::NotImplemented);
+        };
+        if constant.inputs.len() != arguments.len() {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "compile-time evaluation".into(),
+                message: "staged constant arity".into(),
+            }));
+        }
+        let body = self.body(&constant.owner)?;
+        let site = body.analyzed.value.typed.syntax.tree.expressions
+            [constant.expression.0 as usize]
+            .origin
+            .span;
+        let instance = hirsel_tir::constant_instance_path(path, arguments);
+        loop {
+            let cached = self
+                .shared
+                .constants
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&instance)
+                .cloned();
+            if let Some(cached) = cached {
+                self.admit(&cached.constant.depth, site)?;
+                self.merge(&cached.constant.executed);
+                self.registrations.extend(cached.registrations);
+                self.stack.requested(&cached.constant.depth, site);
+                return Ok(cached.constant);
+            }
+            if self.stack.on_stack(&instance).is_some() {
+                self.stack.fail_cycle();
+                return Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                    const { hirsel_diag::RuleId::of("CT-4") },
+                    site,
+                    "compile-time dependency cycle",
+                )]));
+            }
+            self.admit(&DepthEvidence::leaf(self.depth_limit()), site)?;
+            if self.stack.enter(instance.clone(), site) == Entered::Run {
+                break;
+            }
+        }
+        let registration_start = self.registrations.len();
+        let pending_start = self.pending.len();
+        let product = self.capture(|worker| {
+            worker.implementation(&constant.owner);
+            worker.merge(&body.reads);
+            let signature = worker.signature(&constant.owner)?;
+            let inputs = worker.source.inputs();
+            let mut reads = ReadsBuilder::new();
+            let staged = prepare_staged_types(
+                inputs.snapshot.types(),
+                &body.analyzed.value,
+                &mut FrozenProvider::new(
+                    &inputs.snapshot,
+                    constant.owner.0.package.clone(),
+                    &mut reads,
+                ),
+            );
+            worker.merge(&reads.finish().map_err(|_| QueryError::NotImplemented)?);
+            let staged = staged?;
+            let constants = prepare_values(
+                worker.source.inputs().snapshot.types(),
+                &body.analyzed.value,
+                &staged,
+                &signature,
+                worker,
+            )?;
+            let file = &body.analyzed.value.typed.syntax;
+            let ExprKind::Comptime(child) =
+                file.tree.expressions[constant.expression.0 as usize].kind
+            else {
+                return Err(QueryError::NotImplemented);
+            };
+            let ty = body
+                .analyzed
+                .value
+                .typed
+                .checked
+                .expressions
+                .iter()
+                .find(|row| row.expression == constant.expression)
+                .ok_or(QueryError::NotImplemented)?
+                .ty;
+            let sizes: Vec<_> = constant
+                .inputs
+                .iter()
+                .copied()
+                .zip(arguments.iter().copied())
+                .collect();
+            let value = worker.evaluate(EvaluationInput {
+                analyzed: &body.analyzed.value,
+                staged: &staged,
+                signature: &signature,
+                expression: constant.expression,
+                child,
+                ty,
+                constants: &constants,
+                sizes: &sizes,
+            })?;
+            Ok((value, constants))
+        });
+        let depth = self.stack.composed(self.depth_limit(), true);
+        self.merge(&product.reads);
+        let result = product
+            .result
+            .map(|(value, substitutions)| EvaluatedConstant {
+                value,
+                substitutions,
+                executed: product.reads,
+                depth,
+            });
+        if self.pending.len() == pending_start
+            && let Ok(value) = &result
+        {
+            self.shared
+                .constants
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(
+                    instance,
+                    ConstantProduct {
+                        constant: value.clone(),
+                        registrations: self.registrations[registration_start..].to_vec(),
+                        staged: Some((path.clone(), arguments.to_vec())),
+                    },
+                );
+        }
+        self.stack.leave();
+        if let Ok(value) = &result {
+            self.stack.requested(&value.depth, site);
+        }
+        result
     }
     fn validate_lowered(
         &mut self,
         path: &DefPath,
         definition: &hirsel_tir::Definition,
     ) -> Result<(), QueryError> {
+        self.phase = Some(QueryKind::Lower);
         let inputs = self.source.inputs();
         if inputs.verify == Verify::Off {
             return Ok(());
@@ -538,6 +714,7 @@ impl<S: TirSource + ?Sized> ComptimeValueSource for TaskWorker<'_, S> {
         self.constant_at(path, site).map(|value| value.value)
     }
     fn evaluate(&mut self, input: EvaluationInput<'_>) -> Result<Materialized, QueryError> {
+        self.phase = Some(QueryKind::Lower);
         let inputs = self.source.inputs();
         let package = input.signature.definition.path().0.package.clone();
         let site = input.analyzed.typed.syntax.tree.expressions[input.expression.0 as usize]

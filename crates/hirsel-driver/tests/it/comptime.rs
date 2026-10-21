@@ -878,3 +878,142 @@ fn frozen_frontier_evaluation_tasks_overlap() {
         }
     });
 }
+
+/// Staged registrations require a new snapshot round, but their evaluations
+/// must return to workers. A caller-thread retry is observable here.
+#[test]
+fn frozen_frontier_staged_rounds_evaluate_on_workers() {
+    use std::sync::Arc;
+    struct WorkerOnly(Arc<dyn LoweringPhase>, bool);
+    impl LoweringPhase for WorkerOnly {
+        fn lower(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            comptime: &Comptime,
+            signature: &hirsel_types::Signature,
+        ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+            self.0.lower(t, m, body, comptime, signature)
+        }
+        fn lower_evaluation(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
+            signature: &hirsel_types::Signature,
+            expression: hirsel_syntax::ExprId,
+            result: hirsel_types::TypeId,
+            constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
+        ) -> Result<hirsel_tir::Definition, QueryError> {
+            if self.1 {
+                assert_eq!(
+                    std::thread::current().name(),
+                    Some("hirsel-job"),
+                    "staged demand fell back to caller evaluation"
+                );
+            }
+            self.0
+                .lower_evaluation(t, m, body, staged, signature, expression, result, constants)
+        }
+        fn entry_body(&self) -> hirsel_tir::BodyId {
+            self.0.entry_body()
+        }
+    }
+    with_compiler_stack(|| {
+        let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime {let xs:Inline[u8,4]=[1,2,3,4];scaled(xs)}\n";
+        for jobs in [1, 2, 8] {
+            let paths = vec![path("B"), path("A"), path("B")];
+            let mut control = engine(source);
+            let expected: Vec<_> = paths
+                .iter()
+                .map(|p| {
+                    let result = control.materialize_value(p);
+                    outcome_text(&control, result)
+                })
+                .collect();
+            assert!(expected.iter().all(Result::is_ok), "{expected:?}");
+            let mut adapters = compiler_adapters();
+            adapters.lowering = Some(Arc::new(WorkerOnly(
+                adapters.lowering.take().unwrap(),
+                jobs > 1,
+            )));
+            let mut candidate = QueryEngine::new(default_environment(), adapters);
+            let file = candidate
+                .sources
+                .add("comptime.hir", source.into())
+                .unwrap();
+            candidate.parse_file(file, &default_context()).unwrap();
+            assert_eq!(
+                frontier_text(&mut candidate, paths.clone(), jobs),
+                expected,
+                "jobs={jobs}"
+            );
+            assert_eq!(
+                frontier_text(&mut candidate, paths, jobs),
+                expected,
+                "warm jobs={jobs}"
+            );
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_outcomes_capture_each_stopping_phase_and_limit() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2, 8] {
+            let mut adapters = compiler_adapters();
+            adapters.checker = None;
+            let mut candidate = QueryEngine::new(default_environment(), adapters);
+            let file = candidate
+                .sources
+                .add(
+                    "outcomes.hir",
+                    "const ABSENT:u32=comptime 2\nconst BAD:u32=comptime missing\n".into(),
+                )
+                .unwrap();
+            candidate.parse_file(file, &default_context()).unwrap();
+            let outcomes = candidate.materialize_value_outcomes(
+                vec![path("ABSENT"), path("BAD")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(matches!(
+                outcomes[0].result,
+                Err(QueryError::NotImplemented)
+            ));
+            assert_eq!(outcomes[0].phase, Some(QueryKind::Check));
+            assert!(matches!(
+                outcomes[1].result,
+                Err(QueryError::Diagnostics(_))
+            ));
+            assert_eq!(outcomes[1].phase, Some(QueryKind::Resolve));
+            assert_eq!(candidate.last_phase, outcomes[1].phase);
+            assert!(outcomes.iter().all(|outcome| outcome.limit.is_none()));
+            assert!(outcomes.iter().all(|outcome| !outcome.reads.is_empty()));
+
+            let source = "const LEAF:u32=1u32\nconst C1:u32=comptime LEAF\nconst C0:u32=comptime C1\nconst GOOD:u32=comptime 7\n";
+            let mut candidate = engine(source);
+            candidate.comptime_limits.call_depth = 2;
+            let outcomes = candidate.materialize_value_outcomes(
+                vec![path("C0"), path("GOOD")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(matches!(
+                outcomes[0].result,
+                Err(QueryError::Operational(_))
+            ));
+            assert_eq!(outcomes[0].phase, Some(QueryKind::Lower));
+            assert_eq!(
+                outcomes[0].limit.as_ref().unwrap().kind,
+                hirsel_tir::ToolingLimitKind::CallDepth
+            );
+            assert!(outcomes[1].result.is_ok());
+            assert!(outcomes[1].limit.is_none());
+            assert!(candidate.last_comptime_limit.is_none());
+            assert_eq!(outcomes[1].phase, Some(QueryKind::Lower));
+            assert!(outcomes[0].reads.iter().any(|(key, _)| *key
+                == memo::ReadKey::ExecutedBody(hirsel_syntax::DefId::intern(&path("C0")))));
+        }
+    });
+}

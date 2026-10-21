@@ -20,6 +20,7 @@ pub(crate) struct FrozenSource<'a> {
     pub(crate) citations: SourceContext<'a>,
     pub(crate) registry: &'a crate::registry::BuiltinRegistry,
     pub(crate) instance_bodies: &'a hirsel_tir::InstanceBodies,
+    pub(crate) staged: &'a BTreeMap<DefPath, crate::comptime::StagedConstant>,
     pub(crate) manifests: &'a BTreeMap<hirsel_syntax::PackageId, ContentHash>,
     pub(crate) default_manifest: ContentHash,
     pub(crate) environment: ContentHash,
@@ -96,6 +97,9 @@ impl TirSource for FrozenSource<'_> {
             .get(&id)
             .filter(|entry| self.current(path, entry))
         {
+            if entry.result().is_err() {
+                worker.phase = Some(QueryKind::Modes);
+            }
             return DependencyProduct {
                 result: entry.result().map(|output| {
                     Arc::new(TaskBody {
@@ -186,6 +190,9 @@ impl TirSource for FrozenSource<'_> {
             environment: self.environment,
         });
         let result = done.result();
+        if result.is_err() {
+            worker.phase = Some(done.phase);
+        }
         let reads = match reads {
             Ok(reads) => reads,
             Err(error) => {
@@ -221,8 +228,14 @@ impl TirSource for FrozenSource<'_> {
         self.registry
             .dictionary_value(self.inputs.snapshot.types(), &self.inputs.memo, path)
     }
-    fn supports_staged_declarations(&self) -> bool {
-        false
+    fn has_staged_declaration(&self, registration: &crate::comptime::StagedRegistration) -> bool {
+        self.staged.get(&registration.path).is_some_and(|constant| {
+            constant.signature.fingerprint == registration.constant.signature.fingerprint
+                && constant.inputs == registration.constant.inputs
+        })
+    }
+    fn staged_constant(&self, path: &DefPath) -> Option<crate::comptime::StagedConstant> {
+        self.staged.get(path).cloned()
     }
     fn cached_constant(&self, path: &DefPath) -> Option<crate::comptime::EvaluatedConstant> {
         let constant = self
@@ -273,14 +286,11 @@ impl TirSource for FrozenSource<'_> {
         if arguments.is_empty() {
             return DependencySource::constant(worker, path);
         }
-        worker.pending.push(Requirement::ConstantInstance(
-            path.clone(),
-            arguments.to_vec(),
-        ));
-        DependencyProduct {
-            result: Err(QueryError::NotImplemented),
-            reads: Reads::empty(),
-        }
+        worker.capture(|worker| {
+            worker
+                .staged_at(path, arguments)
+                .map(|value| Arc::new(value.value))
+        })
     }
     fn instance_body(
         &self,
@@ -351,6 +361,7 @@ impl QueryEngine {
             },
             registry: &self.registry,
             instance_bodies: &self.instance_bodies,
+            staged: &self.staged_constants,
             manifests: &self.package_manifests,
             default_manifest: self.environment.package_manifest_hash,
             environment,
@@ -374,13 +385,73 @@ impl QueryEngine {
         definitions: Vec<DefPath>,
         jobs: hirsel_intern::jobs::Jobs,
     ) -> Vec<Result<hirsel_tir::Materialized, QueryError>> {
+        self.materialize_value_outcomes(definitions, jobs)
+            .into_iter()
+            .map(|outcome| outcome.result)
+            .collect()
+    }
+    /// The same worker schedule with root-local operational provenance.
+    pub fn materialize_value_outcomes(
+        &mut self,
+        definitions: Vec<DefPath>,
+        jobs: hirsel_intern::jobs::Jobs,
+    ) -> Vec<MaterializationResult> {
+        loop {
+            if let Some(results) = self.materialize_values_round(&definitions, jobs) {
+                if let Some(last) = results.last() {
+                    self.last_phase = last.phase;
+                    self.last_comptime_limit = last.limit.clone();
+                    self.unavailable = matches!(last.result, Err(QueryError::NotImplemented))
+                        .then_some(last.phase)
+                        .flatten();
+                }
+                return results;
+            }
+        }
+    }
+    fn scalar_materialization_outcome(&mut self, path: &DefPath) -> MaterializationResult {
+        self.last_phase = None;
+        self.unavailable = None;
+        self.last_comptime_limit = None;
+        self.execution_stack.push(ReadsBuilder::new());
+        let mut result = self.materialize_value(path);
+        let reads = self
+            .execution_stack
+            .pop()
+            .expect("root outcome read frame")
+            .finish();
+        let reads = match reads {
+            Ok(reads) => reads,
+            Err(_) => {
+                result = Err(QueryError::NotImplemented);
+                Reads::empty()
+            }
+        };
+        self.merge_execution(&reads);
+        let phase = if result.is_ok() {
+            Some(QueryKind::Lower)
+        } else {
+            self.unavailable.or(self.last_phase)
+        };
+        MaterializationResult {
+            definition: path.clone(),
+            result,
+            phase,
+            limit: self.last_comptime_limit.clone(),
+            reads: Arc::new(reads),
+        }
+    }
+    fn materialize_values_round(
+        &mut self,
+        definitions: &[DefPath],
+        jobs: hirsel_intern::jobs::Jobs,
+    ) -> Option<Vec<MaterializationResult>> {
         if definitions.is_empty() {
-            return vec![];
+            return Some(vec![]);
         }
         self.note_environment();
         self.prepare_materialization_environment();
-        let mut results: Vec<Option<Result<hirsel_tir::Materialized, QueryError>>> =
-            vec![None; definitions.len()];
+        let mut results: Vec<Option<MaterializationResult>> = vec![None; definitions.len()];
         let mut tasks = vec![];
         for (index, definition) in definitions.iter().enumerate() {
             if let Some(value) = self.constant_values.get(definition).cloned()
@@ -391,23 +462,31 @@ impl QueryEngine {
                         .any(|(key, _)| matches!(key, ReadKey::ValidationUniverse(_))))
                 && self.execution_valid(definition, &value.executed)
             {
-                results[index] = Some(Ok(value.value));
+                results[index] = Some(MaterializationResult {
+                    definition: definition.clone(),
+                    result: Ok(value.value),
+                    phase: Some(QueryKind::Lower),
+                    limit: None,
+                    reads: Arc::new(value.executed),
+                });
             } else {
                 tasks.push((index, definition.clone()));
             }
         }
         if tasks.is_empty() {
             self.last_comptime_limit = None;
-            return results.into_iter().map(Option::unwrap).collect();
+            return Some(results.into_iter().map(Option::unwrap).collect());
         }
         let shared = worker::TaskShared::new(self.s1.coordinator().clone());
         let source = match self.frozen_s1_source() {
             Ok(source) => source,
             Err(_) => {
-                return definitions
-                    .iter()
-                    .map(|path| self.materialize_value(path))
-                    .collect();
+                return Some(
+                    definitions
+                        .iter()
+                        .map(|path| self.scalar_materialization_outcome(path))
+                        .collect(),
+                );
             }
         };
         let completed = hirsel_intern::jobs::map_with_state(
@@ -422,6 +501,7 @@ impl QueryEngine {
                     path,
                     product,
                     worker.limit.take(),
+                    worker.phase,
                     std::mem::take(&mut worker.registrations),
                     std::mem::take(&mut worker.pending),
                 )
@@ -440,30 +520,70 @@ impl QueryEngine {
                 let _ = self.merge_completed(body);
             }
         }
+        // A declaration demand suspends evaluation before V. Install only
+        // registrations whose complete producer reads still hold, then begin
+        // another worker round under the new signature universe.
+        let mut declarations = BTreeMap::new();
+        for (_, path, product, _, _, registrations, pending) in &completed {
+            if pending
+                .iter()
+                .any(|requirement| matches!(requirement, Requirement::Staged(_)))
+                && self.execution_valid(path, &product.reads)
+            {
+                for registration in registrations {
+                    if !self
+                        .staged_constants
+                        .get(&registration.path)
+                        .is_some_and(|old| {
+                            old.signature.fingerprint == registration.constant.signature.fingerprint
+                                && old.inputs == registration.constant.inputs
+                        })
+                    {
+                        declarations.insert(registration.path.clone(), registration.clone());
+                    }
+                }
+            }
+        }
+        if !declarations.is_empty() {
+            for registration in declarations.into_values() {
+                self.install_staged(registration);
+            }
+            return None;
+        }
         // Successes reached inside a failed root remain independently valid.
         // Publish only after all worker requests/claims have settled.
-        for (path, constant, mut registrations) in shared.into_constants() {
+        for (path, constant, mut registrations, staged) in shared.into_constants() {
             if self.execution_valid(&path, &constant.executed) {
                 registrations.sort_by(|a, b| a.path.cmp(&b.path));
                 for registration in registrations {
                     self.install_staged(registration);
                 }
-                self.constant_values.insert(path, constant);
+                match staged {
+                    Some(key) => {
+                        self.staged_values.insert(key, constant);
+                    }
+                    None => {
+                        self.constant_values.insert(path, constant);
+                    }
+                }
             }
         }
         let mut completed: BTreeMap<_, _> = completed
             .into_iter()
-            .map(|(index, path, product, limit, registrations, pending)| {
-                (index, (path, product, limit, registrations, pending))
-            })
+            .map(
+                |(index, path, product, limit, phase, registrations, pending)| {
+                    (index, (path, product, limit, phase, registrations, pending))
+                },
+            )
             .collect();
         for (index, path) in definitions.iter().enumerate() {
-            let Some((_, product, limit, mut registrations, pending)) = completed.remove(&index)
+            let Some((_, product, limit, phase, mut registrations, pending)) =
+                completed.remove(&index)
             else {
                 // A prior root may have changed registrations since preflight.
                 // Recheck the hit at its sequential position and clear a limit
                 // from an earlier root exactly as scalar materialization does.
-                results[index] = Some(self.materialize_value(path));
+                results[index] = Some(self.scalar_materialization_outcome(path));
                 continue;
             };
             if pending.is_empty() && self.execution_valid(path, &product.reads) {
@@ -472,13 +592,19 @@ impl QueryEngine {
                     self.install_staged(registration);
                 }
                 self.last_comptime_limit = limit;
-                results[index] = Some(product.result);
+                results[index] = Some(MaterializationResult {
+                    definition: path.clone(),
+                    result: product.result,
+                    phase,
+                    limit: self.last_comptime_limit.clone(),
+                    reads: Arc::new(product.reads),
+                });
             } else {
                 // No suspended failure becomes a cached language verdict. A
                 // whole-root retry preserves the requester's original stack.
-                results[index] = Some(self.materialize_value(path));
+                results[index] = Some(self.scalar_materialization_outcome(path));
             }
         }
-        results.into_iter().map(Option::unwrap).collect()
+        Some(results.into_iter().map(Option::unwrap).collect())
     }
 }
