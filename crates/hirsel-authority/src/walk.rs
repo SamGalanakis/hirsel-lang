@@ -378,7 +378,7 @@ impl<'a> Checker<'a> {
             lexical: syntax.owner(),
             signature,
             reader,
-            memo,
+            memo: memo.with_nominal_roles(&signature.metadata.roles),
             intrinsics,
             receiving: None,
             expression_origins: BTreeMap::new(),

@@ -290,6 +290,10 @@ pub struct ContextMemo<'q> {
     equality: HashMap<(TypeId, Bound), Recorded<bool>>,
     authorities: HashMap<(TypeId, u32), Recorded<AuthoritySummary>>,
     role_ids: HashMap<NominalRoles, u32>,
+    // Retain the borrow: the metadata cannot mutate or reuse this address.
+    bound_roles: Option<(&'q NominalRoles, u32)>,
+    #[cfg(test)]
+    pub(crate) role_key_lookups: usize,
     view_policies: HashMap<TypeId, Recorded<CompatPolicy>>,
     payload_ids: HashMap<Vec<TypeId>, PayloadSetId>,
     payload_sets: Vec<StdHashSet<TypeId>>,
@@ -313,11 +317,23 @@ impl<'q> ContextMemo<'q> {
             equality: HashMap::default(),
             authorities: HashMap::default(),
             role_ids: HashMap::default(),
+            bound_roles: None,
+            #[cfg(test)]
+            role_key_lookups: 0,
             view_policies: HashMap::default(),
             payload_ids: HashMap::default(),
             payload_sets: vec![],
             hits: 0,
         }
+    }
+    /// Retain an immutable role context for this query's repeated proofs.
+    /// Borrowed from rustc15c1044 data_structures/intern.rs:13-24: equal
+    /// pointers avoid content hashing. Distinct pointers still use content
+    /// equality here; public metadata need not be globally interned.
+    pub fn with_nominal_roles(mut self, roles: &'q NominalRoles) -> Self {
+        let role = self.role_id(roles);
+        self.bound_roles = Some((roles, role));
+        self
     }
     pub fn types(&self) -> &'q TypeInterner {
         self.t
@@ -943,6 +959,15 @@ impl<'q> ContextMemo<'q> {
     }
 
     fn role_id(&mut self, roles: &NominalRoles) -> u32 {
+        if let Some((bound, role)) = self.bound_roles
+            && std::ptr::eq(bound, roles)
+        {
+            return role;
+        }
+        #[cfg(test)]
+        {
+            self.role_key_lookups += 1;
+        }
         match self.role_ids.get(roles) {
             Some(role) => *role,
             None => {

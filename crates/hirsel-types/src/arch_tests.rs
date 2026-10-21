@@ -795,3 +795,101 @@ fn concurrent_interning_gives_every_row_one_id() {
         stats.lock_wait_ns / 1000
     );
 }
+
+#[test]
+fn retained_nominal_roles_avoid_rehashing_without_merging_contexts() {
+    let t = TypeInterner::new(None);
+    let byte = primitive(&t, Primitive::U8);
+    let hidden = t.intern(row(TypeKind::Named {
+        definition: def("Hidden"),
+        arguments: vec![].into(),
+    }));
+    let heap = t.intern(Type {
+        allocation_target: Some(AllocationTarget::Heap),
+        ..t.row(hidden).clone()
+    });
+    let mut signature = (*nominal(Some(byte), vec![])).clone();
+    signature.definition = def("Hidden");
+    let SignatureKind::Type(declaration) = &mut signature.kind else {
+        unreachable!()
+    };
+    declaration.authority = AuthoritySummary::Unknown;
+    let signature = Arc::new(signature);
+    let roles = NominalRoles {
+        heap: Some(HeapRole {
+            arena: path("Hidden"),
+            operation: path("heap"),
+        }),
+        ..NominalRoles::default()
+    };
+    let generics = GenericDeclarations::default();
+    let reads = std::cell::RefCell::new(vec![]);
+    let mut lookup = |definition| {
+        reads.borrow_mut().push(definition);
+        Ok(Some(signature.clone()))
+    };
+    let mut memo = ContextMemo::new(&t, &generics, &mut lookup).with_nominal_roles(&roles);
+    for _ in 0..64 {
+        reads.borrow_mut().clear();
+        assert_eq!(
+            memo.authority(hidden, &roles).unwrap(),
+            AuthoritySummary::Unknown
+        );
+        assert_eq!(*reads.borrow(), [def("Hidden")]);
+        reads.borrow_mut().clear();
+        assert_eq!(
+            memo.authority(heap, &roles).unwrap(),
+            AuthoritySummary::inert()
+        );
+        assert!(reads.borrow().is_empty());
+    }
+    assert_eq!(
+        memo.role_key_lookups, 1,
+        "one content-key lookup binds the immutable context"
+    );
+
+    // Equal data at a different address retains the ordinary content key.
+    let copied = roles.clone();
+    let before = memo.hits();
+    assert_eq!(
+        memo.authority(heap, &copied).unwrap(),
+        AuthoritySummary::inert()
+    );
+    assert_eq!(memo.hits(), before + 1);
+    let missing = NominalRoles::default();
+    assert_eq!(
+        memo.authority(heap, &missing).unwrap(),
+        AuthoritySummary::Unknown
+    );
+    // Public metadata passed through the unbound API may change at the same address.
+    let mut other = roles.clone();
+    assert_eq!(
+        memo.authority(heap, &other).unwrap(),
+        AuthoritySummary::inert()
+    );
+    other.heap = None;
+    assert_eq!(
+        memo.authority(heap, &other).unwrap(),
+        AuthoritySummary::Unknown
+    );
+    assert_eq!(
+        memo.authority(heap, &roles).unwrap(),
+        AuthoritySummary::inert()
+    );
+    // A new query keeps its own provider/private view despite equal roles.
+    let mut visible = (*signature).clone();
+    let SignatureKind::Type(declaration) = &mut visible.kind else {
+        unreachable!()
+    };
+    declaration.authority = AuthoritySummary::inert();
+    let mut lookup = |_| Ok(Some(Arc::new(visible.clone())));
+    let mut separate = ContextMemo::new(&t, &generics, &mut lookup).with_nominal_roles(&roles);
+    assert_eq!(
+        separate.authority(hidden, &roles).unwrap(),
+        AuthoritySummary::inert()
+    );
+    assert_eq!(
+        memo.authority(hidden, &roles).unwrap(),
+        AuthoritySummary::Unknown
+    );
+}
