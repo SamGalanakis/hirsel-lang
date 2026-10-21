@@ -37,6 +37,8 @@ fn frozen(steps: Vec<Step>) -> &'static Layout {
         field_count: 1,
         logical: 0,
         logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: u64::MAX,
         flags: LAYOUT_FROZEN,
     })
 }

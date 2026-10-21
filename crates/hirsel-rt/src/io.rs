@@ -4614,6 +4614,8 @@ pub static hirsel_rt_v2_file_walk_descriptor: WalkDescriptor = WalkDescriptor(cr
     flags: crate::LAYOUT_DYNAMIC,
     logical: crate::LOGICAL_UNSUPPORTED,
     logical_count: std::ptr::null(),
+    scan: std::ptr::null(),
+    scan_words: 0,
 });
 /// # Safety
 /// Context live; each item contains only a run-context Path or FileError.

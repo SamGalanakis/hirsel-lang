@@ -9,6 +9,7 @@
 //! AheadSucc, `absorb` is Absorb, `finish_turn` is TurnEnd, and `eligible` is
 //! Eligible. The native adapter, not this protocol, owns fibers and ABI images.
 
+pub mod capture;
 pub mod footprint;
 pub mod native;
 

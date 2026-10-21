@@ -4,6 +4,7 @@
 hirsel_guard::install!();
 
 pub mod disk;
+pub mod handle_scan;
 pub mod integer;
 pub mod report;
 pub mod schedule;

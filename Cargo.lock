@@ -766,6 +766,7 @@ dependencies = [
  "hirsel-diag",
  "hirsel-graph",
  "hirsel-guard",
+ "hirsel-kernels",
  "hirsel-layout",
  "hirsel-lir",
  "hirsel-span",

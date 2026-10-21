@@ -15,6 +15,7 @@ pub mod discharge;
 pub mod effect;
 pub mod emission;
 pub mod fuel;
+pub mod handle_scan;
 pub mod ir;
 pub mod layout;
 pub mod layout_types;

@@ -258,6 +258,8 @@ pub fn layout(
         field_count,
         logical: 0,
         logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: u64::MAX,
         flags: if steps
             .iter()
             .any(|s| matches!(s.kind, hirsel_rt::STEP_LOOP | hirsel_rt::STEP_COLUMN))

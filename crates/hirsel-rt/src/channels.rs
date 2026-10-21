@@ -491,6 +491,8 @@ mod tests {
             flags: 0,
             logical: 0,
             logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: u64::MAX,
         };
         let none = [0u64; 2];
         let element = unsafe { Element::new(0, &layout, none.as_ptr().cast()) };

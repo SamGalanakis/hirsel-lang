@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 33
+#define HIRSEL_RT_V2_ABI_VERSION 34
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 40
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_FOREIGN_THREADS_HOME 0
@@ -153,7 +153,7 @@ _Static_assert(HIRSEL_RT_V2_PAGE_XTHREAD_FREE_OFFSET == HIRSEL_RT_V2_PAGE_OWNER_
  * LayoutRecord drop program to it). Step offsets are from the enclosing frame's base: the value,
  * a loop's element, or a column's element. */
 #define HIRSEL_RT_V2_LAYOUT_MAGIC 0x484e4c31u
-#define HIRSEL_RT_V2_LAYOUT_VERSION 13
+#define HIRSEL_RT_V2_LAYOUT_VERSION 14
 #define HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI 1
 #define HIRSEL_RT_V2_LAYOUT_DYNAMIC 2
 #define HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR 4
@@ -260,6 +260,10 @@ struct hirsel_rt_v2_layout {
        tag offset, form (0 ordinal Some=1, 1 live bit, 2 non-null niche), bit number.
        Only initialized live entries contribute to a copy/detach charge. */
     const uint64_t *logical_count;
+    /* Holder scan: eight-word instructions from hirsel-kernels::handle_scan.
+       scan_words 0 certifies no holders; UINT64_MAX means unknown metadata. */
+    const uint64_t *scan;
+    uint64_t scan_words;
 };
 
 /* Compiler-reserved cleanup continuation for an inline value. */
@@ -344,7 +348,7 @@ typedef struct hirsel_rt_v2_failure {
 #define HIRSEL_RT_V2_ASSERT_SIZE(type, bytes) _Static_assert(sizeof(type) == (bytes), #type " size")
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_header, HIRSEL_RT_V2_HEADER_SIZE);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_step, 56);
-HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_layout, 72);
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_layout, 88);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_cleanup, 32);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_region, 64);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_builder, 40);

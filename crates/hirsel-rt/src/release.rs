@@ -34,7 +34,7 @@ use crate::{STATUS_OK, fault};
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
 /// `Layout::version` of this descriptor format.
-pub const LAYOUT_VERSION: u32 = 13;
+pub const LAYOUT_VERSION: u32 = 14;
 /// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
 /// finalizer ends the process (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
@@ -145,6 +145,10 @@ pub struct Layout {
     pub logical: u64,
     /// Optional five-word live-entry count program (native descriptor version 13).
     pub logical_count: *const u64,
+    /// Native holder scan (version 14), eight words per instruction.
+    pub scan: *const u64,
+    /// Zero certifies no holders; u64::MAX means metadata is unavailable.
+    pub scan_words: u64,
 }
 
 /// One drop program step. Outside every loop it is active only when its top-level `field` is

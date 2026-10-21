@@ -203,6 +203,8 @@ pub fn derive(owners: &Owners, store: &TypeStore, types: &[TypeId]) -> (Derived,
         flags: 0,
         logical: 0,
         logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: u64::MAX,
     });
     (
         Derived {
@@ -232,6 +234,8 @@ fn materialize(descriptors: &HashMap<LayoutId, Descriptor>) -> HashMap<LayoutId,
                 field_count: d.field_count,
                 flags: d.flags,
                 logical: d.logical,
+                scan: std::ptr::null(),
+                scan_words: u64::MAX,
                 logical_count: d.logical_count.map_or(std::ptr::null(), |words| {
                     Box::leak(Box::new(words)).as_ptr()
                 }),

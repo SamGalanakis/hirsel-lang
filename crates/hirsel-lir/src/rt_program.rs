@@ -150,6 +150,8 @@ pub struct Descriptor {
     /// Optional native count program for live private entries.
     pub logical_count: Option<[u64; 5]>,
     pub steps: Vec<Step>,
+    /// Holder scan, distinct from the destructor program.
+    pub scan: crate::handle_scan::Program,
 }
 
 impl Descriptor {
@@ -290,6 +292,7 @@ fn descriptor_with_storage(
         None => (logical, None),
     };
     Ok(Descriptor {
+        scan: crate::handle_scan::Program::lower(record),
         logical_count,
         layout: id,
         size,

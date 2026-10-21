@@ -41,6 +41,18 @@ those locks before joining. The Io binding pointer uses release/acquire
 publication. These projections remove whole-run aliasing; they do not replace
 the role or prove individual concurrent service implementations safe.
 
+Native descriptor version 14 (runtime ABI 34) adds an independent holder scan
+pointer and word count, taking the C descriptor from 72 to 88 bytes. Both
+native emitters lower the existing `LayoutRecord.scan`; destruction programs
+cannot substitute for it because atomics and tasks are not resources.
+`ordered::capture` visits active variants, live captures, counted graphs,
+inline arrays, sequences and structure-of-arrays columns. Shared values are
+inert except for a mutex's exact-root wrapper. Missing descriptors, borrowed
+pointers, variable-flat sequences and scans exceeding the work bound remain
+unknown. Zero scan words certify an empty holder set; `u64::MAX` means unknown.
+The raw handle set still needs typed object resolution and obtainable-type
+closure before it can supply `Held`; ambiguous words never certify independence.
+
 ## Integration status
 
 This is a protocol and guarded migration substrate, not an enabled concurrent
@@ -62,6 +74,11 @@ Runtime controls additionally exercise role-enabled task-table growth at widths
   `proofs/ordered/Ordered.tla:398` (ClearPending), `:416` (Absorb), `:442`
   (ContinueCall), and its `Eligible`/`Fp` definitions. Its mutation traces are
   the regression cases in `ordered/tests.rs` and `channels.rs`.
+- Holder scan lowering follows this repository's existing native drop-program
+  lowering (`hirsel-lir/src/rt_program.rs`, `Lower::program` and `Lower::arm`)
+  and the checked `ScanStep` graph. It retains tag/live-bit/loop structure but
+  uses a separate read-only program, visits shared graph nodes once, and returns
+  unknown on unsupported storage or bounded work instead of inferring from drops.
 - Role waiting follows Rust std commit
   `ea137335b78829b4514bf1b4c16302f74fab8581`,
   `library/std/src/sync/poison/condvar.rs:182-194`: inspect and change the

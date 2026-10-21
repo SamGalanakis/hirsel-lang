@@ -22,6 +22,8 @@ fn main() {
         flags: 0,
         logical: 0,
         logical_count: ptr::null(),
+        scan: ptr::null(),
+        scan_words: u64::MAX,
     };
     let layouts = [&leaf as *const Layout];
     let config = Config {

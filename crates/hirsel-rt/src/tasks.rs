@@ -1304,13 +1304,18 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
     // unique, so the order is total.
     if woken.len() > 1 {
         woken.sort_unstable_by_key(|&task| {
-            let row = scheduler(ctx).task(task);
-            let deadline = match row.wait {
+            // The home bridge may release the role and another worker may
+            // grow the task table. Copy before it; no row borrow may cross it.
+            let (wait, parked_at) = {
+                let row = scheduler(ctx).task(task);
+                (row.wait, row.parked_at)
+            };
+            let deadline = match wait {
                 // SAFETY: the context is live and `token` parked.
                 Some(Wait::Host { token }) => unsafe { crate::host_waits::deadline(ctx, token) },
                 _ => None,
             };
-            (deadline, row.parked_at)
+            (deadline, parked_at)
         });
     }
     for &task in &woken {

@@ -19,7 +19,7 @@ use crate::CodegenError;
 use crate::module::{CheckThunk, Emitted, Emitter, Helper, PTR};
 
 /// Bytes of `hirsel_rt_v2_layout`.
-const DESCRIPTOR_BYTES: usize = 72;
+const DESCRIPTOR_BYTES: usize = 88;
 /// Bytes of `hirsel_rt_v2_step`.
 const STEP_BYTES: usize = 56;
 
@@ -236,7 +236,30 @@ impl Emitter<'_> {
             } else {
                 None
             };
-            let bytes = descriptor_bytes(
+            let scan = d.scan.linked(|id| self.inputs.registry.index(id));
+            let scan_words = scan.as_ref().map_or(u64::MAX, |w| w.len() as u64);
+            let scan_id = match scan {
+                Some(words) if !words.is_empty() => {
+                    let scan_name = name.replace("hirsel.layout.", "hirsel.scan.");
+                    let (id, fresh) = self.declare_data(&scan_name, Linkage::Preemptible)?;
+                    if fresh {
+                        self.manifested.descriptors.insert(scan_name.clone());
+                        let mut description = DataDescription::new();
+                        description.define(
+                            words
+                                .into_iter()
+                                .flat_map(u64::to_le_bytes)
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
+                        );
+                        description.set_align(8);
+                        self.define_data(&scan_name, id, &description)?;
+                    }
+                    Some(id)
+                }
+                _ => None,
+            };
+            let mut bytes = descriptor_bytes(
                 d.size,
                 d.align,
                 d.steps.len() as u64,
@@ -244,9 +267,14 @@ impl Emitter<'_> {
                 d.flags,
                 d.logical,
             );
+            put_u64(&mut bytes, 80, scan_words);
             let mut description = DataDescription::new();
             description.define(bytes.into_boxed_slice());
             description.set_align(8);
+            if let Some(scan) = scan_id {
+                let gv = self.module.declare_data_in_data(scan, &mut description);
+                description.write_data_addr(72, gv, 0);
+            }
             if let Some(count) = logical_count {
                 let gv = self.module.declare_data_in_data(count, &mut description);
                 description.write_data_addr(64, gv, 0);

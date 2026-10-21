@@ -34,6 +34,8 @@ fn words() -> &'static Layout {
         leak(Layout {
             logical: 8,
             logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: u64::MAX,
             flags: LAYOUT_DYNAMIC | LAYOUT_LOGICAL_PER_ELEMENT | LAYOUT_SEQUENCE,
             ..*leaf(16)
         })
@@ -52,6 +54,8 @@ fn boxes() -> &'static Layout {
         leak(Layout {
             logical: 8,
             logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: u64::MAX,
             flags: program.flags | LAYOUT_DYNAMIC | LAYOUT_LOGICAL_PER_ELEMENT | LAYOUT_SEQUENCE,
             ..*program
         })
