@@ -133,6 +133,10 @@ fn native_cancel_and_unshielded_checks_record_observations_and_replay_the_cut() 
                 }
                 race.canceled.store(true, Ordering::Release);
                 wait_until(|| race.finished.load(Ordering::Acquire));
+                wait_until(|| unsafe {
+                    let _role = role::Guard::new(ctx);
+                    scheduler(ctx).task(word as u32).state == State::Done
+                });
                 STATUS_OK
             },
         );
@@ -159,9 +163,11 @@ fn native_cancel_and_unshielded_checks_record_observations_and_replay_the_cut() 
                 replay.begin(&[]);
                 replay.publish(&[], Phase::Done).unwrap();
             }
-            for op in 1..=if terminal { 4 } else { 1 } {
+            for op in 1..=if terminal { 5 } else { 1 } {
                 replay.begin(&[0]);
-                if op != 3 {
+                if op == 5 {
+                    replay.publish(&[0], Phase::Entered).unwrap();
+                } else if op != 3 {
                     assert_eq!(
                         replay.cancel_check(&[0], None).unwrap(),
                         (op != 1).then_some(CANCEL_REQUESTED)

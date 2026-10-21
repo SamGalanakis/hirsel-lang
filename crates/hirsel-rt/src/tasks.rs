@@ -2564,6 +2564,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
             crate::stop::check(ctx, ordered::lifecycle::finish(ctx, slot, none, size))
         };
     }
+    if free::enabled(ctx) {
+        return unsafe { crate::stop::check(ctx, free::lifecycle::finish(ctx, slot, none, size)) };
+    }
     let s = scheduler(ctx);
     let current = s.current;
     let held = Slot {

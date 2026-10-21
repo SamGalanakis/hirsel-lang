@@ -157,6 +157,12 @@ pub(super) fn object(ctx: *mut TaskCtx) -> Option<hirsel_free::record::ObjectId>
     })
 }
 
+pub(super) fn end<T>(ctx: *mut TaskCtx, action: impl FnOnce() -> T) -> Stopped<T> {
+    begin(ctx);
+    publish(ctx, Phase::Entered, |_| ())?;
+    publish(ctx, Phase::Done, |_| action())
+}
+
 fn entry(ctx: *mut TaskCtx) {
     if !on(ctx) {
         // Live entry releases happen under the role, before obtaining a cell

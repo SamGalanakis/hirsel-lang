@@ -106,44 +106,7 @@ pub(super) unsafe fn migrate(ctx: &mut TaskCtx) {
 /// # Safety
 /// This is the running child, holding the scheduler role after body cleanup.
 pub(super) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
-    {
-        let path = scheduler(ctx).task(index).path.clone();
-        let first_end = !std::mem::replace(&mut scheduler(ctx).task(index).ended, true);
-        if first_end {
-            crate::free::end(ctx, &path);
-        }
-        let chain = ctx.failure.take_chain(&path);
-        let failed = status != STATUS_OK;
-        if failed != !chain.is_empty() {
-            fault("a task's status disagrees with its failure state");
-        }
-        if let Some(metrics) = &ctx.run_ref().worker_metrics {
-            metrics.complete();
-        }
-        let s = scheduler(ctx);
-        let row = s.task(index);
-        row.finishing = true;
-        row.state = State::Ready;
-        if !failed && first_end {
-            // Detached children skip TaskFinish's holding phase, but every
-            // child end still takes its parent scope's completion rank.
-            s.order(index);
-        }
-        if failed {
-            let row = s.task(index);
-            row.failure = Some(chain);
-            let scope = row.scope.expect("a child has a scope");
-            s.order(index);
-            s.cancel_scope(scope, CANCEL_CHILD_FAILED);
-            let siblings = s.scope(scope).children.clone();
-            s.wake_owner(scope);
-            for sibling in siblings {
-                if sibling != index {
-                    s.cancel(sibling, CANCEL_CHILD_FAILED);
-                }
-            }
-        }
-    }
+    unsafe { crate::stop::check(ctx, lifecycle::completion(ctx, index, status)) };
     if ctx.failure.active() || ctx.shield != 0 || !ctx.work.is_null() || !ctx.region.is_null() {
         fault("a task completed with context state left");
     }
