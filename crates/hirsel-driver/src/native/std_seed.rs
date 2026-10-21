@@ -120,29 +120,39 @@ pub fn seed_objects(manifest: &Path, output: &Path) -> Result<SeedReport, String
                     backend.name(),
                     &format!("{opt:?}").to_lowercase(),
                 );
-                let store = Arc::new(DirObjects::new(output.join(partition)));
-                let mut options = Options::new(target.clone());
-                options.validation = Validation::Ready;
-                options.objects = Some(UnitObjects {
-                    store,
-                    backend,
-                    opt,
-                    debug: opt == OptLevel::None,
-                    fuel: false,
-                    jobs: hirsel_intern::jobs::Jobs::ONE,
-                    byte_budget: None,
-                });
-                let ready = super::stages::build_program(&program, operations.clone(), &options)
-                    .map_err(|e| e.to_string())?;
-                if backend == Backend::Cranelift && opt == OptLevel::None {
-                    report.units += ready.summaries.len();
-                    report.generic_units +=
-                        ready.unit_objects.as_ref().map_or(0, |o| o.generic_units);
+                // Native run uses O0 without debug intervals; debug builds use
+                // the same partition with debug intervals. The key binds both.
+                let debug_modes: &[bool] = if opt == OptLevel::None {
+                    &[false, true]
+                } else {
+                    &[false]
+                };
+                for &debug in debug_modes {
+                    let store = Arc::new(DirObjects::new(output.join(&partition)));
+                    let mut options = Options::new(target.clone());
+                    options.validation = Validation::Ready;
+                    options.objects = Some(UnitObjects {
+                        store,
+                        backend,
+                        opt,
+                        debug,
+                        fuel: false,
+                        jobs: hirsel_intern::jobs::Jobs::ONE,
+                        byte_budget: None,
+                    });
+                    let ready =
+                        super::stages::build_program(&program, operations.clone(), &options)
+                            .map_err(|e| e.to_string())?;
+                    if backend == Backend::Cranelift && opt == OptLevel::None && debug {
+                        report.units += ready.summaries.len();
+                        report.generic_units +=
+                            ready.unit_objects.as_ref().map_or(0, |o| o.generic_units);
+                    }
+                    report.objects += ready
+                        .unit_objects
+                        .as_ref()
+                        .map_or(0, |o| o.objects.len() - o.hits);
                 }
-                report.objects += ready
-                    .unit_objects
-                    .as_ref()
-                    .map_or(0, |o| o.objects.len() - o.hits);
             }
         }
     }
@@ -242,32 +252,39 @@ mod tests {
                         backend.name(),
                         &format!("{opt:?}").to_lowercase(),
                     );
-                    let mut options = Options::new(target.clone());
-                    options.validation = Validation::Ready;
-                    options.objects = Some(UnitObjects {
-                        store: Arc::new(SeededObjects {
-                            writable: Arc::new(NoObjects),
-                            seed: Arc::new(ReadOnlyObjects(output.join(partition))),
-                        }),
-                        backend,
-                        opt,
-                        debug: opt == OptLevel::None,
-                        fuel: false,
-                        jobs: hirsel_intern::jobs::Jobs::new(2),
-                        byte_budget: None,
-                    });
-                    let seeded = super::super::build(&input, &options).unwrap();
-                    let seeded_objects = seeded.unit_objects.unwrap();
-                    assert!(
-                        seeded_objects.hits > 0,
-                        "{backend:?} {opt:?}: no installed owner hit"
-                    );
-                    options.objects.as_mut().unwrap().store = Arc::new(NoObjects);
-                    let fresh = super::super::build(&input, &options)
-                        .unwrap()
-                        .unit_objects
-                        .unwrap();
-                    assert_eq!(seeded_objects.objects, fresh.objects, "{backend:?} {opt:?}");
+                    let debug_modes: &[bool] = if opt == OptLevel::None {
+                        &[false, true]
+                    } else {
+                        &[false]
+                    };
+                    for &debug in debug_modes {
+                        let mut options = Options::new(target.clone());
+                        options.validation = Validation::Ready;
+                        options.objects = Some(UnitObjects {
+                            store: Arc::new(SeededObjects {
+                                writable: Arc::new(NoObjects),
+                                seed: Arc::new(ReadOnlyObjects(output.join(&partition))),
+                            }),
+                            backend,
+                            opt,
+                            debug,
+                            fuel: false,
+                            jobs: hirsel_intern::jobs::Jobs::new(2),
+                            byte_budget: None,
+                        });
+                        let seeded = super::super::build(&input, &options).unwrap();
+                        let seeded_objects = seeded.unit_objects.unwrap();
+                        assert!(
+                            seeded_objects.hits > 0,
+                            "{backend:?} {opt:?}: no installed owner hit"
+                        );
+                        options.objects.as_mut().unwrap().store = Arc::new(NoObjects);
+                        let fresh = super::super::build(&input, &options)
+                            .unwrap()
+                            .unit_objects
+                            .unwrap();
+                        assert_eq!(seeded_objects.objects, fresh.objects, "{backend:?} {opt:?}");
+                    }
                 }
             }
             std::fs::remove_dir_all(directory).unwrap();
