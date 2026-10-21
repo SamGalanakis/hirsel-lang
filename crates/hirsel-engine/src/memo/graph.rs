@@ -7,7 +7,7 @@ use crate::QueryKind;
 use hirsel_intern::IdHasher;
 use hirsel_intern::timings::{self, Count};
 use hirsel_syntax::{ContentHash, DefId};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
@@ -215,14 +215,25 @@ impl MemoGraph {
                 self.last_changed[d as usize] = self.revision;
             }
         }
+        // Several changed inputs often share subscribers (header, candidate,
+        // representation and citation changes in particular). Union the mark
+        // requests before touching records, preserving the first read's reason.
+        let mut readers = BTreeMap::new();
         for (read, _) in &changes.reads {
-            self.mark_subscribers(read);
-        }
-        for (def, _) in &changes.texts {
-            let keys: Vec<MemoKey> = self.memos_of(*def).copied().collect();
-            for key in keys {
-                self.mark(key, Invalidation::Text);
+            for key in self.subscribers(read) {
+                readers.entry(*key).or_insert(read.kind());
             }
+        }
+        for (key, kind) in readers {
+            self.mark(key, Invalidation::Read(kind));
+        }
+        let texts: BTreeSet<_> = changes
+            .texts
+            .iter()
+            .flat_map(|(def, _)| self.memos_of(*def).copied())
+            .collect();
+        for key in texts {
+            self.mark(key, Invalidation::Text);
         }
         self.revision
     }
@@ -555,6 +566,47 @@ mod tests {
         );
         assert!((1..2001).step_by(2).all(|i| graph.is_dirty(&memos[i].key)));
         assert!((2..2001).step_by(2).all(|i| !graph.is_dirty(&memos[i].key)));
+    }
+
+    #[test]
+    fn overlapping_change_inputs_share_one_read_mark_and_text_still_wins() {
+        let mut graph = MemoGraph::default();
+        let (a, b) = (def("a"), def("b"));
+        let key = MemoKey::new(QueryKind::Check, a);
+        let memo = graph.insert::<()>(
+            key,
+            h("a"),
+            Ok(Arc::new(())),
+            reads(&[
+                (ReadKey::Signature(b), "signature"),
+                (ReadKey::Representation(b), "shape"),
+            ]),
+            Durability::Low,
+            false,
+        );
+        let base = graph.stats().touched;
+        let mut change = ChangeSet::default();
+        change.read(ReadKey::Signature(b), Durability::Low);
+        change.read(ReadKey::Representation(b), Durability::Low);
+        change.read(ReadKey::Signature(b), Durability::Low);
+        graph.apply(&change);
+        assert_eq!(graph.stats().touched - base, 1);
+        assert_eq!(graph.stats().invalidated[ReadKind::Signature as usize], 1);
+        assert_eq!(
+            graph.check(&memo),
+            Verdict::Dirty(Invalidation::Read(ReadKind::Signature))
+        );
+        change.text(a, Durability::Low);
+        change.text(a, Durability::Low);
+        let base = graph.stats().touched;
+        graph.apply(&change);
+        assert_eq!(
+            graph.stats().touched - base,
+            2,
+            "one read mark then one text override"
+        );
+        assert_eq!(graph.check(&memo), Verdict::Dirty(Invalidation::Text));
+        assert_eq!(graph.stats().invalidated_text, 1);
     }
 
     #[test]
