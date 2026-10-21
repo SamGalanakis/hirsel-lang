@@ -68,7 +68,7 @@ const PHASES: [&str; 21] = [
     "declarations",
     "signature normalize",
 ];
-const COUNTS: [&str; 49] = [
+const COUNTS: [&str; 57] = [
     "definitions",
     "units",
     "V runs",
@@ -118,6 +118,14 @@ const COUNTS: [&str; 49] = [
     "native effective workers peak",
     "native worker stack reservation bytes peak",
     "native retained Ready structural bytes peak",
+    "native Value decodes",
+    "native Value decode bytes",
+    "native Value rebinds",
+    "native effect replays",
+    "native append/expand",
+    "closure body scans",
+    "arena body scans",
+    "native late keys",
 ];
 
 fn build(source: &std::path::Path, timings: &str) -> std::process::Output {
@@ -259,8 +267,7 @@ fn mem_usage_reports_peak_rss_and_the_tables_held() {
     assert!(held("engine: signatures") > 0, "{memory}");
 }
 
-/// Release and explicit whole-module LLVM optimization preserve executable behavior
-/// and reject combinations that cannot run LLVM optimization.
+/// Native memory reporting separates resident peaks, retained structures and reserved stacks.
 #[test]
 fn native_memory_separates_phase_rss_structural_bytes_and_stack_reservations() {
     let source = std_file(HELLO);
