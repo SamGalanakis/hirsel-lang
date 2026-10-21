@@ -4,21 +4,39 @@
 use super::super::*;
 
 /// # Safety
-/// As for ordinary TaskScopeExit. This policy does not yet admit timers.
+/// As for ordinary TaskScopeExit, retaining any deadline through child cleanup.
 pub(crate) unsafe fn scope_exit(
     ctx: *mut TaskCtx,
     word: u64,
     error: u8,
     caller_site: u64,
 ) -> Stopped<u8> {
+    unsafe { exit_scope(ctx, word, error, caller_site, None) }
+}
+
+/// # Safety
+/// As for TaskScopeExitUntil; out is writable for its Expired bit.
+pub(crate) unsafe fn scope_exit_until(
+    ctx: *mut TaskCtx,
+    word: u64,
+    error: u8,
+    caller_site: u64,
+    out: *mut u8,
+) -> Stopped<u8> {
+    unsafe { exit_scope(ctx, word, error, caller_site, Some(out)) }
+}
+
+unsafe fn exit_scope(
+    ctx: *mut TaskCtx,
+    word: u64,
+    error: u8,
+    caller_site: u64,
+    out: Option<*mut u8>,
+) -> Stopped<u8> {
     super::record::begin(ctx);
     let s = scheduler(ctx) as *mut Scheduler;
     let scope = unsafe { (*s).scope_handle(word) };
     let me = unsafe { (*s).current };
-    assert!(
-        unsafe { (*s).scope(scope).deadline.is_none() },
-        "native Free deadlines are not admitted"
-    );
     let failing = error != 0 || unsafe { (*ctx).failure.active() };
     let mut cancellations = Vec::new();
     if failing {
@@ -86,13 +104,26 @@ pub(crate) unsafe fn scope_exit(
             }
         }
     }
-    let retired_scope = super::record::publish(ctx, Phase::Done, |_| unsafe {
+    // The timer is owned by this scope until all called child rests return.
+    // Removing its host interest may bridge to home, outside every section.
+    if let Some(token) = unsafe { (*s).scope(scope).deadline.as_ref().and_then(|d| d.token) } {
+        unsafe { crate::host_waits::disarm(ctx, token) };
+    }
+    let retired_scope = super::record::publish(ctx, Phase::Done, |writer| unsafe {
         let s = &mut *s;
         for &child in children.iter().rev() {
             let chain = s.task(child).failure.take();
             retired.push((s.retire_task(child), chain));
         }
         let row = s.scopes[scope as usize].take().expect("an exiting scope");
+        if let Some(deadline) = &row.deadline
+            && let Some(writer) = writer
+        {
+            writer.expired(deadline.expired);
+        }
+        if let Some(out) = out {
+            out.write(u8::from(row.deadline.as_ref().is_some_and(|d| d.expired)));
+        }
         s.vacant_scopes.push(scope);
         row
     })?;
@@ -464,6 +495,53 @@ pub(crate) unsafe fn spawn(
 /// The role is held and out is writable for the scope word.
 pub(crate) unsafe fn scope_enter(ctx: *mut TaskCtx, out: *mut u64) -> Stopped<()> {
     super::record::begin(ctx);
+    let (s, index, current, row) = prepare_scope(ctx, None);
+    let generation = row.generation;
+    super::record::publish(ctx, Phase::Done, |_| unsafe {
+        install_scope(s, index, current, row);
+        out.write(handle(index, generation));
+    })?;
+    unsafe { try_yield(&mut *ctx) }
+}
+
+/// # Safety
+/// As for TaskScopeEnterUntil, with a bound home adapter and writable out.
+pub(crate) unsafe fn scope_enter_until(
+    ctx: *mut TaskCtx,
+    out: *mut u64,
+    deadline: *const [u64; 2],
+) -> Stopped<()> {
+    let [clock, at] = unsafe { deadline.read() };
+    super::record::begin(ctx);
+    let (s, index, current, row) = prepare_scope(
+        ctx,
+        Some(ScopeDeadline {
+            token: None,
+            expired: false,
+        }),
+    );
+    let generation = row.generation;
+    super::record::publish(ctx, Phase::Entered, |_| unsafe {
+        install_scope(s, index, current, row);
+    })?;
+    let token = unsafe { crate::host_waits::arm(ctx, index, clock, at) }?;
+    // A fresh scope has no children or inner scopes, so immediate expiration
+    // needs no allocation or graph walk inside this publication.
+    super::record::publish(ctx, Phase::Done, |_| unsafe {
+        let s = &mut *s;
+        match token {
+            Some(token) => s.scope(index).deadline.as_mut().unwrap().token = Some(token),
+            None => s.expire(index),
+        }
+        out.write(handle(index, generation));
+    })?;
+    unsafe { try_yield(&mut *ctx) }
+}
+
+fn prepare_scope(
+    ctx: *mut TaskCtx,
+    deadline: Option<ScopeDeadline>,
+) -> (*mut Scheduler, u32, u32, Scope) {
     let s = scheduler(ctx) as *mut Scheduler;
     let (index, generation, current) = unsafe {
         let s = &mut *s;
@@ -484,18 +562,18 @@ pub(crate) unsafe fn scope_enter(ctx: *mut TaskCtx, out: *mut u64) -> Stopped<()
         owner: current,
         children: Vec::new(),
         canceled: Default::default(),
-        deadline: None,
+        deadline,
         completions: AtomicU64::new(0),
     };
-    super::record::publish(ctx, Phase::Done, |_| unsafe {
-        let s = &mut *s;
-        assert!(s.scopes[index as usize].is_none());
-        s.scopes[index as usize] = Some(row);
-        s.task(current).scopes.push(index);
-        s.cancel_epoch.changed();
-        out.write(handle(index, generation));
-    })?;
-    unsafe { try_yield(&mut *ctx) }
+    (s, index, current, row)
+}
+
+unsafe fn install_scope(s: *mut Scheduler, index: u32, current: u32, row: Scope) {
+    let s = unsafe { &mut *s };
+    assert!(s.scopes[index as usize].is_none());
+    s.scopes[index as usize] = Some(row);
+    s.task(current).scopes.push(index);
+    s.cancel_epoch.changed();
 }
 
 #[cfg(test)]
@@ -941,3 +1019,6 @@ mod tests {
 
 #[cfg(test)]
 mod rest_tests;
+
+#[cfg(test)]
+mod deadline_tests;
