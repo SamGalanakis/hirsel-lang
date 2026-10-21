@@ -669,7 +669,7 @@ impl<'a> Checker<'a> {
         let pending = self.reader.borrow_mut().take_pending();
         for (d, result) in pending {
             self.out.reads.push(DependencyRead::Signature {
-                definition: d.path().clone(),
+                definition: d,
                 fingerprint: result.as_ref().ok().map(|s| s.fingerprint),
             });
             match result {

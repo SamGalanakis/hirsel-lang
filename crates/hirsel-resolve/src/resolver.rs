@@ -426,7 +426,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             }
         };
         self.output.reads.push(DependencyRead::Signature {
-            definition: definition.clone(),
+            definition: id,
             fingerprint: signature.as_ref().map(|s| s.fingerprint),
         });
         self.output

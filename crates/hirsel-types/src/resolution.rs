@@ -26,7 +26,8 @@ pub enum DependencyRead {
         exposed: bool,
     },
     Signature {
-        definition: DefPath,
+        #[serde(with = "crate::definition_path")]
+        definition: DefId,
         fingerprint: Option<ContentHash>,
     },
 }

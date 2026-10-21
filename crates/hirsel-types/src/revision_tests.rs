@@ -225,7 +225,7 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
                 output: lookup.clone(),
             },
             DependencyRead::Signature {
-                definition: path("absent"),
+                definition: hirsel_syntax::DefId::intern(&path("absent")),
                 fingerprint: None,
             },
         ],

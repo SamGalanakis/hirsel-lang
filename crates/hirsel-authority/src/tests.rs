@@ -215,7 +215,7 @@ fn provider_failures_are_preserved_outside_the_result() {
     let out = f.finish(root);
     assert!(matches!(out.failure, Some(QueryError::Operational(_))));
     assert!(out.reads.contains(&DependencyRead::Signature {
-        definition: path("Missing"),
+        definition: hirsel_syntax::DefId::intern(&path("Missing")),
         fingerprint: None
     }));
 }

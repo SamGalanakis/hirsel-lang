@@ -10,7 +10,7 @@ impl Checker<'_, '_> {
         }
         let result = self.provider.signature(definition);
         self.body.resolution.reads.push(DependencyRead::Signature {
-            definition: definition.path().clone(),
+            definition,
             fingerprint: result.as_ref().ok().map(|s| s.fingerprint),
         });
         match result {

@@ -249,10 +249,8 @@ impl Weight {
                 self.context(context);
                 self.add(head.capacity());
             }
-            DependencyRead::Signature {
-                definition,
-                fingerprint: _,
-            } => self.def_path(definition),
+            // Definition identities are owned by the session interner.
+            DependencyRead::Signature { .. } => (),
         }
     }
     fn detail(&mut self, detail: &crate::DependencyReads) {
@@ -823,6 +821,31 @@ mod tests {
         let one_destination = weight.bytes;
         weight.destination(&Destination::Caller(callers));
         assert_eq!(weight.bytes, one_destination);
+    }
+
+    #[test]
+    fn signature_read_weight_excludes_session_owned_path_payload() {
+        use hirsel_types::DependencyRead;
+        let path = DefPath::core(&"helper".repeat(1000));
+        let read = DependencyRead::Signature {
+            definition: hirsel_syntax::DefId::intern(&path),
+            fingerprint: None,
+        };
+        let mut weight = Weight::default();
+        weight.dependency(&read);
+        assert_eq!(weight.bytes, 0);
+        // The vector still owns and charges its reserved inline enum rows.
+        let mut reads = Vec::with_capacity(8);
+        let capacity = reads.capacity();
+        reads.push(read);
+        weight.vec(&reads, Weight::dependency);
+        assert_eq!(
+            weight.bytes,
+            (capacity * size_of::<DependencyRead>()) as u64
+        );
+        // A lookup's owned result path remains a separate allocation.
+        weight.def_path(&path);
+        assert!(weight.bytes >= 6000);
     }
 
     #[test]

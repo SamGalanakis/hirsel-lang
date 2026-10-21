@@ -253,7 +253,7 @@ pub(crate) fn complete_reads(
                 definition,
                 fingerprint,
             } => reads.record(
-                ReadKey::Signature(def(definition)),
+                ReadKey::Signature(*definition),
                 signature_value(*fingerprint),
             ),
         }

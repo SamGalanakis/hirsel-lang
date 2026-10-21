@@ -180,7 +180,7 @@ impl QueryEngine {
                     for read in reads.resolver.iter().chain(&reads.manifest_lookups) {
                         match read {
                             DependencyRead::Signature { definition, .. } => {
-                                dependencies.insert(definition.clone());
+                                dependencies.insert(definition.path().clone());
                             }
                             DependencyRead::Lookup {
                                 result: Ok(definition),

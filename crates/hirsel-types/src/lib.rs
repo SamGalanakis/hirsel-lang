@@ -1127,12 +1127,12 @@ pub struct QueryOutput<T> {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct SignatureDependency {
     // Keep the historical path encoding even inside a numbered std image.
-    #[serde(with = "signature_dependency_path")]
+    #[serde(with = "definition_path")]
     pub definition: DefId,
     pub fingerprint: ContentHash,
 }
 
-mod signature_dependency_path {
+mod definition_path {
     use super::{DefId, DefPath};
     use serde::{Deserialize, Serialize};
 

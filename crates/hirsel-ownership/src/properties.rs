@@ -55,7 +55,7 @@ impl<'q> Signatures<'q> {
     pub fn record(&mut self, reads: &mut Vec<DependencyRead>) {
         for (definition, result) in self.reader.borrow_mut().take_pending() {
             reads.push(DependencyRead::Signature {
-                definition: definition.path().clone(),
+                definition,
                 fingerprint: result.as_ref().ok().map(|s| s.fingerprint),
             });
         }

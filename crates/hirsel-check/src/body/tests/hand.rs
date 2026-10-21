@@ -293,7 +293,7 @@ fn nonrecursive_lookup_failures_are_recorded() {
             .resolution
             .reads
             .contains(&DependencyRead::Signature {
-                definition: path,
+                definition: hirsel_syntax::DefId::intern(&path),
                 fingerprint: None
             })
     );

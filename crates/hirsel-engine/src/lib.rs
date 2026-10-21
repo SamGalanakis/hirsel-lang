@@ -445,6 +445,61 @@ mod tests {
         }
     }
     #[test]
+    fn signature_read_wire_keeps_legacy_enum_tag_and_path_inside_image_scopes() {
+        use hirsel_intern::persist::{Numbering, Source};
+        use hirsel_syntax::{DefId, with_def_numbering, with_def_source};
+        use hirsel_types::DependencyRead;
+        struct NoDefinitions;
+        impl Source<DefId> for NoDefinitions {
+            fn id(&self, _: u32) -> Option<DefId> {
+                panic!("a signature read must decode its path directly")
+            }
+        }
+        for path in [path("z"), path("a"), DefPath::core(&"long".repeat(1024))] {
+            for fingerprint in [None, Some(ContentHash::of_bytes(b"observed"))] {
+                let read = DependencyRead::Signature {
+                    definition: DefId::intern(&path),
+                    fingerprint,
+                };
+                let json = format!(
+                    "{{\"Signature\":{{\"definition\":{},\"fingerprint\":{}}}}}",
+                    serde_json::to_string(&path).unwrap(),
+                    serde_json::to_string(&fingerprint).unwrap(),
+                )
+                .into_bytes();
+                // Legacy bincode: the fourth enum variant's fixed u32 tag,
+                // then the owned DefPath and optional observed fingerprint.
+                let mut binary = 3u32.to_le_bytes().to_vec();
+                binary.extend(bincode::serialize(&path).unwrap());
+                binary.extend(bincode::serialize(&fingerprint).unwrap());
+                let encode = || {
+                    assert_eq!(serde_json::to_vec(&read).unwrap(), json);
+                    assert_eq!(bincode::serialize(&read).unwrap(), binary);
+                };
+                let decode = || {
+                    assert_eq!(
+                        serde_json::from_slice::<DependencyRead>(&json).unwrap(),
+                        read
+                    );
+                    assert_eq!(
+                        bincode::deserialize::<DependencyRead>(&binary).unwrap(),
+                        read
+                    );
+                };
+                encode();
+                decode();
+                let mut numbering = Numbering::default();
+                with_def_numbering(&mut numbering, encode);
+                assert!(numbering.ids().is_empty());
+                with_def_source(std::sync::Arc::new(NoDefinitions), decode);
+                let DependencyRead::Signature { definition, .. } = read.clone() else {
+                    unreachable!()
+                };
+                assert!(std::ptr::eq(definition.path(), DefId::intern(&path).path()));
+            }
+        }
+    }
+    #[test]
     fn dependency_order_is_irrelevant_but_text_and_signature_edits_invalidate() {
         let a = SignatureDependency {
             definition: hirsel_syntax::DefId::intern(&path("a")),

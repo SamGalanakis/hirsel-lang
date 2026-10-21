@@ -609,7 +609,7 @@ fn successful_and_failed_signature_reads_and_failed_name_reads_survive_rejection
         vec![own("good"), own("unavailable")]
     );
     assert!(output.reads.contains(&DependencyRead::Signature {
-        definition: own("unavailable"),
+        definition: hirsel_syntax::DefId::intern(&own("unavailable")),
         fingerprint: None
     }));
     assert!(output.reads.iter().any(|r| matches!(r,DependencyRead::Lookup { segments,result: Err(LookupError::Missing),manifest,.. } if segments == &["missing"] && *manifest == index.revision)));

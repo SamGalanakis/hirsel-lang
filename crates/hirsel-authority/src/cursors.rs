@@ -252,7 +252,7 @@ pub fn refine_cursor_plan(
         }
         let value = provider.signature(definition);
         reads.push(DependencyRead::Signature {
-            definition: definition.path().clone(),
+            definition,
             fingerprint: value.as_ref().ok().map(|s| s.fingerprint),
         });
         let signature = value?;
