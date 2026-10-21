@@ -1,0 +1,28 @@
+// rule: PROV-1
+// expect: run
+type R {
+  x: u64,
+}
+
+fn owner(n: u64) -> R {
+  R(x: n)
+}
+
+fn brand(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: R, b: Option[u8 of r]) -> u64 {
+  r.x
+}
+
+pub fn main(t: Test) {
+  let ns: List[u64] = [0, 1]
+  let mut total = 0u64
+  for n in ns {
+    let r = owner(n)
+    let b = brand(r)
+    total += inspect(r, b)
+  }
+  test.check(t, total == 1)
+}

@@ -1257,3 +1257,26 @@ fn main() {}
         assert_eq!(kinds(&scan, &signatures), []);
     });
 }
+
+#[test]
+fn loop_local_owners_introduce_fresh_brands_on_each_iteration() {
+    with_compiler_stack(|| {
+        let source = r#"
+type R { x: u64 }
+fn owner() -> R { R(x: 0u64) }
+fn brand(r: R) -> Option[u8 of r] { None }
+fn inspect(r: R, b: Option[u8 of r]) {}
+fn probe() {
+  let ns: List[u64] = [0u64, 1u64]
+  for n in ns {
+    let r = owner()
+    let b = brand(r)
+    inspect(r, b)
+  }
+}
+fn main() {}
+"#;
+        let (probe, signatures) = lowered(source, "probe");
+        assert_eq!(kinds(&probe, &signatures), []);
+    });
+}

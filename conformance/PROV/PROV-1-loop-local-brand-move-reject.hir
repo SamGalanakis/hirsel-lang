@@ -1,0 +1,24 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 20
+// twin: PROV/PROV-1-loop-local-brand-run.hir
+type R {
+  x: u64,
+}
+
+fn brand(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: R, b: Option[u8 of r]) {}
+
+fn probe() {
+  let ns: List[u64] = [0, 1]
+  for n in ns {
+    let mut r = R(x: n)
+    let b = brand(r)
+    r = R(x: 9)
+    inspect(r, b)
+  }
+}
+
+pub fn main() {}

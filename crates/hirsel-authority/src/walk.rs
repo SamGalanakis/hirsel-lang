@@ -1892,6 +1892,7 @@ impl<'a> Checker<'a> {
             let invalid = self.invalid.clone();
             let identities = self.identities.clone();
             let identity_changes = self.identity_changes.clone();
+            self.renew_loop_locals(body);
             self.expr(body, None);
             if !falls && !continues {
                 break;

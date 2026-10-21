@@ -743,6 +743,47 @@ impl Checker<'_> {
     pub(super) fn expired_type(&self, root: TypeId) -> bool {
         self.ended(root).is_some()
     }
+    /// Replay creates new values for owners declared inside the loop. Expiry
+    /// of the previous iteration must not poison their newly produced brands.
+    /// Rows still held outside the body retain expiry, including at part depth.
+    pub(super) fn renew_loop_locals(&mut self, body: ExprId) {
+        let body = self.span(body);
+        let inside = |span: Span| {
+            span.anchor == body.anchor && span.start >= body.start && span.end <= body.end
+        };
+        let mut outside = hirsel_modes::rows::BodyRows::default();
+        for binding in &self.out.body.bindings {
+            if !inside(self.sites().binding(binding).1) {
+                if let Some(&ty) = self.binding_types.get(&binding_key(binding)) {
+                    outside.note(self.t, ty);
+                }
+            }
+        }
+        let renewed: Vec<_> = self
+            .invalid
+            .keys()
+            .copied()
+            .filter(|ty| {
+                if outside.contains(*ty) {
+                    return false;
+                }
+                let (mut local, mut external) = (false, false);
+                visit_type_origins(self.t, *ty, |origin, _| {
+                    if self.origin_site(origin).1.is_some_and(inside) {
+                        local = true;
+                    } else {
+                        external = true;
+                    }
+                    Ok(())
+                })
+                .expect("checked loop brand graph");
+                local && !external
+            })
+            .collect();
+        for ty in renewed {
+            self.invalid.remove(&ty);
+        }
+    }
     /// Where an origin named anywhere in this value's type ended.
     pub(super) fn ended(&self, root: TypeId) -> Option<Span> {
         self.ended_in(root, &self.invalid)
