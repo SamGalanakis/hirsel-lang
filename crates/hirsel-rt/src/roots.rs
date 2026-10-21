@@ -222,6 +222,11 @@ pub(crate) unsafe fn consume(ctx: &mut TaskCtx, block: *mut Header) -> bool {
             ctx.heap().measurement.record("count_decrements", 1);
             ctx.heap().measurement.count_decrements += 1;
         }
+        // A mutex may own finalizers. Its last release belongs to this task's
+        // cleanup, so it cannot be deferred to an infallible Shared phase.
+        if (*ctx.descriptor((*block).index())).flags & crate::LAYOUT_MUTEX_ROOT != 0 {
+            return take(ctx, block);
+        }
         if ctx.roots.speculative {
             ctx.roots.deferred.push(block);
             measure(ctx, "root_deferrals");
@@ -343,6 +348,28 @@ pub(crate) unsafe fn dup_holder(ctx: *mut TaskCtx, block: *mut Header) {
             hirsel_rt_v2_root_dup(ctx, block);
         } else {
             crate::count::hirsel_rt_v2_dup(ctx, block);
+        }
+    }
+}
+
+/// Drop an exact atomic root, propagating a mutex payload's destruction failure.
+/// Shared roots retain their existing deferred-release semantics.
+///
+/// # Safety
+/// `ctx` is live and the caller owns one credit of the live root `block`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_root_drop(
+    ctx: *mut TaskCtx,
+    block: *mut Header,
+    anchor: u64,
+    operation_site: u64,
+) -> u8 {
+    // SAFETY: caller owns a credit; consume handles exact atomic counts.
+    unsafe {
+        if consume(&mut *ctx, block) {
+            crate::release::drop_last(&mut *ctx, block, std::ptr::null(), anchor, operation_site)
+        } else {
+            crate::STATUS_OK
         }
     }
 }

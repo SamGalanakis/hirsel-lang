@@ -524,6 +524,7 @@ impl<S: Stage> Machine<'_, S> {
         };
         match val {
             Val::Handle(word) => Ok(word),
+            Val::Ptr(ptr) => Ok(self.scan_scalar(ptr, 8)? as u64),
             Val::Bits { bits, .. } => Ok(bits as u64),
             _ => fail(V::TypeConfusion, "a task handle that is not a word"),
         }

@@ -80,6 +80,7 @@ fn header_constants_match_the_runtime() {
         ("LAYOUT_VERSION", LAYOUT_VERSION as u64),
         ("LAYOUT_UNSAFE_FFI", LAYOUT_UNSAFE_FFI as u64),
         ("LAYOUT_DYNAMIC", LAYOUT_DYNAMIC as u64),
+        ("LAYOUT_MUTEX_ROOT", LAYOUT_MUTEX_ROOT as u64),
         ("LAYOUT_NO_EXTENT", LAYOUT_NO_EXTENT as u64),
         ("LAYOUT_SEQUENCE", LAYOUT_SEQUENCE as u64),
         ("LAYOUT_UNTRACKED_BELOW", LAYOUT_UNTRACKED_BELOW as u64),
@@ -464,7 +465,7 @@ fn launch_rejects_another_abi_version_and_unknown_flags() {
         LAUNCH_OK
     );
     unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
-    assert_eq!(hirsel_rt_v2_abi_version(), 30);
+    assert_eq!(hirsel_rt_v2_abi_version(), ABI_VERSION);
 }
 
 #[test]

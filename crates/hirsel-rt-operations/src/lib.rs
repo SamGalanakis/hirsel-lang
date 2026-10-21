@@ -829,7 +829,12 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_mutex_create",
         destination: true,
         result: Some((8, 8)),
-        parameters: &[Physical::Pointer],
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I32,
+            Physical::I32,
+        ],
     },
     AbiExport {
         caller_site: false,

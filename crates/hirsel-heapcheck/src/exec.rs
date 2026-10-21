@@ -9411,6 +9411,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                             } else if h & channels::ENDPOINT != 0 {
                                 // A channel endpoint closes in the task scheduler (CONC-6).
                                 self.close_endpoint(h, &mut d.work)?;
+                            } else if h & sync::MUTEX != 0 {
+                                self.close_mutex(h, &mut d.work)?;
                             } else if let Some(rule) = self
                                 .ops
                                 .close_handle(h, &mut self.output)
@@ -9577,17 +9579,6 @@ impl<'p, S: Stage> Machine<'p, S> {
         self.terminal = Some(observation);
         if self.ended {
             return Ok(());
-        }
-        // The run's end releases what the mutexes still hold (`exec/sync.rs`), after the
-        // returned value's drain below.
-        let mutexes = self.end_mutexes()?;
-        if !mutexes.is_empty() {
-            self.stack.push(Activity::Drain(Drain {
-                caller: None,
-                operation: None,
-                work: mutexes,
-                failed: false,
-            }));
         }
         if let Finished::Returned(Some((held, layout, _))) = finished
             && held.credits > 0

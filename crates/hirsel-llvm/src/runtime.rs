@@ -68,6 +68,7 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::Alloc
         | R::Release
         | R::RootRelease
+        | R::RootDrop
         | R::Free
         | R::Reset
         | R::Reuse

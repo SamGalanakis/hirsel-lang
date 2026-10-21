@@ -1,0 +1,31 @@
+// rule: FAIL-4
+// expect: run
+// stdout: parent
+// stdout: inner
+// stdout: after
+// The last wrapper drops a nested resource through the payload descriptor:
+// the parent's finalizer precedes its fields, before the caller continues.
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "inner\n")
+}
+
+resource type Parent {
+  field: Trace,
+}
+drop(x) {
+  let _ = out.print(x.field.stdout, "parent\n")
+}
+
+fn finish(take m: Mutex[Parent]) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let m = mutex.create(tasks, Parent(field: Trace(stdout: stdout)))
+  finish(take m)
+  let _ = out.print(stdout, "after\n")
+  Ok(())
+}

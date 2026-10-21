@@ -39,6 +39,51 @@ impl PartialEq for NamedFunction {
 }
 impl Eq for NamedFunction {}
 
+/// A mutex wrapper's semantic credits. Snapshots clone this object without
+/// acquiring a credit, just as SharedRoot does; owned copies acquire explicitly.
+#[derive(Clone)]
+pub struct MutexRoot {
+    id: u64,
+    credits: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+impl MutexRoot {
+    pub(crate) fn new(id: u64) -> Self {
+        Self {
+            id,
+            credits: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
+        }
+    }
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+    fn acquire(&self) {
+        self.credits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub(crate) fn release(&self) -> Result<bool, crate::Error> {
+        let old = self
+            .credits
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |n| n.checked_sub(1),
+            )
+            .map_err(|_| crate::invalid("release of a dead Mutex root"))?;
+        Ok(old == 1)
+    }
+}
+impl std::fmt::Debug for MutexRoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Mutex#{}", self.id)
+    }
+}
+impl PartialEq for MutexRoot {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Eq for MutexRoot {}
+
 /// A `Shared[T]` root (MEM-11). Snapshots of one root share its graph and its
 /// explicit root count: only an owned copy adds a root ([`Value::copied`]) and
 /// only a release or a successful thaw removes one. The graph is frozen: it is
@@ -306,6 +351,7 @@ impl std::fmt::Debug for Block {
 pub enum Value {
     FunctionReference(Box<NamedFunction>),
     Shared(SharedRoot),
+    Mutex(MutexRoot),
     /// Opaque simulation identity. Tags come from the library registry, never addresses.
     Handle {
         kind: String,
@@ -560,6 +606,7 @@ impl Value {
                     id: *id,
                 },
                 Value::Shared(root) => Value::Shared(root.clone()),
+                Value::Mutex(root) => Value::Mutex(root.clone()),
                 Value::Map { entries, arena } => Value::Map {
                     entries: entries.clone(),
                     arena: arena.clone(),
@@ -682,6 +729,7 @@ impl Value {
         while let Some(value) = work.pop() {
             match value {
                 Value::Shared(root) => root.acquire(),
+                Value::Mutex(root) => root.acquire(),
                 Value::Closure {
                     captures,
                     environment,
@@ -899,5 +947,39 @@ impl Value {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod mutex_tests {
+    use super::{MutexRoot, Value};
+
+    #[test]
+    fn mutex_snapshots_preserve_one_credit_but_owned_copies_add_one() {
+        let root = MutexRoot::new(7);
+        let value = Value::Mutex(root.clone());
+        let snapshot = value.clone();
+        let copy = value.copied();
+        assert!(!root.release().unwrap());
+        let Value::Mutex(copy) = copy else {
+            panic!("mutex copy")
+        };
+        assert!(copy.release().unwrap());
+        let Value::Mutex(snapshot) = snapshot else {
+            panic!("mutex snapshot")
+        };
+        assert!(
+            snapshot.release().is_err(),
+            "snapshots did not own extra credits"
+        );
+    }
+
+    #[test]
+    fn copying_an_aggregate_keeps_its_nested_mutex_alive() {
+        let root = MutexRoot::new(8);
+        let value = Value::Tuple(vec![Some(Value::Mutex(root.clone()))]);
+        let _copy = value.copied();
+        assert!(!root.release().unwrap());
+        assert!(root.release().unwrap());
     }
 }

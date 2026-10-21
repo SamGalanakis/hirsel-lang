@@ -1,0 +1,25 @@
+// rule: FAIL-4
+// expect: run
+// stdout: held
+// stdout: released
+// A copy of the handle owns the same noncopyable payload. The first handle's
+// release keeps it alive; the last one runs its finalizer once.
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "released\n")
+}
+
+fn finish(take m: Mutex[Trace]) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let m = mutex.create(tasks, Trace(stdout: stdout))
+  let other = copy m
+  finish(take m)
+  let _ = out.print(stdout, "held\n")
+  finish(take other)
+  Ok(())
+}

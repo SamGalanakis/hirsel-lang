@@ -1449,15 +1449,10 @@ fn incomplete_and_foreign_types_are_named() {
         b.layout(&t.store, c),
         Err(LayoutError::Unavailable { issue: Some(6), .. })
     ));
-    // A Mutex holds a copyable payload natively (CONC-4), with pointers or without; one of a
-    // noncopyable payload, whose release is observable, is M2.
+    // Mutex wrappers use atomic roots for scalar, counted, and resource payloads.
     let u8_ = t.p(Primitive::U8);
     let sender = t.builtin(BuiltinType::Sender, vec![GenericArgument::Type(u8_)]);
     let mutex = t.builtin(BuiltinType::Mutex, vec![GenericArgument::Type(sender)]);
-    match b.layout(&t.store, mutex) {
-        Err(LayoutError::Unavailable { issue: None, .. }) => {}
-        other => panic!("Mutex: {other:?}"),
-    }
     let plain = t.builtin(BuiltinType::Mutex, vec![GenericArgument::Type(u8_)]);
     let text = t.p(Primitive::String);
     let owned = t.builtin(BuiltinType::Mutex, vec![GenericArgument::Type(text)]);
@@ -1471,11 +1466,29 @@ fn incomplete_and_foreign_types_are_named() {
     // Failed requests leave no partial records behind.
     let table = checked(b);
     assert!(table.layouts.len() <= 2, "{} records", table.layouts.len());
-    for accepted in [plain, owned] {
-        assert!(
-            LayoutBuilder::new(&x86(), &owners)
-                .layout(&t.store, accepted)
-                .is_ok()
+    for accepted in [plain, owned, mutex] {
+        let mut builder = LayoutBuilder::new(&x86(), &owners);
+        let root = builder.layout(&t.store, accepted).unwrap();
+        let table = checked(builder);
+        let root = &table.layouts[root.0 as usize];
+        assert_eq!(root.scan, [ScanStep::Root { offset: 0 }]);
+        assert_eq!(root.drop, [DropStep::ReleaseRoot { offset: 0 }]);
+        let LayoutKind::Shared { payload } = root.kind else {
+            panic!("a mutex without an atomic root");
+        };
+        let LayoutKind::Frozen { value } = table.layouts[payload.0 as usize].kind else {
+            panic!("a mutex without a frozen cell word");
+        };
+        assert_eq!(
+            table.layouts[value.0 as usize].drop,
+            [DropStep::CloseHandle { offset: 0 }]
+        );
+        assert_eq!(
+            table.layouts[payload.0 as usize].drop,
+            [DropStep::Child {
+                offset: 0,
+                layout: value
+            }]
         );
     }
     // Raw and callback pointers are pointer scalars (PROG-4).
@@ -1685,6 +1698,8 @@ fn golden_corpus(target: &TargetSpec) -> LayoutTable {
     // A `Shared` root over a frozen list of boxes (MEM-11).
     let shared = t.builtin(BuiltinType::Shared, vec![GenericArgument::Type(list)]);
     b.layout(&t.store, shared).unwrap();
+    let mutex = t.builtin(BuiltinType::Mutex, vec![GenericArgument::Type(string)]);
+    b.layout(&t.store, mutex).unwrap();
     b.header();
     for name in c {
         let ty = t.named(&path(name), vec![]);

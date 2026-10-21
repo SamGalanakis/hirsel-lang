@@ -1,0 +1,32 @@
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let n = match arg.text(args, 0) {
+    Ok(t) => match u64.parse(t) {
+      Ok(v) => v,
+      Error(_) => 1000000u64,
+    },
+    Error(_) => 1000000u64,
+  }
+  let tasks = io.tasks(rt) ? Grant
+  let m = mutex.create(tasks, 0u64)
+  for _ in 0u64..n {
+    mutex.with(
+      tasks,
+      m,
+      fn(mut value: u64) -> () uses {} {
+        value = int.wrapping_add(value, 1u64)
+      }
+    )
+  }
+  let total = mutex.with(
+    tasks,
+    m,
+    fn(mut value: u64) -> u64 uses {} {
+      value
+    }
+  )
+  let stdout = io.stdout(rt) ? Grant
+  out.print(stdout, f"{total}\n") ? Output
+  Ok(())
+}

@@ -33,11 +33,11 @@ pub(crate) struct Element {
     /// `Option[T]`'s descriptor index, which drops an unreceived message.
     pub(crate) descriptor: u32,
     /// The image size in bytes.
-    size: usize,
+    pub(crate) size: usize,
     /// The descriptor runs nothing: an unreceived message needs no drop.
-    inert: bool,
+    pub(crate) inert: bool,
     /// The `None` image a send leaves in the sender's slot.
-    none: Box<[u8]>,
+    pub(crate) none: Box<[u8]>,
 }
 
 impl Element {
@@ -77,7 +77,7 @@ pub(crate) struct Ring {
 }
 
 impl Ring {
-    fn new(size: usize, align: usize) -> Ring {
+    pub(crate) fn new(size: usize, align: usize) -> Ring {
         let align = align.max(1).next_power_of_two();
         Ring {
             buffer: NonNull::dangling(),
@@ -107,7 +107,7 @@ impl Ring {
         unsafe { self.buffer.as_ptr().add(slot * self.stride) }
     }
     /// Append a copy of the `size`-byte image at `image`.
-    fn push(&mut self, image: *const u8, size: usize) {
+    pub(crate) fn push(&mut self, image: *const u8, size: usize) {
         if self.len == self.capacity {
             self.grow();
         }
@@ -117,7 +117,7 @@ impl Ring {
         self.len += 1;
     }
     /// Move the oldest image into `out`, if any.
-    fn pop(&mut self, out: *mut u8, size: usize) -> bool {
+    pub(crate) fn pop(&mut self, out: *mut u8, size: usize) -> bool {
         if self.len == 0 {
             return false;
         }
@@ -137,7 +137,9 @@ impl Ring {
         let first = (self.capacity - self.head).min(self.len);
         // SAFETY: both runs are inside the old buffer, the new one is fresh and large enough.
         unsafe {
-            std::ptr::copy_nonoverlapping(self.at(0), buffer.as_ptr(), first * self.stride);
+            if first > 0 {
+                std::ptr::copy_nonoverlapping(self.at(0), buffer.as_ptr(), first * self.stride);
+            }
             if self.len > first {
                 std::ptr::copy_nonoverlapping(
                     self.buffer.as_ptr(),

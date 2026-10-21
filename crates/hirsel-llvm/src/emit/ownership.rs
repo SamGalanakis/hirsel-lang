@@ -203,7 +203,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             release: self.runtime(RuntimeEntry::Release)?,
             free: self.runtime(RuntimeEntry::Free)?,
             close_handle: self.runtime(RuntimeEntry::CloseHandle)?,
-            root_release: self.runtime(RuntimeEntry::RootRelease)?,
+            root_release: self.runtime(RuntimeEntry::RootDrop)?,
             measure_release,
             tracking: self.tracking(),
         };

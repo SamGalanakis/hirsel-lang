@@ -17,7 +17,6 @@ pub(super) struct Synchronizers {
 struct Mutex {
     value: Option<Value>,
     dead: Option<Vec<FailureRecord>>,
-    drops: bool,
 }
 impl Library {
     pub(super) fn synchronization_call(
@@ -54,20 +53,15 @@ impl Library {
                 self.synchronizers.next += 1;
                 let id = self.synchronizers.next;
                 let value = arg(a, 1)?.clone();
-                let drops = needs_drop(&value);
                 self.synchronizers.mutexes.insert(
                     id,
                     Mutex {
                         value: Some(value),
                         dead: None,
-                        drops,
                     },
                 );
-                OperationResult::returned(Value::Handle {
-                    kind: "Mutex".into(),
-                    id,
-                })
-                .transferring([1])
+                OperationResult::returned(Value::Mutex(crate::value::MutexRoot::new(id)))
+                    .transferring([1])
             }
             "mutex.with" => {
                 let id = id(arg(a, 1)?, "Mutex")?;
@@ -159,21 +153,17 @@ impl Library {
                 self.synchronizers.next += 1;
                 let id = self.synchronizers.next;
                 let value = arg(a, 1)?.clone();
-                let drops = needs_drop(&value);
                 self.synchronizers.mutexes.insert(
                     id,
                     Mutex {
                         value: Some(value),
                         dead: None,
-                        drops,
                     },
                 );
                 self.free_create((MUTEX, id))?;
-                let result = OperationResult::returned(Value::Handle {
-                    kind: "Mutex".into(),
-                    id,
-                })
-                .transferring([1]);
+                let result =
+                    OperationResult::returned(Value::Mutex(crate::value::MutexRoot::new(id)))
+                        .transferring([1]);
                 self.free_done(result, context)
             }
             "atomic.load" => {
@@ -349,58 +339,11 @@ impl Library {
         }
     }
     pub(super) fn drop_mutex(&mut self, id: u64) -> Vec<Value> {
-        // A payload with observable destruction makes Mutex[T] noncopyable by
-        // the declared recursive Copyable bound. Copyable payloads have no
-        // user destruction; retaining their value snapshots is unobservable.
-        if self.synchronizers.mutexes.get(&id).is_some_and(|m| m.drops) {
-            self.synchronizers
-                .mutexes
-                .remove(&id)
-                .unwrap()
-                .value
-                .into_iter()
-                .collect()
-        } else {
-            vec![]
-        }
+        self.synchronizers
+            .mutexes
+            .remove(&id)
+            .into_iter()
+            .flat_map(|m| m.value)
+            .collect()
     }
-}
-fn needs_drop(value: &Value) -> bool {
-    let mut work = vec![value];
-    while let Some(value) = work.pop() {
-        match value {
-            Value::Resource { .. } | Value::ResourceVariant { .. } => return true,
-            Value::Handle { kind, .. }
-                if matches!(
-                    kind.as_str(),
-                    "Sender"
-                        | "Receiver"
-                        | "File"
-                        | "AtomicFile"
-                        | "Stream"
-                        | "ReadHalf"
-                        | "WriteHalf"
-                        | "UdpSocket"
-                ) =>
-            {
-                return true;
-            }
-            Value::Closure {
-                captures,
-                environment,
-                ..
-            } => work.extend(
-                captures
-                    .iter()
-                    .zip(&environment.owned_captures)
-                    .filter_map(|(v, owns)| owns.then_some(v.as_ref()).flatten()),
-            ),
-            _ => {
-                if let Some(fields) = value.fields() {
-                    work.extend(fields.iter().flatten());
-                }
-            }
-        }
-    }
-    false
 }

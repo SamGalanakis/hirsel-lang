@@ -1517,6 +1517,9 @@ impl Operations for Library {
         context: &mut OperationContext<'_>,
     ) -> Result<(), Error> {
         if kind == "Mutex" {
+            if self.free_close("Mutex", id)? {
+                return Ok(());
+            }
             let released = self.drop_mutex(id);
             self.channels.released.extend(released);
             return Ok(());
@@ -2507,6 +2510,11 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 out.push(5);
                 atom(&mut out, kind.as_bytes());
                 out.extend_from_slice(&id.to_le_bytes());
+            }
+            Value::Mutex(root) => {
+                out.push(5);
+                atom(&mut out, b"Mutex");
+                out.extend_from_slice(&root.id().to_le_bytes());
             }
             Value::Shared(root) => {
                 out.push(20);

@@ -66,6 +66,12 @@ pub(crate) unsafe fn run_close(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    if handle & crate::sync::MUTEX != 0 && handle & crate::channels::ENDPOINT == 0 {
+        // SAFETY: the wrapper owns the cell; detach before invoking user code.
+        return shielded(ctx, |ctx| unsafe {
+            crate::tasks::close_mutex(ctx, handle, anchor, operation_site)
+        });
+    }
     if handle & crate::channels::ENDPOINT != 0 {
         // SAFETY: the dropped value owned this endpoint of the run.
         return shielded(ctx, |ctx| unsafe {

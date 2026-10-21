@@ -2952,59 +2952,58 @@ pub(crate) unsafe fn close_endpoint(
     status
 }
 
-/// Move the payload block out of the `Some` carrier at `payload`, leaving `None`.
+/// `$intrinsic.MutexCreate[T]` (CONC-5): move the `Option[T]` image into a
+/// fresh cell and return its counted handle wrapper, leaving `None` in `payload`.
 ///
 /// # Safety
-/// `payload` is a readable and writable `Option[List[T]]` holding `Some`.
-unsafe fn carried(payload: *mut *mut Header) -> NonNull<Header> {
-    // SAFETY: caller contract.
-    let block = unsafe { payload.replace(std::ptr::null_mut()) };
-    NonNull::new(block).unwrap_or_else(|| fault("a mutex payload carrier holding None"))
-}
-
-/// `$intrinsic.MutexCreate[T](mut payload)` (CONC-5): a mutex owning the payload block, taken
-/// from the `Some` carrier, which is left `None`.
-///
-/// # Safety
-/// `ctx` is live, `out` writable and `payload` a `Some` carrier.
+/// `ctx` is live; `out` is writable; `descriptor` describes the `Some` image
+/// at `payload` and the `None` image at `none`; `wrapper` describes an eight-byte
+/// handle with a CloseHandle drop step.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
     ctx: *mut TaskCtx,
     _destination: *mut u8,
     out: *mut u64,
-    payload: *mut *mut Header,
+    payload: *mut u8,
+    none: *const u8,
+    descriptor: u32,
+    wrapper: u32,
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_create");
     // SAFETY: caller contract.
     crate::free::enter(ctx, Phase::Done);
     unsafe {
-        let block = carried(payload);
-        let word = scheduler(ctx).sync.create_block(block);
+        let layout = (*ctx).descriptor(descriptor);
+        let element = crate::channels::Element::new(descriptor, layout, none);
+        let word = scheduler(ctx).sync.create_mutex(element, &*layout, payload);
+        let block =
+            crate::alloc::hirsel_rt_v2_alloc(ctx, wrapper, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+        block.add(1).cast::<u64>().write(word);
         crate::free::create(ctx, (crate::free::MUTEX, word));
         crate::free::done(ctx);
-        out.write(word);
+        out.write(block as u64);
         yield_now(&mut *ctx);
     }
     STATUS_OK
 }
 
-/// `$intrinsic.MutexTake[T](m, mut payload)`: move the payload block into the `None` carrier
+/// `$intrinsic.MutexTake[T](m, mut payload)`: move the payload image into the `None` slot
 /// (status 0), or report the mutex dead (status 1). Acquiring is not a yield.
 ///
 /// # Safety
-/// `ctx` is live, `out` writable, `m` a Mutex word and `payload` a writable `None` carrier.
+/// `ctx` is live, `out` writable, `m` borrows a counted Mutex wrapper and `payload` a writable `None` carrier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     ctx: *mut TaskCtx,
     out: *mut u32,
     m: *const u64,
-    payload: *mut *mut Header,
+    payload: *mut u8,
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_take");
     // SAFETY: caller contract.
-    let word = unsafe { m.read() };
+    let word = unsafe { mutex_word(m) };
     let free = crate::free::enter(ctx, Phase::Entered);
     let mut entered = false;
     if free {
@@ -3025,7 +3024,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
         1
     } else {
         // SAFETY: caller contract.
-        unsafe { payload.write(sync.take(word).as_ptr()) };
+        unsafe { sync.take(word, payload) };
         0
     };
     // SAFETY: caller contract.
@@ -3040,25 +3039,24 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     STATUS_OK
 }
 
-/// `$intrinsic.MutexPut[T](m, mut payload)`: the body returned; its payload's block goes back
-/// from the `Some` carrier, which is left `None`, and the operation yields.
+/// `$intrinsic.MutexPut[T](m, mut payload)`: the body returned; its payload image goes back
+/// from the `Some` slot, which is left `None`, and the operation yields.
 ///
 /// # Safety
-/// `ctx` is live, `m` a Mutex word and `payload` a `Some` carrier.
+/// `ctx` is live, `m` borrows a counted Mutex wrapper and `payload` a `Some` carrier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
     ctx: *mut TaskCtx,
     m: *const u64,
-    payload: *mut *mut Header,
+    payload: *mut u8,
 ) -> u8 {
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_put");
     // SAFETY: caller contract.
     unsafe {
-        let word = m.read();
+        let word = mutex_word(m);
         mutex_release_op(ctx, word, "put");
-        let block = carried(payload);
-        scheduler(ctx).sync.put(word, block);
+        scheduler(ctx).sync.put(word, payload);
         crate::free::done(ctx);
         yield_now(&mut *ctx);
     }
@@ -3078,8 +3076,7 @@ fn mutex_release_op(ctx: *mut TaskCtx, word: u64, outcome: &str) {
     crate::free::touch(ctx, object, outcome);
 }
 
-/// The run ended: release the payload blocks its mutexes still hold. Their payloads are
-/// copyable, so the release runs no user code and cannot fail.
+/// The run ended after compiled cleanup released every mutex handle.
 pub(crate) fn end_run(ctx: &mut TaskCtx) {
     let wide = crate::pool::wide(ctx.run_ref());
     // The run's code ran on one thread last, so its other threads are idle: they leave.
@@ -3093,16 +3090,42 @@ pub(crate) fn end_run(ctx: &mut TaskCtx) {
         ctx.home_again();
     }
     crate::pool::retire(ctx.run());
-    let Some(s) = ctx.run().tasks.as_deref_mut() else {
-        return;
+    if let Some(s) = ctx.run().tasks.as_deref_mut() {
+        s.sync.end();
+    }
+}
+
+/// # Safety
+/// `m` borrows a live counted mutex wrapper.
+unsafe fn mutex_word(m: *const u64) -> u64 {
+    unsafe { (m.read() as *const Header).add(1).cast::<u64>().read() }
+}
+
+/// # Safety
+/// `word` is owned by the last wrapper and `ctx` is live.
+pub(crate) unsafe fn close_mutex(
+    ctx: *mut TaskCtx,
+    word: u64,
+    anchor: u64,
+    operation_site: u64,
+) -> u8 {
+    if crate::free::close(ctx, (crate::free::MUTEX, word), "close mutex") == Some(false) {
+        return STATUS_OK;
+    }
+    let Some((image, descriptor)) = scheduler(ctx).sync.close(word) else {
+        return STATUS_OK;
     };
-    for block in s.sync.end() {
-        // SAFETY: the cell owned the block's credit.
-        if unsafe { crate::release::release_block(ctx, block.as_ptr(), std::ptr::null(), 0, 0) }
-            != STATUS_OK
-        {
-            fault("a mutex payload's release failed");
-        }
+    let mut continuation = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
+    unsafe {
+        crate::finalize::hirsel_rt_v2_finalize(
+            ctx,
+            descriptor,
+            image.at(0),
+            std::ptr::null(),
+            continuation.as_mut_ptr(),
+            anchor,
+            operation_site,
+        )
     }
 }
 
@@ -3134,7 +3157,7 @@ fn stack_rss(ctx: &mut TaskCtx) -> u64 {
 /// and the operation yields.
 ///
 /// # Safety
-/// `ctx` is live, its failure active, and `m` a Mutex word.
+/// `ctx` is live, its failure active, and `m` borrows a counted Mutex wrapper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u64) -> u8 {
     #[cfg(feature = "measurement")]
@@ -3146,7 +3169,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u6
     let chain = unsafe { (*ctx).failure.chain(&path) };
     // SAFETY: caller contract.
     unsafe {
-        let word = m.read();
+        let word = mutex_word(m);
         mutex_release_op(ctx, word, "kill");
         scheduler(ctx).sync.kill(word, chain);
         crate::free::done(ctx);
@@ -3159,7 +3182,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u6
 /// acquisition, with the chain that killed it.
 ///
 /// # Safety
-/// `ctx` is live and `m` a dead Mutex's word.
+/// `ctx` is live and `m` borrows a dead Mutex's wrapper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut TaskCtx, m: *const u64) -> u8 {
     #[cfg(feature = "measurement")]
@@ -3167,7 +3190,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut TaskCtx, m: *const u
     // SAFETY: caller contract.
     let chain = scheduler(ctx)
         .sync
-        .dead(unsafe { m.read() })
+        .dead(unsafe { mutex_word(m) })
         .cloned()
         .unwrap_or_else(|| fault("the cause of a mutex that is not dead"));
     // SAFETY: the context is live.

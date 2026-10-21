@@ -1664,16 +1664,17 @@ impl<'o> LayoutBuilder<'o> {
             }];
         }
         if !v.drop.is_empty() {
-            record.drop = vec![
-                DropStep::Thaw {
+            // A mutex root holds only a cell word, with no counted graph to thaw.
+            if v.kind != LayoutKind::Handle {
+                record.drop.push(DropStep::Thaw {
                     offset: 0,
                     layout: value,
-                },
-                DropStep::Child {
-                    offset: 0,
-                    layout: value,
-                },
-            ];
+                });
+            }
+            record.drop.push(DropStep::Child {
+                offset: 0,
+                layout: value,
+            });
         }
         record.copy = CopyRecipe::NotCopyable;
         Ok(record)
@@ -2743,17 +2744,27 @@ impl<'o> LayoutBuilder<'o> {
             BuiltinType::Task => Ok(self.handle_record(key, false)),
             // A run-local channel endpoint word (CONC-6), closed when dropped.
             BuiltinType::Sender | BuiltinType::Receiver => Ok(self.handle_record(key, true)),
-            // Run-local handle words (CONC-4, CONC-5): the runtime holds an atomic's scalar
-            // image and a mutex's payload block, which it releases when the run ends. That is
-            // unobservable only for a copyable payload, whose Mutex is copyable too; a mutex
-            // over a resource must release its payload with its last handle.
+            // An atomic's scalar cell has no observable destruction. A mutex
+            // uses a counted wrapper over its run-local cell word: copies add
+            // credits, and the last release drops the present payload.
             BuiltinType::Atomic => Ok(self.handle_record(key, false)),
             BuiltinType::Mutex => {
-                let payload = self.memory(walk, ty_at(0)?, f, false)?;
-                if self.record(payload).copy == CopyRecipe::NotCopyable {
-                    return unavailable(None, "a Mutex of a noncopyable payload is M2");
-                }
-                Ok(self.handle_record(key, false))
+                let handle_key = b"mutex-cell-handle".to_vec();
+                let handle = match self.memo.get(&handle_key) {
+                    Some(&id) => id,
+                    None => {
+                        let record = self.handle_record(&handle_key, true);
+                        self.insert(handle_key, record)
+                    }
+                };
+                // A run-owned cell may be shared across tasks: its wrapper uses
+                // exact atomic roots, never ordinary task-local block counts.
+                let payload = self.frozen(walk, handle)?;
+                let mut record = self.block_record(key, payload);
+                record.kind = LayoutKind::Shared { payload };
+                record.scan = vec![ScanStep::Root { offset: 0 }];
+                record.drop = vec![DropStep::ReleaseRoot { offset: 0 }];
+                Ok(record)
             }
             BuiltinType::Region => unavailable(None, format!("{} is M2", builtin_name(kind))),
         }

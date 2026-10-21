@@ -1,12 +1,6 @@
-//! Mutexes and atomics (CONC-4, CONC-5, FAIL-4): the runtime's cells
-//! (`hirsel-rt/src/sync.rs`). An atomic's cell holds its scalar payload as the
-//! `Some` image of the compiled bodies' `Option`, which a create or store copies
-//! in and a load copies out. A mutex's payload crosses in an `Option[List[T]]`
-//! carrier, as a channel message does: a create or put moves the carrier's
-//! `Some` into a harness root, leaving `None`, and a take moves it back into a
-//! `None` carrier. The payloads the mutexes still hold are dropped when the run
-//! finishes, as the runtime releases them at the run's end. A dead mutex keeps
-//! the failure chain of the body that killed it.
+//! Mutex cells retain rooted `Option[T]` images between take and put. The
+//! counted handle wrapper's last release detaches and drops the present image,
+//! mirroring the native descriptor-driven lifetime. Atomics copy scalar images.
 use super::*;
 
 /// The harness root of mutex cell `index`'s payload carrier.
@@ -14,6 +8,7 @@ const MUTEX_ROOT: u64 = 1 << 60;
 /// Synchronizer words occupy their own namespace, like channel endpoints.
 /// Bare cell indices can alias closed handles returned by host operations.
 const SYNCHRONIZER: u64 = 1 << 61;
+pub(super) const MUTEX: u64 = SYNCHRONIZER;
 
 #[derive(Clone)]
 struct Cell {
@@ -22,6 +17,7 @@ struct Cell {
     /// A mutex's carrier layout; its payload is the root `MUTEX_ROOT | index`
     /// unless a mutex body holds it.
     carrier: Option<LayoutId>,
+    none: Option<Extent>,
     dead: Option<Vec<(ObservedFailure, Vec<u32>)>>,
 }
 
@@ -94,13 +90,20 @@ impl<S: Stage> Machine<'_, S> {
         ordinal: u32,
         index: u64,
     ) -> Checked<LayoutId> {
+        let index = index & !SYNCHRONIZER;
         let r = self.task_slot(f, &Self::task_argument(arguments, ordinal)?)?;
         let size = self.size(r.layout)?;
         let owned = self.resources_of(r.layout)?;
         let image = self.take_part(r.ptr, size, &owned);
         let (val, _, credited) = self.val_from(image, ValueRepr::Aggregate, r.layout)?;
-        let mut none = Extent::new(size);
-        none.write_bytes(0, &vec![0; size as usize]);
+        let cell = self.scheduler().sync.cell(SYNCHRONIZER | index)?;
+        if cell.carrier != Some(r.layout) {
+            return fail(V::TypeConfusion, "a mutex image of another layout");
+        }
+        let none = cell
+            .none
+            .clone()
+            .ok_or_else(|| err(V::Malformed, "a mutex without None"))?;
         self.write_value(
             r.ptr,
             r.layout,
@@ -129,6 +132,7 @@ impl<S: Stage> Machine<'_, S> {
         ordinal: u32,
         index: u64,
     ) -> Checked<()> {
+        let index = index & !SYNCHRONIZER;
         let held = self
             .roots
             .get(&(MUTEX_ROOT | index))
@@ -151,43 +155,43 @@ impl<S: Stage> Machine<'_, S> {
         )
     }
 
-    /// The run finished: drop work for every payload the mutexes still hold.
-    pub(super) fn end_mutexes(&mut self) -> Checked<Vec<Work>> {
-        let Some(s) = self.tasks.as_deref_mut() else {
-            return Ok(Vec::new());
+    /// Drop a detached cell's present image at the last wrapper release.
+    pub(super) fn close_mutex(&mut self, word: u64, work: &mut Vec<Work>) -> Checked<()> {
+        let cell = self.scheduler().sync.cell(word)?;
+        let layout = cell
+            .carrier
+            .take()
+            .ok_or_else(|| err(V::DoubleClose, "a mutex closed twice"))?;
+        cell.dead = None;
+        cell.none = None;
+        let Some(held) = self
+            .roots
+            .get(&(MUTEX_ROOT | (word & !SYNCHRONIZER)))
+            .cloned()
+        else {
+            return Ok(());
         };
-        let cells: Vec<_> = std::mem::take(&mut s.sync.cells)
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, cell)| cell.carrier.map(|layout| (index as u64, layout)))
-            .collect();
-        let mut work = Vec::new();
-        for (index, layout) in cells {
-            let Some(held) = self.roots.get(&(MUTEX_ROOT | index)).cloned() else {
-                continue;
-            };
-            self.set_root(MUTEX_ROOT | index, None);
-            let temp = self.temporary(layout)?;
-            self.write_value(
-                temp,
-                layout,
-                Moved {
-                    val: held.val,
-                    credited: held.credits > 0,
-                    borrow: None,
-                },
-            )?;
-            work.push(Work::Death {
-                alloc: temp.alloc,
-                raw: None,
-            });
-            work.push(Work::DropAt {
-                at: temp,
-                layout,
-                mask: None,
-            });
-        }
-        Ok(work)
+        self.set_root(MUTEX_ROOT | (word & !SYNCHRONIZER), None);
+        let temp = self.temporary(layout)?;
+        self.write_value(
+            temp,
+            layout,
+            Moved {
+                val: held.val,
+                credited: held.credits > 0,
+                borrow: None,
+            },
+        )?;
+        work.push(Work::Death {
+            alloc: temp.alloc,
+            raw: None,
+        });
+        work.push(Work::DropAt {
+            at: temp,
+            layout,
+            mask: None,
+        });
+        Ok(())
     }
 
     pub(super) fn sync_operation(
@@ -201,22 +205,43 @@ impl<S: Stage> Machine<'_, S> {
         match name {
             "$intrinsic.MutexCreate" => {
                 let word = self.scheduler().sync.cells.len() as u64;
-                let carrier = self.carry_in(f, arguments, 0, word)?;
+                let carrier =
+                    LayoutId(self.task_word(f, &Self::task_argument(arguments, 2)?)? as u32);
+                let none = self.sync_image(f, arguments, 1)?;
+                if none.len() != self.size(carrier)? {
+                    return fail(V::TypeConfusion, "a mutex None image of another size");
+                }
                 self.scheduler().sync.cells.push(Cell {
                     image: None,
                     carrier: Some(carrier),
+                    none: Some(none),
                     dead: None,
                 });
+                self.carry_in(f, arguments, 0, word)?;
+                let wrapper =
+                    LayoutId(self.task_word(f, &Self::task_argument(arguments, 3)?)? as u32);
+                let owner =
+                    self.heap_alloc(wrapper, self.size(wrapper)?, self.record(wrapper)?.align)?;
+                self.ledger.get_mut(owner.alloc).count = Some(Count::Root(1));
+                let LayoutKind::Frozen { value: handle } = self.record(wrapper)?.kind else {
+                    return fail(
+                        V::TypeConfusion,
+                        "a mutex wrapper without a root descriptor",
+                    );
+                };
+                let image = self.operation_image(
+                    f,
+                    handle,
+                    OpValue::OpenHandle(MUTEX | word),
+                    arguments,
+                    &mut Default::default(),
+                )?;
+                self.ledger.get_mut(owner.alloc).extent.place(0, image);
                 self.task_yield()?;
                 let result = site
                     .result
                     .ok_or_else(|| err(V::Malformed, "a cell creation without a result"))?;
-                self.task_return(
-                    f,
-                    arguments,
-                    Some((result, Val::Handle(SYNCHRONIZER | word))),
-                    normal,
-                )
+                self.task_return(f, arguments, Some((result, Val::Ptr(owner))), normal)
             }
             "$intrinsic.AtomicCreate" => {
                 let image = self.sync_image(f, arguments, 0)?;
@@ -224,6 +249,7 @@ impl<S: Stage> Machine<'_, S> {
                 s.sync.cells.push(Cell {
                     image: Some(image),
                     carrier: None,
+                    none: None,
                     dead: None,
                 });
                 let word = (s.sync.cells.len() - 1) as u64;

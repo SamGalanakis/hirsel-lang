@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 30;
+pub const ABI_VERSION: u32 = 31;
 /// Caller-owned streaming SipHash state (six u64 words).
 pub const HASH_STATE_BYTES: u64 = 48;
 pub const HASH_STATE_ALIGN: u32 = 8;
@@ -225,6 +225,9 @@ pub const LAYOUT_COLUMNS: u32 = 512;
 /// to a tracked one is charged and copies a shared one at its capacity; `hirsel_rt_v2_block_grow`
 /// regrows a tracked one in its arena.
 pub const LAYOUT_SEQUENTIAL: u32 = 1024;
+/// An atomic root wrapping a mutex cell word (ABI 31). Releases apply immediately;
+/// its final drop may run user code and fail, through RootDrop.
+pub const LAYOUT_MUTEX_ROOT: u32 = 2048;
 pub const STEP_RELEASE: u32 = 1;
 pub const STEP_FINALIZE: u32 = 2;
 pub const STEP_CLOSE_HANDLE: u32 = 3;
@@ -451,6 +454,7 @@ pub enum RuntimeEntry {
     Thaw,
     RootDup,
     RootRelease,
+    RootDrop,
     Finalize,
     FinalizeBegin,
     FinalizeEnd,
@@ -579,7 +583,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 75] = [
+    pub const ALL: [RuntimeEntry; 76] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -611,6 +615,7 @@ impl RuntimeEntry {
         Self::Thaw,
         Self::RootDup,
         Self::RootRelease,
+        Self::RootDrop,
         Self::Finalize,
         Self::FinalizeBegin,
         Self::FinalizeEnd,
@@ -849,6 +854,11 @@ impl RuntimeEntry {
             Self::Thaw => ("hirsel_rt_v2_thaw", VOID, const { &[CTX, BLOCK] }),
             Self::RootDup => ("hirsel_rt_v2_root_dup", VOID, const { &[CTX, BLOCK] }),
             Self::RootRelease => ("hirsel_rt_v2_root_release", VOID, const { &[CTX, BLOCK] }),
+            Self::RootDrop => (
+                "hirsel_rt_v2_root_drop",
+                U8,
+                const { &[CTX, BLOCK, ANCHOR, OPERATION_SITE] },
+            ),
             Self::Finalize => (
                 "hirsel_rt_v2_finalize",
                 U8,
@@ -1190,6 +1200,7 @@ snapshot_enum!(RuntimeEntry {
     Thaw,
     RootDup,
     RootRelease,
+    RootDrop,
     Finalize,
     FinalizeBegin,
     FinalizeEnd,

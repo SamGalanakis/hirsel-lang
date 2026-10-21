@@ -303,3 +303,188 @@ fn overdue_timers_resume_by_deadline_with_suspension_order_for_ties() {
     unsafe { (*ctx.0).bind_io_data(std::ptr::null_mut()) };
     assert_eq!(ctx.stats().live_blocks, 0);
 }
+
+/// A counted wrapper's final drop closes the table cell. The Option descriptor
+/// runs the resource finalizer only for Some, with its fields in descriptor order.
+fn mutex_layouts(
+    finalizer: hirsel_rt::DropThunk,
+) -> (&'static hirsel_rt::Layout, &'static hirsel_rt::Layout) {
+    let resource = cached_layout("mutex-resource", finalizer as usize as u64, || {
+        layout(8, 1, Some(finalizer), Vec::new())
+    });
+    let image = cached_layout("mutex-option", finalizer as usize as u64, || {
+        layout(
+            16,
+            1,
+            None,
+            vec![tag_step(0, 1, 1), finalize_step(0, 8, resource)],
+        )
+    });
+    let wrapper = cached_layout("mutex-wrapper", 0, || {
+        let base = layout(8, 1, None, vec![step(hirsel_rt::STEP_CLOSE_HANDLE, 0, 0)]);
+        leak(hirsel_rt::Layout {
+            flags: hirsel_rt::LAYOUT_FROZEN | hirsel_rt::LAYOUT_MUTEX_ROOT,
+            ..*base
+        })
+    });
+    (image, wrapper)
+}
+
+fn mutex_create(ctx: &Ctx, image: &hirsel_rt::Layout, wrapper: &hirsel_rt::Layout, id: u64) -> u64 {
+    let descriptor = index(ctx.0, image);
+    let wrapper = index(ctx.0, wrapper);
+    let mut payload = [1u64, id];
+    let mut handle = 0;
+    assert_eq!(
+        unsafe {
+            hirsel_rt::tasks::hirsel_rt_v2_mutex_create(
+                ctx.0,
+                std::ptr::null_mut(),
+                &mut handle,
+                payload.as_mut_ptr().cast(),
+                NONE.as_ptr().cast(),
+                descriptor,
+                wrapper,
+            )
+        },
+        0
+    );
+    assert_eq!(payload, NONE);
+    handle
+}
+
+fn mutex_release(ctx: &Ctx, handle: u64) -> u8 {
+    let block = handle as *mut Header;
+    unsafe { hirsel_rt::roots::hirsel_rt_v2_root_drop(ctx.0, block, 0, 0) }
+}
+
+#[test]
+fn mutex_images_move_without_allocations_and_finalize_at_last_handle() {
+    let (image, wrapper) = mutex_layouts(log_drop);
+    let ctx = Ctx::diagnostic();
+    let handle = mutex_create(&ctx, image, wrapper, 41);
+    unsafe { hirsel_rt::roots::hirsel_rt_v2_root_dup(ctx.0, handle as *mut Header) };
+    take_events();
+    assert_eq!(mutex_release(&ctx, handle), 0);
+    assert!(
+        take_events().is_empty(),
+        "another handle still owns the cell"
+    );
+    let calls = host_calls();
+    for _ in 0..1000 {
+        let mut slot = NONE;
+        let mut status = 99;
+        assert_eq!(
+            unsafe {
+                hirsel_rt::tasks::hirsel_rt_v2_mutex_take(
+                    ctx.0,
+                    &mut status,
+                    &handle,
+                    slot.as_mut_ptr().cast(),
+                )
+            },
+            0
+        );
+        assert_eq!((status, slot), (0, [1, 41]));
+        assert_eq!(
+            unsafe {
+                hirsel_rt::tasks::hirsel_rt_v2_mutex_put(ctx.0, &handle, slot.as_mut_ptr().cast())
+            },
+            0
+        );
+        assert_eq!(slot, NONE);
+    }
+    assert_eq!(
+        host_calls(),
+        calls,
+        "take/put must not allocate even host buffers"
+    );
+    assert_eq!(mutex_release(&ctx, handle), 0);
+    assert_eq!(
+        take_events().into_iter().map(|e| e.0).collect::<Vec<_>>(),
+        [41]
+    );
+    assert_eq!(ctx.stats().live_blocks, 0);
+}
+
+#[test]
+fn mutex_last_handle_propagates_payload_drop_failure_and_preserves_primary() {
+    let (image, wrapper) = mutex_layouts(failing_drop);
+    let ctx = Ctx::diagnostic();
+    let handle = mutex_create(&ctx, image, wrapper, 42);
+    unsafe { hirsel_rt_v2_failure_begin(ctx.0, 3, 900, 7, 7) };
+    take_events();
+    assert_eq!(mutex_release(&ctx, handle), 1);
+    assert_eq!(
+        take_events().into_iter().map(|e| e.0).collect::<Vec<_>>(),
+        [42]
+    );
+    let mut primary = MaybeUninit::uninit();
+    assert_eq!(
+        unsafe { hirsel_rt_v2_failure_primary(ctx.0, primary.as_mut_ptr()) },
+        1
+    );
+    assert_eq!(unsafe { primary.assume_init() }.rule, 900);
+    assert_eq!(ctx.stats().live_blocks, 0);
+}
+
+#[test]
+fn mutex_kill_leaves_payload_with_the_body_and_last_close_does_not_drop_it_again() {
+    let (image, wrapper) = mutex_layouts(log_drop);
+    let ctx = Ctx::diagnostic();
+    let handle = mutex_create(&ctx, image, wrapper, 43);
+    let mut slot = NONE;
+    let mut status = 99;
+    assert_eq!(
+        unsafe {
+            hirsel_rt::tasks::hirsel_rt_v2_mutex_take(
+                ctx.0,
+                &mut status,
+                &handle,
+                slot.as_mut_ptr().cast(),
+            )
+        },
+        0
+    );
+    assert_eq!(status, 0);
+    unsafe { hirsel_rt_v2_failure_begin(ctx.0, 3, 901, 8, 8) };
+    assert_eq!(
+        unsafe { hirsel_rt::tasks::hirsel_rt_v2_mutex_kill(ctx.0, &handle) },
+        0
+    );
+    let mut none = NONE;
+    assert_eq!(
+        unsafe {
+            hirsel_rt::tasks::hirsel_rt_v2_mutex_take(
+                ctx.0,
+                &mut status,
+                &handle,
+                none.as_mut_ptr().cast(),
+            )
+        },
+        0
+    );
+    assert_eq!((status, none), (1, NONE));
+    take_events();
+    let mut continuation = MaybeUninit::<hirsel_rt::Cleanup>::uninit();
+    assert_eq!(
+        unsafe {
+            hirsel_rt::finalize::hirsel_rt_v2_finalize(
+                ctx.0,
+                index(ctx.0, image),
+                slot.as_mut_ptr().cast(),
+                std::ptr::null(),
+                continuation.as_mut_ptr(),
+                0,
+                0,
+            )
+        },
+        0
+    );
+    assert_eq!(mutex_release(&ctx, handle), 0);
+    assert_eq!(
+        take_events().into_iter().map(|e| e.0).collect::<Vec<_>>(),
+        [43]
+    );
+    assert_eq!(ctx.stats().live_blocks, 0);
+}

@@ -310,6 +310,13 @@ fn descriptor_with_storage(
             } else {
                 0
             }
+            | if matches!(record.kind, LayoutKind::Frozen { value }
+                if table.layouts[value.0 as usize].kind == LayoutKind::Handle)
+            {
+                crate::runtime_abi::LAYOUT_MUTEX_ROOT
+            } else {
+                0
+            }
             | if matches!(record.kind, LayoutKind::Sequence { .. }) {
                 crate::runtime_abi::LAYOUT_SEQUENCE
             } else {

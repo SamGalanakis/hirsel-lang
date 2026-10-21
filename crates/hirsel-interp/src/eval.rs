@@ -1226,6 +1226,15 @@ pub(crate) fn execute_frames(
                         }
                         continue;
                     }
+                    if let Value::Mutex(root) = &value {
+                        if !root.release()? {
+                            continue;
+                        }
+                        value = Value::Handle {
+                            kind: "Mutex".into(),
+                            id: root.id(),
+                        };
+                    }
                     if let Value::Handle { kind, id } = &value {
                         effect(
                             &mut execution.trace,

@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 30
+#define HIRSEL_RT_V2_ABI_VERSION 31
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 40
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_FOREIGN_THREADS_HOME 0
@@ -182,6 +182,7 @@ _Static_assert(HIRSEL_RT_V2_PAGE_XTHREAD_FREE_OFFSET == HIRSEL_RT_V2_PAGE_OWNER_
  * sequence's; a push copies a shared one at its capacity and block_grow regrows it there (MEM-6,
  * ABI 15). */
 #define HIRSEL_RT_V2_LAYOUT_SEQUENTIAL 1024
+#define HIRSEL_RT_V2_LAYOUT_MUTEX_ROOT 2048
 #define HIRSEL_RT_V2_INDEX_MASK 0x1fffffffu
 #define HIRSEL_RT_V2_KIND_SHIFT 29
 #define HIRSEL_RT_V2_KIND_SMALL 0
@@ -582,6 +583,7 @@ void hirsel_rt_v2_thaw(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
  * run's mode, walking the root when it was the last and the release applies now. */
 void hirsel_rt_v2_root_dup(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
 void hirsel_rt_v2_root_release(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
+uint8_t hirsel_rt_v2_root_drop(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t anchor, uint64_t operation_site);
 
 /* Finalizers. */
 uint8_t hirsel_rt_v2_finalize(hirsel_rt_v2_ctx *ctx, uint32_t index, void *value,

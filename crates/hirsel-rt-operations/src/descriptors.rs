@@ -865,6 +865,15 @@ pub const ENTRIES: &[Entry] = &[
     // roots.rs: increments commute; releases can free counted frozen storage.
     entry("hirsel_rt_v2_root_dup", Concurrent),
     ops("hirsel_rt_v2_root_release", &["root.release"]),
+    ops(
+        "hirsel_rt_v2_root_drop",
+        &[
+            "root.release",
+            "drop.trivial",
+            "drop.leftovers",
+            "host.handle_drop",
+        ],
+    ),
     // release.rs
     ops("hirsel_rt_v2_free", DROPS),
     ops("hirsel_rt_v2_release", DROPS),
@@ -896,6 +905,8 @@ pub const ENTRIES: &[Entry] = &[
     ops("hirsel_rt_v2_channel_send", &["channel.send"]),
     ops("hirsel_rt_v2_channel_receive", &["channel.receive"]),
     ops("hirsel_rt_v2_mutex_create", &["mutex.create"]),
+    // Mutex wrappers close through finalize::close_handle. A last release
+    // detaches the inline image before drop.leftovers invokes user cleanup.
     ops("hirsel_rt_v2_mutex_take", &["mutex.take"]),
     ops("hirsel_rt_v2_mutex_put", &["mutex.put"]),
     ops("hirsel_rt_v2_mutex_kill", &["mutex.kill"]),

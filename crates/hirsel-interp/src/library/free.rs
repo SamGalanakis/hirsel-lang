@@ -91,7 +91,7 @@ pub enum FreePrint {
 struct Close {
     path: Vec<u32>,
     op: u64,
-    channel: u64,
+    object: (u8, u64),
     kind: &'static str,
     endpoint: u64,
 }
@@ -386,7 +386,7 @@ impl Library {
         if free
             .closes
             .iter()
-            .any(|close| close.path == path && (CHANNEL, close.channel) == handle)
+            .any(|close| close.path == path && close.object == handle)
         {
             return Ok(false);
         }
@@ -599,7 +599,11 @@ impl Library {
             return Ok(false);
         }
         self.free_apply_closes()?;
-        let Some(channel) = self.channels.endpoint_channel(endpoint) else {
+        let object = if kind == "Mutex" {
+            (MUTEX, endpoint)
+        } else if let Some(channel) = self.channels.endpoint_channel(endpoint) {
+            (CHANNEL, channel)
+        } else {
             return Ok(false);
         };
         let path = self.tasks.path();
@@ -610,14 +614,19 @@ impl Library {
         }
         self.free_apply_pending(self.tasks.current)?;
         let outcome = format!("close {}", kind.to_lowercase());
-        if self.free_enabled((CHANNEL, channel))? {
-            self.free_touch((CHANNEL, channel), &outcome)?;
-            self.channels.close(kind, endpoint)?;
+        if self.free_enabled(object)? {
+            self.free_touch(object, &outcome)?;
+            if kind == "Mutex" {
+                let released = self.drop_mutex(endpoint);
+                self.channels.released.extend(released);
+            } else {
+                self.channels.close(kind, endpoint)?;
+            }
         } else {
             self.free.as_mut().unwrap().closes.push(Close {
                 path: path.clone(),
                 op,
-                channel,
+                object,
                 kind,
                 endpoint,
             });
@@ -633,15 +642,15 @@ impl Library {
                 return Ok(());
             };
             let mut applied = None;
-            let mut blocked: BTreeSet<(Vec<u32>, u64)> = BTreeSet::new();
+            let mut blocked: BTreeSet<(Vec<u32>, (u8, u64))> = BTreeSet::new();
             for (i, close) in free.closes.iter().enumerate() {
-                let key = (close.path.clone(), close.channel);
+                let key = (close.path.clone(), close.object);
                 if blocked.contains(&key) {
                     continue;
                 }
                 if free
                     .session
-                    .enabled_at(&close.path, close.op, 0, (CHANNEL, close.channel))
+                    .enabled_at(&close.path, close.op, 0, close.object)
                     .map_err(diverged)?
                 {
                     applied = Some(i);
@@ -658,11 +667,16 @@ impl Library {
                     &close.path,
                     close.op,
                     0,
-                    (CHANNEL, close.channel),
+                    close.object,
                     &format!("close {}", close.kind.to_lowercase()),
                 )
                 .map_err(diverged)?;
-            self.channels.close(close.kind, close.endpoint)?;
+            if close.kind == "Mutex" {
+                let released = self.drop_mutex(close.endpoint);
+                self.channels.released.extend(released);
+            } else {
+                self.channels.close(close.kind, close.endpoint)?;
+            }
         }
     }
 

@@ -62,7 +62,7 @@ pub(crate) struct Runtime<'m> {
     pub(crate) free: Function<'m>,
     /// `hirsel_rt_v2_close_handle`.
     pub(crate) close_handle: Function<'m>,
-    /// `hirsel_rt_v2_root_release`.
+    /// `hirsel_rt_v2_root_drop`.
     pub(crate) root_release: Function<'m>,
     pub(crate) measure_release: Option<Function<'m>>,
     /// The program builds tracked arena blocks (MEM-6), which a release leaves alone.
@@ -141,7 +141,10 @@ fn holder(layouts: &LayoutTable, scope: &Scope, offset: u64) -> Option<LayoutId>
     let (mut layout, mut base) = (scope.layout, 0u64);
     loop {
         let record = layouts.layout(layout)?;
-        if let LayoutKind::Block { payload } | LayoutKind::Box { payload } = record.kind {
+        if let LayoutKind::Block { payload }
+        | LayoutKind::Box { payload }
+        | LayoutKind::Shared { payload } = record.kind
+        {
             return (offset == base).then_some(payload);
         }
         let fields: &[FieldLayout] = match &record.tag {
@@ -190,8 +193,13 @@ fn infallible(layouts: &LayoutTable, layout: LayoutId) -> bool {
                 }
                 _ => false,
             },
-            // A frozen graph runs no finalizer and closes nothing (MEM-11).
-            DropStep::ReleaseRoot { .. } => true,
+            // Mutex wrappers are atomic roots too, and their last close may fail.
+            DropStep::ReleaseRoot { offset } => holder(layouts, scope, *offset)
+                .and_then(|payload| layouts.layout(payload))
+                .is_some_and(|record| {
+                    matches!(record.kind, LayoutKind::Frozen { value }
+                    if layouts.layout(value).is_some_and(|value| value.kind != LayoutKind::Handle))
+                }),
             DropStep::ActiveVariant {
                 tag_offset,
                 variants,
@@ -694,8 +702,10 @@ impl<'m, 'g> Walk<'m, 'g> {
                 let block = self
                     .builder
                     .load(ptr_ty, self.at(base, *offset), word(*offset));
-                self.builder
-                    .call(self.runtime.root_release, &[self.context, block]);
+                self.accumulate(self.builder.call(
+                    self.runtime.root_release,
+                    &[self.context, block, self.anchor, self.operation_site],
+                ));
                 Ok(())
             }
             DropStep::CloseHandle { offset } => {

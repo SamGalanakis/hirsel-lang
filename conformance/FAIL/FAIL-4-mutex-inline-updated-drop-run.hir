@@ -1,0 +1,31 @@
+// rule: FAIL-4
+// expect: run
+// stdout: updated
+// stdout: after
+// The successful body returns the updated inline resource. Releasing the last
+// handle destroys that resource before the caller's next operation.
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn finish(take m: Mutex[Trace]) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let m = mutex.create(tasks, Trace(stdout: stdout, text: "before\n"))
+  mutex.with(
+    tasks,
+    m,
+    fn(mut x: unique Trace) -> () uses {} {
+      x.text = "updated\n"
+    }
+  )
+  finish(take m)
+  let _ = out.print(stdout, "after\n")
+  Ok(())
+}

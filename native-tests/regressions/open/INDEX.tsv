@@ -6,7 +6,6 @@
 # The kinds are unverified on current main; the last complete agree --native full campaign ran on
 # main 7dd85479 (2026-10-14). Refresh after tools/buck2/agree.py --native-full.
 # kind	variants on 7dd85479	program
-m2-unavailable: a Mutex of a noncopyable payload needs last-handle finalization	50 configurations on e0518a73	conformance/FAIL/FAIL-4-mutex-payload-drop-run.hir (exhaustive native matrix, 2026-10-20; native handles currently release payload blocks only at run end)
 native/heap/heap: Malformed: read names ValueId(N) but SlotId(N) holds ValueId(N)	0	heap-read-names-stale-value.hir
 native/heap/heap: TypeConfusion: dup copy of a non-block value	0	heap-dup-of-non-block.hir
 native/heap/import: validator: CleanupOrder	9	conformance/SEM/SEM-3-wave1-text-empty-run.hir (argument/passing)

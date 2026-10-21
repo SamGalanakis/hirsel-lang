@@ -198,6 +198,13 @@ impl ObservedValue {
                     });
                     continue;
                 }
+                Value::Mutex(root) => {
+                    nodes.push(O::Handle {
+                        kind: "Mutex".into(),
+                        logical_id: root.id(),
+                    });
+                    continue;
+                }
                 Value::Shared(root) => {
                     nodes.push(O::Handle {
                         kind: "Shared".into(),

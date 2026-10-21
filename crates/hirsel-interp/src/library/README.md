@@ -110,10 +110,10 @@ Io and channel effects, while destruction shields cancellation. Blocked network
 operations park their typed arguments and mutable loans until ready.
 `synchronization.rs` runs mutex bodies synchronously, publishes mutable payload
 updates on every exit, kills failed mutexes with their original cause, and stores
-sequentially consistent scalar atomics. A payload with observable destruction makes
-its mutex noncopyable through the recursive Copyable bound; its single owner drops
-the payload through the evaluator. Copyable payload snapshots may remain in the
-library until the run ends, as with the reference model's other allocation costs.
+sequentially consistent scalar atomics. MutexRoot counts owned semantic copies
+separately from evaluator snapshots, like SharedRoot. The last release removes the
+cell and schedules any present payload for destruction through the evaluator;
+a failed body releases the updated payload before the dead cell is closed.
 `copy_to` uses the interpreter's iterative semantic value copy; checked execution
 uses the declared destination relation to retain the target arena lifetime.
 The evaluator charges a `copy_to` into a bounded arena before it runs (MEM-6).

@@ -1,19 +1,13 @@
 //! Mutexes and atomics (CONC-4, CONC-5, FAIL-4) over the runtime's cells
 //! (`hirsel_rt_v2_mutex_*`, `hirsel_rt_v2_atomic_*`, `hirsel-rt/src/sync.rs`).
 //!
-//! A mutex payload crosses as the block
-//! of a one-element `List[T]` in an `Option` carrier, which the runtime takes
-//! from `Some` and moves into `None`, so it never reads `T`'s layout. An
-//! atomic's scalar payload crosses as the `Some` image of an `Option` of known
-//! size, which the runtime copies. `mutex.with` moves the payload out of its
-//! block into a local, calls the body with it `mut` and puts it back in a new
-//! block; a body that fails kills the mutex and propagates. Acquiring a dead
-//! mutex fails FAIL-4, continued by the chain of the body that killed it.
+//! A mutex carries an `Option[T]` image, moved into and out of the runtime cell.
+//! Creation supplies its layout descriptor and `None` image, like channel.open.
+//! A counted handle wrapper closes the cell on its last release; the runtime drops
+//! a present image through its descriptor. A failed body kills the empty cell.
 use super::LibraryBody;
 use super::builder::{Body, Cx};
-use super::channels::variant_field;
 use super::iter::{drop_local, local, option};
-use super::slots::construct;
 use super::tasks::{
     Intrinsic, argument, exclusive, intrinsic, invoke, operation, option_of, parameter,
 };
@@ -21,65 +15,12 @@ use crate::PassError;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::ir::*;
-use hirsel_lir::layout_types::LayoutId;
+use hirsel_lir::layout_types::{LayoutId, LayoutKind};
 use hirsel_lir::stage::Value;
 use hirsel_syntax::DefPath;
-use hirsel_types::{BuiltinType, GenericArgument, Type, TypeKind};
+use hirsel_types::GenericArgument;
 
 type R<T> = Result<T, PassError>;
-
-/// The payload carrier `List[T]` of `mutex.<op>[T]`: its layout and the
-/// layout of its `Option`.
-fn carrier(cx: &mut Cx<'_>) -> R<(LayoutId, LayoutId)> {
-    let element = cx.type_actual(0)?;
-    let list = cx.store.push(Type::with_kind(TypeKind::Builtin {
-        kind: BuiltinType::List,
-        arguments: vec![GenericArgument::Type(element)].into(),
-    }));
-    let list_layout = cx.layout(list)?;
-    let (option_layout, _) = option_of(cx, list)?;
-    Ok((list_layout, option_layout))
-}
-
-/// Move the value out of the `Some([v])` carrier in `slot`, whose storage then ends,
-/// and drop the empty list. The value is left in a local the body holds.
-fn unbox(
-    b: &mut Body<'_, '_>,
-    slot: SlotId,
-    address: AddressId,
-    option_layout: LayoutId,
-) -> R<ValueId> {
-    let list_layout = variant_field(b, option_layout, 1, 0)?;
-    let field = b.place(
-        AddressBase::Address(address),
-        &[ProjectionStep::VariantField {
-            variant: 1,
-            field: 0,
-        }],
-        list_layout,
-        None,
-    )?;
-    let list = b.take(field)?;
-    b.emptied(slot);
-    b.push(Inst::StorageDead {
-        slot,
-        if_live: false,
-    });
-    let (list_slot, list_address) = local(b, list)?;
-    let zero = b.u64(0)?;
-    let at = b.slot_place(list_address, zero)?;
-    let value = b.take(at)?;
-    let (value_slot, value_address) = local(b, value)?;
-    b.seq_set_len(list_address, zero)?;
-    drop_local(b, list_slot, list_address);
-    let value = b.take(value_address)?;
-    b.emptied(value_slot);
-    b.push(Inst::StorageDead {
-        slot: value_slot,
-        if_live: false,
-    });
-    Ok(value)
-}
 
 pub static MUTEX_CREATE: LibraryBody = LibraryBody {
     path: || DefPath::core("mutex.create"),
@@ -159,17 +100,15 @@ fn put(
     Ok(result)
 }
 
-/// Pass `Some([value])` to the mutex `entry` as its carrier, with `handle` first when
-/// given; the runtime takes the block, and the then `None` local is dropped after the call.
-fn put_block(
+/// Move `Some(value)` through the mutex entry, leaving `None` in the local.
+fn put_image(
     b: &mut Body<'_, '_>,
     entry: &Intrinsic,
     handle: Option<ValueId>,
-    (list_layout, option_layout): (LayoutId, LayoutId),
+    option_layout: LayoutId,
     value: ValueId,
 ) -> R<Option<ValueId>> {
-    let list = construct(b, list_layout, ConstructorKind::Sequence, &[value])?;
-    let some = option(b, option_layout, 1, &[list]);
+    let some = option(b, option_layout, 1, &[value]);
     let (slot, address) = local(b, some)?;
     let first = u32::from(handle.is_some());
     let mut arguments: Vec<_> = handle
@@ -178,8 +117,20 @@ fn put_block(
         .collect();
     arguments.push(exclusive(b, first, slot, address));
     let result = call(b, entry, arguments, &[]);
+    let kept = result.map(|r| local(b, r)).transpose()?;
     drop_local(b, slot, address);
-    Ok(result)
+    match kept {
+        Some((slot, address)) => {
+            let value = b.take(address)?;
+            b.emptied(slot);
+            b.push(Inst::StorageDead {
+                slot,
+                if_live: false,
+            });
+            Ok(Some(value))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Interpose the kill of mutex `m` before the cleanup of every failure that `blocks` can
@@ -348,14 +299,55 @@ fn ret_unit(b: &mut Body<'_, '_>) {
 
 /// `mutex.create(tasks, take v) -> Mutex[T]`.
 fn mutex_create(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    let layouts = carrier(cx)?;
-    let (_, _, entries) = entries(cx, &["MutexCreate"])?;
+    let (option_layout, _, entries) = entries(cx, &["MutexCreate"])?;
+    let u32_layout = cx.primitive(hirsel_types::Primitive::U32)?;
+    let LayoutKind::Shared { payload: wrapper } =
+        cx.record(cx.fn_abi().result.unwrap().layout).kind
+    else {
+        return Err(PassError::Malformed(
+            "a mutex without an atomic wrapper".into(),
+        ));
+    };
     let mut b = Body::new(cx)?;
     let &[_, v] = b.parameters.as_slice() else {
         return Err(PassError::Malformed("mutex.create parameters".into()));
     };
     let value = b.take(v.address)?;
-    let mutex = put_block(&mut b, &entries[0], None, layouts, value)?;
+    let some = option(&mut b, option_layout, 1, &[value]);
+    let (slot, address) = local(&mut b, some)?;
+    let none = option(&mut b, option_layout, 0, &[]);
+    let (none_slot, none_address) = local(&mut b, none)?;
+    let (none, none_loan) = b.borrow(none_address, false)?;
+    let descriptor = b.constant(u32_layout, ConstantValue::Descriptor(option_layout));
+    let wrapper = b.constant(u32_layout, ConstantValue::Descriptor(wrapper));
+    let payload = exclusive(&mut b, 0, slot, address);
+    let mutex = call(
+        &mut b,
+        &entries[0],
+        vec![
+            payload,
+            argument(1, Passing::Borrow, none),
+            argument(2, Passing::Borrow, descriptor),
+            argument(3, Passing::Borrow, wrapper),
+        ],
+        &[none_loan],
+    );
+    // Keep the mutex owned while cleaning up the metadata local.
+    let kept = mutex.map(|m| local(&mut b, m)).transpose()?;
+    drop_local(&mut b, none_slot, none_address);
+    drop_local(&mut b, slot, address);
+    let mutex = match kept {
+        Some((slot, address)) => {
+            let value = b.take(address)?;
+            b.emptied(slot);
+            b.push(Inst::StorageDead {
+                slot,
+                if_live: false,
+            });
+            Some(value)
+        }
+        None => None,
+    };
     b.ret(mutex);
     Ok(b.finish())
 }
@@ -367,9 +359,8 @@ fn mutex_with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .layouts
         .fn_abi(&cx.store, callback, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
-    let layouts = carrier(cx)?;
-    let option_layout = layouts.1;
-    let (_, _, entries) = entries(cx, &["MutexTake", "MutexPut", "MutexKill", "MutexCause"])?;
+    let (option_layout, _, entries) =
+        entries(cx, &["MutexTake", "MutexPut", "MutexKill", "MutexCause"])?;
     let [take, put_back, kill, cause] = &entries[..] else {
         unreachable!()
     };
@@ -377,7 +368,7 @@ fn mutex_with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let &[_, m, body] = b.parameters.as_slice() else {
         return Err(PassError::Malformed("mutex.with parameters".into()));
     };
-    let m = b.read_bits(m.address)?;
+    let (m, mutex_loan) = b.borrow(m.address, false)?;
     let (slot, address) = none_local(&mut b, option_layout)?;
     let arguments = vec![
         argument(0, Passing::Borrow, m),
@@ -416,7 +407,7 @@ fn mutex_with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     // From here until the put, the mutex holds no payload (`kill_failures`).
     let region = (taken, b.ed.code[taken.index()].len());
     let region_blocks = b.ed.unit.blocks.len();
-    let value = unbox(&mut b, slot, address, option_layout)?;
+    let value = take_some(&mut b, slot, address, option_layout)?;
     let (payload, payload_address) = local(&mut b, value)?;
     // A failed body kills the mutex, and its payload is dropped.
     let unwinding = kill_on_failure(&mut b, kill, m);
@@ -439,7 +430,7 @@ fn mutex_with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         slot: payload,
         if_live: false,
     });
-    put_block(&mut b, put_back, Some(m), layouts, value)?;
+    put_image(&mut b, put_back, Some(m), option_layout, value)?;
     // The continuation after the put holds the payload's mutex again.
     let put = b.current();
     kill_failures(
@@ -462,7 +453,21 @@ fn mutex_with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         }
         None => None,
     };
+    b.end_loan(mutex_loan);
     b.ret(result);
+    // The mutex loan spans its body and FAIL-4 kill cleanup. Entry preparation
+    // can fail before it starts, so terminate it conditionally at failure exits.
+    for (i, terminator) in b.ed.unit.terminators.iter().enumerate() {
+        if matches!(
+            terminator,
+            Terminator::Propagate | Terminator::InvariantFault { .. }
+        ) {
+            b.ed.code[i].push(Inst::EndLoan {
+                loan: mutex_loan,
+                if_active: true,
+            });
+        }
+    }
     Ok(b.finish())
 }
 

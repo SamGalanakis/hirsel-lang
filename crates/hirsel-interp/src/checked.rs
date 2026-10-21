@@ -668,7 +668,7 @@ pub(crate) fn holds_storage(value: &Value) -> bool {
             | Value::F64(_)
             | Value::FunctionReference(_) => (),
             // A root is global storage: no local bound reaches its graph.
-            Value::Shared(_) => (),
+            Value::Shared(_) | Value::Mutex(_) => (),
         }
     }
     false

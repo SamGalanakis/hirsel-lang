@@ -1115,25 +1115,24 @@ impl<'a> Validator<'a> {
                 "a frozen payload scans its value",
             );
         }
-        let drop = if v.drop.is_empty() {
-            Vec::new()
-        } else {
-            vec![
-                DropStep::Thaw {
+        let mut drop = Vec::new();
+        if !v.drop.is_empty() {
+            if v.kind != LayoutKind::Handle {
+                drop.push(DropStep::Thaw {
                     offset: 0,
                     layout: value,
-                },
-                DropStep::Child {
-                    offset: 0,
-                    layout: value,
-                },
-            ]
-        };
+                });
+            }
+            drop.push(DropStep::Child {
+                offset: 0,
+                layout: value,
+            });
+        }
         if r.drop != drop {
             self.fail(
                 s.clone(),
                 Obligation::DropOrder,
-                "a frozen payload thaws its value, then drops it",
+                "a frozen payload thaws its counted graph, then drops its value",
             );
         }
         if v.finalizer.is_some() || r.finalizer.is_some() {

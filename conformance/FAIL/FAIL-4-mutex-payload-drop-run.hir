@@ -2,8 +2,6 @@
 // expect: run
 // stdout: released
 // Releasing a mutex also releases its owned noncopyable payload.
-// Native exclusions record the missing last-handle finalizer: native mutex
-// payloads are currently released at run end, which cannot implement this rule.
 resource type Trace {
   stdout: Stdout,
 }

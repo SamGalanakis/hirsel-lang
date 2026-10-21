@@ -523,12 +523,21 @@ impl FnEmitter<'_, '_, '_> {
                 let pointer = self.get(value)?;
                 self.define(result, pointer)
             }
-            // A root release never fails: a frozen graph runs no finalizer (MEM-11).
-            Inst::Release { value, .. } if self.is_root_value(value)? => {
+            // Mutex roots may run user finalizers on the last release.
+            Inst::Release {
+                value,
+                anchor,
+                failure,
+                ..
+            } if self.is_root_value(value)? => {
                 let block = self.get1(value)?;
-                let context = self.context;
-                self.rt(RuntimeEntry::RootRelease, &[context, block])?;
-                Ok(())
+                let anchor = self.cleanup_code(anchor)?;
+                let (anchor, operation_site) = self.failure_sites(anchor);
+                let status = self.rt1(
+                    RuntimeEntry::RootDrop,
+                    &[self.context, block, anchor, operation_site],
+                )?;
+                self.status_guard(status, failure)
             }
             Inst::Reset { value, .. } if self.is_root_value(value)? => {
                 self.invalid("a reset of a Shared root, which is never a reuse donor")

@@ -6528,3 +6528,7 @@ conformance/MODE/MODE-2-copied-atomic-record-ok.hir
 conformance/MODE/MODE-2-copied-atomic-record-bad.hir
 conformance/MODE/MODE-1-handle-only-copy-ok.hir
 conformance/MODE/MODE-1-handle-only-copy-bad.hir
+conformance/FAIL/FAIL-4-mutex-inline-updated-drop-run.hir
+conformance/FAIL/FAIL-4-mutex-nested-payload-drop-run.hir
+conformance/FAIL/FAIL-4-mutex-copied-payload-drop-run.hir
+conformance/FAIL/FAIL-4-mutex-payload-drop-failure-run.hir

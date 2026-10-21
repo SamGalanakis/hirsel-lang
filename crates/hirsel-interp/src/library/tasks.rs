@@ -119,6 +119,7 @@ fn handle(kind: &str, id: u64) -> Value {
 pub(super) fn id(value: &Value, expected: &str) -> Result<u64, Error> {
     match value {
         Value::Handle { kind, id } if kind == expected => Ok(*id),
+        Value::Mutex(root) if expected == "Mutex" => Ok(root.id()),
         _ => Err(invalid(format!("expected {expected}"))),
     }
 }
