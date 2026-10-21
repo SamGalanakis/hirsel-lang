@@ -1355,6 +1355,86 @@ fn template_owners_and_objects_are_identical_at_one_and_eight_workers() {
     });
 }
 
+/// Historical migration link failures must keep their callable owner objects,
+/// including when cached summaries replace Ready bodies on the second build.
+#[test]
+fn original_callable_values_retain_their_thunk_owners_on_both_backends() {
+    use hirsel_driver::native::{self, Backend, OptLevel, Options, UnitObjects};
+    use hirsel_lir::emission::{function_thunk_name, symbol_name};
+    use hirsel_lir::objects::SimObjects;
+    use std::sync::Arc;
+    with_compiler_stack(|| {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for path in [
+            "conformance/LANG/LANG-2-core-operation-values-run.hir",
+            "conformance/LANG/LANG-2-generic-callable-context-run.hir",
+            "conformance/LANG/LANG-9-track-caller-primitive-value-run.hir",
+            "conformance/LANG/LANG-9-track-caller-primitive-value-fail.hir",
+            "conformance/MODE/MODE-2-std-container-empty-run.hir",
+        ] {
+            let mut loaded = hirsel_driver::load_program(&root.join(path)).unwrap();
+            loaded.check_for_execution().unwrap();
+            let input = loaded.engine.export_native_input().unwrap();
+            let input = loaded.engine.import_native_input(input).unwrap();
+            for (backend, opt) in [
+                (Backend::Llvm, OptLevel::None),
+                (Backend::Llvm, OptLevel::Speed),
+                (Backend::Cranelift, OptLevel::None),
+            ] {
+                let mut options = Options::new(x86());
+                options.objects = Some(UnitObjects {
+                    store: Arc::new(SimObjects::default()),
+                    backend,
+                    opt,
+                    debug: false,
+                    fuel: false,
+                    jobs: hirsel_intern::jobs::Jobs::ONE,
+                    byte_budget: None,
+                });
+                let cold = native::build(&input, &options).unwrap();
+                let warm = native::build(&input, &options).unwrap();
+                assert_eq!(
+                    cold.summaries, warm.summaries,
+                    "{path}: {backend:?} {opt:?}"
+                );
+                let cold = cold.unit_objects.as_ref().unwrap();
+                let objects = warm.unit_objects.as_ref().unwrap();
+                assert_eq!(objects.hits, warm.summaries.len());
+                assert_eq!(cold.objects, objects.objects, "{path}: {backend:?} {opt:?}");
+                let mut entries = std::collections::BTreeSet::new();
+                for summary in &warm.summaries {
+                    entries.extend(summary.glue.entries.iter().cloned());
+                }
+                assert!(!entries.is_empty(), "{path}: no callable values exercised");
+                for (definition, instance) in entries {
+                    let owner = warm
+                        .summaries
+                        .iter()
+                        .position(|s| {
+                            s.definition == definition && instance.is_none_or(|i| s.instance == i)
+                        })
+                        .unwrap_or_else(|| panic!("{path}: missing owner of {definition}"));
+                    for symbol in [
+                        symbol_name(&definition, instance.as_ref()),
+                        function_thunk_name(&definition, instance.as_ref()),
+                    ] {
+                        let owners: Vec<_> = objects
+                            .objects
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, o)| {
+                                o.exports.iter().any(|s| s.name == symbol).then_some(i)
+                            })
+                            .collect();
+                        assert_eq!(owners, [owner], "{path}: {backend:?} {opt:?}: {symbol}");
+                        eprintln!("{path}: {backend:?} {opt:?}: {symbol} owner={definition}");
+                    }
+                }
+            }
+        }
+    });
+}
+
 #[test]
 fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() {
     use hirsel_driver::native::{self, Backend, OptLevel, Options, UnitObjects, Validation};
