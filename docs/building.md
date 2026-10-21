@@ -94,7 +94,9 @@ Native object storage uses the driver's existing separate provider.
 
 `HIRSEL_RESULTS` selects `dir@1` (the default), `mem@1`, `none@1` or `sim@1`;
 `HIRSEL_RESULTS_DIR` overrides the disk directory. `HIRSEL_VERIFY_CACHE=1`
-recomputes disk hits and compares their canonical bytes. Use `none@1` with
+recomputes disk hits and compares their canonical bytes. `--verify-cache` on
+check, build and run selects the same policy and bypasses resident dispatch.
+Use `none@1` with
 `HIRSEL_DAEMON=off` for a cache-free reference check. Source snapshots are
 renewed from disk results after 64 edited revisions to bound retained history.
 

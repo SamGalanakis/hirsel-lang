@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>...";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>...";
 
 mod allocator;
 mod execution_policy;
@@ -797,9 +797,19 @@ fn take_flag(args: &mut Vec<OsString>, flag: &str) -> bool {
 
 /// Run the command, then report what `--timings` and `--mem-usage` measured.
 fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
+    let verify_cache = take_flag(&mut args, "--verify-cache");
     let command = args
         .iter()
         .find_map(|arg| arg.to_str().filter(|arg| !arg.starts_with('-')));
+    if verify_cache && !command.is_some_and(|c| matches!(c, "check" | "build" | "run")) {
+        eprintln!("--verify-cache applies only to check, build and run");
+        return usage();
+    }
+    hirsel_engine::verify_cached_results(if verify_cache {
+        hirsel_engine::store::VerifyStore::Recompute
+    } else {
+        hirsel_engine::store::VerifyStore::Off
+    });
     hirsel_engine::persistent_results(
         command.is_some_and(|c| matches!(c, "check" | "build" | "run" | "serve")),
     );
@@ -807,7 +817,9 @@ fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
         return serve::serve(&args[1..]);
     }
     // A running resident compiler for this workspace takes the command.
-    if let Some(code) = serve::client(&args) {
+    // Verification must exercise the selected store in this command's process,
+    // even if a resident server already has a checked result.
+    if !verify_cache && let Some(code) = serve::client(&args) {
         return code;
     }
     if args.first().is_some_and(|a| a == "check") && take_flag(&mut args, "--watch") {

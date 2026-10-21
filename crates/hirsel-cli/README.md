@@ -63,6 +63,9 @@ Commands (arguments use the shared lexopt parser):
   (docs/building.md); any other command refuses it with exit 2.
 - `--verbose`, anywhere before `--`, writes one `hirsel: ...` line on stderr for each
   dependency checked from source because no std image matched. Nothing else changes.
+- `--verify-cache`, anywhere before `--` on check, build and run, recomputes
+  result-store hits and compares their complete canonical records. It runs in
+  this process, bypassing resident dispatch, and leaves V enabled by default.
 - Invalid arguments exit 2. Non-executing source commands report IO failures as
   exit 1, without a RuleId; run and test setup failures use the shared exit policy. Invalid UTF-8
   is a SEM-3 language diagnostic at the first invalid byte boundary, before parsing.

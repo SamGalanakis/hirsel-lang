@@ -53,6 +53,56 @@ mod unix_backlog;
 #[path = "cli/validation.rs"]
 mod validation;
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn verify_cache_recomputes_disk_hits_without_changing_diagnostics() {
+    let source = file(
+        "fn callee(x: u8) -> u8 { x + 1u8 }\npub fn main() -> Result[(), ()] { let _ = callee(1u8); Ok(()) }\n",
+    );
+    let store = source.with_extension("results");
+    let run = |verify: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .env("HIRSEL_DAEMON", "auto")
+            .env("HIRSEL_RESULTS", "dir@1")
+            .env("HIRSEL_RESULTS_DIR", &store)
+            .env_remove("HIRSEL_VERIFY_CACHE")
+            .args(["check", "--json", "--timings=json"]);
+        if verify {
+            command.arg("--verify-cache");
+        }
+        let output = command.arg(&source).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let report: serde_json::Value =
+            serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
+        (output.stdout, report)
+    };
+    let (cold, cold_counts) = run(false);
+    let (warm, warm_counts) = run(false);
+    let (verified, verified_counts) = run(true);
+    assert_eq!(cold, warm);
+    assert_eq!(cold, verified);
+    assert!(cold_counts["counts"]["definitions"].as_u64().unwrap() > 0);
+    assert!(
+        warm_counts["counts"]["store hits"].as_u64().unwrap() > 0,
+        "{warm_counts}"
+    );
+    assert_eq!(warm_counts["counts"]["definitions"], 0, "{warm_counts}");
+    assert!(
+        verified_counts["counts"]["definitions"].as_u64().unwrap() > 0,
+        "{verified_counts}"
+    );
+    let invalid = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["fmt", "--verify-cache"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("--verify-cache applies only"));
+    let _ = std::fs::remove_dir_all(store);
+    let _ = std::fs::remove_file(source);
+}
 #[test]
 fn help_spellings_print_usage_to_stdout_and_exit_zero() {
     for command in ["--help", "help"] {
@@ -63,7 +113,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>...\n",
+            b"usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>...\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
