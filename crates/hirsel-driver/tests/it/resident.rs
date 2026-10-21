@@ -214,3 +214,90 @@ fn manifest_session_preserves_the_cold_loader_syntax_error_boundary() {
         assert!(session.check().unwrap().diagnostics.is_empty());
     });
 }
+
+#[test]
+fn frozen_frontier_restores_and_verifies_persistent_modes_with_complete_reads() {
+    with_compiler_stack(|| {
+        use hirsel_intern::jobs::Jobs;
+        fn run(
+            store: Arc<dyn store::ResultStore>,
+            source: &str,
+            jobs: Jobs,
+            verify: bool,
+        ) -> (QueryEngine, Vec<String>) {
+            let mut engine = engine(store);
+            if verify {
+                engine = engine.with_verify_store(store::VerifyStore::Recompute);
+            }
+            let file = engine.sources.add("bulk-store.hir", source.into()).unwrap();
+            let parsed = engine.parse_file(file, &default_context()).unwrap();
+            let paths = parsed
+                .value
+                .items
+                .iter()
+                .map(|s| s.item.definition.clone())
+                .rev()
+                .collect();
+            let results = engine.mode_definitions(paths, jobs);
+            let mut output = Vec::new();
+            for result in results {
+                let diagnostics = match result.result {
+                    Ok(value) => value.diagnostics.clone(),
+                    Err(QueryError::Diagnostics(ds)) => ds,
+                    Err(error) => panic!("{error:?}"),
+                };
+                for diagnostic in diagnostics {
+                    output.push(format!(
+                        "phase {:?}\n{}",
+                        engine.diagnostic_phase(&diagnostic),
+                        diagnostic.render_human(&engine.sources)
+                    ));
+                }
+            }
+            (engine, output)
+        }
+        for jobs in [1, 2, 8] {
+            let store = Arc::new(store::MemStore::default());
+            let source = "pub opaque type Hidden: plain uses {} { value:u8 }\nfn get(x:Hidden) -> u8 { x.value }\nfn a(x:u8) -> u8 { x }\nfn b() -> u8 { a(1u8) }\n";
+            let (first, ds) = run(store.clone(), source, Jobs::new(jobs), false);
+            assert!(ds.is_empty(), "{ds:?}");
+            assert!(!store.is_empty());
+            drop(first);
+            for edited in [source.to_owned(), source.replace("{ x }", "{ x + 1u8 }")] {
+                let (warm, ds) = run(store.clone(), &edited, Jobs::new(jobs), false);
+                let (_, cold) = run(Arc::new(store::NoneStore), &edited, Jobs::new(jobs), false);
+                assert_eq!(ds, cold);
+                assert_eq!(warm.recompute_count(&path("b"), QueryKind::Check), 0);
+                assert_eq!(warm.recompute_count(&path("b"), QueryKind::Modes), 0);
+            }
+            for edited in [
+                source.replace("a(x:u8) -> u8", "a(x:u32) -> u32"),
+                source.replace("value:u8", "value:u32"),
+                source.replace("x.value", "missing"),
+                source.replace("x.value", "missing") + "fn missing() {}\n",
+            ] {
+                let (warm, ds) = run(store.clone(), &edited, Jobs::new(jobs), false);
+                let (_, cold) = run(Arc::new(store::NoneStore), &edited, Jobs::new(jobs), false);
+                assert_eq!(ds, cold, "jobs {jobs}: {edited}");
+                if edited.contains("a(x:u32)") {
+                    assert!(warm.recompute_count(&path("b"), QueryKind::Check) > 0);
+                }
+                if edited.contains("value:u32") {
+                    assert!(warm.recompute_count(&path("get"), QueryKind::Check) > 0);
+                }
+            }
+            let rejected = "fn identity[T](v: T) -> T { v }\n";
+            let (_, expected) = run(store.clone(), rejected, Jobs::new(jobs), false);
+            assert!(!expected.is_empty());
+            let (restored, actual) = run(store.clone(), rejected, Jobs::new(jobs), false);
+            assert_eq!(actual, expected, "stored mode rejection phase provenance");
+            assert_eq!(
+                restored.recompute_count(&path("identity"), QueryKind::Modes),
+                0
+            );
+            let (verified, ds) = run(store.clone(), source, Jobs::new(jobs), true);
+            assert!(ds.is_empty(), "{ds:?}");
+            assert!(verified.recompute_count(&path("b"), QueryKind::Modes) > 0);
+        }
+    });
+}

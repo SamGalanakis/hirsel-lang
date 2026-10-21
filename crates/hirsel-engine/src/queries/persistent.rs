@@ -348,7 +348,18 @@ impl QueryEngine {
         };
         let phases = diagnostics
             .iter()
-            .filter_map(|d| self.diagnostic_phase(d).map(|phase| (d.clone(), phase)))
+            .filter_map(|d| {
+                entry
+                    .products
+                    .mode_diagnostics
+                    .iter()
+                    .find(|(diagnostic, _)| {
+                        diagnostic.rule == d.rule && diagnostic.primary == d.primary
+                    })
+                    .map(|(_, phase)| phase.clone())
+                    .or_else(|| self.diagnostic_phase(d))
+                    .map(|phase| (d.clone(), phase))
+            })
             .collect();
         self.write_record(
             path,

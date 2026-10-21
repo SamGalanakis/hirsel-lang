@@ -735,7 +735,7 @@ impl QueryEngine {
         observed: Observed,
     ) -> Entry<T> {
         prepare_result(&mut reads, &mut result, &observed.products);
-        self.finish_prepared(key, text, reads, result, observed)
+        self.finish_prepared(key, text, reads, result.map(Arc::new), observed)
     }
     /// Worker results have already applied the same diagnostic/dependency
     /// completion as serial phases; record them without adding reads twice.
@@ -744,7 +744,7 @@ impl QueryEngine {
         key: MemoKey,
         text: ContentHash,
         reads: DependencyReads,
-        result: Result<QueryOutput<T>, QueryError>,
+        result: Result<Arc<QueryOutput<T>>, QueryError>,
         observed: Observed,
     ) -> Entry<T> {
         let definition = key.def.path();
@@ -752,7 +752,7 @@ impl QueryEngine {
         if result.is_err() {
             self.last_phase = Some(key.kind);
         }
-        self.record(key, text, result.map(Arc::new), reads, &observed)
+        self.record(key, text, result, reads, &observed)
     }
     /// The file an item stands in.
     pub(crate) fn item_file(&self, syntax: &ItemSyntax) -> FileId {

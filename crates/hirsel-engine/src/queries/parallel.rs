@@ -25,20 +25,31 @@ struct Task {
     text: ContentHash,
 }
 struct Stage<T> {
-    result: Result<QueryOutput<T>, QueryError>,
+    result: Result<Arc<QueryOutput<T>>, QueryError>,
     detail: DependencyReads,
     observed: Observed,
     unavailable: Option<QueryKind>,
+}
+impl<T> Stage<T> {
+    fn complete(
+        &mut self,
+        mut result: Result<QueryOutput<T>, QueryError>,
+        products: PhaseProducts,
+    ) {
+        self.observed.products = Arc::new(products);
+        prepare_result(&mut self.detail, &mut result, &self.observed.products);
+        self.result = result.map(Arc::new);
+    }
 }
 enum Product<T> {
     Hit(Arc<Entry<T>>),
     Computed(Stage<T>),
 }
-impl<T: Clone> Product<T> {
+impl<T> Product<T> {
     fn result(&self) -> Result<Arc<QueryOutput<T>>, QueryError> {
         match self {
             Self::Hit(entry) => entry.result(),
-            Self::Computed(stage) => stage.result.clone().map(Arc::new),
+            Self::Computed(stage) => stage.result.clone(),
         }
     }
     fn detail(&self) -> &DependencyReads {
@@ -103,7 +114,7 @@ impl Worker<'_> {
                 };
                 let mut products = PhaseProducts::default();
                 let mut provider = WorkerRecorder::new(self, owner, &mut stage);
-                stage.result = match self.resolver {
+                let result = match self.resolver {
                     Some(adapter) => adapter.resolve(
                         self.types,
                         self.memo,
@@ -114,12 +125,7 @@ impl Worker<'_> {
                     ),
                     None => Err(QueryError::NotImplemented),
                 };
-                stage.observed.products = Arc::new(products);
-                prepare_result(
-                    &mut stage.detail,
-                    &mut stage.result,
-                    &stage.observed.products,
-                );
+                stage.complete(result, products);
                 Product::Computed(stage)
             };
             let resolution = resolved.result();
@@ -163,7 +169,7 @@ impl Worker<'_> {
                 unavailable: None,
             };
             let mut provider = WorkerRecorder::new(self, owner, &mut stage);
-            stage.result = match self.checker {
+            let mut result = match self.checker {
                 Some(adapter) => adapter.check(
                     self.types,
                     self.memo,
@@ -174,7 +180,7 @@ impl Worker<'_> {
                 ),
                 None => Err(QueryError::NotImplemented),
             };
-            if let Ok(output) = &mut stage.result {
+            if let Ok(output) = &mut result {
                 arm_fixes::place(
                     output,
                     &mut stage.observed.representations,
@@ -182,11 +188,7 @@ impl Worker<'_> {
                     self.items,
                 );
             }
-            prepare_result(
-                &mut stage.detail,
-                &mut stage.result,
-                &stage.observed.products,
-            );
+            stage.complete(result, PhaseProducts::default());
             Product::Computed(stage)
         };
         done.phase = QueryKind::Check;
@@ -225,7 +227,7 @@ impl Worker<'_> {
         };
         let mut products = PhaseProducts::default();
         let mut provider = WorkerRecorder::new(self, owner, &mut stage);
-        stage.result = match self.modes {
+        let result = match self.modes {
             Some(adapter) => adapter.check_modes(
                 self.types,
                 self.memo,
@@ -236,12 +238,7 @@ impl Worker<'_> {
             ),
             None => Err(QueryError::NotImplemented),
         };
-        stage.observed.products = Arc::new(products);
-        prepare_result(
-            &mut stage.detail,
-            &mut stage.result,
-            &stage.observed.products,
-        );
+        stage.complete(result, products);
         if matches!(stage.result, Err(QueryError::NotImplemented)) {
             done.phase = stage.unavailable.unwrap_or(done.phase);
         }
@@ -457,7 +454,16 @@ impl QueryEngine {
             {
                 outputs[index] = Some(ModeResult {
                     definition,
-                    result: entry.result(),
+                    result: self.mode_result(entry),
+                    phase: Some(QueryKind::Modes),
+                });
+                continue;
+            }
+            if let Some(entry) = self.load_mode(&definition) {
+                self.modes.insert(id, entry.clone());
+                outputs[index] = Some(ModeResult {
+                    definition,
+                    result: self.mode_result(entry),
                     phase: Some(QueryKind::Modes),
                 });
                 continue;
@@ -576,13 +582,22 @@ impl QueryEngine {
                     product,
                     inherited.as_deref(),
                 );
-                let result = entry.result();
-                keep(
-                    &mut self.modes,
-                    &mut self.graph,
-                    entry,
-                    self.s1.failure_is_own(),
-                );
+                let result = self
+                    .store_mode(&done.definition, &entry)
+                    .and_then(|_| self.mode_result(entry.clone()));
+                if matches!(result, Err(QueryError::Operational(_))) {
+                    self.forget(&MemoKey::new(
+                        QueryKind::Modes,
+                        DefId::intern(&done.definition),
+                    ));
+                } else {
+                    keep(
+                        &mut self.modes,
+                        &mut self.graph,
+                        entry,
+                        self.s1.failure_is_own(),
+                    );
+                }
                 result
             } else {
                 done.result
@@ -600,24 +615,6 @@ impl QueryEngine {
             .into_iter()
             .map(|result| result.expect("one outcome per input"))
             .collect();
-        if !self.execution_stack.is_empty() {
-            for output in &outputs {
-                if output.phase != Some(QueryKind::Modes) {
-                    continue;
-                }
-                let reads = self
-                    .modes
-                    .get(&DefId::intern(&output.definition))
-                    .map(|entry| entry.memo.reads.clone());
-                if let Some(reads) = reads {
-                    for (key, _) in reads.iter() {
-                        if let ReadKey::Representation(definition) = key {
-                            self.read_implementation(definition.path());
-                        }
-                    }
-                }
-            }
-        }
         if let Some(last) = outputs.last() {
             self.last_phase = last.phase;
             self.unavailable = matches!(last.result, Err(QueryError::NotImplemented))
