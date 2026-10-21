@@ -3,7 +3,7 @@
 
 use cranelift_codegen::ir::{InstBuilder, Value, condcodes::IntCC, types};
 use cranelift_frontend::Switch;
-use hirsel_lir::emission::slice_storage;
+use hirsel_lir::emission::slice_storage_with_index;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{
     SEQUENCE_CAPACITY_OFFSET, sequence_elements_offset, sequential_elements_offset,
@@ -314,7 +314,11 @@ impl FnEmitter<'_, '_, '_> {
         let owner = self.load_ty(PTR, addr, owner_at);
         let start = self.load_ty(types::I64, addr, start_at);
         let length = self.load_ty(types::I64, addr, length_at);
-        let Some(storage) = slice_storage(self.em.layouts(), element) else {
+        let Some(storage) = slice_storage_with_index(
+            self.em.layouts(),
+            self.em.inputs.unit.and_then(|i| i.index),
+            element,
+        ) else {
             return self.invalid("a slice without its element's sequence layout");
         };
         let payload = self.payload_of(owner, storage)?;
@@ -698,7 +702,11 @@ impl FnEmitter<'_, '_, '_> {
                 let owner = self.load_ty(PTR, source.ptr, owner_at);
                 let start = self.load_ty(types::I64, source.ptr, start_at);
                 let length = self.load_ty(types::I64, source.ptr, length_at);
-                let Some(storage) = slice_storage(self.em.layouts(), element) else {
+                let Some(storage) = slice_storage_with_index(
+                    self.em.layouts(),
+                    self.em.inputs.unit.and_then(|i| i.index),
+                    element,
+                ) else {
                     return self.invalid("a flat slice source without byte storage");
                 };
                 let payload = self.payload_of(owner, storage)?;

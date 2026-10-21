@@ -19,7 +19,7 @@ use hirsel_lir::abi_types::{
 use hirsel_lir::emission::{
     EmitInputs, IMMORTAL_PREFIX, IMMORTAL_PREFIX_BYTES, Manifested, OptLevel, PrefixWord,
     TOOLCHAIN_IMPORTS, artifact, callback_thunk_name, check_receipt, function_thunk_name,
-    register_result, scalar_shape, site_code, slice_storage, symbol_name,
+    register_result, scalar_shape, site_code, slice_storage_with_index, symbol_name,
 };
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{
@@ -312,6 +312,18 @@ fn lower<T>(
     finish: impl FnOnce(&Module<'_>, &TargetMachine) -> Result<T, CodegenError>,
 ) -> Result<(T, Manifested, Option<crate::debug::DebugPlan>), CodegenError> {
     check_loaded()?;
+    let owned;
+    let index = match inputs.index.filter(|index| index.matches(inputs.layouts)) {
+        Some(index) => index,
+        None => {
+            owned = hirsel_lir::LayoutIndex::new(inputs.layouts);
+            &owned
+        }
+    };
+    let inputs = &EmitInputs {
+        index: Some(index),
+        ..inputs.clone()
+    };
     for unit in units {
         check_receipt(unit, inputs).map_err(|problem| CodegenError::Receipt {
             definition: unit.unit().header.definition.clone(),

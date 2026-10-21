@@ -232,6 +232,7 @@ fn harness(program: &Program) -> String {
 fn emit(program: &Program, opt: OptLevel) -> Vec<u8> {
     let input = input();
     let inputs = EmitInputs {
+        index: None,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,

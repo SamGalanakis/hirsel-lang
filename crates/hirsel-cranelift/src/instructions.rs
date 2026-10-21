@@ -3,7 +3,7 @@
 //! goes through its runtime entry.
 
 use cranelift_codegen::ir::{InstBuilder, Value, condcodes::IntCC, types};
-use hirsel_lir::emission::slice_storage;
+use hirsel_lir::emission::slice_storage_with_index;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{
     SEQUENCE_CAPACITY_OFFSET, sequence_elements_offset, sequence_slice_start,
@@ -855,7 +855,11 @@ impl FnEmitter<'_, '_, '_> {
                 LayoutKind::Slice { element } => {
                     // A whole fresh byte sequence: its count, its capacity (the count) and
                     // the bytes.
-                    let Some(payload) = slice_storage(self.em.layouts(), element) else {
+                    let Some(payload) = slice_storage_with_index(
+                        self.em.layouts(),
+                        self.em.inputs.unit.and_then(|i| i.index),
+                        element,
+                    ) else {
                         return self.invalid("a flat copy slice without sequence storage");
                     };
                     let (first, whole) = match (

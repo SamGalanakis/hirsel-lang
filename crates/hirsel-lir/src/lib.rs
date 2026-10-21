@@ -20,6 +20,7 @@ pub mod fuel;
 pub mod glue;
 pub mod ir;
 pub mod layout;
+pub mod layout_index;
 pub mod layout_keys;
 pub mod layout_types;
 pub mod layout_validate;
@@ -38,6 +39,7 @@ pub mod validate;
 pub use abi_types::{FnAbi, FnAbiId};
 pub use effect::{Effects, Opcode};
 pub use ir::{LirUnit, SchemaError};
+pub use layout_index::LayoutIndex;
 pub use layout_keys::LayoutKeys;
 pub use layout_types::{LayoutId, LayoutKey, LayoutRecord, LayoutTable, TargetSpec};
 pub use stage::{
@@ -56,7 +58,7 @@ pub const ABI_VERSION: u32 = 2;
 pub const RUNTIME_ABI_VERSION: u32 = runtime_abi::ABI_VERSION;
 /// Private FlatFormatV0, separate from the canonical SER-2 codec.
 pub const FLAT_FORMAT_VERSION: u32 = 0;
-pub const VALIDATOR_VERSION: u32 = 11;
+pub const VALIDATOR_VERSION: u32 = 12;
 
 /// Shared hand-built LIR assembly, available only with the `testing` feature.
 #[cfg(feature = "testing")]

@@ -219,6 +219,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         aliasing_unstated: false,
     };
     let inputs = EmitInputs {
+        index: None,
         input: &input,
         target,
         layouts: &table,

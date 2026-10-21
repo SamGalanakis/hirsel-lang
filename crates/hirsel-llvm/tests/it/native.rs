@@ -421,6 +421,7 @@ fn every_target_executes_the_scalar_boundary_matrix() {
             let dir = scratch(&format!("scalar-{}-{opt:?}", target.triple));
             let bytes = {
                 let inputs = EmitInputs {
+                    index: None,
                     input: &input,
                     target: &program.table.target,
                     layouts: &program.table.table,
@@ -612,6 +613,7 @@ fn every_target_executes_the_abi_probes() {
                 let input = input();
                 let program = abi_program(&target);
                 let inputs = EmitInputs {
+                    index: None,
                     input: &input,
                     target: &program.table.target,
                     layouts: &program.table.table,
@@ -720,6 +722,7 @@ fn every_target_executes_the_heap_probes() {
                     .map(|name| program.c_call(name, &format!("call_{name}")))
                     .collect();
                 let inputs = EmitInputs {
+                    index: None,
                     input: &input,
                     target: &program.table.target,
                     layouts: &program.table.table,

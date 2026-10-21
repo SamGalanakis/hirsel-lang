@@ -633,6 +633,35 @@ fn unit_digest<S: crate::stage::Stage + Clone>(
             .ok_or_else(|| format!("the unit names FnAbi {}, outside the table", id.0))?;
         parts.push(key.0.to_vec());
     }
+    let owned;
+    let index = match inputs.index.filter(|index| index.matches(inputs.layouts)) {
+        Some(index) => index,
+        None => {
+            owned = crate::LayoutIndex::new(inputs.layouts);
+            &owned
+        }
+    };
+    let closure = crate::validate::UnitInputs {
+        target: inputs.target,
+        layouts: inputs.layouts,
+        manifest: inputs.manifest,
+    }
+    .closure_with_index(unit, index)?;
+    let mut dependencies: Vec<_> = closure
+        .layouts
+        .into_iter()
+        .chain(
+            index
+                .introduced()
+                .filter(|_| domain == "hirsel.object-key.v1"),
+        )
+        .map(|id| inputs.keys.key(id))
+        .collect();
+    dependencies.sort_unstable();
+    dependencies.dedup();
+    for key in dependencies {
+        parts.push(key.0.0.to_vec());
+    }
     // The static data the unit reads: glue holds the blocks, but the unit's view of them
     // carries their content.
     for inst in &unit.instructions {

@@ -84,6 +84,7 @@ fn inputs<'a>(
     static INLINE: std::collections::BTreeSet<hirsel_syntax::ContentHash> =
         std::collections::BTreeSet::new();
     EmitInputs {
+        index: None,
         input,
         target: &p.table.target,
         layouts: &p.table.table,

@@ -186,3 +186,60 @@ fn input_evidence_covers_exact_rows_and_ignores_unrelated_program_changes() {
     };
     assert_ne!(original, inputs.digest(&unit).unwrap());
 }
+
+#[test]
+fn the_input_closure_includes_implicit_slice_storage_and_rejects_foreign_indices() {
+    use hirsel_lir::{
+        LayoutId, LayoutIndex,
+        ir::{LirType, ValueRepr},
+        layout_types::LayoutKind,
+        validate::UnitInputs,
+    };
+    let (mut unit, mut table, manifest) = identity::<Ready>();
+    unit.types.push(LirType {
+        repr: ValueRepr::Aggregate,
+        layout: l::SLICE,
+    });
+    let element = match table.layouts[l::SLICE.0 as usize].kind {
+        LayoutKind::Slice { element } => element,
+        _ => unreachable!(),
+    };
+    let storage = match LayoutIndex::new(&table).sequence(element) {
+        Some(id) => id,
+        None => {
+            let id = LayoutId(table.layouts.len() as u32);
+            let mut row = table.layouts[element.0 as usize].clone();
+            row.kind = LayoutKind::Sequence { element };
+            table.layouts.push(row);
+            id
+        }
+    };
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = UnitInputs {
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let index = LayoutIndex::new(&table);
+    assert!(
+        inputs
+            .closure_with_index(&unit, &index)
+            .unwrap()
+            .layouts
+            .contains(&storage)
+    );
+    let evidence = inputs.digest_with_index(&unit, &index).unwrap();
+    assert_eq!(evidence, inputs.digest(&unit).unwrap());
+    assert_eq!(
+        index.scalar(hirsel_lir::layout_types::ScalarKind::I64),
+        Some(l::I64)
+    );
+    let mut changed = table.clone();
+    changed.layouts[storage.0 as usize].align += 1;
+    let changed_inputs = UnitInputs {
+        layouts: &changed,
+        ..inputs
+    };
+    assert!(changed_inputs.digest_with_index(&unit, &index).is_err());
+    assert_ne!(evidence, changed_inputs.digest(&unit).unwrap());
+}

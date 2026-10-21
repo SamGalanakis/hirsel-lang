@@ -122,6 +122,7 @@ pub fn emit(
 pub fn emit_ir(program: &ReadyProgram, opt: OptLevel) -> Result<String, NativeError> {
     let units: Vec<_> = program.units.iter().collect();
     let inputs = EmitInputs {
+        index: None,
         input: &program.input,
         target: &program.target,
         layouts: &program.table,
@@ -146,6 +147,7 @@ pub fn emit_clif(program: &ReadyProgram) -> Result<String, NativeError> {
     check_runtime_calls(program)?;
     let units: Vec<_> = program.units.iter().collect();
     let inputs = EmitInputs {
+        index: None,
         input: &program.input,
         target: &program.target,
         layouts: &program.table,
@@ -181,6 +183,7 @@ pub(crate) fn emit_registered(
         .map(|(_, unit)| unit)
         .collect();
     let inputs = EmitInputs {
+        index: None,
         input: &program.input,
         target: &program.target,
         layouts: &program.table,

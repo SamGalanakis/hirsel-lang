@@ -22,7 +22,7 @@ use cranelift_codegen::ir::{
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
 use cranelift_module::{FuncId, Module};
-use hirsel_lir::emission::slice_storage;
+use hirsel_lir::emission::slice_storage_with_index;
 use hirsel_lir::ir::{COMPARE_MAX_DEPTH, CompareOp, FailureId, ValueId};
 use hirsel_lir::layout::{payload_offset, sequence_elements_offset, slice_data_offset};
 use hirsel_lir::layout_types::{
@@ -311,7 +311,11 @@ impl Gen<'_, '_> {
         let (Some(owner), Some(start), Some(length)) = (field(0), field(1), field(2)) else {
             return self.invalid("a slice without its fields");
         };
-        let Some(payload) = slice_storage(self.em.inputs.layouts, element) else {
+        let Some(payload) = slice_storage_with_index(
+            self.em.inputs.layouts,
+            self.em.inputs.unit.and_then(|i| i.index),
+            element,
+        ) else {
             return self.invalid("a slice without its element's sequence layout");
         };
         let owner_at = self.at(at, owner.offset);

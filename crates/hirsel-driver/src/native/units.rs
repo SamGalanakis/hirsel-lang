@@ -436,8 +436,10 @@ fn stages(
     let reuse = hirsel_rc::reuse::Options {
         reuse: options.reuse,
     };
-    let reused = timed(Phase::Reuse, || hirsel_rc::reuse::reuse(rc, table, &reuse))
-        .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
+    let reused = timed(Phase::Reuse, || {
+        hirsel_rc::reuse::reuse_indexed(rc, &reuse, program.validation.index())
+    })
+    .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
     let reused = checkpoint(
         StageName::Reuse,
         reused,
@@ -446,7 +448,7 @@ fn stages(
         options.validation,
     )?;
     let ready = timed(Phase::Ready, || {
-        hirsel_rc::ready::ready(reused, table, program.finalizers)
+        hirsel_rc::ready::ready_indexed(reused, program.finalizers, program.validation.index())
     })
     .map_err(|e| fail(StageName::Ready, e.to_string()))?;
     let ready = seal(StageName::Ready, || {

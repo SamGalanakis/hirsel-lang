@@ -602,7 +602,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         LayoutKind::Slice { element } => {
                             // A whole fresh byte sequence: its count, its capacity (the
                             // count) and the bytes (runtime ABI 5).
-                            let Some(payload) = slice_storage(self.inputs.layouts, element) else {
+                            let Some(payload) = slice_storage_with_index(
+                                self.inputs.layouts,
+                                self.inputs.index,
+                                element,
+                            ) else {
                                 return self.invalid("a flat copy slice without sequence storage");
                             };
                             let (first, whole) = match (
@@ -918,6 +922,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.module,
                     self.inputs.layouts,
                     self.inputs.keys,
+                    self.inputs.index,
                     layout,
                     matches!(op, CompareOp::Eq | CompareOp::Ne),
                 ) {
@@ -1464,6 +1469,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.module,
                     self.inputs.layouts,
                     self.inputs.keys,
+                    self.inputs.index,
                     layout,
                     update,
                 ) {

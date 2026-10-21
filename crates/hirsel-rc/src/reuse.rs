@@ -59,12 +59,21 @@ pub fn reuse(
     table: &LayoutTable,
     options: &Options,
 ) -> Result<LirUnit<Reuse>, PassError> {
+    reuse_indexed(unit, options, &hirsel_lir::LayoutIndex::new(table))
+}
+
+pub fn reuse_indexed(
+    unit: LirUnit<Rc>,
+    options: &Options,
+    index: &hirsel_lir::LayoutIndex<'_>,
+) -> Result<LirUnit<Reuse>, PassError> {
+    let table = index.table();
     let unit = unit.into_stage::<Reuse>();
     if !options.reuse {
         return Ok(unit);
     }
     let unit = crate::specialize_drop::specialize(unit, table)?;
-    let unit = pair_tokens(unit, table)?;
+    let unit = pair_tokens(unit, index)?;
     Ok(crate::reuse_stores::keep(unit, table))
 }
 
@@ -484,13 +493,12 @@ fn construct_bucket<S: Stage>(ed: &Editor<S>, table: &LayoutTable, inst: &Inst) 
 
 type Live = Vec<(ValueId, Bucket)>;
 
-fn pair_tokens(unit: LirUnit<Reuse>, table: &LayoutTable) -> Result<LirUnit<Reuse>, PassError> {
-    let Some(header) = table
-        .layouts
-        .iter()
-        .position(|l| l.kind == LayoutKind::Header)
-        .map(|i| LayoutId(i as u32))
-    else {
+fn pair_tokens(
+    unit: LirUnit<Reuse>,
+    index: &hirsel_lir::LayoutIndex<'_>,
+) -> Result<LirUnit<Reuse>, PassError> {
+    let table = index.table();
+    let Some(header) = index.header() else {
         // No token type in this table: nothing can be reused.
         return Ok(unit);
     };

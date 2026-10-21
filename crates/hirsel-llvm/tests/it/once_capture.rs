@@ -299,6 +299,7 @@ fn capture_masks_agree_on_both_native_targets() {
             ] {
                 let id = input();
                 let inputs = hirsel_lir::emission::EmitInputs {
+                    index: None,
                     input: &id,
                     target: &target,
                     layouts: &p.table.table,
@@ -510,6 +511,7 @@ fn initialization_masks_share_the_named_live_word_limit() {
         let sealed = seal(&table, &m, u.finish());
         let id = input();
         let inputs = hirsel_lir::emission::EmitInputs {
+            index: None,
             input: &id,
             target: &table.target,
             layouts: &table.table,

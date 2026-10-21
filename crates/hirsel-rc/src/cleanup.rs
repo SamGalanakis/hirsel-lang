@@ -180,12 +180,21 @@ pub fn lower<S: Stage>(
     table: &LayoutTable,
     finalizers: &Finalizers,
 ) -> Result<LirUnit<Ready>, PassError> {
+    lower_indexed(unit, finalizers, &hirsel_lir::LayoutIndex::new(table))
+}
+
+pub fn lower_indexed<S: Stage>(
+    unit: LirUnit<S>,
+    finalizers: &Finalizers,
+    index: &hirsel_lir::LayoutIndex<'_>,
+) -> Result<LirUnit<Ready>, PassError> {
     if !matches!(S::KIND, StageKind::Rc | StageKind::Reuse) {
         return Err(PassError::Malformed(format!(
             "cleanup lowering reads Rc or Reuse LIR, not {:?}",
             S::KIND
         )));
     }
+    let table = index.table();
     let lay = Lay(table);
     let unit = unit.into_stage::<Ready>();
     let mut facts = Facts::new(&unit, table);
@@ -197,7 +206,7 @@ pub fn lower<S: Stage>(
     // sharing the final result. Ready validation still re-derives its own facts.
     let inputs = join_versions(&mut ed, &mut facts, lay, false)?;
     let before_flags = instruction_states_from(&ed, &facts, lay, false, inputs);
-    let drops: Vec<_> = match join_flags(&mut ed, &facts, lay, table, &before_flags)? {
+    let drops: Vec<_> = match join_flags(&mut ed, &facts, lay, index, &before_flags)? {
         None => before_flags
             .into_iter()
             .map(|(b, i, st)| (b, i, st, Flags::new()))
@@ -209,6 +218,7 @@ pub fn lower<S: Stage>(
     };
     lower_copies(&mut ed, lay)?;
     let mut lowering = Lowering {
+        index,
         ed: &mut ed,
         facts: &mut facts,
         lay,
@@ -850,7 +860,7 @@ fn join_flags(
     ed: &mut Editor<Ready>,
     facts: &Facts,
     lay: Lay<'_>,
-    table: &LayoutTable,
+    index: &hirsel_lir::LayoutIndex<'_>,
     drops: &[(BlockId, usize, State)],
 ) -> Result<Option<BTreeMap<(BlockId, usize), Flags>>, PassError> {
     // Each flagged part with its layout. A flag is true exactly when its part
@@ -882,15 +892,13 @@ fn join_flags(
     if wanted.is_empty() {
         return Ok(None);
     }
-    let boolean = table
-        .layouts
-        .iter()
-        .position(|r| r.kind == LayoutKind::Scalar(hirsel_lir::layout_types::ScalarKind::Bool))
+    let boolean = index
+        .scalar(hirsel_lir::layout_types::ScalarKind::Bool)
         .ok_or_else(|| PassError::Malformed("drop flags require the bool layout".into()))?;
     let bool_ty = type_of(
         &mut ed.unit,
         ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::Bool),
-        LayoutId(boolean as u32),
+        boolean,
     );
     let mut constant = |value: bool| {
         let id = hirsel_lir::ir::ConstantId(ed.unit.tables.constants.len() as u32);
@@ -1354,6 +1362,7 @@ struct Lowering<'e, 'a> {
     facts: &'e mut Facts,
     lay: Lay<'a>,
     finalizers: &'a Finalizers,
+    index: &'a hirsel_lir::LayoutIndex<'a>,
     symbols: BTreeMap<LayoutId, SymbolId>,
     /// Instructions inserted outside the drop being lowered, as (block,
     /// index), for the positions of the drops still to lower.
@@ -2085,20 +2094,15 @@ impl Lowering<'_, '_> {
                 Step::Variant(variant, field) => ProjectionStep::VariantField { variant, field },
                 Step::Inline(index) => {
                     let layout = self
-                        .lay
-                        .0
-                        .layouts
-                        .iter()
-                        .position(|r| {
-                            r.kind == LayoutKind::Scalar(hirsel_lir::layout_types::ScalarKind::U64)
-                        })
+                        .index
+                        .scalar(hirsel_lir::layout_types::ScalarKind::U64)
                         .ok_or_else(|| {
                             PassError::Malformed("no u64 layout for an inline cleanup index".into())
                         })?;
                     let ty = type_of(
                         &mut self.ed.unit,
                         ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::U64),
-                        LayoutId(layout as u32),
+                        layout,
                     );
                     let result = self.ed.value(ty, Holding::Plain);
                     let constant =
@@ -2697,7 +2701,9 @@ mod pending_tests {
         assert_eq!(slot_state.moved, before.moved);
         assert_eq!(slot_state.taken, before.taken);
         let finalizers = Finalizers::default();
+        let index = hirsel_lir::LayoutIndex::new(&table);
         let lowering = Lowering {
+            index: &index,
             ed: &mut ed,
             facts: &mut facts,
             lay,
@@ -2757,7 +2763,9 @@ mod pending_tests {
         let mut facts = Facts::new(&unit, &table);
         let mut ed = Editor::new(unit);
         let finalizers = Finalizers::default();
+        let index = hirsel_lir::LayoutIndex::new(&table);
         let lowering = Lowering {
+            index: &index,
             ed: &mut ed,
             facts: &mut facts,
             lay: Lay(&table),

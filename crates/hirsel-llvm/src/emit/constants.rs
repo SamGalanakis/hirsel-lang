@@ -54,7 +54,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 };
                 // The owner is the sequence block of the slice's element the table derived
                 // with it.
-                let Some(payload) = slice_storage(self.inputs.layouts, element) else {
+                let Some(payload) =
+                    slice_storage_with_index(self.inputs.layouts, self.inputs.index, element)
+                else {
                     return self.invalid("a slice without its element's sequence layout");
                 };
                 let block = self.literal_block(payload, bytes)?;

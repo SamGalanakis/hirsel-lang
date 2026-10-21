@@ -699,7 +699,7 @@ impl<'t> Unit<'t> {
         result
     }
 
-    /// A cleanup anchor at a byte range.
+    /// An explicit instruction-drop anchor for this hand-built unit.
     pub fn cleanup_anchor(&mut self, start: u32, end: u32) -> CleanupAnchorId {
         self.builder
             .unit
@@ -707,7 +707,7 @@ impl<'t> Unit<'t> {
             .cleanup_anchors
             .push(CleanupAnchor {
                 body: 0,
-                cleanup: self.builder.unit.tables.cleanup_anchors.len() as u32,
+                cleanup: INSTRUCTION_DROP,
                 action: 0,
                 site: SiteRange { start, end },
             });

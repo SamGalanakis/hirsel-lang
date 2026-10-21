@@ -22,6 +22,7 @@ fn emit(corpus: &Corpus, opt: OptLevel) -> hirsel_lir::stage::ObjectArtifact {
     let input = input();
     let program = &corpus.program;
     let inputs = EmitInputs {
+        index: None,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,

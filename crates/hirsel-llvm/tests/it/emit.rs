@@ -19,6 +19,7 @@ fn inputs<'a>(program: &'a Program, input: &'a InputIdentity, opt: OptLevel) -> 
     static EMPTY_INLINE: std::collections::BTreeSet<hirsel_syntax::ContentHash> =
         std::collections::BTreeSet::new();
     EmitInputs {
+        index: None,
         input,
         target: &program.table.target,
         layouts: &program.table.table,
@@ -177,6 +178,7 @@ fn a_receipt_for_other_inputs_is_rejected() {
     emit_object(
         &units,
         &EmitInputs {
+            index: None,
             input: &other,
             ..valid.clone()
         },
@@ -289,4 +291,72 @@ fn uniqueness_queries_do_not_import_a_runtime_entry() {
             );
         }
     }
+}
+
+#[test]
+fn slice_storage_is_bound_even_when_only_the_slice_type_names_it() {
+    use hirsel_lir::ir::ValueRepr;
+    use hirsel_lir::layout_types::LayoutKind;
+    use hirsel_syntax::PassingMode;
+    use hirsel_types::Primitive;
+    let target = x86();
+    let mut schema = Schema::new();
+    let text = schema.types.p(Primitive::String);
+    let word = schema.types.p(Primitive::I64);
+    schema.name("text", text);
+    schema.signature("identity", &[(PassingMode::Borrow, word)], word);
+    let table = schema.build(&target);
+    let manifest = manifest();
+    let mut u = Unit::new(&table, "identity", "identity");
+    u.ty(ValueRepr::Aggregate, table.layout("text"));
+    let value = u.param(table.scalar(hirsel_lir::layout_types::ScalarKind::I64));
+    u.builder.ret(ENTRY, Some(value));
+    let unit = seal(&table, &manifest, u.finish());
+    let program = Program {
+        table,
+        manifest,
+        units: vec![unit],
+        statics: vec![],
+        finalizers: Default::default(),
+    };
+    let input = input();
+    let valid = inputs(&program, &input, OptLevel::None);
+    let units = program.units();
+    emit_object(&units, &valid).unwrap();
+    let before =
+        hirsel_lir::objects::ready_digest(units[0].unit(), &valid, "llvm", false, &[]).unwrap();
+    let mut changed = program.table.table.clone();
+    let storage = changed
+        .layouts
+        .iter()
+        .position(|row| matches!(row.kind, LayoutKind::Sequence { .. }))
+        .unwrap();
+    changed.layouts[storage].key.owner_revision = Some(hash("changed storage"));
+    // Keep producer LayoutKeys stale. The receipt still sees the changed raw
+    // storage row although neither an operand nor the ABI directly names it.
+    let stale = EmitInputs {
+        layouts: &changed,
+        ..valid.clone()
+    };
+    assert!(hirsel_lir::emission::check_receipt(units[0], &stale).is_err());
+    let new_keys = hirsel_lir::LayoutKeys::new(&changed);
+    let rebound = EmitInputs {
+        keys: &new_keys,
+        ..stale
+    };
+    assert_ne!(
+        before,
+        hirsel_lir::objects::ready_digest(units[0].unit(), &rebound, "llvm", false, &[]).unwrap()
+    );
+    let wrong = hirsel_lir::LayoutIndex::new(&program.table.table);
+    assert!(
+        hirsel_lir::emission::check_receipt(
+            units[0],
+            &EmitInputs {
+                index: Some(&wrong),
+                ..rebound
+            }
+        )
+        .is_err()
+    );
 }

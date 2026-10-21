@@ -22,6 +22,7 @@ fn ir(program: &Program, opt: OptLevel, callbacks: &BTreeSet<DefPath>) -> String
     let input = input();
     let none = BTreeSet::new();
     let inputs = EmitInputs {
+        index: None,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,

@@ -17,6 +17,7 @@ fn inputs<'a>(program: &'a Program, input: &'a InputIdentity, opt: OptLevel) -> 
     static NONE: std::collections::BTreeSet<hirsel_syntax::ContentHash> =
         std::collections::BTreeSet::new();
     EmitInputs {
+        index: None,
         input,
         target: &program.table.target,
         layouts: &program.table.table,

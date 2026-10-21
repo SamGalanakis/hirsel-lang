@@ -114,6 +114,18 @@ impl UnitInputs<'_> {
     /// Enumerate only rows this unit can read, rejecting every foreign id.
     /// Cycles are visited once, including edges in scan/drop programs.
     pub fn closure<S: Stage>(&self, unit: &LirUnit<S>) -> Result<InputClosure, String> {
+        self.closure_with_index(unit, &crate::LayoutIndex::new(self.layouts))
+    }
+
+    /// The closure using the build's borrow-bound lookup index.
+    pub fn closure_with_index<S: Stage>(
+        &self,
+        unit: &LirUnit<S>,
+        index: &crate::LayoutIndex<'_>,
+    ) -> Result<InputClosure, String> {
+        if !index.matches(self.layouts) {
+            return Err("layout index names another table".into());
+        }
         let (mut pending, abis) = crate::objects::references(unit);
         let mut reached = std::collections::BTreeSet::new();
         for id in &abis {
@@ -134,6 +146,7 @@ impl UnitInputs<'_> {
                 .layout(id)
                 .ok_or_else(|| format!("the unit names layout {}, outside the table", id.0))?;
             pending.extend(record.references());
+            pending.extend(index.implicit(id));
         }
         Ok(InputClosure {
             layouts: reached.into_iter().collect(),
@@ -148,7 +161,16 @@ impl UnitInputs<'_> {
         &self,
         unit: &LirUnit<S>,
     ) -> Result<hirsel_syntax::ContentHash, String> {
-        let closure = self.closure(unit)?;
+        self.digest_with_index(unit, &crate::LayoutIndex::new(self.layouts))
+    }
+
+    /// Exact evidence using the build's index; no program-wide work per unit.
+    pub fn digest_with_index<S: Stage>(
+        &self,
+        unit: &LirUnit<S>,
+        index: &crate::LayoutIndex<'_>,
+    ) -> Result<hirsel_syntax::ContentHash, String> {
+        let closure = self.closure_with_index(unit, index)?;
         let mut parts = vec![
             self.target.digest().0.to_vec(),
             self.layouts.target.0.to_vec(),
@@ -193,6 +215,7 @@ pub struct ValidationContext<'a> {
     target: &'a TargetSpec,
     manifest: &'a Manifest,
     layout_errors: std::sync::OnceLock<Vec<crate::layout_validate::Violation>>,
+    index: crate::LayoutIndex<'a>,
 }
 
 impl<'a> ValidationContext<'a> {
@@ -202,7 +225,12 @@ impl<'a> ValidationContext<'a> {
             target: inputs.target,
             manifest: inputs.manifest,
             layout_errors: std::sync::OnceLock::new(),
+            index: crate::LayoutIndex::new(inputs.layouts),
         }
+    }
+
+    pub fn index(&self) -> &crate::LayoutIndex<'a> {
+        &self.index
     }
 
     /// Check the immutable table once per build, including builds with no units.
@@ -248,7 +276,7 @@ impl<'a> ValidationContext<'a> {
             validator_version: crate::VALIDATOR_VERSION,
         };
         let evidence = UnitInputs::from(inputs)
-            .digest(&unit)
+            .digest_with_index(&unit, &self.index)
             .expect("the independent validator checked every input reference");
         Ok(ValidatedUnit::seal(
             unit,

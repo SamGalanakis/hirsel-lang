@@ -160,6 +160,7 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
 fn object(program: &Program, opt: OptLevel) -> Vec<u8> {
     let input = input();
     let inputs = EmitInputs {
+        index: None,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,

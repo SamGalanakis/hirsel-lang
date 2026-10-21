@@ -7,7 +7,7 @@ use cranelift_codegen::ir::{InstBuilder, Value, condcodes::IntCC, types};
 use cranelift_frontend::Switch;
 
 use hirsel_lir::emission::{
-    IMMORTAL_PREFIX_BYTES, function_thunk_name, slice_storage, symbol_name,
+    IMMORTAL_PREFIX_BYTES, function_thunk_name, slice_storage_with_index, symbol_name,
 };
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{
@@ -125,7 +125,11 @@ impl<'a> FnEmitter<'_, 'a, '_> {
                 else {
                     return self.invalid("a slice layout without owner, start and length");
                 };
-                let Some(payload) = slice_storage(self.em.layouts(), element) else {
+                let Some(payload) = slice_storage_with_index(
+                    self.em.layouts(),
+                    self.em.inputs.unit.and_then(|i| i.index),
+                    element,
+                ) else {
                     return self.invalid("a slice without its element's sequence layout");
                 };
                 let block = self.em.literal_block(payload, bytes, definition)?;

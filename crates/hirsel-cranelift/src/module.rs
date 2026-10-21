@@ -292,6 +292,18 @@ pub(crate) fn emit(
     clif: bool,
     profile: hirsel_lir::debug::Profile<'_>,
 ) -> Emitted<(hirsel_lir::stage::ObjectArtifact, Option<String>)> {
+    let owned;
+    let index = match inputs.index.filter(|index| index.matches(inputs.layouts)) {
+        Some(index) => index,
+        None => {
+            owned = hirsel_lir::LayoutIndex::new(inputs.layouts);
+            &owned
+        }
+    };
+    let inputs = &EmitInputs {
+        index: Some(index),
+        ..inputs.clone()
+    };
     for unit in units {
         check_receipt(unit, inputs).map_err(|problem| CodegenError::Receipt {
             definition: unit.unit().header.definition.clone(),

@@ -25,7 +25,7 @@ use crate::context::{
     MemoryEffects, Module, Value,
 };
 use crate::emit::load_tag;
-use hirsel_lir::emission::slice_storage;
+use hirsel_lir::emission::slice_storage_with_index;
 
 /// The pair is equal.
 pub(crate) const ORDER_EQUAL: u8 = 0;
@@ -59,6 +59,7 @@ pub(crate) fn comparator<'m>(
     module: &'m Module<'m>,
     layouts: &LayoutTable,
     keys: &LayoutKeys,
+    index: Option<&hirsel_lir::LayoutIndex<'_>>,
     layout: LayoutId,
     equality: bool,
 ) -> Compared<Function<'m>> {
@@ -69,6 +70,7 @@ pub(crate) fn comparator<'m>(
             module,
             layouts,
             keys,
+            index,
             function,
             builder: Builder::new(module),
             pending: &mut pending,
@@ -112,6 +114,7 @@ fn declare<'m>(
 struct Generator<'m, 'g> {
     module: &'m Module<'m>,
     layouts: &'g LayoutTable,
+    index: Option<&'g hirsel_lir::LayoutIndex<'g>>,
     keys: &'g LayoutKeys,
     function: Function<'m>,
     builder: Builder<'m>,
@@ -627,7 +630,7 @@ impl<'m> Generator<'m, '_> {
         };
         let (owner, start, length) = (field(0)?, field(1)?, field(2)?);
         // The owner word names the counted sequence block of the slice's element.
-        let Some(payload) = slice_storage(self.layouts, element) else {
+        let Some(payload) = slice_storage_with_index(self.layouts, self.index, element) else {
             return Err(CompareError::Invalid(
                 "a slice without its element's sequence layout".into(),
             ));
@@ -931,6 +934,7 @@ pub(crate) fn hasher<'m>(
     module: &'m Module<'m>,
     layouts: &LayoutTable,
     keys: &LayoutKeys,
+    index: Option<&hirsel_lir::LayoutIndex<'_>>,
     layout: LayoutId,
     hash_bytes: Function<'m>,
 ) -> Compared<Function<'m>> {
@@ -941,6 +945,7 @@ pub(crate) fn hasher<'m>(
             module,
             layouts,
             keys,
+            index,
             function,
             builder: Builder::new(module),
             pending: &mut pending,
@@ -975,6 +980,7 @@ fn declare_hash<'m>(
 struct HashGenerator<'m, 'g> {
     module: &'m Module<'m>,
     layouts: &'g LayoutTable,
+    index: Option<&'g hirsel_lir::LayoutIndex<'g>>,
     keys: &'g LayoutKeys,
     function: Function<'m>,
     builder: Builder<'m>,
@@ -1215,7 +1221,14 @@ impl<'m> HashGenerator<'m, '_> {
         self.builder.position(check);
         let offset = self.builder.binary(BinOp::Mul, i, self.u64(stride));
         let candidate = self.builder.offset(base, offset);
-        let comparator = comparator(self.module, self.layouts, self.keys, element, false)?;
+        let comparator = comparator(
+            self.module,
+            self.layouts,
+            self.keys,
+            self.index,
+            element,
+            false,
+        )?;
         let context = self.module.parameter(self.function, 4);
         let after = self
             .builder
@@ -1521,7 +1534,7 @@ impl<'m> HashGenerator<'m, '_> {
                 .ok_or_else(|| CompareError::Invalid("a slice without its fields".into()))
         };
         let (owner, start, length) = (field(0)?, field(1)?, field(2)?);
-        let Some(payload) = slice_storage(self.layouts, element) else {
+        let Some(payload) = slice_storage_with_index(self.layouts, self.index, element) else {
             return Err(CompareError::Invalid(
                 "a slice without its element's sequence layout".into(),
             ));

@@ -64,6 +64,8 @@ pub const BOUNDED_RULE: &str = "MEM-6";
 /// options and the program-wide bits below.
 #[derive(Clone, Debug)]
 pub struct EmitInputs<'a> {
+    /// Borrow-bound lookup index shared by unit workers. Raw callers may omit it.
+    pub index: Option<&'a crate::LayoutIndex<'a>>,
     /// The frozen front-end input every unit was built from.
     pub input: &'a InputIdentity,
     pub target: &'a TargetSpec,
@@ -230,6 +232,18 @@ pub fn slice_storage(layouts: &LayoutTable, element: LayoutId) -> Option<LayoutI
         .map(|i| LayoutId(i as u32))
 }
 
+/// The same lookup with a once/build index. A foreign borrow takes the raw path.
+pub fn slice_storage_with_index(
+    layouts: &LayoutTable,
+    index: Option<&crate::LayoutIndex<'_>>,
+    element: LayoutId,
+) -> Option<LayoutId> {
+    match index.filter(|index| index.matches(layouts)) {
+        Some(index) => index.sequence(element),
+        None => slice_storage(layouts, element),
+    }
+}
+
 /// A word of the prefix an immortal block (static, region owner or arena block) carries
 /// before its payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -335,12 +349,20 @@ pub fn check_receipt(unit: &ValidatedUnit<Ready>, inputs: &EmitInputs<'_>) -> Re
     if raw.key != header.key {
         return reject("the receipt names another unit key");
     }
+    let owned;
+    let index = match inputs.index.filter(|index| index.matches(inputs.layouts)) {
+        Some(index) => index,
+        None => {
+            owned = crate::LayoutIndex::new(inputs.layouts);
+            &owned
+        }
+    };
     let evidence = crate::validate::UnitInputs {
         target: inputs.target,
         layouts: inputs.layouts,
         manifest: inputs.manifest,
     }
-    .digest(unit.unit())?;
+    .digest_with_index(unit.unit(), index)?;
     if unit.receipt().checked_inputs() != evidence {
         return reject("the receipt names other checked inputs");
     }
@@ -658,6 +680,7 @@ mod tests {
         };
         let keys = crate::layout_keys::LayoutKeys::new(&layouts);
         let inputs = EmitInputs {
+            index: None,
             input: &input,
             target: &target,
             layouts: &layouts,

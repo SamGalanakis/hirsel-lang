@@ -490,7 +490,7 @@ pub fn build_program(
             reuse: options.reuse,
         };
         let reused = timed(Phase::Reuse, || {
-            hirsel_rc::reuse::reuse(unit, table, &reuse)
+            hirsel_rc::reuse::reuse_indexed(unit, &reuse, validation.index())
         })
         .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
         let reused = checkpoint(
@@ -501,7 +501,7 @@ pub fn build_program(
             options.validation,
         )?;
         let ready = timed(Phase::Ready, || {
-            hirsel_rc::ready::ready(reused, table, &finalizers)
+            hirsel_rc::ready::ready_indexed(reused, &finalizers, validation.index())
         })
         .map_err(|e| fail(StageName::Ready, e.to_string()))?;
         units.push(seal(StageName::Ready, || {
@@ -600,7 +600,17 @@ fn build_units(
             .any(|t| matches!(t, hirsel_lir::ir::Terminator::Recover { .. }))
     });
     let empty = BTreeSet::new();
+    let inputs = Inputs {
+        discharge: Some(&lowered.native_discharge),
+        operations,
+        target: &options.target,
+        layouts: table,
+        manifest,
+    };
+    let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
+    preflight(&validation)?;
     let emit = hirsel_lir::emission::EmitInputs {
+        index: Some(validation.index()),
         input: &program.input,
         target: &options.target,
         layouts: table,
@@ -615,15 +625,6 @@ fn build_units(
         measurement: false,
         fuel: objects.fuel,
     };
-    let inputs = Inputs {
-        discharge: Some(&lowered.native_discharge),
-        operations,
-        target: &options.target,
-        layouts: table,
-        manifest,
-    };
-    let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
-    preflight(&validation)?;
     let headers: Vec<(DefPath, ContentHash)> = units
         .iter()
         .map(|u| (u.header.definition.clone(), u.header.instance))
