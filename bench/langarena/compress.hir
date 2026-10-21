@@ -1,0 +1,769 @@
+// langarena: Compress::BWTEncode
+// langarena: Compress::BWTDecode
+// langarena: Compress::HuffEncode
+// langarena: Compress::HuffDecode
+// langarena: Compress::ArithEncode
+// langarena: Compress::ArithDecode
+// langarena: Compress::LZWEncode
+// langarena: Compress::LZWDecode
+// Port: LangArena 3c9f84d rust/src/benchmarks/compress.rs:5-1026.
+// Lists replace Vec/fixed arrays; owned byte keys replace Vec<u8> map keys.
+
+fn zeros(n: u64) -> unique List[u64] {
+  let mut out: List[u64] = []
+  list.reserve(mut out, n)
+  for _ in 0u64..n {
+    list.push(mut out, 0)
+  }
+  take out
+}
+
+fn zero_bytes(n: u64) -> unique List[u8] {
+  let mut out: List[u8] = []
+  list.reserve(mut out, n)
+  for _ in 0u64..n {
+    list.push(mut out, 0)
+  }
+  take out
+}
+
+fn copy_bytes(data: List[u8]) -> unique List[u8] {
+  let mut out: List[u8] = []
+  list.reserve(mut out, list.len(data))
+  for b in data {
+    list.push(mut out, b)
+  }
+  take out
+}
+
+fn test_data(size: u64) -> unique List[u8] {
+  let pattern = string.as_bytes("ABRACADABRA")
+  let mut out: List[u8] = []
+  list.reserve(mut out, size)
+  for i in 0u64..size {
+    list.push(mut out, pattern[i % 11])
+  }
+  take out
+}
+
+fn frequencies(data: List[u8]) -> unique List[u64] {
+  let mut out = zeros(256)
+  for byte in data {
+    let i: u64 = int.widen(byte)
+    out[i] += 1
+  }
+  take out
+}
+
+type Bwt {
+  data: List[u8],
+  original: u64,
+}
+
+type Pair {
+  first: u64,
+  second: u64,
+  order: u64,
+  suffix: u64,
+}
+
+@noalloc
+fn pair_compare(a: Pair, b: Pair) -> i32 uses {} {
+  if a.first < b.first {
+    return -1
+  }
+  if a.first > b.first {
+    return 1
+  }
+  if a.second < b.second {
+    return -1
+  }
+  if a.second > b.second {
+    return 1
+  }
+  if a.order < b.order {
+    return -1
+  }
+  if a.order > b.order {
+    return 1
+  }
+  0
+}
+
+// compress.rs:32-126. Explicit previous order gives Rust's stable sort ties
+// while calling Hirsel's standard sort without a capturing comparator.
+fn bwt_encode(input: List[u8]) -> Bwt {
+  let n = list.len(input)
+  if n == 0 {
+    return Bwt(data: [], original: 0)
+  }
+  let counts = frequencies(input)
+  let mut positions = zeros(256)
+  let mut total: u64 = 0
+  for i in 0u64..256u64 {
+    positions[i] = total
+    total += counts[i]
+  }
+  let mut used = zeros(256)
+  let mut sa = zeros(n)
+  for i in 0u64..n {
+    let byte: u64 = int.widen(input[i])
+    sa[positions[byte] + used[byte]] = i
+    used[byte] += 1
+  }
+  if n > 1 {
+    let mut rank = zeros(n)
+    let mut current: u64 = 0
+    let mut previous = input[sa[0]]
+    for index in sa {
+      if input[index] != previous {
+        current += 1
+        previous = input[index]
+      }
+      rank[index] = current
+    }
+    let mut k: u64 = 1
+    while k < n {
+      let mut pairs: List[Pair] = []
+      list.reserve(mut pairs, n)
+      for i in 0u64..n {
+        let index = sa[i]
+        list.push(
+          mut pairs,
+          Pair(
+            first: rank[index],
+            second: rank[(index + k) % n],
+            order: i,
+            suffix: index
+          )
+        )
+      }
+      list.sort(mut pairs, pair_compare)
+      let mut new_rank = zeros(n)
+      for i in 0u64..n {
+        sa[i] = pairs[i].suffix
+        if i > 0 {
+          let previous_pair = pairs[i - 1]
+          let pair = pairs[i]
+          new_rank[sa[i]] = new_rank[sa[i - 1]] + if pair.first == previous_pair.first && pair.second == previous_pair.second {
+            0
+          } else {
+            1
+          }
+        }
+      }
+      rank = take new_rank
+      k = k << 1
+    }
+  }
+  let mut transformed = zero_bytes(n)
+  let mut original: u64 = 0
+  for i in 0u64..n {
+    let suffix = sa[i]
+    if suffix == 0 {
+      transformed[i] = input[n - 1]
+      original = i
+    } else {
+      transformed[i] = input[suffix - 1]
+    }
+  }
+  Bwt(data: take transformed, original: original)
+}
+
+// compress.rs:176-221.
+fn bwt_decode(encoded: Bwt) -> unique List[u8] {
+  let n = list.len(encoded.data)
+  if n == 0 {
+    return []
+  }
+  let counts = frequencies(encoded.data)
+  let mut positions = zeros(256)
+  let mut total: u64 = 0
+  for i in 0u64..256u64 {
+    positions[i] = total
+    total += counts[i]
+  }
+  let mut used = zeros(256)
+  let mut next = zeros(n)
+  for i in 0u64..n {
+    let byte: u64 = int.widen(encoded.data[i])
+    next[positions[byte] + used[byte]] = i
+    used[byte] += 1
+  }
+  let mut out = zero_bytes(n)
+  let mut index = encoded.original
+  for i in 0u64..n {
+    index = next[index]
+    out[i] = encoded.data[index]
+  }
+  take out
+}
+
+type Node = Leaf(frequency: u64, byte: u8) | Branch(
+  frequency: u64,
+  left: box Node,
+  right: box Node
+)
+
+@noalloc
+fn frequency(node: box Node) -> u64 {
+  match node {
+    Leaf(frequency: f, byte: _) => f,
+    Branch(frequency: f, left: _, right: _) => f,
+  }
+}
+
+// compress.rs:300-345. Stable initial ordering, then binary insertion.
+fn huff_tree(freq: List[u64]) -> box Node {
+  let mut nodes: List[box Node] = []
+  for i in 0u64..256u64 {
+    if freq[i] > 0 {
+      let node: box Node = box Leaf(frequency: freq[i], byte: int.narrow(i))
+      let mut pos = list.len(nodes)
+      list.push(mut nodes, take node)
+      while pos > 0 && frequency(nodes[pos - 1]) > freq[i] {
+        list.swap(mut nodes, pos, pos - 1)
+        pos -= 1
+      }
+    }
+  }
+  if list.len(nodes) == 0 {
+    return box Leaf(frequency: 0, byte: 0)
+  }
+  if list.len(nodes) == 1 {
+    return box Branch(
+      frequency: frequency(nodes[0]),
+      left: nodes[0],
+      right: box Leaf(frequency: 0, byte: 0)
+    )
+  }
+  while list.len(nodes) > 1 {
+    let left = list.remove(mut nodes, 0)
+    let right = list.remove(mut nodes, 0)
+    let f = frequency(left) + frequency(right)
+    let parent: box Node = box Branch(frequency: f, left: left, right: right)
+    let mut lo: u64 = 0
+    let mut hi = list.len(nodes)
+    while lo < hi {
+      let mid = (lo + hi) / 2
+      if frequency(nodes[mid]) <= f {
+        lo = mid + 1
+      } else {
+        hi = mid
+      }
+    }
+    // Rust binary_search returns the last equal frequency, rather than after it.
+    if lo > 0 && frequency(nodes[lo - 1]) == f {
+      lo -= 1
+    }
+    list.push(mut nodes, take parent)
+    let mut pos = list.len(nodes) - 1
+    while pos > lo {
+      list.swap(mut nodes, pos, pos - 1)
+      pos -= 1
+    }
+  }
+  nodes[0]
+}
+
+fn huff_codes(
+  node: box Node,
+  code: u64,
+  length: u64,
+  mut lengths: unique List[u64],
+  mut codes: unique List[u64]
+) {
+  match node {
+    Leaf(frequency: _, byte: b) => {
+      if length > 0 || b != 0 {
+        let index: u64 = int.widen(b)
+        lengths[index] = length
+        codes[index] = code
+      }
+    },
+    Branch(frequency: _, left: l, right: r) => {
+      huff_codes(l, code << 1, length + 1, mut lengths, mut codes)
+      huff_codes(r, code << 1 | 1, length + 1, mut lengths, mut codes)
+    },
+  }
+}
+
+type Huff {
+  data: List[u8],
+  bits: u64,
+  freq: List[u64],
+}
+
+// compress.rs:347-423.
+fn huff_encode(data: List[u8]) -> Huff {
+  let freq = frequencies(data)
+  let tree = huff_tree(freq)
+  let mut lengths = zeros(256)
+  let mut codes = zeros(256)
+  huff_codes(tree, 0, 0, mut lengths, mut codes)
+  let mut out: List[u8] = []
+  list.reserve(mut out, list.len(data) * 2)
+  let mut byte: u8 = 0
+  let mut position: u64 = 0
+  let mut bits: u64 = 0
+  for b in data {
+    let index: u64 = int.widen(b)
+    let code = codes[index]
+    let mut i = lengths[index]
+    while i > 0 {
+      i -= 1
+      if code & 1u64 << i != 0 {
+        byte = byte | 1u8 << int.narrow(7u64 - position)
+      }
+      position += 1
+      bits += 1
+      if position == 8 {
+        list.push(mut out, byte)
+        byte = 0
+        position = 0
+      }
+    }
+  }
+  if position > 0 {
+    list.push(mut out, byte)
+  }
+  Huff(data: take out, bits: bits, freq: take freq)
+}
+
+// compress.rs:432-473. Keep the bit-count-sized scratch allocation.
+fn huff_decode(encoded: Huff) -> unique List[u8] {
+  let root = huff_tree(encoded.freq)
+  let mut node = copy root
+  let mut out = zero_bytes(encoded.bits)
+  let mut size: u64 = 0
+  for bit in 0u64..encoded.bits {
+    match node {
+      Branch(frequency: _, left: l, right: r) => {
+        node = if encoded.data[bit / 8] >> int.narrow(7u64 - bit % 8) & 1 == 1 {
+          r
+        } else {
+          l
+        }
+      },
+      Leaf(frequency: _, byte: _) => {},
+    }
+    match node {
+      Leaf(frequency: _, byte: b) => {
+        if b != 0 {
+          out[size] = b
+          size += 1
+        }
+        node = copy root
+      },
+      Branch(frequency: _, left: _, right: _) => {},
+    }
+  }
+  // Hirsel has no list.truncate; pop the unused initialized tail.
+  while list.len(out) > size {
+    let _ = list.pop(mut out)
+  }
+  take out
+}
+
+type Table {
+  total: u64,
+  low: List[u64],
+  high: List[u64],
+}
+
+fn table(freq: List[u64]) -> Table {
+  let mut low = zeros(256)
+  let mut high = zeros(256)
+  let mut total: u64 = 0
+  for i in 0u64..256u64 {
+    low[i] = total
+    total += freq[i]
+    high[i] = total
+  }
+  Table(total: total, low: take low, high: take high)
+}
+
+type BitOutput {
+  buffer: u8,
+  position: u64,
+  data: List[u8],
+}
+
+fn write_bit(mut writer: BitOutput, bit: u8) {
+  writer.buffer = writer.buffer << 1 | bit & 1
+  writer.position += 1
+  if writer.position == 8 {
+    list.push(mut writer.data, writer.buffer)
+    writer.buffer = 0
+    writer.position = 0
+  }
+}
+
+fn write_pending(mut writer: BitOutput, bit: u8, pending: u64) {
+  write_bit(mut writer, bit)
+  for _ in 0u64..pending {
+    write_bit(mut writer, bit ^ 1)
+  }
+}
+
+type Arith {
+  data: List[u8],
+  freq: List[u64],
+}
+
+// compress.rs:564-714. 32-bit interval in u64, MSB-first bit streams.
+fn arith_encode(data: List[u8]) -> Arith {
+  let freq = frequencies(data)
+  let t = table(freq)
+  let mut low: u64 = 0
+  let mut high: u64 = 4294967295
+  let mut pending: u64 = 0
+  let mut output = BitOutput(buffer: 0, position: 0, data: [])
+  for byte in data {
+    let index: u64 = int.widen(byte)
+    let width = high - low + 1
+    high = low + width * t.high[index] / t.total - 1
+    low += width * t.low[index] / t.total
+    while true {
+      if high < 2147483648 {
+        write_pending(mut output, 0, pending)
+        pending = 0
+      } else {
+        if low >= 2147483648 {
+          write_pending(mut output, 1, pending)
+          pending = 0
+          low -= 2147483648
+          high -= 2147483648
+        } else {
+          if low >= 1073741824 && high < 3221225472 {
+            pending += 1
+            low -= 1073741824
+            high -= 1073741824
+          } else {
+            break
+          }
+        }
+      }
+      low = low << 1
+      high = (high << 1 | 1) & 4294967295
+    }
+  }
+  pending += 1
+  write_pending(
+    mut output,
+    if low < 1073741824 {
+      0
+    } else {
+      1
+    },
+    pending
+  )
+  if output.position > 0 {
+    list.push(mut output.data, output.buffer << int.narrow(8u64 - output.position))
+  }
+  let BitOutput(buffer: _, position: _, data: output_data) = take output
+  Arith(data: take output_data, freq: take freq)
+}
+
+type BitInput {
+  data: List[u8],
+  position: u64,
+}
+
+fn read_bit(mut reader: BitInput) -> u64 {
+  let i = reader.position / 8
+  let bit: u64 = if i < list.len(reader.data) {
+    int.widen(reader.data[i] >> int.narrow(7u64 - reader.position % 8) & 1)
+  } else {
+    0
+  }
+  reader.position += 1
+  bit
+}
+
+// compress.rs:794-849; binary partition-point symbol lookup.
+fn arith_decode(encoded: Arith) -> unique List[u8] {
+  let t = table(encoded.freq)
+  let mut out = zero_bytes(t.total)
+  let mut input = BitInput(data: encoded.data, position: 0)
+  let mut value: u64 = 0
+  for _ in 0u64..32u64 {
+    value = value << 1 | read_bit(mut input)
+  }
+  let mut low: u64 = 0
+  let mut high: u64 = 4294967295
+  for j in 0u64..t.total {
+    let width = high - low + 1
+    let scaled = ((value - low + 1) * t.total - 1) / width
+    let mut begin: u64 = 0
+    let mut end: u64 = 256
+    while begin < end {
+      let mid = (begin + end) / 2
+      if t.high[mid] <= scaled {
+        begin = mid + 1
+      } else {
+        end = mid
+      }
+    }
+    let symbol = begin
+    out[j] = int.narrow(symbol)
+    high = low + width * t.high[symbol] / t.total - 1
+    low += width * t.low[symbol] / t.total
+    while true {
+      if high >= 2147483648 && low < 2147483648 && (low < 1073741824 || high >= 3221225472) {
+        break
+      }
+      if high < 2147483648 {} else {
+        if low >= 2147483648 {
+          value -= 2147483648
+          low -= 2147483648
+          high -= 2147483648
+        } else {
+          if low >= 1073741824 && high < 3221225472 {
+            value -= 1073741824
+            low -= 1073741824
+            high -= 1073741824
+          }
+        }
+      }
+      low = low << 1
+      high = high << 1 | 1
+      value = value << 1 | read_bit(mut input)
+    }
+  }
+  take out
+}
+
+// compress.rs:888-929. Dictionary keys hold the same byte sequences as Rust.
+fn lzw_encode(input: List[u8]) -> unique List[u8] {
+  if list.len(input) == 0 {
+    return []
+  }
+  let mut dict: Map[Bytes, u64] = map.empty()
+  for i in 0u64..256u64 {
+    let b: u8 = int.narrow(i)
+    map.insert(mut dict, bytes.from_list([b]), i)
+  }
+  let mut next_code: u64 = 256
+  let mut out: List[u8] = []
+  list.reserve(mut out, list.len(input) * 2)
+  let mut current: List[u8] = [input[0]]
+  for i in 1u64..list.len(input) {
+    let byte = input[i]
+    list.push(mut current, byte)
+    let key = bytes.from_list(copy_bytes(current))
+    if !map.contains(dict, key) {
+      let prefix = bytes.slice(key, 0, bytes.len(key) - 1)
+      let code = option.unwrap_or(map.get(dict, prefix), 0)
+      list.push(mut out, int.narrow(code >> 8 & 255))
+      list.push(mut out, int.narrow(code & 255))
+      map.insert(mut dict, take key, next_code)
+      next_code += 1
+      current = [byte]
+    }
+  }
+  let code = option.unwrap_or(map.get(dict, bytes.from_list(take current)), 0)
+  list.push(mut out, int.narrow(code >> 8 & 255))
+  list.push(mut out, int.narrow(code & 255))
+  take out
+}
+
+fn lzw_code(data: List[u8], index: u64) -> u64 {
+  int.widen(data[index]) << 8 | int.widen(data[index + 1])
+}
+
+// compress.rs:962-1002. Dictionary entries are owned byte lists as upstream.
+fn lzw_decode(encoded: List[u8]) -> unique List[u8] {
+  if list.len(encoded) == 0 {
+    return []
+  }
+  let mut dict: List[List[u8]] = []
+  list.reserve(mut dict, 4096)
+  for i in 0u64..256u64 {
+    let b: u8 = int.narrow(i)
+    list.push(mut dict, [b])
+  }
+  let mut out: List[u8] = []
+  list.reserve(mut out, list.len(encoded) * 2)
+  let mut old = lzw_code(encoded, 0)
+  for b in dict[old] {
+    list.push(mut out, b)
+  }
+  let mut i: u64 = 2
+  while i < list.len(encoded) {
+    let code = lzw_code(encoded, i)
+    let mut entry = copy_bytes(dict[old])
+    if code < list.len(dict) {
+      list.push(mut entry, dict[code][0])
+      for b in dict[code] {
+        list.push(mut out, b)
+      }
+    } else {
+      if code == list.len(dict) {
+        let first_byte = entry[0]
+        list.push(mut entry, first_byte)
+        for b in entry {
+          list.push(mut out, b)
+        }
+      } else {
+        return []
+      }
+    }
+    list.push(mut dict, take entry)
+    old = code
+    i += 2
+  }
+  take out
+}
+
+type Encoded = BwtData(value: Bwt) | HuffData(value: Huff) | ArithData(value: Arith) | LzwData(
+  value: List[u8]
+) | Empty
+
+type State {
+  kind: u64,
+  input: List[u8],
+  encoded: Encoded,
+  decoded: List[u8],
+  result_val: u32,
+}
+
+fn step(mut s: State, iteration: u64) {
+  let size = match s.kind {
+    0 => {
+      let value = bwt_encode(s.input)
+      let n = list.len(value.data)
+      s.encoded = BwtData(value: take value)
+      n
+    },
+    1 => {
+      s.decoded = match s.encoded {
+        BwtData(value: value) => bwt_decode(value),
+        _ => [],
+      }
+      list.len(s.decoded)
+    },
+    2 => {
+      let value = huff_encode(s.input)
+      let n = list.len(value.data)
+      s.encoded = HuffData(value: take value)
+      n
+    },
+    3 => {
+      s.decoded = match s.encoded {
+        HuffData(value: value) => huff_decode(value),
+        _ => [],
+      }
+      list.len(s.decoded)
+    },
+    4 => {
+      let value = arith_encode(s.input)
+      let n = list.len(value.data)
+      s.encoded = ArithData(value: take value)
+      n
+    },
+    5 => {
+      s.decoded = match s.encoded {
+        ArithData(value: value) => arith_decode(value),
+        _ => [],
+      }
+      list.len(s.decoded)
+    },
+    6 => {
+      let value = lzw_encode(s.input)
+      let n = list.len(value)
+      s.encoded = LzwData(value: take value)
+      n
+    },
+    _ => {
+      s.decoded = match s.encoded {
+        LzwData(value: value) => lzw_decode(value),
+        _ => [],
+      }
+      list.len(s.decoded)
+    },
+  }
+  s.result_val = u32.wrapping_add(s.result_val, int.truncate(size))
+}
+
+fn checksum(s: State) -> u32 {
+  u32.wrapping_add(
+    s.result_val,
+    if s.kind % 2 == 1 && s.decoded == s.input {
+      100000
+    } else {
+      0
+    }
+  )
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let kind: u64 = match name {
+    "Compress::BWTEncode" => 0,
+    "Compress::BWTDecode" => 1,
+    "Compress::HuffEncode" => 2,
+    "Compress::HuffDecode" => 3,
+    "Compress::ArithEncode" => 4,
+    "Compress::ArithDecode" => 5,
+    "Compress::LZWEncode" => 6,
+    _ => 7,
+  }
+  let input = test_data(harness.number(config, "size"))
+  let encoded: Encoded = match kind {
+    1 => BwtData(value: bwt_encode(input)),
+    3 => HuffData(value: huff_encode(input)),
+    5 => ArithData(value: arith_encode(input)),
+    7 => LzwData(value: lzw_encode(input)),
+    _ => Empty(),
+  }
+  harness.measure(
+    rt,
+    config,
+    State(
+      kind: kind,
+      input: take input,
+      encoded: take encoded,
+      decoded: [],
+      result_val: 0
+    ),
+    step,
+    checksum
+  )
+}
+
+@test
+fn codec_vectors(t: Test) {
+  // Explicit cyclic rotations and the LZW new-code-equals-dictionary-size case.
+  let banana: List[u8] = [66, 65, 78, 65, 78, 65]
+  let bwt = bwt_encode(banana)
+  test.check(t, bwt.data == [78u8, 78u8, 66u8, 65u8, 65u8, 65u8])
+  test.check(t, bwt.original == 3)
+  test.check(t, bwt_decode(bwt) == banana)
+  // Exact bytes from unchanged upstream compress.rs:347-382,638-708.
+  let abracadabra = test_data(11)
+  let huff = huff_encode(abracadabra)
+  test.check(t, huff.data == [105u8, 207u8, 104u8] && huff.bits == 23)
+  test.check(t, arith_encode(abracadabra).data == [71u8, 94u8, 178u8])
+  let banana_huff = huff_encode(banana)
+  test.check(t, banana_huff.data == [45u8, 128u8] && banana_huff.bits == 9)
+  test.check(t, arith_encode(banana).data == [144u8, 192u8])
+  let lzw_input: List[u8] = [65, 66, 65, 66, 65, 66, 65]
+  let lzw = lzw_encode(lzw_input)
+  test.check(t, lzw == [0u8, 65u8, 0u8, 66u8, 1u8, 0u8, 1u8, 2u8])
+  test.check(t, lzw_decode(lzw) == lzw_input)
+  let sizes: List[u64] = [0, 1, 2, 11, 53, 257]
+  for size in sizes {
+    let data = test_data(size)
+    test.check(t, bwt_decode(bwt_encode(data)) == data)
+    test.check(t, huff_decode(huff_encode(data)) == data)
+    test.check(t, arith_decode(arith_encode(data)) == data)
+    test.check(t, lzw_decode(lzw_encode(data)) == data)
+  }
+  let binary: List[u8] = [0, 255, 0, 1, 255, 128, 0, 255]
+  test.check(t, bwt_decode(bwt_encode(binary)) == binary)
+  test.check(t, arith_decode(arith_encode(binary)) == binary)
+  test.check(t, lzw_decode(lzw_encode(binary)) == binary)
+}

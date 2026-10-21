@@ -1,0 +1,189 @@
+// langarena: Sort::Quick
+// langarena: Sort::Merge
+// langarena: Sort::Self
+// Port: LangArena 3c9f84d rust/src/benchmarks/sort_{benchmark,quick,merge,self}.rs
+// (prepare:18-25, quick:13-48, merge:9-54, self:30-42); helper.rs:3-36.
+// Lists replace Vec; explicit copies preserve the per-iteration clone cost.
+type State {
+  data: List[i32],
+  algorithm: u64,
+  rng: u64,
+  result_val: u32,
+}
+
+fn next(mut s: State, maximum: u64) -> u64 {
+  s.rng = (s.rng * 3877 + 29573) % 139968
+  let value: f64 = float.from_int(s.rng) / 139968.0 * float.from_int(maximum)
+  int.narrow(results.unwrap_or(float.to_i32(value), 0i32))
+}
+
+fn quick(mut xs: unique List[i32], begin: u64, end: u64) {
+  if end - begin <= 1 {
+    return
+  }
+  let pivot = xs[begin + (end - begin) / 2]
+  let mut i = begin
+  let mut j = end - 1
+  while i <= j {
+    while xs[i] < pivot {
+      i += 1
+    }
+    while xs[j] > pivot {
+      j -= 1
+    }
+    if i <= j {
+      list.swap(mut xs, i, j)
+      i += 1
+      if j > begin {
+        j -= 1
+      } else {
+        break
+      }
+    }
+  }
+  if j > begin {
+    quick(mut xs, begin, j + 1)
+  }
+  if i < end {
+    quick(mut xs, i, end)
+  }
+}
+
+fn merge(mut xs: unique List[i32], mut temp: unique List[i32], left: u64, right: u64) {
+  if left >= right {
+    return
+  }
+  let mid = (left + right) / 2
+  merge(mut xs, mut temp, left, mid)
+  merge(mut xs, mut temp, mid + 1, right)
+  for k in left..right + 1 {
+    temp[k] = xs[k]
+  }
+  let mut i = left
+  let mut j = mid + 1
+  let mut k = left
+  while i <= mid && j <= right {
+    if temp[i] <= temp[j] {
+      xs[k] = temp[i]
+      i += 1
+    } else {
+      xs[k] = temp[j]
+      j += 1
+    }
+    k += 1
+  }
+  while i <= mid {
+    xs[k] = temp[i]
+    i += 1
+    k += 1
+  }
+}
+
+@noalloc
+fn compare(a: i32, b: i32) -> i32 uses {} {
+  if a < b {
+    -1
+  } else {
+    if a > b {
+      1
+    } else {
+      0
+    }
+  }
+}
+
+fn step(mut s: State, iteration: u64) {
+  let size = list.len(s.data)
+  let source_index = next(mut s, size)
+  s.result_val = u32.wrapping_add(s.result_val, int.narrow(s.data[source_index]))
+  let mut xs: List[i32] = []
+  list.reserve(mut xs, size)
+  for value in s.data {
+    list.push(mut xs, value)
+  }
+  if s.algorithm == 0 {
+    quick(mut xs, 0, size)
+  } else {
+    if s.algorithm == 1 {
+      let mut temp: List[i32] = []
+      list.reserve(mut temp, size)
+      for _ in 0u64..size {
+        list.push(mut temp, 0)
+      }
+      if size > 0 {
+        merge(mut xs, mut temp, 0, size - 1)
+      }
+    } else {
+      list.sort_stable(mut xs, compare)
+    }
+  }
+  let after = next(mut s, size)
+  s.result_val = u32.wrapping_add(s.result_val, int.narrow(xs[after]))
+}
+
+fn reset(mut s: State) {
+  s.rng = 42
+}
+
+fn checksum(s: State) -> u32 {
+  s.result_val
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let size = harness.number(config, "size")
+  let mut s = State(
+    data: [],
+    algorithm: if name == "Sort::Quick" {
+      0
+    } else {
+      if name == "Sort::Merge" {
+        1
+      } else {
+        2
+      }
+    },
+    rng: 42,
+    result_val: 0
+  )
+  list.reserve(mut s.data, size)
+  for _ in 0u64..size {
+    let value: i32 = int.narrow(next(mut s, 1000000))
+    list.push(mut s.data, value)
+  }
+  harness.measure_reset(rt, config, take s, step, reset, checksum)
+}
+
+@test
+fn sort_boundaries(t: Test) {
+  let cases: List[List[i32]] = [
+    [],
+    [7i32],
+    [2i32, 1i32],
+    [1i32, 2i32, 3i32],
+    [3i32, 2i32, 1i32],
+    [2i32, 1i32, 2i32, 1i32]
+  ]
+  for data in cases {
+    let mut expected: List[i32] = []
+    let mut quick_data: List[i32] = []
+    let mut merge_data: List[i32] = []
+    let mut scratch: List[i32] = []
+    for value in data {
+      list.push(mut expected, value)
+      list.push(mut quick_data, value)
+      list.push(mut merge_data, value)
+      list.push(mut scratch, 0)
+    }
+    let size = list.len(data)
+    list.sort_stable(mut expected, compare)
+    quick(mut quick_data, 0, size)
+    if size > 0 {
+      merge(mut merge_data, mut scratch, 0, size - 1)
+    }
+    test.check(t, quick_data == expected)
+    test.check(t, merge_data == expected)
+  }
+}
