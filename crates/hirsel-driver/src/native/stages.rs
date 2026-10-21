@@ -696,7 +696,7 @@ fn build_units(
     let mut artifacts = Vec::with_capacity(lowered_units.len());
     let mut hits = 0;
     for unit in lowered_units {
-        let fragment = unit.fragment.expect("every planned unit owns a fragment");
+        let fragment = unit.fragment;
         hits += usize::from(unit.hit);
         summaries.push(fragment.summary);
         artifacts.push(fragment.object);

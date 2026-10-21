@@ -125,7 +125,7 @@ pub(crate) struct Program<'a> {
 
 /// One unit of a program after `lower`, with its independently retained owner object.
 pub(crate) struct LoweredUnit {
-    pub fragment: Option<UnitFragment>,
+    pub fragment: UnitFragment,
     /// The object store held the fragment.
     pub hit: bool,
 }
@@ -245,7 +245,7 @@ pub(crate) fn lower(
         jobs,
         tasks,
         |&i| copies[i].len() as u64 + 1,
-        |i| -> Result<(usize, LoweredUnit), NativeError> {
+        |i| -> Result<LoweredUnit, NativeError> {
             let key = &keys[i];
             let stored = timed(Phase::StoreLookup, || program.objects.store.get(key));
             let cached = stored.as_ref().and_then(|bytes| {
@@ -265,13 +265,10 @@ pub(crate) fn lower(
             if let Some(fragment) = cached
                 && program.options.validation == super::stages::Validation::Ready
             {
-                return Ok((
-                    i,
-                    LoweredUnit {
-                        fragment: Some(fragment),
-                        hit: true,
-                    },
-                ));
+                return Ok(LoweredUnit {
+                    fragment,
+                    hit: true,
+                });
             }
             let own = ready(i)?;
             let definition = &own.unit().header.definition;
@@ -340,24 +337,10 @@ pub(crate) fn lower(
                 ));
             }
             program.objects.store.put(key, &bytes);
-            let missed = LoweredUnit {
-                fragment: Some(fragment),
-                hit,
-            };
-            Ok((i, missed))
+            Ok(LoweredUnit { fragment, hit })
         },
     );
-    let mut out: Vec<LoweredUnit> = (0..keys.len())
-        .map(|_| LoweredUnit {
-            fragment: None,
-            hit: false,
-        })
-        .collect();
-    for result in results {
-        let (i, unit) = result?;
-        out[i] = unit;
-    }
-    Ok(out)
+    results.into_iter().collect()
 }
 
 /// The object key of `unit`, the program's unit `index`, with the templates `copies`
@@ -585,6 +568,79 @@ mod cache_tests {
                 "{error}"
             );
             assert_eq!(store.puts.load(Ordering::Relaxed), 2 * puts);
+        });
+    }
+    #[test]
+    fn retained_owner_workers_match_at_one_two_eight_and_both_validation_policies() {
+        hirsel_engine::with_compiler_stack(|| {
+            let mut engine = hirsel_engine::QueryEngine::new(
+                hirsel_engine::default_environment(),
+                crate::compiler_adapters(),
+            );
+            let file = engine.sources.add("owner-workers.hir", "fn step(x:u64)->u64{x+1u64}\nfn main()->u64 {let mut xs:List[u64]=[];list.push(mut xs,7u64);step(xs[0u64])}\n".into()).unwrap();
+            let checked =
+                hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
+                    .unwrap();
+            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+            let input = engine.export_native_input().unwrap();
+            let input = engine.import_native_input(input).unwrap();
+            for (backend, opt) in [
+                (Backend::Cranelift, OptLevel::None),
+                (Backend::Llvm, OptLevel::None),
+                (Backend::Llvm, OptLevel::Default),
+            ] {
+                let mut baseline = None;
+                for workers in [1, 2, 8] {
+                    for validation in [
+                        super::super::Validation::Ready,
+                        super::super::Validation::EveryStage,
+                    ] {
+                        let mut options =
+                            Options::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu());
+                        options.validation = validation;
+                        options.objects = Some(UnitObjects {
+                            store: Arc::new(hirsel_lir::objects::NoObjects),
+                            backend,
+                            opt,
+                            debug: false,
+                            fuel: false,
+                            jobs: hirsel_intern::jobs::Jobs::new(workers),
+                        });
+                        let ready = super::super::build(&input, &options).unwrap();
+                        let objects = ready.unit_objects.unwrap().objects;
+                        assert_eq!(objects.len(), ready.summaries.len());
+                        assert!(
+                            ready
+                                .summaries
+                                .iter()
+                                .any(|s| s.origin == UnitOrigin::Library)
+                        );
+                        for summary in &ready.summaries {
+                            let symbol = hirsel_lir::emission::symbol_name(
+                                &summary.definition,
+                                Some(&summary.instance),
+                            );
+                            assert_eq!(
+                                objects
+                                    .iter()
+                                    .filter(|o| o.exports.iter().any(|e| e.name == symbol))
+                                    .count(),
+                                1,
+                                "{backend:?} {opt:?} {workers} {validation:?} {symbol}"
+                            );
+                        }
+                        let actual = (ready.summaries, objects);
+                        if let Some(expected) = &baseline {
+                            assert_eq!(
+                                &actual, expected,
+                                "{backend:?} {opt:?} {workers} {validation:?}"
+                            )
+                        } else {
+                            baseline = Some(actual)
+                        }
+                    }
+                }
+            }
         });
     }
 }
