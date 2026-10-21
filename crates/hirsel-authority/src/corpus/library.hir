@@ -81,6 +81,7 @@ fn list.len[T](xs: List[T]) -> u64
 fn array.len[T](xs: Array[T]) -> u64
 fn list.push[T](mut xs: List[T], take value: T) -> ()
 fn iter.from[S, T](take state: S, take next: fn(mut S) -> Option[T]) -> Iter[T] uses {state, next}
+fn iter.map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f}
 fn iter.next[T](mut it: Iter[T]) -> Option[T]
 
 // SEM-1/2/3/5, GEN-2, MEM-8/9

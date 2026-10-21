@@ -107,6 +107,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
         let mut loaded = hirsel_driver::load_program(&fixture).unwrap();
         [
             "bytes.replace",
+            "iter.map",
             "map.same_entries",
             "u64.to_string",
             "unicode.graphemes",
