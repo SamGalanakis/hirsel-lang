@@ -15,5 +15,7 @@ mod coordinator;
 pub use coordinator::{CoordinatorStats, Entered, Frame, S1Coordinator, S1Worker, WorkerId};
 mod holds;
 pub use holds::{HoldStats, Holds, Retention, default_hold_bytes};
+mod retained;
+pub(crate) use retained::retained_tir_bytes;
 mod worklist;
 pub use worklist::{Step, WorkKey, WorkKind, Worklist};

@@ -922,3 +922,8 @@ Image construction withholds production worker admission while producing
 portable receipts; the prior admission purpose is restored on success or error.
 This preserves imported constants without body recomputation while whole-universe
 worker receipts remain unsuitable as portable image evidence.
+
+Retained TIR hold weights use structural allocation accounting: Vec capacities,
+owned strings and literals, Arc headers/alignment and deduplicated shared path or
+slice allocations within each artifact. Session interner rows and interned DefId
+storage are session costs; no serialization runs to estimate a hold's bytes.
