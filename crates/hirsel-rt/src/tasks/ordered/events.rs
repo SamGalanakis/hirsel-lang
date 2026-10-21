@@ -195,8 +195,15 @@ pub(crate) fn owned_host_result(
     }
 }
 
+/// Caller owns the scheduler role. This lookup cannot allocate, bridge or
+/// observe a stop, including on the disabled native host path.
+pub(crate) fn observing(ctx: *mut TaskCtx) -> bool {
+    let table = unsafe { &*(*(*ctx).run_ptr()).tasks.get() };
+    matches!(table.as_deref().map(|s| &s.logical), Some(Logical::Ordered(driver)) if driver.events.is_some())
+}
+
 /// IdleGuard owns the scheduler, but no TaskCtx is installed or sampled.
-pub(super) fn record_host_poll(
+pub(crate) fn record_host_poll(
     s: &mut super::super::Scheduler,
     task: u32,
     result: Result<crate::io::Completion, crate::io::AdapterError>,

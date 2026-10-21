@@ -584,16 +584,26 @@ pub(crate) unsafe fn poll_home(
 pub(crate) unsafe fn completed_home(
     run: *mut crate::context::RunShared,
     token: u64,
-) -> Result<Completion, AdapterError> {
+) -> CompletedHost {
     let binding = unsafe { &*(*run).io_binding().cast::<Binding>() };
-    crate::tasks::ordered::events::owned_host_result(
-        binding
-            .waits
-            .parked
-            .get(&token)
-            .and_then(|row| row.completion.as_ref())
-            .expect("a completed reserved host poll"),
-    )
+    let row = binding
+        .waits
+        .parked
+        .get(&token)
+        .expect("a reserved host wait");
+    CompletedHost {
+        task: row.task.expect("a parked host owner"),
+        result: crate::tasks::ordered::events::owned_host_result(
+            row.completion
+                .as_ref()
+                .expect("a completed reserved host poll"),
+        ),
+    }
+}
+
+pub(crate) struct CompletedHost {
+    pub(crate) task: u32,
+    pub(crate) result: Result<Completion, AdapterError>,
 }
 
 /// # Safety
@@ -754,8 +764,33 @@ pub(crate) unsafe fn poll(
     cause: Option<u32>,
     ready: bool,
 ) -> Stopped<bool> {
-    // SAFETY: caller contract.
-    unsafe { at_home(ctx, || poll_here(ctx, token, cause, ready)) }?
+    let observing =
+        crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::events::observing(ctx);
+    if !observing {
+        // SAFETY: caller contract; ordinary path retains no evidence.
+        return unsafe { at_home(ctx, || poll_here(ctx, token, cause, ready)) }?;
+    }
+    // Borrow only the home service on this bridge; copy the completion while
+    // its wait row still owns it, then record after the caller regains role.
+    let (done, completion) = unsafe {
+        at_home(ctx, || -> Stopped<_> {
+            let done = poll_here(ctx, token, cause, ready)?;
+            let completion = done.then(|| completed_home((*ctx).run_ptr(), token));
+            Ok((done, completion))
+        })
+    }??;
+    if let Some(completion) = completion {
+        // SAFETY: the bridge returned the role; do not observe a stop while
+        // this owned completion has yet to be installed in the log.
+        let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+        crate::tasks::ordered::events::record_host_poll(
+            s,
+            completion.task,
+            completion.result,
+            false,
+        );
+    }
+    Ok(done)
 }
 
 unsafe fn poll_here(

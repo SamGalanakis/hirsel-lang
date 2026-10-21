@@ -142,6 +142,152 @@ mod tests {
         }
     }
 
+    unsafe extern "C" fn sleeping_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+        let deadline = unsafe { crate::alloc::payload(env).cast::<u64>().read() };
+        let mut result = std::mem::MaybeUninit::<UnitResult>::uninit();
+        assert_eq!(
+            unsafe {
+                crate::io::hirsel_rt_v2_clock_sleep_until(
+                    ctx,
+                    std::ptr::null_mut(),
+                    result.as_mut_ptr(),
+                    &11,
+                    &deadline,
+                )
+            },
+            STATUS_OK
+        );
+        assert_eq!(unsafe { result.assume_init() }.tag, 0);
+        STATUS_OK
+    }
+
+    #[test]
+    fn a_batch_of_host_completions_is_recorded_in_deadline_then_park_order_before_any_wake() {
+        let environment = layout();
+        let layouts = [&environment as *const crate::Layout];
+        let mut reference = None;
+        for width in [2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let probe = Arc::new(Probe::default());
+                let output = Arc::new(Mutex::new(Vec::new()));
+                let seen = output.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 1;
+                run.adapter = Some(Box::new(Host {
+                    home: std::thread::current().id(),
+                    probe: probe.clone(),
+                    cancellation: false,
+                }));
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        engine::enable(ctx, policy);
+                        super::super::events::enable(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let mut scope = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_enter(
+                                ctx,
+                                std::ptr::null_mut(),
+                                &mut scope,
+                                &0
+                            ),
+                            STATUS_OK
+                        );
+                        for deadline in [20u64, 10, 10] {
+                            let env = crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                2,
+                                24,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            );
+                            crate::alloc::payload(env)
+                                .cast::<[u64; 3]>()
+                                .write([deadline, 0, 0]);
+                            let mut child = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_spawn(
+                                    ctx,
+                                    0,
+                                    0,
+                                    std::ptr::null_mut(),
+                                    &mut child,
+                                    &scope,
+                                    sleeping_child,
+                                    env,
+                                    0
+                                ),
+                                STATUS_OK
+                            );
+                        }
+                        let mut result = std::mem::MaybeUninit::<UnitResult>::uninit();
+                        assert_eq!(
+                            crate::io::hirsel_rt_v2_clock_sleep_until(
+                                ctx,
+                                std::ptr::null_mut(),
+                                result.as_mut_ptr(),
+                                &11,
+                                &30
+                            ),
+                            STATUS_OK
+                        );
+                        assert_eq!(result.assume_init().tag, 0);
+                        let log = engine::driver(ctx).events.as_ref().unwrap();
+                        assert_eq!(log.host_polls.len(), 4);
+                        assert_eq!(
+                            log.host_polls
+                                .iter()
+                                .map(|row| row.completion.task.clone())
+                                .collect::<Vec<_>>(),
+                            [vec![1], vec![2], vec![0], vec![]]
+                        );
+                        assert_eq!(
+                            log.host_polls
+                                .iter()
+                                .map(|row| row.sequence)
+                                .collect::<Vec<_>>(),
+                            [0, 1, 2, 3]
+                        );
+                        assert!(
+                            log.host_polls
+                                .iter()
+                                .all(|row| row.idle
+                                    && row.retirement == log.host_polls[0].retirement)
+                        );
+                        assert_eq!(log.host_completions.len(), 4);
+                        for (polled, returned) in log.host_polls.iter().zip(&log.host_completions) {
+                            assert_eq!(&polled.completion, returned);
+                        }
+                        *seen.lock().unwrap() = log.host_polls.clone();
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                            STATUS_OK
+                        );
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                assert_eq!(probe.completed.load(Ordering::Acquire), 4);
+                let polls = output.lock().unwrap().clone();
+                if let Some(reference) = &reference {
+                    assert_eq!(&polls, reference);
+                } else {
+                    reference = Some(polls);
+                }
+            }
+        }
+    }
+
     #[test]
     fn owned_host_sleep_completes_from_idle_and_deadline_cancels_a_saved_request() {
         for width in [2, 4, 8] {

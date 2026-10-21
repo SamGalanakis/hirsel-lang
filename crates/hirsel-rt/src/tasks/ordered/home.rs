@@ -84,9 +84,10 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
                     // The home service borrow ends before claiming IdleGuard;
                     // a saved request still owns its completion until wake.
                     let result = unsafe { crate::host_waits::completed_home(run, token) };
+                    assert_eq!(result.task, task);
                     let _guard = unsafe { role::IdleGuard::new(run) };
                     let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
-                    super::events::record_host_poll(s, task, result, !retiring);
+                    super::events::record_host_poll(s, task, result.result, !retiring);
                 }
                 ready.push(task);
             }
