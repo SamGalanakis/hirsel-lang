@@ -1,6 +1,18 @@
 use crate::*;
 use hirsel_engine::{QueryError, ToolError};
 
+/// Bug-catching campaigns independently recompute every reusable result.
+/// Each compiler owns an ephemeral memory provider, so unrelated cases cannot
+/// accumulate results for the lifetime of a campaign. Oracle cold runs keep none@1.
+pub(crate) fn verifying_compiler() -> hirsel_engine::Compiler {
+    hirsel_driver::COMPILER.with_config(hirsel_engine::CompileConfig {
+        retention: hirsel_engine::memo::Retention::Resident,
+        store: std::sync::Arc::new(hirsel_engine::store::MemStore::default()),
+        verify_store: hirsel_engine::store::VerifyStore::Recompute,
+        ..Default::default()
+    })
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Observation {
     pub actual: String,
@@ -28,7 +40,7 @@ fn evaluate_on_compiler_thread(
     hash_seed: u64,
 ) -> (Status, Observation) {
     let text = fs::read_to_string(path).unwrap_or_default();
-    let loaded = hirsel_driver::load_program(path);
+    let loaded = verifying_compiler().load_program(path);
     let mut program = match loaded {
         Ok(program) => program,
         Err(ToolError::Query {
@@ -147,7 +159,8 @@ fn evaluate_on_compiler_thread(
             .iter()
             .any(|d| d.severity == Severity::Error)
         {
-            hirsel_driver::load_program(path)
+            verifying_compiler()
+                .load_program(path)
                 .map_err(|e| e.to_string())?
                 .check(Reachable)
         } else {

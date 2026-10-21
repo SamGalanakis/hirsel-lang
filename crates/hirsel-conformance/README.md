@@ -535,7 +535,7 @@ oracle="$(.buck2/bin/buck2 build //:hirsel-conformance-bin-oracle --show-full-si
 tools/capped "$oracle" o1 --path conformance/CT/ --limit 20 [--native]
 tools/capped "$oracle" o2 [--scenario body-edit]...
 tools/capped "$oracle" o3
-tools/capped "$oracle" o4 --path conformance/PROG/ --limit 20
+HIRSEL_ORACLE_CLI=/path/to/matching/hirsel "$oracle" o4 --path conformance/PROG/ --limit 20
 ```
 
 - **O1** compiles each selected corpus file once per cell, each cell in its own
@@ -556,9 +556,11 @@ tools/capped "$oracle" o4 --path conformance/PROG/ --limit 20
   `SessionStats.touched` are TODO.
 - **O4** compares a corpus file served from a warm store with a cold run: a
   shared in-process result store, then two processes over a `dir@1` store under
-  `VerifyStore::Recompute`. The CLI `--verify-cache` cell remains a TODO until
-  that flag is available; `HIRSEL_VERIFY_CACHE` is currently its environment
-  selector.
+  `VerifyStore::Recompute`. The CLI cell invokes the matching binary selected
+  by `HIRSEL_ORACLE_CLI`: cold and verified disk-warm check/build diagnostics,
+  statuses and successful complete executable bytes must agree. Missing CLI
+  input fails. Conformance and agreement checkers explicitly select Recompute
+  with an ephemeral memory store; V stays on.
 
 A scenario file (format in `src/oracle/edits.rs`) holds the tree before the
 edit as `=== <path>` sections and the edit as `+++` (replace or add), `---`

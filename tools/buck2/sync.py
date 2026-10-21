@@ -909,6 +909,9 @@ def first_party(meta: dict) -> str:
                     t["name"]: f"//:{name}-bin-{t['name']}"
                     for t in package["targets"] if t["kind"] == ["bin"]
                 }
+                if name == "hirsel-conformance":
+                    # O4 invokes the actual CLI cache-verification switch.
+                    binaries["hirsel"] = "//:hirsel-cli-bin-hirsel"
                 count, costs = shards(f"{name}-test-{target['name']}")
                 out.append("\n" + call("hirsel_test", **profile, name=f"{name}-test-{target['name']}", deps=own + test_deps, bin_exes=binaries,
                                          shards=count if count > 1 else None, costs=costs,

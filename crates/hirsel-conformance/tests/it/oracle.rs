@@ -1,7 +1,7 @@
 //! The O1–O4 harnesses on today's compiler: every check either passes or names
 //! a switch the compiler lacks, and each comparison fails on a planted difference.
 use hirsel_conformance::oracle::{
-    self, Artifacts, Report, SCENARIOS, Verdict, edits::Scenario, o2, o3, o4, o5, switches::Switch,
+    self, Artifacts, Report, SCENARIOS, Verdict, edits::Scenario, o2, o3, o5, switches::Switch,
 };
 use std::{
     path::{Path, PathBuf},
@@ -184,19 +184,31 @@ fn o4_store_hits_equal_cold_runs() {
         None,
     )
     .unwrap();
-    let report = o4::run(
-        Path::new(env!("CARGO_BIN_EXE_oracle")),
-        &root(),
-        &programs,
-        &work,
-    );
-    holds(&report);
-    assert_eq!(
-        report.count(|v| *v == Verdict::Pass),
-        4,
+    let output = Command::new(env!("CARGO_BIN_EXE_oracle"))
+        .env("HIRSEL_ORACLE_CLI", env!("CARGO_BIN_EXE_hirsel"))
+        .args(["o4", "--json", "--root"])
+        .arg(root())
+        .arg("--work")
+        .arg(&work)
+        .args(programs.iter().flat_map(|path| {
+            [
+                "--path".to_owned(),
+                path.strip_prefix(root())
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ]
+        }))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
         "{}",
-        report.text()
+        String::from_utf8_lossy(&output.stderr)
     );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["pass"], 6);
+    assert_eq!(report["todo"], 0);
     let _ = std::fs::remove_dir_all(&work);
 }
 

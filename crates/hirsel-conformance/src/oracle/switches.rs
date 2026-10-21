@@ -50,8 +50,9 @@ impl Switch {
             | Switch::Session
             | Switch::DirStore
             | Switch::VerifyStore
+            | Switch::VerifyCache
             | Switch::VerifyOff => true,
-            Switch::VerifyCache | Switch::SlowPathCounters | Switch::Touched => false,
+            Switch::SlowPathCounters | Switch::Touched => false,
         }
     }
 

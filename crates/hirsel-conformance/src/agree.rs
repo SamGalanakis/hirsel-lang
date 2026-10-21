@@ -41,6 +41,10 @@ fn engine() -> QueryEngine {
     static ENVIRONMENT: OnceLock<hirsel_engine::QueryEnvironment> = OnceLock::new();
     let environment = ENVIRONMENT.get_or_init(hirsel_engine::default_environment);
     QueryEngine::new(environment.clone(), adapters)
+        .with_result_store(std::sync::Arc::new(
+            hirsel_engine::store::MemStore::default(),
+        ))
+        .with_verify_store(hirsel_engine::store::VerifyStore::Recompute)
 }
 fn violation(operation: &str, message: &str) -> Classification {
     let kind = if operation.contains("TIR validation") {
@@ -321,7 +325,9 @@ fn classify_package_native(
     match catch_unwind(AssertUnwindSafe(|| {
         let (mut program, mut bare) = (None, None);
         let (checked, entry) = if let Some(path) = path {
-            let mut loaded = match hirsel_driver::load_program_source(path, Some(source)) {
+            let mut loaded = match crate::compiler::verifying_compiler()
+                .load_program_source(path, Some(source))
+            {
                 Ok(p) => p,
                 Err(e) => return tool_error(e),
             };
