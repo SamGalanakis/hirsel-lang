@@ -1667,6 +1667,9 @@ unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stoppe
             match unsafe { receive_ready(s, task, shield, channel, slot) } {
                 Some(status) => {
                     s.task(task).status = status;
+                    // SAFETY: saved-frame checks above protect the slot;
+                    // capture before the owner can be unparked.
+                    unsafe { ordered::events::record_receive_poll(s, task, slot, status) };
                     true
                 }
                 None => false,

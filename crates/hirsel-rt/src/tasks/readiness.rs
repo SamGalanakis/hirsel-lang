@@ -49,6 +49,9 @@ unsafe fn poll(s: &mut Scheduler, task: u32, pool_available: Option<bool>) -> Op
             // SAFETY: the destination belongs to a saved waiting frame.
             if let Some(status) = unsafe { receive_ready(s, task, shield, channel, slot) } {
                 s.task(task).status = status;
+                // SAFETY: saved preflight and receive_ready initialized only
+                // DONE payloads. The observer never samples the parked ctx.
+                unsafe { ordered::events::record_receive_poll(s, task, slot, status) };
                 true
             } else {
                 false

@@ -66,6 +66,20 @@ pub(super) struct HostPollCompletion {
     pub sequence: u64,
 }
 
+/// A saved receive slot is filled by retirement readiness before its owner
+/// can resume. This snapshot fixes that effect's original operation ordinal
+/// and poll position without borrowing the parked task's context.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ReceivePollCompletion {
+    pub task: Vec<u32>,
+    pub ordinal: u64,
+    pub channel: ObjectId,
+    pub status: u32,
+    pub payload: Option<Vec<u8>>,
+    pub retirement: u64,
+    pub sequence: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum OwnerOutcome {
     ScopeExit {
@@ -173,6 +187,9 @@ pub(super) struct Log {
     pub host_polls: Vec<HostPollCompletion>,
     host_polled: BTreeSet<(Vec<u32>, u64)>,
     pub owner_completions: Vec<OwnerCompletion>,
+    pub receive_polls: Vec<ReceivePollCompletion>,
+    receivers: BTreeMap<Vec<u32>, (ObjectId, u32)>,
+    receive_polled: BTreeSet<(Vec<u32>, u64)>,
     pub boundaries: Vec<Boundary>,
     versions: BTreeMap<CanonicalItem, u64>,
     /// Generation-qualified native words are lookup keys only. Keep bindings
@@ -285,6 +302,92 @@ pub(super) unsafe fn install_value(
         .as_mut()
         .expect("evidence enabled at admission");
     assert!(log.values.insert(descriptor, program).is_none());
+}
+
+/// Compile immutable metadata in the running owner's entry window. The idle
+/// readiness callback later has no TaskCtx and must not perform this lookup.
+/// # Safety
+/// The running owner holds the role; the linked descriptors outlive the run.
+pub(super) unsafe fn prepare_receive(ctx: *mut TaskCtx, word: u64, descriptor: u32) {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    if !enabled(s) {
+        return;
+    }
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let channel = driver
+        .objects
+        .identity(crate::ordered::objects::Kind::Receiver, word)
+        .expect("an admitted receiver identity")
+        .clone();
+    log.receivers.insert(path, (channel, descriptor));
+    if let std::collections::btree_map::Entry::Vacant(entry) = log.values.entry(descriptor)
+        && let Ok(program) = unsafe { super::values::Program::linked(ctx, descriptor) }
+    {
+        entry.insert(program);
+    }
+}
+
+/// # Safety
+/// The role owns `s`; `slot` is a saved receive output. DONE initialized its
+/// active fields. Every other status may leave the entire output unwritten.
+pub(crate) unsafe fn record_receive_poll(
+    s: &mut super::super::Scheduler,
+    task: u32,
+    slot: *const u8,
+    status: u32,
+) {
+    if !enabled(s) {
+        return;
+    }
+    let path = s.task(task).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let retirement = driver.frontier.as_ref().unwrap().retired();
+    let log = driver.events.as_mut().unwrap();
+    let (channel, descriptor) = log.receivers.get(&path).expect("receive entry before poll");
+    let ordinal = log.ordinals[&path]
+        .checked_sub(1)
+        .expect("receive entry ordinal");
+    assert_eq!(log.last_ops[&path], "channel.receive");
+    assert!(
+        log.receive_polled.insert((path.clone(), ordinal)),
+        "one completing receive poll"
+    );
+    let payload = if status == crate::channels::DONE {
+        log.values.get(descriptor).and_then(|program| unsafe {
+            program
+                .encode(slot, |kind, word| {
+                    use crate::ordered::objects::Kind;
+                    match kind {
+                        Kind::Task => log.tasks.get(&word),
+                        Kind::TaskSet => log.sets.get(&word),
+                        _ => driver.objects.identity(kind, word),
+                    }
+                    .cloned()
+                })
+                .ok()
+        })
+    } else {
+        None
+    };
+    log.receive_polls.push(ReceivePollCompletion {
+        task: path,
+        ordinal,
+        channel: channel.clone(),
+        status,
+        payload,
+        retirement,
+        sequence: log
+            .receive_polls
+            .len()
+            .try_into()
+            .expect("receive poll sequence fits u64"),
+    });
 }
 
 /// # Safety
@@ -2281,6 +2384,116 @@ mod tests {
                     reference = Some(events);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn receive_poll_observer_uses_saved_slots_without_parked_contexts() {
+        use crate::budget::stretch::Settled;
+        use crate::tasks::{Logical, Scheduler, Task, Wait};
+        for case in 0..3 {
+            let mut s = Scheduler::default();
+            s.tasks
+                .push(Some(Task::new(1, std::ptr::null_mut(), None, vec![], None)));
+            s.tasks.push(Some(Task::new(
+                2,
+                std::ptr::null_mut(),
+                None,
+                vec![7],
+                None,
+            )));
+            let layout = crate::Layout {
+                magic: crate::LAYOUT_MAGIC,
+                version: crate::LAYOUT_VERSION,
+                size: 16,
+                align: 8,
+                finalizer: None,
+                steps: std::ptr::null(),
+                step_count: 0,
+                field_count: 0,
+                flags: 0,
+                logical: 0,
+                logical_count: std::ptr::null(),
+                scan: std::ptr::null(),
+                scan_words: 0,
+            };
+            let none = [0u64; 2];
+            let element =
+                unsafe { crate::channels::Element::new(2, &layout, none.as_ptr().cast()) };
+            let (sender, receiver) = s.channels.open(element, &layout);
+            let channel = s.channels.channel(receiver, false);
+            let identity = ObjectId {
+                creator: vec![],
+                ordinal: 3,
+            };
+            let mut driver = super::super::driver::Driver::new(
+                0,
+                Policy::admit(&Default::default(), None),
+                Settled {
+                    level: 0,
+                    limit: u64::MAX,
+                    fuel: u64::MAX,
+                },
+                Default::default(),
+            );
+            let mut log = Log::default();
+            log.ordinals.insert(vec![7], 10);
+            log.last_ops.insert(vec![7], "channel.receive");
+            log.receivers.insert(vec![7], (identity.clone(), 2));
+            log.values.insert(2, received_integer_program());
+            driver.events = Some(log);
+            s.logical = Logical::Ordered(driver);
+            let mut output = std::mem::MaybeUninit::<[u64; 2]>::uninit();
+            let slot = if case == 0 {
+                output.as_mut_ptr().cast()
+            } else {
+                std::ptr::null_mut()
+            };
+            s.current = 1;
+            s.park(Wait::Receive { channel, slot });
+            if case == 0 {
+                let mut message = [1u64, 55];
+                assert_eq!(
+                    unsafe { s.channels.send(channel, message.as_mut_ptr().cast()) },
+                    crate::channels::DONE
+                );
+            } else if case == 1 {
+                s.channels.close(sender);
+            } else {
+                s.cancel(1, crate::tasks::CANCEL_REQUESTED);
+            }
+            s.wake(1);
+            assert!(unsafe { crate::tasks::readiness::poll_ordered(&mut s, true) });
+            assert!(s.task(1).wait.is_none());
+            assert!(s.task(1).ctx.is_null());
+            if case == 0 {
+                unsafe { output.as_mut_ptr().write([0, 0]) };
+            }
+            let Logical::Ordered(driver) = &s.logical else {
+                unreachable!()
+            };
+            let polls = &driver.events.as_ref().unwrap().receive_polls;
+            assert_eq!(polls.len(), 1);
+            assert_eq!(
+                polls[0],
+                ReceivePollCompletion {
+                    task: vec![7],
+                    ordinal: 9,
+                    channel: identity,
+                    status: match case {
+                        0 => crate::channels::DONE,
+                        1 => crate::channels::CLOSED,
+                        _ => crate::channels::CANCELED + crate::tasks::CANCEL_REQUESTED,
+                    },
+                    payload: (case == 0).then(|| [
+                        1u32.to_le_bytes().as_slice(),
+                        &55u64.to_le_bytes()
+                    ]
+                    .concat()),
+                    retirement: 0,
+                    sequence: 0,
+                }
+            );
         }
     }
 

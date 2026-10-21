@@ -595,6 +595,7 @@ pub(crate) unsafe fn receive(
     engine::at_head(ctx)?;
     let word = unsafe { receiver.read() };
     let descriptor = engine::carrier_descriptor(ctx, Kind::Receiver, word);
+    unsafe { super::events::prepare_receive(ctx, word, descriptor) };
     let me = scheduler(ctx).current;
     let (status, progress) = engine::head_effect(ctx, "channel.receive", || {
         let s = scheduler(ctx);
@@ -1384,7 +1385,30 @@ mod tests {
         _: u64,
         _: u64,
     ) -> u8 {
-        let mut sender = unsafe { crate::alloc::payload(environment).cast::<u64>().read() };
+        let [mut sender, await_saved] =
+            unsafe { crate::alloc::payload(environment).cast::<[u64; 2]>().read() };
+        if await_saved != 0 {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let waiting = {
+                    let _role = unsafe { role::Guard::new(ctx) };
+                    let s = scheduler(ctx);
+                    matches!(s.task(0).wait, Some(Wait::Receive { .. })) && readiness::saved(s, 0)
+                };
+                if waiting {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < until,
+                    "receiver never saved its wait"
+                );
+                let mut cause = 0;
+                assert_eq!(
+                    unsafe { hirsel_rt_v2_task_canceled(ctx, &mut cause, &0) },
+                    STATUS_OK
+                );
+            }
+        }
         let mut scope = 0;
         assert_eq!(
             unsafe { hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0) },
@@ -1415,8 +1439,15 @@ mod tests {
         }
     }
 
-    fn receive_run(width: u32, sender: bool) {
-        use hirsel_core_contract::handle_scan::TYPED_HANDLE;
+    fn receive_run(
+        width: u32,
+        sender: bool,
+        observing: bool,
+    ) -> Option<super::super::events::ReceivePollCompletion> {
+        use hirsel_core_contract::handle_scan::*;
+        use std::sync::{Arc, Mutex};
+        let observed = Arc::new(Mutex::new(None));
+        let seen = observed.clone();
         let scan = [TYPED_HANDLE, 0, Kind::Sender.code(), 2, 0, 0, 0, 0];
         let environment = crate::Layout {
             magic: crate::LAYOUT_MAGIC,
@@ -1433,12 +1464,37 @@ mod tests {
             scan: scan.as_ptr(),
             scan_words: 8,
         };
+        let option = [
+            VALUE,
+            VALUE_VARIANT,
+            16,
+            0,
+            0,
+            0,
+            2,
+            0,
+            VALUE_FIELD,
+            8,
+            4,
+            1,
+            0,
+            0,
+            0,
+            0,
+        ];
+        let bits = [VALUE, VALUE_BITS, 8, 0, 0, 0, 0, 0];
         let image = crate::Layout {
-            scan: std::ptr::null(),
-            scan_words: 0,
+            scan: option.as_ptr(),
+            scan_words: option.len() as u64,
             ..environment
         };
-        let layouts = [&environment as *const crate::Layout, &image];
+        let scalar = crate::Layout {
+            size: 8,
+            scan: bits.as_ptr(),
+            scan_words: bits.len() as u64,
+            ..environment
+        };
+        let layouts = [&environment as *const crate::Layout, &image, &scalar];
         let mut run = crate::host::BodyRun::new(width, false);
         run.config.layouts = layouts.as_ptr();
         run.config.layout_count = layouts.len() as u32;
@@ -1446,7 +1502,12 @@ mod tests {
         // finalizers or Shared roots. Quiescent endpoint cleanup is explicit.
         unsafe { run.use_physical_dispatch() };
         let outcome = run.run(
-            |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+            |ctx| unsafe {
+                engine::enable(ctx, Policy::admit(&Default::default(), None));
+                if observing {
+                    super::super::events::enable(ctx);
+                }
+            },
             move |ctx| unsafe {
                 let mut scope = 0;
                 assert_eq!(
@@ -1477,7 +1538,7 @@ mod tests {
                     );
                     crate::alloc::payload(environment)
                         .cast::<[u64; 2]>()
-                        .write([endpoints[0], 0]);
+                        .write([endpoints[0], u64::from(observing)]);
                     assert_eq!(
                         hirsel_rt_v2_task_spawn(
                             ctx,
@@ -1509,6 +1570,39 @@ mod tests {
                 assert!(sender, "a blocked receive cannot continue");
                 assert_eq!(status, crate::channels::DONE);
                 assert_eq!(message, [1, 77]);
+                if observing {
+                    let _role = role::Guard::new(ctx);
+                    let log = engine::driver(ctx).events.as_ref().unwrap();
+                    assert_eq!(
+                        log.receive_polls.len(),
+                        1,
+                        "actual saved poll completed receive"
+                    );
+                    let poll = &log.receive_polls[0];
+                    assert_eq!(poll.status, crate::channels::DONE);
+                    assert_eq!(poll.sequence, 0);
+                    assert_eq!(
+                        poll.payload,
+                        Some([1u32.to_le_bytes().as_slice(), &77u64.to_le_bytes()].concat())
+                    );
+                    assert!(log.boundaries.iter().any(|b| b.task == poll.task
+                        && b.ordinal == poll.ordinal
+                        && b.transition == super::super::events::Transition::Park));
+                    let done = log
+                        .owner_completions
+                        .iter()
+                        .find(|done| done.task == poll.task && done.ordinal == poll.ordinal)
+                        .unwrap();
+                    let super::super::events::OwnerOutcome::Receive {
+                        status, payload, ..
+                    } = &done.outcome
+                    else {
+                        panic!("receive owner outcome")
+                    };
+                    assert_eq!(*status, poll.status);
+                    assert_eq!(payload, &poll.payload);
+                    *seen.lock().unwrap() = Some(poll.clone());
+                }
                 let mut result = NONE;
                 assert_eq!(
                     hirsel_rt_v2_task_join(
@@ -1548,19 +1642,33 @@ mod tests {
             assert!(waits[0].spawn_path.is_empty());
         }
         assert_eq!(outcome.pending, 0);
+        observed.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn saved_receive_poll_evidence_matches_owner_at_one_and_many_workers() {
+        let mut reference = None;
+        for width in [1, 2, 4, 8] {
+            let observed = receive_run(width, true, true).unwrap();
+            if let Some(reference) = &reference {
+                assert_eq!(&observed, reference);
+            } else {
+                reference = Some(observed);
+            }
+        }
     }
 
     #[test]
     fn a_real_ordered_receive_wakes_from_a_retired_send_and_moves_the_saved_slot() {
         for width in [2, 4, 8] {
-            receive_run(width, true);
+            receive_run(width, true, false);
         }
     }
 
     #[test]
     fn the_last_ordered_receive_reports_blocked_only_after_idle_save_and_poll() {
         for width in [2, 4, 8] {
-            receive_run(width, false);
+            receive_run(width, false, false);
         }
     }
 }
