@@ -773,6 +773,7 @@ impl QueryEngine {
             }
             QueryKind::Lower => {
                 self.lowered.remove(&key.def);
+                self.lower_verdicts.remove(&key.def);
             }
             _ => {}
         }

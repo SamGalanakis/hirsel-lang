@@ -229,6 +229,7 @@ impl Drop for QueryEngine {
             return;
         }
         let _timing = timings::interval(Interval::Merge);
+        released("engine: lower verdicts", take(&mut self.lower_verdicts));
         released("engine: lowered", take(&mut self.lowered));
         released("engine: modes", take(&mut self.modes));
         released("engine: checked", take(&mut self.checked));
@@ -349,6 +350,7 @@ impl QueryEngine {
             self.constant_values.clear();
             self.staged_values.clear();
             self.lowered.clear();
+            self.lower_verdicts.clear();
             self.materialization_environment = Some(now);
         }
     }
