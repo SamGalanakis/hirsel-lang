@@ -122,9 +122,8 @@ pub(super) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
             row.failure = Some(chain);
             let scope = row.scope.expect("a child has a scope");
             s.order(index);
-            let scope_row = s.scope(scope);
-            scope_row.canceled.get_or_insert(CANCEL_CHILD_FAILED);
-            let siblings = scope_row.children.clone();
+            s.cancel_scope(scope, CANCEL_CHILD_FAILED);
+            let siblings = s.scope(scope).children.clone();
             s.wake_owner(scope);
             for sibling in siblings {
                 if sibling != index {

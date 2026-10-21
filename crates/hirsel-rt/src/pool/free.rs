@@ -118,6 +118,7 @@ fn word_owner(owner: u32) -> Owner {
 /// service lifetime and scheduler role contracts must hold before activation.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
     let execs = execs(ctx);
+    unsafe { crate::tasks::install_cancel_metrics(ctx) };
     let metrics = unsafe { (*ctx).run_ref() }
         .worker_metrics
         .as_ref()

@@ -11,6 +11,7 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+pub mod cancel;
 pub mod claim;
 pub mod frame;
 pub mod keys;

@@ -359,7 +359,7 @@ mod tests {
         for enabled in [false, true] {
             let run = Run::new(enabled);
             let s = super::super::scheduler(run.0);
-            s.task(0).canceled = Some(super::super::CANCEL_REQUESTED);
+            s.cancel(0, super::super::CANCEL_REQUESTED);
             unsafe { release(run.0) };
             assert_eq!(super::super::task_canceled(run.0, 0), Some(0));
             unsafe {
@@ -379,7 +379,7 @@ mod tests {
     fn remote_shield_reads_use_the_snapshot_while_local_state_changes() {
         let run = Run::new(true);
         let s = super::super::scheduler(run.0);
-        s.task(0).canceled = Some(super::super::CANCEL_REQUESTED);
+        s.cancel(0, super::super::CANCEL_REQUESTED);
         unsafe {
             (*run.0).shield = 1;
             release(run.0);

@@ -31,6 +31,11 @@ expected result; the gate runs it when these models or the kernel source they co
   send, and a spawn's registration and the child's end on another thread, against two cuts).
   Mutations that must fail: `-DWEAK_ENTER` (a release store for `active := 1`) and
   `-DWITHDRAW_BLIND` (a plain store instead of the withdraw CAS), with and without recording.
+- `loom/tests/cancel.rs` runs the production cancellation flag and epoch cache
+  at preemption bound **2**: competing causes have one stable winner, and a
+  cached observation cannot survive cancellation when the scheduler role
+  changes owners. Runtime tests cover scope precedence, shielding, promotion
+  of descendants when a spawner retires, and row reuse.
 
 GenMC is built once by `check.sh`, pinned by commit, into
 `${XDG_CACHE_HOME:-~/.cache}/genmc-<commit>`; it needs cmake, clang and LLVM 19-22 with their

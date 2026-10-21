@@ -3,6 +3,9 @@
 
 pub mod sync;
 
+#[path = "../../../../crates/hirsel-free/src/cancel.rs"]
+pub mod cancel;
+
 #[path = "../../../../crates/hirsel-free/src/claim.rs"]
 pub mod claim;
 #[path = "../../../../crates/hirsel-free/src/phase.rs"]

@@ -155,7 +155,13 @@ struct Task {
     scope: Option<u32>,
     path: Vec<u32>,
     spawned: u32,
-    canceled: Option<u32>,
+    canceled: hirsel_free::cancel::Flag,
+    cancel_cache: hirsel_free::cancel::Cache,
+    /// Actual spawning parent and position in its child list. A task can be
+    /// spawned into a scope owned by another task. Retirement promotes its
+    /// live descendants before this row can be reused.
+    parent: Option<(u32, usize)>,
+    children: Vec<u32>,
     /// Role-owned finalizer-shield snapshot. Remote cancellation/poll readers
     /// never borrow TaskCtx while its owner executes task-local runtime code.
     shield: u32,
@@ -218,7 +224,7 @@ struct Scope {
     /// The task whose body runs in the scope.
     owner: u32,
     children: Vec<u32>,
-    canceled: Option<u32>,
+    canceled: hirsel_free::cancel::Flag,
     /// `task.scope_until`'s deadline (CONC-3).
     deadline: Option<ScopeDeadline>,
     /// Completion order belongs to the parent scope, including children that
@@ -245,6 +251,8 @@ enum Logical {
 #[derive(Default)]
 pub(crate) struct Scheduler {
     logical: Logical,
+    cancel_epoch: hirsel_free::cancel::Epoch,
+    cancel_metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
     tasks: Vec<Option<Task>>,
     vacant_tasks: Vec<u32>,
     scopes: Vec<Option<Scope>>,
@@ -329,26 +337,37 @@ impl Scheduler {
     }
     /// `task`'s cancellation, with `shield` its finalizer shield (the context's while it runs).
     fn canceled_task(&self, task: u32, shield: u32) -> Option<u32> {
-        canceled_in(&self.tasks, &self.scopes, task, shield)
+        canceled_in(
+            &self.tasks,
+            &self.scopes,
+            task,
+            shield,
+            self.cancel_epoch.load(),
+            self.cancel_metrics.as_deref(),
+        )
     }
     /// Cancel `task` with `cause` and its descendants with `Parent`; an earlier cause stays.
     /// Each canceled parked task is woken: its cancellation may end its wait.
     fn cancel(&mut self, task: u32, cause: u32) {
-        let path = self.task(task).path.clone();
-        let mut parked = Vec::new();
-        for (index, row) in self.tasks.iter_mut().enumerate() {
-            let Some(row) = row else { continue };
-            if row.path.starts_with(&path) && row.scope.is_some() {
-                row.canceled.get_or_insert(if row.path.len() == path.len() {
-                    cause
-                } else {
-                    CANCEL_PARENT
-                });
-                parked.push(index as u32);
-            }
+        // Go context's linked-child walk, rather than scanning unrelated run
+        // rows. Links stay until the child row is vacated, including scope exit.
+        let mut pending = vec![task];
+        let mut changed = false;
+        while let Some(index) = pending.pop() {
+            let row = self.task(index);
+            changed |= row
+                .canceled
+                .cancel(if index == task { cause } else { CANCEL_PARENT });
+            pending.extend_from_slice(&row.children);
+            self.wake(index);
         }
-        for task in parked {
-            self.wake(task);
+        if changed {
+            self.cancel_epoch.changed();
+        }
+    }
+    fn cancel_scope(&mut self, scope: u32, cause: u32) {
+        if self.scope(scope).canceled.cancel(cause) {
+            self.cancel_epoch.changed();
         }
     }
     /// Poll parked `task` at the next scheduling point: an event may have ended its wait.
@@ -400,7 +419,16 @@ impl Scheduler {
                     break;
                 }
                 let shield = self.tasks[task as usize].as_ref().map_or(0, |t| t.shield());
-                if canceled_in(&self.tasks, &self.scopes, task, shield).is_none() {
+                if canceled_in(
+                    &self.tasks,
+                    &self.scopes,
+                    task,
+                    shield,
+                    self.cancel_epoch.load(),
+                    self.cancel_metrics.as_deref(),
+                )
+                .is_none()
+                {
                     served += 1;
                 }
                 wake_in(&mut self.tasks, &mut self.woken, task);
@@ -487,8 +515,8 @@ impl Scheduler {
         }
         deadline.expired = true;
         deadline.token = None;
-        row.canceled.get_or_insert(CANCEL_DEADLINE);
         let (owner, children) = (row.owner, row.children.clone());
+        self.cancel_scope(scope, CANCEL_DEADLINE);
         self.wake(owner);
         for child in children {
             self.cancel(child, CANCEL_DEADLINE);
@@ -588,13 +616,39 @@ impl Scheduler {
             .is_some_and(|t| matches!(self.task(t).state, State::Holding | State::Done))
     }
     fn vacate_task(&mut self, index: u32) {
-        let task = self.tasks[index as usize]
+        let mut task = self.tasks[index as usize]
             .take()
             .unwrap_or_else(|| fault("a task completed twice"));
         if task.stack.is_some() {
             fault("a task left its rows before it completed");
         }
+        // Tokio cancellation_token/tree_node.rs:201-239 at ce685ee6916549ed:
+        // remove this node and promote its children to its parent. The role
+        // replaces Tokio's node locks; indices replace Arc-owned nodes.
+        if let Some((parent, pos)) = task.parent {
+            let children = &mut self.task(parent).children;
+            assert_eq!(children.swap_remove(pos), index);
+            if let Some(&moved) = children.get(pos) {
+                self.task(moved).parent = Some((parent, pos));
+            }
+            for child in std::mem::take(&mut task.children) {
+                let pos = self.task(parent).children.len();
+                self.task(child).parent = Some((parent, pos));
+                self.task(parent).children.push(child);
+            }
+        } else {
+            assert!(
+                task.children.is_empty(),
+                "a root retired with live children"
+            );
+        }
         self.vacant_tasks.push(index);
+    }
+
+    fn link_child(&mut self, parent: u32, child: u32) {
+        let pos = self.task(parent).children.len();
+        assert!(self.task(child).parent.replace((parent, pos)).is_none());
+        self.task(parent).children.push(child);
     }
 }
 
@@ -615,7 +669,10 @@ impl Task {
             scope,
             path,
             spawned: 0,
-            canceled,
+            canceled: canceled.into(),
+            cancel_cache: Default::default(),
+            parent: None,
+            children: Vec::new(),
             shield: 0,
             scopes: Vec::new(),
             code: None,
@@ -667,6 +724,8 @@ fn canceled_in(
     scopes: &[Option<Scope>],
     task: u32,
     shield: u32,
+    epoch: u64,
+    metrics: Option<&crate::pool::WorkerMetrics>,
 ) -> Option<u32> {
     if shield > 0 {
         return None;
@@ -674,13 +733,28 @@ fn canceled_in(
     let task = tasks[task as usize]
         .as_ref()
         .unwrap_or_else(|| fault("a vacant task row"));
-    if let Some(cause) = task.canceled {
-        return Some(cause);
+    let mut depth = 0;
+    let cause = task.cancel_cache.get(epoch, || {
+        if let Some(cause) = task.canceled.cause() {
+            return Some(cause);
+        }
+        for &scope in task.scopes.iter().rev() {
+            if metrics.is_some() {
+                depth += 1;
+            }
+            if let Some(cause) = scopes[scope as usize]
+                .as_ref()
+                .and_then(|s| s.canceled.cause())
+            {
+                return Some(cause);
+            }
+        }
+        None
+    });
+    if let Some(metrics) = metrics {
+        metrics.cancellation(depth);
     }
-    task.scopes
-        .iter()
-        .rev()
-        .find_map(|&s| scopes[s as usize].as_ref().and_then(|s| s.canceled))
+    cause
 }
 
 /// Mark parked `task` to be polled at the next scheduling point, once.
@@ -774,20 +848,7 @@ pub(crate) fn task_canceled(ctx: *mut TaskCtx, task: u32) -> Option<u32> {
 /// RUN-9: a callee run's place forwards its caller's cancellation: the run's root task is
 /// canceled with `cause` and every other task with `Parent`, and the parked ones are polled.
 pub(crate) fn cancel_root(ctx: *mut TaskCtx, cause: u32) {
-    let s = scheduler(ctx);
-    let mut parked = Vec::new();
-    for (index, row) in s.tasks.iter_mut().enumerate() {
-        let Some(row) = row else { continue };
-        row.canceled.get_or_insert(if index == ROOT as usize {
-            cause
-        } else {
-            CANCEL_PARENT
-        });
-        parked.push(index as u32);
-    }
-    for task in parked {
-        s.wake(task);
-    }
+    scheduler(ctx).cancel(ROOT, cause);
 }
 
 /// Outstanding waits for the test runner. This is host reporting, outside program Io.
@@ -1216,6 +1277,13 @@ pub(crate) unsafe fn record_dispatch(
     let run = unsafe { &*run };
     let s = unsafe { (*run.tasks.get()).as_deref_mut().unwrap() };
     record_worker(s.task(task), here, run.worker_metrics.as_deref());
+}
+
+/// # Safety
+/// Admission only; no worker has started a task.
+pub(crate) unsafe fn install_cancel_metrics(ctx: *mut TaskCtx) {
+    let metrics = unsafe { (*ctx).run_ref() }.worker_metrics.clone();
+    scheduler(ctx).cancel_metrics = metrics;
 }
 
 /// A physical stack reached idle, before its dispatch activity reservation
@@ -2027,9 +2095,8 @@ unsafe fn completed(ctx: &mut TaskCtx, index: u32, status: u8) -> Stopped<u32> {
         row.failure = Some(chain);
         s.order(index);
         // FAIL-2: a failed child cancels its siblings and its scope's later blocking effects.
-        let scope_row = s.scope(scope);
-        scope_row.canceled.get_or_insert(CANCEL_CHILD_FAILED);
-        let siblings = scope_row.children.clone();
+        s.cancel_scope(scope, CANCEL_CHILD_FAILED);
+        let siblings = s.scope(scope).children.clone();
         s.wake_owner(scope);
         for sibling in siblings {
             if sibling != index {
@@ -2109,7 +2176,7 @@ fn open_scope(ctx: *mut TaskCtx, deadline: Option<ScopeDeadline>) -> (u32, u32) 
         generation,
         owner: current,
         children: Vec::new(),
-        canceled: None,
+        canceled: Default::default(),
         deadline,
         completions: AtomicU64::new(0),
     };
@@ -2124,6 +2191,7 @@ fn open_scope(ctx: *mut TaskCtx, deadline: Option<ScopeDeadline>) -> (u32, u32) 
         }
     };
     s.task(current).scopes.push(index);
+    s.cancel_epoch.changed();
     (index, generation)
 }
 
@@ -2242,6 +2310,7 @@ unsafe fn exit_scope(
     if s.task(current).scopes.pop() != Some(index) {
         fault("a scope exits before a scope entered inside it");
     }
+    s.cancel_epoch.changed();
     let failing = ctx.failure.active();
     if failing || error != 0 {
         for child in s.scope(index).children.clone() {
@@ -2365,6 +2434,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     let child = task.path.clone();
     s.tasks[index as usize] = Some(task);
     s.scope(scope).children.push(index);
+    s.link_child(current, index);
     // A free-mode replay never starts a child its cut lacks.
     // SAFETY: the context is live.
     if let (Some(started), Some(metrics)) =
@@ -3710,6 +3780,110 @@ mod free_policy_tests {
     use super::*;
 
     #[test]
+    fn cancellation_cache_tracks_scope_precedence_and_skips_repeated_ancestor_walks() {
+        let metrics = std::sync::Arc::new(crate::pool::WorkerMetrics::default());
+        let mut s = Scheduler::default();
+        s.cancel_metrics = Some(metrics.clone());
+        s.tasks
+            .push(Some(Task::new(1, std::ptr::null_mut(), None, vec![], None)));
+        s.scopes = vec![Some(scope()), Some(scope())];
+        s.task(ROOT).scopes = vec![0, 1];
+        assert_eq!(s.canceled_task(ROOT, 0), None);
+        assert_eq!(s.canceled_task(ROOT, 0), None);
+        let values = metrics
+            .values()
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(values["ancestor_depth"], 1.0);
+        s.cancel_scope(0, CANCEL_CHILD_FAILED);
+        assert_eq!(s.canceled_task(ROOT, 0), Some(CANCEL_CHILD_FAILED));
+        s.cancel_scope(1, CANCEL_DEADLINE);
+        assert_eq!(s.canceled_task(ROOT, 0), Some(CANCEL_DEADLINE));
+        // Shielding neither observes nor overwrites the cached cause.
+        assert_eq!(s.canceled_task(ROOT, 1), None);
+        assert_eq!(s.canceled_task(ROOT, 0), Some(CANCEL_DEADLINE));
+        s.task(ROOT).scopes.pop();
+        s.cancel_epoch.changed();
+        assert_eq!(s.canceled_task(ROOT, 0), Some(CANCEL_CHILD_FAILED));
+        s.cancel(ROOT, CANCEL_REQUESTED);
+        assert_eq!(s.canceled_task(ROOT, 0), Some(CANCEL_REQUESTED));
+        s.cancel(ROOT, CANCEL_DEADLINE);
+        assert_eq!(s.canceled_task(ROOT, 0), Some(CANCEL_REQUESTED));
+    }
+
+    #[test]
+    fn cancellation_walks_only_linked_descendants_and_unlinks_before_row_reuse() {
+        let mut s = Scheduler::default();
+        s.scopes.push(Some(scope()));
+        for task in 0..5 {
+            s.tasks.push(Some(Task::new(
+                1,
+                std::ptr::null_mut(),
+                (task != ROOT).then_some(0),
+                vec![task],
+                None,
+            )));
+        }
+        s.link_child(ROOT, 1);
+        s.link_child(ROOT, 4);
+        s.link_child(1, 2);
+        s.link_child(1, 3);
+        s.cancel(1, CANCEL_DEADLINE);
+        assert_eq!(s.task(ROOT).canceled.cause(), None);
+        assert_eq!(s.task(1).canceled.cause(), Some(CANCEL_DEADLINE));
+        assert_eq!(s.task(2).canceled.cause(), Some(CANCEL_PARENT));
+        assert_eq!(s.task(3).canceled.cause(), Some(CANCEL_PARENT));
+        assert_eq!(s.task(4).canceled.cause(), None);
+        // Scope 0 belongs to root, but task 2's actual parent is task 1.
+        s.vacate_task(2);
+        s.tasks[2] = Some(Task::new(2, std::ptr::null_mut(), Some(0), vec![9], None));
+        s.link_child(ROOT, 2);
+        s.cancel(1, CANCEL_REQUESTED);
+        assert_eq!(s.task(2).canceled.cause(), None);
+        s.cancel(ROOT, CANCEL_REQUESTED);
+        assert_eq!(s.task(2).canceled.cause(), Some(CANCEL_PARENT));
+        assert_eq!(s.task(4).canceled.cause(), Some(CANCEL_PARENT));
+    }
+
+    #[test]
+    fn retiring_a_spawner_promotes_descendants_before_its_row_is_reused() {
+        let mut s = Scheduler::default();
+        s.scopes.push(Some(scope()));
+        for task in 0..5 {
+            s.tasks.push(Some(Task::new(
+                1,
+                std::ptr::null_mut(),
+                (task != ROOT).then_some(0),
+                vec![task],
+                None,
+            )));
+        }
+        s.link_child(ROOT, 1);
+        s.link_child(ROOT, 4);
+        s.link_child(1, 2);
+        s.link_child(2, 3);
+        s.vacate_task(1);
+        assert_eq!(s.task(ROOT).children, [4, 2]);
+        assert_eq!(s.task(4).parent, Some((ROOT, 0)));
+        assert_eq!(s.task(2).parent, Some((ROOT, 1)));
+        s.tasks[1] = Some(Task::new(2, std::ptr::null_mut(), Some(0), vec![9], None));
+        s.link_child(ROOT, 1);
+        s.cancel(1, CANCEL_REQUESTED);
+        assert_eq!(s.task(2).canceled.cause(), None);
+        assert_eq!(s.task(3).canceled.cause(), None);
+        s.cancel(ROOT, CANCEL_DEADLINE);
+        assert_eq!(s.task(1).canceled.cause(), Some(CANCEL_REQUESTED));
+        for child in [2, 3, 4] {
+            assert_eq!(s.task(child).canceled.cause(), Some(CANCEL_PARENT));
+        }
+        // Promotion can repeat, and must repair the swapped child's position.
+        s.vacate_task(2);
+        assert_eq!(s.task(ROOT).children, [4, 1, 3]);
+        assert_eq!(s.task(1).parent, Some((ROOT, 1)));
+        assert_eq!(s.task(3).parent, Some((ROOT, 2)));
+    }
+
+    #[test]
     fn a_logically_parked_running_frame_cannot_be_polled_before_idle_save() {
         let mut run = crate::host::BodyRun::new(2, false);
         // SAFETY: the body uses the root's existing physical-dispatch end and
@@ -3877,7 +4051,7 @@ mod free_policy_tests {
             generation: 1,
             owner: ROOT,
             children: Vec::new(),
-            canceled: None,
+            canceled: Default::default(),
             deadline: None,
             completions: AtomicU64::new(0),
         }

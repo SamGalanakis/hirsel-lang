@@ -406,6 +406,8 @@ pub struct WorkerMetrics {
     elisions: AtomicU64,
     queue_ops: AtomicU64,
     ready_metrics: std::sync::OnceLock<Arc<hirsel_free::work::Metrics>>,
+    cancel_checks: AtomicU64,
+    ancestor_links: AtomicU64,
     spawns: AtomicU64,
     spawn_ns: AtomicU64,
     migrations: AtomicU64,
@@ -427,6 +429,8 @@ impl Default for WorkerMetrics {
             elisions: AtomicU64::new(0),
             queue_ops: AtomicU64::new(0),
             ready_metrics: std::sync::OnceLock::new(),
+            cancel_checks: AtomicU64::new(0),
+            ancestor_links: AtomicU64::new(0),
             spawns: AtomicU64::new(0),
             spawn_ns: AtomicU64::new(0),
             migrations: AtomicU64::new(0),
@@ -469,6 +473,10 @@ impl WorkerMetrics {
     fn ready_metrics(&self) -> Arc<hirsel_free::work::Metrics> {
         self.ready_metrics.get_or_init(Default::default).clone()
     }
+    pub(crate) fn cancellation(&self, depth: u64) {
+        self.cancel_checks.fetch_add(1, Relaxed);
+        self.ancestor_links.fetch_add(depth, Relaxed);
+    }
     /// A child task created in `took`; it is resident until it completes.
     pub(crate) fn spawn(&self, took: Duration) {
         self.spawns.fetch_add(1, Relaxed);
@@ -508,6 +516,10 @@ impl WorkerMetrics {
         let ready = self.ready_metrics.get().map(|metrics| metrics.counts());
         let queue_ops = self.queue_ops.load(Relaxed) + ready.map_or(0, |(ops, _, _)| ops);
         let mut values = vec![
+            (
+                "ancestor_depth",
+                ratio(&self.ancestor_links, self.cancel_checks.load(Relaxed)),
+            ),
             ("switches_per_op", ratio(&self.switches, ops)),
             (
                 "permit_wait_ns",
