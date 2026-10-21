@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1926 exported definitions; 809 variants.
+1927 exported definitions; 809 variants.
 
 ## Types and roots
 
@@ -2839,6 +2839,8 @@ References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/Reader`](#def-std
 
 - `pub fn bufio.contents(r: Reader) -> unique Bytes uses {}`
 
+An independent owned snapshot; use `peek` to inspect without copying.
+
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
 
 <a id="def-std_401_2fbufio_2ffile_5fread"></a>
@@ -2876,6 +2878,14 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2
 - `pub fn bufio.new(capacity: u64) -> Reader uses {}`
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+
+<a id="def-std_401_2fbufio_2fpeek"></a>
+
+- `pub fn bufio.peek(r: Reader, max: u64) -> Bytes in r uses {}`
+
+Borrows at most `max` unread bytes without refilling or advancing `r`.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
 
 <a id="def-std_401_2fbufio_2fread"></a>
 
