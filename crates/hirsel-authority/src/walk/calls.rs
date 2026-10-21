@@ -805,107 +805,118 @@ impl Checker<'_> {
         self.out.call_allocations.retain(|(site, _)| *site != e);
         self.out.call_allocations.push((e, allocation));
         let mut generic_arguments = call.generic_arguments.clone();
-        let mut pending: Vec<_> = f
-            .parameters
-            .iter()
-            .zip(&args)
-            .map(|(p, a)| (p.ty, *a, 0))
-            .collect();
-        while let Some((formal, actual, depth)) = pending.pop() {
-            match self.t.get(formal).unwrap().kind.clone() {
-                TypeKind::Parameter(p) if p.binder() == GenericBinder::Bound(depth) => {
-                    if let Some(GenericArgument::Type(argument)) =
-                        generic_arguments.get_mut(p.parameter().0 as usize)
-                    {
-                        *argument = refine_inferred_value_contract(self.t, *argument, actual)
-                            .expect("checked generic occurrence");
-                    }
-                }
-                TypeKind::Function(f) => {
-                    if let TypeKind::Function(a) = &self.t.get(actual).unwrap().kind {
-                        pending.extend(
-                            f.parameters
-                                .iter()
-                                .map(|p| p.ty)
-                                .chain([f.result])
-                                .zip(a.parameters.iter().map(|p| p.ty).chain([a.result]))
-                                .map(|(a, b)| (a, b, depth + 1)),
-                        );
-                    }
-                }
-                kind => pending.extend(
-                    kind.value_parts()
-                        .into_iter()
-                        .zip(self.t.get(actual).unwrap().kind.value_parts())
-                        .map(|(a, b)| (a, b, depth)),
-                ),
-            }
-        }
-        // GEN-1/PROV-1: a type argument carries the brands of the values it
-        // is instantiated at. The first parameter in declaration order that
-        // supplies a single brand fixes it, and every other argument is then
-        // checked against it, so a value of another owner cannot enter through
-        // a generic parameter. A type argument no parameter mentions types no
-        // value the callee receives, so it can produce none: the expected
-        // result type instantiates it, and any brand holds vacuously.
-        let mut mentioned = BTreeSet::new();
-        for parameter in &f.parameters {
-            let mut pending = vec![(parameter.ty, 0)];
-            while let Some((ty, depth)) = pending.pop() {
-                let row = self.t.get(ty).unwrap();
-                if let TypeKind::Parameter(p) = &row.kind {
-                    if p.binder() == GenericBinder::Bound(depth) {
-                        mentioned.insert(p.parameter().0 as usize);
-                    }
-                }
-                pending.extend(
-                    row.kind
-                        .graph_edges()
-                        .into_iter()
-                        .map(|edge| (edge.ty, depth + edge.role.parameter_binders())),
-                );
-            }
-        }
-        let supplied = f
-            .parameters
-            .iter()
-            .map(|p| p.ty)
-            .zip(args.iter().copied())
-            .map(|pair| (pair, true))
-            .chain(
-                expected
-                    .map(|expected| ((f.result, expected), false))
-                    .into_iter(),
-            );
-        for ((formal, actual), argument) in supplied.collect::<Vec<_>>() {
-            let mut pending = vec![(formal, actual)];
-            while let Some((formal, actual)) = pending.pop() {
-                let (Some(formal_row), Some(actual_row)) =
-                    (self.t.get(formal).cloned(), self.t.get(actual).cloned())
-                else {
-                    continue;
-                };
-                match formal_row.kind {
-                    TypeKind::Parameter(p) if p.binder() == GenericBinder::Bound(0) => {
-                        let index = p.parameter().0 as usize;
-                        if argument != mentioned.contains(&index) {
-                            continue;
-                        }
-                        if let Some(GenericArgument::Type(instance)) =
-                            generic_arguments.get_mut(index)
+        // Rustc15c1044 ty/erase_regions.rs:26-34: skip a transformation
+        // with no possible target. Every write below requires a generic slot.
+        if !generic_arguments.is_empty() {
+            let mut pending: Vec<_> = f
+                .parameters
+                .iter()
+                .zip(&args)
+                .map(|(p, a)| (p.ty, *a, 0))
+                .collect();
+            while let Some((formal, actual, depth)) = pending.pop() {
+                #[cfg(test)]
+                GENERIC_REFINEMENT_ROWS.with(|rows| rows.set(rows.get() + 1));
+                match self.t.get(formal).unwrap().kind.clone() {
+                    TypeKind::Parameter(p) if p.binder() == GenericBinder::Bound(depth) => {
+                        if let Some(GenericArgument::Type(argument)) =
+                            generic_arguments.get_mut(p.parameter().0 as usize)
                         {
-                            *instance = self.adopt_brands(*instance, actual);
+                            *argument = refine_inferred_value_contract(self.t, *argument, actual)
+                                .expect("checked generic occurrence");
                         }
                     }
-                    TypeKind::Function(_) => {}
-                    kind => {
-                        if std::mem::discriminant(&kind) == std::mem::discriminant(&actual_row.kind)
-                        {
+                    TypeKind::Function(f) => {
+                        if let TypeKind::Function(a) = &self.t.get(actual).unwrap().kind {
                             pending.extend(
-                                kind.value_parts()
-                                    .into_iter()
-                                    .zip(actual_row.kind.value_parts()),
+                                f.parameters
+                                    .iter()
+                                    .map(|p| p.ty)
+                                    .chain([f.result])
+                                    .zip(a.parameters.iter().map(|p| p.ty).chain([a.result]))
+                                    .map(|(a, b)| (a, b, depth + 1)),
                             );
+                        }
+                    }
+                    kind => pending.extend(
+                        kind.value_parts()
+                            .into_iter()
+                            .zip(self.t.get(actual).unwrap().kind.value_parts())
+                            .map(|(a, b)| (a, b, depth)),
+                    ),
+                }
+            }
+            // GEN-1/PROV-1: a type argument carries the brands of the values it
+            // is instantiated at. The first parameter in declaration order that
+            // supplies a single brand fixes it, and every other argument is then
+            // checked against it, so a value of another owner cannot enter through
+            // a generic parameter. A type argument no parameter mentions types no
+            // value the callee receives, so it can produce none: the expected
+            // result type instantiates it, and any brand holds vacuously.
+            let mut mentioned = BTreeSet::new();
+            for parameter in &f.parameters {
+                let mut pending = vec![(parameter.ty, 0)];
+                while let Some((ty, depth)) = pending.pop() {
+                    #[cfg(test)]
+                    GENERIC_REFINEMENT_ROWS.with(|rows| rows.set(rows.get() + 1));
+                    let row = self.t.get(ty).unwrap();
+                    if let TypeKind::Parameter(p) = &row.kind {
+                        if p.binder() == GenericBinder::Bound(depth) {
+                            mentioned.insert(p.parameter().0 as usize);
+                        }
+                    }
+                    pending.extend(
+                        row.kind
+                            .graph_edges()
+                            .into_iter()
+                            .map(|edge| (edge.ty, depth + edge.role.parameter_binders())),
+                    );
+                }
+            }
+            let supplied = f
+                .parameters
+                .iter()
+                .map(|p| p.ty)
+                .zip(args.iter().copied())
+                .map(|pair| (pair, true))
+                .chain(
+                    expected
+                        .map(|expected| ((f.result, expected), false))
+                        .into_iter(),
+                );
+            for ((formal, actual), argument) in supplied.collect::<Vec<_>>() {
+                let mut pending = vec![(formal, actual)];
+                while let Some((formal, actual)) = pending.pop() {
+                    #[cfg(test)]
+                    GENERIC_REFINEMENT_ROWS.with(|rows| rows.set(rows.get() + 1));
+                    let (Some(formal_row), Some(actual_row)) =
+                        (self.t.get(formal).cloned(), self.t.get(actual).cloned())
+                    else {
+                        continue;
+                    };
+                    match formal_row.kind {
+                        TypeKind::Parameter(p) if p.binder() == GenericBinder::Bound(0) => {
+                            let index = p.parameter().0 as usize;
+                            if argument != mentioned.contains(&index) {
+                                continue;
+                            }
+                            if let Some(GenericArgument::Type(instance)) =
+                                generic_arguments.get_mut(index)
+                            {
+                                *instance = self.adopt_brands(*instance, actual);
+                            }
+                        }
+                        TypeKind::Function(_) => {}
+                        kind => {
+                            if std::mem::discriminant(&kind)
+                                == std::mem::discriminant(&actual_row.kind)
+                            {
+                                pending.extend(
+                                    kind.value_parts()
+                                        .into_iter()
+                                        .zip(actual_row.kind.value_parts()),
+                                );
+                            }
                         }
                     }
                 }

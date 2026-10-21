@@ -17,6 +17,13 @@ mod patterns;
 mod promises;
 use hirsel_modes::explain::{Cause, Explanation, Fact, Requirement};
 
+#[cfg(test)]
+thread_local! { static GENERIC_REFINEMENT_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn generic_refinement_rows() -> usize {
+    GENERIC_REFINEMENT_ROWS.with(std::cell::Cell::get)
+}
+
 /// A labelled block being walked: its consumer's context and each break
 /// that leaves it, with that path's state (LANG-11).
 struct BlockExit {

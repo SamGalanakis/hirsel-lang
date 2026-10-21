@@ -848,3 +848,64 @@ fn a_dependent_callable_refuses_missing_capture_evidence() {
         "MODE-4",
     );
 }
+
+#[test]
+fn nongeneric_calls_skip_refinement_walks_but_generic_calls_keep_them() {
+    for generic_call in [false, true] {
+        let mut f = Fixture::new();
+        let scalar = f.ty(TypeKind::Primitive(Primitive::U64));
+        let tuple = f.ty(TypeKind::Tuple(vec![scalar; 64].into()));
+        let argument = f.binding(
+            ResolvedName::Parameter(ParamId(0)),
+            tuple,
+            NameSite::Item,
+            UseKind::Borrow,
+            false,
+        );
+        let formal = if generic_call {
+            f.ty(TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))))
+        } else {
+            tuple
+        };
+        let mut callee = function(f.unit);
+        callee.parameters = vec![parameter(formal, PassingMode::Borrow)].into();
+        if generic_call {
+            callee.generics = vec![GenericParameter::Type {
+                name: "T".into(),
+                bounds: vec![].into(),
+            }]
+            .into();
+        }
+        let call = f.call("observe", callee, vec![argument], None);
+        if generic_call {
+            f.body.instantiations.push(Instantiation {
+                expression: call,
+                callee: path("observe"),
+                arguments: vec![GenericArgument::Type(tuple)],
+            });
+        }
+        let before = super::walk::generic_refinement_rows();
+        let out = f.finish(call);
+        clean(&out);
+        let visited = super::walk::generic_refinement_rows() - before;
+        let checked = out
+            .body
+            .calls
+            .iter()
+            .find(|r| r.expression == call)
+            .unwrap();
+        if generic_call {
+            assert!(visited > 0, "generic occurrence refinement must still run");
+            let GenericArgument::Type(actual) = checked.generic_arguments[0] else {
+                panic!("type actual")
+            };
+            assert!(session().semantic_eq(actual, tuple));
+        } else {
+            assert!(checked.generic_arguments.is_empty());
+            assert_eq!(
+                visited, 0,
+                "there is no generic slot for any header walk to refine"
+            );
+        }
+    }
+}
