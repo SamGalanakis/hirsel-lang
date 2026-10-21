@@ -1445,6 +1445,9 @@ pub(crate) unsafe fn gate_enter(ctx: &mut TaskCtx, gate: u32, site: u64) -> bool
     if ordered::engine::on(ctx) {
         return unsafe { crate::stop::check(ctx, ordered::foreign::gate_enter(ctx, gate, site)) };
     }
+    if free::enabled(ctx) {
+        return unsafe { crate::stop::check(ctx, free::gate::enter(ctx, gate, site)) };
+    }
     let s = scheduler(ctx);
     let me = s.current;
     let row = s.gate(gate);
@@ -1504,6 +1507,10 @@ pub(crate) unsafe fn gate_enter(ctx: &mut TaskCtx, gate: u32, site: u64) -> bool
 pub(crate) fn gate_leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) {
     if ordered::engine::on(ctx) {
         unsafe { crate::stop::check(ctx, ordered::foreign::gate_leave(ctx, gate, outermost)) };
+        return;
+    }
+    if free::enabled(ctx) {
+        unsafe { crate::stop::check(ctx, free::gate::leave(ctx, gate, outermost)) };
         return;
     }
     let object = if outermost && crate::free::enter(ctx, Phase::Done) {

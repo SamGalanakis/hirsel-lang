@@ -1022,3 +1022,6 @@ mod rest_tests;
 
 #[cfg(test)]
 mod deadline_tests;
+
+#[cfg(test)]
+mod gate_tests;
