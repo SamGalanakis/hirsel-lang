@@ -41,11 +41,8 @@ git -C "$repo" worktree add --detach "$worktree" "$sha" >> "$log" 2>&1
 cd "$worktree"
 stage="toolchain build"
 python3 tools/buck2/prepare.py >> "$log" 2>&1
-bundle=$(.buck2/bin/buck2 build --target-platforms //tools/buck2:dist //:hirsel-toolchain --show-full-output 2>> "$log" \
-  | awk '/^root\/\/:hirsel-toolchain /{print $2}')
-toolchain="$out/toolchain-$sha"
-rm -rf "$toolchain"
-cp -rL "$bundle" "$toolchain"
+toolchain="$out/toolchain-$stamp-$sha"
+tools/toolchain-dist/build --pgo --output "$toolchain" --work "$out/pgo-$stamp-$sha" >> "$log" 2>&1
 stage="suite"
 result="$out/$stamp-$sha.json"
 tools/compiler-bench/run --toolchain "$toolchain" --work "$out/work" --output "$result" "$@" >> "$log" 2>&1 || status=$?

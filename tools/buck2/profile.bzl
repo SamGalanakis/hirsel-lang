@@ -15,7 +15,18 @@ RELEASE_FLAGS = [
 
 # tsrs notes/perf-pgo.md: fat LTO requires bitcode in every target rlib.
 # Proc macros and build scripts keep host_transition's canonical dev profile.
-DIST_FLAGS = RELEASE_FLAGS + ["-Cembed-bitcode=yes", "-Clto=fat", "-Ccodegen-units=1"]
+DIST_PGO = read_root_config("hirsel", "dist_pgo", "off")
+if DIST_PGO not in ["off", "generate", "use"]:
+    fail("hirsel.dist_pgo must be off, generate or use")
+
+# Keep the same target platform, reservations, metadata and symbol names in
+# both passes (tsrs notes/perf-pgo.md:157-169). Only the action inputs change.
+PGO_FLAGS = {
+    "off": [],
+    "generate": ["-Cprofile-generate"],
+    "use": ["-Cprofile-use=$(location root//tools/toolchain-dist:profile)", "-Cllvm-args=-pgo-warn-missing-function"],
+}
+DIST_FLAGS = RELEASE_FLAGS + ["-Cembed-bitcode=yes", "-Clto=fat", "-Ccodegen-units=1"] + PGO_FLAGS[DIST_PGO]
 
 # The runtime archive is built as Cargo's release profile with
 # CARGO_PROFILE_RELEASE_PANIC=abort (crates/hirsel-driver/src/native/link.rs).

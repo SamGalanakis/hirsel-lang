@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Build an isolated distribution bundle, optionally with reproducible PGO.
+
+    tools/toolchain-dist/build --output /tmp/dist [--pgo --profdata /path/to/llvm-profdata]
+
+Uses Buck2's remote pool. Training uses one tools/capped command at a time.
+Keep output and work outside the repository; generated profiles are never committed.
+"""
+import argparse
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+
+ROOT = Path(__file__).resolve().parents[2]
+BUCK = ROOT / '.buck2/bin/buck2'
+PROFILE = Path(__file__).with_name('profile.profdata')
+
+
+def build(mode, output):
+    done = subprocess.run([str(BUCK), 'build', '--target-platforms', '//tools/buck2:dist',
+                           '-c', 'hirsel.dist_pgo=' + mode, '//:hirsel-toolchain', '--show-json-output'],
+                          cwd=ROOT, stdout=subprocess.PIPE, text=True, check=True)
+    bundle = ROOT / json.loads(done.stdout)['root//:hirsel-toolchain']
+    shutil.copytree(bundle, output, dirs_exist_ok=True)
+
+
+def manifest(output, mode):
+    def command(*args):
+        return subprocess.check_output(args, cwd=ROOT, text=True).strip()
+    def digest(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    record = dict(commit=command('git', 'rev-parse', 'HEAD'),
+                  patch_sha256=hashlib.sha256(command('git', 'diff', 'HEAD').encode()).hexdigest(),
+                  rustc=command(str(ROOT / 'tools/buck2/toolchains/rust-files/bin/rustc'), '-vV'),
+                  profile='dist', pgo=mode, lto='fat', codegen_units=1,
+                  training='compiler-bench examples + syn3k: check, debug Cranelift, release LLVM',
+                  hirsel_sha256=digest(output / 'hirsel'),
+                  precheck_sha256=digest(output / 'hirsel-std.precheck'))
+    if mode == 'use':
+        record['profdata_sha256'] = digest(output / 'hirsel.profdata')
+    (output / 'hirsel-build.json').write_text(json.dumps(record, indent=2) + '\n')
+
+
+@contextmanager
+def profile_lock():
+    # serialize pipeline writers in this checkout; each lane has its own file.
+    lock = ROOT / '.buck2/dist-pgo.lock'
+    with lock.open('w') as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--work', type=Path)
+    parser.add_argument('--pgo', action='store_true')
+    parser.add_argument('--cpu', type=int, default=29)
+    parser.add_argument('--profdata', help='LLVM tools matching the pinned rustc')
+    args = parser.parse_args()
+    output = args.output.resolve()
+    if output.exists():
+        parser.error('output already exists; use a fresh directory')
+    work = args.work.resolve() if args.work else output.with_name(output.name + '-work')
+    subprocess.run(['python3', 'tools/buck2/prepare.py'], cwd=ROOT, check=True)
+    if not args.pgo:
+        build('off', output)
+        manifest(output, 'off')
+        return
+    with profile_lock():
+        if args.profdata is None:
+            args.profdata = subprocess.check_output([str(ROOT / 'tools/toolchain-dist/profile-tools')], text=True).strip()
+        work.mkdir(parents=True, exist_ok=True)
+        instrumented = work / 'instrumented'
+        raw = work / 'raw'
+        if raw.exists():
+            raise SystemExit(f'{raw} exists: use a fresh work directory to avoid stale profiles')
+        build('generate', instrumented)
+        subprocess.run([str(ROOT / 'tools/toolchain-dist/train'), '--toolchain', str(instrumented),
+                        '--work', str(work / 'corpus'), '--raw', str(raw), '--cpu', str(args.cpu)], cwd=ROOT, check=True)
+        profiles = sorted(raw.glob('*.profraw'))
+        if not profiles or any(p.stat().st_size == 0 for p in profiles):
+            raise SystemExit('training left an empty or missing raw profile')
+        merged = work / 'merged.profdata'
+        subprocess.run([str(ROOT / 'tools/capped'), '--timeout', '300', args.profdata, 'merge',
+                        '-o', str(merged), *map(str, profiles)],
+                       env=dict(os.environ, HIRSEL_JOBS='1'), check=True)
+        subprocess.run([args.profdata, 'show', str(merged)], check=True)
+        shutil.copyfile(merged, PROFILE)
+        build('use', output)
+        shutil.copyfile(merged, output / 'hirsel.profdata')
+        manifest(output, 'use')
+
+
+if __name__ == '__main__':
+    main()

@@ -70,3 +70,75 @@ The comparison harness now retains diagnostics and each artifact hash separately
 Borrowed from oxc-project/tsrs notes/perf-pgo.md:14-32 (fat LTO, one codegen unit).
 Differs because Buck2 target flags and a dedicated 1-CPU/4-GiB final-link reservation
 replace Cargo's build plan. Developer compile reservations remain unchanged.
+
+## PGO on top of fat LTO
+
+PGO improves every measured case by another 8.44–18.80% instructions,
+geometric mean -13.51%. Combined with LTO, the reduction against release is
+12.56–22.68%, geometric mean -18.01%. Combined peak RSS ranges from -1.55% to
++0.04%, geometric mean -0.80%; no material memory regression. Final compiler
+size is 49,153,128 bytes, with symbols retained. Both comparisons report zero
+instruction regressions across all 24 metrics.
+
+| Program / mode | Release / dist / PGO instructions (G) | PGO vs release | Release / dist / PGO RSS (MiB) |
+| --- | ---: | ---: | ---: |
+| hello / check | 5.636 / 5.383 / 4.929 | -12.56% | 386.2 / 386.0 / 385.0 |
+| hello / clif | 10.665 / 9.969 / 8.921 | -16.36% | 631.6 / 629.0 / 623.4 |
+| hello / llvm-o2 | 10.498 / 9.803 / 8.755 | -16.60% | 633.0 / 631.0 / 627.6 |
+| todo-api / check | 14.540 / 13.602 / 11.949 | -17.82% | 579.1 / 576.1 / 574.5 |
+| todo-api / clif | 118.233 / 111.451 / 91.677 | -22.46% | 885.9 / 883.3 / 878.4 |
+| todo-api / llvm-o2 | 163.405 / 156.807 / 137.443 | -15.89% | 934.5 / 956.5 / 927.3 |
+| kvstore / check | 13.906 / 13.039 / 11.485 | -17.41% | 544.0 / 542.8 / 541.9 |
+| kvstore / clif | 99.988 / 94.122 / 77.422 | -22.57% | 851.5 / 850.8 / 845.8 |
+| kvstore / llvm-o2 | 134.929 / 129.142 / 112.820 | -16.39% | 912.2 / 906.5 / 904.0 |
+| logq / check | 13.819 / 12.950 / 11.379 | -17.66% | 544.6 / 543.1 / 542.4 |
+| logq / clif | 43.406 / 41.498 / 33.695 | -22.37% | 718.7 / 717.1 / 710.0 |
+| logq / llvm-o2 | 55.152 / 53.311 / 45.645 | -17.24% | 739.7 / 736.5 / 732.1 |
+| csvjson / check | 7.708 / 7.262 / 6.531 | -15.26% | 413.4 / 407.5 / 412.2 |
+| csvjson / clif | 58.596 / 55.595 / 45.661 | -22.08% | 758.1 / 753.9 / 746.7 |
+| csvjson / llvm-o2 | 78.510 / 75.615 / 65.872 | -16.10% | 784.5 / 782.3 / 773.2 |
+| mdtoc / check | 5.977 / 5.695 / 5.196 | -13.06% | 389.5 / 389.4 / 389.6 |
+| mdtoc / clif | 20.514 / 19.276 / 16.279 | -20.64% | 685.5 / 681.3 / 674.8 |
+| mdtoc / llvm-o2 | 24.395 / 23.179 / 20.227 | -17.09% | 691.9 / 689.6 / 686.1 |
+| bench-lite / check | 12.601 / 11.846 / 10.486 | -16.79% | 535.7 / 534.2 / 533.2 |
+| bench-lite / clif | 26.558 / 25.281 / 21.119 | -20.48% | 688.9 / 686.9 / 680.3 |
+| bench-lite / llvm-o2 | 32.126 / 30.877 / 26.761 | -16.70% | 695.9 / 694.0 / 689.7 |
+| syn3k / check | 30.307 / 28.156 / 24.331 | -19.72% | 714.1 / 712.6 / 711.2 |
+| syn3k / clif | 246.016 / 233.305 / 190.211 | -22.68% | 1165.7 / 1164.8 / 1159.4 |
+| syn3k / llvm-o2 | 356.448 / 344.450 / 302.416 | -15.16% | 1310.8 / 1308.5 / 1304.3 |
+
+`tools/toolchain-dist/build --pgo` is the reproducible distribution pipeline;
+`compiler-bench/run-main` uses it. It trains the instrumented compiler on all
+24 quick workloads, requires a nonempty profile from each, merges with matching
+checksum-pinned LLVM tools, then builds with profile-use. Both passes retain the
+same platform hash bfbd7803d9312439, crate metadata, reservations, fat LTO and
+strip setting. A declared, ignored profile artifact participates in Buck2 remote
+action keys. Mimalloc's C code is not instrumented. Build manifests retain the
+compiler/profile/precheck hashes. Generated profiles are never committed.
+
+All 24 training workloads passed (peak 1265 MiB); all 64 baseline/PGO correctness
+invocations passed, covering diagnostics, exported TIR and native ELF bytes.
+Captured PGO-use diagnostics contain zero profile hash mismatches. Audited CLI
+argument files confirm identical metadata between generate/use and the final
+profile-use flag. Startup usage probes direct LLVM's output to /dev/null rather
+than leaving a stray profile in the repository.
+
+Borrowed from tsrs .github/scripts/pgo-train.sh:1-58 and notes/perf-pgo.md:128-169:
+instrument/train/merge/use, nonempty workload profiles, matching symbol metadata.
+Differs because Buck2 artifacts and configuration hashes replace Cargo target
+folders. Training is CPU-selectable with explicit lock-wait/acquired progress;
+CPU31 was occupied by another lane, so this experiment used CPU29.
+
+## BOLT: declined
+
+LLVM BOLT 23.1.1 was tried on a PGO compiler linked with --emit-relocs.
+`llvm-bolt hirsel -instrument -o hirsel.inst
+--instrumentation-file=profiles/hirsel --instrumentation-file-append-pid`
+reached the tools/capped 4 GiB memory limit; the kernel killed it after 27.1 s,
+exit 137, before training. The cap was not raised and no BOLT candidate exists,
+so there is no speed claim or BOLT shipping step. Relocation flags are not
+retained. Prior art: tsrs .github/scripts/bolt.sh:36-75 and
+notes/perf-build-level.md:66-115. No rejected CPU/huge-page/allocator knobs were retried.
+
+This changes the cost of executing compiler work; it adds no resident engine,
+query cache or native ABI. The architectural work remains with its existing lanes.

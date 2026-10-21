@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Compare compiler diagnostics, exported TIR and native output across bundles.
+
+    tools/toolchain-dist/check --bundle before=DIR --bundle after=DIR --work DIR
+
+Checks all eight quick programs, canonical TIR exports and both native backends.
+Every compiler invocation uses tools/capped, with caches disabled. Compare native
+ELF bytes at the same output path, so path-bearing debug data is comparable.
+"""
+import argparse
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import re
+from pathlib import Path
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'tools/compiler-bench'))
+loader = importlib.machinery.SourceFileLoader('compiler_bench_run', str(ROOT / 'tools/compiler-bench/run'))
+bench = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(bench)
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--bundle', action='append', required=True)
+    parser.add_argument('--work', type=Path, required=True)
+    parser.add_argument('--cpu', type=int, default=29)
+    parser.add_argument('--select', help='program-name regex')
+    parser.add_argument('--modes', default='check,export,clif,llvm-o2')
+    args = parser.parse_args()
+    bundles = {name: Path(directory).resolve() for name, directory in (item.split('=', 1) for item in args.bundle)}
+    work = args.work.resolve()
+    programs = [p for p in bench.corpus.corpus(work, scale=(3000,)) if bench.quick_program(p)
+                and (args.select is None or re.search(args.select, p.name))]
+    environment = bench.environment(True)
+    for values in environment.values():
+        values['HIRSEL_JOBS'] = '1'
+    records = []
+    print(f'check: waiting for CPU{args.cpu} lock', flush=True)
+    with bench.timing_lock(args.cpu):
+        print(f'check: CPU{args.cpu} lock acquired', flush=True)
+        for program in programs:
+            for mode in args.modes.split(','):
+                expected = None
+                for name, bundle in bundles.items():
+                    options = argparse.Namespace(toolchain=str(bundle), work=str(work), timeout=300)
+                    runner = bench.Runner(options, environment)
+                    runner.timings = []
+                    output = runner.scratch / ('canonical.tir' if mode == 'export' else 'program')
+                    command = ([str(bundle / 'hirsel'), 'export', '--tir', str(program.path), '-o', str(output)]
+                               if mode == 'export' else runner.hirsel_command(program.path, mode))
+                    done = subprocess.run([str(bench.CAPPED), '--timeout', '300', 'taskset', '-c', str(args.cpu), *command],
+                                          cwd=ROOT, env=runner.env(native=mode in bench.NATIVE), capture_output=True, check=True)
+                    stderr = b'\n'.join(line for line in done.stderr.splitlines() if not line.startswith(b'capped:'))
+                    actual = (done.stdout, stderr, digest(output) if mode != 'check' else None)
+                    prefix = work / f'{program.name}-{mode}-{name}'
+                    prefix.with_suffix('.stdout').write_bytes(done.stdout)
+                    prefix.with_suffix('.stderr').write_bytes(stderr)
+                    with (work / 'comparison.jsonl').open('a') as stream:
+                        stream.write(json.dumps(dict(program=program.name, mode=mode, variant=name,
+                                                     artifact_sha256=actual[2], stdout_sha256=hashlib.sha256(actual[0]).hexdigest(),
+                                                     stderr_sha256=hashlib.sha256(actual[1]).hexdigest())) + '\n')
+                    if expected is None:
+                        expected = actual
+                    elif actual != expected:
+                        raise RuntimeError(f'{program.name}/{mode}/{name}: output differs from {next(iter(bundles))}; '
+                                           f'stdout={actual[0] != expected[0]}, stderr={actual[1] != expected[1]}, '
+                                           f'artifact={actual[2] != expected[2]} (see {work}/comparison.jsonl)')
+                    records.append(dict(program=program.name, mode=mode, variant=name, artifact_sha256=actual[2]))
+                    print(f'check: {program.name}/{mode}/{name} passed', flush=True)
+    (work / 'comparison.json').write_text(json.dumps(records, indent=1) + '\n')
+    print(f'check: {len(records)} comparisons passed', flush=True)
+
+
+if __name__ == '__main__':
+    main()

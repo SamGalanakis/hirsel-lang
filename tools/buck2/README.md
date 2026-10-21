@@ -163,11 +163,13 @@ The copied runtime archives accounted for about 8.16 GiB and toolchain bundles
 
 ## Distribution compiler
 
-`//tools/buck2:dist` builds the distribution compiler with fat LTO and one
-codegen unit. The existing mimalloc dependency already builds v3.
-`tools/compiler-bench/run-main` measures this profile. Developer `dev` and
-`release`, checked tools and runtime archives keep their existing profiles.
-See [the measurements](../../reports/toolchain-dist.md).
+`tools/toolchain-dist/build --pgo --output /tmp/hirsel-dist` builds the shipped
+compiler with `//tools/buck2:dist`: fat LTO, one codegen unit and PGO trained on
+compiler-bench's examples and syn3k. The existing mimalloc dependency already
+builds v3. `tools/compiler-bench/run-main` measures this distribution pipeline.
+Developer `dev` and `release`, checked tools and runtime archives keep their
+existing profiles. See [the pipeline](../toolchain-dist/README.md) for exact
+commands, profile provenance, interleaved measurements and the declined BOLT trial.
 
 ## Everyday commands
 

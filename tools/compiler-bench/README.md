@@ -7,8 +7,8 @@ compares user-mode instruction counts with a stored baseline, and runs only when
 invoked by hand.
 
 ```sh
-# The distribution CLI: fat LTO, one codegen unit; sibling std precheck.
-.buck2/bin/buck2 build --target-platforms //tools/buck2:dist //:hirsel-toolchain --show-output
+# The distribution CLI: fat LTO, one codegen unit, PGO; sibling std precheck.
+tools/toolchain-dist/build --pgo --output /tmp/hirsel-dist
 # Developer release builds keep their existing profile.
 tools/compiler-bench/run --quick --toolchain <bundle> --output quick.json       # Hirsel examples + syn3k, no Rust
 tools/compiler-bench/run --toolchain <bundle> --output results.json            # whole suite
@@ -207,7 +207,8 @@ tools/compiler-bench/run-main --groups examples --modes check
 ```
 
 `run-main` fetches `origin/main` into a detached worktree and builds the
-distribution bundle on the Buck2 pool. It runs the suite (one capped process at a
+PGO distribution bundle on the Buck2 pool, training on the examples and syn3k
+through tools/capped. See `tools/toolchain-dist/README.md`. It runs the suite (one capped process at a
 time) and compares the result with the baseline. Each result and comparison
 is kept under `$HIRSEL_MAIN_RUNS/compiler-bench/`, and a regression appends
 one line to `$HIRSEL_MAIN_RUNS/alarms.log`, the file `tools/main-stall-alarm`

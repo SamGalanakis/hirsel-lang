@@ -1,0 +1,4 @@
+# A generated, uncommitted profile; Buck2 hashes its bytes into every use action.
+# Declare it only for an explicit PGO-use build, so ordinary builds need no file.
+[export_file(name = "profile", src = "profile.profdata", visibility = ["PUBLIC"])
+ for _ in [0] if read_root_config("hirsel", "dist_pgo", "off") == "use"]

@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Interleave distribution candidates on compiler-bench --quick's 24 cells.
+
+    tools/toolchain-dist/measure --bundle release=DIR --bundle dist=DIR --output DIR
+
+Three seeded rounds by default, one capped compiler process at a time; the existing benchmark
+runner records perf cycles/instructions and peak RSS. Its native program cache is
+disabled. Result files use compiler-bench's schema for `compare` and `report`.
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import random
+import re
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'tools/compiler-bench'))
+loader = importlib.machinery.SourceFileLoader('compiler_bench_run', str(ROOT / 'tools/compiler-bench/run'))
+bench = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(bench)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--bundle', action='append', required=True, help='NAME=toolchain directory')
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--rounds', type=int, default=3)
+    parser.add_argument('--seed', type=int, default=20261021)
+    parser.add_argument('--select', help='program-name regex (default: all quick programs)')
+    parser.add_argument('--modes', default='check,clif,llvm-o2')
+    parser.add_argument('--cpu', type=int, default=29)
+    args = parser.parse_args()
+    if args.rounds < 1 or args.cpu not in os.sched_getaffinity(0):
+        parser.error('rounds must be positive and cpu must be available')
+    bundles = dict(item.split('=', 1) for item in args.bundle)
+    if len(bundles) != len(args.bundle):
+        parser.error('bundle names must be unique')
+    if args.output.exists():
+        parser.error('output already exists; use a fresh directory')
+    args.output.mkdir(parents=True)
+    work = args.output.resolve() / 'work'
+    programs = [p for p in bench.corpus.corpus(work, scale=(3000,)) if bench.quick_program(p)
+                and (args.select is None or re.search(args.select, p.name))]
+    modes = args.modes.split(',')
+    if not programs or not set(modes) <= {'check', 'clif', 'llvm-o2'}:
+        parser.error('select at least one quick program and valid modes')
+    env = bench.environment(True)
+    for values in env.values():
+        values['HIRSEL_JOBS'] = '1'
+    runners = {}
+    for name, directory in bundles.items():
+        options = argparse.Namespace(toolchain=directory, work=str(work / name), timeout=300,
+                                     cpu=args.cpu, repeat=1, repeat_large=False)
+        runners[name] = bench.Runner(options, env)
+    samples = {(p.name, mode, name): [] for p in programs for mode in modes for name in bundles}
+    rng = random.Random(args.seed)
+    print(f'measure: waiting for CPU{args.cpu} lock; siblings {bench.siblings(args.cpu)}', flush=True)
+    with bench.timing_lock(args.cpu):
+        print(f'measure: CPU{args.cpu} lock acquired; starting interleaved rounds', flush=True)
+        for round_index in range(args.rounds):
+            for program in programs:
+                for mode in modes:
+                    order = list(bundles)
+                    rng.shuffle(order)
+                    for name in order:
+                        print(f'round {round_index + 1}: {program.name}/{mode}/{name}', flush=True)
+                        run = runners[name].timed_hirsel(program.path, mode)
+                        samples[program.name, mode, name].append(run)
+                        with (args.output / 'samples.jsonl').open('a') as log:
+                            log.write(json.dumps(dict(round=round_index + 1, program=program.name, mode=mode, variant=name, run=run)) + '\n')
+                        if run['status'] != 'ok':
+                            raise RuntimeError(f'{program.name}/{mode}/{name}: {run}')
+    for name, runner in runners.items():
+        for program in programs:
+            for mode in modes:
+                runner.cell(program, mode, 1, bench.HIRSEL_CACHE, samples[program.name, mode, name])
+        result = dict(schema=1, suite='compiler-bench', commit=bench.git_commit(), cpu=args.cpu,
+                      seed=args.seed, repeat=args.rounds, cells=runner.cells, pairs=[],
+                      toolchain={'hirsel_sha256': bench.file_hash(runner.hirsel)},
+                      selection={'quick': True, 'select': args.select, 'modes': args.modes, 'interleaved': list(bundles)})
+        (args.output / f'{name}.json').write_text(json.dumps(result, indent=1) + '\n')
+
+
+if __name__ == '__main__':
+    main()

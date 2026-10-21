@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Train an instrumented compiler on examples + syn3k, check/debug/release.
+
+    tools/toolchain-dist/train --toolchain DIR --work DIR --raw DIR
+
+Ported from tsrs .github/scripts/pgo-train.sh: each workload must exit normally
+and write a nonempty profile (an _exit otherwise silently drops the counters).
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'tools/compiler-bench'))
+loader = importlib.machinery.SourceFileLoader('compiler_bench_run', str(ROOT / 'tools/compiler-bench/run'))
+bench = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(bench)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--toolchain', required=True)
+    parser.add_argument('--work', type=Path, required=True)
+    parser.add_argument('--raw', type=Path, required=True)
+    parser.add_argument('--cpu', type=int, default=29)
+    args = parser.parse_args()
+    if args.cpu not in os.sched_getaffinity(0):
+        parser.error('cpu must be available')
+    args.work = args.work.resolve()
+    args.raw = args.raw.resolve()
+    args.raw.mkdir(parents=True, exist_ok=True)
+    if any(args.raw.glob('*.profraw')):
+        parser.error('raw directory already contains profiles; use a fresh directory')
+    programs = [p for p in bench.corpus.corpus(args.work, scale=(3000,)) if bench.quick_program(p)]
+    options = argparse.Namespace(toolchain=args.toolchain, work=str(args.work), timeout=300)
+    runner = bench.Runner(options, bench.environment(True))
+    print(f'train: waiting for CPU{args.cpu} timing lock; siblings {bench.siblings(args.cpu)}', flush=True)
+    with bench.timing_lock(args.cpu):
+        print(f'train: CPU{args.cpu} lock acquired; starting 24 workloads', flush=True)
+        for program in programs:
+            for mode in ('check', 'clif', 'llvm-o2'):
+                prefix = f'{program.name}-{mode}-'
+                env = runner.env(native=mode in bench.NATIVE)
+                env['HIRSEL_JOBS'] = '1'
+                env['LLVM_PROFILE_FILE'] = str(args.raw / (prefix + '%m-%p.profraw'))
+                command = [str(bench.CAPPED), '--timeout', '300', 'taskset', '-c', str(args.cpu), *runner.hirsel_command(program.path, mode)]
+                print(f'train: {program.name}/{mode}', flush=True)
+                subprocess.run(command, env=env, cwd=ROOT, check=True)
+                if not any(p.stat().st_size for p in args.raw.glob(prefix + '*.profraw')):
+                    raise RuntimeError(f'no nonempty profile from {program.name}/{mode}')
+    print('train: 24 workloads passed', flush=True)
+
+
+if __name__ == '__main__':
+    main()

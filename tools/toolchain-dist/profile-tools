@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Fetch the checksum-pinned llvm-profdata matching the repository's rustc.
+
+Installs only into this checkout's ignored .buck2 state. Like bootstrap.py,
+verify the archive before extraction; do not use the system LLVM (which can
+neither read nor merge newer raw profile versions).
+"""
+import hashlib
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import tomllib
+import urllib.request
+
+ROOT = Path(__file__).resolve().parents[2]
+VERSION = '1.99.0'
+SHA256 = 'e61e54b2f90dfb0990dd807df71610abeb50e24c402597e9695c6e390db0b516'
+NAME = f'llvm-tools-{VERSION}-x86_64-unknown-linux-gnu'
+
+
+def main():
+    channel = tomllib.loads((ROOT / 'rust-toolchain.toml').read_text())['toolchain']['channel']
+    if channel != VERSION:
+        raise SystemExit(f'update the profile-tools archive pin for Rust {channel} (currently {VERSION})')
+    destination = ROOT / '.buck2/dist-llvm-tools'
+    tool = destination / NAME / 'llvm-tools-preview/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata'
+    if not tool.is_file():
+        with tempfile.TemporaryDirectory(dir=ROOT / '.buck2', prefix='profile-tools-') as temporary:
+            archive = Path(temporary) / 'tools.tar.zst'
+            url = f'https://github.com/hermeticbuild/rust-redist/releases/download/{VERSION}/{NAME}.tar.zst'
+            with urllib.request.urlopen(url, timeout=60) as source, archive.open('wb') as stream:
+                shutil.copyfileobj(source, stream)
+            with archive.open('rb') as stream:
+                if hashlib.file_digest(stream, 'sha256').hexdigest() != SHA256:
+                    raise SystemExit('LLVM tools archive checksum mismatch')
+            tree = Path(temporary) / 'tree'
+            tree.mkdir()
+            subprocess.run(['tar', '--zstd', '-xf', str(archive), '-C', str(tree)], check=True)
+            tree.rename(destination)
+    print(tool)
+
+
+if __name__ == '__main__':
+    main()
