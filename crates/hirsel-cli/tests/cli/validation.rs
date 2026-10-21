@@ -5,18 +5,34 @@ use std::process::Command;
 
 #[test]
 fn validate_stages_preserves_native_bytes_and_restores_four_checks_per_unit() {
-    let source = file("pub fn main() -> Result[(), ()] { Ok(()) }\n");
+    // task.async names task_main only through ClosureSite.code: the worker's
+    // dependency graph must keep that template and bind it into the object key.
+    let source = file(
+        r#"
+        pub fn main(rt: Io) -> Result[(), GrantError] {
+          let tasks = io.tasks(rt)?
+          task.scope(tasks, fn(s: Scope) {
+            let child = task.async(s, fn() -> u64 { 1u64 })
+            let answer = task.await(s, take child)
+          })
+          Ok(())
+        }
+    "#,
+    );
     let output = source.with_extension("ready.exe");
     let mut results = Vec::new();
     for stages in [false, true] {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_hirsel"));
-        cmd.env_remove("HIRSEL_VALIDATE_STAGES").args([
-            "--timings=json",
-            "build",
-            "--debug",
-            "--backend",
-            "cranelift",
-        ]);
+        cmd.env_remove("HIRSEL_VALIDATE_STAGES")
+            .env_remove("HIRSEL_OBJECTS")
+            .env("HIRSEL_JOBS", "1")
+            .args([
+                "--timings=json",
+                "build",
+                "--debug",
+                "--backend",
+                "cranelift",
+            ]);
         if stages {
             cmd.arg("--validate-stages");
         }
@@ -30,6 +46,10 @@ fn validate_stages_preserves_native_bytes_and_restores_four_checks_per_unit() {
                 .unwrap(),
         )
         .unwrap();
+        assert!(
+            report["counts"]["object misses"].as_u64().unwrap() > 0,
+            "worker path not selected: {report}"
+        );
         let calls = report["phases"]
             .as_array()
             .unwrap()

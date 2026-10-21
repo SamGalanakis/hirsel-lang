@@ -73,8 +73,8 @@ impl UnitObjects {
 }
 
 /// The per-unit pipeline a build of `target` selects: the object store `HIRSEL_OBJECTS`
-/// names (`none@1`, `dir@1` or `sim@1`) on `HIRSEL_JOBS` workers (default: the host's
-/// parallelism), or none (the whole-program link) without it.
+/// names (`none@1` by default, `dir@1` or `sim@1`) on `HIRSEL_JOBS` workers
+/// (default: the host's parallelism).
 pub(crate) fn selected(
     target: &hirsel_lir::layout_types::TargetSpec,
     backend: Backend,
@@ -82,9 +82,7 @@ pub(crate) fn selected(
     debug: bool,
     fuel: bool,
 ) -> Result<Option<UnitObjects>, NativeError> {
-    let Some(name) = std::env::var_os("HIRSEL_OBJECTS") else {
-        return Ok(None);
-    };
+    let name = std::env::var_os("HIRSEL_OBJECTS").unwrap_or_else(|| "none@1".into());
     let name = name.to_string_lossy();
     let store = UnitObjects::by_name(&name, target, backend, opt)
         .map_err(|e| NativeError::new(StageName::Emission, format!("HIRSEL_OBJECTS: {e}")))?;
@@ -512,18 +510,24 @@ fn symbol_name<S>(unit: &LirUnit<S>) -> String {
     hirsel_lir::emission::symbol_name(&unit.header.definition, Some(&unit.header.instance))
 }
 
-/// The functions `unit` calls directly or names by `FunctionRef`.
+/// Every function the unit names directly, by a function reference or as closure code.
 fn references<S>(unit: &LirUnit<S>) -> impl Iterator<Item = Symbol> + '_ {
     let calls = unit.tables.calls.iter().filter_map(|c| match c.callee {
         Callee::Direct(s) | Callee::Bound { code: s, .. } => Some(s),
         _ => None,
     });
+    let closures = unit
+        .tables
+        .closures
+        .iter()
+        .filter_map(|site| site.code.map(|code| code.symbol));
     let refs = unit.instructions.iter().filter_map(|inst| match *inst {
         Inst::FunctionRef { symbol, .. } => Some(symbol),
         _ => None,
     });
     calls
         .chain(refs)
+        .chain(closures)
         .filter_map(|s| unit.tables.symbols.get(s.index()).cloned())
 }
 
