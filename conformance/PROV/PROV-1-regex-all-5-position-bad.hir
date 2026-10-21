@@ -1,0 +1,13 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 12
+// twin: PROV/PROV-1-regex-all-5-position-ok.hir
+// Checked positions still belong to their original string.
+fn wrong(source: String, other: String, span: regex.Span) -> () {
+  let Some(start) = string.position(source, span.start) else {
+    return ()
+  }
+  let Some(end) = string.position(source, span.end) else {
+    return ()
+  }
+  let _ = string.slice(other, start, end)
+}

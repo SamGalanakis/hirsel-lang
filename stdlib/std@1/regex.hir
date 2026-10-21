@@ -921,3 +921,97 @@ pub fn is_match(re: Regex, text: String, work_limit: u64) -> Result[bool, MatchE
     None() => Ok(false),
   }
 }
+
+// Restart the existing ordered VM at an original-input scalar boundary.
+// Queue initialization and every VM step draw from the caller's single budget.
+fn find_from(re: Regex, subject: Input, start: u64, mut work: u64) -> Result[
+  Option[Span],
+  MatchError
+] uses {} {
+  let mut machine = Machine(
+    seen: [],
+    seeds: [],
+    matched: None(),
+    at: subject.offsets[start],
+    previous: if start == 0 {
+      None()
+    } else {
+      Some(subject.scalars[start - 1])
+    },
+    work: work
+  )
+  let mut i: u64 = 0
+  while i < core@1/list.len(re.code) {
+    spend(mut machine.work)?
+    core@1/list.push(mut machine.seen, 0)
+    i += 1
+  }
+  let mut cursor = start
+  while cursor <= core@1/list.len(subject.scalars) {
+    let next: Option[char] = if cursor < core@1/list.len(subject.scalars) {
+      Some(subject.scalars[cursor])
+    } else {
+      None()
+    }
+    if step(re, next, mut machine)? {
+      work = machine.work
+      return Ok(copy machine.matched)
+    }
+    cursor += 1
+  }
+  work = machine.work
+  Ok(copy machine.matched)
+}
+
+// Go ebe2feef regexp/regexp.go:746-802 (matches, formerly allMatches),
+// :948-958 (allIndex), :1098-1107 (FindAllIndex/FindAllStringIndex).
+// Preserve pos/prevMatchEnd/accept progression on the original input.
+pub fn find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> Result[
+  List[Span],
+  MatchError
+] uses {} {
+  let mut matches: List[Span] = []
+  if max_matches == 0 {
+    return Ok(take matches)
+  }
+  let mut work = work_limit
+  let mut subject = Input(scalars: [], offsets: [], at: 0)
+  let mut byte: u64 = 0
+  for c in core@1/string.scalars(text) {
+    spend(mut work)?
+    core@1/list.push(mut subject.scalars, c)
+    core@1/list.push(mut subject.offsets, byte)
+    byte += scalar_width(c)
+  }
+  spend(mut work)?
+  core@1/list.push(mut subject.offsets, byte)
+  let mut pos: u64 = 0
+  let mut previous_end: Option[u64] = None()
+  while pos <= core@1/list.len(subject.scalars) {
+    let Some(span) = find_from(re, subject, pos, mut work)? else {
+      return Ok(take matches)
+    }
+    let mut accept = true
+    if span.end == subject.offsets[pos] {
+      if previous_end == Some(span.start) {
+        accept = false
+      }
+      // A scalar index makes the rune-width advance exact, including EOF+1.
+      spend(mut work)?
+      pos += 1
+    } else {
+      while subject.offsets[pos] < span.end {
+        spend(mut work)?
+        pos += 1
+      }
+    }
+    previous_end = Some(span.end)
+    if accept {
+      core@1/list.push(mut matches, copy span)
+      if core@1/list.len(matches) == max_matches {
+        return Ok(take matches)
+      }
+    }
+  }
+  Ok(take matches)
+}

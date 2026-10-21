@@ -1,0 +1,65 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let re = match regex.compile("a", 2) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  let none: List[regex.Span] = []
+  failure.check(regex.find_all(re, "aaa", 0, 0) == Ok(none), TextInvariant())
+  let one: List[regex.Span] = [regex.Span(start: 0, end: 1)]
+  let three: List[regex.Span] = [
+    regex.Span(start: 0, end: 1),
+    regex.Span(start: 1, end: 2),
+    regex.Span(start: 2, end: 3)
+  ]
+  failure.check(regex.find_all(re, "aaa", 1, 13) == Error(WorkLimit()), TextInvariant())
+  failure.check(regex.find_all(re, "aaa", 1, 14) == Ok(one), TextInvariant())
+  failure.check(regex.find_all(re, "aaa", 3, 33) == Error(WorkLimit()), TextInvariant())
+  failure.check(regex.find_all(re, "aaa", 3, 34) == Ok(copy three), TextInvariant())
+  failure.check(regex.find_all(re, "aaa", 4, 38) == Error(WorkLimit()), TextInvariant())
+  failure.check(regex.find_all(re, "aaa", 4, 39) == Ok(copy three), TextInvariant())
+  // Resetting work would admit each search; enumeration has one budget.
+  failure.check(
+    regex.find(re, "aaa", 13) == Ok(Some(regex.Span(start: 0, end: 1))),
+    TextInvariant()
+  )
+  failure.check(
+    regex.find(re, "aa", 13) == Ok(Some(regex.Span(start: 0, end: 1))),
+    TextInvariant()
+  )
+  failure.check(
+    regex.find(re, "a", 13) == Ok(Some(regex.Span(start: 0, end: 1))),
+    TextInvariant()
+  )
+  failure.check(regex.find_all(re, "aaa", 3, 13) == Error(WorkLimit()), TextInvariant())
+  failure.check(regex.find_all(re, "aaa", 3, 0) == Error(WorkLimit()), TextInvariant())
+  let many = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  failure.check(
+    regex.find_all(re, many, 32, 200) == Error(WorkLimit()),
+    TextInvariant()
+  )
+  failure.check(
+    match regex.find_all(re, many, 32, 10000) {
+      Ok(spans) => list.len(spans) == 32,
+      Error(_) => false,
+    },
+    TextInvariant()
+  )
+  // Existing exact accounting and reuse after failure stay intact.
+  failure.check(regex.find(re, "a", 8) == Error(WorkLimit()), TextInvariant())
+  failure.check(
+    regex.find(re, "a", 9) == Ok(Some(regex.Span(start: 0, end: 1))),
+    TextInvariant()
+  )
+  let empty = match regex.compile("", 2) {
+    Ok(compiled) => take compiled,
+    Error(_) => return Error(()),
+  }
+  let empty_span: List[regex.Span] = [regex.Span(start: 0, end: 0)]
+  failure.check(regex.find_all(empty, "", 1, 7) == Error(WorkLimit()), TextInvariant())
+  failure.check(regex.find_all(empty, "", 1, 8) == Ok(copy empty_span), TextInvariant())
+  failure.check(regex.find_all(empty, "", 2, 7) == Error(WorkLimit()), TextInvariant())
+  failure.check(regex.find_all(empty, "", 2, 8) == Ok(copy empty_span), TextInvariant())
+  Ok(())
+}

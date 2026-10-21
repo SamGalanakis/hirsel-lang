@@ -1,0 +1,12 @@
+// rule: PROV-1
+// expect: accept
+// Checked positions still belong to their original string.
+fn wrong(source: String, other: String, span: regex.Span) -> () {
+  let Some(start) = string.position(source, span.start) else {
+    return ()
+  }
+  let Some(end) = string.position(source, span.end) else {
+    return ()
+  }
+  let _ = string.slice(source, start, end)
+}

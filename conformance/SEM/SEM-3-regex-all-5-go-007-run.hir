@@ -1,0 +1,32 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef regexp/find_test.go whole-match FindAllStringIndex vectors.
+// Copyright 2009 The Go Authors. BSD-3-Clause; third-party/NOTICES.md.
+fn check(pattern: String, text: String, max: u64, expected: List[regex.Span]) -> Result[
+  (),
+  ()
+] {
+  let re = match regex.compile(pattern, 1000) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  failure.check(regex.find_all(re, text, max, 100000) == Ok(expected), TextInvariant())
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  // Oracle vector 24.
+  check("[^a-z]+", "ab1234cd", 100, [regex.Span(start: 2, end: 6)])?
+  // Oracle vector 25.
+  check(
+    "[a\\-\\]z]+",
+    "az]-bcz",
+    100,
+    [regex.Span(start: 0, end: 4), regex.Span(start: 6, end: 7)]
+  )?
+  // Oracle vector 26.
+  check("[^\\n]+", "abcd\n", 100, [regex.Span(start: 0, end: 4)])?
+  // Oracle vector 27.
+  check("[日本語]+", "日本語日本語", 100, [regex.Span(start: 0, end: 18)])?
+  Ok(())
+}

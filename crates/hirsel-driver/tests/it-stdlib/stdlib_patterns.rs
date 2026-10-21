@@ -109,3 +109,6 @@ fn regex_go_large_group_repeat_exceeds_the_program_bound() {
 fn regex_go_long_sequence_exceeds_the_program_bound() {
     regex_large_invalid(507);
 }
+
+#[path = "stdlib_regex_all_5.rs"]
+mod regex_all_5;

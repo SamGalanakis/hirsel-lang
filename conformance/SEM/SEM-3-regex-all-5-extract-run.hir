@@ -1,0 +1,49 @@
+// rule: SEM-3
+// expect: run
+// Bounded log extraction. Spans own integers; slices borrow the source.
+fn detached(re: regex.Regex) -> Result[List[regex.Span], OutOfSpace] {
+  arena.bounded(
+    4096,
+    fn(a: Arena) -> List[regex.Span] {
+      let source: String in a = copy_to(a, "é id=12 id=7")
+      match regex.find_all(re, source, 4, 10000) {
+        Ok(spans) => take spans,
+        Error(_) => [],
+      }
+    }
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  let re = match regex.compile("id=\\d+", 20) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  let detached_spans = match detached(re) {
+    Ok(spans) => take spans,
+    Error(_) => return Error(()),
+  }
+  // The arena and text have ended; the absolute offsets remain usable.
+  failure.check(
+    detached_spans == [regex.Span(start: 3, end: 8), regex.Span(start: 9, end: 13)],
+    TextInvariant()
+  )
+  let source = "é id=12 id=7"
+  let spans = match regex.find_all(re, source, 4, 10000) {
+    Ok(spans) => take spans,
+    Error(_) => return Error(()),
+  }
+  let mut tokens: List[String] = []
+  for span in spans {
+    let Some(start) = string.position(source, span.start) else {
+      return Error(())
+    }
+    let Some(end) = string.position(source, span.end) else {
+      return Error(())
+    }
+    // unique copies token bytes, so a saved token does not retain the log.
+    list.push(mut tokens, unique string.slice(source, start, end))
+  }
+  failure.check(tokens == ["id=12", "id=7"], TextInvariant())
+  Ok(())
+}

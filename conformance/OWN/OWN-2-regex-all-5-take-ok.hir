@@ -1,0 +1,6 @@
+// rule: OWN-2
+// expect: accept
+fn wrong(re: regex.Regex, take text: String) -> u64 {
+  let _ = regex.find_all(re, text, 1, 100)
+  string.byte_len(text)
+}

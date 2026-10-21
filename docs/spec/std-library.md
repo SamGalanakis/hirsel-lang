@@ -3245,6 +3245,7 @@ pub type regex.Span { start: u64, end: u64 }
 fn regex.compile(pattern: String, max_instructions: u64) -> Result[regex.Regex, regex.CompileError] uses {}
 fn regex.find(re: regex.Regex, text: String, work_limit: u64) -> Result[Option[regex.Span], regex.MatchError] uses {}
 fn regex.is_match(re: regex.Regex, text: String, work_limit: u64) -> Result[bool, regex.MatchError] uses {}
+fn regex.find_all(re: regex.Regex, text: String, max_matches: u64, work_limit: u64) -> Result[List[regex.Span], regex.MatchError] uses {}
 ```
 
 The fixed dialect operates on Unicode scalars. It supports literal scalars, `.`,
@@ -3304,10 +3305,59 @@ deterministic and independent of wall time or host regex behavior. Queue
 memory is O(compiled size); work is bounded by the caller even on adversarial
 alternation, nested repetition or nullable cycles.
 
+`find_all` returns at most `max_matches` nonoverlapping, leftmost-first whole
+matches, preserving the same alternative and greedy/lazy priority. Offsets
+always refer to the original supplied String, including when it is itself a
+slice. Anchors and ASCII word boundaries retain that original context across
+restarts. A zero match limit returns an empty list without examining the text
+or spending work, even with a zero work limit. There is no unbounded sentinel.
+
+Empty-match progression follows Go `FindAllStringIndex`: an empty match that
+starts where the preceding match ended is suppressed. An empty match at the
+current search position advances by one Unicode scalar; after an empty match
+found later, the restart at its end suppresses that same empty match and
+advances. An empty match at EOF is reported at most once. For example, `a*`
+on `baaab` yields `[0,0), [1,4), [5,5)`; the empty match at byte 4 is suppressed.
+An empty pattern on `é` yields `[0,0), [2,2)`.
+
+Enumeration has its own cumulative accounting, without changing `find` or
+`is_match`: one unit for each scalar indexed initially and one for its EOF
+offset, one for every instruction slot initialized at **each** VM restart,
+all the VM boundary/epsilon/ready/range charges described above, and one for
+every scalar advanced by the outer progression (including advancing past
+EOF). Progression is charged before collecting a match, even the last allowed
+one. No budget is reset per result. Reaching the match limit stops immediately;
+otherwise proving that no further match exists also costs work. An insufficient
+budget returns `WorkLimit` and discards the entire partial list. For `a` on
+`aaa`, limits 1 and 3 complete at budgets 14 and 34 respectively; requesting
+4 completes at 39, including the final failed search. Memory is O(input scalars
++ compiled size + returned matches), bounded by work and the match limit.
+The scalar index contains only characters and byte offsets, with no string
+slices or retained source owner.
+
 For extraction, turn the returned byte offsets into `string.position` values
 and slice the same text; the scalar-boundary span guarantees both positions
-exist. Advancing a repeated search after an empty match is the caller's job:
-advance by one scalar, and stop after an empty EOF match.
+exist. The list of integer spans can outlive the source. A string slice still
+borrows its source; use `unique string.slice(text, start, end)` to save an
+independent token without retaining the whole input. The bounded log-token
+example in `conformance/SEM/SEM-3-regex-all-5-extract-run.hir` demonstrates both
+arena-local source lifetime and checked extraction:
+
+```hirsel
+let spans = match regex.find_all(re, text, 64, 100000) {
+  Ok(spans) => take spans,
+  Error(_) => return Error(()),
+}
+let mut tokens: List[String] = []
+for span in spans {
+  let Some(start) = string.position(text, span.start) else { return Error(()) }
+  let Some(end) = string.position(text, span.end) else { return Error(()) }
+  list.push(mut tokens, unique string.slice(text, start, end))
+}
+```
+
+The example maps `MatchError` to its own error type. See `reports/regex-all-5.md` for pinned upstream
+sources, differential vectors and intentional API deviations.
 
 ## Slash glob patterns
 
