@@ -242,16 +242,15 @@ fn arena_parameter_origins_resolve_their_declaring_scope_without_retyping() {
         ),
     ] {
         let checked = f.checked.clone();
-        let wrong =
-            hirsel_types::map_parameter_references(session(), value_type, |p, _| {
-                Ok(match p {
-                    hirsel_types::ParameterRef::Body { parameter, .. } => {
-                        hirsel_types::ParameterRef::body(other, parameter)
-                    }
-                    p => p,
-                })
+        let wrong = hirsel_types::map_parameter_references(session(), value_type, |p, _| {
+            Ok(match p {
+                hirsel_types::ParameterRef::Body { parameter, .. } => {
+                    hirsel_types::ParameterRef::body(other, parameter)
+                }
+                p => p,
             })
-            .unwrap();
+        })
+        .unwrap();
         for b in &mut f.checked.bindings {
             if b.ty == value_type {
                 b.ty = wrong;
@@ -310,7 +309,8 @@ fn body_adapter_preserves_producer_selected_propagation_tags() {
         error_type: f.scalar,
         propagated_result: target_result,
     });
-    let plans = Plans::from_body(session(), &f.syntax.tree, &f.checked, &producer, expression).unwrap();
+    let plans =
+        Plans::from_body(session(), &f.syntax.tree, &f.checked, &producer, expression).unwrap();
     let propagation = &plans.propagation[0].1;
     assert_eq!(propagation.success_type, f.scalar);
     assert_eq!(propagation.error_type, source_error);
@@ -616,7 +616,10 @@ fn checked_rows(f: &Fixture) -> std::collections::HashSet<hirsel_types::TypeId> 
         .chain(f.checked.patterns.iter().map(|p| p.ty))
         .chain(f.frames.iter().map(|(_, t)| *t))
         .chain([f.unit, f.boolean, f.scalar]);
-    hirsel_types::closure(session(), roots).iter().copied().collect()
+    hirsel_types::closure(session(), roots)
+        .iter()
+        .copied()
+        .collect()
 }
 /// Lowering transports checked rows: its type table adds none of its own.
 fn assert_no_new_rows(f: &Fixture, definition: &Definition) {

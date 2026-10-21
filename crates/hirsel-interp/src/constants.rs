@@ -103,8 +103,8 @@ fn decode(data: &Materialized, runtime: &aggregate::RuntimeTypes) -> Result<Valu
                     .map(Some)
                     .collect();
                 let row = runtime
-                        .types
-                        .get(node.ty)
+                    .types
+                    .get(node.ty)
                     .ok_or_else(|| invalid("materialized constructor type"))?;
                 values.push(aggregate::construct(
                     constructor,

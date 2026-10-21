@@ -302,10 +302,7 @@ pub(crate) fn table<'a>(
                         }
                         Callee::Indirect { value, .. } => {
                             let ty = body.places.get(value.place.0 as usize).map(|p| p.ty);
-                            match ty
-                                .and_then(|ty| types.get(ty))
-                                .map(|row| &row.kind)
-                            {
+                            match ty.and_then(|ty| types.get(ty)).map(|row| &row.kind) {
                                 Some(TypeKind::Function(f)) => (None, &f.contracts),
                                 _ => (None, &[]),
                             }

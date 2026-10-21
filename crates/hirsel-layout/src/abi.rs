@@ -336,7 +336,10 @@ impl<'o> LayoutBuilder<'o> {
             TypeKind::Named { definition, .. }
                 if definition.path().package_is("core", "1")
                     && definition.path().0.modules.is_empty()
-                    && matches!(definition.path().0.name.as_str(), "ScalarView" | "PositionView") =>
+                    && matches!(
+                        definition.path().0.name.as_str(),
+                        "ScalarView" | "PositionView"
+                    ) =>
             {
                 Class::Value(vec![ScalarKind::Pointer, ScalarKind::U64, ScalarKind::U64])
             }

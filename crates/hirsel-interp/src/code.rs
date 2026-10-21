@@ -337,8 +337,7 @@ impl Codes {
             return id;
         }
         let id = self.codes.len() as u32;
-        self.codes
-            .push(Code::new(&definition.bodies[index], types));
+        self.codes.push(Code::new(&definition.bodies[index], types));
         let ids = self.ids.entry(definition.path).or_default();
         if ids.len() <= index {
             ids.resize(definition.bodies.len().max(index + 1), None);

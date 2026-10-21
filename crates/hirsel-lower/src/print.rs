@@ -12,7 +12,8 @@ pub fn definition(definition: &Definition) -> String {
     let index = |t: &hirsel_types::TypeId| table.get(t).copied().unwrap_or(usize::MAX);
     let mut output = format!(
         "definition {} entry b{}\n",
-        definition.path.path().0.name, definition.entry.0
+        definition.path.path().0.name,
+        definition.entry.0
     );
     for receipt in &definition.protocol_associations {
         output.push_str(&format!(

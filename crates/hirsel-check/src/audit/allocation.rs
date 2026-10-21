@@ -267,12 +267,7 @@ impl<'a> Audit<'a, '_> {
             ) => {
                 if d.destructor_allocation == Allocation::NoAlloc {
                     if let Some(repr) = d.representation
-                        && self
-                            .types
-                            .get(repr)
-                            .unwrap()
-                            .drop_allocation
-                            != DropAllocation::NoAlloc
+                        && self.types.get(repr).unwrap().drop_allocation != DropAllocation::NoAlloc
                     {
                         result.add(
                             self.input.syntax.tree.expressions[drop.body.0 as usize]
@@ -372,7 +367,10 @@ impl<'a> Audit<'a, '_> {
                     let signature = self.snapshot(&definition)?;
                     if matches!(&signature.kind, SignatureKind::Type(d) if d.resource && d.destructor_allocation != Allocation::NoAlloc)
                     {
-                        notes.push(format!("destructor {} permits allocation", definition.path()));
+                        notes.push(format!(
+                            "destructor {} permits allocation",
+                            definition.path()
+                        ));
                     }
                     let (repr, _) = self.representation(ty)?;
                     if repr != ty {

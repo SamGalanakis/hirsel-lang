@@ -461,8 +461,7 @@ impl Fixture {
         });
     }
     pub fn register(&mut self, signature: Signature) {
-        self.declarations
-            .insert(signature.definition, signature);
+        self.declarations.insert(signature.definition, signature);
     }
     pub fn closure(&mut self, info: ClosureInfo, result: TypeId, capture_owner: NameSite) {
         self.frames

@@ -2,12 +2,12 @@
 //! Only the type structure read by native layout/ABI instantiation crosses LIR.
 use crate::layout::{LayoutBuilder, Owners};
 use hirsel_core_contract::OperationId;
+use hirsel_intern::Symbol;
 use hirsel_lir::abi_types::{CallMultiplicity, CallableShape, FnAbi};
 use hirsel_lir::layout::{LayoutError, MAX_DEPTH};
 use hirsel_lir::operation::{NativeType, OperationArgument, OperationDeclarations};
-use hirsel_types::*;
-use hirsel_intern::Symbol;
 use hirsel_syntax::DefId;
+use hirsel_types::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

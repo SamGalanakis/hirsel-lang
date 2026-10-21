@@ -215,7 +215,8 @@ fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
             requests: vec![],
         };
         let execution = run(
-            &mut provider, &crate::support::session(),
+            &mut provider,
+            &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("main"),

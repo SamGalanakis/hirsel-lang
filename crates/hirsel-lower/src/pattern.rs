@@ -108,8 +108,7 @@ impl Builder<'_, '_> {
                     return self.error(span, "missing pattern binding row");
                 };
                 if binding.usage != row.usage
-                    || !self.types.shape_eq(binding.ty, row.ty)
-                    .unwrap_or(false)
+                    || !self.types.shape_eq(binding.ty, row.ty).unwrap_or(false)
                 {
                     return self.error(span, "binding and pattern decisions disagree");
                 }

@@ -306,14 +306,7 @@ fn data_shape_within(
                     })
                     .collect();
                 if entered.insert((*definition, inner.clone()))
-                    && !data_shape_within(
-                        store,
-                        representation,
-                        0,
-                        &inner,
-                        lookup,
-                        entered,
-                    )
+                    && !data_shape_within(store, representation, 0, &inner, lookup, entered)
                 {
                     return false;
                 }

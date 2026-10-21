@@ -33,8 +33,8 @@ use hirsel_types::{
     TypeId, TypeInterner, TypeKind, TypeMemo, TypeParamId, TypeParameterRef, UseKind,
 };
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::Arc;
 
 /// The tooling limit on instance expansion (a separate resource limit, never
 /// a source rejection).
@@ -526,7 +526,6 @@ pub fn instantiate_function(
     Ok(types.intern(row))
 }
 
-
 /// The declared conventions of a `Function` row.
 pub fn convention(types: &TypeInterner, callable: TypeId) -> Option<CallableConvention> {
     let row = types.get(callable)?;
@@ -733,7 +732,8 @@ impl Expander<'_, '_, '_> {
             && let Some((finalizer, _)) = &record.finalizer
             && let Some(body) = crate::library::body_index(finalizer)
         {
-            let request = crate::library::Request::finalizer(&program.types, body, finalizer, path, &actuals);
+            let request =
+                crate::library::Request::finalizer(&program.types, body, finalizer, path, &actuals);
             crate::library::instantiate(self.layouts, &mut self.out, request)?;
             return Ok(());
         }
@@ -744,7 +744,14 @@ impl Expander<'_, '_, '_> {
         let Some(definition) = self.program.definitions.get(finalizer).cloned() else {
             return Ok(());
         };
-        let key = key_of(&program.types, finalizer, definition.entry, &actuals, None, None)?;
+        let key = key_of(
+            &program.types,
+            finalizer,
+            definition.entry,
+            &actuals,
+            None,
+            None,
+        )?;
         if self.out.by_key.contains_key(&key) {
             return Ok(());
         }
@@ -765,24 +772,24 @@ impl Expander<'_, '_, '_> {
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         let unit = types.intern(Type::unit());
         let callable = types.intern(Type::with_kind(TypeKind::Function(FunctionType {
-                state_promises: Default::default(),
-                generics: Vec::new().into(),
-                parameters: vec![hirsel_types::Parameter {
-                    name: None,
-                    label: None,
-                    passing: hirsel_syntax::PassingMode::Borrow,
-                    ty: self_ty,
-                }]
-                .into(),
-                result: unit,
-                error: None,
-                allocation: hirsel_types::Allocation::MayAllocate,
-                authority: AuthoritySummary::Unknown,
-                uses: hirsel_types::Uses::Unrestricted,
-                contracts: Vec::new().into(),
-                incomplete: false,
-                foreign: None,
-            })));
+            state_promises: Default::default(),
+            generics: Vec::new().into(),
+            parameters: vec![hirsel_types::Parameter {
+                name: None,
+                label: None,
+                passing: hirsel_syntax::PassingMode::Borrow,
+                ty: self_ty,
+            }]
+            .into(),
+            result: unit,
+            error: None,
+            allocation: hirsel_types::Allocation::MayAllocate,
+            authority: AuthoritySummary::Unknown,
+            uses: hirsel_types::Uses::Unrestricted,
+            contracts: Vec::new().into(),
+            incomplete: false,
+            foreign: None,
+        })));
         let view = InstanceView {
             key,
             body: definition.entry,
@@ -831,9 +838,7 @@ impl Expander<'_, '_, '_> {
         self.out.elided.insert(id, elided);
         for (i, local) in body.locals.iter().enumerate() {
             let local_id = hirsel_tir::LocalId(i as u32);
-            if generic_function(types, local.ty)
-                && !self.out.elided[&id].contains(&local_id)
-            {
+            if generic_function(types, local.ty) && !self.out.elided[&id].contains(&local_id) {
                 self.data_local(id, local_id)?;
             }
         }
@@ -1174,7 +1179,14 @@ impl Expander<'_, '_, '_> {
         let convention = convention(types, callable).ok_or_else(|| {
             InstanceError::Malformed(format!("{path:?}: closure of a non-function type"))
         })?;
-        let key = key_of(types, &path, body_id, &actuals, Some(&convention), Some(digest))?;
+        let key = key_of(
+            types,
+            &path,
+            body_id,
+            &actuals,
+            Some(&convention),
+            Some(digest),
+        )?;
         let view = InstanceView {
             key,
             body: body_id,

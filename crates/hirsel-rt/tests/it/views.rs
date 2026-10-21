@@ -74,9 +74,10 @@ fn cursor_and_option_records_match_derived_layouts_on_both_targets() {
             .iter()
             .map(|name| {
                 let path = support::schema::path(name);
-                owners
-                    .nominals
-                    .insert(hirsel_syntax::DefId::intern(&path.clone()), OwnerRepresentation::StringView);
+                owners.nominals.insert(
+                    hirsel_syntax::DefId::intern(&path.clone()),
+                    OwnerRepresentation::StringView,
+                );
                 ty.add(TypeKind::Named {
                     definition: hirsel_syntax::DefId::intern(&path),
                     arguments: vec![].into(),

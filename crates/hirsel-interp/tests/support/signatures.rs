@@ -409,9 +409,9 @@ pub fn fixture_signatures(
             fact: None,
             captures: None,
         };
-        signatures.entry(path.clone()).or_insert_with(|| {
-            snapshot(path, SignatureKind::Type(declaration))
-        });
+        signatures
+            .entry(path.clone())
+            .or_insert_with(|| snapshot(path, SignatureKind::Type(declaration)));
     }
     signatures
 }

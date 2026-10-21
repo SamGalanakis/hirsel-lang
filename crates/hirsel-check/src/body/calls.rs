@@ -517,15 +517,13 @@ impl Checker<'_, '_> {
             if let Some(GenericArgument::Type(actual)) = argument {
                 if !type_contracts.contains(&i) {
                     let arenas = self.arena_places(*actual);
-                    *actual = generic_type_argument(self.types, *actual, |o| {
-                        arenas.contains(o)
-                    })
-                    .map_err(|e| {
-                        QueryError::Operational(OperationalFailure {
-                            operation: "generic type argument".into(),
-                            message: format!("{e:?}"),
-                        })
-                    })?;
+                    *actual = generic_type_argument(self.types, *actual, |o| arenas.contains(o))
+                        .map_err(|e| {
+                            QueryError::Operational(OperationalFailure {
+                                operation: "generic type argument".into(),
+                                message: format!("{e:?}"),
+                            })
+                        })?;
                 } else {
                     *actual = self.contract_type_argument(*actual);
                 }
@@ -1034,7 +1032,8 @@ impl Checker<'_, '_> {
             if let CallTarget::Constructor(ContextualName::Constructor(owner)) = &target {
                 let declaration = self.snapshot(owner)?;
                 if matches!(&declaration.kind, SignatureKind::Type(td) if td.fact.is_some()) {
-                    let helper = hirsel_check_protocol::fact::fact_signature(self.types, &declaration)?;
+                    let helper =
+                        hirsel_check_protocol::fact::fact_signature(self.types, &declaration)?;
                     let SignatureKind::Function(f) = &helper.kind else {
                         unreachable!()
                     };

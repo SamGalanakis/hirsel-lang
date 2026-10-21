@@ -453,13 +453,12 @@ impl Checker<'_, '_> {
             incomplete: false,
             foreign: None,
         }));
-        let function = abstract_parameter_scope(self.types, function, scope_site)
-            .map_err(|e| {
-                QueryError::Operational(OperationalFailure {
-                    operation: "contract clause header".into(),
-                    message: format!("{e:?}"),
-                })
-            })?;
+        let function = abstract_parameter_scope(self.types, function, scope_site).map_err(|e| {
+            QueryError::Operational(OperationalFailure {
+                operation: "contract clause header".into(),
+                message: format!("{e:?}"),
+            })
+        })?;
         self.body
             .resolution
             .generic_declarations

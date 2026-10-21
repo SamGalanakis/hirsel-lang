@@ -250,9 +250,7 @@ impl Builder<'_, '_> {
                     "materialized root disagrees with checked expression type",
                 );
             }
-            return self
-                .materialized_value(&value.root, id, span)
-                .map(Some);
+            return self.materialized_value(&value.root, id, span).map(Some);
         }
         let kind = self.input.syntax.tree.expressions[id.0 as usize]
             .kind
@@ -1599,9 +1597,7 @@ impl Builder<'_, '_> {
         let TypeKind::Function(_) = &self.types.get(info.ty).unwrap().kind else {
             return self.error(span, "closure does not have function type");
         };
-        let result = self
-            .decisions
-            .formal_result(&owner, self.types)?;
+        let result = self.decisions.formal_result(&owner, self.types)?;
         let body_id = BodyId(bodies.len() as u32);
         bodies.push(None);
         let mut capture_rows = vec![];

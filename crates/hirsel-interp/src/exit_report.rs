@@ -106,7 +106,9 @@ pub fn returned_error(
                     Some(TypeKind::Record(fs)) => (
                         "{ ".into(),
                         " }",
-                        fs.iter().map(|f| (Some(f.name.as_str().to_owned()), f.ty)).collect(),
+                        fs.iter()
+                            .map(|f| (Some(f.name.as_str().to_owned()), f.ty))
+                            .collect(),
                     ),
                     Some(TypeKind::Variant(vs)) => {
                         let ordinal = match value {

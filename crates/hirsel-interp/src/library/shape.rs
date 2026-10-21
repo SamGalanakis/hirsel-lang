@@ -71,7 +71,9 @@ pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
                                 record(
                                     "PayloadShape",
                                     vec![
-                                        label.map_or_else(none, |l| some(Value::String(l.as_str().to_owned()))),
+                                        label.map_or_else(none, |l| {
+                                            some(Value::String(l.as_str().to_owned()))
+                                        }),
                                         Value::String(declared.text(*ty)),
                                     ],
                                 )

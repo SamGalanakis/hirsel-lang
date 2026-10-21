@@ -64,7 +64,8 @@ fn size_bindings_preserve_u64_boundaries_and_reject_missing_values() {
             &mut Provider {
                 definitions,
                 queries: vec![],
-            }, &crate::support::session(),
+            },
+            &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("main"),
@@ -88,7 +89,8 @@ fn size_bindings_preserve_u64_boundaries_and_reject_missing_values() {
             &mut Provider {
                 definitions: vec![reader],
                 queries: vec![],
-            }, &crate::support::session(),
+            },
+            &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("read_size"),

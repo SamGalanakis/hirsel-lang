@@ -32,7 +32,12 @@ impl Checker<'_, '_> {
         self.imported(root)
     }
     fn imported(&mut self, ty: TypeId) -> Result<TypeId, QueryError> {
-        if !self.types.valid(ty) && self.types.validate(ty).is_err_and(|e| !matches!(e, GraphError::RecoveryType(_))) {
+        if !self.types.valid(ty)
+            && self
+                .types
+                .validate(ty)
+                .is_err_and(|e| !matches!(e, GraphError::RecoveryType(_)))
+        {
             return Err(QueryError::Operational(OperationalFailure {
                 operation: "body type import".into(),
                 message: "malformed declared type graph".into(),
@@ -514,7 +519,8 @@ impl Checker<'_, '_> {
                             .find(|(_, f)| f.name.as_str() == name)
                             .map(|(i, f)| (SourceProjectionKind::Field(FieldId(i as u32)), f.ty)),
                         TypeKind::Variant(vs) => {
-                            let selected = vs.iter().enumerate().find(|(_, v)| v.name.as_str() == name);
+                            let selected =
+                                vs.iter().enumerate().find(|(_, v)| v.name.as_str() == name);
                             selected.and_then(|(variant, v)| {
                                 let field_name = self.name(*segments.next()?);
                                 let (field, (_, ty)) =
@@ -743,7 +749,10 @@ impl Checker<'_, '_> {
                                 .last()
                                 .map(|s| self.name(*s))
                                 .unwrap_or_default();
-                            if !vs.iter().any(|v| v.name.as_str() == name && v.fields.is_empty()) {
+                            if !vs
+                                .iter()
+                                .any(|v| v.name.as_str() == name && v.fields.is_empty())
+                            {
                                 self.report(
                                     const { RuleId::of("LANG-7") },
                                     self.span(id),
@@ -869,9 +878,10 @@ impl Checker<'_, '_> {
                 Projection::Field(name) => {
                     let (_, repr) = self.representation(t)?;
                     match self.kind(repr) {
-                        TypeKind::Record(fields) => {
-                            fields.into_iter().find(|f| f.name.as_str() == name).map(|f| f.ty)
-                        }
+                        TypeKind::Record(fields) => fields
+                            .into_iter()
+                            .find(|f| f.name.as_str() == name)
+                            .map(|f| f.ty),
                         _ => None,
                     }
                 }
@@ -1094,7 +1104,8 @@ impl Checker<'_, '_> {
         if let (NameSite::Statement(_), Some(t)) = (owner, s.result)
             && hirsel_check_protocol::declaration::written_local(&self.input.syntax.tree, t)
                 .unwrap_or(
-                    self.types.get(result)
+                    self.types
+                        .get(result)
                         .unwrap()
                         .modes
                         .relation
@@ -1464,7 +1475,9 @@ impl Checker<'_, '_> {
                 _ => vec![],
             };
             for part in parts {
-                if !self.types.get(done[&part])
+                if !self
+                    .types
+                    .get(done[&part])
                     .unwrap()
                     .modes
                     .relation
@@ -1763,16 +1776,13 @@ impl Checker<'_, '_> {
         }
         if bound == ast::Bound::Flat {
             let generics = declarations.clone();
-            return structural_flat(
-                self.types,
-                root,
-                &generics,
-                &mut |path| match self.snapshot(path) {
-                    Ok(s) => Ok(Some(s)),
-                    Err(QueryError::Diagnostics(_)) => Ok(None),
-                    Err(e) => Err(e),
-                },
-            );
+            return structural_flat(self.types, root, &generics, &mut |path| match self
+                .snapshot(path)
+            {
+                Ok(s) => Ok(Some(s)),
+                Err(QueryError::Diagnostics(_)) => Ok(None),
+                Err(e) => Err(e),
+            });
         }
         let property = match bound {
             ast::Bound::Plain => Some(StructuralProperty::Plain),

@@ -201,20 +201,20 @@ impl Checker<'_, '_> {
                                         .collect::<Vec<_>>(),
                                     false,
                                 )),
-                                TypeKind::Variant(vs) => {
-                                    vs.iter().enumerate().find(|(_, v)| v.name.as_str() == name).map(
-                                        |(i, v)| {
-                                            (
-                                                ContextualName::Variant {
-                                                    owner: owner.clone(),
-                                                    variant: VariantId(i as u32),
-                                                },
-                                                v.fields.to_vec(),
-                                                vs.len() > 1,
-                                            )
-                                        },
-                                    )
-                                }
+                                TypeKind::Variant(vs) => vs
+                                    .iter()
+                                    .enumerate()
+                                    .find(|(_, v)| v.name.as_str() == name)
+                                    .map(|(i, v)| {
+                                        (
+                                            ContextualName::Variant {
+                                                owner: owner.clone(),
+                                                variant: VariantId(i as u32),
+                                            },
+                                            v.fields.to_vec(),
+                                            vs.len() > 1,
+                                        )
+                                    }),
                                 _ => None,
                             };
                             if let Some((ctx, slots, refut)) = shape {

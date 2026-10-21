@@ -185,7 +185,14 @@ impl Frame {
     ) -> Result<Self, Error> {
         arguments.iter_mut().for_each(Value::canonicalize);
         let entry = definition.entry;
-        Self::new_body(types, definition, entry, arguments, vec![], Default::default())
+        Self::new_body(
+            types,
+            definition,
+            entry,
+            arguments,
+            vec![],
+            Default::default(),
+        )
     }
     pub fn new_body(
         types: std::sync::Arc<hirsel_types::TypeInterner>,
@@ -639,7 +646,8 @@ impl Frame {
                 .and_then(Option::as_ref);
         }
         if operand.usage == UseKind::Copy {
-            let ty = self.types
+            let ty = self
+                .types
                 .get(self.place(operand.place)?.ty)
                 .ok_or_else(|| invalid("operand type"))?;
             if ty.modes.multiplicity == hirsel_types::Multiplicity::Once {
@@ -762,7 +770,8 @@ impl Frame {
         let place = self.place(id)?;
         if check.noalloc && !place.projection.is_empty() {
             let root = &self.body().locals[place.root.0 as usize];
-            let row = self.types
+            let row = self
+                .types
                 .get(root.ty)
                 .ok_or_else(|| invalid("write root type"))?;
             // Inline fields are independent stores. Traversing a counted block
@@ -892,7 +901,8 @@ impl Frame {
         // live holder shares, whatever either checker proved.
         if holds
             && place.projection.is_empty()
-            && self.types
+            && self
+                .types
                 .get(place.ty)
                 .is_some_and(|r| r.modes.uniqueness == hirsel_types::Uniqueness::Unique)
             && !shadow.sole_owner()

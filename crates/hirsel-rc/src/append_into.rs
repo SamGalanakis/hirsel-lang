@@ -51,7 +51,8 @@ use hirsel_tir::{
 };
 use hirsel_types::{
     BinderRef, BuiltinType, GenericArgument, Origin, OriginRoot, ParamId, Parameter, ParameterRef,
-    Primitive, Signature, SignatureKind, StatePromise, Type, TypeId, TypeInterner, TypeKind, UseKind,
+    Primitive, Signature, SignatureKind, StatePromise, Type, TypeId, TypeInterner, TypeKind,
+    UseKind,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -1060,9 +1061,15 @@ impl Fuser {
                 } else {
                     continue;
                 };
-                if let Some(site) =
-                    self.site(program, &program.types, body, &mut refs, &loops, b, producer)
-                {
+                if let Some(site) = self.site(
+                    program,
+                    &program.types,
+                    body,
+                    &mut refs,
+                    &loops,
+                    b,
+                    producer,
+                ) {
                     sites.push(site);
                 }
             }

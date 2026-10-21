@@ -116,7 +116,11 @@ fn write_content(content: &DefinitionContent, w: &mut Writer<Cx>) {
     w.close();
 }
 
-fn encode(types: &Arc<TypeInterner>, content: &DefinitionContent, naming: Naming) -> (String, Naming) {
+fn encode(
+    types: &Arc<TypeInterner>,
+    content: &DefinitionContent,
+    naming: Naming,
+) -> (String, Naming) {
     let mut w = Writer::with_context(Cx::new(Rc::new(|_| Location::unknown()), types.clone()));
     w.context.content = Some(naming);
     collect(&mut w, |w| write_content(content, w));

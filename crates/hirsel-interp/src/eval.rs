@@ -369,7 +369,14 @@ pub(crate) fn execute_frames(
                 }
                 _ => return Err(invalid("task body requires a callable")),
             };
-            let mut child = Frame::new_body(runtime.types.clone(), definition, body, vec![], captures, sizes)?;
+            let mut child = Frame::new_body(
+                runtime.types.clone(),
+                definition,
+                body,
+                vec![],
+                captures,
+                sizes,
+            )?;
             if child.definition.tracks_caller(body) {
                 child.caller = start
                     .site
@@ -812,7 +819,7 @@ pub(crate) fn execute_frames(
                                     callback_mut_arguments: mut_arguments,
                                     bounds: frame.check.as_ref().map(|check| {
                                         operation_bounds(
-                                    &runtime.types,
+                                            &runtime.types,
                                             &check.state.borrow(),
                                             &reference.definition,
                                             &callback_inputs,
@@ -851,8 +858,14 @@ pub(crate) fn execute_frames(
                         _ => return Err(invalid("operation callback requires function value")),
                     };
                     let path = definition.path.path().clone();
-                    let mut callback =
-                        Frame::new_body(runtime.types.clone(), definition, body, arguments, captures, sizes)?;
+                    let mut callback = Frame::new_body(
+                        runtime.types.clone(),
+                        definition,
+                        body,
+                        arguments,
+                        captures,
+                        sizes,
+                    )?;
                     if callback.definition.tracks_caller(body) {
                         callback.caller = Some(CallerSite::new(frame, state.anchor.site, sources)?);
                     }
@@ -1313,8 +1326,14 @@ pub(crate) fn execute_frames(
                                 sizes.iter().copied(),
                             );
                             let sizes = bindings;
-                            let mut callee =
-                                Frame::new_body(runtime.types.clone(), definition, body, vec![value], vec![], sizes)?;
+                            let mut callee = Frame::new_body(
+                                runtime.types.clone(),
+                                definition,
+                                body,
+                                vec![value],
+                                vec![],
+                                sizes,
+                            )?;
                             if let Some(check) = &frame.check {
                                 callee.check =
                                     Some(enter_checked(&check.state, &callee, vec![], None)?);
@@ -2116,7 +2135,8 @@ pub(crate) fn execute_frames(
                                 return Err(invalid("forget requires resource"));
                             };
                             if definition.path().0.package != frame.definition.path.path().0.package
-                                || definition.path().0.modules != frame.definition.path.path().0.modules
+                                || definition.path().0.modules
+                                    != frame.definition.path.path().0.modules
                             {
                                 return Err(invalid("cross-module forget"));
                             }
@@ -2155,12 +2175,7 @@ pub(crate) fn execute_frames(
                         let exhausted = if !target.core {
                             None
                         } else if path.is_core("copy_to") {
-                            copy_to_arena(
-                                runtime,
-                                result_type,
-                                &mut arguments,
-                                &mut budgets,
-                            )?
+                            copy_to_arena(runtime, result_type, &mut arguments, &mut budgets)?
                         } else {
                             list_write(path, &mut arguments, &mut budgets)
                                 .or_else(|| keyed_write(path, &mut arguments, &mut budgets))
@@ -2296,8 +2311,16 @@ pub(crate) fn execute_frames(
                         )
                     }
                 };
-                let path = (runtime.trace_mode == TraceMode::Full).then(|| definition.path.path().clone());
-                let mut callee = Frame::new_body(runtime.types.clone(), definition, body, arguments, captures, sizes)?;
+                let path =
+                    (runtime.trace_mode == TraceMode::Full).then(|| definition.path.path().clone());
+                let mut callee = Frame::new_body(
+                    runtime.types.clone(),
+                    definition,
+                    body,
+                    arguments,
+                    captures,
+                    sizes,
+                )?;
                 if callee.definition.tracks_caller(body) {
                     callee.caller =
                         if forward_caller && frame.definition.tracks_caller(frame.body_id) {
@@ -2801,7 +2824,8 @@ fn rvalue(
     let value = match *value {
         Rvalue::Constant(ref c) => {
             let ty = frame.place(destination)?.ty;
-            let ty = &runtime.types
+            let ty = &runtime
+                .types
                 .get(ty)
                 .ok_or_else(|| invalid("type out of range"))?
                 .kind;
@@ -2944,12 +2968,7 @@ fn rvalue(
             // MEM-6: charge a bounded arena before any operand is consumed.
             if let Some(arena) = bounded_destination(frame, placement, budgets) {
                 let ty = frame.place(destination)?.ty;
-                let bytes = crate::bounded::construction(
-                    runtime,
-                    ty,
-                    constructor,
-                    fields.len(),
-                )?;
+                let bytes = crate::bounded::construction(runtime, ty, constructor, fields.len())?;
                 budgets
                     .charge(arena, bytes)
                     .map_err(EvalError::OutOfSpace)?;
@@ -2976,7 +2995,8 @@ fn rvalue(
             }
             if frame.check.is_some() {
                 let inline_sequence = matches!(
-                    runtime.types
+                    runtime
+                        .types
                         .get(frame.place(destination)?.ty)
                         .map(|t| &t.kind),
                     Some(hirsel_types::TypeKind::Builtin {
@@ -3007,7 +3027,8 @@ fn rvalue(
                     shadow.add_all(region);
                 }
             }
-            let kind = &runtime.types
+            let kind = &runtime
+                .types
                 .get(frame.place(destination)?.ty)
                 .ok_or_else(|| invalid("destination type"))?
                 .kind;
@@ -3126,7 +3147,8 @@ fn rvalue(
                 };
             }
             Value::Closure {
-                invoked: runtime.types
+                invoked: runtime
+                    .types
                     .get(frame.place(destination)?.ty)
                     .is_some_and(|t| t.modes.multiplicity == hirsel_types::Multiplicity::Once)
                     .then(|| std::sync::Arc::new(std::sync::OnceLock::new())),
@@ -4268,12 +4290,7 @@ fn operation_bounds(
                 }
             }
         }
-        crate::checked::operation_result(
-            types,
-            function.result,
-            &result_inputs,
-            &retained,
-        )
+        crate::checked::operation_result(types, function.result, &result_inputs, &retained)
     } else {
         Shadow::of(retained)
     };

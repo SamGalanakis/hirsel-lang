@@ -143,7 +143,8 @@ fn run_repeat(failing: bool, mutating: bool, limits: Limits) -> (Execution, u64)
         &mut Provider {
             definitions,
             queries: vec![],
-        }, &crate::support::session(),
+        },
+        &crate::support::session(),
         &sources(),
         &RunConfiguration {
             entry: path("main"),
@@ -896,7 +897,8 @@ fn nested_native_named_callbacks_resume_mut_updates_and_preserve_failure_and_dep
             queries: vec![],
         };
         let execution = run_with_operations(
-            &mut provider, &crate::support::session(),
+            &mut provider,
+            &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("main"),

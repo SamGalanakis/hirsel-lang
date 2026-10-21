@@ -30,8 +30,8 @@ use hirsel_types::{
     ParamId, Parameter, ProtocolAssociation, Reach, RegionId, Relation, RelationPlace,
     ScalarDomain, SchemaConstraint, Sendability, SendabilityRequirement, SerializableCheck,
     SharedPath, SharedSlice, Signature, SignatureDependency, SignatureKind, SignatureMetadata,
-    Size, SizeParamId, StatePromise, Type, TypeDefinition, TypeId, TypeKind, TypeParamId,
-    TypeInterner, Uniqueness, UseKind, Uses, Variant, VariantId, WrapperKind,
+    Size, SizeParamId, StatePromise, Type, TypeDefinition, TypeId, TypeInterner, TypeKind,
+    TypeParamId, Uniqueness, UseKind, Uses, Variant, VariantId, WrapperKind,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -366,7 +366,12 @@ pub(crate) fn read_table(r: &mut Reader<'_, Cx>) -> Result<(), DecodeError> {
     let decoded = hirsel_types::decode_table(&r.context.types, &table);
     r.context.type_ids = positions
         .iter()
-        .map(|p| decoded.get(*p as usize).copied().unwrap_or(TypeId::DANGLING))
+        .map(|p| {
+            decoded
+                .get(*p as usize)
+                .copied()
+                .unwrap_or(TypeId::DANGLING)
+        })
         .collect();
     Ok(())
 }

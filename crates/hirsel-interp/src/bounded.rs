@@ -149,10 +149,7 @@ pub(crate) fn construction<'a>(
 /// The logical bytes of one element of the List or Array type `ty`, or one
 /// entry of the Map or Set type `ty`: what a push or an insert of a new key
 /// charges, and per element what a copy-on-write copy charges (MEM-6).
-pub(crate) fn element<'a>(
-    runtime: &'a RuntimeTypes,
-    ty: TypeId,
-) -> Result<u64, Error> {
+pub(crate) fn element<'a>(runtime: &'a RuntimeTypes, ty: TypeId) -> Result<u64, Error> {
     let resolve = resolver(runtime);
     let logical = Logical::new(&resolve);
     let element = logical
@@ -181,11 +178,7 @@ pub(crate) fn storage<'a>(
     ) {
         return Ok(None);
     }
-    let element = if bounded {
-        element(runtime, ty)?
-    } else {
-        0
-    };
+    let element = if bounded { element(runtime, ty)? } else { 0 };
     Ok(Some(ArenaStorage::fresh(arena, element)))
 }
 

@@ -2,7 +2,8 @@
 //! signature phase and the query engine that drives it through a trait object.
 use hirsel_syntax as ast;
 use hirsel_types::{
-    DeclarationSite, Metadata, QueryOutput, Resolution, Signature, TypeDefinition, TypeInterner, TypeMemo,
+    DeclarationSite, Metadata, QueryOutput, Resolution, Signature, TypeDefinition, TypeInterner,
+    TypeMemo,
 };
 
 /// All borrowed input snapshots must belong to the same syntax/interner session.

@@ -60,14 +60,19 @@ impl Serialization {
     pub fn get(&self, path: &DefPath) -> Option<&hirsel_types::SignatureRef> {
         let view = self.views.get(path);
         if let Some(recording) = self.recordings.lock().unwrap().last_mut() {
-            recording.insert(path.clone(), view.map_or_else(ContentHash::default, |v| v.1));
+            recording.insert(
+                path.clone(),
+                view.map_or_else(ContentHash::default, |v| v.1),
+            );
         }
         view.map(|(view, _)| view)
     }
     /// The digest a read of `path` records: its view's, or the default when
     /// it has none.
     pub fn digest(&self, path: &DefPath) -> ContentHash {
-        self.views.get(path).map_or_else(ContentHash::default, |v| v.1)
+        self.views
+            .get(path)
+            .map_or_else(ContentHash::default, |v| v.1)
     }
     pub fn len(&self) -> usize {
         self.views.len()

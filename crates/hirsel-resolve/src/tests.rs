@@ -311,7 +311,13 @@ impl Tree {
     fn run(&self, item: ItemId) -> ResolveOutput {
         let index = self.index();
         let mut fake = Fake::new(&index);
-        resolve_item(&self.file, &self.file.items[item], &index, session(), &mut fake)
+        resolve_item(
+            &self.file,
+            &self.file.items[item],
+            &index,
+            session(),
+            &mut fake,
+        )
     }
 }
 fn clean(output: &ResolveOutput) {
@@ -526,7 +532,13 @@ fn unresolved_ambiguous_and_private_uses_have_rule_and_use_span() {
     }
     let (index, _) = ManifestIndex::new(fixture);
     let mut provider = Fake::new(&index);
-    let output = resolve_item(&t.file, &t.file.items[item], &index, session(), &mut provider);
+    let output = resolve_item(
+        &t.file,
+        &t.file.items[item],
+        &index,
+        session(),
+        &mut provider,
+    );
     assert_eq!(output.query.diagnostics.len(), 3);
     for (d, (rule, line)) in
         output
@@ -723,7 +735,11 @@ fn failed_provider_diagnostics_are_silent_for_reservations_and_emitted_once_at_u
         Visibility::Private,
         3,
     );
-    let output = resolve_item(&t.file, &t.file.items[item], &t.index(), session(),
+    let output = resolve_item(
+        &t.file,
+        &t.file.items[item],
+        &t.index(),
+        session(),
         &mut ReportingProvider,
     );
     assert_eq!(output.query.diagnostics.len(), 1);

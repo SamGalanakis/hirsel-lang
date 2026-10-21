@@ -21,7 +21,8 @@ pub fn load(path: &str) -> Result<Export, String> {
         &text,
         &header.environment,
         &hirsel_types::TypeInterner::new(None),
-    ).map_err(|e| format!("{path}: {e}"))
+    )
+    .map_err(|e| format!("{path}: {e}"))
 }
 
 /// The local a place is rooted at.

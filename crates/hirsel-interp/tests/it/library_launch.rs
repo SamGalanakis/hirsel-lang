@@ -63,7 +63,8 @@ fn invalid_and_unavailable_entries_never_query_a_body_or_partly_grant() {
             queries: vec![],
         };
         let error = launch(
-            &mut provider, &crate::support::session(),
+            &mut provider,
+            &crate::support::session(),
             &support::sources(),
             &sig,
             &run,
@@ -117,8 +118,15 @@ fn explicitly_configured_unsafe_is_granted_and_configuration_is_deterministic() 
     let mut config = SimulationConfig::default();
     config.grants.insert("Unsafe".into());
     let mut library = Library::new(&run, config.clone()).unwrap();
-    let first = library.entry_arguments(&crate::support::session(), &sig).unwrap();
+    let first = library
+        .entry_arguments(&crate::support::session(), &sig)
+        .unwrap();
     assert!(matches!(&first[0],Value::Handle{kind,..}if kind=="Unsafe"));
     let mut other = Library::new(&run, config).unwrap();
-    assert_eq!(other.entry_arguments(&crate::support::session(), &sig).unwrap(), first);
+    assert_eq!(
+        other
+            .entry_arguments(&crate::support::session(), &sig)
+            .unwrap(),
+        first
+    );
 }

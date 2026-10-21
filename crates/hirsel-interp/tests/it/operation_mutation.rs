@@ -96,7 +96,8 @@ fn operation_updates_only_mut_argument_places() {
             &mut Provider {
                 definitions: vec![d],
                 queries: vec![],
-            }, &crate::support::session(),
+            },
+            &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("main"),
@@ -202,7 +203,8 @@ fn operation_releases_untransferred_inputs_in_reverse_source_order_before_displa
         &mut Provider {
             definitions: vec![main],
             queries: vec![],
-        }, &crate::support::session(),
+        },
+        &crate::support::session(),
         &sources(),
         &RunConfiguration {
             entry: path("main"),
@@ -264,7 +266,8 @@ fn api_execution_errors_retain_exact_prior_stdout_and_original_cause() {
             &mut Provider {
                 definitions: vec![definition],
                 queries: vec![],
-            }, &crate::support::session(),
+            },
+            &crate::support::session(),
             &sources(),
             &RunConfiguration {
                 entry: path("main"),

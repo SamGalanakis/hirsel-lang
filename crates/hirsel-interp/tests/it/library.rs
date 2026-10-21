@@ -789,7 +789,8 @@ fn cleanup_closes_files_aborts_atomic_temporaries_and_records_drop_order() {
         &mut Provider {
             definitions: vec![b.definition("main")],
             queries: vec![],
-        }, &crate::support::session(),
+        },
+        &crate::support::session(),
         &h.sources,
         &h.run,
         vec![Value::Tuple(vec![Some(file), Some(atomic)])],

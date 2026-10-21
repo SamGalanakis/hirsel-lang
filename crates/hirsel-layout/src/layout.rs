@@ -1241,8 +1241,7 @@ impl<'o> LayoutBuilder<'o> {
         'o: 's,
     {
         let (resolved, frame) = walk.resolve(ty, f)?;
-        let fixed_flat = if let TypeKind::Named { definition, .. } =
-            &walk.row(resolved)?.kind
+        let fixed_flat = if let TypeKind::Named { definition, .. } = &walk.row(resolved)?.kind
             && self.flat_owner(definition)
         {
             let body = self.flat_body(walk, ty, f)?;
@@ -2312,13 +2311,17 @@ impl<'o> LayoutBuilder<'o> {
         let record = match owner {
             OwnerRepresentation::Handle { revision, resource } => {
                 let mut handle = self.handle_record(key, *resource);
-                if !resource && definition.path().0.package.name_is("core") && definition.path().0.name == "Path"
+                if !resource
+                    && definition.path().0.package.name_is("core")
+                    && definition.path().0.name == "Path"
                 {
                     handle.kind = LayoutKind::Path;
                     handle.scan.clear();
                 }
                 // An arena token is a record address, never a run-context ID.
-                if !resource && definition.path().0.package.name_is("core") && definition.path().0.name == "Arena"
+                if !resource
+                    && definition.path().0.package.name_is("core")
+                    && definition.path().0.name == "Arena"
                 {
                     let (size, align) = self.pointer();
                     handle = self.blank(key, LayoutKind::Arena, SizeSpec::Fixed(size), align);
@@ -2899,7 +2902,10 @@ impl<'o> LayoutBuilder<'o> {
                 let owners = self.owners;
                 let Some(OwnerRepresentation::Defined(record)) = owners.nominals.get(definition)
                 else {
-                    return invalid(format!("{} is not flat-compatible", describe(definition.path())));
+                    return invalid(format!(
+                        "{} is not flat-compatible",
+                        describe(definition.path())
+                    ));
                 };
                 if record.resource {
                     return invalid(format!(

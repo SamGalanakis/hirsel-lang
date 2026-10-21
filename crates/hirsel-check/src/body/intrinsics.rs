@@ -74,11 +74,9 @@ impl Checker<'_, '_> {
                 }
             }
         }
-        if let Some((rule, message)) =
-            schema_failure(self.types, args, schema, |ty, bound| {
-                proofs.get(&(ty, bound)).copied().unwrap_or(false)
-            })
-        {
+        if let Some((rule, message)) = schema_failure(self.types, args, schema, |ty, bound| {
+            proofs.get(&(ty, bound)).copied().unwrap_or(false)
+        }) {
             self.report(rule, span, message);
             return Ok(false);
         }

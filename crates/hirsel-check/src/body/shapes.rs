@@ -9,13 +9,12 @@ impl Checker<'_, '_> {
         let types = self.types;
         let compile_time_only = match &self.input.signature.kind {
             SignatureKind::Const { .. } => true,
-            SignatureKind::Function(f) => {
-                f.parameters
-                    .iter()
-                    .map(|p| p.ty)
-                    .chain([f.result])
-                    .any(|t| mentions_compile_time_only(types, t))
-            }
+            SignatureKind::Function(f) => f
+                .parameters
+                .iter()
+                .map(|p| p.ty)
+                .chain([f.result])
+                .any(|t| mentions_compile_time_only(types, t)),
             SignatureKind::Type(_) => false,
         };
         if compile_time_only {

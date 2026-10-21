@@ -50,7 +50,8 @@ impl Library {
                 "entry must be complete and monomorphic".into(),
             ));
         }
-        let result = types.get(f.result)
+        let result = types
+            .get(f.result)
             .ok_or_else(|| LaunchError::InvalidEntry("missing result type".into()))?;
         let TypeKind::Named {
             definition,
@@ -81,7 +82,8 @@ impl Library {
             let TypeKind::Named {
                 definition,
                 arguments,
-            } = &types.get(p.ty)
+            } = &types
+                .get(p.ty)
                 .ok_or_else(|| LaunchError::InvalidEntry("missing parameter type".into()))?
                 .kind
             else {
