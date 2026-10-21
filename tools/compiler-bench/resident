@@ -223,7 +223,8 @@ def measure(args):
     pairs = [(name, path) for name, path in [('tasks', corpus.ROOT / 'examples/tasks/hirsel.json'), ('syn10k', syn)] if re.search(args.select, name)]
     report = {'schema': 1, 'mode': 'measure', 'seed': args.seed, 'rounds': args.rounds,
               'server_cpu': 31, 'client_cpu': 7, 'runs': [],
-              'cache_policy': 'independent per mode; cold disables definition and object stores'}
+              'cache_policy': 'independent per mode; cold disables definition and object stores',
+              'allow_rejected_checks': args.allow_rejected_checks}
     randomizer = random.Random(args.seed)
     for name, source in pairs:
         directory = args.work / 'measure' / name
@@ -247,7 +248,8 @@ def measure(args):
         server = Server(args, directory, pinned=True)
         try:
             result, _ = server.command(['check', str(entry)])
-            if result.returncode:
+            baseline = bytes_of(result)
+            if result.returncode and (not args.allow_rejected_checks or args.native):
                 raise RuntimeError(result.stderr.decode())
             if args.native:
                 result, _ = server.command(native)
@@ -264,8 +266,8 @@ def measure(args):
                     store = 'none@1' if mode == 'cold' else 'dir@1'
                     cache = None if mode == 'resident' else mode
                     seeded, _ = server.command(['check', str(entry)], daemon=daemon, results=store, cache=cache)
-                    if seeded.returncode:
-                        raise RuntimeError(seeded.stderr.decode())
+                    if bytes_of(seeded) != baseline:
+                        raise RuntimeError('seeding changed the baseline output: ' + seeded.stderr.decode())
                     change = {'unchanged': base,
                               'body': base.replace('resident_probe(x:u64) -> u64 { 1u64 }',
                                                    f'resident_probe(x:u64) -> u64 {{ {round_number + 2}u64 }}'),
@@ -280,12 +282,14 @@ def measure(args):
                     with server_counts(server.process.pid, Path(str(prefix) + '.server.perf')):
                         result, wall = server.command(native if operation == 'native' else ['check', str(entry)], daemon=daemon,
                                                        results=store, perf=Path(str(prefix) + '.client.perf'), cache=cache)
-                    if result.returncode:
+                    if (args.allow_rejected_checks and bytes_of(result) != baseline) or (result.returncode and not args.allow_rejected_checks):
                         raise RuntimeError(result.stderr.decode())
                     client = counts(Path(str(prefix) + '.client.perf'))
                     worker = counts(Path(str(prefix) + '.server.perf'))
                     row = {'program': name, 'round': round_number, 'mode': mode, 'edit': operation,
                            'wall_s': wall, 'client': client, 'server': worker,
+                           'exit': result.returncode,
+                           'workload_status': 'rejected' if result.returncode else 'accepted',
                            'instructions': client.get('instructions', 0) + worker.get('instructions', 0),
                            'cycles': client.get('cycles', 0) + worker.get('cycles', 0)}
                     report['runs'].append(row)
@@ -334,6 +338,8 @@ def campaign(args):
                        '--work', str(directory), '--output', str(output)]
             if args.native:
                 command.append('--native')
+            if args.allow_rejected_checks:
+                command.append('--allow-rejected-checks')
             log = directory / 'session.log'
             with log.open('wb') as stream:
                 result = subprocess.run(command, stdout=stream, stderr=stream)
@@ -366,6 +372,8 @@ def main():
     parser.add_argument('--single', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--scale', type=lambda s: tuple(map(int, s.split(','))), default=corpus.SCALE)
     parser.add_argument('--rounds', type=int, default=10)
+    parser.add_argument('--allow-rejected-checks', action='store_true',
+                        help='measure unchanged rejection bytes; never permits native errors')
     parser.add_argument('--native', action='store_true', help='include edit to running native cells')
     parser.add_argument('--seed', type=int, default=20261021)
     args = parser.parse_args()
