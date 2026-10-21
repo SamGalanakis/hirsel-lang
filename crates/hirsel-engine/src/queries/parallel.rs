@@ -547,7 +547,7 @@ impl QueryEngine {
         let changes = self
             .front_changes
             .is_active()
-            .then(|| self.invalidate_front_products());
+            .then(|| self.invalidate_front_definition(id));
         let outcome = self.front_outcome(
             definition.clone(),
             entry.result(),

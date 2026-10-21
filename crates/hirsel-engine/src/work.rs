@@ -44,6 +44,8 @@ work_stats! {
     lint_definition_visits,
     /// Body products read by the package dead-arm lint.
     lint_body_visits,
+    /// Pending frontier notifications copied, including already invalidated generations.
+    frontier_observations,
     /// Compact owners actually invalidated by a new generation.
     front_invalidations,
     /// Compact selection-summary requests, including hits.

@@ -105,7 +105,33 @@ impl QueryEngine {
                 self.front_changes.changed(DefId::intern(&path), true);
             }
         }
-        self.front_changes.snapshot()
+        let changes = self.front_changes.snapshot();
+        self.work.frontier_observations += changes.observations.len() as u64;
+        changes
+    }
+    /// One publication's notification. Compact completion consumes only its
+    /// owner's generation, leaving every unrelated pending owner untouched.
+    pub(crate) fn frontier_change(&mut self, definition: DefId) -> FrontChanges {
+        self.note_environment();
+        self.settle_signatures();
+        let mut changes = FrontChanges::default();
+        if let Some(pending) = self.front_changes.pending.get(&definition) {
+            self.work.frontier_observations += 1;
+            changes.observations.insert(definition, pending.generation);
+            match pending.present {
+                Some(true) => {
+                    changes.changed.insert(definition);
+                }
+                Some(false) => {
+                    changes.removed.insert(definition);
+                }
+                None => (),
+            }
+            if pending.affected {
+                changes.affected.insert(definition);
+            }
+        }
+        changes
     }
     /// Acknowledge only products actually refreshed from `observed`. Changes
     /// arriving during S1 remain pending for the following frontier.
@@ -227,6 +253,27 @@ mod tests {
             engine.graph.validation_context_reads().next().is_none(),
             "replacing a memo retires its contextual key"
         );
+    }
+
+    #[test]
+    fn owner_snapshot_preserves_other_owners_and_newer_generations() {
+        let (a, b) = (owner("a"), owner("b"));
+        let mut engine = QueryEngine::new(default_environment(), PhaseAdapters::default());
+        engine.front_changes.activate();
+        engine.front_changes.changed(a, true);
+        engine.front_changes.changed(b, true);
+        let first = engine.frontier_change(a);
+        assert_eq!(first.changed, BTreeSet::from([a]));
+        assert_eq!(first.observations.len(), 1);
+        engine.front_changes.changed(a, false);
+        engine.acknowledge_frontier(&first, &[a, b]);
+        let pending = engine.front_changes.snapshot();
+        assert_eq!(pending.changed, BTreeSet::from([b]));
+        assert_eq!(pending.removed, BTreeSet::from([a]));
+        let second = engine.frontier_change(a);
+        engine.acknowledge_frontier(&second, &[a]);
+        assert_eq!(engine.front_changes.snapshot().changed, BTreeSet::from([b]));
+        assert_eq!(engine.work.frontier_observations, 2);
     }
 
     #[test]

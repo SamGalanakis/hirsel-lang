@@ -2243,6 +2243,10 @@ fn accepted_ten_thousand_definition_body_edit_reports_actual_index_and_aggregate
         let mut session = session::Session::open(&source, Verify::On);
         assert!(session.check().unwrap().diagnostics.is_empty());
         let before = session.program_applied().unwrap().engine.work_stats();
+        assert!(
+            before.frontier_observations < 100_000,
+            "cold publication copied too many frontier notifications: {before:?}"
+        );
         let edit = text.replace("{ x }", "{ x + 1u8 }");
         session.apply(vec![session::FileChange {
             path: source.clone(),
@@ -2335,5 +2339,27 @@ fn scalar_materialization_inherits_complete_mode_receipts_on_cold_and_warm_deman
                 );
             }
         }
+    });
+}
+
+#[test]
+fn cold_compact_publication_observes_each_owners_notification_once() {
+    with_compiler_stack(|| {
+        let mut text = String::from("fn main(){}\n");
+        for i in 0..255 {
+            text.push_str(&format!("fn f{i}()->u8{{1u8}}\n"));
+        }
+        let mut candidate = engine(Arc::new(store::NoneStore)).with_config(CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::new(8),
+            retention: memo::Retention::Batch,
+            ..CompileConfig::for_memory_cap(None)
+        });
+        assert!(checked(&mut candidate, &text).diagnostics.is_empty());
+        let work = candidate.work_stats();
+        eprintln!("compact publication work: {work:?}");
+        assert!(
+            work.frontier_observations < 5_000,
+            "cold frontier snapshots grew quadratically: {work:?}"
+        );
     });
 }

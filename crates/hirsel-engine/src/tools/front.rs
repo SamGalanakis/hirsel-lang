@@ -69,6 +69,19 @@ impl FrontProducts {
 impl QueryEngine {
     pub(crate) fn invalidate_front_products(&mut self) -> crate::queries::FrontChanges {
         let changes = self.frontier_changes();
+        self.invalidate_front_changes(changes)
+    }
+    pub(crate) fn invalidate_front_definition(
+        &mut self,
+        definition: DefId,
+    ) -> crate::queries::FrontChanges {
+        let changes = self.frontier_change(definition);
+        self.invalidate_front_changes(changes)
+    }
+    fn invalidate_front_changes(
+        &mut self,
+        changes: crate::queries::FrontChanges,
+    ) -> crate::queries::FrontChanges {
         if self.front_products.verify != Some(self.verify) {
             self.front_products.lowered.clear();
             self.front_products.verify = Some(self.verify);
