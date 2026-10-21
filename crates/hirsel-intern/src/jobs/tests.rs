@@ -2,6 +2,18 @@ use super::*;
 use proptest::prelude::*;
 use std::sync::atomic::AtomicU64;
 
+#[test]
+fn worker_count_respects_stack_reservations_and_empty_frontiers() {
+    for requested in [1, 2, 8, 32] {
+        let jobs = Jobs::new(requested);
+        assert_eq!(jobs.worker_count_with_cap(0, 0), 0);
+        assert_eq!(jobs.worker_count_with_cap(64, 0), 1);
+        assert_eq!(jobs.worker_count_with_cap(64, 512 << 20), requested.min(2));
+        assert_eq!(jobs.worker_count_with_cap(64, 4 << 30), requested.min(16));
+        assert_eq!(jobs.worker_count_with_cap(1, 4 << 30), 1);
+    }
+}
+
 /// A task that records the order it started in and does work proportional to its cost.
 fn run(jobs: Jobs, costs: &[u64]) -> (Vec<(usize, u64)>, Vec<usize>) {
     let started = Mutex::new(Vec::new());
@@ -147,7 +159,10 @@ fn state_is_initialized_once_per_worker_and_reused_only_on_that_thread() {
                 (task, state.owner, state.calls.get())
             },
         );
-        assert_eq!(initialized.load(Ordering::Relaxed), jobs);
+        assert_eq!(
+            initialized.load(Ordering::Relaxed),
+            Jobs::new(jobs).worker_count(40)
+        );
         let mut by_thread = std::collections::HashMap::new();
         for (index, (task, owner, ordinal)) in ran.into_iter().enumerate() {
             assert_eq!(index, task as usize);

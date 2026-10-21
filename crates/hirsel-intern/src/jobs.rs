@@ -35,6 +35,25 @@ impl Jobs {
     pub fn get(self) -> usize {
         self.0.get()
     }
+
+    /// Actual workers under the host memory cap. Stack reservations count
+    /// against RLIMIT_DATA even when untouched; half the cap stays available
+    /// to the caller and shared compiler products. Empty frontiers use none.
+    pub fn worker_count(self, tasks: usize) -> usize {
+        let cap = std::env::var("HIRSEL_MEMORY_LIMIT")
+            .ok()
+            .and_then(|text| hirsel_guard::parse_limit(text.as_bytes()))
+            .unwrap_or(hirsel_guard::DEFAULT_LIMIT);
+        self.worker_count_with_cap(tasks, cap)
+    }
+
+    /// The same policy with an explicit byte cap, for host schedulers/tests.
+    pub fn worker_count_with_cap(self, tasks: usize, cap: u64) -> usize {
+        let stacks = (cap / (2 * COMPILER_STACK_BYTES as u64)).max(1);
+        self.get()
+            .min(tasks)
+            .min(stacks.min(usize::MAX as u64) as usize)
+    }
 }
 
 /// Run `work` over `tasks` on up to `jobs` workers and return the results in
@@ -72,7 +91,7 @@ pub fn map_with_state<T: Send, R: Send, S>(
     let costs: Vec<u64> = tasks.iter().map(&cost).collect();
     let mut order: Vec<usize> = (0..tasks.len()).collect();
     order.sort_by(|&a, &b| costs[b].cmp(&costs[a]).then(a.cmp(&b)));
-    let workers = jobs.get().min(tasks.len());
+    let workers = jobs.worker_count(tasks.len());
     if workers <= 1 {
         let mut state = initialize();
         let mut slots: Vec<Option<T>> = tasks.into_iter().map(Some).collect();
