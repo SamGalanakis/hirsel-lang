@@ -22,7 +22,6 @@ pub struct DirStore {
     root: PathBuf,
     cap: u64,
     written: AtomicU64,
-    temp: AtomicU64,
 }
 
 /// What a collection found and removed.
@@ -40,7 +39,6 @@ impl DirStore {
             root,
             cap: DEFAULT_CAP,
             written: AtomicU64::new(0),
-            temp: AtomicU64::new(0),
         }
     }
     pub fn with_cap(mut self, cap: u64) -> Self {
@@ -143,15 +141,27 @@ impl ResultStore for DirStore {
         let temp_dir = self.root.join("tmp");
         let framed = frame(value);
         let write = || -> std::io::Result<()> {
+            use std::io::Write;
+            // Separate handles in this process share a publication sequence.
+            // create_new also refuses leftovers from an earlier PID lifetime.
+            static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
             fs::create_dir_all(path.parent().unwrap())?;
             fs::create_dir_all(&temp_dir)?;
             let temp = temp_dir.join(format!(
                 "{}.{}.{}",
                 key.hex(),
                 std::process::id(),
-                self.temp.fetch_add(1, Relaxed)
+                NEXT_TEMP.fetch_add(1, Relaxed)
             ));
-            fs::write(&temp, &framed)?;
+            let mut file = fs::File::options()
+                .write(true)
+                .create_new(true)
+                .open(&temp)?;
+            if let Err(error) = file.write_all(&framed) {
+                let _ = fs::remove_file(&temp);
+                return Err(error);
+            }
+            drop(file);
             fs::rename(&temp, &path).inspect_err(|_| {
                 let _ = fs::remove_file(&temp);
             })
@@ -159,7 +169,10 @@ impl ResultStore for DirStore {
         // A failed write is a later miss, never a compile failure.
         if write().is_ok() {
             let before = self.written.fetch_add(framed.len() as u64, Relaxed);
-            if (before + framed.len() as u64) / GC_EVERY != before / GC_EVERY {
+            // Short-lived CLI processes must not bypass collection forever.
+            // Afterwards allow at most one interval of slack per active handle.
+            let interval = GC_EVERY.min(self.cap.max(1));
+            if before == 0 || (before + framed.len() as u64) / interval != before / interval {
                 self.gc(self.cap);
             }
         }

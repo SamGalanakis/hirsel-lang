@@ -576,9 +576,10 @@ bundle="$(.buck2/bin/buck2 build --target-platforms //tools/buck2:release \
 install -d "$HOME/.local/bin"
 install -m 755 "$bundle/hirsel" "$HOME/.local/bin/hirsel"
 install -m 644 "$bundle/hirsel-std.image" "$HOME/.local/bin/hirsel-std.image"
+cp -R "$bundle/hirsel-std.objects" "$HOME/.local/bin/"
 ```
 
-`//:hirsel-toolchain` produces a directory containing both files. Its executable
+`//:hirsel-toolchain` produces a directory containing the executable, image and object seed. Its executable
 finds its sibling std image immediately, including after installation. Plain
 `cargo build` users create that sibling with one command from the repository root
 (use `target/release/hirsel` after `cargo build --release`):
@@ -707,10 +708,20 @@ cache reuse and optional verified code-store provenance.
 ## Native unit objects
 
 Native builds lower and emit units on `HIRSEL_JOBS` workers (the host's available
-parallelism by default). `HIRSEL_OBJECTS=none@1` is the default writable store;
-`dir@1` retains checksummed fragments under
+parallelism by default). `HIRSEL_OBJECTS=dir@1` is the default writable store;
+it retains checksummed fragments under
 `$XDG_CACHE_HOME/hirsel/objects-v1/<target>-<backend>-<opt>` (or `$HOME/.cache`),
-and `sim@1` keeps them in memory. Object and import keys describe the unit's
+and `sim@1` keeps them in memory. `HIRSEL_OBJECTS=none@1` disables writable
+objects; also set `HIRSEL_STD_OBJECTS=none` for a completely uncached native
+control. Each partition has a 4 GiB cap with least-recently-used eviction. The
+first publication of each store handle collects old entries; later publications
+collect every 64 MiB (or the configured cap, if smaller), bounding slack per
+active writer. Result records use `HIRSEL_RESULTS=dir@1` by default, with a
+2 GiB cap and the same collection policy; `HIRSEL_RESULTS=none@1` disables them.
+Fresh user caches contain no other program's results. Only the installed
+read-only std products can serve another program's first build.
+
+Object and import keys describe the unit's
 content and dependencies. Warm imports replay layout, ABI and library requests;
 warm object hits skip placement, RC, reuse, Ready validation and emission.
 `--validate-stages` always imports and recomputes object hits, comparing the

@@ -202,3 +202,61 @@ fn stores_are_selected_by_name() {
     assert_eq!(store_by_name("dir@1", Some(root)).unwrap().name(), "dir@1");
     assert!(store_by_name("disk@9", None).is_err());
 }
+
+#[test]
+fn dir_short_lived_writers_enforce_the_cap() {
+    let root = scratch("short-writers");
+    for n in 0..12 {
+        let store = DirStore::new(root.clone()).with_cap(4096);
+        store.put(&key(&format!("entry-{n}")), &[n as u8; 2048]);
+        let report = store.gc(u64::MAX);
+        assert!(
+            report.bytes <= 4096,
+            "fresh writers must collect: {report:?}"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn dir_concurrent_handles_publish_complete_records_during_eviction() {
+    let root = scratch("publish-evict");
+    std::thread::scope(|scope| {
+        for n in 0..8 {
+            let root = &root;
+            scope.spawn(move || {
+                // Independent handles must not reuse temporary files, even for
+                // simultaneous publication of different bytes at the same key.
+                let store = DirStore::new(root.clone()).with_cap(512 * 1024);
+                let payload = vec![n as u8; 128 * 1024];
+                for _ in 0..16 {
+                    store.put(&key("shared"), &payload);
+                    if let Some(bytes) = store.get(&key("shared")) {
+                        assert_eq!(bytes.len(), payload.len());
+                        assert!(bytes.iter().all(|b| *b == bytes[0]));
+                        assert!(bytes[0] < 8);
+                    }
+                    store.gc(512 * 1024);
+                }
+            });
+        }
+    });
+    let store = DirStore::new(root.clone());
+    store.put(&key("shared"), b"complete");
+    assert_eq!(&*store.get(&key("shared")).unwrap(), b"complete");
+    assert!(
+        std::fs::read_dir(root.join("tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    let hex = key("shared").hex();
+    let path = root.join(&hex[..2]).join(&hex);
+    let bytes = std::fs::read(&path).unwrap();
+    // Every truncated header/payload and a damaged checksum is a miss.
+    for cut in 0..bytes.len() {
+        std::fs::write(&path, &bytes[..cut]).unwrap();
+        assert!(store.get(&key("shared")).is_none(), "cut {cut}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

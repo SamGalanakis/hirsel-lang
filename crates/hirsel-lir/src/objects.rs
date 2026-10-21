@@ -125,7 +125,6 @@ pub struct DirObjects {
     root: PathBuf,
     cap: u64,
     written: AtomicU64,
-    temp: AtomicU64,
 }
 
 /// What a collection found and removed.
@@ -144,7 +143,6 @@ impl DirObjects {
             root,
             cap: DEFAULT_CAP,
             written: AtomicU64::new(0),
-            temp: AtomicU64::new(0),
         }
     }
     pub fn with_cap(mut self, cap: u64) -> Self {
@@ -249,15 +247,27 @@ impl ObjectStore for DirObjects {
         let temp_dir = self.root.join("tmp");
         let framed = frame(value);
         let write = || -> std::io::Result<()> {
+            use std::io::Write;
+            // Separate handles in this process share a publication sequence.
+            // create_new also refuses leftovers from an earlier PID lifetime.
+            static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
             fs::create_dir_all(path.parent().unwrap())?;
             fs::create_dir_all(&temp_dir)?;
             let temp = temp_dir.join(format!(
                 "{}.{}.{}",
                 key.hex(),
                 std::process::id(),
-                self.temp.fetch_add(1, Relaxed)
+                NEXT_TEMP.fetch_add(1, Relaxed)
             ));
-            fs::write(&temp, &framed)?;
+            let mut file = fs::File::options()
+                .write(true)
+                .create_new(true)
+                .open(&temp)?;
+            if let Err(error) = file.write_all(&framed) {
+                let _ = fs::remove_file(&temp);
+                return Err(error);
+            }
+            drop(file);
             fs::rename(&temp, &path).inspect_err(|_| {
                 let _ = fs::remove_file(&temp);
             })
@@ -265,7 +275,10 @@ impl ObjectStore for DirObjects {
         // A failed write is a later miss, never a build failure.
         if write().is_ok() {
             let before = self.written.fetch_add(framed.len() as u64, Relaxed);
-            if (before + framed.len() as u64) / GC_EVERY != before / GC_EVERY {
+            // Short-lived CLI processes must not bypass collection forever.
+            // Afterwards allow at most one interval of slack per active handle.
+            let interval = GC_EVERY.min(self.cap.max(1));
+            if before == 0 || (before + framed.len() as u64) / interval != before / interval {
                 self.gc(self.cap);
             }
         }
@@ -825,5 +838,63 @@ mod tests {
             ]
         );
         assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn dir_short_lived_writers_enforce_the_cap() {
+        let root = scratch("short-writers");
+        for n in 0..12 {
+            let store = DirObjects::new(root.clone()).with_cap(4096);
+            store.put(&key(n), &[n as u8; 2048]);
+            let report = store.gc(u64::MAX);
+            assert!(
+                report.bytes <= 4096,
+                "fresh writers must collect: {report:?}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dir_concurrent_handles_publish_complete_records_during_eviction() {
+        let root = scratch("publish-evict");
+        std::thread::scope(|scope| {
+            for n in 0..8 {
+                let root = &root;
+                scope.spawn(move || {
+                    // Independent handles must not reuse temporary files, even for
+                    // simultaneous publication of different bytes at the same key.
+                    let store = DirObjects::new(root.clone()).with_cap(512 * 1024);
+                    let payload = vec![n as u8; 128 * 1024];
+                    for _ in 0..16 {
+                        store.put(&key(99), &payload);
+                        if let Some(bytes) = store.get(&key(99)) {
+                            assert_eq!(bytes.len(), payload.len());
+                            assert!(bytes.iter().all(|b| *b == bytes[0]));
+                            assert!(bytes[0] < 8);
+                        }
+                        store.gc(512 * 1024);
+                    }
+                });
+            }
+        });
+        let store = DirObjects::new(root.clone());
+        store.put(&key(99), b"complete");
+        assert_eq!(&*store.get(&key(99)).unwrap(), b"complete");
+        assert!(
+            std::fs::read_dir(root.join("tmp"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        let hex = key(99).hex();
+        let path = root.join(&hex[..2]).join(&hex);
+        let bytes = std::fs::read(&path).unwrap();
+        // Every truncated header/payload and a damaged checksum is a miss.
+        for cut in 0..bytes.len() {
+            std::fs::write(&path, &bytes[..cut]).unwrap();
+            assert!(store.get(&key(99)).is_none(), "cut {cut}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -77,7 +77,7 @@ impl UnitObjects {
 }
 
 /// The per-unit pipeline a build of `target` selects: the object store `HIRSEL_OBJECTS`
-/// names (`none@1` by default, `dir@1` or `sim@1`) on `HIRSEL_JOBS` workers
+/// names (`dir@1` by default, `none@1` or `sim@1`) on `HIRSEL_JOBS` workers
 /// (default: the host's parallelism).
 pub(crate) fn selected(
     target: &hirsel_lir::layout_types::TargetSpec,
@@ -86,7 +86,7 @@ pub(crate) fn selected(
     debug: bool,
     fuel: bool,
 ) -> Result<Option<UnitObjects>, NativeError> {
-    let name = std::env::var_os("HIRSEL_OBJECTS").unwrap_or_else(|| "none@1".into());
+    let name = std::env::var_os("HIRSEL_OBJECTS").unwrap_or_else(|| "dir@1".into());
     let name = name.to_string_lossy();
     let store = UnitObjects::by_name(&name, target, backend, opt)
         .map_err(|e| NativeError::new(StageName::Emission, format!("HIRSEL_OBJECTS: {e}")))?;

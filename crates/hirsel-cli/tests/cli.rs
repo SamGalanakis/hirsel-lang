@@ -6,6 +6,8 @@ use std::{
 };
 #[path = "cli/budgets.rs"]
 mod budgets;
+#[path = "cli/cache_defaults.rs"]
+mod cache_defaults;
 #[path = "cli/deadlines.rs"]
 mod deadlines;
 #[path = "cli/dependency_card.rs"]
