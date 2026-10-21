@@ -57,6 +57,11 @@ pub const KIND_BUG: u32 = 1;
 /// The rule a bounded arena's exhaustion fails with (MEM-6).
 pub const BOUNDED_RULE: &str = "MEM-6";
 
+/// Whether the explicit every-stage harness policy enables backend verification.
+pub fn validate_stages() -> bool {
+    std::env::var_os("HIRSEL_VALIDATE_STAGES").is_some_and(|value| value == "1")
+}
+
 /// The immutable inputs of one emission. The emitter receives no provider, query engine or
 /// linker, and keeps no reference to any input after it returns. Nothing here is a number
 /// the program assigns (`crate::glue`): a unit's code reads those from glue cells, so what
@@ -80,8 +85,9 @@ pub struct EmitInputs<'a> {
     pub statics: &'a [crate::statics::StaticData],
     /// Source specializations and known callable bodies replicated by the driver.
     pub inline_instances: &'a BTreeSet<ContentHash>,
-    /// Small source units another object of the partition implements, emitted here as
-    /// `available_externally` bodies so calls into them inline across objects.
+    /// Units owned by another object: LLVM keeps these as optimizer-only bodies,
+    /// including library templates and their root adapters and callable thunks.
+    /// Cranelift skips these bodies. Omit them entirely when no inlining is needed.
     pub available_externally: &'a BTreeSet<ContentHash>,
     /// The program names a C callback (PROG-4), so no Hirsel entry states `noalias`
     /// (`hirsel-llvm`'s `Aliasing`).
@@ -90,6 +96,9 @@ pub struct EmitInputs<'a> {
     /// arena blocks and charge them.
     pub tracking: bool,
     pub opt: OptLevel,
+    /// Run the backend IR verifier (the explicit every-stage harness policy).
+    /// Debug-assertion compilers verify regardless of this value.
+    pub verify_backend: bool,
     /// Instrument inline count edges. Set only when linking a measurement runtime archive.
     pub measurement: bool,
     /// Charge the run's fuel at every fuel point (`crate::fuel::fuel_points`): the word at
@@ -681,6 +690,7 @@ mod tests {
         let keys = crate::layout_keys::LayoutKeys::new(&layouts);
         let inputs = EmitInputs {
             index: None,
+            verify_backend: true,
             input: &input,
             target: &target,
             layouts: &layouts,

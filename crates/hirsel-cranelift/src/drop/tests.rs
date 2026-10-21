@@ -220,6 +220,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
     };
     let inputs = EmitInputs {
         index: None,
+        verify_backend: true,
         input: &input,
         target,
         layouts: &table,

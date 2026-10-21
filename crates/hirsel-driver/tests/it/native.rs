@@ -1160,3 +1160,88 @@ fn agreement_rejects_exit_codes_that_disagree_with_the_run_outcome() {
         }
     });
 }
+
+/// Each template has one retained owner, independently of which worker compiled it.
+/// Include root adapters, dictionary function references and ordinary source inlining.
+#[test]
+fn template_owners_and_objects_are_identical_at_one_and_eight_workers() {
+    use hirsel_driver::native::{self, Backend, OptLevel, Options};
+    use hirsel_intern::jobs::Jobs;
+    use hirsel_lir::emission::{function_thunk_name, symbol_name};
+    use hirsel_lir::ir::UnitOrigin;
+    with_compiler_stack(|| {
+        for (name, source) in [
+            ("generic", GENERIC),
+            ("list", LIST_READ),
+            ("finalizer", FINALIZER),
+        ] {
+            let checked = checked(source);
+            let ready = native::build(&checked.validated, &Options::new(x86())).unwrap();
+            let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
+                &ready.table,
+                &ready.finalizers,
+            );
+            let tools = Toolchain::in_tree_diagnostic(
+                &scratch(&format!("owners-runtime-{name}")),
+                &[&ready.target],
+            )
+            .unwrap();
+            for (backend, opt) in [
+                (Backend::Llvm, OptLevel::None),
+                (Backend::Llvm, OptLevel::Default),
+                (Backend::Cranelift, OptLevel::None),
+            ] {
+                let emit = |jobs| {
+                    native::partition_backend_objects_with_jobs(
+                        &ready,
+                        backend,
+                        opt,
+                        Partition::Singleton,
+                        &registry,
+                        false,
+                        None,
+                        Jobs::new(jobs),
+                    )
+                    .unwrap()
+                };
+                let serial = emit(1);
+                let parallel = emit(8);
+                assert_eq!(serial, parallel, "{name}: {backend:?} {opt:?}");
+                assert_eq!(serial.len(), ready.units.len());
+                for unit in &ready.units {
+                    let header = &unit.unit().header;
+                    if header.origin != UnitOrigin::Library
+                        && !ready.inline_instances.contains(&header.instance)
+                    {
+                        continue;
+                    }
+                    let entry = symbol_name(&header.definition, Some(&header.instance));
+                    let thunk = function_thunk_name(&header.definition, Some(&header.instance));
+                    let symbols = std::iter::once(&entry).chain(
+                        (ready.table.fn_abis[header.abi.0 as usize].shape
+                            == hirsel_lir::abi_types::CallableShape::Definition)
+                            .then_some(&thunk),
+                    );
+                    for symbol in symbols {
+                        let owners = serial
+                            .iter()
+                            .filter(|o| o.exports.iter().any(|e| &e.name == symbol))
+                            .count();
+                        assert_eq!(owners, 1, "{name}: {backend:?} {opt:?} {symbol}");
+                    }
+                }
+                let dir = scratch(&format!("owners-{name}-{backend:?}-{opt:?}"));
+                let exe =
+                    native::link_objects(&ready, &checked.entry, &parallel, &tools, &dir).unwrap();
+                let launched = native::launch(&exe, &ready.target, &tools, &dir, true).unwrap();
+                let actual = native::observe(
+                    &launched,
+                    &ready,
+                    &native::Sites::new(checked.validated.snapshot()),
+                )
+                .unwrap();
+                assert_eq!(actual, checked.reference, "{name}: {backend:?} {opt:?}");
+            }
+        }
+    });
+}

@@ -734,15 +734,11 @@ impl Partition {
 /// limits the extra code each object compiles.
 pub const SMALL_UNIT_INSTRUCTIONS: usize = 512;
 
-/// The objects of `partition`, one per group of units it assigns, in group
-/// order. Library templates are in every object, and known source callable
-/// bodies only in their transitive calling objects, both `linkonce_odr`. A
-/// small source unit (`SMALL_UNIT_INSTRUCTIONS`) is also an
-/// `available_externally` body in every object whose units call it, so with
-/// optimization whether a call inlines does not depend on the partition; the
-/// unit's own object still implements and exports it. An object's code thus
-/// depends on the small callee bodies it copies as well as on its own units.
-/// At `OptLevel::None` nothing inlines and nothing is copied.
+/// The objects of `partition`, one per group in plan order, emitted on independent
+/// workers. Each template is owned by its assigned object, never chosen from its
+/// callers. At O0 callers only import it; at LLVM O2/O3 reached templates and small
+/// source units are optimizer-only `available_externally` copies. Their content is
+/// therefore a dependency of the caller's object as well as of their own object.
 pub fn partition_objects(
     program: &ReadyProgram,
     opt: OptLevel,
@@ -773,6 +769,36 @@ pub fn partition_backend_objects(
     registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
     measurement: bool,
     sources: Option<&hirsel_lir::profile::ProfileSources>,
+) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
+    let jobs = match std::env::var("HIRSEL_JOBS") {
+        Ok(text) => hirsel_intern::jobs::Jobs::new(text.parse().map_err(|_| {
+            NativeError::new(StageName::Emission, "HIRSEL_JOBS must be a worker count")
+        })?),
+        Err(_) => hirsel_intern::jobs::Jobs::available(),
+    };
+    partition_backend_objects_with_jobs(
+        program,
+        backend,
+        opt,
+        partition,
+        registry,
+        measurement,
+        sources,
+        jobs,
+    )
+}
+
+/// `partition_backend_objects` with an explicit worker count. Scheduling never changes
+/// object contents or order; tests can compare worker counts without process globals.
+pub fn partition_backend_objects_with_jobs(
+    program: &ReadyProgram,
+    backend: Backend,
+    opt: OptLevel,
+    partition: Partition,
+    registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
+    measurement: bool,
+    sources: Option<&hirsel_lir::profile::ProfileSources>,
+    jobs: hirsel_intern::jobs::Jobs,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     use hirsel_lir::ir::{Callee, Inst, UnitOrigin};
     // A build that emitted its units itself has one object per unit already.
@@ -862,11 +888,24 @@ pub fn partition_backend_objects(
             calls[i].iter().copied().chain(refs).collect()
         })
         .collect();
-    groups
-        .iter()
-        .map(|group| {
+    // Go's gc/compile.go:138 schedules independent backend work longest first.
+    // jobs::map owns no backend handles and collects objects in plan order.
+    hirsel_intern::jobs::map(
+        jobs,
+        groups,
+        |group| {
+            program
+                .units
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| assignment[*i] == *group)
+                .map(|(_, u)| u.unit().instructions.len() as u64)
+                .sum()
+        },
+        |group| {
+            let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Codegen);
             let own: Vec<bool> = (0..program.units.len())
-                .map(|i| library[i] || assignment[i] == *group)
+                .map(|i| assignment[i] == group)
                 .collect();
             let mut selected = own.clone();
             // Small callees, transitively through small callees.
@@ -874,7 +913,11 @@ pub fn partition_backend_objects(
             let mut pending: Vec<usize> = (0..own.len()).filter(|&i| own[i]).collect();
             while let Some(i) = pending.pop() {
                 for &callee in &calls[i] {
-                    if small[callee] && !std::mem::replace(&mut selected[callee], true) {
+                    if backend == Backend::Llvm
+                        && opt != OptLevel::None
+                        && (small[callee] || library[callee] || inline[callee])
+                        && !std::mem::replace(&mut selected[callee], true)
+                    {
                         copies.insert(program.units[callee].unit().header.instance);
                         pending.push(callee);
                     }
@@ -884,7 +927,12 @@ pub fn partition_backend_objects(
             let mut pending: Vec<usize> = (0..selected.len()).filter(|&i| selected[i]).collect();
             while let Some(i) = pending.pop() {
                 for &dependency in &references[i] {
-                    if inline[dependency] && !std::mem::replace(&mut selected[dependency], true) {
+                    if backend == Backend::Llvm
+                        && opt != OptLevel::None
+                        && (inline[dependency] || library[dependency])
+                        && !std::mem::replace(&mut selected[dependency], true)
+                    {
+                        copies.insert(program.units[dependency].unit().header.instance);
                         pending.push(dependency);
                     }
                 }
@@ -898,15 +946,17 @@ pub fn partition_backend_objects(
                 measurement,
                 sources,
             )
-        })
-        .chain([super::emit::emit_glue(program, backend, registry)])
-        .collect::<Result<Vec<_>, _>>()
-        .and_then(|mut objects| {
-            if let Some(sources) = sources {
-                objects.push(debug_artifact(program, &objects, sources)?);
-            }
-            Ok(objects)
-        })
+        },
+    )
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()
+    .and_then(|mut objects| {
+        objects.push(super::emit::emit_glue(program, backend, registry)?);
+        if let Some(sources) = sources {
+            objects.push(debug_artifact(program, &objects, sources)?);
+        }
+        Ok(objects)
+    })
 }
 
 /// The link's debug object (`hirsel_cranelift::debug_object`): line tables for the

@@ -123,6 +123,7 @@ pub fn emit_ir(program: &ReadyProgram, opt: OptLevel) -> Result<String, NativeEr
     let units: Vec<_> = program.units.iter().collect();
     let inputs = EmitInputs {
         index: None,
+        verify_backend: program.validation == super::stages::Validation::EveryStage,
         input: &program.input,
         target: &program.target,
         layouts: &program.table,
@@ -148,6 +149,7 @@ pub fn emit_clif(program: &ReadyProgram) -> Result<String, NativeError> {
     let units: Vec<_> = program.units.iter().collect();
     let inputs = EmitInputs {
         index: None,
+        verify_backend: program.validation == super::stages::Validation::EveryStage,
         input: &program.input,
         target: &program.target,
         layouts: &program.table,
@@ -184,6 +186,7 @@ pub(crate) fn emit_registered(
         .collect();
     let inputs = EmitInputs {
         index: None,
+        verify_backend: program.validation == super::stages::Validation::EveryStage,
         input: &program.input,
         target: &program.target,
         layouts: &program.table,

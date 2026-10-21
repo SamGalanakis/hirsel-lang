@@ -155,6 +155,8 @@ impl std::error::Error for NativeError {}
 /// A whole program at Ready: every unit sealed by the Ready validator against
 /// this table, target, manifest and input.
 pub struct ReadyProgram {
+    /// Validation policy retained for subsequent inspection and emission.
+    pub validation: Validation,
     pub operations: hirsel_layout::operation::OperationRegistry,
     pub launch: hirsel_run_schema::Inputs,
     pub input: InputIdentity,
@@ -574,6 +576,7 @@ pub fn build_program(
         })
         .collect::<Result<_, _>>()?;
     Ok(ReadyProgram {
+        validation: options.validation,
         callbacks,
         operations,
         launch: options.launch.clone(),
@@ -655,6 +658,7 @@ fn build_units(
     let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
     preflight(&validation)?;
     let emit = hirsel_lir::emission::EmitInputs {
+        verify_backend: options.validation == Validation::EveryStage,
         index: Some(validation.index()),
         input: &program.input,
         target: &options.target,
@@ -751,6 +755,7 @@ impl BuiltUnits {
             })
             .collect();
         ReadyProgram {
+            validation: options.validation,
             callbacks: self.callbacks,
             operations,
             launch: options.launch.clone(),

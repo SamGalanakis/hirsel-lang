@@ -816,7 +816,12 @@ pub fn emit_glue(inputs: &GlueInputs<'_>) -> Result<ObjectArtifact, CodegenError
         let mut manifested = emitter.manifested;
         manifested.settle_imports();
         (
-            optimize_and_emit(&module, &machine, OptLevel::None)?,
+            optimize_and_emit(
+                &module,
+                &machine,
+                OptLevel::None,
+                hirsel_lir::emission::validate_stages(),
+            )?,
             manifested,
         )
     };

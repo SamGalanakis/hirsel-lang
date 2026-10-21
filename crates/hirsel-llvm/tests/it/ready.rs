@@ -233,6 +233,7 @@ fn emit(program: &Program, opt: OptLevel) -> Vec<u8> {
     let input = input();
     let inputs = EmitInputs {
         index: None,
+        verify_backend: true,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,

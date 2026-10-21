@@ -58,6 +58,7 @@ fn inputs<'a>(
         std::collections::BTreeSet::new();
     EmitInputs {
         index: None,
+        verify_backend: true,
         input,
         target: &p.table.target,
         layouts: &p.table.table,

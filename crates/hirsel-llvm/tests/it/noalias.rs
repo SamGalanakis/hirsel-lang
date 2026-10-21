@@ -23,6 +23,7 @@ fn ir(program: &Program, opt: OptLevel, callbacks: &BTreeSet<DefPath>) -> String
     let none = BTreeSet::new();
     let inputs = EmitInputs {
         index: None,
+        verify_backend: true,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,

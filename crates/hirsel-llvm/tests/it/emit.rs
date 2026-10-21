@@ -20,6 +20,7 @@ fn inputs<'a>(program: &'a Program, input: &'a InputIdentity, opt: OptLevel) -> 
         std::collections::BTreeSet::new();
     EmitInputs {
         index: None,
+        verify_backend: true,
         input,
         target: &program.table.target,
         layouts: &program.table.table,
@@ -179,6 +180,7 @@ fn a_receipt_for_other_inputs_is_rejected() {
         &units,
         &EmitInputs {
             index: None,
+            verify_backend: true,
             input: &other,
             ..valid.clone()
         },

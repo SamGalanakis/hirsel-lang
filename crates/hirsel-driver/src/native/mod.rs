@@ -58,7 +58,7 @@ pub use link::{
     Launched, Library, Observed, Partition, Runnable, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS, Tape,
     Toolchain, emit_backend_objects, emit_objects, launch, launch_runnable, launch_with, link,
     link_host, link_library, link_objects, link_profile, link_runnable, observe, observe_run,
-    partition_backend_objects, partition_objects, run_host,
+    partition_backend_objects, partition_backend_objects_with_jobs, partition_objects, run_host,
 };
 pub use observe::{Failure, OBSERVATION_SCHEMA, Observation, Sites, site_codes};
 pub use pairwise::pairwise_matrix;
