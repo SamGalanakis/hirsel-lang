@@ -650,17 +650,15 @@ owner-credit changes to H.
 
 PROG-1 package loading is in `package.rs`. `load_program` indexes the selected
 JSON graph before checks, retaining all source FileContexts and a declared entry.
-`LoadedProgram.check` checks every selected body once per dependency package revision,
-with per-package dependency heads composed by `CompilerState.index`. Checking
-includes compile-time evaluation for every selected body; lowering and V do not.
-The entry's own package lowers every executable body. A dependency lowers at check
-time only the bodies whose lowering evaluates at compile time (constants, `comptime`
-expressions and source-constant reads), because only that evaluation reports source
-diagnostics from lowering; every other dependency body lowers when the program
-package reaches it. Reachability is `semantic_program`'s read closure, so the check
-lowers exactly what a launch's semantic program revision can encode
-(`queries/lowering.rs`, `tests/it/lazy_lowering.rs`). `.hir.json` is an exact sidecar; there
-is no ancestor search, std fallback or source discovery.
+`LoadedProgram.check` checks each package through per-definition queries unless a
+std image already covers it. The configured lowering policy selects the root
+package's bodies: `Comptime` lowers compile-time evaluation, while `Reachable`
+also lowers its executable bodies and the dependency bodies they reach.
+Dependencies otherwise use `Comptime`; their cached checked results live in the
+selected result store. Both policies check every selected source body and report
+the same diagnostics. Reachability is `semantic_program`'s read closure
+(`queries/lowering.rs`, `tests/it/lazy_lowering.rs`). `.hir.json` is an exact
+sidecar; there is no ancestor search, std fallback or source discovery.
 
 The heap adapter models byte/position/path bridges with exact input-relative ranges. Wave-1 ordinary std algorithms remain Source-origin units; the source-origin and resource failure integration controls live in tests/it/stdlib_wave1.rs.
 
