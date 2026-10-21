@@ -169,7 +169,7 @@ impl QueryEngine {
         true
     }
 
-    fn record_summary(
+    pub(super) fn record_summary(
         &mut self,
         summary: std::sync::Arc<PublishedSummary>,
         detail: DependencyReads,
@@ -267,7 +267,7 @@ impl QueryEngine {
             .then(|| entry.result().ok().map(|output| (*output.value).clone()))
             .flatten()
     }
-    fn record_checked_summary(
+    pub(super) fn record_checked_summary(
         &mut self,
         definition: DefId,
         summary: CheckedSummary,

@@ -5,6 +5,9 @@
 use super::*;
 use hirsel_intern::jobs::{self, Jobs};
 use hirsel_types::SignatureRef;
+mod compact;
+pub(crate) use compact::CompactCompleted;
+use compact::{FrontResult, WorkerCompleted};
 
 /// One input's outcome, including the phase that completed or stopped it.
 /// Results from `mode_definitions` always retain the caller's input order.
@@ -71,6 +74,27 @@ impl<T> Product<T> {
             Self::Computed(stage) => stage.result.clone(),
         }
     }
+    fn complete_reads(
+        &self,
+        owner: &DefPath,
+        inherited: &Reads,
+        source: &mut impl memos::ReadSource,
+    ) -> Result<Reads, crate::memo::Inconsistent> {
+        match self {
+            Self::Hit(entry) => Ok(entry.reads().clone()),
+            Self::Computed(stage) => {
+                let mut merged = stage.observed.merged.clone();
+                merged.merge(inherited);
+                let observed = Observed {
+                    products: stage.observed.products.clone(),
+                    representations: stage.observed.representations.clone(),
+                    merged,
+                };
+                memos::complete_reads(owner, &stage.detail, &observed, source)
+            }
+        }
+    }
+
     fn detail(&self) -> &DependencyReads {
         match self {
             Self::Hit(entry) => &entry.detail,
@@ -105,35 +129,15 @@ impl Completed {
         &self,
         source: &mut impl memos::ReadSource,
     ) -> Result<Reads, crate::memo::Inconsistent> {
-        fn append<T>(
-            owner: &DefPath,
-            product: &Product<T>,
-            inherited: &Reads,
-            source: &mut impl memos::ReadSource,
-        ) -> Result<Reads, crate::memo::Inconsistent> {
-            match product {
-                Product::Hit(entry) => Ok(entry.reads().clone()),
-                Product::Computed(stage) => {
-                    let mut merged = stage.observed.merged.clone();
-                    merged.merge(inherited);
-                    let observed = Observed {
-                        products: stage.observed.products.clone(),
-                        representations: stage.observed.representations.clone(),
-                        merged,
-                    };
-                    memos::complete_reads(owner, &stage.detail, &observed, source)
-                }
-            }
-        }
         let mut reads = Reads::empty();
         if let Some(product) = &self.resolution {
-            reads = append(&self.definition, product, &reads, source)?;
+            reads = product.complete_reads(&self.definition, &reads, source)?;
         }
         if let Some(product) = &self.checked {
-            reads = append(&self.definition, product, &reads, source)?;
+            reads = product.complete_reads(&self.definition, &reads, source)?;
         }
         if let Some(product) = &self.modes {
-            reads = append(&self.definition, product, &reads, source)?;
+            reads = product.complete_reads(&self.definition, &reads, source)?;
         }
         if self.phase == QueryKind::Signature {
             reads = reads.union(&self.signature_reads)?;
@@ -441,58 +445,78 @@ impl SignatureProvider for WorkerRecorder<'_> {
 impl QueryEngine {
     /// Publish compact outcomes before releasing bodies according to the
     /// selected retention policy. No returned product retains a TypedBody.
-    /// Callers bound the in-flight frontier independently of the hold budget.
+    /// Batch workers release bodies before accepting their next task; compact
+    /// receipts and optional store payload bytes await serial publication.
     pub fn publish_definitions(
         &mut self,
         definitions: Vec<DefPath>,
         jobs: Jobs,
         retention: crate::memo::Retention,
     ) -> Vec<PublishedResult> {
-        self.mode_definitions(definitions, jobs)
-            .into_iter()
-            .map(|outcome| {
-                let definition = DefId::intern(&outcome.definition);
-                let result = outcome.result.and_then(|output| {
-                    outcome
-                        .summary
-                        .map(|summary| PublishedDefinition {
-                            summary,
-                            diagnostics: output.diagnostics.clone(),
-                        })
-                        .ok_or_else(|| {
-                            QueryError::Operational(hirsel_types::OperationalFailure {
-                                operation: "definition publication".into(),
-                                message: "completed front result has no coherent summary".into(),
-                            })
-                        })
-                });
-                if retention == crate::memo::Retention::Batch {
-                    // Error entries contain no body; keep their complete receipts
-                    // and reverse subscriptions. Release never reenters a query.
-                    if self
-                        .checked
-                        .get(&definition)
-                        .is_some_and(|e| e.memo.value.is_ok())
-                    {
-                        self.forget(&MemoKey::new(QueryKind::Check, definition));
-                    }
-                    if self
-                        .modes
-                        .get(&definition)
-                        .is_some_and(|e| e.memo.value.is_ok())
-                    {
-                        self.forget(&MemoKey::new(QueryKind::Modes, definition));
-                    }
-                }
-                PublishedResult {
-                    definition: outcome.definition,
-                    result,
-                    phase: outcome.phase,
-                    reads: outcome.reads,
-                    diagnostic_phases: outcome.diagnostic_phases,
-                }
-            })
-            .collect()
+        self.run_front(
+            definitions,
+            jobs,
+            retention == crate::memo::Retention::Batch,
+        )
+        .into_iter()
+        .map(|outcome| match outcome {
+            FrontResult::Compact(outcome) => outcome,
+            FrontResult::Resident(outcome) => self.compact_front_outcome(outcome, false),
+        })
+        .collect()
+    }
+
+    fn compact_front_outcome(&mut self, outcome: ModeResult, release: bool) -> PublishedResult {
+        let definition = DefId::intern(&outcome.definition);
+        let result = outcome.result.and_then(|output| {
+            outcome
+                .summary
+                .map(|summary| PublishedDefinition {
+                    summary,
+                    diagnostics: output.diagnostics.clone(),
+                })
+                .ok_or_else(compact::missing_summary)
+        });
+        if release {
+            // Errors are already body-free and retain their complete receipts.
+            if self
+                .checked
+                .get(&definition)
+                .is_some_and(|e| e.memo.value.is_ok())
+            {
+                self.forget(&MemoKey::new(QueryKind::Check, definition));
+            }
+            if self
+                .modes
+                .get(&definition)
+                .is_some_and(|e| e.memo.value.is_ok())
+            {
+                self.forget(&MemoKey::new(QueryKind::Modes, definition));
+            }
+        }
+        PublishedResult {
+            definition: outcome.definition,
+            result,
+            phase: outcome.phase,
+            reads: outcome.reads,
+            diagnostic_phases: outcome.diagnostic_phases,
+        }
+    }
+
+    fn front_output(
+        &mut self,
+        definition: DefPath,
+        result: Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
+        phase: Option<QueryKind>,
+        inherited: Option<Arc<Reads>>,
+        compact: bool,
+    ) -> FrontResult {
+        let outcome = self.front_outcome(definition, result, phase, inherited);
+        if compact {
+            FrontResult::Compact(self.compact_front_outcome(outcome, true))
+        } else {
+            FrontResult::Resident(outcome)
+        }
     }
 
     /// Capture this request's products before any later serial boundary can
@@ -565,6 +589,22 @@ impl QueryEngine {
     /// jobs::map; only preparation and memo publication mutate the engine.
     /// Declarations that execute generators keep their ordinary serial S1 path.
     pub fn mode_definitions(&mut self, definitions: Vec<DefPath>, jobs: Jobs) -> Vec<ModeResult> {
+        self.run_front(definitions, jobs, false)
+            .into_iter()
+            .map(|outcome| {
+                let FrontResult::Resident(outcome) = outcome else {
+                    unreachable!()
+                };
+                outcome
+            })
+            .collect()
+    }
+    fn run_front(
+        &mut self,
+        definitions: Vec<DefPath>,
+        jobs: Jobs,
+        compact: bool,
+    ) -> Vec<FrontResult> {
         let mut outputs = Vec::with_capacity(definitions.len());
         let mut frontier = Vec::new();
         for definition in definitions {
@@ -581,8 +621,11 @@ impl QueryEngine {
                     // Generators can change source/signature inputs. Publish
                     // the preceding frontier before serial S1 work, then build
                     // a fresh immutable context for the following frontier.
-                    outputs
-                        .extend(self.mode_source_definitions(std::mem::take(&mut frontier), jobs));
+                    outputs.extend(self.mode_source_definitions(
+                        std::mem::take(&mut frontier),
+                        jobs,
+                        compact,
+                    ));
                     self.last_phase = None;
                     self.unavailable = None;
                     let result = state.and_then(|_| self.mode_query(&definition));
@@ -593,15 +636,15 @@ impl QueryEngine {
                     } else {
                         self.unavailable.or(self.last_phase)
                     };
-                    outputs.push(self.front_outcome(definition, result, phase, None));
+                    outputs.push(self.front_output(definition, result, phase, None, compact));
                 }
             }
         }
-        outputs.extend(self.mode_source_definitions(frontier, jobs));
+        outputs.extend(self.mode_source_definitions(frontier, jobs, compact));
         if let Some(last) = outputs.last() {
-            self.last_phase = last.phase;
-            self.unavailable = if matches!(last.result, Err(QueryError::NotImplemented)) {
-                last.phase
+            self.last_phase = last.phase();
+            self.unavailable = if last.unavailable() {
+                last.phase()
             } else {
                 None
             };
@@ -612,8 +655,9 @@ impl QueryEngine {
         &mut self,
         definitions: Vec<DefPath>,
         jobs: Jobs,
-    ) -> Vec<ModeResult> {
-        let mut outputs: Vec<Option<ModeResult>> = (0..definitions.len()).map(|_| None).collect();
+        compact: bool,
+    ) -> Vec<FrontResult> {
+        let mut outputs: Vec<Option<FrontResult>> = (0..definitions.len()).map(|_| None).collect();
         let mut sources = Vec::new();
         let mut first = BTreeMap::new();
         let mut duplicates = Vec::new();
@@ -634,19 +678,21 @@ impl QueryEngine {
                 }
                 Ok(_) => {
                     let result = self.mode_query(&definition);
-                    outputs[index] = Some(self.front_outcome(
+                    outputs[index] = Some(self.front_output(
                         definition,
                         result,
                         self.unavailable.or(self.last_phase),
                         None,
+                        compact,
                     ));
                 }
                 Err(error) => {
-                    outputs[index] = Some(self.front_outcome(
+                    outputs[index] = Some(self.front_output(
                         definition,
                         Err(error),
                         self.unavailable.or(self.last_phase),
                         None,
+                        compact,
                     ))
                 }
             }
@@ -666,7 +712,8 @@ impl QueryEngine {
             let text = match self.key_text(&definition, QueryKind::Modes) {
                 Ok(text) => text,
                 Err(error) => {
-                    outputs[index] = Some(self.front_outcome(definition, Err(error), None, None));
+                    outputs[index] =
+                        Some(self.front_output(definition, Err(error), None, None, compact));
                     continue;
                 }
             };
@@ -675,11 +722,12 @@ impl QueryEngine {
             {
                 let reads = entry.memo.reads.clone();
                 let result = self.mode_result(entry);
-                outputs[index] = Some(self.front_outcome(
+                outputs[index] = Some(self.front_output(
                     definition,
                     result,
                     Some(QueryKind::Modes),
                     Some(reads),
+                    compact,
                 ));
                 continue;
             }
@@ -687,11 +735,12 @@ impl QueryEngine {
                 self.modes.insert(id, entry.clone());
                 let reads = entry.memo.reads.clone();
                 let result = self.mode_result(entry);
-                outputs[index] = Some(self.front_outcome(
+                outputs[index] = Some(self.front_output(
                     definition,
                     result,
                     Some(QueryKind::Modes),
                     Some(reads),
+                    compact,
                 ));
                 continue;
             }
@@ -759,6 +808,28 @@ impl QueryEngine {
                 None => Err(QueryError::NotImplemented),
             };
         }
+        let environment = if compact {
+            self.environment_value()
+        } else {
+            ContentHash::default()
+        };
+        let candidates: BTreeMap<_, _> = if compact {
+            tasks
+                .iter()
+                .map(|task| {
+                    (
+                        task.definition.clone(),
+                        self.candidates_value(&task.definition),
+                    )
+                })
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
+        let capture_store = compact
+            && self.result_store.is_some()
+            && self.s1.is_empty()
+            && self.s1.failure_is_own();
         let completed = {
             let citations = self.citation_source();
             let worker = Worker {
@@ -777,14 +848,44 @@ impl QueryEngine {
                 jobs,
                 tasks,
                 |task| task.syntax.tree.expressions.len() as u64,
-                |task| worker.run(task),
+                |task| {
+                    let done = worker.run(task);
+                    if compact {
+                        let mut source = FrozenReadSource {
+                            declarations: &declarations,
+                            citations: &citations,
+                            candidates: candidates.get(&done.definition).copied(),
+                            environment,
+                        };
+                        WorkerCompleted::Compact(CompactCompleted::capture(
+                            done,
+                            &worker,
+                            self.types.clone(),
+                            &mut source,
+                            capture_store,
+                        ))
+                    } else {
+                        WorkerCompleted::Resident(done)
+                    }
+                },
             )
         };
         let mut completed = completed;
-        completed.sort_by(|a, b| a.definition.cmp(&b.definition).then(a.index.cmp(&b.index)));
+        completed.sort_by(|a, b| {
+            a.definition()
+                .cmp(b.definition())
+                .then(a.index().cmp(&b.index()))
+        });
         for done in completed {
-            let index = done.index;
-            outputs[index] = Some(self.merge_completed(done));
+            let index = done.index();
+            outputs[index] = Some(match done {
+                WorkerCompleted::Resident(done) => {
+                    FrontResult::Resident(self.merge_completed(done))
+                }
+                WorkerCompleted::Compact(done) => {
+                    FrontResult::Compact(self.merge_compact_completed(done))
+                }
+            });
         }
         for (index, previous) in duplicates {
             outputs[index] = outputs[previous].clone();
@@ -794,10 +895,8 @@ impl QueryEngine {
             .map(|result| result.expect("one outcome per input"))
             .collect();
         if let Some(last) = outputs.last() {
-            self.last_phase = last.phase;
-            self.unavailable = matches!(last.result, Err(QueryError::NotImplemented))
-                .then_some(last.phase)
-                .flatten();
+            self.last_phase = last.phase();
+            self.unavailable = last.unavailable().then_some(last.phase()).flatten();
         }
         outputs
     }

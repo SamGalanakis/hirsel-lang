@@ -21,12 +21,15 @@ struct Body {
     calls: Vec<(hirsel_syntax::ExprId, hirsel_types::Allocation)>,
 }
 impl Body {
-    fn capture(engine: &QueryEngine, body: &AnalyzedBody) -> Self {
-        fn ordered(engine: &QueryEngine, set: &std::collections::HashSet<TypeId>) -> Vec<TypeId> {
+    fn capture(types: &Arc<hirsel_types::TypeInterner>, body: &AnalyzedBody) -> Self {
+        fn ordered(
+            types: &hirsel_types::TypeInterner,
+            set: &std::collections::HashSet<TypeId>,
+        ) -> Vec<TypeId> {
             let mut entries: Vec<_> = set
                 .iter()
                 .map(|id| {
-                    let (table, _) = hirsel_types::encode_table(&engine.types, &[*id]);
+                    let (table, _) = hirsel_types::encode_table(types, &[*id]);
                     (bincode::serialize(&table).expect("type table"), *id)
                 })
                 .collect();
@@ -34,8 +37,8 @@ impl Body {
             entries.into_iter().map(|(_, id)| id).collect()
         }
         let mut ownership = body.ownership.clone();
-        let plain = ordered(engine, &ownership.plain_types);
-        let silent = ordered(engine, &ownership.silent_drop_types);
+        let plain = ordered(types, &ownership.plain_types);
+        let silent = ordered(types, &ownership.silent_drop_types);
         ownership.plain_types.clear();
         ownership.silent_drop_types.clear();
         Self {
@@ -99,6 +102,81 @@ struct Envelope {
     payload: Vec<u8>,
 }
 
+fn encode_record<T: Serialize>(
+    types: Arc<hirsel_types::TypeInterner>,
+    items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+    record: &T,
+) -> Option<Vec<u8>> {
+    let mut anchors = AnchorCodec::Collect(vec![]);
+    let mut table = hirsel_types::TableBuilder::new(types);
+    let payload = table
+        .with_encoding(|| {
+            hirsel_span::with_anchor_codec(&mut anchors, || bincode::serialize(record))
+        })
+        .ok()?;
+    let AnchorCodec::Collect(anchors) = anchors else {
+        unreachable!()
+    };
+    let anchors = anchors
+        .into_iter()
+        .map(|anchor| {
+            items.iter().find_map(|(path, items)| {
+                items
+                    .iter()
+                    .find(|item| item.anchor == anchor)
+                    .map(|item| (path.clone(), item.occurrence))
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    bincode::serialize(&Envelope {
+        anchors,
+        table: table.finish(),
+        payload,
+    })
+    .ok()
+}
+
+/// Capture through the exact scalar mode codec using immutable inputs only.
+/// Callers must check the selected provider before invoking this: an off store
+/// never clones body data or enters canonical type/anchor encoding.
+pub(super) fn capture_mode(
+    types: Arc<hirsel_types::TypeInterner>,
+    items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+    result: &Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
+    checked: Option<(&QueryOutput<TypedBody>, &DependencyReads)>,
+    phases: Vec<(Diagnostic, String)>,
+    detail: DependencyReads,
+) -> Option<Vec<u8>> {
+    let output = match result {
+        Ok(output) => Ok(QueryOutput {
+            value: Body::capture(&types, &output.value),
+            diagnostics: output.diagnostics.clone(),
+            dependencies: output.dependencies.clone(),
+        }),
+        Err(error) if error.cacheable() => Err(error.clone()),
+        Err(_) => return None,
+    };
+    let checked = checked.map(|(output, detail)| CheckedRecord {
+        checked: output.value.checked.clone(),
+        plans: output.value.plans.clone(),
+        unit: output.value.unit,
+        boolean: output.value.boolean,
+        diagnostics: output.diagnostics.clone(),
+        dependencies: output.dependencies.clone(),
+        detail: detail.clone(),
+    });
+    encode_record(
+        types,
+        items,
+        &ModeRecord {
+            checked,
+            phases,
+            output,
+            detail,
+        },
+    )
+}
+
 impl QueryEngine {
     /// Select a persistent result store. Library engines default to no store;
     /// CLI engines use dir@1. Injected stores keep integration tests isolated.
@@ -147,33 +225,7 @@ impl QueryEngine {
         ))
     }
     fn encode_record<T: Serialize>(&self, record: &T) -> Option<Vec<u8>> {
-        let mut anchors = AnchorCodec::Collect(vec![]);
-        let mut table = hirsel_types::TableBuilder::new(self.types.clone());
-        let payload = table
-            .with_encoding(|| {
-                hirsel_span::with_anchor_codec(&mut anchors, || bincode::serialize(record))
-            })
-            .ok()?;
-        let AnchorCodec::Collect(anchors) = anchors else {
-            unreachable!()
-        };
-        let anchors = anchors
-            .into_iter()
-            .map(|anchor| {
-                self.items.iter().find_map(|(path, items)| {
-                    items
-                        .iter()
-                        .find(|item| item.anchor == anchor)
-                        .map(|item| (path.clone(), item.occurrence))
-                })
-            })
-            .collect::<Option<Vec<_>>>()?;
-        bincode::serialize(&Envelope {
-            anchors,
-            table: table.finish(),
-            payload,
-        })
-        .ok()
+        encode_record(self.types.clone(), &self.items, record)
     }
     fn decode_record<T: serde::de::DeserializeOwned>(&self, bytes: &[u8]) -> Option<T> {
         let envelope: Envelope = bincode::deserialize(bytes).ok()?;
@@ -215,13 +267,22 @@ impl QueryEngine {
         reads: &Reads,
         record: &T,
     ) -> Result<(), QueryError> {
+        self.write_encoded(path, kind, reads, |engine| engine.encode_record(record))
+    }
+    fn write_encoded(
+        &mut self,
+        path: &DefPath,
+        kind: QueryKind,
+        reads: &Reads,
+        encode: impl FnOnce(&Self) -> Option<Vec<u8>>,
+    ) -> Result<(), QueryError> {
         let Some(store) = self.result_store.clone() else {
             return Ok(());
         };
         let Some(key) = self.store_key(path, kind) else {
             return Ok(());
         };
-        let Some(payload) = self.encode_record(record) else {
+        let Some(payload) = encode(self) else {
             return Ok(());
         };
         if let Some(expected) = self
@@ -327,26 +388,7 @@ impl QueryEngine {
         {
             return Ok(());
         }
-        let output = match entry.result() {
-            Ok(o) => Ok(QueryOutput {
-                value: Body::capture(self, &o.value),
-                diagnostics: o.diagnostics.clone(),
-                dependencies: o.dependencies.clone(),
-            }),
-            Err(error) if error.cacheable() => Err(error),
-            Err(_) => return Ok(()),
-        };
-        let checked = self.checked.get(&DefId::intern(path)).and_then(|e| {
-            e.result().ok().map(|o| CheckedRecord {
-                checked: o.value.checked.clone(),
-                plans: o.value.plans.clone(),
-                unit: o.value.unit,
-                boolean: o.value.boolean,
-                diagnostics: o.diagnostics.clone(),
-                dependencies: o.dependencies.clone(),
-                detail: e.detail.clone(),
-            })
-        });
+        let output = entry.result();
         let diagnostics = match &output {
             Ok(o) => &o.diagnostics,
             Err(QueryError::Diagnostics(ds)) => ds,
@@ -367,17 +409,36 @@ impl QueryEngine {
                     .map(|phase| (d.clone(), phase))
             })
             .collect();
-        self.write_record(
-            path,
-            QueryKind::Modes,
-            entry.reads(),
-            &ModeRecord {
-                output,
-                checked,
+        self.write_encoded(path, QueryKind::Modes, entry.reads(), |engine| {
+            let checked = engine
+                .checked
+                .get(&DefId::intern(path))
+                .and_then(|entry| entry.result().ok().map(|output| (output, &entry.detail)));
+            capture_mode(
+                engine.types.clone(),
+                &engine.items,
+                &output,
+                checked
+                    .as_ref()
+                    .map(|(output, detail)| (&**output, *detail)),
                 phases,
-                detail: entry.detail.clone(),
-            },
-        )
+                entry.detail.clone(),
+            )
+        })
+    }
+    /// Commit an already canonical mode record after immutable workers have
+    /// released its body products. Provider, key and verify-cache behavior are
+    /// shared with the ordinary writer; no decoder or alternate format exists.
+    pub(super) fn store_mode_payload(
+        &mut self,
+        path: &DefPath,
+        reads: &Reads,
+        payload: Vec<u8>,
+    ) -> Result<(), QueryError> {
+        if !self.s1.is_empty() || !self.s1.failure_is_own() {
+            return Ok(());
+        }
+        self.write_encoded(path, QueryKind::Modes, reads, |_| Some(payload))
     }
     pub(super) fn load_lower(
         &mut self,

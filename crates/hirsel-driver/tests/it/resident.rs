@@ -217,89 +217,7 @@ fn manifest_session_preserves_the_cold_loader_syntax_error_boundary() {
 
 #[test]
 fn frozen_frontier_restores_and_verifies_persistent_modes_with_complete_reads() {
-    with_compiler_stack(|| {
-        use hirsel_intern::jobs::Jobs;
-        fn run(
-            store: Arc<dyn store::ResultStore>,
-            source: &str,
-            jobs: Jobs,
-            verify: bool,
-        ) -> (QueryEngine, Vec<String>) {
-            let mut engine = engine(store);
-            if verify {
-                engine = engine.with_verify_store(store::VerifyStore::Recompute);
-            }
-            let file = engine.sources.add("bulk-store.hir", source.into()).unwrap();
-            let parsed = engine.parse_file(file, &default_context()).unwrap();
-            let paths = parsed
-                .value
-                .items
-                .iter()
-                .map(|s| s.item.definition.clone())
-                .rev()
-                .collect();
-            let results = engine.mode_definitions(paths, jobs);
-            let mut output = Vec::new();
-            for result in results {
-                let diagnostics = match result.result {
-                    Ok(value) => value.diagnostics.clone(),
-                    Err(QueryError::Diagnostics(ds)) => ds,
-                    Err(error) => panic!("{error:?}"),
-                };
-                for diagnostic in diagnostics {
-                    output.push(format!(
-                        "phase {:?}\n{}",
-                        engine.diagnostic_phase(&diagnostic),
-                        diagnostic.render_human(&engine.sources)
-                    ));
-                }
-            }
-            (engine, output)
-        }
-        for jobs in [1, 2, 8] {
-            let store = Arc::new(store::MemStore::default());
-            let source = "pub opaque type Hidden: plain uses {} { value:u8 }\nfn get(x:Hidden) -> u8 { x.value }\nfn a(x:u8) -> u8 { x }\nfn b() -> u8 { a(1u8) }\n";
-            let (first, ds) = run(store.clone(), source, Jobs::new(jobs), false);
-            assert!(ds.is_empty(), "{ds:?}");
-            assert!(!store.is_empty());
-            drop(first);
-            for edited in [source.to_owned(), source.replace("{ x }", "{ x + 1u8 }")] {
-                let (warm, ds) = run(store.clone(), &edited, Jobs::new(jobs), false);
-                let (_, cold) = run(Arc::new(store::NoneStore), &edited, Jobs::new(jobs), false);
-                assert_eq!(ds, cold);
-                assert_eq!(warm.recompute_count(&path("b"), QueryKind::Check), 0);
-                assert_eq!(warm.recompute_count(&path("b"), QueryKind::Modes), 0);
-            }
-            for edited in [
-                source.replace("a(x:u8) -> u8", "a(x:u32) -> u32"),
-                source.replace("value:u8", "value:u32"),
-                source.replace("x.value", "missing"),
-                source.replace("x.value", "missing") + "fn missing() {}\n",
-            ] {
-                let (warm, ds) = run(store.clone(), &edited, Jobs::new(jobs), false);
-                let (_, cold) = run(Arc::new(store::NoneStore), &edited, Jobs::new(jobs), false);
-                assert_eq!(ds, cold, "jobs {jobs}: {edited}");
-                if edited.contains("a(x:u32)") {
-                    assert!(warm.recompute_count(&path("b"), QueryKind::Check) > 0);
-                }
-                if edited.contains("value:u32") {
-                    assert!(warm.recompute_count(&path("get"), QueryKind::Check) > 0);
-                }
-            }
-            let rejected = "fn identity[T](v: T) -> T { v }\n";
-            let (_, expected) = run(store.clone(), rejected, Jobs::new(jobs), false);
-            assert!(!expected.is_empty());
-            let (restored, actual) = run(store.clone(), rejected, Jobs::new(jobs), false);
-            assert_eq!(actual, expected, "stored mode rejection phase provenance");
-            assert_eq!(
-                restored.recompute_count(&path("identity"), QueryKind::Modes),
-                0
-            );
-            let (verified, ds) = run(store.clone(), source, Jobs::new(jobs), true);
-            assert!(ds.is_empty(), "{ds:?}");
-            assert!(verified.recompute_count(&path("b"), QueryKind::Modes) > 0);
-        }
-    });
+    persistent_frontier_control(false);
 }
 
 #[test]
@@ -402,6 +320,16 @@ fn disabled_result_provider_skips_store_work_for_scalar_and_frozen_queries() {
             );
             assert!(results.iter().all(|r| r.result.is_ok()));
             assert_eq!(frozen.export_tir(&path("main")).unwrap(), scalar_tir);
+            let mut compact = engine(Arc::new(Off));
+            let file = compact.sources.add("resident.hir", source.into()).unwrap();
+            compact.parse_file(file, &default_context()).unwrap();
+            let results = compact.publish_definitions(
+                vec![path("main"), path("a")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+                memo::Retention::Batch,
+            );
+            assert!(results.iter().all(|r| r.result.is_ok()));
+            assert_eq!(compact.export_tir(&path("main")).unwrap(), scalar_tir);
         }
         assert!(!store::ResultStore::enabled(&store::NoneStore));
         assert!(store::ResultStore::enabled(&store::MemStore::default()));
@@ -1139,6 +1067,237 @@ fn constant_frontier_keeps_earlier_lower_warnings_when_a_later_root_stops() {
                     CheckCompletion::Complete
                 }
             );
+        }
+    });
+}
+
+#[test]
+fn batch_publication_releases_completed_worker_bodies_before_the_next_task() {
+    use std::sync::{
+        Mutex, Weak,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct ObservedModes {
+        inner: Arc<dyn ModesPhase>,
+        bodies: Mutex<Vec<Weak<TypedBody>>>,
+        peak: AtomicUsize,
+    }
+    impl ModesPhase for ObservedModes {
+        fn check_modes(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: Arc<TypedBody>,
+            signature: &Signature,
+            products: &mut PhaseProducts,
+            provider: &mut dyn SignatureProvider,
+        ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
+            let output = self
+                .inner
+                .check_modes(t, m, body, signature, products, provider)?;
+            let mut bodies = self.bodies.lock().unwrap();
+            bodies.retain(|body| body.strong_count() != 0);
+            bodies.push(Arc::downgrade(&output.value.typed));
+            self.peak.fetch_max(bodies.len(), Ordering::Relaxed);
+            Ok(output)
+        }
+    }
+    with_compiler_stack(|| {
+        for jobs in [1, 2, 8] {
+            let mut adapters = compiler_adapters();
+            let observed = Arc::new(ObservedModes {
+                inner: adapters.modes.take().unwrap(),
+                bodies: Mutex::new(vec![]),
+                peak: AtomicUsize::new(0),
+            });
+            adapters.modes = Some(observed.clone());
+            let mut candidate = QueryEngine::new(default_environment(), adapters);
+            let source: String = (0..64)
+                .map(|i| format!("fn task{i}()->u64{{{i}u64}}\n"))
+                .collect();
+            let file = candidate.sources.add("bounded.hir", source).unwrap();
+            candidate.parse_file(file, &default_context()).unwrap();
+            let paths: Vec<_> = (0..64).rev().map(|i| path(&format!("task{i}"))).collect();
+            let outputs = candidate.publish_definitions(
+                paths.clone(),
+                hirsel_intern::jobs::Jobs::new(jobs),
+                memo::Retention::Batch,
+            );
+            assert_eq!(
+                outputs
+                    .iter()
+                    .map(|output| &output.definition)
+                    .collect::<Vec<_>>(),
+                paths.iter().collect::<Vec<_>>()
+            );
+            assert!(outputs.iter().all(|output| output.result.is_ok()));
+            let peak = observed.peak.load(Ordering::Relaxed);
+            assert!(
+                peak <= jobs,
+                "jobs={jobs}: {peak} completed mode bodies accumulated across 64 tasks"
+            );
+            assert!(
+                observed
+                    .bodies
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|body| body.strong_count() == 0)
+            );
+            for path in paths {
+                assert_eq!(candidate.recompute_count(&path, QueryKind::Check), 1);
+                assert_eq!(candidate.recompute_count(&path, QueryKind::Modes), 1);
+                let before = candidate.memo_stats().recomputed.clone();
+                candidate
+                    .definition_summary(hirsel_syntax::DefId::intern(&path))
+                    .unwrap();
+                assert_eq!(candidate.memo_stats().recomputed, before);
+            }
+        }
+    });
+}
+
+#[test]
+fn compact_workers_restore_and_verify_scalar_store_bytes_with_complete_failure_phases() {
+    persistent_frontier_control(true);
+}
+
+fn persistent_frontier_control(compact: bool) {
+    with_compiler_stack(|| {
+        use hirsel_intern::jobs::Jobs;
+        fn run_case(
+            store: Arc<dyn store::ResultStore>,
+            source: &str,
+            jobs: Jobs,
+            verify: bool,
+            compact: bool,
+        ) -> (QueryEngine, Vec<String>) {
+            let mut engine = engine(store.clone());
+            if verify {
+                engine = engine.with_verify_store(store::VerifyStore::Recompute);
+            }
+            let file = engine.sources.add("bulk-store.hir", source.into()).unwrap();
+            let parsed = engine.parse_file(file, &default_context()).unwrap();
+            let paths: Vec<_> = parsed
+                .value
+                .items
+                .iter()
+                .map(|s| s.item.definition.clone())
+                .rev()
+                .collect();
+            if verify && compact {
+                // Seed canonical scalar bytes, then demand immutable worker
+                // capture to compare exactly through VerifyStore::Recompute.
+                let mut scalar = super::resident::engine(store.clone());
+                let file = scalar.sources.add("bulk-store.hir", source.into()).unwrap();
+                scalar.parse_file(file, &default_context()).unwrap();
+                for path in &paths {
+                    let _ = scalar.mode_definition(path);
+                }
+            }
+            let results: Vec<_> = if compact {
+                engine
+                    .publish_definitions(paths, jobs, memo::Retention::Batch)
+                    .into_iter()
+                    .map(|outcome| {
+                        (
+                            outcome.result.map(|output| output.diagnostics),
+                            outcome.diagnostic_phases,
+                        )
+                    })
+                    .collect()
+            } else {
+                engine
+                    .mode_definitions(paths, jobs)
+                    .into_iter()
+                    .map(|outcome| {
+                        let result = outcome.result.map(|output| output.diagnostics.clone());
+                        let diagnostics = match &result {
+                            Ok(ds) | Err(QueryError::Diagnostics(ds)) => &ds[..],
+                            Err(_) => &[],
+                        };
+                        let phases = diagnostics
+                            .iter()
+                            .filter_map(|d| {
+                                engine.diagnostic_phase(d).map(|phase| (d.clone(), phase))
+                            })
+                            .collect();
+                        (result, phases)
+                    })
+                    .collect()
+            };
+            let mut output = Vec::new();
+            for (result, phases) in results {
+                let diagnostics = match result {
+                    Ok(value) | Err(QueryError::Diagnostics(value)) => value,
+                    Err(error) => panic!("{error:?}"),
+                };
+                for diagnostic in diagnostics {
+                    output.push(format!(
+                        "phase {:?}\n{}",
+                        phases
+                            .iter()
+                            .find(|(d, _)| d == &diagnostic)
+                            .map(|(_, phase)| phase.clone()),
+                        diagnostic.render_human(&engine.sources)
+                    ));
+                }
+            }
+            (engine, output)
+        }
+        let run = |store: Arc<dyn store::ResultStore>, source: &str, jobs, verify| {
+            run_case(store, source, jobs, verify, compact)
+        };
+        for jobs in [1, 2, 8] {
+            let store = Arc::new(store::MemStore::default());
+            let source = "pub opaque type Hidden: plain uses {} { value:u8 }\nfn get(x:Hidden) -> u8 { x.value }\nfn a(x:u8) -> u8 { x }\nfn b() -> u8 { a(1u8) }\n";
+            let (first, ds) = run(store.clone(), source, Jobs::new(jobs), false);
+            assert!(ds.is_empty(), "{ds:?}");
+            assert!(!store.is_empty());
+            drop(first);
+            for edited in [source.to_owned(), source.replace("{ x }", "{ x + 1u8 }")] {
+                let (warm, ds) = run(store.clone(), &edited, Jobs::new(jobs), false);
+                let (_, cold) = run(Arc::new(store::NoneStore), &edited, Jobs::new(jobs), false);
+                assert_eq!(ds, cold);
+                assert_eq!(warm.recompute_count(&path("b"), QueryKind::Check), 0);
+                assert_eq!(warm.recompute_count(&path("b"), QueryKind::Modes), 0);
+            }
+            for edited in [
+                source.replace("a(x:u8) -> u8", "a(x:u32) -> u32"),
+                source.replace("value:u8", "value:u32"),
+                source.replace("x.value", "missing"),
+                source.replace("x.value", "missing") + "fn missing() {}\n",
+            ] {
+                let (warm, ds) = run(store.clone(), &edited, Jobs::new(jobs), false);
+                let (_, cold) = run(Arc::new(store::NoneStore), &edited, Jobs::new(jobs), false);
+                assert_eq!(ds, cold, "jobs {jobs}: {edited}");
+                if edited.contains("a(x:u32)") {
+                    assert!(warm.recompute_count(&path("b"), QueryKind::Check) > 0);
+                }
+                if edited.contains("value:u32") {
+                    assert!(warm.recompute_count(&path("get"), QueryKind::Check) > 0);
+                }
+            }
+            let rejected = "fn identity[T](v: T) -> T { v }\n";
+            let (_, expected) = run(store.clone(), rejected, Jobs::new(jobs), false);
+            assert!(!expected.is_empty());
+            let (restored, actual) = run(store.clone(), rejected, Jobs::new(jobs), false);
+            assert_eq!(actual, expected, "stored mode rejection phase provenance");
+            assert_eq!(
+                restored.recompute_count(&path("identity"), QueryKind::Modes),
+                0
+            );
+            let (verified, ds) = run(store.clone(), source, Jobs::new(jobs), true);
+            assert!(ds.is_empty(), "{ds:?}");
+            assert!(verified.recompute_count(&path("b"), QueryKind::Modes) > 0);
+            if compact {
+                let (verified, actual) = run(store.clone(), rejected, Jobs::new(jobs), true);
+                assert_eq!(actual, expected, "verified rejection phase provenance");
+                assert_eq!(
+                    verified.recompute_count(&path("identity"), QueryKind::Modes),
+                    1
+                );
+            }
         }
     });
 }
