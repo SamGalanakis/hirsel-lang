@@ -15,7 +15,12 @@ fn path_or_handle(mutant: bool) -> Vec<K> {
         LayoutKind::Path
     };
     if mutant {
-        record.scan = vec![ScanStep::Handle { offset: 0 }];
+        record.scan = vec![ScanStep::Handle {
+            offset: 0,
+            kind: hirsel_lir::layout_types::HandleKind::Unknown,
+            ty: None,
+            obtains: None,
+        }];
     }
     let layout = hirsel_lir::layout_types::LayoutId(t.table.layouts.len() as u32);
     t.table.layouts.push(record);

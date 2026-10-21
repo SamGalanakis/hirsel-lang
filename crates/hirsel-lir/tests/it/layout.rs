@@ -105,6 +105,51 @@ fn fixed(r: &LayoutRecord) -> u64 {
     }
 }
 
+#[test]
+fn ordered_handle_metadata_keeps_families_and_recursive_obtainable_layouts() {
+    let mut owners = Owners::default();
+    let node = owner(&mut owners, "ReceiverNode", OwnerSpec::default(), |t| {
+        let node = t.named(&path("ReceiverNode"), vec![]);
+        let receiver = t.builtin(BuiltinType::Receiver, vec![GenericArgument::Type(node)]);
+        t.record(&[receiver])
+    });
+    let mut t = Ty::default();
+    let scalar = t.p(Primitive::U64);
+    let atomic = t.builtin(BuiltinType::Atomic, vec![GenericArgument::Type(scalar)]);
+    let receiver = t.builtin(BuiltinType::Receiver, vec![GenericArgument::Type(atomic)]);
+    let task = t.builtin(BuiltinType::Task, vec![GenericArgument::Type(receiver)]);
+    let mutex = t.builtin(BuiltinType::Mutex, vec![GenericArgument::Type(task)]);
+    let captures = t.record(&[atomic, receiver, task, mutex]);
+    let recursive = t.named(&node, vec![]);
+    for target in TargetSpec::executed() {
+        let mut builder = LayoutBuilder::new(&target, &owners);
+        let captures = builder.layout(&t.store, captures).unwrap();
+        let recursive = builder.layout(&t.store, recursive).unwrap();
+        let table = checked(builder);
+        let fields = &rec(&table, captures).fields;
+        for (index, family, obtains) in [
+            (0, HandleKind::Atomic, None),
+            (1, HandleKind::Receiver, Some(fields[0].layout)),
+            (2, HandleKind::Task, Some(fields[1].layout)),
+        ] {
+            assert!(rec(&table, captures).scan.iter().any(|step| matches!(step,
+                ScanStep::Handle { kind, ty: Some(ty), obtains: actual, .. }
+                if *kind == family && *ty == fields[index].layout && *actual == obtains)));
+        }
+        assert!(
+            table
+                .layouts
+                .iter()
+                .any(|r| r.scan.iter().any(|step| matches!(step,
+            ScanStep::Handle { kind: HandleKind::Mutex, ty: Some(ty), obtains: Some(value), .. }
+            if *ty == fields[3].layout && *value == fields[2].layout)))
+        );
+        assert!(rec(&table, recursive).scan.iter().any(|step| matches!(step,
+            ScanStep::Handle { kind: HandleKind::Receiver, obtains: Some(value), .. }
+            if *value == recursive)));
+    }
+}
+
 fn offsets(r: &LayoutRecord) -> Vec<u64> {
     r.fields.iter().map(|f| f.offset).collect()
 }
@@ -1977,12 +2022,19 @@ fn renumber_scan(s: &mut ScanStep, map: &impl Fn(&mut LayoutId)) {
             .for_each(|s| renumber_scan(s, map)),
         ScanStep::Sequence { element, .. } | ScanStep::Repeat { element, .. } => map(element),
         ScanStep::Columns(c) => renumber_columns(c, map),
+        ScanStep::Handle { ty, obtains, .. } => {
+            if let Some(id) = ty {
+                map(id);
+            }
+            if let Some(id) = obtains {
+                map(id);
+            }
+        }
         ScanStep::Counted { .. }
         | ScanStep::Root { .. }
         | ScanStep::Uncounted { .. }
         | ScanStep::SliceOwner { .. }
-        | ScanStep::Environment { .. }
-        | ScanStep::Handle { .. } => {}
+        | ScanStep::Environment { .. } => {}
     }
 }
 
@@ -2280,7 +2332,12 @@ fn a_borrowed_handle_holding_capture_contributes_no_descriptor_steps() {
     let table = checked(b);
     let r = &table.layouts[env.0 as usize];
     let (view, owned) = (r.fields[0].offset, r.fields[1].offset);
-    assert!(r.scan.contains(&ScanStep::Handle { offset: view }));
+    assert!(r.scan.contains(&ScanStep::Handle {
+        offset: view,
+        kind: HandleKind::Unknown,
+        ty: None,
+        obtains: None
+    }));
     let d = descriptor(&table, env).unwrap();
     let steps: Vec<_> = d
         .steps

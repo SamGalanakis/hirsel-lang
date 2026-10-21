@@ -299,8 +299,30 @@ impl<'a> Validator<'a> {
             }
             LayoutKind::Handle => {
                 self.exact(&s, r, 8, self.target.scalar_align(ScalarKind::U64));
-                if r.scan != [ScanStep::Handle { offset: 0 }] {
+                if !matches!(r.scan.as_slice(), [ScanStep::Handle { offset: 0, .. }]) {
                     self.fail(s.clone(), Obligation::Scan, "a handle scans its ID");
+                }
+                if let [
+                    ScanStep::Handle {
+                        kind, ty, obtains, ..
+                    },
+                ] = r.scan.as_slice()
+                {
+                    let typed = *kind != HandleKind::Unknown;
+                    let has_payload = matches!(
+                        kind,
+                        HandleKind::Receiver
+                            | HandleKind::Mutex
+                            | HandleKind::Task
+                            | HandleKind::TaskSet
+                    );
+                    if typed != ty.is_some() || has_payload != obtains.is_some() {
+                        self.fail(
+                            s.clone(),
+                            Obligation::Scan,
+                            "typed handle scans name their handle and obtainable payload layouts",
+                        );
+                    }
                 }
                 let closes = r.drop == [DropStep::CloseHandle { offset: 0 }];
                 if !(closes || r.drop.is_empty()) {
@@ -1839,6 +1861,10 @@ fn scan_ids(step: &ScanStep, out: &mut Vec<LayoutId>) {
             .flat_map(|(_, s)| s)
             .for_each(|s| scan_ids(s, out)),
         ScanStep::Columns(c) => out.extend(c.columns.iter().map(|c| c.layout)),
+        ScanStep::Handle { ty, obtains, .. } => {
+            out.extend(*ty);
+            out.extend(*obtains);
+        }
         _ => {}
     }
 }

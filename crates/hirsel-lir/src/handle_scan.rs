@@ -5,7 +5,7 @@
 //! registry by emission; they are never process addresses or local table IDs.
 //! Unsupported borrowed/variable-flat representations explicitly yield unknown.
 
-use crate::layout_types::{LayoutId, LayoutKind, LayoutRecord, ScanStep, TagForm};
+use crate::layout_types::{HandleKind, LayoutId, LayoutKind, LayoutRecord, ScanStep, TagForm};
 
 pub use hirsel_kernels::handle_scan::*;
 
@@ -22,6 +22,41 @@ impl Program {
             out.instruction(UNKNOWN, 0);
         } else {
             out.steps(&record.scan);
+        }
+        // Type closure follows layout structure even when a pointer's target
+        // is not in the current value image. These edges never read a value.
+        let mut references: Vec<_> = record.fields.iter().map(|f| f.layout).collect();
+        if let Some(tag) = &record.tag {
+            references.extend(
+                tag.variants
+                    .iter()
+                    .flat_map(|v| v.fields.iter().map(|f| f.layout)),
+            );
+        }
+        match record.kind {
+            LayoutKind::Block { payload }
+            | LayoutKind::Box { payload }
+            | LayoutKind::Shared { payload } => references.push(payload),
+            LayoutKind::Frozen { value } => references.push(value),
+            LayoutKind::Inline { element, .. }
+            | LayoutKind::Simd { element, .. }
+            | LayoutKind::Slice { element }
+            | LayoutKind::Sequence { element }
+            | LayoutKind::Sequential { element }
+            | LayoutKind::SoaColumns { element } => references.push(element),
+            LayoutKind::Callable {
+                environment: Some(environment),
+            } => references.push(environment),
+            LayoutKind::Callable { environment: None } | LayoutKind::Iterator { .. } => {
+                out.instruction(TYPE_UNKNOWN, 0);
+            }
+            _ => {}
+        }
+        references.sort();
+        references.dedup();
+        for id in references {
+            let at = out.instruction(TYPE_EDGE, 0);
+            out.reference(at + 2, id);
         }
         out
     }
@@ -53,8 +88,24 @@ impl Program {
     fn steps(&mut self, steps: &[ScanStep]) {
         for step in steps {
             match step {
-                ScanStep::Handle { offset } => {
-                    self.instruction(HANDLE, *offset);
+                ScanStep::Handle {
+                    offset,
+                    kind,
+                    ty,
+                    obtains,
+                } => {
+                    if let (kind, Some(ty)) = (kind, ty)
+                        && *kind != HandleKind::Unknown
+                    {
+                        let at = self.instruction(TYPED_HANDLE, *offset);
+                        self.words[at + 2] = kind.code();
+                        self.reference(at + 3, *ty);
+                        if let Some(payload) = obtains {
+                            self.reference(at + 4, *payload);
+                        }
+                    } else {
+                        self.instruction(HANDLE, *offset);
+                    }
                 }
                 ScanStep::Counted { offset }
                 | ScanStep::SliceOwner { offset }
@@ -163,7 +214,12 @@ mod tests {
     fn nonresource_handles_are_present_and_borrowed_pointers_are_unknown() {
         let mut p = Program::default();
         p.steps(&[
-            ScanStep::Handle { offset: 0 },
+            ScanStep::Handle {
+                offset: 0,
+                kind: crate::layout_types::HandleKind::Unknown,
+                ty: None,
+                obtains: None,
+            },
             ScanStep::Uncounted { offset: 8 },
         ]);
         let words = p.linked(|_| None).unwrap();

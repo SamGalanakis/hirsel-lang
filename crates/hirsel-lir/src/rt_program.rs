@@ -634,7 +634,7 @@ impl Lower<'_> {
                 | ScanStep::Uncounted { offset }
                 | ScanStep::SliceOwner { offset }
                 | ScanStep::Environment { offset }
-                | ScanStep::Handle { offset }
+                | ScanStep::Handle { offset, .. }
                 | ScanStep::Inline { offset, .. }
                 | ScanStep::Sequence { offset, .. }
                 | ScanStep::Repeat { offset, .. } => Some(*offset),

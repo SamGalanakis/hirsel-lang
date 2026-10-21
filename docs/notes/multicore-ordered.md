@@ -41,7 +41,7 @@ those locks before joining. The Io binding pointer uses release/acquire
 publication. These projections remove whole-run aliasing; they do not replace
 the role or prove individual concurrent service implementations safe.
 
-Native descriptor version 14 (runtime ABI 34) adds an independent holder scan
+Native descriptor version 14 (introduced in runtime ABI 34) adds an independent holder scan
 pointer and word count, taking the C descriptor from 72 to 88 bytes. Both
 native emitters lower the existing `LayoutRecord.scan`; destruction programs
 cannot substitute for it because atomics and tasks are not resources.
@@ -50,8 +50,16 @@ inline arrays, sequences and structure-of-arrays columns. Shared values are
 inert except for a mutex's exact-root wrapper. Missing descriptors, borrowed
 pointers, variable-flat sequences and scans exceeding the work bound remain
 unknown. Zero scan words certify an empty holder set; `u64::MAX` means unknown.
-The raw handle set still needs typed object resolution and obtainable-type
-closure before it can supply `Held`; ambiguous words never certify independence.
+Runtime ABI 35, LIR 44 and layout version 7 retain the descriptor size and add
+family, instantiated handle type and obtainable payload type to handle scans.
+Separate static edges visit all variants and recursive payloads without reading
+a value. Typed captures distinguish overlapping atomic and task words; missing
+or opaque type metadata cannot certify a complete closure. Shared payloads
+remain inert during value scans. Static closure may conservatively include them.
+Ambiguous raw words contribute every registered family. Creation entries that
+erase their generic type register objects under every linked type of that family;
+this admits extra conflicts rather than excluding a possible object. The
+metadata and registry still need installation at native admission and spawn.
 
 `ordered::objects::Registry` supplies stable identities and obtainable-type
 bindings. A raw word shared by multiple native handle families contributes all

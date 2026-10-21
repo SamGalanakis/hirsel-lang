@@ -19,6 +19,34 @@ pub enum Kind {
     Capability,
 }
 
+impl Kind {
+    pub fn code(self) -> u64 {
+        match self {
+            Self::Atomic => 1,
+            Self::Mutex => 2,
+            Self::Sender => 3,
+            Self::Receiver => 4,
+            Self::Task => 5,
+            Self::TaskSet => 6,
+            Self::Scope => 7,
+            Self::Capability => 8,
+        }
+    }
+    fn from_code(code: u64) -> Option<Self> {
+        Some(match code {
+            1 => Self::Atomic,
+            2 => Self::Mutex,
+            3 => Self::Sender,
+            4 => Self::Receiver,
+            5 => Self::Task,
+            6 => Self::TaskSet,
+            7 => Self::Scope,
+            8 => Self::Capability,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Binding {
     object: Option<ObjectId>,
@@ -34,9 +62,29 @@ struct Binding {
 pub struct Registry {
     handles: BTreeMap<u64, BTreeMap<Kind, Binding>>,
     pub carries: Carries,
+    families: BTreeMap<u64, BTreeSet<u32>>,
 }
 
 impl Registry {
+    /// Install the admitted native type graph before dispatch. Runtime object
+    /// creation ABIs sometimes erase their generic handle type; register such
+    /// an object under every linked type of its known family. This overstates
+    /// conflicts and never excludes a possible object from a type closure.
+    pub fn install_types(&mut self, types: super::capture::Types) {
+        for (id, edges) in types.definitions {
+            self.carries.define(id, edges);
+        }
+        self.families = types.families;
+        for bindings in self.handles.values() {
+            for (&kind, binding) in bindings {
+                if let Some(object) = &binding.object {
+                    for &ty in self.families.get(&kind.code()).into_iter().flatten() {
+                        self.carries.register(ty, object.clone());
+                    }
+                }
+            }
+        }
+    }
     /// Register creation, or another endpoint alias of an existing object.
     /// `ty` is the linked handle type, not its result/message payload type.
     /// `obtains` names the handle types its payload can expose in this turn.
@@ -49,6 +97,9 @@ impl Registry {
         obtains: BTreeSet<TypeId>,
     ) {
         self.carries.register(ty, object.clone());
+        for &ty in self.families.get(&kind.code()).into_iter().flatten() {
+            self.carries.register(ty, object.clone());
+        }
         self.insert(
             kind,
             word,
@@ -102,6 +153,14 @@ impl Registry {
     pub fn captured(&self, captures: &Captures) -> Held {
         let mut held = Held::empty();
         held.unknown = captures.unknown;
+        for handle in &captures.typed {
+            if let Some(kind) = Kind::from_code(handle.kind) {
+                self.obtained(&mut held, kind, handle.word);
+                held.obtains.extend(handle.obtains);
+            } else {
+                held.unknown = true;
+            }
+        }
         for word in &captures.handles {
             match self.handles.get(word) {
                 Some(bindings) => {
@@ -164,6 +223,7 @@ mod tests {
         registry.bind(Kind::Task, 17, object(1), 2, BTreeSet::from([3]));
         let held = registry.captured(&Captures {
             handles: BTreeSet::from([17]),
+            typed: BTreeSet::new(),
             unknown: false,
         });
         assert_eq!(held.objects, BTreeSet::from([object(0), object(1)]));
@@ -183,6 +243,7 @@ mod tests {
         registry.carries.define(3, BTreeSet::from([2]));
         let held = registry.captured(&Captures {
             handles: BTreeSet::from([31]),
+            typed: BTreeSet::new(),
             unknown: false,
         });
         let tasks = BTreeMap::from([(1, held)]);
@@ -196,6 +257,7 @@ mod tests {
         let mut registry = Registry::default();
         let captures = Captures {
             handles: BTreeSet::from([5]),
+            typed: BTreeSet::new(),
             unknown: false,
         };
         assert!(registry.captured(&captures).unknown);

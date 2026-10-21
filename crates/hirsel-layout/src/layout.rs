@@ -1513,12 +1513,34 @@ impl<'o> LayoutBuilder<'o> {
             self.target.scalar_align(ScalarKind::U64),
         );
         self.words(&mut record, &[ScalarKind::U64]);
-        record.scan = vec![ScanStep::Handle { offset: 0 }];
+        record.scan = vec![ScanStep::Handle {
+            offset: 0,
+            kind: hirsel_lir::layout_types::HandleKind::Unknown,
+            ty: None,
+            obtains: None,
+        }];
         if resource {
             record.drop = vec![DropStep::CloseHandle { offset: 0 }];
             record.copy = CopyRecipe::NotCopyable;
             record.storage = RESOURCE_STORAGE.to_vec();
         }
+        record
+    }
+
+    fn typed_handle_record(
+        &mut self,
+        key: &[u8],
+        resource: bool,
+        kind: HandleKind,
+        obtains: Option<LayoutId>,
+    ) -> LayoutRecord {
+        let mut record = self.handle_record(key, resource);
+        record.scan = vec![ScanStep::Handle {
+            offset: 0,
+            kind,
+            ty: self.memo.get(key).copied(),
+            obtains,
+        }];
         record
     }
 
@@ -2323,6 +2345,30 @@ impl<'o> LayoutBuilder<'o> {
         let record = match owner {
             OwnerRepresentation::Handle { revision, resource } => {
                 let mut handle = self.handle_record(key, *resource);
+                if definition.0.package.name_is("core") {
+                    match definition.0.name.as_str() {
+                        "TaskSet" => {
+                            if let Some(GenericArgument::Type(result)) = arguments.first() {
+                                let result = self.memory(walk, *result, f, true)?;
+                                handle.scan = vec![ScanStep::Handle {
+                                    offset: 0,
+                                    kind: HandleKind::TaskSet,
+                                    ty: self.memo.get(key).copied(),
+                                    obtains: Some(result),
+                                }];
+                            }
+                        }
+                        "Scope" | "Tasks" => {
+                            handle.scan = vec![ScanStep::Handle {
+                                offset: 0,
+                                kind: HandleKind::Scope,
+                                ty: self.memo.get(key).copied(),
+                                obtains: None,
+                            }]
+                        }
+                        _ => {}
+                    }
+                }
                 if !resource && definition.0.package.name_is("core") && definition.0.name == "Path"
                 {
                     handle.kind = LayoutKind::Path;
@@ -2741,19 +2787,42 @@ impl<'o> LayoutBuilder<'o> {
             BuiltinType::TypeShape => unavailable(None, "TypeShape materialization as static data"),
             // A run-local task-table word (CONC-2); a handle nobody awaited needs no drop:
             // its scope's exit joins the child.
-            BuiltinType::Task => Ok(self.handle_record(key, false)),
+            BuiltinType::Task => {
+                let result = self.memory(walk, ty_at(0)?, f, true)?;
+                Ok(self.typed_handle_record(key, false, HandleKind::Task, Some(result)))
+            }
             // A run-local channel endpoint word (CONC-6), closed when dropped.
-            BuiltinType::Sender | BuiltinType::Receiver => Ok(self.handle_record(key, true)),
+            BuiltinType::Sender => {
+                Ok(self.typed_handle_record(key, true, HandleKind::Sender, None))
+            }
+            BuiltinType::Receiver => {
+                let message = self.memory(walk, ty_at(0)?, f, true)?;
+                Ok(self.typed_handle_record(key, true, HandleKind::Receiver, Some(message)))
+            }
             // An atomic's scalar cell has no observable destruction. A mutex
             // uses a counted wrapper over its run-local cell word: copies add
             // credits, and the last release drops the present payload.
-            BuiltinType::Atomic => Ok(self.handle_record(key, false)),
+            BuiltinType::Atomic => {
+                Ok(self.typed_handle_record(key, false, HandleKind::Atomic, None))
+            }
             BuiltinType::Mutex => {
-                let handle_key = b"mutex-cell-handle".to_vec();
+                let value = self.memory(walk, ty_at(0)?, f, true)?;
+                // Representation is the same cell word, but its may-obtain
+                // metadata belongs to this instantiated payload type.
+                let mut handle_key = key.to_vec();
+                handle_key.extend(b"/mutex-cell-handle");
                 let handle = match self.memo.get(&handle_key) {
                     Some(&id) => id,
                     None => {
-                        let record = self.handle_record(&handle_key, true);
+                        let mut record = self.typed_handle_record(
+                            &handle_key,
+                            true,
+                            HandleKind::Mutex,
+                            Some(value),
+                        );
+                        if let ScanStep::Handle { ty, .. } = &mut record.scan[0] {
+                            *ty = self.memo.get(key).copied();
+                        }
                         self.insert(handle_key, record)
                     }
                 };

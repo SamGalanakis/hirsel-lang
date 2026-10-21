@@ -182,7 +182,12 @@ fn fixture_table(target: &TargetSpec) -> LayoutTable {
     }];
     records.push(opaque);
     let mut handle = layout(&t, LayoutKind::Handle, fixed(8), 8);
-    handle.scan = vec![ScanStep::Handle { offset: 0 }];
+    handle.scan = vec![ScanStep::Handle {
+        offset: 0,
+        kind: hirsel_lir::layout_types::HandleKind::Unknown,
+        ty: None,
+        obtains: None,
+    }];
     handle.drop = vec![DropStep::CloseHandle { offset: 0 }];
     records.push(handle);
     let mut callable = layout(

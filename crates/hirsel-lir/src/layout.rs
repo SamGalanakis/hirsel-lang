@@ -235,7 +235,7 @@ pub fn scan_order(step: &ScanStep) -> u64 {
         | ScanStep::Inline { offset, .. }
         | ScanStep::Sequence { offset, .. }
         | ScanStep::Environment { offset }
-        | ScanStep::Handle { offset }
+        | ScanStep::Handle { offset, .. }
         | ScanStep::Repeat { offset, .. } => *offset,
         ScanStep::ActiveVariant { tag_offset, .. } => *tag_offset,
         ScanStep::Columns(c) => c.count_offset,
@@ -272,8 +272,16 @@ pub fn borrowed_scan<'r>(
             | ScanStep::Environment { offset } => out.push(ScanStep::Uncounted {
                 offset: offset + by,
             }),
-            ScanStep::Handle { offset } => out.push(ScanStep::Handle {
+            ScanStep::Handle {
+                offset,
+                kind,
+                ty,
+                obtains,
+            } => out.push(ScanStep::Handle {
                 offset: offset + by,
+                kind: *kind,
+                ty: *ty,
+                obtains: *obtains,
             }),
             ScanStep::Inline { offset, layout } => {
                 out.extend(borrowed_scan(record(*layout), by + offset, record)?)
@@ -409,8 +417,16 @@ pub fn shift_scan(step: &ScanStep, by: u64) -> ScanStep {
         ScanStep::Environment { offset } => ScanStep::Environment {
             offset: offset + by,
         },
-        ScanStep::Handle { offset } => ScanStep::Handle {
+        ScanStep::Handle {
+            offset,
+            kind,
+            ty,
+            obtains,
+        } => ScanStep::Handle {
             offset: offset + by,
+            kind: *kind,
+            ty: *ty,
+            obtains: *obtains,
         },
         ScanStep::Repeat {
             offset,

@@ -216,12 +216,19 @@ fn erase_layout_refs(record: &mut crate::LayoutRecord, refs: &mut Vec<crate::Lay
                     }
                 }
                 ScanStep::Columns(c) => columns(c, refs),
+                ScanStep::Handle { ty, obtains, .. } => {
+                    if let Some(id) = ty {
+                        take(id, refs);
+                    }
+                    if let Some(id) = obtains {
+                        take(id, refs);
+                    }
+                }
                 ScanStep::Counted { .. }
                 | ScanStep::Root { .. }
                 | ScanStep::Uncounted { .. }
                 | ScanStep::SliceOwner { .. }
-                | ScanStep::Environment { .. }
-                | ScanStep::Handle { .. } => {}
+                | ScanStep::Environment { .. } => {}
             }
         }
     }

@@ -425,6 +425,37 @@ pub enum InitializedBytes {
 }
 
 /// One step of an arbitrary-offset scan program (holders a value contains).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum HandleKind {
+    Unknown,
+    Atomic,
+    Mutex,
+    Sender,
+    Receiver,
+    Task,
+    TaskSet,
+    Scope,
+    Capability,
+}
+
+impl HandleKind {
+    /// Native holder-scan operand; kept independent of enum memory layout.
+    pub const fn code(self) -> u64 {
+        match self {
+            Self::Unknown => 0,
+            Self::Atomic => 1,
+            Self::Mutex => 2,
+            Self::Sender => 3,
+            Self::Receiver => 4,
+            Self::Task => 5,
+            Self::TaskSet => 6,
+            Self::Scope => 7,
+            Self::Capability => 8,
+        }
+    }
+}
+
+/// One step of an arbitrary-offset scan program (holders a value contains).
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ScanStep {
     /// A counted block reference.
@@ -454,7 +485,15 @@ pub enum ScanStep {
     /// A callable's environment reference.
     Environment { offset: u64 },
     /// A run-context handle.
-    Handle { offset: u64 },
+    Handle {
+        offset: u64,
+        kind: HandleKind,
+        /// Identity of the instantiated handle type, preserved through flattening.
+        ty: Option<LayoutId>,
+        /// Payload/result obtainable by a keep op, including leftover finalizers.
+        /// Sender and scalar Atomic handles cannot obtain another handle.
+        obtains: Option<LayoutId>,
+    },
     /// `count` inline elements (`Inline[T, n]`), `stride` bytes apart.
     Repeat {
         offset: u64,
@@ -768,6 +807,17 @@ snapshot_enum!(InitializedBytes {
     Fields,
     ZeroPadding
 });
+snapshot_enum!(HandleKind {
+    Unknown,
+    Atomic,
+    Mutex,
+    Sender,
+    Receiver,
+    Task,
+    TaskSet,
+    Scope,
+    Capability
+});
 snapshot_enum!(ScanStep {
     Counted { offset },
     Uncounted { offset },
@@ -785,7 +835,7 @@ snapshot_enum!(ScanStep {
         element
     },
     Environment { offset },
-    Handle { offset },
+    Handle { offset, kind, ty, obtains },
     Repeat {
         offset,
         count,

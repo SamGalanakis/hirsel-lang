@@ -13,7 +13,88 @@ use crate::{Header, Layout, TaskCtx};
 #[derive(Debug, Default, Eq, PartialEq)]
 pub struct Captures {
     pub handles: BTreeSet<u64>,
+    pub typed: BTreeSet<Handle>,
     pub unknown: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct Handle {
+    pub word: u64,
+    pub kind: u64,
+    pub ty: u32,
+    pub obtains: Option<u32>,
+}
+
+/// Static type edges follow every variant, not only the current value's.
+/// Missing/opaque metadata has no definition, so Carries cannot certify it.
+#[derive(Default)]
+pub struct Types {
+    pub definitions: std::collections::BTreeMap<u32, BTreeSet<u32>>,
+    pub families: std::collections::BTreeMap<u64, BTreeSet<u32>>,
+}
+
+/// Read the admitted program's immutable type graph, once before dispatch.
+/// # Safety
+/// `ctx` is live and its registry contains matching native scan programs.
+pub unsafe fn types(ctx: *mut TaskCtx) -> Types {
+    // SAFETY: caller contract; descriptor resolution reads immutable data.
+    unsafe { types_with((*ctx).heap_ref().layout_count(), |id| (*ctx).descriptor(id)) }
+}
+
+unsafe fn types_with(count: u32, descriptor: impl Fn(u32) -> *const Layout) -> Types {
+    let mut out = Types::default();
+    // SAFETY: caller contract, immutable registry lives for the run.
+    unsafe {
+        for id in 0..count {
+            let layout = &*descriptor(id);
+            if layout.scan_words == u64::MAX || layout.scan_words % WORDS as u64 != 0 {
+                continue;
+            }
+            if layout.scan_words == 0 {
+                out.definitions.insert(id, BTreeSet::new());
+                continue;
+            }
+            if layout.scan.is_null() || layout.scan_words > (WORK_MAX * WORDS) as u64 {
+                continue;
+            }
+            let mut edges = BTreeSet::new();
+            let mut known = true;
+            for op in std::slice::from_raw_parts(layout.scan, layout.scan_words as usize)
+                .chunks_exact(WORDS)
+            {
+                match op[0] {
+                    HANDLE | UNKNOWN | TYPE_UNKNOWN => known = false,
+                    TYPED_HANDLE => {
+                        if op[2] == 0 || op[3] == 0 {
+                            known = false;
+                            continue;
+                        }
+                        let ty = op[3] as u32;
+                        out.families.entry(op[2]).or_default().insert(ty);
+                        edges.insert(ty);
+                        if op[4] != 0 {
+                            edges.insert(op[4] as u32);
+                        }
+                    }
+                    INLINE | TYPE_EDGE => {
+                        edges.insert(op[2] as u32);
+                    }
+                    SEQUENCE | REPEAT => {
+                        edges.insert(op[4] as u32);
+                    }
+                    COLUMN => {
+                        edges.insert(op[6] as u32);
+                    }
+                    BLOCK | ROOT | TAG | NONNULL | LIVE_BIT => {}
+                    _ => known = false,
+                }
+            }
+            if known {
+                out.definitions.insert(id, edges);
+            }
+        }
+    }
+    out
 }
 
 const WORK_MAX: usize = 65_536;
@@ -67,8 +148,19 @@ unsafe fn scan_with(
                 }
                 let op = &words[at..at + WORDS];
                 at += WORDS;
-                let address = value.add(op[1] as usize);
+                let address = value.wrapping_add(op[1] as usize);
                 match op[0] {
+                    TYPED_HANDLE => {
+                        if op[2] == 0 || op[3] == 0 {
+                            out.unknown = true;
+                        }
+                        out.typed.insert(Handle {
+                            word: address.cast::<u64>().read_unaligned(),
+                            kind: op[2],
+                            ty: op[3] as u32,
+                            obtains: (op[4] != 0).then_some(op[4] as u32),
+                        });
+                    }
                     HANDLE => {
                         out.handles.insert(address.cast::<u64>().read_unaligned());
                     }
@@ -141,6 +233,7 @@ unsafe fn scan_with(
                         }
                     }
                     UNKNOWN => out.unknown = true,
+                    TYPE_EDGE | TYPE_UNKNOWN => {}
                     _ => {
                         out.unknown = true;
                         return out;
@@ -304,5 +397,82 @@ mod tests {
         };
         assert_eq!(captures.handles, BTreeSet::from([11, 22]));
         assert!(!captures.unknown);
+    }
+
+    #[test]
+    fn typed_receiver_closure_reads_inactive_types_without_reading_a_value() {
+        use super::super::footprint::ObjectId;
+        use super::super::objects::{Kind, Registry};
+        use std::collections::BTreeMap;
+        let empty = layout(&[]);
+        let receiver_words = [TYPED_HANDLE, 0, 4, 2, 3, 0, 0, 0];
+        let receiver = layout(&receiver_words);
+        let message_words = [
+            TAG,
+            0,
+            1,
+            WORDS as u64,
+            0,
+            0,
+            0,
+            0,
+            TYPED_HANDLE,
+            u64::MAX,
+            1,
+            4,
+            0,
+            0,
+            0,
+            0,
+        ];
+        let message = layout(&message_words);
+        let atomic_words = [TYPED_HANDLE, 0, 1, 4, 0, 0, 0, 0];
+        let atomic = layout(&atomic_words);
+        let layouts = [&empty, &empty, &receiver, &message, &atomic];
+        let types = unsafe { types_with(layouts.len() as u32, |id| layouts[id as usize]) };
+        assert!(types.definitions[&3].contains(&4));
+        let value = 19u64;
+        let captures =
+            unsafe { scan_with((&raw const value).cast(), 2, |id| layouts[id as usize]) };
+        assert_eq!(
+            captures.typed,
+            BTreeSet::from([Handle {
+                word: 19,
+                kind: 4,
+                ty: 2,
+                obtains: Some(3)
+            }])
+        );
+        let mut registry = Registry::default();
+        registry.install_types(types);
+        registry.bind(
+            Kind::Receiver,
+            19,
+            ObjectId {
+                creator: vec![],
+                ordinal: 0,
+            },
+            2,
+            BTreeSet::new(),
+        );
+        let held = registry.captured(&captures);
+        assert!(!held.unknown);
+        assert_eq!(held.obtains, BTreeSet::from([3]));
+        registry.bind(
+            Kind::Atomic,
+            29,
+            ObjectId {
+                creator: vec![],
+                ordinal: 1,
+            },
+            4,
+            BTreeSet::new(),
+        );
+        let operation = registry.footprint(Kind::Atomic, 29, true).unwrap();
+        assert!(
+            !registry
+                .carries
+                .disjoint(1, &BTreeMap::from([(1, held)]), &operation)
+        );
     }
 }

@@ -13,3 +13,10 @@ pub const LIVE_BIT: u64 = 8;
 pub const SEQUENCE: u64 = 9;
 pub const REPEAT: u64 = 10;
 pub const COLUMN: u64 = 11;
+
+/// Typed handle: offset, family, handle layout, obtainable payload layout (0 absent).
+pub const TYPED_HANDLE: u64 = 12;
+/// Type-only edge; value scans ignore it.
+pub const TYPE_EDGE: u64 = 13;
+/// Unavailable static closure information; value scans ignore it.
+pub const TYPE_UNKNOWN: u64 = 14;
