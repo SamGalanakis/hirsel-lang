@@ -15,6 +15,8 @@ struct Probe {
     terminal: AtomicU64,
     older_effect: AtomicBool,
     mode: AtomicU64,
+    reported: AtomicBool,
+    cleaned: AtomicBool,
 }
 
 unsafe extern "C" fn older(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
@@ -210,4 +212,157 @@ fn root_success_waits_for_its_final_turn_to_retire_before_publication() {
 #[test]
 fn root_failure_waits_for_its_final_turn_to_retire_before_publication() {
     terminal_run(5);
+}
+
+unsafe extern "C" fn returned_cleanup(ctx: *mut TaskCtx, value: *mut u8, _: u64, _: u64) -> u8 {
+    let probe = unsafe { &*(value.cast::<u64>().read() as *const Probe) };
+    assert!(
+        probe.reported.load(Ordering::Acquire),
+        "sink must precede result cleanup"
+    );
+    assert!(
+        probe.older_effect.load(Ordering::Acquire),
+        "cleanup overtook older turn"
+    );
+    let mut canceled = u32::MAX;
+    assert_eq!(
+        unsafe { hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0) },
+        STATUS_OK
+    );
+    probe.cleaned.store(true, Ordering::Release);
+    STATUS_OK
+}
+
+#[test]
+fn returned_error_sink_and_yielding_cleanup_follow_older_turns_on_the_production_launch_frame() {
+    let environment = crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size: 16,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 0,
+        flags: 0,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: 0,
+    };
+    let result = crate::Layout {
+        finalizer: Some(returned_cleanup),
+        ..environment
+    };
+    let layouts = [&environment as *const crate::Layout, &result];
+    let node = crate::exit_report::Node {
+        kind: 2,
+        a: 8,
+        b: 0,
+        c: 0,
+        text: std::ptr::null(),
+        text_len: 0,
+        fields: std::ptr::null(),
+        field_count: 0,
+    };
+    for width in [2, 4, 8] {
+        let probe = Arc::new(Probe::default());
+        let seen = probe.clone();
+        let node_address = std::ptr::from_ref(&node).addr();
+        let entry: crate::stop::Entry = Box::new(move |ctx, words| unsafe {
+            let mut atomic = 0;
+            assert_eq!(
+                hirsel_rt_v2_atomic_create(
+                    ctx,
+                    std::ptr::null_mut(),
+                    &mut atomic,
+                    (&0u64 as *const u64).cast(),
+                    8
+                ),
+                STATUS_OK
+            );
+            let mut scope = 0;
+            assert_eq!(
+                hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                STATUS_OK
+            );
+            let env = crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 16, 8, crate::alloc::DOMAIN_HEAP, 0);
+            crate::alloc::payload(env)
+                .cast::<[u64; 2]>()
+                .write([Arc::as_ptr(&seen) as u64, atomic]);
+            let mut child = 0;
+            assert_eq!(
+                hirsel_rt_v2_task_spawn(
+                    ctx,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                    &mut child,
+                    &scope,
+                    older,
+                    env,
+                    0
+                ),
+                STATUS_OK
+            );
+            {
+                let _role = role::Guard::new(ctx);
+                seen.terminal.store(engine::current(ctx), Ordering::Release);
+                // This is the production returned-result registration, with
+                // storage owned by LaunchFrame, not the returning entry stack.
+                let value = (*words).result.as_mut_ptr().cast::<u8>();
+                value
+                    .cast::<[u64; 2]>()
+                    .write([Arc::as_ptr(&seen) as u64, 42]);
+                crate::exit_report::hirsel_rt_v2_exit_report(
+                    ctx,
+                    value,
+                    3,
+                    8,
+                    node_address as *const crate::exit_report::Node,
+                );
+            }
+            seen.attempted.store(true, Ordering::Release);
+            STATUS_OK
+        });
+        let home = std::thread::current().id();
+        let mut report = |returned: &crate::exit_report::Returned| {
+            assert_eq!(
+                std::thread::current().id(),
+                home,
+                "report sink is home-affine"
+            );
+            assert!(
+                probe.older_effect.load(Ordering::Acquire),
+                "sink overtook older turn"
+            );
+            assert!(!probe.cleaned.load(Ordering::Acquire));
+            assert_eq!(
+                unsafe { crate::exit_report::render(returned) },
+                "error: 42\n"
+            );
+            assert!(
+                !probe.reported.swap(true, Ordering::AcqRel),
+                "report exactly once"
+            );
+        };
+        let mut config = crate::Config::new();
+        config.layouts = layouts.as_ptr();
+        config.layout_count = layouts.len() as u32;
+        let mut ctx = std::ptr::null_mut();
+        unsafe {
+            assert_eq!(
+                crate::context::hirsel_rt_v2_ctx_create(&config, &mut ctx),
+                0
+            );
+            engine::enable(ctx, Policy::admit(&Default::default(), None));
+            crate::pool::start(ctx, width, true);
+            crate::pool::free::enable(ctx);
+            let frame = crate::stop::LaunchFrame::new(entry, 0, 0, [0; 5], &mut report);
+            assert_eq!(crate::stop::run_root(ctx, frame), Ok(STATUS_OK));
+            assert!(probe.reported.load(Ordering::Acquire));
+            assert!(probe.cleaned.load(Ordering::Acquire));
+            crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+        }
+    }
 }

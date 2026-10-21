@@ -1063,6 +1063,10 @@ fn record_worker(row: &mut Task, here: Option<u16>, metrics: Option<&crate::pool
 /// # Safety
 /// `ctx` is the running task's; the caller holds nothing a stop must drop.
 unsafe fn migrate_self(ctx: &mut TaskCtx) {
+    if ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, ordered::engine::migrate(ctx)) };
+        return;
+    }
     if free::enabled(ctx) {
         unsafe { free::migrate(ctx) };
         return;

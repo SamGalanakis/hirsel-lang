@@ -440,6 +440,24 @@ pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
     }
 }
 
+/// Move the current head to its required host/compute owner without a
+/// semantic scheduling point. The shared dispatcher transfers the exclusive
+/// Running token only after idle publishes this frame's actual saved stack.
+/// # Safety
+/// The running task owns the role, with no borrow retained across suspension.
+pub(crate) unsafe fn migrate(ctx: *mut TaskCtx) -> Stopped<()> {
+    at_head(ctx)?;
+    let task = current(ctx);
+    let (owner, last) = {
+        let row = scheduler(ctx).task(task as u32);
+        (row.owner, row.last)
+    };
+    if crate::pool::target(ctx, owner, last).is_some() {
+        suspend(ctx, task, true);
+    }
+    Ok(())
+}
+
 /// Reporting a returned root error is a host effect and must wait for the
 /// root's turn before invoking its sink or any yielding result cleanup.
 pub(crate) fn root_report(ctx: *mut TaskCtx) -> Stopped<()> {
