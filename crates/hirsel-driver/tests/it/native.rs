@@ -1209,6 +1209,7 @@ fn template_owners_and_objects_are_identical_at_one_and_eight_workers() {
                     .unwrap()
                 };
                 let serial = emit(1);
+                assert_eq!(serial, emit(2), "{name}: {backend:?} {opt:?}: jobs=2");
                 let parallel = emit(8);
                 assert_eq!(serial, parallel, "{name}: {backend:?} {opt:?}");
                 assert_eq!(serial.len(), ready.units.len() + 1, "one glue object");
@@ -1254,6 +1255,103 @@ fn template_owners_and_objects_are_identical_at_one_and_eight_workers() {
                 )
                 .unwrap();
                 assert_eq!(actual, checked.reference, "{name}: {backend:?} {opt:?}");
+            }
+        }
+    });
+}
+
+#[test]
+fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() {
+    use hirsel_driver::native::{self, Backend, OptLevel, Options, UnitObjects, Validation};
+    use hirsel_lir::objects::{NoObjects, ObjectStore, SimObjects};
+    use std::sync::Arc;
+    with_compiler_stack(|| {
+        // Keep the caller's text and positions fixed. Only its copied callee changes.
+        let before = "pub fn main()->Result[(),()]{failure.check(step(3u64)==4u64,Arithmetic());Ok(())}\nfn step(x:u64)->u64{x+1u64}\n";
+        let after = before.replace("x+1u64", "x+2u64");
+        let original = checked(before);
+        let edited = checked(&after);
+        assert_ne!(original.reference, edited.reference);
+        for jobs in [1, 2, 8] {
+            for validation in [Validation::Ready, Validation::EveryStage] {
+                let store = Arc::new(SimObjects::default());
+                let build = |checked: &Checked, store: Arc<dyn ObjectStore>| {
+                    let mut options = Options::new(x86());
+                    options.validation = validation;
+                    options.objects = Some(UnitObjects {
+                        store,
+                        backend: Backend::Llvm,
+                        opt: OptLevel::Default,
+                        debug: false,
+                        fuel: false,
+                        jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                    });
+                    native::build(&checked.validated, &options).unwrap()
+                };
+                let old = build(&original, store.clone());
+                let warm = build(&original, store.clone());
+                assert_eq!(
+                    warm.unit_objects.as_ref().unwrap().hits,
+                    old.summaries.len()
+                );
+                let rebuilt = build(&edited, store.clone());
+                let fresh = build(&edited, Arc::new(NoObjects));
+                let artifacts = |ready: &native::ReadyProgram| {
+                    (
+                        ready.summaries.clone(),
+                        ready.unit_objects.as_ref().unwrap().objects.clone(),
+                    )
+                };
+                assert_eq!(artifacts(&old), artifacts(&warm));
+                assert_eq!(artifacts(&rebuilt), artifacts(&fresh));
+                let owner = |ready: &native::ReadyProgram| {
+                    ready
+                        .summaries
+                        .iter()
+                        .position(|s| s.definition == original.entry)
+                        .unwrap()
+                };
+                let old_owner = owner(&old);
+                let new_owner = owner(&rebuilt);
+                assert_eq!(
+                    old.summaries[old_owner], rebuilt.summaries[new_owner],
+                    "caller changed"
+                );
+                assert_ne!(
+                    old.unit_objects.as_ref().unwrap().objects[old_owner],
+                    rebuilt.unit_objects.as_ref().unwrap().objects[new_owner],
+                    "stale copied callee"
+                );
+                let dir = scratch(&format!("copied-edit-{jobs}-{validation:?}"));
+                let tools = Toolchain::in_tree_diagnostic(&dir, &[&rebuilt.target]).unwrap();
+                let mut executable = None;
+                for ready in [&rebuilt, &fresh] {
+                    let objects = native::emit_backend_objects(
+                        ready,
+                        Backend::Llvm,
+                        OptLevel::Default,
+                        Partition::Singleton,
+                        false,
+                        None,
+                    )
+                    .unwrap();
+                    let exe =
+                        native::link_objects(ready, &edited.entry, &objects, &tools, &dir).unwrap();
+                    let bytes = std::fs::read(&exe).unwrap();
+                    if let Some(expected) = &executable {
+                        assert_eq!(&bytes, expected);
+                    } else {
+                        executable = Some(bytes);
+                    }
+                    let launched = native::launch(&exe, &ready.target, &tools, &dir, true).unwrap();
+                    let actual = native::observe(
+                        &launched,
+                        ready,
+                        &native::Sites::new(edited.validated.snapshot()),
+                    )
+                    .unwrap();
+                    assert_eq!(actual, edited.reference);
+                }
             }
         }
     });

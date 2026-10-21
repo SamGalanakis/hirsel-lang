@@ -56,6 +56,26 @@ fn native_import_reuses_exact_verdicts_and_validates_detached_tir() {
             let mut forged = base;
             forged.foreign_unreplayable = !forged.foreign_unreplayable;
             assert!(engine.import_native_input(forged).is_err());
+
+            // Off must not mint a verdict that a later On import can reuse.
+            let mut unchecked = QueryEngine::new(default_environment(), compiler_adapters());
+            unchecked.verify = Verify::Off;
+            let file = unchecked
+                .sources
+                .add("off-on.hir", "fn main() {}".into())
+                .unwrap();
+            let output = check_progress(&mut unchecked, file, &default_context()).unwrap();
+            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+            let input = unchecked.export_native_input().unwrap();
+            let before = runs();
+            unchecked.import_native_input(input.clone()).unwrap();
+            assert_eq!(runs(), before);
+            unchecked.verify = Verify::On;
+            unchecked.import_native_input(input.clone()).unwrap();
+            assert_eq!(runs() - before, input.definitions.len() as u64);
+            let accepted = runs();
+            unchecked.import_native_input(input).unwrap();
+            assert_eq!(runs(), accepted);
             "checked".to_owned()
         })
     };

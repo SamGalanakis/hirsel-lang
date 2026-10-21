@@ -96,6 +96,38 @@ fn program_validation_context_is_sync() {
 }
 
 #[test]
+fn preflight_checks_without_units_and_raw_errors_remain_schema_first() {
+    let (mut unit, mut table, manifest) = identity::<Ready>();
+    table.layouts[l::I64.0 as usize].align = 3;
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let operations = support::registry();
+    let inputs = Inputs {
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let context = ValidationContext::new(&inputs);
+    // No unit validation has run: even an empty build must reject this table.
+    let errors = context.preflight().unwrap_err();
+    assert!(!errors.is_empty());
+    assert!(std::ptr::eq(errors, context.preflight().unwrap_err()));
+    assert!(
+        context
+            .check(&unit, &inputs)
+            .iter()
+            .all(|v| matches!(v.kind, ViolationKind::Layout(_)))
+    );
+    unit.header.lir_version = 0;
+    // A cached preflight failure cannot hide the raw unit's schema failure.
+    let errors = validate::check(&unit, &inputs);
+    assert_eq!(errors.len(), 1);
+    assert!(matches!(errors[0].kind, ViolationKind::Schema(_)));
+    assert_eq!(context.check(&unit, &inputs), errors);
+}
+
+#[test]
 fn input_evidence_covers_exact_rows_and_ignores_unrelated_program_changes() {
     use hirsel_core_contract::{Disposition, Manifest, OperationId};
     use hirsel_lir::{LayoutId, LayoutKeys, layout_types::LayoutKind, validate::UnitInputs};

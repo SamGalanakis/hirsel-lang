@@ -506,143 +506,233 @@ mod cache_tests {
 
     #[test]
     fn warm_ready_hits_skip_work_but_every_stage_recomputes_and_compares() {
-        hirsel_engine::with_compiler_stack(|| {
-            let mut engine = hirsel_engine::QueryEngine::new(
-                hirsel_engine::default_environment(),
-                crate::compiler_adapters(),
-            );
-            let file = engine
-                .sources
-                .add("warm-object.hir", "fn main() {}".into())
-                .unwrap();
-            let output =
-                hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
+        let run = || {
+            hirsel_engine::with_compiler_stack(|| {
+                use hirsel_intern::timings::{self, Count, Phase};
+                timings::enable();
+                let calls = || {
+                    let report = timings::report();
+                    let phases = [
+                        Phase::Place,
+                        Phase::Rc,
+                        Phase::Reuse,
+                        Phase::Ready,
+                        Phase::Codegen,
+                        Phase::LirValidate,
+                    ];
+                    (
+                        phases.map(|phase| {
+                            report
+                                .phases
+                                .iter()
+                                .find(|p| p.phase == phase)
+                                .unwrap()
+                                .calls
+                        }),
+                        report
+                            .counts
+                            .iter()
+                            .find(|(c, _)| *c == Count::Units)
+                            .unwrap()
+                            .1,
+                    )
+                };
+                for workers in [1, 2, 8] {
+                    let mut engine = hirsel_engine::QueryEngine::new(
+                        hirsel_engine::default_environment(),
+                        crate::compiler_adapters(),
+                    );
+                    let file = engine
+                        .sources
+                        .add(
+                            "warm-object.hir",
+                            "fn helper(x:u64)->u64{x+1u64}\nfn main()->u64{helper(7u64)}".into(),
+                        )
+                        .unwrap();
+                    let output = hirsel_engine::check_progress(
+                        &mut engine,
+                        file,
+                        &hirsel_engine::default_context(),
+                    )
                     .unwrap();
-            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-            let input = engine.export_native_input().unwrap();
-            let input = engine.import_native_input(input).unwrap();
-            let store = Arc::new(Store::default());
-            let mut options =
-                Options::new(hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu());
-            options.validation = super::super::Validation::Ready;
-            options.objects = Some(UnitObjects {
-                store: store.clone(),
-                backend: Backend::Cranelift,
-                opt: OptLevel::None,
-                debug: false,
-                fuel: false,
-                jobs: hirsel_intern::jobs::Jobs::new(1),
-            });
-            let cold = super::super::build(&input, &options)
-                .unwrap()
-                .unit_objects
-                .unwrap();
-            assert!(!cold.objects.is_empty());
-            assert_eq!(cold.hits, 0);
-            let puts = store.puts.load(Ordering::Relaxed);
-            assert!(puts > 0);
-            let warm = super::super::build(&input, &options)
-                .unwrap()
-                .unit_objects
-                .unwrap();
-            assert_eq!(warm.hits, cold.objects.len());
-            assert_eq!(warm.objects, cold.objects);
-            assert_eq!(store.puts.load(Ordering::Relaxed), puts);
-            options.validation = super::super::Validation::EveryStage;
-            let checked = super::super::build(&input, &options)
-                .unwrap()
-                .unit_objects
-                .unwrap();
-            assert_eq!(checked.hits, cold.objects.len());
-            assert_eq!(checked.objects, cold.objects);
-            assert_eq!(store.puts.load(Ordering::Relaxed), 2 * puts);
-            store.tamper.store(true, Ordering::Relaxed);
-            let error = match super::super::build(&input, &options) {
-                Ok(_) => panic!("EveryStage accepted changed cached object bytes"),
-                Err(error) => error,
-            };
-            assert_eq!(error.stage, StageName::Emission);
-            assert!(error.definition.is_some());
-            assert!(
-                error
-                    .message
-                    .contains("EveryStage recomputation differs from cached fragment for unit key"),
-                "{error}"
-            );
-            assert_eq!(store.puts.load(Ordering::Relaxed), 2 * puts);
-        });
+                    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+                    let input = engine.export_native_input().unwrap();
+                    let input = engine.import_native_input(input).unwrap();
+                    let store = Arc::new(Store::default());
+                    let mut options = Options::new(
+                        hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu(),
+                    );
+                    options.validation = super::super::Validation::Ready;
+                    options.objects = Some(UnitObjects {
+                        store: store.clone(),
+                        backend: Backend::Cranelift,
+                        opt: OptLevel::None,
+                        debug: false,
+                        fuel: false,
+                        jobs: hirsel_intern::jobs::Jobs::new(workers),
+                    });
+                    let before = calls();
+                    let cold = super::super::build(&input, &options)
+                        .unwrap()
+                        .unit_objects
+                        .unwrap();
+                    let after = calls();
+                    let cold_calls: [_; 6] = std::array::from_fn(|i| after.0[i] - before.0[i]);
+                    let units = after.1 - before.1;
+                    assert!(units > 0);
+                    assert!(cold_calls.iter().all(|c| *c > 0));
+                    assert!(!cold.objects.is_empty());
+                    assert_eq!(cold.hits, 0);
+                    let puts = store.puts.load(Ordering::Relaxed);
+                    assert!(puts > 0);
+                    let warm = super::super::build(&input, &options)
+                        .unwrap()
+                        .unit_objects
+                        .unwrap();
+                    assert_eq!(warm.hits, cold.objects.len());
+                    assert_eq!(warm.objects, cold.objects);
+                    assert_eq!(store.puts.load(Ordering::Relaxed), puts);
+                    let after_warm = calls();
+                    assert_eq!(after_warm.1, after.1, "Ready hit lowered a unit");
+                    assert_eq!(
+                        &after_warm.0[..5],
+                        &after.0[..5],
+                        "Ready hit ran the pipeline"
+                    );
+                    options.validation = super::super::Validation::EveryStage;
+                    let checked = super::super::build(&input, &options)
+                        .unwrap()
+                        .unit_objects
+                        .unwrap();
+                    let after_checked = calls();
+                    let checked_calls: [_; 6] =
+                        std::array::from_fn(|i| after_checked.0[i] - after_warm.0[i]);
+                    assert_eq!(after_checked.1 - after_warm.1, units);
+                    assert_eq!(&checked_calls[..5], &cold_calls[..5]);
+                    assert_eq!(
+                        checked_calls[5] - cold_calls[5],
+                        4 * units,
+                        "warm EveryStage did not restore all four intermediate checkpoints"
+                    );
+                    assert_eq!(checked.hits, cold.objects.len());
+                    assert_eq!(checked.objects, cold.objects);
+                    assert_eq!(store.puts.load(Ordering::Relaxed), 2 * puts);
+                    store.tamper.store(true, Ordering::Relaxed);
+                    let error = match super::super::build(&input, &options) {
+                        Ok(_) => panic!("EveryStage accepted changed cached object bytes"),
+                        Err(error) => error,
+                    };
+                    assert_eq!(error.stage, StageName::Emission);
+                    assert!(error.definition.is_some());
+                    assert!(
+                        error.message.contains(
+                            "EveryStage recomputation differs from cached fragment for unit key"
+                        ),
+                        "{error}"
+                    );
+                    assert_eq!(store.puts.load(Ordering::Relaxed), 2 * puts);
+                }
+                "checked".to_owned()
+            })
+        };
+        if let Some(outputs) = hirsel_intern::under_salts(
+            "native::units::cache_tests::warm_ready_hits_skip_work_but_every_stage_recomputes_and_compares",
+            &[1],
+            run,
+        ) {
+            assert_eq!(outputs, ["checked"]);
+        }
     }
     #[test]
     fn retained_owner_workers_match_at_one_two_eight_and_both_validation_policies() {
-        hirsel_engine::with_compiler_stack(|| {
-            let mut engine = hirsel_engine::QueryEngine::new(
-                hirsel_engine::default_environment(),
-                crate::compiler_adapters(),
-            );
-            let file = engine.sources.add("owner-workers.hir", "fn step(x:u64)->u64{x+1u64}\nfn main()->u64 {let mut xs:List[u64]=[];list.push(mut xs,7u64);step(xs[0u64])}\n".into()).unwrap();
-            let checked =
-                hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
-                    .unwrap();
-            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
-            let input = engine.export_native_input().unwrap();
-            let input = engine.import_native_input(input).unwrap();
-            for (backend, opt) in [
-                (Backend::Cranelift, OptLevel::None),
-                (Backend::Llvm, OptLevel::None),
-                (Backend::Llvm, OptLevel::Default),
-            ] {
-                let mut baseline = None;
-                for workers in [1, 2, 8] {
-                    for validation in [
-                        super::super::Validation::Ready,
-                        super::super::Validation::EveryStage,
-                    ] {
-                        let mut options =
-                            Options::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu());
-                        options.validation = validation;
-                        options.objects = Some(UnitObjects {
-                            store: Arc::new(hirsel_lir::objects::NoObjects),
-                            backend,
-                            opt,
-                            debug: false,
-                            fuel: false,
-                            jobs: hirsel_intern::jobs::Jobs::new(workers),
-                        });
-                        let ready = super::super::build(&input, &options).unwrap();
-                        let objects = ready.unit_objects.unwrap().objects;
-                        assert_eq!(objects.len(), ready.summaries.len());
-                        assert!(
-                            ready
-                                .summaries
-                                .iter()
-                                .any(|s| s.origin == UnitOrigin::Library)
-                        );
-                        for summary in &ready.summaries {
-                            let symbol = hirsel_lir::emission::symbol_name(
-                                &summary.definition,
-                                Some(&summary.instance),
-                            );
-                            assert_eq!(
-                                objects
+        let run = || {
+            hirsel_engine::with_compiler_stack(|| {
+                let mut engine = hirsel_engine::QueryEngine::new(
+                    hirsel_engine::default_environment(),
+                    crate::compiler_adapters(),
+                );
+                let file = engine.sources.add("owner-workers.hir", "fn step(x:u64)->u64{x+1u64}\nfn main()->u64 {let mut xs:List[u64]=[];list.push(mut xs,7u64);step(xs[0u64])}\n".into()).unwrap();
+                let checked = hirsel_engine::check_progress(
+                    &mut engine,
+                    file,
+                    &hirsel_engine::default_context(),
+                )
+                .unwrap();
+                assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+                let input = engine.export_native_input().unwrap();
+                let input = engine.import_native_input(input).unwrap();
+                let mut artifacts = String::new();
+                for (backend, opt) in [
+                    (Backend::Cranelift, OptLevel::None),
+                    (Backend::Llvm, OptLevel::None),
+                    (Backend::Llvm, OptLevel::Default),
+                ] {
+                    let mut baseline = None;
+                    for workers in [1, 2, 8] {
+                        for validation in [
+                            super::super::Validation::Ready,
+                            super::super::Validation::EveryStage,
+                        ] {
+                            let mut options =
+                                Options::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu());
+                            options.validation = validation;
+                            options.objects = Some(UnitObjects {
+                                store: Arc::new(hirsel_lir::objects::NoObjects),
+                                backend,
+                                opt,
+                                debug: false,
+                                fuel: false,
+                                jobs: hirsel_intern::jobs::Jobs::new(workers),
+                            });
+                            let ready = super::super::build(&input, &options).unwrap();
+                            let objects = ready.unit_objects.unwrap().objects;
+                            assert_eq!(objects.len(), ready.summaries.len());
+                            assert!(
+                                ready
+                                    .summaries
                                     .iter()
-                                    .filter(|o| o.exports.iter().any(|e| e.name == symbol))
-                                    .count(),
-                                1,
-                                "{backend:?} {opt:?} {workers} {validation:?} {symbol}"
+                                    .any(|s| s.origin == UnitOrigin::Library)
                             );
-                        }
-                        let actual = (ready.summaries, objects);
-                        if let Some(expected) = &baseline {
-                            assert_eq!(
-                                &actual, expected,
-                                "{backend:?} {opt:?} {workers} {validation:?}"
-                            )
-                        } else {
-                            baseline = Some(actual)
+                            for summary in &ready.summaries {
+                                let symbol = hirsel_lir::emission::symbol_name(
+                                    &summary.definition,
+                                    Some(&summary.instance),
+                                );
+                                assert_eq!(
+                                    objects
+                                        .iter()
+                                        .filter(|o| o.exports.iter().any(|e| e.name == symbol))
+                                        .count(),
+                                    1,
+                                    "{backend:?} {opt:?} {workers} {validation:?} {symbol}"
+                                );
+                            }
+                            let actual = (ready.summaries, objects);
+                            if let Some(expected) = &baseline {
+                                assert_eq!(
+                                    &actual, expected,
+                                    "{backend:?} {opt:?} {workers} {validation:?}"
+                                )
+                            } else {
+                                baseline = Some(actual)
+                            }
                         }
                     }
+                    artifacts.push_str(&format!("{backend:?} {opt:?} {:?}", baseline.unwrap()));
                 }
-            }
-        });
+                artifacts
+            })
+        };
+        if let Some(outputs) = hirsel_intern::under_salts(
+            "native::units::cache_tests::retained_owner_workers_match_at_one_two_eight_and_both_validation_policies",
+            &[1, 2, 0x5eed],
+            run,
+        ) {
+            assert_eq!(outputs.len(), 3);
+            assert!(
+                outputs.windows(2).all(|pair| pair[0] == pair[1]),
+                "salt changed complete summaries or objects"
+            );
+        }
     }
 }

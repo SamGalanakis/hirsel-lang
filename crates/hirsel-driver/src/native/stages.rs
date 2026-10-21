@@ -952,12 +952,13 @@ mod tests {
 
     #[test]
     fn unit_pipeline_is_identical_at_every_worker_count_and_validation_policy() {
-        hirsel_engine::with_compiler_stack(|| {
-            let mut engine = hirsel_engine::QueryEngine::new(
-                hirsel_engine::default_environment(),
-                crate::compiler_adapters(),
-            );
-            let source = r#"
+        let run = || {
+            hirsel_engine::with_compiler_stack(|| {
+                let mut engine = hirsel_engine::QueryEngine::new(
+                    hirsel_engine::default_environment(),
+                    crate::compiler_adapters(),
+                );
+                let source = r#"
 fn helper(x: u64) -> u64 { x + 1u64 }
 fn main() -> u64 {
     let built: String = "value"
@@ -969,79 +970,95 @@ fn main() -> u64 {
     }
 }
 "#;
-            let file = engine.sources.add("pipeline.hir", source.into()).unwrap();
-            let checked =
-                hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
-                    .unwrap();
-            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
-            let exported = engine.export_native_input().unwrap();
-            let validated = engine.import_native_input(exported).unwrap();
-            let program = adapt::program(&validated);
-            let target = TargetSpec::x86_64_unknown_linux_gnu();
-            let lowered = hirsel_rc::import::lower(&program, &target).unwrap();
-            assert!(lowered.units.len() > 1);
-            let manifest = adapt::manifest(validated.snapshot()).unwrap();
-            let operations = program.operation_registry();
-            let inputs = Inputs {
-                discharge: Some(&lowered.native_discharge),
-                operations: &operations,
-                target: &target,
-                layouts: &lowered.table,
-                manifest: &manifest,
-            };
-            let context = hirsel_lir::validate::ValidationContext::new(&inputs);
-            preflight(&context).unwrap();
-            let finalizers = Finalizers::planned(&lowered.instances, &lowered.table);
-            let mut expected = None;
-            for policy in [Validation::EveryStage, Validation::Ready] {
-                let mut options = Options::new(target.clone());
-                options.validation = policy;
-                for jobs in [1, 2, 8] {
-                    let tasks = lowered
-                        .units
-                        .iter()
-                        .cloned()
-                        .zip(lowered.unit_origins.iter().copied())
-                        .collect();
-                    let results = hirsel_intern::jobs::map(
-                        hirsel_intern::jobs::Jobs::new(jobs),
-                        tasks,
-                        |(u, _)| u.instructions.len() as u64,
-                        |(unit, id)| {
-                            let inputs = Inputs {
-                                discharge: Some(&lowered.native_discharge),
-                                operations: &operations,
-                                target: &target,
-                                layouts: &lowered.table,
-                                manifest: &manifest,
-                            };
-                            lower_unit(
-                                unit,
-                                id,
-                                &options,
-                                &lowered.instances,
-                                &finalizers,
-                                &inputs,
-                                &context,
-                            )
-                            .map(|unit| {
-                                (
-                                    hirsel_codec::to_text(unit.unit()),
-                                    unit.receipt().raw().clone(),
+                let file = engine.sources.add("pipeline.hir", source.into()).unwrap();
+                let checked = hirsel_engine::check_progress(
+                    &mut engine,
+                    file,
+                    &hirsel_engine::default_context(),
+                )
+                .unwrap();
+                assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+                let exported = engine.export_native_input().unwrap();
+                let validated = engine.import_native_input(exported).unwrap();
+                let program = adapt::program(&validated);
+                let target = TargetSpec::x86_64_unknown_linux_gnu();
+                let lowered = hirsel_rc::import::lower(&program, &target).unwrap();
+                assert!(lowered.units.len() > 1);
+                let manifest = adapt::manifest(validated.snapshot()).unwrap();
+                let operations = program.operation_registry();
+                let inputs = Inputs {
+                    discharge: Some(&lowered.native_discharge),
+                    operations: &operations,
+                    target: &target,
+                    layouts: &lowered.table,
+                    manifest: &manifest,
+                };
+                let context = hirsel_lir::validate::ValidationContext::new(&inputs);
+                preflight(&context).unwrap();
+                let finalizers = Finalizers::planned(&lowered.instances, &lowered.table);
+                let mut expected = None;
+                for policy in [Validation::EveryStage, Validation::Ready] {
+                    let mut options = Options::new(target.clone());
+                    options.validation = policy;
+                    for jobs in [1, 2, 8] {
+                        let tasks = lowered
+                            .units
+                            .iter()
+                            .cloned()
+                            .zip(lowered.unit_origins.iter().copied())
+                            .collect();
+                        let results = hirsel_intern::jobs::map(
+                            hirsel_intern::jobs::Jobs::new(jobs),
+                            tasks,
+                            |(u, _)| u.instructions.len() as u64,
+                            |(unit, id)| {
+                                let inputs = Inputs {
+                                    discharge: Some(&lowered.native_discharge),
+                                    operations: &operations,
+                                    target: &target,
+                                    layouts: &lowered.table,
+                                    manifest: &manifest,
+                                };
+                                lower_unit(
+                                    unit,
+                                    id,
+                                    &options,
+                                    &lowered.instances,
+                                    &finalizers,
+                                    &inputs,
+                                    &context,
                                 )
-                            })
-                        },
-                    )
-                    .into_iter()
-                    .collect::<Result<Vec<_>, _>>()
-                    .unwrap();
-                    if let Some(expected) = &expected {
-                        assert_eq!(expected, &results, "jobs={jobs}, policy={policy:?}");
-                    } else {
-                        expected = Some(results);
+                                .map(|unit| {
+                                    (
+                                        hirsel_codec::to_text(unit.unit()),
+                                        unit.receipt().raw().clone(),
+                                    )
+                                })
+                            },
+                        )
+                        .into_iter()
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap();
+                        if let Some(expected) = &expected {
+                            assert_eq!(expected, &results, "jobs={jobs}, policy={policy:?}");
+                        } else {
+                            expected = Some(results);
+                        }
                     }
                 }
-            }
-        });
+                format!("{:?}", expected.unwrap())
+            })
+        };
+        if let Some(outputs) = hirsel_intern::under_salts(
+            "native::stages::tests::unit_pipeline_is_identical_at_every_worker_count_and_validation_policy",
+            &[1, 2, 0x5eed],
+            run,
+        ) {
+            assert_eq!(outputs.len(), 3);
+            assert!(
+                outputs.windows(2).all(|pair| pair[0] == pair[1]),
+                "salt changed complete units or receipts"
+            );
+        }
     }
 }
