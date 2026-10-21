@@ -140,7 +140,9 @@ Invariants:
   member of a cycle (`Cons`, `Even`/`Odd`) hashes the rooted DFS of its
   component. Keys never depend on `LayoutId`s, request order or unrelated
   layouts, and an edit changes the key of every layout that reaches it. FnAbi
-  keys replace parameter and result layouts by their keys.
+  keys replace parameter and result layouts by their keys. Rooted keys visit only
+  a completed layout's reachable graph and use the same encoding; intrinsic empty
+  sequence and boxed nullary statics use these keys before import.
 - ABI. Passing classes read only the declared convention and the public
   structure of each parameter type. Every nominal travels by address, so a
   private representation change moves layout keys and never the ABI digest

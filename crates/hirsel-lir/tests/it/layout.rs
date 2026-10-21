@@ -2052,6 +2052,10 @@ fn layout_keys_depend_on_content_alone() {
         }
         let table = checked(b);
         let keys = hirsel_lir::LayoutKeys::new(&table);
+        for index in 0..table.layouts.len() {
+            let id = LayoutId(index as u32);
+            assert_eq!(hirsel_lir::LayoutKeys::rooted(&table, id), keys.key(id));
+        }
         let named: Vec<LayoutKey> = ids.iter().map(|id| keys.key(*id)).collect();
         (named, ids, table, keys)
     };

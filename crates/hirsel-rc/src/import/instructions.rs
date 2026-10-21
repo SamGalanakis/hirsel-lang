@@ -2,6 +2,13 @@ use super::*;
 use crate::PassError;
 
 impl Importer<'_> {
+    fn static_layout_key(&mut self, layout: LayoutId) -> hirsel_lir::layout_types::LayoutKey {
+        *self
+            .static_layout_keys
+            .entry(layout)
+            .or_insert_with(|| hirsel_lir::LayoutKeys::rooted(self.layouts.table(), layout))
+    }
+
     pub(super) fn destination_class(&self, d: &hirsel_types::Destination) -> R<DestinationClass> {
         use hirsel_types::Destination as D;
         Ok(match d {
@@ -1133,8 +1140,10 @@ impl Importer<'_> {
         {
             return Ok(None);
         }
-        let record = self.layouts.record(payload);
-        let Some(instance) = crate::statics::nullary_variant_instance(record, variant) else {
+        let key = self.static_layout_key(payload);
+        let Some(instance) =
+            crate::statics::nullary_variant_instance(self.layouts.record(payload), key, variant)
+        else {
             return Ok(None);
         };
         self.drop_place(field.value.place)?;
@@ -1172,7 +1181,7 @@ impl Importer<'_> {
                 LayoutKind::Block { payload } if payload == layout
             )
         {
-            let instance = empty_sequence_instance(self.layouts.record(layout));
+            let instance = self.static_layout_key(layout).0;
             let symbol = self.symbol(SymbolKind::Constant, &empty_sequence(), Some(instance));
             let result = self.fresh(ty);
             self.push(Inst::ReadStatic { result, symbol });

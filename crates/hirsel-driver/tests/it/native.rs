@@ -1258,3 +1258,65 @@ fn template_owners_and_objects_are_identical_at_one_and_eight_workers() {
         }
     });
 }
+
+#[test]
+fn intrinsic_static_objects_survive_unrelated_layouts_and_import_replay() {
+    use hirsel_driver::native::{self, Backend, OptLevel, Options, UnitObjects};
+    use hirsel_lir::objects::{NoObjects, SimObjects};
+    use std::sync::Arc;
+    with_compiler_stack(|| {
+        let source = "type Tree = Leaf | Branch(left: box Tree, right: box Tree)\nfn leaf()->box Tree { box Leaf() }\nfn empty()->List[(u64,u64)] { [] }\npub fn main()->Result[(),()] { let xs=empty(); let tree=leaf(); failure.check(list.len(xs)==0u64, Arithmetic()); Ok(()) }\n";
+        let compile =
+            |text: &str, store: Arc<dyn hirsel_lir::objects::ObjectStore>, backend, opt| {
+                let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+                let file = engine.sources.add("statics.hir", text.into()).unwrap();
+                let output = check_progress(&mut engine, file, &default_context()).unwrap();
+                assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+                let input = engine.export_native_input().unwrap();
+                let input = engine.import_native_input(input).unwrap();
+                let mut options = Options::new(x86());
+                options.objects = Some(UnitObjects {
+                    store,
+                    backend,
+                    opt,
+                    debug: false,
+                    fuel: false,
+                    jobs: hirsel_intern::jobs::Jobs::ONE,
+                });
+                native::build(&input, &options).unwrap()
+            };
+        let decoy = format!("fn aaa()->(bool,u32) {{ (true,0u32) }}\n{source}");
+        for (backend, opt) in [
+            (Backend::Cranelift, OptLevel::None),
+            (Backend::Llvm, OptLevel::None),
+            (Backend::Llvm, OptLevel::Default),
+        ] {
+            let a = compile(source, Arc::new(NoObjects), backend, opt);
+            let b = compile(&decoy, Arc::new(NoObjects), backend, opt);
+            let objects = |ready: &native::ReadyProgram| {
+                ready
+                    .summaries
+                    .iter()
+                    .zip(&ready.unit_objects.as_ref().unwrap().objects)
+                    .map(|(s, o)| ((s.definition.clone(), s.instance), o.clone()))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            };
+            let baseline = objects(&a);
+            let shifted = objects(&b);
+            for (key, object) in &baseline {
+                assert!(
+                    object == &shifted[key],
+                    "{backend:?} {opt:?}: {}: {:?} versus {:?}",
+                    key.0,
+                    object.imports,
+                    shifted[key].imports
+                );
+            }
+            let store = Arc::new(SimObjects::default());
+            compile(source, store.clone(), backend, opt);
+            let replay = compile(&decoy, store, backend, opt);
+            assert!(replay.unit_objects.as_ref().unwrap().hits > 0);
+            assert_eq!(objects(&replay), shifted, "{backend:?} {opt:?}: replay");
+        }
+    });
+}

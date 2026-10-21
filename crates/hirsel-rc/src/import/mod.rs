@@ -458,11 +458,6 @@ pub fn nullary_variant() -> DefPath {
     hirsel_syntax::DefPath::core("$intrinsic.NullaryVariant")
 }
 
-/// The instance of the static empty sequence of the payload `record`.
-fn empty_sequence_instance(record: &hirsel_lir::layout_types::LayoutRecord) -> ContentHash {
-    hirsel_lir::snapshot::digest("empty-sequence", record)
-}
-
 /// The static data of each constant the units read, once per constant, of
 /// each static empty sequence (its zero count, at its payload layout) and of
 /// each boxed nullary variant (its tag, at its payload layout).
@@ -519,7 +514,7 @@ fn statics(
         })
         .collect::<Vec<_>>();
     let nullary = nullary.into_values().map(|(symbol, payload)| {
-        crate::statics::nullary_variant(layouts.record(payload), symbol, payload).ok_or_else(|| {
+        crate::statics::nullary_variant(layouts.table(), symbol, payload).ok_or_else(|| {
             LowerError::Static(
                 nullary_variant(),
                 crate::statics::StaticError("a nullary variant its layout does not have".into()),
@@ -1128,6 +1123,7 @@ fn import_mapped(
         actuals,
         types,
         type_memo: HashMap::new(),
+        static_layout_keys: HashMap::new(),
         required,
         finalizer_memo: std::collections::HashSet::new(),
         out: Out::default(),
@@ -1234,6 +1230,9 @@ fn converged(used: &[Option<State>], entry: &[Option<State>]) -> bool {
 }
 
 struct Importer<'a> {
+    /// Payload layouts are complete before construction; later rows cannot
+    /// change their keys. Repeated empty constructions share this graph walk.
+    static_layout_keys: HashMap<LayoutId, hirsel_lir::layout_types::LayoutKey>,
     program: &'a Program,
     instances: &'a Instances,
     layouts: &'a mut dyn crate::library::builder::Layouts,

@@ -129,6 +129,29 @@ pub struct LayoutKeys {
 }
 
 impl LayoutKeys {
+    /// Key one completed layout and its reachable graph during planning, without
+    /// hashing unrelated rows. Uses the same SCC encoding as the finished table.
+    pub fn rooted(table: &LayoutTable, root: LayoutId) -> LayoutKey {
+        let keys = hirsel_graph::scc_keys(
+            &[root.0],
+            |n| {
+                table.layouts[n as usize]
+                    .references()
+                    .into_iter()
+                    .map(|id| id.0)
+                    .collect()
+            },
+            |n, w| {
+                let mut record = table.layouts[n as usize].clone();
+                record.for_each_reference_mut(&mut |id| *id = LayoutId(0));
+                w.bytes(b"hirsel.layout.v1");
+                w.bytes(&table.layout_version.to_le_bytes());
+                w.bytes(hirsel_codec::to_text(&record).as_bytes());
+            },
+        );
+        LayoutKey(keys[&root.0])
+    }
+
     /// Keys every layout of `table`.
     pub fn new(table: &LayoutTable) -> Self {
         let nodes: Vec<u32> = (0..table.layouts.len() as u32).collect();
