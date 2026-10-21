@@ -36,7 +36,7 @@ pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
 /// # Safety
 /// Admission only, with physical dispatch installed and before root start.
 /// The body uses only supported ordered boundaries and explicit dispatch end;
-/// no budgets, fuel, host or terminal effects. Native task tests
+/// no memory budgets, host or terminal effects. Native task tests
 /// use supported task/receive boundaries and dropless closure environments;
 /// no deadlines or host-bearing finalizers are admitted. Resource finalizers
 /// use only installed task/E/drop boundaries. Root releases are strict-head;
@@ -64,13 +64,130 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
         .insert(root, Held::empty());
     assert_eq!(driver.select(), vec![root]);
     scheduler(ctx).logical = Logical::Ordered(driver);
+    unsafe {
+        (*ctx)
+            .run_ref()
+            .ordered_mode
+            .store(true, std::sync::atomic::Ordering::Release)
+    };
 }
 
 fn empty() -> Stretch {
     Stretch::new(Budgets {
-        fuel: false,
+        fuel: true,
         memory: false,
     })
+}
+
+/// Switch-in/out run under the scheduler role. Leases belong to a task, never
+/// to its worker, and ordered fuel never comes out of the shared Free pool.
+/// These projections deliberately avoid scheduler(ctx): switch-out can be part
+/// of stop abandonment, where observing the requested stop would recurse.
+fn fuel_state(ctx: *mut TaskCtx) -> (TaskId, &'static mut Driver) {
+    // An outer compiled entry drops its temporary guard before raising a
+    // stop. Abandonment still needs exclusive policy access for switch-out.
+    // enter acquires the role without observing the run's stop word.
+    unsafe { super::super::role::enter(ctx) };
+    let s = unsafe {
+        (*(*(*ctx).run_ptr()).tasks.get())
+            .as_deref_mut()
+            .expect("an admitted ordered scheduler")
+    };
+    let index = unsafe { (*ctx).task_id };
+    let task = handle(index, s.task(index).generation);
+    let Logical::Ordered(driver) = &mut s.logical else {
+        panic!("ordered switch without an ordered policy")
+    };
+    (task, driver)
+}
+
+pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
+    let initial = unsafe { (*ctx).run_ref().fuel.remaining() };
+    let (task, driver) = fuel_state(ctx);
+    driver.enter(task, crate::pool::compute_index().unwrap_or(0));
+    let frontier = driver.frontier.as_mut().expect("restored fuel frontier");
+    if !driver.fuel_initialized {
+        frontier.settled.fuel = initial;
+        driver.fuel_initialized = true;
+    }
+    let fuel = driver
+        .stretches
+        .get(&task)
+        .map_or(0, Stretch::fuel_charges)
+        .saturating_add(frontier.logged_fuel(task));
+    let room = frontier.settled.fuel.saturating_sub(fuel);
+    let grant = room.min(crate::budget::FUEL_CHUNK);
+    driver.fuel_grants.insert(task, grant);
+    unsafe { (*ctx).heap().set_fuel(grant as i64) };
+}
+
+fn capture_fuel(ctx: *mut TaskCtx) {
+    let word = unsafe { (*ctx).view.compiled.fuel };
+    let remaining = word.max(0) as u64;
+    let (task, driver) = fuel_state(ctx);
+    let grant = driver
+        .fuel_grants
+        .insert(task, remaining)
+        .unwrap_or(remaining);
+    let consumed = grant
+        .saturating_sub(remaining)
+        .saturating_add(u64::from(word < 0));
+    if consumed != 0 {
+        driver
+            .stretches
+            .entry(task)
+            .or_insert_with(empty)
+            .fuel_points(consumed);
+    }
+    // A negative word denotes the failed point already counted above. Clear
+    // it before a pause, so saving this frame cannot charge that point twice.
+    if word < 0 {
+        unsafe { (*ctx).heap().set_fuel(0) };
+    }
+}
+
+pub(crate) fn fuel_out(ctx: *mut TaskCtx) {
+    capture_fuel(ctx);
+    let (task, driver) = fuel_state(ctx);
+    driver.fuel_grants.remove(&task);
+    unsafe { (*ctx).heap().set_fuel(0) };
+}
+
+fn stretch(ctx: *mut TaskCtx) -> Stretch {
+    capture_fuel(ctx);
+    let (task, driver) = fuel_state(ctx);
+    driver.stretches.remove(&task).unwrap_or_else(empty)
+}
+
+/// A refill is a physical budget boundary, never a semantic operation or poll.
+/// An exhausted younger segment waits for promotion before exposing its stop.
+pub(crate) fn fuel_refill(ctx: *mut TaskCtx) -> Stopped<()> {
+    capture_fuel(ctx);
+    advance(ctx)?;
+    let task = current(ctx);
+    let must_wait = {
+        let driver = driver(ctx);
+        let frontier = driver.frontier.as_ref().unwrap();
+        let consumed = frontier
+            .logged_fuel(task)
+            .saturating_add(driver.stretches.get(&task).map_or(0, Stretch::fuel_charges));
+        frontier.head() != Some(task) && consumed > frontier.settled.fuel
+    };
+    if must_wait {
+        at_head(ctx)?;
+    }
+    if driver(ctx).frontier.as_ref().unwrap().head() == Some(task) {
+        let before = stretch(ctx);
+        driver(ctx)
+            .frontier
+            .as_mut()
+            .unwrap()
+            .settled
+            .settle(&before)
+            .map_err(Stop::BudgetExceeded)?;
+    }
+    fuel_in(ctx);
+    Ok(())
 }
 
 /// All callbacks here are bounded internal object work. Objects::deferred
@@ -175,6 +292,15 @@ pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
     loop {
         advance(ctx)?;
         if driver(ctx).frontier.as_ref().unwrap().head() == Some(task) {
+            let before = stretch(ctx);
+            driver(ctx)
+                .frontier
+                .as_mut()
+                .unwrap()
+                .settled
+                .settle(&before)
+                .map_err(Stop::BudgetExceeded)?;
+            fuel_in(ctx);
             return Ok(());
         }
         suspend(ctx, task, true);
@@ -227,6 +353,7 @@ pub(super) fn head_effect<T>(
     at_head(ctx)?;
     let task = current(ctx);
     accepted(ctx, task, false);
+    let before = stretch(ctx);
     let mut result = None;
     let progress = with_frontier(ctx, |frontier, objects| {
         let mut backend = HeadEffect {
@@ -235,7 +362,7 @@ pub(super) fn head_effect<T>(
             result: &mut result,
         };
         frontier.apply_head(
-            empty(),
+            before,
             Command::Head { name }.operation(Footprint::default()),
             &mut backend,
         )
@@ -251,9 +378,10 @@ pub(super) fn head_continuation<T>(
     effect: impl FnOnce() -> (T, Next),
 ) -> Stopped<(T, Progress)> {
     at_head(ctx)?;
+    let before = stretch(ctx);
     let mut result = None;
     let progress = with_frontier(ctx, |frontier, backend| {
-        frontier.continue_head(empty(), backend, || {
+        frontier.continue_head(before, backend, || {
             let (value, next) = effect();
             result = Some(value);
             next
@@ -291,37 +419,40 @@ pub(super) fn submit(
 ) -> Stopped<Option<Returned>> {
     let task = current(ctx);
     driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
+    let mut before = stretch(ctx);
     loop {
         advance(ctx)?;
         let head = driver(ctx).frontier.as_ref().unwrap().head();
         if head == Some(task) {
             accepted(ctx, task, true);
             let progress =
-                with_frontier(ctx, |f, backend| f.apply_head(empty(), operation, backend))
+                with_frontier(ctx, |f, backend| f.apply_head(before, operation, backend))
                     .map_err(Stop::BudgetExceeded)?;
             if progress == Progress::Poll {
                 poll(ctx)?;
             }
             advance(ctx)?;
-            return Ok(Some(
-                driver(ctx)
-                    .returned
-                    .remove(&task)
-                    .expect("head outcome recorded"),
-            ));
+            let result = driver(ctx)
+                .returned
+                .remove(&task)
+                .expect("head outcome recorded");
+            fuel_in(ctx);
+            return Ok(Some(result));
         }
         let (offer, retained, result) = with_frontier(ctx, |f, backend| {
-            let (offer, retained) = f.offer(task, empty(), operation, backend);
+            let (offer, retained) = f.offer(task, before, operation, backend);
             let result = (offer == Offer::Early).then(|| f.early_result(task).unwrap().returned());
             (offer, retained, result)
         });
         match offer {
             Offer::Early => {
                 accepted(ctx, task, false);
+                fuel_in(ctx);
                 return Ok(result);
             }
             Offer::Logged => {
                 accepted(ctx, task, false);
+                fuel_in(ctx);
                 return Ok(None);
             }
             Offer::Pending => {
@@ -330,12 +461,13 @@ pub(super) fn submit(
                     suspend(ctx, task, false);
                     advance(ctx)?;
                     if let Some(returned) = driver(ctx).returned.remove(&task) {
+                        fuel_in(ctx);
                         return Ok(Some(returned));
                     }
                 }
             }
             Offer::Full => {
-                operation = retained.expect("unaccepted command retained").1;
+                (before, operation) = retained.expect("unaccepted command retained");
                 suspend(ctx, task, true);
             }
             Offer::Stopped => return Err(Stop::Failed),
@@ -674,6 +806,365 @@ pub(crate) unsafe fn mutex_cause(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    unsafe fn charge(ctx: *mut TaskCtx) {
+        unsafe {
+            (*ctx).view.compiled.fuel -= 1;
+            if (*ctx).view.compiled.fuel < 0 {
+                crate::budget::hirsel_rt_v2_fuel_refill(ctx);
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct FuelOrder {
+        start: std::sync::atomic::AtomicBool,
+        older_retired: std::sync::atomic::AtomicBool,
+        younger_passed: std::sync::atomic::AtomicBool,
+        younger: std::sync::atomic::AtomicU64,
+    }
+
+    unsafe extern "C" fn fuel_child(
+        ctx: *mut TaskCtx,
+        environment: *mut crate::Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        use super::super::super::*;
+        use std::sync::atomic::Ordering;
+        let [probe, mode, atomic] =
+            unsafe { crate::alloc::payload(environment).cast::<[u64; 3]>().read() };
+        let probe = unsafe { &*(probe as *const FuelOrder) };
+        if mode == 0 {
+            while !probe.start.load(Ordering::Acquire) {
+                let mut cause = 0;
+                assert_eq!(
+                    unsafe { hirsel_rt_v2_task_canceled(ctx, &mut cause, &0) },
+                    0
+                );
+            }
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let id = probe.younger.load(Ordering::Acquire);
+                let paused = {
+                    let _role = unsafe { role::Guard::new(ctx) };
+                    id != 0 && driver(ctx).head_paused(id)
+                };
+                if paused {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < until,
+                    "younger exhausted segment did not save"
+                );
+                std::thread::yield_now();
+            }
+            assert!(!probe.younger_passed.load(Ordering::Acquire));
+            unsafe { charge(ctx) };
+            let _role = unsafe { role::Guard::new(ctx) };
+            let value = 7u64;
+            assert_eq!(
+                unsafe { hirsel_rt_v2_atomic_store(ctx, &atomic, (&raw const value).cast(), 8) },
+                0
+            );
+            assert!(driver(ctx).frontier.as_ref().unwrap().settled.fuel <= 19);
+            probe.older_retired.store(true, Ordering::Release);
+        } else {
+            {
+                let _role = unsafe { role::Guard::new(ctx) };
+                probe.younger.store(current(ctx), Ordering::Release);
+            }
+            let remaining = if mode == 2 {
+                for _ in 0..5 {
+                    unsafe { charge(ctx) };
+                }
+                let value = 3u64;
+                assert_eq!(
+                    unsafe {
+                        hirsel_rt_v2_atomic_store(ctx, &atomic, (&raw const value).cast(), 8)
+                    },
+                    0
+                );
+                16
+            } else {
+                21
+            };
+            // Include fuel in earlier logged turns when bounding this segment.
+            // Without that term the logged variant would return past point21.
+            for _ in 0..remaining {
+                unsafe { charge(ctx) };
+            }
+            probe.younger_passed.store(true, Ordering::Release);
+            panic!("the younger's exhausted point must stop at promotion");
+        }
+        let mut result = [1u64, 0];
+        assert_eq!(
+            unsafe {
+                hirsel_rt_v2_task_finish(
+                    ctx,
+                    result.as_mut_ptr().cast(),
+                    [0u64; 2].as_ptr().cast(),
+                    16,
+                )
+            },
+            0
+        );
+        0
+    }
+
+    #[test]
+    fn ordered_native_younger_fuel_exhaustion_waits_for_the_older_retiring_turn() {
+        use super::super::super::*;
+        use hirsel_core_contract::handle_scan::TYPED_HANDLE;
+        use std::sync::{Arc, atomic::Ordering};
+        for (width, logged) in [2, 4, 8]
+            .into_iter()
+            .flat_map(|width| [(width, false), (width, true)])
+        {
+            let probe = Arc::new(FuelOrder::default());
+            let seen = probe.clone();
+            let scan = [TYPED_HANDLE, 16, Kind::Atomic.code(), 2, 0, 0, 0, 0];
+            let environment = crate::Layout {
+                scan: scan.as_ptr(),
+                scan_words: scan.len() as u64,
+                ..image_layout(24)
+            };
+            let layouts = [&environment as *const crate::Layout];
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            run.fuel = Some(20);
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe { enable(ctx, Policy::admit(&Default::default(), None)) },
+                move |ctx| unsafe {
+                    let mut scope = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                        0
+                    );
+                    let mut atomic = 0;
+                    let zero = 0u64;
+                    assert_eq!(
+                        hirsel_rt_v2_atomic_create(
+                            ctx,
+                            std::ptr::null_mut(),
+                            &mut atomic,
+                            (&raw const zero).cast(),
+                            8
+                        ),
+                        0
+                    );
+                    let mut last_child = 0;
+                    for mode in [0, if logged { 2 } else { 1 }] {
+                        let environment = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            24,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(environment)
+                            .cast::<[u64; 3]>()
+                            .write([Arc::as_ptr(&seen) as u64, mode, atomic]);
+                        if mode != 0 {
+                            seen.start.store(true, Ordering::Release);
+                        }
+                        let mut child = 0;
+                        // Spawn may suspend, so publish the younger id from its own entry
+                        // instead of retaining a spawner-side table reference.
+                        assert_eq!(
+                            hirsel_rt_v2_task_spawn(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut child,
+                                &scope,
+                                fuel_child,
+                                environment
+                            ),
+                            0
+                        );
+                        last_child = child;
+                    }
+                    let mut result = [0u64; 2];
+                    assert_eq!(
+                        hirsel_rt_v2_task_join(
+                            ctx,
+                            0,
+                            0,
+                            &scope,
+                            &mut last_child,
+                            result.as_mut_ptr().cast(),
+                            16
+                        ),
+                        0
+                    );
+                    panic!("the younger stop must precede root continuation");
+                },
+            );
+            assert_eq!(
+                outcome.ended,
+                Err(Stop::BudgetExceeded(hirsel_run_schema::BudgetKind::Fuel))
+            );
+            assert!(probe.older_retired.load(Ordering::Acquire));
+            assert!(!probe.younger_passed.load(Ordering::Acquire));
+        }
+    }
+
+    #[test]
+    fn ordered_native_pure_fuel_loop_observes_external_stop_without_reentering_abandonment() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        for width in [2, 8] {
+            let started = Arc::new(AtomicBool::new(false));
+            let seen = started.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            unsafe { run.use_physical_dispatch() };
+            let control = run.control();
+            let stopper = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while !started.load(Ordering::Acquire) {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "ordered loop did not start"
+                    );
+                    std::thread::yield_now();
+                }
+                control.stop();
+            });
+            let outcome = run.run(
+                |ctx| unsafe { enable(ctx, Policy::admit(&Default::default(), None)) },
+                move |ctx| {
+                    seen.store(true, Ordering::Release);
+                    loop {
+                        unsafe { charge(ctx) };
+                    }
+                },
+            );
+            stopper.join().unwrap();
+            assert_eq!(outcome.ended, Err(Stop::Requested));
+        }
+    }
+
+    #[test]
+    fn ordered_native_fuel_exhaustion_is_exact_across_chunks_and_worker_widths() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        };
+        for width in [2, 4, 8] {
+            for limit in [
+                0,
+                1,
+                crate::budget::FUEL_CHUNK,
+                crate::budget::FUEL_CHUNK + 3,
+            ] {
+                let charged = Arc::new(AtomicU64::new(0));
+                let seen = charged.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.fuel = Some(limit);
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe { enable(ctx, Policy::admit(&Default::default(), None)) },
+                    move |ctx| loop {
+                        unsafe { charge(ctx) };
+                        seen.fetch_add(1, Ordering::Relaxed);
+                    },
+                );
+                assert_eq!(
+                    outcome.ended,
+                    Err(Stop::BudgetExceeded(hirsel_run_schema::BudgetKind::Fuel))
+                );
+                assert_eq!(
+                    charged.load(Ordering::Relaxed),
+                    limit,
+                    "width {width}, limit {limit}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_native_boundaries_settle_partial_chunks_without_fuel_operations_or_polls() {
+        for width in [2, 4, 8] {
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.fuel = Some(11);
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe { enable(ctx, Policy::admit(&Default::default(), None)) },
+                |ctx| unsafe {
+                    let mut word = 0;
+                    let zero = 0u64;
+                    assert_eq!(
+                        crate::tasks::hirsel_rt_v2_atomic_create(
+                            ctx,
+                            std::ptr::null_mut(),
+                            &mut word,
+                            (&raw const zero).cast(),
+                            8
+                        ),
+                        0
+                    );
+                    for consumed in [3, 8] {
+                        for _ in 0..consumed {
+                            charge(ctx);
+                        }
+                        let value = consumed;
+                        assert_eq!(
+                            crate::tasks::hirsel_rt_v2_atomic_store(
+                                ctx,
+                                &word,
+                                (&raw const value).cast(),
+                                8
+                            ),
+                            0
+                        );
+                        let _role = crate::tasks::role::Guard::new(ctx);
+                        let driver = driver(ctx);
+                        let frontier = driver.frontier.as_ref().unwrap();
+                        assert_eq!(frontier.settled.fuel, if consumed == 3 { 8 } else { 0 });
+                        assert_eq!(frontier.retired(), if consumed == 3 { 2 } else { 3 });
+                        assert_eq!(driver.recorded[&current(ctx)], frontier.retired());
+                    }
+                    charge(ctx);
+                    panic!("the twelfth point must stop");
+                },
+            );
+            assert_eq!(
+                outcome.ended,
+                Err(Stop::BudgetExceeded(hirsel_run_schema::BudgetKind::Fuel))
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_unbounded_native_fuel_refills_preserve_semantic_ordinals() {
+        let mut run = crate::host::BodyRun::new(4, true);
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe { enable(ctx, Policy::admit(&Default::default(), None)) },
+            |ctx| unsafe {
+                for _ in 0..(3 * crate::budget::FUEL_CHUNK + 5) {
+                    charge(ctx);
+                }
+                let _role = crate::tasks::role::Guard::new(ctx);
+                let task = current(ctx);
+                let driver = driver(ctx);
+                assert_eq!(driver.frontier.as_ref().unwrap().settled.fuel, u64::MAX);
+                assert_eq!(driver.frontier.as_ref().unwrap().retired(), 0);
+                assert!(driver.submitted.is_empty());
+                assert!(driver.recorded.is_empty());
+                driver.finishing(task);
+                0
+            },
+        );
+        assert_eq!(outcome.ended, Ok(0));
+    }
 
     fn image_layout(size: u64) -> crate::Layout {
         crate::Layout {

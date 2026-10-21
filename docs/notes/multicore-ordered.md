@@ -181,6 +181,24 @@ The remaining native boundaries, budget hooks and production admission still
 need installation. These controls are not a parallel ordered
 corpus or speed gate.
 
+Native ordered fuel now uses task-owned grants and real stretches. Switch-in
+claims physical dispatch even for a task that reaches only fuel points; switch-out
+captures consumed fuel before clearing the compiled word. It never leases fuel
+from the shared Free pool. Operation boundaries attach consumed points to their
+owned logs, retained full-log commands keep their original stretches, and head
+promotion settles the preceding segment before granting further fuel. Refills
+and physical pauses add no semantic operation or readiness poll. A younger task
+whose own logged and segment fuel exceed the settled remainder saves its frame
+until promotion, so an older turn's effects retire before the fuel stop.
+Switch accounting raw-projects policy under the role without observing stops;
+the compiled refill entry drops its temporary guard before reporting its result.
+This also permits external-stop abandonment without recursively entering the
+stop path. Tests cover exact exhaustion at widths 2/4/8, partial chunks, multiple
+unbounded refills, external stops, and younger exhaustion with and without fuel
+in earlier logged turns. Memory preflight, positional credit events and the
+combined memory/fuel native gate remain unfinished. Allocation allowance pauses
+must precede any worker-heap or region-pool borrow.
+
 ## Integration status
 
 This is a protocol and guarded migration substrate, not an enabled concurrent

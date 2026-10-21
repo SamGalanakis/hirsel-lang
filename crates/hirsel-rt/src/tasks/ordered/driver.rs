@@ -36,6 +36,9 @@ pub(crate) struct Driver {
     pub(super) waiting: BTreeMap<TaskId, u64>,
     pub(super) returned: BTreeMap<TaskId, super::Returned>,
     pub(super) host_poll: bool,
+    pub(super) fuel_initialized: bool,
+    pub(super) fuel_grants: BTreeMap<TaskId, u64>,
+    pub(super) stretches: BTreeMap<TaskId, crate::budget::stretch::Stretch>,
     /// A park/holding/end boundary cannot poll slots before its physical save.
     poll_after_save: Option<TaskId>,
     return_after_save: Option<TaskId>,
@@ -55,6 +58,9 @@ impl Driver {
             waiting: BTreeMap::new(),
             returned: BTreeMap::new(),
             host_poll: false,
+            fuel_initialized: false,
+            fuel_grants: BTreeMap::new(),
+            stretches: BTreeMap::new(),
             poll_after_save: None,
             return_after_save: None,
             carriers: BTreeMap::new(),
@@ -169,6 +175,11 @@ impl Driver {
         let execution = self.execution.get_mut(&task).expect("a live task");
         assert_eq!(*execution, Execution::Running);
         *execution = Execution::Finishing;
+    }
+
+    #[cfg(test)]
+    pub(super) fn head_paused(&self, task: TaskId) -> bool {
+        self.execution.get(&task) == Some(&Execution::Saved { head_only: true })
     }
 
     /// Only the generic idle callback calls this, after publishing physical

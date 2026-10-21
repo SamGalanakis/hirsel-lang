@@ -160,6 +160,10 @@ impl FuelPool {
     pub(crate) fn active(&self) -> bool {
         self.active.load(Ordering::Relaxed)
     }
+    /// Admission snapshot before an ordered driver leases any compiled fuel.
+    pub(crate) fn remaining(&self) -> u64 {
+        self.left.load(Ordering::Relaxed)
+    }
     /// A task that stops running returns only its own unspent points. The
     /// release/acquire run-token handoff publishes its updated fuel word.
     pub(crate) fn put(&self, points: u64) {
@@ -254,6 +258,14 @@ fn exceeded(kind: BudgetKind) -> ! {
 /// `ctx` is the running context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_fuel_refill(ctx: *mut TaskCtx) {
+    if unsafe { (*ctx).run_ref().ordered_mode.load(Ordering::Acquire) } {
+        let result = crate::stop::observe(ctx).and_then(|()| {
+            let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+            crate::tasks::ordered::engine::fuel_refill(ctx)
+        });
+        unsafe { crate::stop::check(ctx, result) };
+        return;
+    }
     // SAFETY: caller contract.
     let ctx = unsafe { &mut *ctx };
     // A refill is where a loop without runtime entries sees its run's stop (design §6 Stops).

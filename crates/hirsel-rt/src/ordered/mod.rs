@@ -307,6 +307,13 @@ impl<P, R> Frontier<P, R> {
         self.physical -= bytes;
     }
 
+    /// Fuel already consumed in this task's logged future turns.
+    pub(crate) fn logged_fuel(&self, task: TaskId) -> u64 {
+        self.tasks[&task].log.iter().fold(0, |fuel, entry| {
+            fuel.saturating_add(entry.before.fuel_charges())
+        })
+    }
+
     /// All four rules. Rule 4 is the Backend's pending/publish contract.
     pub fn eligible(&self, task: TaskId, operation: &Operation<P>) -> bool {
         let row = &self.tasks[&task];

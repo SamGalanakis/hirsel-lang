@@ -270,6 +270,8 @@ pub(crate) struct RunShared {
     pub(crate) free: RoleCell<Option<Box<crate::free::Free>>>,
     /// The admitted tasks.free@1 policy, independently of recording.
     pub(crate) free_mode: bool,
+    /// Published at ordered admission, read without borrowing policy state.
+    pub(crate) ordered_mode: std::sync::atomic::AtomicBool,
     /// The exact counts of roots past the finite maximum (`crate::roots`).
     pub(crate) root_overflow: crate::roots::Overflow,
     /// Every worker's heap, until the run ends (`crate::heaps`).
@@ -398,7 +400,13 @@ impl TaskCtx {
         // SAFETY: caller contract.
         unsafe {
             TaskCtx::attach(ctx, worker);
-            if crate::pool::wide((*ctx).run_ref()) && (*ctx).run_ref().fuel.active() {
+            if (*ctx)
+                .run_ref()
+                .ordered_mode
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                crate::tasks::ordered::engine::fuel_in(ctx);
+            } else if crate::pool::wide((*ctx).run_ref()) && (*ctx).run_ref().fuel.active() {
                 let chunk = (*ctx).run_ref().fuel.take();
                 (*ctx).heap().set_fuel(chunk as i64);
             }
@@ -436,7 +444,13 @@ impl TaskCtx {
     /// worker, and it keeps the thread's foreign scope until it is switched in again.
     #[inline(never)]
     pub(crate) fn switch_out(&mut self) {
-        if crate::pool::wide(self.run_ref()) && self.run_ref().fuel.active() {
+        if self
+            .run_ref()
+            .ordered_mode
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            crate::tasks::ordered::engine::fuel_out(self);
+        } else if crate::pool::wide(self.run_ref()) && self.run_ref().fuel.active() {
             let points = self.view.compiled.fuel.max(0) as u64;
             self.run_ref().fuel.put(points);
             self.heap().set_fuel(0);
@@ -801,6 +815,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         schedule: Default::default(),
         free: RoleCell::new(None),
         free_mode: false,
+        ordered_mode: Default::default(),
         root_overflow: Default::default(),
         heaps,
         fuel: Default::default(),

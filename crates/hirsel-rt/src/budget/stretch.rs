@@ -76,7 +76,17 @@ impl Stretch {
     }
     /// One fuel charge.
     pub fn fuel(&mut self) {
-        self.piece().fuel += 1;
+        self.fuel_points(1);
+    }
+    /// Owner-local compiled chunks report their consumed points in one batch.
+    pub fn fuel_points(&mut self, points: u64) {
+        let piece = self.piece();
+        piece.fuel = piece.fuel.saturating_add(points);
+    }
+    pub fn fuel_charges(&self) -> u64 {
+        self.pieces
+            .iter()
+            .fold(0, |total, (_, piece)| total.saturating_add(piece.fuel))
     }
     /// An allocation of `bytes`.
     pub fn alloc(&mut self, bytes: u64) -> Result<(), Pause> {
