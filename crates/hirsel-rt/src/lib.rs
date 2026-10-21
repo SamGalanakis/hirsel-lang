@@ -76,6 +76,7 @@ mod fiber;
 pub mod finalize;
 pub mod foreign;
 mod free;
+pub mod free_driver;
 mod heaps;
 pub mod host;
 #[cfg(feature = "measurement")]

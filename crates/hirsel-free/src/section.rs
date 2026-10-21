@@ -140,6 +140,16 @@ impl Gate {
     /// Open a section on `slot`, waiting out a flush's cut. The caller is the only thread
     /// using `slot` and is not already in a section on it.
     pub fn enter(&self, slot: usize) -> Result<Section<'_>, Stopped> {
+        self.enter_counted(slot, None)
+    }
+
+    /// Optionally count only time spent waiting for a closed cut. Ordinary
+    /// sections read no clock and perform no metric atomic operation.
+    pub fn enter_counted(
+        &self,
+        slot: usize,
+        pause_ns: Option<&AtomicU64>,
+    ) -> Result<Section<'_>, Stopped> {
         let active = &self.slots[slot].active;
         loop {
             sc_store(active, 1);
@@ -147,8 +157,10 @@ impl Gate {
                 return Ok(Section { gate: self, slot });
             }
             active.store(0, Ordering::Release);
+            let waiting = pause_ns.map(|_| std::time::Instant::now());
             loop {
                 if self.stopped.load(Ordering::Acquire) {
+                    add_pause(pause_ns, waiting);
                     return Err(Stopped);
                 }
                 if sc_load(&self.cut) == 0 {
@@ -156,6 +168,7 @@ impl Gate {
                 }
                 relax();
             }
+            add_pause(pause_ns, waiting);
         }
     }
 
@@ -194,6 +207,13 @@ impl Gate {
             known,
             stop,
         }
+    }
+}
+
+fn add_pause(counter: Option<&AtomicU64>, started: Option<std::time::Instant>) {
+    if let (Some(counter), Some(started)) = (counter, started) {
+        let ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        counter.fetch_add(ns, Ordering::Relaxed);
     }
 }
 

@@ -33,6 +33,7 @@ the license named in its row; the license texts follow once each.
 | Effect | Schedule delay composition and exponential/Fibonacci timestamp vectors, adapted to explicit capabilities | `stdlib/std@1/schedule.hir`, schedule conformance | Effect-TS/effect `e95695057b2446d5bc4de81bac0a77ef49d7a4c0` | MIT (Copyright (c) 2023 Effectful Technologies Inc) |
 | cenkalti/backoff | Retry classification, elapsed budget and capped exponential vectors | `stdlib/std@1/schedule.hir`, schedule conformance | cenkalti/backoff `6f228bfdb51209aa375869feb27dcede4fa0db06` | MIT (Copyright (c) 2014 Cenk Altı) |
 | Rust backoff | Elapsed stop regression and exponential vectors | schedule conformance | ihrwein/backoff `587e2da8fb2dcfc65ca544cb9249022c51f1406e` | MIT (Copyright (c) 2016 Tibor Benke <ihrwein@gmail.com>) |
+| mio | Epoll driver and eventfd waker | `crates/hirsel-rt/src/free_driver.rs` | tokio-rs/mio `a88e5e119172e4fb1638926faf65a4fe889e05b1` | MIT (Copyright (c) 2014 Carl Lerche) |
 | Tokio | Packed-head worker deque, steal-half and overflow protocol; task wake state and cooperative/LIFO budgets | `crates/hirsel-free/src/{queue,schedule}.rs` | tokio-rs/tokio `ce685ee6916549ed7e52dbfd5430858bbdc734d3` | MIT (Copyright (c) Tokio Contributors) |
 | tokio-retry | Saturating delay growth and Fibonacci/cap vectors | `stdlib/std@1/schedule.hir`, schedule conformance | srijs/rust-tokio-retry `69a8766aaead1190c2a305937d45740d6c2d9b33` | MIT (Copyright (c) 2017 Sam Rijs) |
 | OpenTelemetry Rust | trace-context extraction/injection validation vectors, adapted to strict W3C wire v00 and explicit malformed-state errors | `conformance/SEM/SEM-3-telemetry-context-run.hir` | open-telemetry/opentelemetry-rust `fb6b53566815062f6be838d49cbea77019669d6f` | Apache-2.0 |
@@ -310,6 +311,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - Protocol Buffers: Copyright 2008 Google Inc. All rights reserved.
 - protobuf-go: Copyright (c) 2018 The Go Authors. All rights reserved.
 - imara-diff: Copyright (c) Pascal Kuthe and imara-diff contributors
+- mio: Copyright (c) 2014 Carl Lerche
 - Tokio: Copyright (c) Tokio Contributors
 - prost: Copyright Dan Burkert and Tokio contributors
 - grpc-go, tonic interop protos and helloworld.proto: Copyright 2014-2019 gRPC authors
