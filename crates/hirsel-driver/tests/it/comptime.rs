@@ -2030,3 +2030,179 @@ fn compact_lowering_prefix_preserves_all_output_facts_and_barriers() {
         }
     });
 }
+
+#[test]
+fn frozen_s1_prefix_resident_and_second_process_store_equal_cold_after_edits() {
+    use std::{path::PathBuf, sync::Arc};
+    fn run(
+        engine: &mut QueryEngine,
+        source: &str,
+        jobs: usize,
+        limit: usize,
+        verify: Verify,
+        manifest: u8,
+        require_restore: bool,
+    ) -> String {
+        engine.verify = verify;
+        engine.comptime_limits.call_depth = limit;
+        engine.environment.package_manifest_hash =
+            hirsel_syntax::ContentHash::of_bytes(&[manifest]);
+        let file = engine.sources.add("comptime.hir", source.into()).unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        // This ordinary helper is a real persisted P hit before the S1 demand.
+        let _ = engine.mode_definition(&path("plain"));
+        if require_restore {
+            assert_eq!(
+                engine.recompute_count(&path("plain"), QueryKind::Check),
+                0,
+                "child must restore the persisted helper before S1 expansion"
+            );
+        }
+        let outcomes = engine.lower_definition_prefix(
+            vec![path("A"), path("B"), path("A")],
+            hirsel_intern::jobs::Jobs::new(jobs),
+        );
+        let mut transcript = String::new();
+        for outcome in outcomes {
+            transcript.push_str(&format!(
+                "{:?}\n{:?}\n",
+                lowering_text(engine, outcome.result),
+                outcome.phase
+            ));
+            transcript.push_str(&placed_evidence(
+                &engine.sources,
+                format!(
+                    "{:?}\n{:?}\n{:?}\n",
+                    outcome.limit, outcome.depth, outcome.reads
+                ),
+            ));
+        }
+        transcript
+    }
+    if let Some(root) = std::env::var_os("HIRSEL_S1_O2_ROOT") {
+        let root = PathBuf::from(root);
+        let jobs: usize = std::env::var("HIRSEL_S1_O2_JOBS").unwrap().parse().unwrap();
+        let source = std::fs::read_to_string(root.join("source.hir")).unwrap();
+        let settings: Vec<usize> = std::fs::read_to_string(root.join("settings"))
+            .unwrap()
+            .split_whitespace()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        let output = with_compiler_stack(|| {
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+                .with_config(CompileConfig {
+                    store: Arc::new(store::DirStore::new(root.join("store"))),
+                    retention: memo::Retention::Resident,
+                    hold_bytes: 0,
+                    ..CompileConfig::for_memory_cap(None)
+                });
+            let output = run(
+                &mut engine,
+                &source,
+                jobs,
+                settings[0],
+                if settings[1] == 0 {
+                    Verify::Off
+                } else {
+                    Verify::On
+                },
+                settings[2] as u8,
+                settings[3] == 0,
+            );
+            output
+        });
+        std::fs::write(root.join(format!("output-{jobs}")), output).unwrap();
+        return;
+    }
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        let root = &fixture.0;
+        let base = "pub opaque type Hidden:plain uses {}{value:u64}\nconst LEAF:u64=7\nfn plain()->u64{LEAF}\nfn private(v:Hidden)->u64{v.value}\nfn body_text()->String{\"fn(v:standalone@0/Hidden)->u64 uses {}{12}\"}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String]{Ok(codegen.body(body_text()))}\nfn width[T](v:T)->u64 uses {}=comptime gen(shape(T))\nfn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime plain()+private(Hidden(value:1))\nconst B:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)+width(Hidden(value:1))}\n";
+        let edits = [
+            (base.to_owned(), 8, Verify::On, 0),
+            (base.replace("LEAF:u64=7", "LEAF:u64=23"), 8, Verify::On, 0),
+            (base.replace("uses {}{12}", "uses {}{19}"), 8, Verify::On, 0),
+            (
+                base.replace("fn plain()->u64", "fn plain()->u32"),
+                8,
+                Verify::On,
+                0,
+            ),
+            (base.replace("value:u64", "value:u32"), 8, Verify::On, 0),
+            (format!("fn earlier_item(){{}}\n{base}"), 8, Verify::On, 0),
+            (base.replace("{LEAF}", "{absent}"), 8, Verify::On, 0),
+            (
+                format!("{base}\nfn plain()->u64{{LEAF}}\n"),
+                8,
+                Verify::On,
+                0,
+            ),
+            (base.to_owned(), 2, Verify::On, 0),
+            (base.to_owned(), 8, Verify::Off, 0),
+            (base.to_owned(), 8, Verify::On, 0),
+            (base.to_owned(), 8, Verify::On, 1),
+            (base.to_owned(), 8, Verify::On, 0),
+        ];
+        let mut resident = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_config(CompileConfig {
+                store: Arc::new(store::DirStore::new(root.join("store"))),
+                retention: memo::Retention::Resident,
+                hold_bytes: 0,
+                ..CompileConfig::for_memory_cap(None)
+            });
+        for (revision, (source, limit, verify, manifest)) in edits.into_iter().enumerate() {
+            let mut cold = QueryEngine::new(default_environment(), compiler_adapters())
+                .with_config(CompileConfig {
+                    store: Arc::new(store::NoneStore),
+                    retention: memo::Retention::Resident,
+                    hold_bytes: 0,
+                    ..CompileConfig::for_memory_cap(None)
+                });
+            let expected = run(&mut cold, &source, 1, limit, verify, manifest, false);
+            if revision == 0 {
+                assert_eq!(
+                    expected
+                        .lines()
+                        .filter(|line| line.starts_with("Ok("))
+                        .count(),
+                    3,
+                    "base fixture must accept all three requested roots: {expected}"
+                );
+            }
+            let actual = run(&mut resident, &source, 8, limit, verify, manifest, false);
+            assert_eq!(actual, expected, "resident revision={revision}");
+            std::fs::write(root.join("source.hir"), &source).unwrap();
+            std::fs::write(
+                root.join("settings"),
+                format!(
+                    "{limit} {} {manifest} {revision}",
+                    if verify == Verify::Off { 0 } else { 1 }
+                ),
+            )
+            .unwrap();
+            for jobs in [1, 2, 8] {
+                let child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["comptime::frozen_s1_prefix_resident_and_second_process_store_equal_cold_after_edits", "--exact", "--nocapture", "--test-threads=1"])
+                    .env("HIRSEL_S1_O2_ROOT", root).env("HIRSEL_S1_O2_JOBS", jobs.to_string()).output().unwrap();
+                assert!(
+                    child.status.success(),
+                    "revision={revision} jobs={jobs}\n{}\n{}",
+                    String::from_utf8_lossy(&child.stdout),
+                    String::from_utf8_lossy(&child.stderr)
+                );
+                let actual = std::fs::read_to_string(root.join(format!("output-{jobs}"))).unwrap();
+                assert_eq!(
+                    actual, expected,
+                    "second-process revision={revision} jobs={jobs}"
+                );
+            }
+        }
+        assert!(
+            std::fs::read_dir(root.join("store"))
+                .unwrap()
+                .next()
+                .is_some(),
+            "the oracle must exercise durable products"
+        );
+    });
+}
