@@ -1,4 +1,6 @@
 use crate::*;
+mod front;
+pub(crate) use front::FrontProducts;
 use hirsel_syntax::PackageId;
 use std::{io, path::Path};
 
@@ -346,7 +348,7 @@ fn mode_frontier(
     let (owners, definitions): (Vec<_>, Vec<_>) = std::mem::take(pending).into_iter().unzip();
     for (owner, mode) in owners
         .into_iter()
-        .zip(engine.mode_definitions(definitions, jobs))
+        .zip(engine.front_definitions(definitions, jobs))
     {
         let check = &mut checks[owner];
         if check.stopped.is_some() {
@@ -488,7 +490,7 @@ pub(crate) fn check_files(
                     engine.lowers_at_check(definition, LoweringPolicy::Comptime)
                 });
             for definition in comptime {
-                diagnostics.extend(engine.lower_to_tir(&definition)?.diagnostics);
+                diagnostics.extend(engine.front_lower(&definition)?);
             }
             // CT-5: each instance a body selects is generated and checked here.
             let roots = parsed
@@ -498,7 +500,7 @@ pub(crate) fn check_files(
             match engine.select_generated_instances(roots) {
                 Ok(instances) => {
                     for instance in instances {
-                        diagnostics.extend(engine.lower_to_tir(&instance)?.diagnostics);
+                        diagnostics.extend(engine.front_lower(&instance)?);
                     }
                 }
                 Err(QueryError::Diagnostics(errors)) => diagnostics.extend(errors),
@@ -516,7 +518,7 @@ pub(crate) fn check_files(
         let completed = check.step(engine, |engine, _, diagnostics| {
             if lowering == LoweringPolicy::Reachable {
                 for definition in rest {
-                    diagnostics.extend(engine.lower_to_tir(&definition)?.diagnostics);
+                    diagnostics.extend(engine.front_lower(&definition)?);
                 }
             }
             Ok(())

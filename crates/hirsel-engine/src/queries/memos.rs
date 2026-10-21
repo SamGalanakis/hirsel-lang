@@ -805,6 +805,7 @@ impl QueryEngine {
 
     /// Forgets one memo from its table and the graph.
     pub(crate) fn forget(&mut self, key: &MemoKey) {
+        self.front_products.forget(key);
         self.graph.remove(key);
         match key.kind {
             QueryKind::Signature => {

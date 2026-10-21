@@ -819,8 +819,11 @@ Publication records resolve/check/modes memos in DefPath order, while returned
 share one task. Current-source citation inputs are borrowed separately from the
 body-stable signature snapshot. A generator drains the preceding source frontier
 and uses the existing exclusive S1 path before a new frontier is frozen.
-This front API does not yet provide parallel S1 execution, budgeted body holds,
-or incremental program diagnostic aggregation.
+This front API does not yet provide parallel S1 execution or budgeted body holds.
+Program checking retains body-free outcomes and lowering diagnostics, refreshing
+changed owners and actual reverse subscribers through the same P implementation.
+Generator drains and per-file operational gates remain in source order. GEN-5
+retains keyed checked inputs separately from final-mode selection summaries.
 
 Published summaries keep GEN-5's pre-mode checked summary and growth separately
 from the final mode-refined selection input. Batch publication retains both
@@ -866,3 +869,11 @@ provenance at completion, before subsequent serial generators can change the
 signature context. Compact publication consumes those captured products without
 asking the body query again. Error entries carry no body and retain their
 subscriptions; transient failures remain retryable.
+
+The frozen signature universe retains weak references to its producing memos.
+When extending a universe, unchanged rows are copied from the prior immutable
+snapshot only while their exact producer remains current, coherent and unmarked.
+Replaced or invalidated producers take ordinary signature demand; private views
+are always selected again from the current owner representation. Snapshot reuse
+never changes the memo touch counter. Compact program products have a separate
+heap-accounting row and are retired by pending generation-stamped changes.

@@ -751,3 +751,142 @@ fn compact_front_results_preserve_diagnostics_after_batch_body_release() {
         }
     });
 }
+
+#[test]
+fn compact_program_front_refreshes_only_changed_definitions_and_signature_subscribers() {
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        let source = fixture.0.join("main.hir");
+        let mut text = String::from(
+            "fn leaf(x:u8) -> u8 { x }\nfn caller() -> u8 { leaf(1u8) }\nfn main() {}\n",
+        );
+        for i in 0..512 {
+            text.push_str(&format!("fn unrelated{i}() -> u8 {{ 1u8 }}\n"));
+        }
+        std::fs::write(&source, &text).unwrap();
+        let mut session = session::Session::open(&source, Verify::On);
+        assert!(session.check().unwrap().diagnostics.is_empty());
+        let caller = path("caller");
+        let before: Vec<_> = [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes]
+            .into_iter()
+            .map(|kind| {
+                session
+                    .program()
+                    .unwrap()
+                    .engine
+                    .recompute_count(&caller, kind)
+            })
+            .collect();
+        let body = text.replace("{ x }", "{ x + 1u8 }");
+        std::fs::write(&source, &body).unwrap();
+        let actual = session.check().unwrap();
+        let touched = session.stats().touched;
+        assert_eq!(
+            diagnostics(&actual),
+            diagnostics(&check_path(&source).unwrap())
+        );
+        assert!(
+            touched < 100,
+            "one body edit touched {touched} memos among 515 definitions"
+        );
+        for (kind, before) in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes]
+            .into_iter()
+            .zip(before)
+        {
+            assert_eq!(
+                session
+                    .program()
+                    .unwrap()
+                    .engine
+                    .recompute_count(&caller, kind),
+                before
+            );
+        }
+        let signature = body.replace("leaf(x:u8) -> u8", "leaf(x:u32) -> u32");
+        std::fs::write(&source, &signature).unwrap();
+        let actual = session.check().unwrap();
+        assert!(!actual.diagnostics.is_empty());
+        assert_eq!(
+            diagnostics(&actual),
+            diagnostics(&check_path(&source).unwrap())
+        );
+        assert!(
+            session.stats().touched < 200,
+            "signature edit touched {} memos",
+            session.stats().touched
+        );
+        std::fs::write(&source, &body).unwrap();
+        let accepted = session.check().unwrap();
+        assert!(accepted.diagnostics.is_empty());
+        assert_eq!(
+            diagnostics(&accepted),
+            diagnostics(&check_path(&source).unwrap())
+        );
+        let removed = body.replace("fn caller() -> u8 { leaf(1u8) }\n", "");
+        std::fs::write(&source, &removed).unwrap();
+        assert_eq!(
+            diagnostics(&session.check().unwrap()),
+            diagnostics(&check_path(&source).unwrap())
+        );
+    });
+}
+
+#[test]
+fn compact_program_lower_products_keep_execution_subscriptions_without_scanning_constants() {
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        let source = fixture.0.join("main.hir");
+        let mut text = String::from(
+            "fn helper() -> u8 { 1u8 }\nconst Answer:u8 = comptime helper()\nfn main() {}\n",
+        );
+        for i in 0..128 {
+            text.push_str(&format!("const C{i}:u8 = 2u8\n"));
+        }
+        std::fs::write(&source, &text).unwrap();
+        let mut session = session::Session::open(&source, Verify::On);
+        let first = session.check().unwrap();
+        assert!(first.diagnostics.is_empty(), "{:?}", diagnostics(&first));
+        for expression in ["(1u8 / 0u8)", "3u8"] {
+            let edited = text.replace("{ 1u8 }", &format!("{{ {expression} }}"));
+            std::fs::write(&source, edited).unwrap();
+            let actual = session.check().unwrap();
+            let touched = session.stats().touched;
+            let cold = check_path(&source).unwrap();
+            assert_eq!(diagnostics(&actual), diagnostics(&cold));
+            assert_eq!(actual.completion, cold.completion);
+            assert_eq!(actual.diagnostics.is_empty(), expression == "3u8");
+            assert!(
+                touched < 100,
+                "one executed helper edit touched {touched} memos among 129 constants"
+            );
+        }
+    });
+}
+
+#[test]
+fn compact_lower_products_require_v_when_verification_is_enabled_after_reuse() {
+    with_compiler_stack(|| {
+        let mut adapters = compiler_adapters();
+        adapters.lowering = Some(Arc::new(ForgedLowering));
+        let mut forged = QueryEngine::new(default_environment(), adapters);
+        forged.verify = Verify::Off;
+        let text = "const N:u8 = 1u8\nfn main() {}\n";
+        let file = forged.sources.add("verify.hir", text.into()).unwrap();
+        assert!(
+            check_progress(&mut forged, file, &default_context())
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
+        forged.verify = Verify::On;
+        assert!(
+            matches!(
+                check_progress(&mut forged, file, &default_context()),
+                Err(QueryError::Operational(_))
+            ),
+            "retained lower diagnostics cannot bypass V for the forged TIR"
+        );
+        let mut accepted = engine(Arc::new(store::NoneStore));
+        assert!(checked(&mut accepted, text).diagnostics.is_empty());
+    });
+}

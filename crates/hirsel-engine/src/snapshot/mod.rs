@@ -403,12 +403,14 @@ impl QueryEngine {
     }
     /// P needs immutable signatures and views, without eagerly validating V's universe.
     pub(crate) fn signature_inputs(&mut self) -> Arc<SignatureSnapshot> {
+        self.prepare_signature_snapshot();
         let stamp = self.snapshot_stamp();
         if let Some((kept, snapshot)) = &self.snapshot
             && *kept == stamp
         {
             return snapshot.clone();
         }
+        let mut row_sources = DefMap::default();
         let mut signatures: Vec<(DefId, Result<SignatureRef, QueryError>)> = self
             .registry
             .signatures()
@@ -418,7 +420,29 @@ impl QueryEngine {
         let mut complete = true;
         for path in self.source_paths() {
             let d = DefId::intern(&path);
-            let signature = self.signature(d);
+            // A new universe need not demand unchanged signature queries.
+            // Reuse this snapshot's own immutable row only when its exact
+            // producer is still current and unmarked. A replacement, missing
+            // entry, transient failure or changed input follows normal demand.
+            let retained = self.snapshot_sources.get(&d).and_then(|source| {
+                let current = self.signature_memo_source(d)?;
+                let source = source.upgrade()?;
+                if !Arc::ptr_eq(&source, current)
+                    || !current.consistent
+                    || self.graph.is_dirty(&current.memo.key)
+                {
+                    return None;
+                }
+                self.snapshot
+                    .as_ref()?
+                    .1
+                    .signature(d)
+                    .map(|row| row.cloned().map_err(Clone::clone))
+            });
+            let signature = retained.unwrap_or_else(|| self.signature(d));
+            if let Some(entry) = self.signature_memo_source(d) {
+                row_sources.insert(d, Arc::downgrade(entry));
+            }
             if let Ok(public) = &signature {
                 match self.body_signature(&path.0.package, public.clone()) {
                     Ok((view, _)) if !Arc::ptr_eq(&view, public) => private.push(view),
@@ -470,6 +494,7 @@ impl QueryEngine {
         if complete {
             self.snapshot_seed_verdicts = ValidatedSignatures::default();
             self.snapshot = Some((stamp, snapshot.clone()));
+            self.snapshot_sources = row_sources;
         }
         snapshot
     }

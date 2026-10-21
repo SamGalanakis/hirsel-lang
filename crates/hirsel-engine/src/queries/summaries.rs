@@ -321,6 +321,7 @@ impl QueryEngine {
     pub fn checked_definition_summaries(
         &mut self,
     ) -> Result<Vec<(DefId, CheckedSummary)>, QueryError> {
+        self.invalidate_front_products();
         let paths = self
             .item_paths()
             .into_iter()
@@ -330,8 +331,15 @@ impl QueryEngine {
             .into_iter()
             .map(|path| {
                 let definition = DefId::intern(&path);
+                if let Some(checked) = self.front_products.checked.get(&definition) {
+                    return Ok((definition, checked.clone()));
+                }
                 let (summary, growth) = self.checked_definition_summary(definition)?;
-                Ok((definition, CheckedSummary { summary, growth }))
+                let checked = CheckedSummary { summary, growth };
+                self.front_products
+                    .checked
+                    .insert(definition, checked.clone());
+                Ok((definition, checked))
             })
             .collect()
     }

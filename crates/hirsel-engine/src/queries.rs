@@ -159,6 +159,7 @@ pub struct QueryEngine {
     /// The memo records, the reverse subscriber index and the dirty marks.
     pub(crate) graph: MemoGraph,
     front_changes: frontier::FrontTracker,
+    pub(crate) front_products: crate::tools::FrontProducts,
     /// Each indexed definition's inputs as last indexed (S0's diff).
     inputs: hirsel_syntax::DefMap<memos::DefInputs>,
     /// The environment and limits the memos were last checked under.
@@ -195,6 +196,10 @@ pub struct QueryEngine {
         Arc<crate::snapshot::SignatureSnapshot>,
     )>,
     pub(crate) snapshot_epoch: crate::memo::Revision,
+    /// Producer identity for rows in the retained frozen snapshot. Weak
+    /// references establish provenance without retaining old memo generations.
+    pub(crate) snapshot_sources:
+        hirsel_syntax::DefMap<std::sync::Weak<Entry<hirsel_types::SignatureRef>>>,
     /// Successful durable view receipts, candidates for the next snapshot.
     pub(crate) snapshot_seed_verdicts: hirsel_validate::ValidatedSignatures,
     /// Signatures published or retired outside declaration indexing (S1).
@@ -251,11 +256,19 @@ impl Drop for QueryEngine {
             "engine: pending front changes",
             take(&mut self.front_changes),
         );
+        released(
+            "engine: compact front products",
+            take(&mut self.front_products),
+        );
         released("engine: inputs", take(&mut self.inputs));
         released("engine: syntax keys", take(&mut self.syntax_keys));
         released("engine: items", take(&mut self.items));
         released("engine: parsed", take(&mut self.parsed));
         released("engine: signature snapshot", take(&mut self.snapshot));
+        released(
+            "engine: snapshot row provenance",
+            take(&mut self.snapshot_sources),
+        );
         released(
             "engine: imported signature verdicts",
             take(&mut self.snapshot_seed_verdicts),
@@ -294,6 +307,16 @@ impl QueryEngine {
     }
 }
 impl QueryEngine {
+    pub(crate) fn prepare_signature_snapshot(&mut self) {
+        self.note_environment();
+        self.settle_signatures();
+    }
+    pub(crate) fn signature_memo_source(
+        &self,
+        definition: DefId,
+    ) -> Option<&Arc<Entry<hirsel_types::SignatureRef>>> {
+        self.signatures.get(&definition)
+    }
     /// Every indexed source definition.
     pub(crate) fn item_paths(&self) -> Vec<DefPath> {
         self.source_paths()
@@ -418,6 +441,7 @@ impl QueryEngine {
             checked_summaries: Default::default(),
             graph: MemoGraph::default(),
             front_changes: Default::default(),
+            front_products: Default::default(),
             inputs: Default::default(),
             environment_seen: None,
             vanished: BTreeSet::new(),
@@ -433,6 +457,7 @@ impl QueryEngine {
             snapshot: None,
             snapshot_seed_verdicts: Default::default(),
             snapshot_epoch: crate::memo::Revision::from_u64(1).expect("a nonzero revision"),
+            snapshot_sources: Default::default(),
             snapshot_inputs_revision: 0,
             types: crate::registry::session_types(),
             memo: Arc::new(hirsel_types::TypeMemo::new()),
