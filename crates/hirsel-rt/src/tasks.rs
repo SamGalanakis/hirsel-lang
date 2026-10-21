@@ -2443,6 +2443,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
             )
         };
     }
+    if free::enabled(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                free::lifecycle::spawn(ctx, out, scope.read(), code, environment, operation_site),
+            )
+        };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller owns the closure and the named live scope.
     let (index, generation, child) =

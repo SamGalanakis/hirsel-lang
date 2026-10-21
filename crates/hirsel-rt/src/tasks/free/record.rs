@@ -27,6 +27,45 @@ pub(crate) struct Task {
     ordinal: u64,
 }
 
+pub(super) struct Child {
+    shared: Arc<Recording>,
+    log: hirsel_free::concurrent::PreparedChild,
+    owner: Box<std::mem::MaybeUninit<Task>>,
+}
+
+pub(super) fn prepare_child(ctx: *mut TaskCtx) -> Option<Child> {
+    unsafe { (*ctx).recording.as_ref() }.map(|task| Child {
+        shared: task.shared.clone(),
+        log: task.log.prepare_child(),
+        owner: Box::new_uninit(),
+    })
+}
+
+/// Register START and install its prepared runtime owner in the parent's
+/// current spawn phase. The box and stable log were allocated before entry.
+pub(super) fn spawn<T>(
+    ctx: *mut TaskCtx,
+    child: Option<Child>,
+    action: impl FnOnce(Option<Box<Task>>) -> T,
+) -> Stopped<T> {
+    publish(ctx, Phase::Done, |writer| {
+        let owner = match (child, writer) {
+            (Some(mut child), Some(writer)) => {
+                child.owner.write(Task {
+                    shared: child.shared,
+                    log: writer.spawn_prepared(child.log),
+                    ordinal: 0,
+                });
+                // SAFETY: the exclusively owned box was initialized above.
+                Some(unsafe { child.owner.assume_init() })
+            }
+            (None, None) => None,
+            _ => unreachable!("a prepared child retains its parent's admission"),
+        };
+        action(owner)
+    })
+}
+
 impl Drop for Task {
     fn drop(&mut self) {
         if !self.log.trace().is_empty() {
@@ -237,7 +276,6 @@ impl Recording {
     }
 }
 
-#[cfg(test)]
 impl Task {
     pub(crate) fn path(&self) -> &[u32] {
         self.log.path()

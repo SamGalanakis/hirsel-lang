@@ -29,9 +29,9 @@ fn check_value(ctx: *mut TaskCtx, expected: u32) {
     assert_eq!(value, expected);
 }
 
-unsafe extern "C" fn child(ctx: *mut u8, data: *mut u8) -> ! {
-    let ctx = ctx.cast::<TaskCtx>();
-    let race = unsafe { Box::from_raw(data.cast::<Arc<Race>>()) };
+unsafe extern "C" fn child(ctx: *mut TaskCtx, environment: *mut Header, _: u64, _: u64) -> u8 {
+    let data = unsafe { environment.add(1).cast::<*mut Arc<Race>>().read() };
+    let race = unsafe { Box::from_raw(data) };
     check_value(ctx, 0);
     race.checked.store(true, Ordering::Release);
     wait_until(|| race.canceled.load(Ordering::Acquire));
@@ -48,10 +48,7 @@ unsafe extern "C" fn child(ctx: *mut u8, data: *mut u8) -> ! {
     check_value(ctx, 1 + CANCEL_REQUESTED);
     race.finished.store(true, Ordering::Release);
     drop(race);
-    unsafe {
-        role::enter(ctx);
-        crate::pool::free::finish_current(ctx);
-    }
+    STATUS_OK
 }
 
 #[test]
@@ -74,6 +71,24 @@ fn native_cancel_and_unshielded_checks_record_observations_and_replay_the_cut() 
         let mut run = crate::host::BodyRun::new(2, false);
         run.free = true;
         unsafe { run.use_physical_dispatch() };
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&raw const layout];
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 1;
         let outcome = run.run(
             move |ctx| unsafe {
                 super::super::enable(ctx);
@@ -84,30 +99,31 @@ fn native_cancel_and_unshielded_checks_record_observations_and_replay_the_cut() 
                 unsafe {
                     hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope_word, &0);
                 }
-                let word = unsafe {
-                    let _role = role::Guard::new(ctx);
-                    let stack = Stack::new();
-                    let child_ctx = stack.context();
-                    child_ctx.write(TaskCtx::new((*ctx).worker_ptr(), (*ctx).run_ptr()));
-                    let log = record::child(ctx).unwrap();
-                    (*child_ctx).recording = Some(Box::new(log));
-                    let s = scheduler(ctx);
-                    let scope = s.scope_handle(scope_word);
-                    let id = s.tasks.len() as u32;
-                    (*child_ctx).task_id = id;
-                    (*child_ctx).task_sp = stack.prepare(
-                        child,
-                        child_ctx.cast(),
-                        Box::into_raw(Box::new(race.clone())).cast(),
+                let mut word = 0;
+                unsafe {
+                    let environment = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        2,
+                        8,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
                     );
-                    let mut row = Task::new(1, child_ctx, Some(scope), vec![0], None);
-                    row.stack = Some(stack);
-                    s.tasks.push(Some(row));
-                    s.scope(scope).children.push(id);
-                    s.link_child(ROOT, id);
-                    crate::pool::free::schedule_saved((*ctx).run_ptr(), id, Owner::Any);
-                    handle(id, 1)
-                };
+                    environment
+                        .add(1)
+                        .cast::<*mut Arc<Race>>()
+                        .write(Box::into_raw(Box::new(race.clone())));
+                    hirsel_rt_v2_task_spawn(
+                        ctx,
+                        0,
+                        0,
+                        std::ptr::null_mut(),
+                        &mut word,
+                        &scope_word,
+                        child,
+                        environment,
+                    );
+                }
                 wait_until(|| race.checked.load(Ordering::Acquire));
                 cutter.recorder.flush().unwrap().unwrap();
                 unsafe {
