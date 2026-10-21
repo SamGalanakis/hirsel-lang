@@ -24,10 +24,74 @@ pub(crate) struct FrozenSource<'a> {
     pub(crate) manifests: &'a BTreeMap<hirsel_syntax::PackageId, ContentHash>,
     pub(crate) default_manifest: ContentHash,
     pub(crate) environment: ContentHash,
+    pub(crate) signer: Option<&'a dyn SignaturePhase>,
     pub(crate) resolver: Option<&'a dyn ResolverPhase>,
     pub(crate) checker: Option<&'a dyn CheckerPhase>,
     pub(crate) mode_phase: Option<&'a dyn ModesPhase>,
     pub(crate) completed: Mutex<Vec<(parallel::Completed, Reads)>>,
+}
+/// Mirror the live generation recorder's adapter detail, including repeated
+/// signature requests in order. Canonical Reads alone cannot reconstruct the
+/// QueryOutput dependency list after private generator checking.
+struct GeneratorRecorder<'a> {
+    provider: FrozenProvider<'a>,
+    snapshot: &'a SignatureSnapshot,
+    detail: &'a mut DependencyReads,
+}
+impl SignatureProvider for GeneratorRecorder<'_> {
+    fn signature(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
+        let result = self.provider.signature(definition);
+        if let Err(QueryError::Operational(error)) = &result {
+            self.detail.operational_failure = Some(error.clone());
+        }
+        match self.snapshot.signature(definition) {
+            Some(Ok(signature)) => self.detail.signatures.push(SignatureDependency {
+                definition: definition.path().clone(),
+                fingerprint: signature.fingerprint,
+            }),
+            _ => {
+                self.detail
+                    .failed_signatures
+                    .push(definition.path().clone());
+                self.detail.failed_signature_keys.push((
+                    definition.path().clone(),
+                    self.snapshot.failed_signature_key(definition),
+                ));
+            }
+        }
+        result
+    }
+    fn lookup(
+        &mut self,
+        context: &FileContext,
+        path: &hirsel_syntax::Path,
+    ) -> hirsel_types::LookupOutput {
+        let output = self.provider.lookup(context, path);
+        self.detail
+            .manifest_lookups
+            .push(hirsel_types::DependencyRead::ProviderLookup {
+                context: context.clone(),
+                package: path.package.clone(),
+                segments: path
+                    .segments
+                    .iter()
+                    .map(|s| s.as_str().to_owned())
+                    .collect(),
+                output: output.clone(),
+            });
+        if let Err(QueryError::Operational(error)) = &output.result {
+            self.detail.operational_failure = Some(error.clone());
+        }
+        if let Some(path) = lookup_path(context, path) {
+            self.detail.lookups.push((path, output.result.is_ok()));
+        }
+        output
+    }
+    fn cite_name(&mut self, definition: &DefPath) -> Option<Span> {
+        let cited = self.provider.cite_name(definition);
+        self.detail.citations.push((definition.clone(), cited));
+        cited
+    }
 }
 impl FrozenSource<'_> {
     fn image(&self, path: &DefPath) -> Option<&crate::image::StdImage> {
@@ -54,6 +118,97 @@ impl FrozenSource<'_> {
     }
 }
 impl TirSource for FrozenSource<'_> {
+    fn generator_site(&self, path: &DefPath) -> Result<Span, QueryError> {
+        let syntax = self
+            .items
+            .get(path)
+            .and_then(|items| items.first())
+            .ok_or(QueryError::NotImplemented)?;
+        let expression = generation::generator(syntax).ok_or(QueryError::NotImplemented)?;
+        Ok(syntax.tree.expressions[expression.0 as usize].origin.span)
+    }
+    fn prepare_generator(
+        &self,
+        path: &DefPath,
+    ) -> DependencyProduct<generation::task::PreparedGenerator> {
+        let mut observed = ReadsBuilder::new();
+        let mut products = PhaseProducts::default();
+        let mut detail = DependencyReads::default();
+        let result = (|| {
+            let syntax = self
+                .items
+                .get(path)
+                .and_then(|items| items.first())
+                .cloned()
+                .ok_or(QueryError::NotImplemented)?;
+            let body = generation::generator(&syntax).ok_or(QueryError::NotImplemented)?;
+            let input = generation::task::GeneratorInput::new(path, &syntax, body)?;
+            let (Some(signature), Some(resolver), Some(checker), Some(modes)) =
+                (self.signer, self.resolver, self.checker, self.mode_phase)
+            else {
+                return Err(QueryError::NotImplemented);
+            };
+            let checked = input.check(
+                self.inputs.snapshot.types(),
+                &self.inputs.memo,
+                &self.declarations,
+                &generation::task::GeneratorPhases {
+                    signature,
+                    resolver,
+                    checker,
+                    modes,
+                },
+                &mut products,
+                &mut GeneratorRecorder {
+                    provider: FrozenProvider::for_definition(
+                        &self.inputs.snapshot,
+                        DefId::intern(path),
+                        &self.citations,
+                        &mut observed,
+                    ),
+                    snapshot: &self.inputs.snapshot,
+                    detail: &mut detail,
+                },
+            )?;
+            Ok(generation::task::PreparedGenerator {
+                syntax,
+                body,
+                input,
+                checked,
+                detail: detail.clone(),
+                products: Arc::new(products.clone()),
+            })
+        })();
+        if let Some(resolution) = &products.resolution {
+            detail.resolver = resolution.reads.clone();
+        }
+        let mut source = parallel::FrozenReadSource {
+            declarations: &self.declarations,
+            citations: &self.citations,
+            candidates: self
+                .inputs
+                .snapshot
+                .declaration_candidates(DefId::intern(path)),
+            environment: self.environment,
+        };
+        match memos::complete_reads(
+            path,
+            &detail,
+            &Observed {
+                products: Arc::new(products),
+                merged: observed,
+                ..Default::default()
+            },
+            &mut source,
+        ) {
+            Ok(reads) => DependencyProduct { result, reads },
+            Err(_) => DependencyProduct {
+                result: Err(QueryError::NotImplemented),
+                reads: Reads::empty(),
+            },
+        }
+    }
+
     fn inputs(&self) -> &TaskInputs {
         &self.inputs
     }
@@ -91,12 +246,40 @@ impl TirSource for FrozenSource<'_> {
         worker: &mut TaskWorker<'_, Self>,
         path: &DefPath,
     ) -> DependencyProduct<Arc<TaskBody>> {
+        // A generic generated declaration has no executable body. Its closed
+        // instance must be registered before a worker checks the generator;
+        // never treat its open type parameters as a private constant.
+        if self
+            .items
+            .get(path)
+            .and_then(|items| items.first())
+            .is_some_and(|syntax| generation::instance_bodied(syntax))
+        {
+            worker.pending.push(Requirement::Generate(path.clone()));
+            return DependencyProduct {
+                result: Err(QueryError::NotImplemented),
+                reads: Reads::empty(),
+            };
+        }
         let id = DefId::intern(path);
         if let Some(entry) = self
             .modes
             .get(&id)
             .filter(|entry| self.current(path, entry))
         {
+            if let Some(generated) = self
+                .checked
+                .get(&id)
+                .filter(|entry| self.current(path, entry))
+                && let Some(depth) = &generated.depth
+                && let Err(error) =
+                    worker.replay_generator(depth, self.generator_site(path).unwrap_or_default())
+            {
+                return DependencyProduct {
+                    result: Err(error),
+                    reads: entry.reads().clone(),
+                };
+            }
             if entry.result().is_err() {
                 worker.phase = Some(QueryKind::Modes);
             }
@@ -124,11 +307,30 @@ impl TirSource for FrozenSource<'_> {
             };
         };
         if generation::generator(&syntax).is_some() {
-            worker.pending.push(Requirement::Generate(path.clone()));
-            return DependencyProduct {
-                result: Err(QueryError::NotImplemented),
-                reads: Reads::empty(),
-            };
+            if let Some(entry) = self
+                .checked
+                .get(&id)
+                .filter(|entry| self.current(path, entry))
+            {
+                if let Some(depth) = &entry.depth
+                    && let Err(error) = worker
+                        .replay_generator(depth, self.generator_site(path).unwrap_or_default())
+                {
+                    return DependencyProduct {
+                        result: Err(error),
+                        reads: entry.reads().clone(),
+                    };
+                }
+                if let Err(error) = entry.result() {
+                    worker.phase = Some(QueryKind::Check);
+                    return DependencyProduct {
+                        result: Err(error),
+                        reads: entry.reads().clone(),
+                    };
+                }
+            } else {
+                return worker.generate_body(path);
+            }
         }
         // The own header was observed during snapshot construction. Never
         // normalize/retry it in a worker after freezing the epoch.
@@ -365,6 +567,7 @@ impl QueryEngine {
             manifests: &self.package_manifests,
             default_manifest: self.environment.package_manifest_hash,
             environment,
+            signer: self.adapters.signature.as_deref(),
             resolver: self.adapters.resolver.as_deref(),
             checker: self.adapters.checker.as_deref(),
             mode_phase: self.adapters.modes.as_deref(),
@@ -477,7 +680,7 @@ impl QueryEngine {
             self.last_comptime_limit = None;
             return Some(results.into_iter().map(Option::unwrap).collect());
         }
-        let shared = worker::TaskShared::new(self.s1.coordinator().clone());
+        let mut shared = worker::TaskShared::new(self.s1.coordinator().clone());
         let source = match self.frozen_s1_source() {
             Ok(source) => source,
             Err(_) => {
@@ -548,6 +751,22 @@ impl QueryEngine {
             for registration in declarations.into_values() {
                 self.install_staged(registration);
             }
+            return None;
+        }
+        let mut generated = shared.take_generators();
+        generated.sort_by(|left, right| left.definition.cmp(&right.definition));
+        let mut published = false;
+        for product in generated {
+            if self.implementation_hash(&product.definition) == Some(product.syntax.text_hash)
+                && self.execution_valid(&product.definition, &product.reads)
+            {
+                match self.merge_generated_text(product) {
+                    Ok(()) => published = true,
+                    Err(_) => break,
+                }
+            }
+        }
+        if published {
             return None;
         }
         // Successes reached inside a failed root remain independently valid.

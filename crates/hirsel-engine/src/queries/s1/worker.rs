@@ -7,6 +7,7 @@ use crate::comptime::{
     StagedRegistration, prepare_staged_types, prepare_values,
 };
 use crate::memo::{DepthEvidence, Entered, S1Coordinator, S1Worker};
+use crate::queries::generation::task::{GeneratedText, PreparedGenerator};
 use hirsel_interp::aggregate::RuntimeTypes;
 use hirsel_syntax::ExprKind;
 use hirsel_tir::Materialized;
@@ -54,6 +55,16 @@ pub(crate) trait TirSource: Sync {
         path: &DefPath,
     ) -> DependencyProduct<Arc<TaskBody>>;
     fn dictionary_constant(&self, path: &DefPath) -> Result<Option<Materialized>, QueryError>;
+    fn generator_site(&self, path: &DefPath) -> Result<Span, QueryError> {
+        self.site(path)
+    }
+    fn prepare_generator(&self, _: &DefPath) -> DependencyProduct<PreparedGenerator> {
+        DependencyProduct {
+            result: Err(QueryError::NotImplemented),
+            reads: Reads::empty(),
+        }
+    }
+
     fn has_staged_declaration(&self, _: &StagedRegistration) -> bool {
         true
     }
@@ -118,13 +129,24 @@ impl<S: TirSource + ?Sized> crate::materialized::MaterializationSource
 pub(crate) struct TaskShared {
     coordinator: Arc<S1Coordinator<DefPath>>,
     constants: Mutex<BTreeMap<DefPath, ConstantProduct>>,
+    generators: Mutex<BTreeMap<DefPath, GeneratedText>>,
 }
 impl TaskShared {
     pub(crate) fn new(coordinator: Arc<S1Coordinator<DefPath>>) -> Self {
         Self {
             coordinator,
             constants: Mutex::new(BTreeMap::new()),
+            generators: Mutex::new(BTreeMap::new()),
         }
+    }
+    pub(super) fn take_generators(&mut self) -> Vec<GeneratedText> {
+        std::mem::take(
+            self.generators
+                .get_mut()
+                .unwrap_or_else(|error| error.into_inner()),
+        )
+        .into_values()
+        .collect()
     }
     pub(super) fn into_constants(
         self,
@@ -599,6 +621,130 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         }
         result
     }
+    pub(super) fn replay_generator(
+        &mut self,
+        depth: &DepthEvidence<Span>,
+        site: Span,
+    ) -> Result<(), QueryError> {
+        self.admit(depth, site)?;
+        self.stack.requested(depth, site);
+        Ok(())
+    }
+    /// Prepare and execute a generator privately. The source cannot expose its
+    /// body until its text and registrations pass the serial publication join.
+    pub(super) fn generate_body(&mut self, path: &DefPath) -> DependencyProduct<Arc<TaskBody>> {
+        self.capture(|worker| {
+            worker.generator_text(path)?;
+            worker.pending.push(Requirement::Generate(path.clone()));
+            Err(QueryError::NotImplemented)
+        })
+    }
+    fn generator_text(&mut self, path: &DefPath) -> Result<(), QueryError> {
+        let site = self.source.generator_site(path)?;
+        loop {
+            if self.stack.on_stack(path).is_some() {
+                self.stack.fail_cycle();
+                return Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                    const { hirsel_diag::RuleId::of("CT-4") },
+                    site,
+                    "compile-time dependency cycle: this generator runs its own declaration",
+                )]));
+            }
+            let hit = self
+                .shared
+                .generators
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(path)
+                .cloned();
+            if let Some(hit) = hit {
+                self.replay_generator(&hit.depth, site)?;
+                self.merge(&hit.reads);
+                return Ok(());
+            }
+            if self.stack.enter(path.clone(), site) == Entered::Run {
+                break;
+            }
+        }
+        let pending_start = self.pending.len();
+        let product = self.capture(|worker| {
+            worker.implementation(path);
+            worker.signature(path)?;
+            let prepared = worker.source.prepare_generator(path);
+            let prepared = worker.merge_product(prepared)?;
+            worker.register_staged(&prepared.checked.analyzed)?;
+            let inputs = worker.source.inputs();
+            let constants = prepare_values(
+                inputs.snapshot.types(),
+                &prepared.checked.analyzed,
+                &[],
+                &prepared.checked.signature,
+                worker,
+            )?;
+            let value = prepared.input.value;
+            let (result, _) = worker.run_evaluation(EvaluationInput {
+                analyzed: &prepared.checked.analyzed,
+                staged: &[],
+                signature: &prepared.checked.signature,
+                expression: value,
+                child: value,
+                ty: prepared.checked.ty,
+                constants: &constants,
+                sizes: &[],
+            })?;
+            let text = prepared.input.decode(result)?;
+            Ok((prepared, text))
+        });
+        let depth = self.stack.composed(self.depth_limit(), false);
+        self.merge(&product.reads);
+        let result = product.result.map(|(prepared, text)| GeneratedText {
+            definition: path.clone(),
+            syntax: prepared.syntax,
+            body: prepared.body,
+            text,
+            reads: product.reads,
+            depth: depth.clone(),
+            products: prepared.products,
+            detail: prepared.detail,
+        });
+        if self.pending.len() == pending_start
+            && let Ok(product) = result.as_ref()
+        {
+            self.shared
+                .generators
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(path.clone(), product.clone());
+        }
+        self.stack.leave();
+        self.phase = Some(QueryKind::Check);
+        if result.is_ok() {
+            self.stack.requested(&depth, site);
+        }
+        result.map(|_| ())
+    }
+    fn run_evaluation(
+        &mut self,
+        input: EvaluationInput<'_>,
+    ) -> Result<(hirsel_interp::Value, hirsel_types::TypeId), QueryError> {
+        self.phase = Some(QueryKind::Lower);
+        let inputs = self.source.inputs();
+        let site = input.analyzed.typed.syntax.tree.expressions[input.expression.0 as usize]
+            .origin
+            .span;
+        let prepared = input.lower(inputs.snapshot.types(), &inputs.memo, &*inputs.lowering)?;
+        let admission =
+            ValidatedEvaluation::recorded(prepared, &inputs.snapshot, inputs.verify, site);
+        self.merge(&admission.reads);
+        let validated = admission.result?;
+        let runtime = self.runtime.clone();
+        let product = validated.run(&inputs.sources, inputs.limits, &runtime, self);
+        self.merge(&product.value.reads);
+        if product.limit.is_some() {
+            self.limit = product.limit;
+        }
+        product.value.result
+    }
     fn validate_lowered(
         &mut self,
         path: &DefPath,
@@ -720,18 +866,7 @@ impl<S: TirSource + ?Sized> ComptimeValueSource for TaskWorker<'_, S> {
         let site = input.analyzed.typed.syntax.tree.expressions[input.expression.0 as usize]
             .origin
             .span;
-        let prepared = input.lower(inputs.snapshot.types(), &inputs.memo, &*inputs.lowering)?;
-        let admission =
-            ValidatedEvaluation::recorded(prepared, &inputs.snapshot, inputs.verify, site);
-        self.merge(&admission.reads);
-        let validated = admission.result?;
-        let runtime = self.runtime.clone();
-        let product = validated.run(&inputs.sources, inputs.limits, &runtime, self);
-        self.merge(&product.value.reads);
-        if product.limit.is_some() {
-            self.limit = product.limit;
-        }
-        let (value, ty) = product.value.result?;
+        let (value, ty) = self.run_evaluation(input)?;
         let mut reads = ReadsBuilder::new();
         let mut materializer = TaskMaterialization {
             provider: FrozenProvider::new(&inputs.snapshot, package, &mut reads),

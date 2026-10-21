@@ -225,11 +225,23 @@ impl QueryEngine {
         signature: &Signature,
         reads: &mut Recording,
     ) -> Result<QueryOutput<TypedBody>, QueryError> {
-        let site = snapshot.tree.expressions[body.0 as usize].origin.span;
         let SignatureKind::Function(_) = &signature.kind else {
             return Err(QueryError::NotImplemented);
         };
         let text = self.generated_text(definition, snapshot, body, reads)?;
+        self.publish_generated_body(definition, snapshot, body, signature, text, reads)
+    }
+
+    fn publish_generated_body(
+        &mut self,
+        definition: &DefPath,
+        snapshot: &Arc<ItemSyntax>,
+        body: ExprId,
+        signature: &Signature,
+        text: String,
+        reads: &mut Recording,
+    ) -> Result<QueryOutput<TypedBody>, QueryError> {
+        let site = snapshot.tree.expressions[body.0 as usize].origin.span;
         let file = match self.generated.get(definition) {
             Some(g) if g.text == text => g.file,
             _ => {
@@ -281,6 +293,92 @@ impl QueryEngine {
                 }
                 output
             })
+    }
+
+    /// Publish already evaluated generator text, with no interpreter execution.
+    /// Keep the generator frame while parsing/checking so reentry still uses
+    /// the same CT-4 and logical-depth protocol as source generation.
+    pub(crate) fn merge_generated_text(
+        &mut self,
+        product: task::GeneratedText,
+    ) -> Result<(), QueryError> {
+        let definition = &product.definition;
+        let signature = self.signature_output(definition)?;
+        let text = self.key_text(definition, QueryKind::Check)?;
+        let site = product.syntax.tree.expressions[product.body.0 as usize]
+            .origin
+            .span;
+        if self.s1.enter(definition.clone(), site) == Entered::Settled {
+            return Err(QueryError::NotImplemented);
+        }
+        let _timing = timings::phase(Phase::Check);
+        timings::count(Count::Definitions);
+        if let Err(error) = self.start(definition, QueryKind::Check) {
+            self.s1.leave();
+            return Err(error);
+        }
+        let mut reads = Recording {
+            reads: product.detail,
+            observed: Observed::inheriting(Some(&product.reads)),
+        };
+        reads.observed.products = product.products;
+        let mut signatures = signature.dependencies.clone();
+        signatures.push(SignatureDependency {
+            definition: definition.clone(),
+            fingerprint: signature.value.fingerprint,
+        });
+        signatures.append(&mut reads.reads.signatures);
+        reads.reads.signatures = signatures;
+        self.execution_stack.push(ReadsBuilder::new());
+        let result = self
+            .s1
+            .replay_requests(&product.depth)
+            .map_err(|site| {
+                self.comptime_limit(hirsel_tir::ToolingLimit {
+                    kind: hirsel_tir::ToolingLimitKind::CallDepth,
+                    limit: product.depth.limit() as u64,
+                    site: Some(site),
+                })
+            })
+            .and_then(|_| {
+                self.publish_generated_body(
+                    definition,
+                    &product.syntax,
+                    product.body,
+                    &signature.value,
+                    product.text,
+                    &mut reads,
+                )
+            });
+        let depth = self.depth_composed(false);
+        reads.observed.merged.extend(
+            self.execution_stack
+                .pop()
+                .expect("generator publication frame"),
+        );
+        let mut entry = self.finish(
+            MemoKey::new(QueryKind::Check, DefId::intern(definition)),
+            text,
+            reads.reads,
+            result,
+            reads.observed,
+        );
+        entry.depth = Some(depth);
+        let retry = entry.result().err().filter(|error| !error.cacheable());
+        let own = self.s1.failure_is_own();
+        keep(&mut self.checked, &mut self.graph, Arc::new(entry), own);
+        self.s1.leave();
+        if let Some(error) = retry {
+            return Err(error);
+        }
+        if !self.checked.contains_key(&DefId::intern(definition)) {
+            // A contextual rejection or inconsistent receipt was discarded.
+            // It cannot settle another round; retry the original root.
+            return Err(QueryError::NotImplemented);
+        }
+        // Rejections remain in the checked memo; the suspended root observes
+        // them in its original request context during the next worker round.
+        Ok(())
     }
 
     /// Check and evaluate the generator as a private constant of type

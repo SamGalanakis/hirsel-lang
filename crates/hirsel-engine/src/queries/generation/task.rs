@@ -216,3 +216,25 @@ impl GeneratorInput {
         }
     }
 }
+
+/// A worker's tentative generator success. Source files and check memos are
+/// published only after the serial merger verifies its complete input record.
+#[derive(Clone)]
+pub(crate) struct GeneratedText {
+    pub(crate) definition: DefPath,
+    pub(crate) syntax: Arc<ItemSyntax>,
+    pub(crate) body: ExprId,
+    pub(crate) text: String,
+    pub(crate) reads: Reads,
+    pub(crate) detail: DependencyReads,
+    pub(crate) depth: crate::memo::DepthEvidence<Span>,
+    pub(crate) products: Arc<PhaseProducts>,
+}
+pub(crate) struct PreparedGenerator {
+    pub(crate) syntax: Arc<ItemSyntax>,
+    pub(crate) body: ExprId,
+    pub(crate) input: GeneratorInput,
+    pub(crate) checked: GeneratorBody,
+    pub(crate) detail: DependencyReads,
+    pub(crate) products: Arc<PhaseProducts>,
+}

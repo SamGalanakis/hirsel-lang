@@ -922,39 +922,56 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
         }
     }
     with_compiler_stack(|| {
-        let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime {let xs:Inline[u8,4]=[1,2,3,4];scaled(xs)}\n";
-        for jobs in [1, 2, 8] {
-            let paths = vec![path("B"), path("A"), path("B")];
-            let mut control = engine(source);
-            let expected: Vec<_> = paths
-                .iter()
-                .map(|p| {
-                    let result = control.materialize_value(p);
-                    outcome_text(&control, result)
-                })
-                .collect();
-            assert!(expected.iter().all(Result::is_ok), "{expected:?}");
-            let mut adapters = compiler_adapters();
-            adapters.lowering = Some(Arc::new(WorkerOnly(
-                adapters.lowering.take().unwrap(),
-                jobs > 1,
-            )));
-            let mut candidate = QueryEngine::new(default_environment(), adapters);
-            let file = candidate
-                .sources
-                .add("comptime.hir", source.into())
-                .unwrap();
-            candidate.parse_file(file, &default_context()).unwrap();
-            assert_eq!(
-                frontier_text(&mut candidate, paths.clone(), jobs),
-                expected,
-                "jobs={jobs}"
-            );
-            assert_eq!(
-                frontier_text(&mut candidate, paths, jobs),
-                expected,
-                "warm jobs={jobs}"
-            );
+        let staged = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime {let xs:Inline[u8,4]=[1,2,3,4];scaled(xs)}\n";
+        let generated = "type Seed {x:u32}\nfn body_text()->String{\"fn()->u32 uses {}{11u32}\"}\nfn make(s:TypeShape[Seed])->Result[Body[fn()->u32 uses {}],String]{Ok(codegen.body(body_text()))}\nfn chosen()->u32 uses {}=comptime make(shape(Seed))\nconst A:u32=comptime chosen()\nconst B:u32=comptime chosen()\n";
+        for source in [staged, generated] {
+            for jobs in [1, 2, 8] {
+                let paths = vec![path("B"), path("A"), path("B")];
+                let mut control = engine(source);
+                let expected: Vec<_> = paths
+                    .iter()
+                    .map(|p| {
+                        let result = control.materialize_value(p);
+                        outcome_text(&control, result)
+                    })
+                    .collect();
+                assert!(expected.iter().all(Result::is_ok), "{expected:?}");
+                let mut adapters = compiler_adapters();
+                adapters.lowering = Some(Arc::new(WorkerOnly(
+                    adapters.lowering.take().unwrap(),
+                    jobs > 1,
+                )));
+                let mut candidate = QueryEngine::new(default_environment(), adapters);
+                let file = candidate
+                    .sources
+                    .add("comptime.hir", source.into())
+                    .unwrap();
+                candidate.parse_file(file, &default_context()).unwrap();
+                assert_eq!(
+                    frontier_text(&mut candidate, paths.clone(), jobs),
+                    expected,
+                    "jobs={jobs}"
+                );
+                assert_eq!(
+                    frontier_text(&mut candidate, paths, jobs),
+                    expected,
+                    "warm jobs={jobs}"
+                );
+                if source == generated {
+                    let scalar = control.check_definition(&path("chosen")).unwrap();
+                    let worker = candidate.check_definition(&path("chosen")).unwrap();
+                    assert!(
+                        scalar
+                            .dependencies
+                            .iter()
+                            .any(|d| d.definition == path("make"))
+                    );
+                    assert_eq!(
+                        worker.dependencies, scalar.dependencies,
+                        "checked dependencies jobs={jobs}"
+                    );
+                }
+            }
         }
     });
 }
@@ -1014,6 +1031,134 @@ fn frozen_frontier_outcomes_capture_each_stopping_phase_and_limit() {
             assert_eq!(outcomes[1].phase, Some(QueryKind::Lower));
             assert!(outcomes[0].reads.iter().any(|(key, _)| *key
                 == memo::ReadKey::ExecutedBody(hirsel_syntax::DefId::intern(&path("C0")))));
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_generator_failures_keep_scalar_cycle_and_literal_sites() {
+    with_compiler_stack(|| {
+        let make = |body: &str| {
+            format!(
+                "type Seed {{x:u32}}\nfn make(s:TypeShape[Seed])->Result[Body[fn()->u32 uses {{}}],String]{{{body}}}\nfn chosen()->u32 uses {{}}=comptime make(shape(Seed))\nconst A:u32=comptime chosen()\nconst B:u32=comptime chosen()\n"
+            )
+        };
+        for (rule, source) in [
+            (
+                "CT-4",
+                make("let _=A;Ok(codegen.body(\"fn()->u32 uses {}{11u32}\"))"),
+            ),
+            ("CT-1", make("Error(\"expected generator failure\")")),
+            (
+                "LANG-7",
+                make("Ok(codegen.body(\"fn()->u64 uses {}{11u64}\"))"),
+            ),
+        ] {
+            let paths = vec![path("B"), path("A"), path("B")];
+            let mut control = engine(&source);
+            let expected: Vec<_> = paths
+                .iter()
+                .map(|p| {
+                    let result = control.materialize_value(p);
+                    outcome_text(&control, result)
+                })
+                .collect();
+            assert!(
+                expected
+                    .iter()
+                    .all(|result| result.as_ref().is_err_and(|error| error.contains(rule))),
+                "{expected:?}; expected {rule}"
+            );
+            for jobs in [1, 2, 8] {
+                let mut candidate = engine(&source);
+                let actual = frontier_text(&mut candidate, paths.clone(), jobs);
+                assert_eq!(actual, expected, "jobs={jobs} source={source}");
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_generator_depth_branches_match_scalar_with_partial_hits() {
+    with_compiler_stack(|| {
+        let source = "type Seed {x:u32}\nconst LEAF:u32=1u32\nconst LEFT:u32=comptime LEAF\nconst RIGHT:u32=comptime LEFT\nfn make(s:TypeShape[Seed])->Result[Body[fn()->u32 uses {}],String]{let _=LEFT;let _=RIGHT;Ok(codegen.body(\"fn()->u32 uses {}{11u32}\"))}\nfn chosen()->u32 uses {}=comptime make(shape(Seed))\nconst INNER:u32=comptime chosen()\nconst OUTER:u32=comptime INNER\nconst GOOD:u32=comptime 7u32\n";
+        let paths = vec![path("OUTER"), path("INNER"), path("GOOD"), path("OUTER")];
+        for limit in [2, 3, 4, 5, 8] {
+            let mut control = engine(source);
+            control.comptime_limits.call_depth = limit;
+            let expected: Vec<_> = paths
+                .iter()
+                .map(|p| {
+                    let result = control.materialize_value(p);
+                    outcome_text(&control, result)
+                })
+                .collect();
+            for jobs in [1, 2, 8] {
+                for warm in [0, 1, 2] {
+                    let mut candidate = engine(source);
+                    candidate.comptime_limits.call_depth = limit;
+                    if warm >= 1 {
+                        let _ = candidate.materialize_value(&path("RIGHT"));
+                    }
+                    if warm >= 2 {
+                        let _ = candidate.check_definition(&path("chosen"));
+                    }
+                    let actual = frontier_text(&mut candidate, paths.clone(), jobs);
+                    assert_eq!(actual, expected, "jobs={jobs} limit={limit} warm={warm}");
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_generator_helper_edits_refresh_text_and_execution_reads() {
+    with_compiler_stack(|| {
+        let source = "type Seed {x:u32}\nfn body_text()->String{\"fn()->u32 uses {}{11u32}\"}\nfn make(s:TypeShape[Seed])->Result[Body[fn()->u32 uses {}],String]{Ok(codegen.body(body_text()))}\nfn chosen()->u32 uses {}=comptime make(shape(Seed))\nconst A:u32=comptime chosen()\nconst B:u32=comptime chosen()\n";
+        let paths = vec![path("B"), path("A"), path("B")];
+        for jobs in [1, 2, 8] {
+            let mut candidate = engine(source);
+            for revision in [
+                source.to_owned(),
+                source.replace("11u32", "23u32"),
+                source.replace("codegen.body(body_text())", "codegen.body(missing_text())"),
+                source.to_owned(),
+            ] {
+                let file = candidate
+                    .sources
+                    .add("comptime.hir", revision.clone())
+                    .unwrap();
+                candidate.parse_file(file, &default_context()).unwrap();
+                let mut control = engine(&revision);
+                let expected: Vec<_> = paths
+                    .iter()
+                    .map(|p| {
+                        let result = control.materialize_value(p);
+                        outcome_text(&control, result)
+                    })
+                    .collect();
+                let actual = frontier_text(&mut candidate, paths.clone(), jobs);
+                assert_eq!(actual, expected, "jobs={jobs} source={revision}");
+                if revision.contains("missing_text()") {
+                    assert!(actual.iter().all(Result::is_err));
+                }
+                if actual.iter().all(Result::is_ok) {
+                    let scalar = control.check_definition(&path("chosen")).unwrap();
+                    let worker = candidate.check_definition(&path("chosen")).unwrap();
+                    assert_eq!(worker.dependencies, scalar.dependencies);
+                    let reads = candidate
+                        .memo_reads(&path("chosen"), QueryKind::Check)
+                        .unwrap();
+                    assert!(
+                        reads.iter().any(|(key, _)| *key
+                            == memo::ReadKey::ExecutedBody(hirsel_syntax::DefId::intern(&path(
+                                "body_text"
+                            )))),
+                        "jobs={jobs} revision={revision}\nworker={reads:?}\nscalar={:?}",
+                        control.memo_reads(&path("chosen"), QueryKind::Check)
+                    );
+                }
+            }
         }
     });
 }
