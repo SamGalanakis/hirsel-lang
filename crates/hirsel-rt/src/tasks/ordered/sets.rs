@@ -477,7 +477,8 @@ mod tests {
                             &mut task,
                             &scope,
                             child,
-                            environment
+                            environment,
+                            0,
                         ),
                         STATUS_OK
                     );

@@ -80,6 +80,7 @@ mod signature_input;
 mod source_profile;
 #[path = "../support/source_std.rs"]
 mod source_std;
+mod spawn_fast;
 mod tail_calls;
 mod tls_audit;
 mod value_transport;

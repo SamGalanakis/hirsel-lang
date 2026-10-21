@@ -499,6 +499,7 @@ fn spawn(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     // A take argument transfers at entry: a failed spawn releases `main` itself.
     let failure = b.failure(None);
     let callee = operation(&mut b, &entry);
+    let flags = b.u64(0)?;
     let task = invoke(
         &mut b,
         callee,
@@ -506,6 +507,7 @@ fn spawn(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         vec![
             argument(0, Passing::Borrow, s),
             argument(1, Passing::Take, main),
+            argument(2, Passing::Borrow, flags),
         ],
         &[],
         failure,

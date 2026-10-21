@@ -96,7 +96,17 @@ fn run(width: u32, durable: bool, cancel: bool) {
                 env.add(1)
                     .cast::<(u64, Arc<Trace>)>()
                     .write((id as u64, trace.clone()));
-                hirsel_rt_v2_task_spawn(ctx, 0, 0, std::ptr::null_mut(), word, &scope, child, env);
+                hirsel_rt_v2_task_spawn(
+                    ctx,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                    word,
+                    &scope,
+                    child,
+                    env,
+                    0,
+                );
                 let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
                 loop {
                     let held = {
@@ -294,6 +304,7 @@ fn cancel_all_drains_a_saved_receiver_before_done_and_closes_an_empty_set() {
                         &scope,
                         waiting,
                         env,
+                        0,
                     );
                     hirsel_rt_v2_task_add(ctx, &scope, &mut set, &mut child);
                     let until = std::time::Instant::now() + std::time::Duration::from_secs(2);

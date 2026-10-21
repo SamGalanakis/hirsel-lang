@@ -17,7 +17,10 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 35
+#define HIRSEL_RT_V2_ABI_VERSION 36
+/* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
+#define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
+#define HIRSEL_RT_V2_SPAWN_OP_FREE 2
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 40
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_FOREIGN_THREADS_HOME 0

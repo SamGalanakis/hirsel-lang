@@ -787,7 +787,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "R",
             "$intrinsic.TaskSpawn",
-            "s: Scope, take main: once fn() -> ()",
+            "s: Scope, take main: once fn() -> (), flags: u64",
             "Task[R] of s",
         ),
         (

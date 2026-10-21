@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Measure the native-runtime B1 fork_join kernel with spawn flags 0 and 3.
+
+Build its optimized libtest harness with:
+  .buck2/bin/buck2 build //:hirsel-rt-unittest-harness --show-full-simple-output
+Then pass that executable. This isolates L2 on F1's explicit admission seam;
+production provider admission remains dependency-owned. No compiler/startup time
+is described as per-operation latency. Times are paired ratios in this session.
+"""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import random
+import statistics
+import subprocess
+import tempfile
+
+p = argparse.ArgumentParser(description=__doc__)
+p.add_argument('harness', type=Path)
+p.add_argument('--output', type=Path, required=True)
+p.add_argument('--iterations', type=int, default=10000)
+p.add_argument('--seed', type=int, default=20261021)
+p.add_argument('--cpus', default='31,30')
+a = p.parse_args()
+if a.iterations < 1:
+    p.error('iterations must be positive')
+harness = a.harness.resolve()
+case = 'tasks::free::spawn::benchmark::fork_join'
+rows = []
+rng = random.Random(a.seed)
+lock = Path('/workspace/code/hirsel-briefs/locks/cpu31-timing.lock')
+lock.parent.mkdir(parents=True, exist_ok=True)
+with lock.open('a') as lease, tempfile.TemporaryDirectory(prefix='hirsel-spawn-') as directory:
+    fcntl.flock(lease, fcntl.LOCK_EX)
+    for round_index in range(10):
+        order = [0, 3]
+        rng.shuffle(order)
+        for flags in order:
+            counts = Path(directory) / 'perf.csv'
+            command = ['taskset', '-c', a.cpus, 'perf', 'stat', '-x', ';', '-o', str(counts),
+                       '-e', 'cycles,instructions,duration_time', str(harness), '--exact', case,
+                       '--ignored', '--nocapture', '--test-threads=1']
+            env = os.environ | {'HIRSEL_SPAWN_FLAGS': str(flags), 'HIRSEL_SPAWN_N': str(a.iterations)}
+            result = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+            if '1 passed' not in result.stdout:
+                raise RuntimeError(f'benchmark did not execute: {result.stdout} {result.stderr}')
+            row = {'round': round_index, 'flags': flags}
+            for line in counts.read_text().splitlines():
+                if line.startswith('#') or not line.strip():
+                    continue
+                fields = line.split(';')
+                if len(fields) >= 3 and fields[2] in ('cycles', 'instructions'):
+                    row[fields[2]] = int(fields[0].strip())
+                elif len(fields) >= 3 and fields[2] == 'duration_time':
+                    row['seconds'] = float(fields[0]) / 1e9
+            if not all(k in row for k in ('cycles', 'instructions', 'seconds')):
+                raise RuntimeError(f'missing perf counters: {counts.read_text()}')
+            rows.append(row)
+ratios = {}
+for key in ('cycles', 'instructions', 'seconds'):
+    ratios[key] = statistics.median(
+        next(r[key] for r in rows if r['round'] == i and r['flags'] == 3) /
+        next(r[key] for r in rows if r['round'] == i and r['flags'] == 0)
+        for i in range(10))
+report = {'schema': 1, 'workload': 'fork_join', 'admission': 'native Free test seam',
+          'width': 2, 'iterations': a.iterations, 'rounds': 10, 'seed': a.seed, 'cpus': a.cpus,
+          'harness_sha256': hashlib.sha256(harness.read_bytes()).hexdigest(),
+          'fast_over_ordinary': ratios, 'samples': rows}
+a.output.write_text(json.dumps(report, indent=2) + '\n')
+print(json.dumps(ratios, sort_keys=True))
+if ratios['instructions'] >= 1:
+    raise SystemExit('fork_join instruction gate failed')

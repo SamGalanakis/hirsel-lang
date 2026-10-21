@@ -1535,3 +1535,37 @@ adds the two exports without changing existing signatures. Like Rust std's
 `19833af7224424e8b53e288097d56b6af43d5bcf`), output forwards the exact byte
 slice. Hirsel additionally checks capability ownership and cancellation and
 journals the accepted bytes through its existing Print/PrintStderr events.
+
+### Spawn hints and the worker stack pool
+
+`TaskSpawn` carries a trailing `u64 flags` (runtime ABI 36). Bit 0 is a compiler
+proof that the next operation on the normal path awaits this exact child; bit 1
+is an op-free body proof, including transitive calls, captures and destruction,
+with a trivially droppable result. Empty authority is not evidence. The native
+compiler computes these private facts without changing the public function's
+effects. Unknown calls and shapes fall back to ordinary scheduling.
+
+Only the native Free driver uses the hints. For an immediate join it reserves
+the child's row and spawn path, then lends the parent's physical fiber to the
+child's independently owned `TaskCtx`. The running dispatch image names the
+child until its return, so an operation can suspend and migrate it. The parent
+is logically parked on the join; completion restores its image and context on
+the child's final worker before retiring the child. An intervening operation,
+including failure cleanup, materializes the deferred child with the original
+identity before its own effect. Spawn still counts against the 128-op budget.
+An op-free child can return a raw, trivially droppable result image without
+retaining its frame. Ordered execution and replay ignore the hints. Recordings
+retain separate task logs; native replay admission is still the Free driver's
+responsibility.
+
+All workers return idle stacks through `fiber::StackPool`. It preserves the
+upper 64 KiB (including `TaskCtx`) and advises the lower usable pages with
+`MADV_FREE`, falling back to `MADV_DONTNEED` when unsupported. The mapping and
+inaccessible guard stay intact. This follows Go `src/runtime/mem_linux.go:40-68`
+at `ebe2feefc400f813aefdc8a036e66d2619da6649`. Unlike Go's allocator, advice
+failure never remaps the stack: retaining reclaimable idle memory is safe. The
+fixed hot prefix fits Hirsel's fixed guarded mappings rather than Go's growing
+stacks. Exclusive notification ownership follows Tokio's task harness
+`runtime/task/harness.rs:160-229` at `ce685ee6916549ed7e52dbfd5430858bbdc734d3`;
+Hirsel additionally saves a native stack and lends its physical image across a
+nested child. Tests cover reuse, saved/migrated children and a cutter/host stop.

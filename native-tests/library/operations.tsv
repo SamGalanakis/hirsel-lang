@@ -69,7 +69,7 @@ $intrinsic.TaskScopeExit	0b896885779ded741d2652964d2b5656de2a215798e01c7c43df5f0
 $intrinsic.TaskScopeExitUntil	4b26f332c8fd3314461b18cc6d58a5349521423ba219acc424d28a591d35dfec	0:b:n;1:b:n->n
 $intrinsic.TaskSetHas	6ca8fc335fc38a83271a8598baab13fe643c7495cc9310bd52f9021e52225431	0:b:n;1:b:n;2:b:n->n
 $intrinsic.TaskSetTake	522c98c68ef1a8a2898dce1588a11427f8dcef7fa2f60d869e6102f7a5c3bedf	0:b:n;1:m:n;2:b:n->[0]
-$intrinsic.TaskSpawn	f724d6f887b9bc70fd7a4fa3fb5ac5017aa5fcc82c42e39f999518122c0dd879	0:b:n;1:t:a->[0]
+$intrinsic.TaskSpawn	728f8d461fa5fcadd01f0e71401201a208ad7e9676244959df1c1a43b2e70026	0:b:n;1:t:a;2:b:n->[0]
 $intrinsic.TextFinish	e1098ba4b705cb55327924f2f5e108dca425e06e539e36a4ca5688d0b25523f3	0:t:n->n
 $intrinsic.UnicodeScalars_next	5083f524b68f9f077c43ac5aceab500813c17e0b756ed4fa90514836ec338e8e	0:m:[0]->[0]
 $intrinsic.UnicodeScalars_open	b48d377378eededd0bb7ac9d9a3a203a1776bcdfec1db7c82f2ca2b5335d91fd	0:b:n->n

@@ -164,6 +164,9 @@ pub(super) fn end<T>(ctx: *mut TaskCtx, action: impl FnOnce() -> T) -> Stopped<T
 }
 
 fn entry(ctx: *mut TaskCtx) {
+    // A failed path or any operation other than the promised adjacent join
+    // publishes the child normally before performing its own effect.
+    unsafe { super::spawn::flush(ctx) };
     if !on(ctx) {
         // Live entry releases happen under the role, before obtaining a cell
         // or relinquishing scheduler ownership. Recorded roots are not yet

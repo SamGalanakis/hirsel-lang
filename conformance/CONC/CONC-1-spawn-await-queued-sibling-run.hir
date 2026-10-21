@@ -1,0 +1,40 @@
+// rule: CONC-1
+// expect: run
+// Spawn yields: B already queued before C must store before C loads in ordered mode.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let x = atomic.create(tasks, 0u64)
+  task.scope(
+    tasks,
+    fn(s: Scope) -> () {
+      let a = task.async(
+        s,
+        fn() -> u64 {
+          task.scope(
+            tasks,
+            fn(t: Scope) -> u64 {
+              let _ = task.check_canceled(t)
+              let c = task.async(
+                t,
+                fn() -> u64 {
+                  atomic.load(tasks, x)
+                }
+              )
+              task.await(t, take c)
+            }
+          )
+        }
+      )
+      let b = task.async(
+        s,
+        fn() -> () {
+          atomic.store(tasks, x, 1u64)
+        }
+      )
+      let seen = task.await(s, take a)
+      task.await(s, take b)
+      failure.check(seen == 1u64, Arithmetic())
+    }
+  )
+  Ok(())
+}

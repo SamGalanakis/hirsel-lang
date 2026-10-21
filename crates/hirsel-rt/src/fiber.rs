@@ -35,6 +35,31 @@ pub(crate) const GUARD_BYTES: usize = 64 << 10;
 /// Bytes at the top of each mapping for its task's context.
 const CONTEXT_BYTES: usize = size_of::<TaskCtx>().next_multiple_of(64);
 
+/// Retain the common shallow call prefix when a stack returns to its worker.
+/// Deeper pages remain mapped, but Linux may reclaim their contents. This follows
+/// Go's sysUnusedOS (src/runtime/mem_linux.go:40-68); unlike Go we never replace a
+/// mapping if advice is unsupported, since retaining idle pages is harmless.
+const STACK_HOT_BYTES: usize = 64 << 10;
+
+#[derive(Default)]
+pub(crate) struct StackPool(Vec<Stack>);
+
+impl StackPool {
+    pub(crate) fn take(&mut self) -> Stack {
+        self.0.pop().unwrap_or_else(Stack::new)
+    }
+
+    /// The previous context has been destroyed and no continuation can resume.
+    pub(crate) fn put(&mut self, stack: Stack) {
+        stack.release_cold_pages();
+        self.0.push(stack);
+    }
+
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, Stack> {
+        self.0.iter()
+    }
+}
+
 /// The entry a fresh fiber starts in, with the two words [`Stack::prepare`] stored.
 pub(crate) type Entry = unsafe extern "C" fn(*mut u8, *mut u8) -> !;
 
@@ -92,6 +117,20 @@ impl Stack {
     /// One past the highest usable byte, 16-aligned: below the context slot.
     fn top(&self) -> *mut u8 {
         self.context().cast()
+    }
+
+    fn release_cold_pages(&self) {
+        // sysUnusedOS requires both ends page aligned: madvise rounds outwards.
+        // Keep the top prefix, context and guard completely outside the advice.
+        let length = STACK_BYTES - STACK_HOT_BYTES;
+        // SAFETY: this exclusively owned stack is idle, its lower usable range
+        // contains no live object, and both constants are page multiples.
+        unsafe {
+            let cold = self.base.add(GUARD_BYTES).cast();
+            if libc::madvise(cold, length, libc::MADV_FREE) != 0 {
+                libc::madvise(cold, length, libc::MADV_DONTNEED);
+            }
+        }
     }
 
     /// The bytes of this stack's usable pages that are resident, as `mincore(2)` reports
@@ -350,6 +389,36 @@ unsafe extern "C" fn fiber_start() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pooled_stacks_preserve_the_hot_prefix_and_can_start_another_fiber() {
+        let stack = Stack::new();
+        let base = stack.base;
+        // Dirty both deep and shallow pages; no continuation refers to either.
+        unsafe {
+            base.add(GUARD_BYTES).write_volatile(17);
+            stack.top().sub(1024).write_volatile(42);
+        }
+        let mut pool = StackPool::default();
+        pool.put(stack);
+        let stack = pool.take();
+        assert_eq!(stack.base, base);
+        assert_eq!(unsafe { stack.top().sub(1024).read_volatile() }, 42);
+        let mut ping = Ping {
+            main: std::ptr::null_mut(),
+            fiber: std::ptr::null_mut(),
+            trace: Vec::new(),
+            depth: 0,
+        };
+        let p = &raw mut ping;
+        unsafe {
+            ping.fiber = stack.prepare(entry, p.cast(), 7usize as *mut u8);
+            switch(&raw mut ping.main, ping.fiber);
+            switch(&raw mut ping.main, ping.fiber);
+        }
+        assert_eq!(ping.trace, [7, 3]);
+        assert_eq!(ping.depth, 10_000);
+    }
 
     struct Ping {
         main: *mut u8,

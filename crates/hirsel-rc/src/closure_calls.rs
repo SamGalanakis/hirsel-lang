@@ -185,6 +185,7 @@ pub struct Specializations {
 
 pub fn specialize(lowered: &mut Lowered) -> Specializations {
     let originals = lowered.units.clone();
+    let op_free = crate::spawn::op_free(&originals, &lowered.table);
     let entries: HashMap<_, _> = originals
         .iter()
         .enumerate()
@@ -204,9 +205,13 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
     let mut counts = vec![0; originals.len()];
     let mut cache = BTreeMap::new();
     let mut seeds = vec![Vec::new(); originals.len()];
+    let mut spawn_flags = vec![0; originals.len()];
     let mut at = 0;
     while at < lowered.units.len() {
         let codes = discover(&lowered.units[at], &entries, &seeds[at]);
+        if spawn_flags[at] != 0 {
+            crate::spawn::set_flags(&mut lowered.units[at], spawn_flags[at]);
+        }
         for call in 0..lowered.units[at].tables.calls.len() {
             let site = lowered.units[at].tables.calls[call].clone();
             match site.callee {
@@ -264,7 +269,8 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                     let source = &originals[original];
                     // Library units are generated templates; source specializations
                     // retain source failure anchors and external entry identity.
-                    if source.header.origin != UnitOrigin::Source {
+                    let spawn = source.header.definition.is_core("task.async");
+                    if source.header.origin != UnitOrigin::Source && !spawn {
                         continue;
                     }
                     let abi = &lowered.table.fn_abis[source.header.abi.0 as usize];
@@ -289,8 +295,23 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                     if bound.is_empty() {
                         continue;
                     }
+                    let mut flags = 0;
+                    if spawn {
+                        if crate::spawn::immediately_awaited(&lowered.units[at], call) {
+                            flags |= crate::spawn::IMMEDIATE;
+                        }
+                        if bound
+                            .iter()
+                            .any(|(p, t)| *p == 1 && op_free.get(&t.symbol) == Some(&true))
+                        {
+                            flags |= crate::spawn::OP_FREE;
+                        }
+                        if flags == 0 {
+                            continue;
+                        }
+                    }
                     bound.sort_by_key(|(p, _)| *p);
-                    let encoded: Vec<u8> = bound
+                    let mut encoded: Vec<u8> = bound
                         .iter()
                         .flat_map(|(p, t)| {
                             let mut b = (*p as u64).to_le_bytes().to_vec();
@@ -301,6 +322,9 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                             b
                         })
                         .collect();
+                    if spawn {
+                        encoded.extend(flags.to_le_bytes());
+                    }
                     let digest = ContentHash::of_parts(
                         "hirsel.callable-target-specialization.v1",
                         [source.header.instance.0.as_slice(), encoded.as_slice()],
@@ -321,6 +345,7 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                         lowered.units.push(u);
                         origins.push(InstanceId(original as u32));
                         seeds.push(bound);
+                        spawn_flags.push(flags);
                         inline.insert(digest);
                         cache.insert(key, i);
                         i

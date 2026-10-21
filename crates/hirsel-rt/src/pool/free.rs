@@ -167,7 +167,24 @@ pub(crate) unsafe fn recycle_stack(stack: Stack) {
     let me = own_exec();
     assert!(!me.is_null(), "stack retirement requires its idle worker");
     // SAFETY: this worker belongs exclusively to this idle thread.
-    unsafe { (*(*me).worker.get()).idle_stacks.push(stack) };
+    unsafe { (*(*me).worker.get()).idle_stacks.put(stack) };
+}
+
+/// Lend the running physical image to an immediate child's stable context.
+/// The parent's continuation remains below it on the same native stack. A
+/// child may save/migrate that stack; its return restores the parent's image.
+/// # Safety
+/// The caller owns the role and current image; neither row is published elsewhere.
+pub(crate) unsafe fn lend(ctx: *mut TaskCtx, task: u32) {
+    unsafe {
+        let me = own_exec();
+        assert!(!me.is_null());
+        let mut active = (*me).active.take().expect("running image to lend");
+        let image = active.running.value_mut();
+        image.ctx = ctx;
+        image.task = task;
+        (*me).active.set(Some(active));
+    }
 }
 
 /// Notify a task selected by the logical policy. A running notification

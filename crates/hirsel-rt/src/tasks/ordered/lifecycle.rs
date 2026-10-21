@@ -129,10 +129,7 @@ pub(crate) unsafe fn spawn(
         });
         (index, generation, path)
     };
-    let stack = unsafe { (*ctx).worker() }
-        .idle_stacks
-        .pop()
-        .unwrap_or_else(Stack::new);
+    let stack = unsafe { (*ctx).worker() }.idle_stacks.take();
     let child = stack.context();
     unsafe {
         child.write(TaskCtx::new((*ctx).worker_ptr(), (*ctx).run_ptr()));
@@ -848,7 +845,8 @@ mod tests {
                                 &mut child,
                                 &scope,
                                 detach_child,
-                                env
+                                env,
+                                0
                             ),
                             STATUS_OK
                         );
@@ -1042,7 +1040,8 @@ mod tests {
                                 &mut child,
                                 &scope,
                                 spawning_child,
-                                env
+                                env,
+                                0
                             ),
                             STATUS_OK
                         );
@@ -1183,7 +1182,8 @@ mod tests {
                                 &mut task,
                                 &scope,
                                 child,
-                                environment
+                                environment,
+                                0,
                             ),
                             STATUS_OK
                         );
@@ -1419,7 +1419,8 @@ mod tests {
                             &mut child,
                             &scope,
                             send_child,
-                            environment
+                            environment,
+                            0,
                         ),
                         STATUS_OK
                     );

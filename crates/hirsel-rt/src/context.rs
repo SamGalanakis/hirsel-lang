@@ -172,7 +172,7 @@ pub(crate) struct Worker {
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     pub(crate) immortalized: u64,
     /// Stacks of completed tasks, for the next spawns.
-    pub(crate) idle_stacks: Vec<crate::fiber::Stack>,
+    pub(crate) idle_stacks: crate::fiber::StackPool,
     /// The stack of a task that completed; the next task to run recycles it.
     pub(crate) retired: Option<crate::fiber::Stack>,
 }
@@ -194,7 +194,7 @@ impl Worker {
             run,
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
             immortalized: 0,
-            idle_stacks: Vec::new(),
+            idle_stacks: Default::default(),
             retired: None,
         }))
     }

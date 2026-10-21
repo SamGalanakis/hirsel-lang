@@ -1445,7 +1445,8 @@ mod tests {
                                 &mut child,
                                 &scope,
                                 fuel_child,
-                                environment
+                                environment,
+                                0,
                             ),
                             0
                         );

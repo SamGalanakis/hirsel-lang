@@ -21,6 +21,7 @@ pub mod ready;
 pub mod reuse;
 pub mod reuse_stores;
 pub mod spare_push;
+mod spawn;
 pub mod specialize_drop;
 pub mod statics;
 

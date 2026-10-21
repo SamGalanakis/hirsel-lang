@@ -175,7 +175,22 @@ pub(crate) unsafe fn join(
     size: u64,
     caller_site: u64,
 ) -> Stopped<u8> {
+    // Claim an unpublished adjacent child before begin() flushes deferred work.
+    let inline = {
+        let s = scheduler(ctx);
+        let scope_id = s.scope_handle(scope);
+        let child = s.task_handle(task, scope_id);
+        let me = s.current;
+        (s.task(me).deferred == Some(child)).then(|| {
+            s.task(me).deferred = None;
+            child
+        })
+    };
     super::record::begin(ctx);
+    if let Some(child) = inline {
+        super::record::publish(ctx, Phase::Entered, |_| ())?;
+        unsafe { super::spawn::run(ctx, child, Some((slot, size))) }?;
+    }
     let s = scheduler(ctx);
     let scope = s.scope_handle(scope);
     let child = s.task_handle(task, scope);
@@ -185,7 +200,14 @@ pub(crate) unsafe fn join(
         State::Parked
     };
     match state {
-        State::Done => {}
+        State::Done => {
+            if let Some((image, expected)) = s.task(child).inline_value.take() {
+                assert_eq!(expected as u64, size);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(image.as_ptr().cast::<u8>(), slot, expected)
+                };
+            }
+        }
         State::Holding => {
             super::record::publish(ctx, Phase::Entered, |_| ())?;
             let held = scheduler(ctx)
@@ -251,6 +273,9 @@ pub(crate) unsafe fn finish(
     none: *const u8,
     size: u64,
 ) -> Stopped<u8> {
+    if unsafe { super::spawn::finish(ctx, slot, none, size) } {
+        return Ok(STATUS_OK);
+    }
     let s = scheduler(ctx) as *mut Scheduler;
     let me = unsafe { (*s).current };
     let row = unsafe { (*s).task(me) };
@@ -360,6 +385,7 @@ pub(crate) unsafe fn spawn(
     code: TaskCode,
     environment: *mut Header,
     operation_site: u64,
+    flags: u64,
 ) -> Stopped<()> {
     super::record::begin(ctx);
     let started = unsafe { (*ctx).run_ref() }
@@ -384,20 +410,30 @@ pub(crate) unsafe fn spawn(
         });
         (scope, current, generation, index, path, canceled)
     };
-    let stack = unsafe { (*ctx).worker() }
-        .idle_stacks
-        .pop()
-        .unwrap_or_else(Stack::new);
-    let child_ctx = stack.context();
+    let fast = super::spawn::allowed(ctx, flags);
+    let stack = (!fast).then(|| unsafe { (*ctx).worker().idle_stacks.take() });
+    let mut owned = fast.then(|| {
+        Box::new(std::cell::UnsafeCell::new(unsafe {
+            TaskCtx::new((*ctx).worker_ptr(), (*ctx).run_ptr())
+        }))
+    });
+    let child_ctx = match (&stack, &mut owned) {
+        (Some(stack), _) => stack.context(),
+        (_, Some(owned)) => owned.get(),
+        _ => unreachable!(),
+    };
     unsafe {
-        child_ctx.write(TaskCtx::new((*ctx).worker_ptr(), (*ctx).run_ptr()));
+        if let Some(stack) = &stack {
+            child_ctx.write(TaskCtx::new((*ctx).worker_ptr(), (*ctx).run_ptr()));
+            (*child_ctx).task_sp =
+                stack.prepare(task_entry, child_ctx.cast(), index as usize as *mut u8);
+        }
         (*child_ctx).task_id = index;
-        (*child_ctx).task_sp =
-            stack.prepare(task_entry, child_ctx.cast(), index as usize as *mut u8);
     }
     let mut task = Task::new(generation, child_ctx, Some(scope), path, canceled);
     task.code = Some((code, environment, operation_site));
-    task.stack = Some(stack);
+    task.stack = stack;
+    task.inline_context = owned;
     let log = super::record::prepare_child(ctx);
     super::record::spawn(ctx, log, |log| unsafe {
         if let Some(log) = &log {
@@ -422,7 +458,21 @@ pub(crate) unsafe fn spawn(
         metrics.spawn(started.elapsed());
     }
     unsafe {
-        crate::pool::free::schedule_saved((*ctx).run_ptr(), index, Owner::Any);
+        if fast && flags & super::spawn::IMMEDIATE != 0 {
+            scheduler(ctx).task(current).deferred = Some(index);
+            // The compiler proved the next op is its join. Returning does not
+            // expose an unstarted child to a worker before its destination exists.
+            if scheduler(ctx).task(current).budget.proceed() {
+                return Ok(());
+            }
+            // Count spawn as an operation even when its physical switch is
+            // elided; the parent's 128-op fairness bound still applies.
+            super::spawn::flush(ctx);
+        } else if fast {
+            super::spawn::run(ctx, index, None)?;
+        } else {
+            crate::pool::free::schedule_saved((*ctx).run_ptr(), index, Owner::Any);
+        }
         try_yield(&mut *ctx)
     }
 }
@@ -556,6 +606,7 @@ mod tests {
                             &scope,
                             result,
                             environment,
+                            0,
                         );
                     }
                     assert_eq!(
@@ -712,6 +763,7 @@ mod tests {
                     &scope,
                     result,
                     environment,
+                    0,
                 );
                 let id = child as u32;
                 let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -856,7 +908,7 @@ mod tests {
                 let cut = cutter.recorder.stop("cut", None).unwrap().unwrap().0;
                 let _role = role::Guard::new(ctx);
                 let mut out = u64::MAX;
-                assert!(spawn(ctx, &mut out, scope, never, std::ptr::null_mut(), 0).is_err());
+                assert!(spawn(ctx, &mut out, scope, never, std::ptr::null_mut(), 0, 0).is_err());
                 assert_eq!(out, u64::MAX);
                 let s = scheduler(ctx);
                 let index = s.scope_handle(scope);

@@ -1955,6 +1955,11 @@ fn runtime_declarations_match_the_landed_c_header() {
         "CONFIG_DIAGNOSTIC",
         &runtime_abi::CONFIG_DIAGNOSTIC.to_string(),
     );
+    define(
+        "SPAWN_IMMEDIATE_AWAIT",
+        &runtime_abi::SPAWN_IMMEDIATE_AWAIT.to_string(),
+    );
+    define("SPAWN_OP_FREE", &runtime_abi::SPAWN_OP_FREE.to_string());
     define("HEADER_SIZE", &runtime_abi::HEADER_SIZE.to_string());
     define("COUNT_IMMORTAL", "UINT32_MAX");
     define(

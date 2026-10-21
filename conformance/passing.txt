@@ -572,6 +572,7 @@ conformance/CLO/CLO-4-taken-heap-capture-run.hir
 conformance/CLO/CLO-5-direct-scoped-call.hir
 conformance/CLO/CLO-5-recursive-cycle.hir
 conformance/CONC/CONC-1-pure-child.hir
+conformance/CONC/CONC-1-spawn-await-queued-sibling-run.hir
 conformance/CONC/CONC-2-await.hir
 conformance/CONC/CONC-2-cancel-then-await.hir
 conformance/CONC/CONC-2-child-resource-drop-run.hir

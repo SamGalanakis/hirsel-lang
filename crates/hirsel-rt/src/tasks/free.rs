@@ -13,6 +13,7 @@ pub(crate) mod lifecycle;
 pub(crate) mod mutex;
 pub(crate) mod record;
 pub(crate) mod sets;
+mod spawn;
 
 #[derive(Default)]
 pub(crate) struct Driver;
@@ -364,7 +365,8 @@ mod tests {
                                 } else {
                                     result_child
                                 },
-                                environment
+                                environment,
+                                0,
                             ),
                             STATUS_OK
                         );

@@ -122,6 +122,7 @@ fn native_cancel_and_unshielded_checks_record_observations_and_replay_the_cut() 
                         &scope_word,
                         child,
                         environment,
+                        0,
                     );
                 }
                 wait_until(|| race.checked.load(Ordering::Acquire));

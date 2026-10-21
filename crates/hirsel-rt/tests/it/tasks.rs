@@ -83,6 +83,7 @@ fn spawn(ctx: *mut TaskCtx, scope: u64, code: hirsel_rt::tasks::TaskCode, id: u6
                 &scope,
                 code,
                 environment,
+                0,
             )
         },
         0

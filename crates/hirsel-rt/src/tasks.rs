@@ -154,6 +154,15 @@ struct Task {
     /// Its context: the root's is the run's first, a child's lies at the top of its stack.
     ctx: *mut TaskCtx,
     stack: Option<Stack>,
+    /// Fast children own a stable context independently of the lent fiber.
+    inline_context: Option<Box<std::cell::UnsafeCell<TaskCtx>>>,
+    /// A compiler-proved adjacent spawn/await, not published to a worker yet.
+    deferred: Option<u32>,
+    /// Parent destination while an immediate child runs on its parent's fiber.
+    inline_result: Option<(*mut u8, u64)>,
+    /// An op-free child's trivially droppable result, already off its frame.
+    inline_value: Option<(Vec<u128>, usize)>,
+    inline_running: bool,
     state: State,
     /// The scope it was spawned into (the root has none).
     scope: Option<u32>,
@@ -692,6 +701,11 @@ impl Task {
             dispatch: None,
             ctx,
             stack: None,
+            inline_context: None,
+            deferred: None,
+            inline_result: None,
+            inline_value: None,
+            inline_running: false,
             state: State::Ready,
             scope,
             path,
@@ -1510,7 +1524,7 @@ pub(crate) fn gate_version(ctx: *mut TaskCtx, gate: u32) -> u64 {
 fn recycle(ctx: &mut TaskCtx) {
     let worker = ctx.worker();
     if let Some(stack) = worker.retired.take() {
-        worker.idle_stacks.push(stack);
+        worker.idle_stacks.put(stack);
     }
 }
 
@@ -2443,6 +2457,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     scope: *const u64,
     code: TaskCode,
     environment: *mut Header,
+    flags: u64,
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
@@ -2460,7 +2475,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
         unsafe {
             crate::stop::check(
                 ctx,
-                free::lifecycle::spawn(ctx, out, scope.read(), code, environment, operation_site),
+                free::lifecycle::spawn(
+                    ctx,
+                    out,
+                    scope.read(),
+                    code,
+                    environment,
+                    operation_site,
+                    flags,
+                ),
             )
         };
         return STATUS_OK;
@@ -2518,10 +2541,7 @@ unsafe fn spawn_child(
     let generation = s.fresh_generation();
     // SAFETY: the context is live.
     let (worker, run) = unsafe { ((*ctx).worker_ptr(), (*ctx).run_ptr()) };
-    let stack = unsafe { (*ctx).worker() }
-        .idle_stacks
-        .pop()
-        .unwrap_or_else(Stack::new);
+    let stack = unsafe { (*ctx).worker() }.idle_stacks.take();
     let child = stack.context();
     // SAFETY: the slot lies in this stack, whose previous task's context gave up its contents.
     unsafe { child.write(TaskCtx::new(worker, run)) };

@@ -70,6 +70,7 @@ fn late_set_creation_and_reverse_insertion_preserve_scope_completion_ranks() {
                         &scope,
                         result,
                         environment,
+                        0,
                     );
                     let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
                     loop {

@@ -297,7 +297,8 @@ mod tests {
                         &mut child,
                         &scope,
                         sibling,
-                        environment
+                        environment,
+                        0,
                     ),
                     STATUS_OK
                 );

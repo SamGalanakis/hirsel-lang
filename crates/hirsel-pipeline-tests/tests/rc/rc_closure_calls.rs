@@ -260,3 +260,80 @@ pub fn main(rt:Io,args:Args)->Result[(),GrantError] {{
         });
     }
 }
+
+fn spawn_flags(source: &str) -> Vec<u128> {
+    use hirsel_lir::ir::{ArgumentValue, Callee, ConstantValue, Inst};
+    let (_, lowered) = lower_valid(source);
+    let mut found = Vec::new();
+    for u in &lowered.units {
+        for call in &u.tables.calls {
+            let Callee::Operation(op) = call.callee else {
+                continue;
+            };
+            if !u.tables.operations[op.index()]
+                .definition
+                .is_core("$intrinsic.TaskSpawn")
+            {
+                continue;
+            }
+            let flags = call
+                .arguments
+                .get(&u.pools.call_arguments)
+                .unwrap()
+                .iter()
+                .find(|a| a.parameter == 2)
+                .unwrap();
+            let ArgumentValue::Value(v) = flags.value else {
+                panic!("flags are bits")
+            };
+            let constant = u
+                .instructions
+                .iter()
+                .find_map(|i| match *i {
+                    Inst::Const { result, constant } if result == v => Some(constant),
+                    _ => None,
+                })
+                .unwrap();
+            let ConstantValue::Integer(bits) = u.tables.constants[constant.index()].value else {
+                panic!("flags are u64")
+            };
+            found.push(bits);
+        }
+    }
+    found
+}
+
+#[test]
+fn a_scalar_child_has_an_op_free_proof_and_an_adjacent_join() {
+    let flags = spawn_flags(
+        "fn main(tasks: Tasks)->u64 {task.scope(tasks, fn(s:Scope)->u64 {let child=task.async(s,fn()->u64 {42u64}); task.await(s,take child)})}",
+    );
+    assert!(flags.contains(&3), "flags: {flags:?}");
+}
+
+#[test]
+fn an_empty_authority_summary_does_not_prove_an_atomic_child_op_free() {
+    let flags = spawn_flags(
+        "fn main(tasks: Tasks)->u64 {let a=atomic.create(tasks,0u64); task.scope(tasks, fn(s:Scope)->u64 {let child=task.async(s,fn()->u64 {atomic.load(tasks,a)}); task.await(s,take child)})}",
+    );
+    assert!(flags.contains(&1), "flags: {flags:?}");
+    assert!(!flags.iter().any(|f| f & 2 != 0));
+}
+
+#[test]
+fn an_intervening_operation_prevents_the_immediate_join_proof() {
+    let flags = spawn_flags(
+        "fn main(tasks: Tasks)->u64 {task.scope(tasks, fn(s:Scope)->u64 {let child=task.async(s,fn()->u64 {42u64}); task.check_canceled(s); task.await(s,take child)})}",
+    );
+    assert!(flags.contains(&2), "flags: {flags:?}");
+    assert!(!flags.iter().any(|f| f & 1 != 0));
+}
+
+#[test]
+fn a_child_returning_an_owned_result_retains_its_cleanup_fiber() {
+    let flags = spawn_flags(
+        "fn main(tasks: Tasks)->String {task.scope(tasks, fn(s:Scope)->String {let child=task.async(s,fn()->String {\"owned\"}); task.await(s,take child)})}",
+    );
+    assert!(flags.contains(&1), "flags: {flags:?}");
+    assert!(!flags.iter().any(|f| f & 2 != 0));
+}
