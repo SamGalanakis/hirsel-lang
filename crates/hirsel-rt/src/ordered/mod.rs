@@ -112,6 +112,12 @@ pub trait Backend<P> {
     /// Enter one holding rest selected by a retiring call, including later
     /// members after a previous rest returns. No poll or user code may run.
     fn call(&mut self, _caller: TaskId, _child: TaskId) {}
+    /// Process the next member of a bulk call even when it needs no rest.
+    /// This keeps detach/cancellation effects in member order across calls.
+    fn call_member(&mut self, _caller: TaskId, _child: TaskId) {}
+    /// The final rest returned (or every member needed no call), before the
+    /// caller's final transition. A bulk operation can release its owned set.
+    fn call_returned(&mut self, _caller: TaskId) {}
     /// Native polling can call a home adapter and release the scheduler role.
     /// Return true to request an owned polling continuation instead of calling
     /// poll while Frontier is borrowed. Complete it with Frontier::complete_poll.
@@ -596,6 +602,7 @@ impl<P, R> Frontier<P, R> {
             .0
             .pop_front()
         {
+            backend.call_member(task, child);
             if self.tasks[&child].state != State::Holding {
                 continue;
             }
@@ -609,6 +616,7 @@ impl<P, R> Frontier<P, R> {
             return Progress::Called(child);
         }
         let (_, then_yield) = self.tasks.get_mut(&task).unwrap().calls.take().unwrap();
+        backend.call_returned(task);
         if then_yield {
             self.finish_turn(task, Next::Yield, backend)
         } else {

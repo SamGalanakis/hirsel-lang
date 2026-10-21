@@ -20,6 +20,10 @@ use hirsel_rt_operations::descriptors::op_descriptor;
 /// Mutex wrappers remain owner-local allocations outside these cell effects.
 /// Drops and task/host effects still need retirement/credit adapters.
 pub(crate) enum Command {
+    TaskDetachAll {
+        scope: u64,
+        set: u64,
+    },
     TaskDetach {
         scope: u64,
         child: u64,
@@ -107,6 +111,7 @@ pub(crate) enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::TaskDetachAll { .. } => "task.detach_all",
             Self::TaskDetach { .. } => "task.detach",
             Self::TaskSpawn { .. } => "task.async",
             Self::RootRelease { .. } => "root.release",
@@ -229,6 +234,7 @@ impl Backend<Command> for Objects<'_> {
         let s = super::scheduler(self.ctx);
         match &op.payload {
             Command::Head { .. }
+            | Command::TaskDetachAll { .. }
             | Command::TaskDetach { .. }
             | Command::TaskSpawn { .. }
             | Command::ScopeEnter { .. }
@@ -254,7 +260,7 @@ impl Backend<Command> for Objects<'_> {
         }
     }
 
-    fn commit(&mut self, _: TaskId, op: &Operation<Command>, early: bool) -> Receipt<Outcome> {
+    fn commit(&mut self, task: TaskId, op: &Operation<Command>, early: bool) -> Receipt<Outcome> {
         assert_eq!(op.descriptor.name, op.payload.name());
         if let Command::RootRelease { block } = &op.payload {
             assert!(!early, "root releases only retire");
@@ -275,6 +281,31 @@ impl Backend<Command> for Objects<'_> {
         // validity. All byte storage below is owned, including output images.
         let (result, next) = unsafe {
             match &op.payload {
+                Command::TaskDetachAll { scope, set } => {
+                    assert!(!early, "bulk detach only retires");
+                    let scope = s.scope_handle(*scope);
+                    let set = s.set_handle(*set, scope);
+                    let words = s.set(set).members.clone();
+                    let members = words
+                        .into_iter()
+                        .flatten()
+                        .filter(|&word| s.member(word).is_some())
+                        .collect();
+                    let super::Logical::Ordered(driver) = &mut s.logical else {
+                        unreachable!()
+                    };
+                    assert!(
+                        driver.detaching.insert(task, set).is_none(),
+                        "one active bulk call per task"
+                    );
+                    (
+                        Outcome::image(0, Vec::new()),
+                        Next::Call {
+                            members,
+                            then_yield: true,
+                        },
+                    )
+                }
                 Command::TaskSpawn { reservation } => {
                     assert!(!early, "a child cannot start before spawn retirement");
                     let spawn = reservation
@@ -509,6 +540,18 @@ impl Backend<Command> for Objects<'_> {
 
     fn call(&mut self, caller: TaskId, child: TaskId) {
         lifecycle::call_saved(super::scheduler(self.ctx), caller, child);
+    }
+    fn call_member(&mut self, caller: TaskId, child: TaskId) {
+        lifecycle::detach_member(super::scheduler(self.ctx), caller, child);
+    }
+    fn call_returned(&mut self, caller: TaskId) {
+        let s = super::scheduler(self.ctx);
+        let super::Logical::Ordered(driver) = &mut s.logical else {
+            unreachable!()
+        };
+        if let Some(set) = driver.detaching.remove(&caller) {
+            s.close_set(set);
+        }
     }
 
     fn defer_poll(&self) -> bool {

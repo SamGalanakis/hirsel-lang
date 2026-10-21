@@ -286,6 +286,26 @@ pub(super) fn call_saved(s: &mut Scheduler, caller: u64, child: u64) {
     s.task(parent).state = State::Parked;
 }
 
+/// A bulk detach's members are processed one at a time, after any earlier
+/// member's rest. Running/done members need the same ordered detach effect.
+pub(super) fn detach_member(s: &mut Scheduler, caller: u64, child: u64) {
+    let Logical::Ordered(driver) = &s.logical else {
+        unreachable!()
+    };
+    if !driver.detaching.contains_key(&caller) {
+        return;
+    }
+    let Some(index) = s.member(child) else { return };
+    let row = s.task(index);
+    row.detached = true;
+    if row.state == State::Done && row.failure.is_none() {
+        assert!(readiness::saved(s, index));
+        let scope = s.task(index).scope.expect("a detached child scope");
+        s.scope(scope).children.retain(|&c| c != index);
+        s.vacate_task(index);
+    }
+}
+
 /// Execute a holding child's rest as a call, never as a FIFO enqueue.
 /// # Safety
 /// The child is holding a physically saved frame; the caller owns the role.
@@ -670,13 +690,16 @@ mod tests {
         logged: std::sync::atomic::AtomicBool,
         child: std::sync::atomic::AtomicU64,
         rest_done: std::sync::atomic::AtomicBool,
+        child2: std::sync::atomic::AtomicU64,
+        set: std::sync::atomic::AtomicU64,
+        order: std::sync::Mutex<Vec<u64>>,
     }
 
     unsafe extern "C" fn detach_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
         use std::sync::atomic::Ordering;
         let [probe, mode, atomic] = unsafe { crate::alloc::payload(env).cast::<[u64; 3]>().read() };
         let probe = unsafe { &*(probe as *const DetachOrder) };
-        if mode == 0 {
+        if mode != 1 {
             let mut result = [1u64, 17];
             assert_eq!(
                 unsafe {
@@ -690,6 +713,23 @@ mod tests {
                 STATUS_OK
             );
             assert_eq!(result, [1, 17], "discard remains owned by this rest");
+            let set = probe.set.load(Ordering::Acquire);
+            if set != 0 {
+                let _role = unsafe { role::Guard::new(ctx) };
+                let s = scheduler(ctx);
+                assert!(
+                    s.sets[set as u32 as usize].is_some(),
+                    "set remains owned through all calls"
+                );
+                if mode == 2 {
+                    let later = probe.child.load(Ordering::Acquire) as u32;
+                    assert!(
+                        !s.task(later).detached,
+                        "later member is untouched during the first rest"
+                    );
+                    assert_eq!(s.task(later).state, State::Holding);
+                }
+            }
             let mut canceled = 0;
             assert_eq!(
                 unsafe { hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0) },
@@ -705,6 +745,7 @@ mod tests {
                 "later caller logs cannot retire inside its child's rest"
             );
             probe.rest_done.store(true, Ordering::Release);
+            probe.order.lock().unwrap().push(mode);
         } else {
             let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while !probe.logged.load(Ordering::Acquire) {
@@ -721,12 +762,16 @@ mod tests {
             assert!(!s.task(child).detached, "detach mutates only at retirement");
             assert!(s.task(child).slot.is_some());
             assert!(!probe.rest_done.load(Ordering::Acquire));
+            let child2 = probe.child2.load(Ordering::Acquire);
+            if child2 != 0 {
+                assert!(!s.task(child2 as u32).detached);
+                assert_eq!(s.task(child2 as u32).state, State::Holding);
+            }
         }
         STATUS_OK
     }
 
-    #[test]
-    fn logged_native_detach_calls_a_saved_yielding_rest_before_later_caller_logs() {
+    fn run_logged_detach(bulk: bool) {
         use std::sync::{Arc, atomic::Ordering};
         let layout = crate::Layout {
             magic: crate::LAYOUT_MAGIC,
@@ -771,7 +816,15 @@ mod tests {
                         STATUS_OK
                     );
                     let mut held = 0;
-                    for mode in 0..2 {
+                    let mut set = 0;
+                    if bulk {
+                        assert_eq!(
+                            hirsel_rt_v2_task_set(ctx, std::ptr::null_mut(), &mut set, &scope),
+                            STATUS_OK
+                        );
+                        seen.set.store(set, Ordering::Release);
+                    }
+                    for mode in if bulk { vec![0, 2, 1] } else { vec![0, 1] } {
                         let env = crate::alloc::hirsel_rt_v2_alloc(
                             ctx,
                             2,
@@ -799,15 +852,37 @@ mod tests {
                             ),
                             STATUS_OK
                         );
-                        if mode == 0 {
-                            held = child;
-                            seen.child.store(child, Ordering::Release);
+                        if mode != 1 {
+                            if mode == 0 {
+                                held = child;
+                                seen.child.store(child, Ordering::Release);
+                            } else {
+                                seen.child2.store(child, Ordering::Release);
+                            }
                             let _role = role::Guard::new(ctx);
                             engine::at_head(ctx).unwrap();
                             assert_eq!(scheduler(ctx).task(child as u32).state, State::Holding);
+                            if mode == 2 {
+                                assert_eq!(
+                                    hirsel_rt_v2_task_add(ctx, &scope, &mut set, &mut child),
+                                    STATUS_OK
+                                );
+                                assert_eq!(
+                                    hirsel_rt_v2_task_add(ctx, &scope, &mut set, &mut held),
+                                    STATUS_OK
+                                );
+                                engine::at_head(ctx).unwrap();
+                            }
                         }
                     }
-                    assert_eq!(hirsel_rt_v2_task_detach(ctx, &scope, &mut held), STATUS_OK);
+                    if bulk {
+                        assert_eq!(
+                            hirsel_rt_v2_task_detach_all(ctx, &scope, &mut set),
+                            STATUS_OK
+                        );
+                    } else {
+                        assert_eq!(hirsel_rt_v2_task_detach(ctx, &scope, &mut held), STATUS_OK);
+                    }
                     let value = 7u64;
                     assert_eq!(
                         hirsel_rt_v2_atomic_store(ctx, &atomic, (&raw const value).cast(), 8),
@@ -826,6 +901,10 @@ mod tests {
                     assert_eq!(loaded, 7);
                     let _role = role::Guard::new(ctx);
                     engine::at_head(ctx).unwrap();
+                    if bulk {
+                        assert!(scheduler(ctx).sets[set as u32 as usize].is_none());
+                        assert!(engine::driver(ctx).detaching.is_empty());
+                    }
                     let me = engine::current(ctx);
                     engine::driver(ctx).finishing(me);
                     STATUS_OK
@@ -833,7 +912,21 @@ mod tests {
             );
             assert_eq!(outcome.ended, Ok(STATUS_OK));
             assert!(probe.rest_done.load(Ordering::Acquire));
+            assert_eq!(
+                *probe.order.lock().unwrap(),
+                if bulk { vec![2, 0] } else { vec![0] }
+            );
         }
+    }
+
+    #[test]
+    fn logged_native_detach_calls_a_saved_yielding_rest_before_later_caller_logs() {
+        run_logged_detach(false);
+    }
+
+    #[test]
+    fn logged_native_bulk_detach_calls_members_in_add_order_before_closing_the_set() {
+        run_logged_detach(true);
     }
 
     #[derive(Default)]

@@ -466,6 +466,12 @@ impl<F: FnOnce() -> (T, Next), T> Backend<Command> for HeadEffect<'_, '_, F, T> 
     fn call(&mut self, caller: TaskId, child: TaskId) {
         self.objects.call(caller, child);
     }
+    fn call_member(&mut self, caller: TaskId, child: TaskId) {
+        self.objects.call_member(caller, child);
+    }
+    fn call_returned(&mut self, caller: TaskId) {
+        self.objects.call_returned(caller);
+    }
     fn defer_poll(&self) -> bool {
         true
     }

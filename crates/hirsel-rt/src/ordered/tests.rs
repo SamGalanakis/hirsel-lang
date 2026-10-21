@@ -20,6 +20,8 @@ struct Objects {
     wakes: Vec<TaskId>,
     deferred: bool,
     calls: Vec<(TaskId, TaskId)>,
+    members: Vec<(TaskId, TaskId)>,
+    returned_calls: Vec<TaskId>,
 }
 
 impl Backend<Command> for Objects {
@@ -56,6 +58,12 @@ impl Backend<Command> for Objects {
     }
     fn call(&mut self, caller: TaskId, child: TaskId) {
         self.calls.push((caller, child));
+    }
+    fn call_member(&mut self, caller: TaskId, child: TaskId) {
+        self.members.push((caller, child));
+    }
+    fn call_returned(&mut self, caller: TaskId) {
+        self.returned_calls.push(caller);
     }
     fn poll(&mut self) -> Vec<TaskId> {
         self.polls += 1;
@@ -334,6 +342,8 @@ fn a_logged_detach_all_calls_holding_members_in_order_before_its_later_log() {
         Progress::Called(4)
     );
     assert_eq!(b.calls, [(2, 3), (2, 4)]);
+    assert_eq!(b.members, [(2, 3), (2, 4)]);
+    assert!(b.returned_calls.is_empty());
     assert_eq!(b.polls, polls);
     assert_eq!(
         f.apply_head(empty(), step("task.end", Next::End), &mut b)
@@ -341,6 +351,7 @@ fn a_logged_detach_all_calls_holding_members_in_order_before_its_later_log() {
         Progress::Retired
     );
     assert_eq!(f.head(), Some(1));
+    assert_eq!(b.returned_calls, [2]);
     assert!(!b.values.contains_key(&object(7)));
     f.apply_head(empty(), step("task.check_canceled", Next::Yield), &mut b)
         .unwrap();

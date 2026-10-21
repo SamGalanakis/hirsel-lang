@@ -232,6 +232,15 @@ pub(crate) unsafe fn release(
     cancel: bool,
     caller_site: u64,
 ) -> Stopped<u8> {
+    if !cancel {
+        let scope = unsafe { scope.read() };
+        let set = unsafe { set.read() };
+        engine::submit(
+            ctx,
+            super::Command::TaskDetachAll { scope, set }.operation(writes([Item::Task(set)])),
+        )?;
+        return Ok(STATUS_OK);
+    }
     let name = if cancel {
         "task.cancel_all"
     } else {
