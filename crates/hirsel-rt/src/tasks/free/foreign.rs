@@ -565,7 +565,11 @@ mod tests {
 
                 let parked = {
                     let _role = role::Guard::new(ctx);
-                    matches!(scheduler(ctx).task(0).wait, Some(Wait::Pool))
+                    let s = scheduler(ctx);
+                    // Wait metadata is installed before the physical save.
+                    // Observe the same saved-frame gate as production polling
+                    // before releasing the slot that wakes this waiter.
+                    matches!(s.task(0).wait, Some(Wait::Pool)) && readiness::saved(s, 0)
                 };
                 if parked {
                     break;
