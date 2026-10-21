@@ -21,7 +21,8 @@
       "row": "switch_queue",
       "metrics": [
         "switches_per_op",
-        "queue_ops_per_op"
+        "queue_ops_per_op",
+        "steals_per_s"
       ],
       "workloads": [
         "yield",

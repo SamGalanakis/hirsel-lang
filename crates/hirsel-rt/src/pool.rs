@@ -405,6 +405,7 @@ pub struct WorkerMetrics {
     switches: AtomicU64,
     elisions: AtomicU64,
     queue_ops: AtomicU64,
+    ready_metrics: std::sync::OnceLock<Arc<hirsel_free::work::Metrics>>,
     spawns: AtomicU64,
     spawn_ns: AtomicU64,
     migrations: AtomicU64,
@@ -425,6 +426,7 @@ impl Default for WorkerMetrics {
             switches: AtomicU64::new(0),
             elisions: AtomicU64::new(0),
             queue_ops: AtomicU64::new(0),
+            ready_metrics: std::sync::OnceLock::new(),
             spawns: AtomicU64::new(0),
             spawn_ns: AtomicU64::new(0),
             migrations: AtomicU64::new(0),
@@ -464,6 +466,9 @@ impl WorkerMetrics {
     pub(crate) fn queue_op(&self) {
         self.queue_ops.fetch_add(1, Relaxed);
     }
+    fn ready_metrics(&self) -> Arc<hirsel_free::work::Metrics> {
+        self.ready_metrics.get_or_init(Default::default).clone()
+    }
     /// A child task created in `took`; it is resident until it completes.
     pub(crate) fn spawn(&self, took: Duration) {
         self.spawns.fetch_add(1, Relaxed);
@@ -500,13 +505,18 @@ impl WorkerMetrics {
         };
         let ops = self.ops.load(Relaxed);
         let seconds = self.started.elapsed().as_secs_f64();
-        [
+        let ready = self.ready_metrics.get().map(|metrics| metrics.counts());
+        let queue_ops = self.queue_ops.load(Relaxed) + ready.map_or(0, |(ops, _, _)| ops);
+        let mut values = vec![
             ("switches_per_op", ratio(&self.switches, ops)),
             (
                 "permit_wait_ns",
                 ratio(&self.permit_wait_ns, self.permit_acquires.load(Relaxed)),
             ),
-            ("queue_ops_per_op", ratio(&self.queue_ops, ops)),
+            (
+                "queue_ops_per_op",
+                (ops != 0).then(|| queue_ops as f64 / ops as f64),
+            ),
             ("spawn_ns", ratio(&self.spawn_ns, self.spawns.load(Relaxed))),
             (
                 "rss_bytes_per_task",
@@ -520,10 +530,17 @@ impl WorkerMetrics {
                 "refresh_ns",
                 ratio(&self.refresh_ns, self.refreshes.load(Relaxed)),
             ),
-        ]
-        .into_iter()
-        .filter_map(|(name, value)| Some((name, value?)))
-        .collect()
+        ];
+        if let Some((_, steals, _)) = ready {
+            values.push((
+                "steals_per_s",
+                (seconds > 0.0).then(|| steals as f64 / seconds),
+            ));
+        }
+        values
+            .into_iter()
+            .filter_map(|(name, value)| Some((name, value?)))
+            .collect()
     }
     /// Started tasks resumed on another worker so far.
     pub fn migrations(&self) -> u64 {

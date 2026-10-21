@@ -450,6 +450,7 @@ mod tests {
         run.free = true;
         run.config.layouts = layouts.as_ptr();
         run.config.layout_count = 1;
+        let metrics = run.worker_metrics();
         // SAFETY: these bodies use the free task policy and no host services.
         unsafe { run.use_physical_dispatch() };
         let outcome = run.run(
@@ -525,6 +526,12 @@ mod tests {
         );
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
         assert_eq!(outcome.pending, 0);
+        let values = metrics
+            .values()
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert!(values["queue_ops_per_op"] > 0.0);
+        assert!(values["steals_per_s"] >= 0.0);
     }
 
     #[test]

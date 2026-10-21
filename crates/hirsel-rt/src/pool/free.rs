@@ -118,7 +118,11 @@ fn word_owner(owner: u32) -> Owner {
 /// service lifetime and scheduler role contracts must hold before activation.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
     let execs = execs(ctx);
-    let (ready, locals) = hirsel_free::work::workers(MAX_WIDTH, None);
+    let metrics = unsafe { (*ctx).run_ref() }
+        .worker_metrics
+        .as_ref()
+        .map(|m| m.ready_metrics());
+    let (ready, locals) = hirsel_free::work::workers(MAX_WIDTH, metrics);
     assert!(
         execs
             .dispatch

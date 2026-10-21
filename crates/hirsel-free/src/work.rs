@@ -16,6 +16,7 @@ use std::time::Instant;
 
 /// B1's queue headroom counts. Collection is optional; the uninstrumented path
 /// reads no clock and does no counter atomic operation.
+#[derive(Debug)]
 pub struct Metrics {
     started: Instant,
     queue_ops: AtomicU64,

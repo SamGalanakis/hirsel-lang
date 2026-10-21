@@ -4,6 +4,7 @@
   "required_header": ["schema", "width", "metrics"],
   "owners": {
     "switches_per_op": "W1/F1: TaskCtx switch_out + switch_in pair / semantic ops",
+    "steals_per_s": "F1: successful steal-half batches / measured seconds; present only with physical queue metrics",
     "queue_ops_per_op": "W1/F1: enqueue/dequeue/steal events / semantic ops",
     "spawn_ns": "W1/L2: accumulated fiber/task creation ns / children",
     "rss_bytes_per_task": "W1: touched stack RSS / simultaneously resident tasks",
