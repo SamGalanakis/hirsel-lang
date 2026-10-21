@@ -14,6 +14,9 @@ use std::sync::Arc;
 
 mod declarations;
 mod provider;
+mod sources;
+pub use sources::CitationSource;
+pub(crate) use sources::SourceContext;
 mod views;
 pub use declarations::{DeclarationIndex, Declarations, ModuleInputs};
 pub(crate) use declarations::{RowImage, header_hash, logical};
@@ -723,5 +726,69 @@ mod tests {
             engine.observe(&owner, &ReadKey::FailedSignature(failed)),
             Some(changed.failed_signature_receipt(failed))
         );
+    }
+    #[test]
+    fn frozen_citations_select_occurrences_and_observe_current_body_text() {
+        let mut engine =
+            QueryEngine::new(default_environment(), crate::phases::engine_only_adapters());
+        let context = default_context();
+        for (file, source) in [
+            ("left.hir", "fn target() {}\nfn left() {}\n"),
+            ("right.hir", "fn target() {}\nfn right() {}\n"),
+        ] {
+            let file = engine.sources.add(file, source.into()).unwrap();
+            engine.parse_file(file, &context).unwrap();
+        }
+        let path = |name: &str| {
+            let mut p = crate::entry_path(&context);
+            p.0.name = name.into();
+            DefId::intern(&p)
+        };
+        let target = path("target");
+        let snapshot = engine.signature_snapshot();
+        let source = engine.citation_source();
+        let mut receipts = vec![];
+        let mut spans = vec![];
+        for owner in [path("left"), path("right")] {
+            let mut reads = ReadsBuilder::new();
+            let mut provider =
+                FrozenProvider::for_definition(&snapshot, owner, &source, &mut reads);
+            let span = provider.cite_name(target.path()).unwrap();
+            assert_eq!(Some(span), source.cited_name(owner, target));
+            spans.push(span);
+            let reads = reads.finish().unwrap();
+            receipts.push(
+                reads
+                    .iter()
+                    .find_map(|(key, value)| (*key == ReadKey::CitedText(target)).then_some(*value))
+                    .unwrap(),
+            );
+        }
+        assert_ne!(spans[0], spans[1]);
+        assert_ne!(
+            engine.sources.resolve(spans[0]).file,
+            engine.sources.resolve(spans[1]).file
+        );
+        assert_eq!(receipts[0], receipts[1]);
+        let before = receipts[0];
+        drop(source);
+        let file = engine
+            .sources
+            .add("right.hir", "fn target() { 1 }\nfn right() {}\n".into())
+            .unwrap();
+        engine.parse_file(file, &context).unwrap();
+        let source = engine.citation_source();
+        let mut reads = ReadsBuilder::new();
+        // The retained snapshot is intentionally the earlier signature view.
+        let mut provider =
+            FrozenProvider::for_definition(&snapshot, path("right"), &source, &mut reads);
+        assert!(provider.cite_name(target.path()).is_some());
+        let reads = reads.finish().unwrap();
+        let now = reads
+            .iter()
+            .find_map(|(key, value)| (*key == ReadKey::CitedText(target)).then_some(*value))
+            .unwrap();
+        assert_ne!(before, now);
+        assert_eq!(now, source.cited_text(target));
     }
 }

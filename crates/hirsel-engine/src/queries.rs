@@ -664,12 +664,18 @@ impl QueryEngine {
     /// The name site of `path`'s first item in the file of `owner`'s first
     /// item, relative to that item's anchor.
     fn cited_name(&self, owner: &DefPath, path: &DefPath) -> Option<Span> {
-        let file = self.item_file(self.items.get(owner)?.first()?);
-        self.items
-            .get(path)?
-            .iter()
-            .find(|candidate| self.item_file(candidate) == file)
-            .map(|candidate| candidate.item.name_span)
+        self.citation_source()
+            .cited_name(DefId::intern(owner), DefId::intern(path))
+    }
+    /// Citation reads of the current source revision, borrowed independently of
+    /// retained signature snapshots so ordinary body edits stay observable.
+    pub fn citation_source(&self) -> impl CitationSource + '_ {
+        crate::snapshot::SourceContext {
+            sources: &self.sources,
+            items: &self.items,
+            declarations: &self.declarations,
+            image: self.image.as_ref().map(|adopted| &*adopted.image),
+        }
     }
     /// A failed signature's key: its own content and what it read.
     fn failed_signature_key(&self, path: &DefPath) -> Option<ContentHash> {

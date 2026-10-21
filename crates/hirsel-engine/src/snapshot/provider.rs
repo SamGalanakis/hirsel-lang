@@ -16,6 +16,8 @@ pub struct FrozenProvider<'a> {
     owner: PackageId,
     reads: &'a mut ReadsBuilder,
     private_shapes: bool,
+    definition: Option<DefId>,
+    citations: Option<&'a dyn super::CitationSource>,
 }
 impl<'a> FrozenProvider<'a> {
     pub fn new(
@@ -28,6 +30,8 @@ impl<'a> FrozenProvider<'a> {
             owner,
             reads,
             private_shapes: false,
+            definition: None,
+            citations: None,
         }
     }
     /// A body query's provider, selecting its package's private views while
@@ -43,7 +47,22 @@ impl<'a> FrozenProvider<'a> {
             owner,
             reads,
             private_shapes: true,
+            definition: None,
+            citations: None,
         }
+    }
+    /// A body worker's complete signature/citation provider over immutable
+    /// signature and current-source inputs. Each worker owns its read builder.
+    pub fn for_definition(
+        snapshot: &'a SignatureSnapshot,
+        owner: DefId,
+        citations: &'a dyn super::CitationSource,
+        reads: &'a mut ReadsBuilder,
+    ) -> Self {
+        let mut provider = Self::for_body(snapshot, owner.path().0.package.clone(), reads);
+        provider.definition = Some(owner);
+        provider.citations = Some(citations);
+        provider
     }
     /// `d`'s view as the owner's bodies see it, recording `Signature(d)` (or
     /// `FailedSignature(d)`) and, for an opaque type seen privately,
@@ -145,6 +164,14 @@ impl SignatureProvider for FrozenProvider<'_> {
         } else {
             self.public_signature(definition)
         }
+    }
+    fn cite_name(&mut self, target: &hirsel_syntax::DefPath) -> Option<hirsel_span::Span> {
+        let source = self.citations?;
+        let owner = self.definition?;
+        let target = DefId::intern(target);
+        self.reads
+            .record(ReadKey::CitedText(target), source.cited_text(target));
+        source.cited_name(owner, target)
     }
     fn lookup(&mut self, context: &FileContext, path: &Path) -> LookupOutput {
         let output = self.snapshot.lookup(context, path);

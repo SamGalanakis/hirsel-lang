@@ -1,0 +1,88 @@
+//! Current source inputs borrowed by frozen body workers. Signature snapshots
+//! deliberately survive ordinary body edits; citation text never lives there.
+use crate::*;
+use hirsel_span::{FileId, Span};
+use hirsel_syntax::{ContentHash, DefId, ItemSyntax};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+/// Occurrence-aware names and exact cited-text inputs from one source revision.
+/// Kept separate from a signature snapshot, which may survive body edits.
+pub trait CitationSource: Sync {
+    fn cited_name(&self, owner: DefId, target: DefId) -> Option<Span>;
+    fn cited_text(&self, target: DefId) -> ContentHash;
+}
+
+pub(crate) struct SourceContext<'a> {
+    pub sources: &'a SourceMap,
+    pub items: &'a BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+    pub declarations: &'a DeclarationIndex,
+    pub image: Option<&'a crate::image::StdImage>,
+}
+impl SourceContext<'_> {
+    fn file(&self, syntax: &ItemSyntax) -> Option<FileId> {
+        self.sources.anchor(syntax.anchor).map(|(file, _)| file)
+    }
+}
+impl CitationSource for SourceContext<'_> {
+    fn cited_name(&self, owner: DefId, target: DefId) -> Option<Span> {
+        let file = match self.items.get(owner.path()).and_then(|v| v.first()) {
+            Some(first) => self.file(first)?,
+            None => {
+                self.sources
+                    .anchor(
+                        self.declarations
+                            .sites(owner.path())
+                            .first()?
+                            .name_span
+                            .anchor,
+                    )?
+                    .0
+            }
+        };
+        if let Some(items) = self.items.get(target.path()) {
+            return items
+                .iter()
+                .find(|syntax| self.file(syntax) == Some(file))
+                .map(|syntax| syntax.item.name_span);
+        }
+        self.declarations
+            .sites(target.path())
+            .iter()
+            .find(|site| {
+                self.sources
+                    .anchor(site.name_span.anchor)
+                    .is_some_and(|(f, _)| f == file)
+            })
+            .map(|site| site.name_span)
+    }
+    fn cited_text(&self, target: DefId) -> ContentHash {
+        let Some(candidates) = self.items.get(target.path()) else {
+            return self
+                .image
+                .and_then(|image| image.inputs(target))
+                .map(|inputs| inputs.cited)
+                .unwrap_or_else(|| {
+                    ContentHash::of_parts("hirsel.read.uncited", std::iter::empty::<&[u8]>())
+                });
+        };
+        let parts: Vec<Vec<u8>> = candidates
+            .iter()
+            .map(|candidate| {
+                let mut part = self
+                    .file(candidate)
+                    .and_then(|file| self.sources.file(file))
+                    .map_or(vec![], |file| {
+                        file.logical_path().as_os_str().as_encoded_bytes().to_vec()
+                    });
+                part.push(0);
+                part.extend(candidate.occurrence.to_le_bytes());
+                part.extend(candidate.item.name_span.start.to_le_bytes());
+                part.extend(candidate.item.name_span.end.to_le_bytes());
+                part.extend(candidate.text_hash.0);
+                part
+            })
+            .collect();
+        ContentHash::of_parts("hirsel.read.cited", parts.iter().map(Vec::as_slice))
+    }
+}

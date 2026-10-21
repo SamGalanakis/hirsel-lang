@@ -234,28 +234,7 @@ impl QueryEngine {
     /// depends on the citing owner's file, but the observed value may not,
     /// so readers in different files merge.
     pub(crate) fn cited_value(&self, path: &DefPath) -> ContentHash {
-        let Some(candidates) = self.items.get(path) else {
-            return match self.image_inputs(path) {
-                Some(inputs) => inputs.cited,
-                None => tag("hirsel.read.uncited", &[]),
-            };
-        };
-        let parts: Vec<Vec<u8>> = candidates
-            .iter()
-            .map(|c| {
-                let file = self.sources.file(self.item_file(c));
-                let mut part = file.map_or(vec![], |f| {
-                    f.logical_path().as_os_str().as_encoded_bytes().to_vec()
-                });
-                part.push(0);
-                part.extend(c.occurrence.to_le_bytes());
-                part.extend(c.item.name_span.start.to_le_bytes());
-                part.extend(c.item.name_span.end.to_le_bytes());
-                part.extend(c.text_hash.0);
-                part
-            })
-            .collect();
-        ContentHash::of_parts("hirsel.read.cited", parts.iter().map(Vec::as_slice))
+        self.citation_source().cited_text(DefId::intern(path))
     }
     pub(crate) fn failed_key_value(&self, path: &DefPath) -> ContentHash {
         optional(self.failed_signature_key(path))
