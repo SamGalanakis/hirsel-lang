@@ -415,6 +415,9 @@ pub struct BodyRun {
     pub migrate: bool,
     /// Test the admitted free policy without an environment test hook.
     pub free: bool,
+    /// Opt in to saved-segment dispatch for executor boundary tests. The body
+    /// must use that policy's explicit suspension/wake seams throughout.
+    physical_dispatch: bool,
     pub fuel: Option<u64>,
     pub adapter: Option<Box<dyn crate::io::Adapter>>,
     control: std::sync::Arc<crate::stop::Control>,
@@ -438,6 +441,7 @@ impl BodyRun {
             width,
             migrate,
             free: false,
+            physical_dispatch: false,
             fuel: None,
             adapter: None,
             control: Default::default(),
@@ -447,6 +451,15 @@ impl BodyRun {
     pub fn control(&self) -> RunControl {
         self.control.host();
         RunControl(std::sync::Arc::clone(&self.control))
+    }
+    /// Use physical dispatch for executor-boundary tests, before launching.
+    ///
+    /// # Safety
+    /// The body routes every suspension, ready notification and end through
+    /// the physical policy. It obeys saved-frame gating for stack-slot access
+    /// and every scheduler-role and service-lifetime contract.
+    pub unsafe fn use_physical_dispatch(&mut self) {
+        self.physical_dispatch = true;
     }
     pub fn worker_metrics(&mut self) -> std::sync::Arc<crate::pool::WorkerMetrics> {
         std::sync::Arc::clone(self.metrics.get_or_insert_with(Default::default))
@@ -489,6 +502,10 @@ impl BodyRun {
                     },
                     self.migrate,
                 );
+            }
+            if self.physical_dispatch {
+                assert!(crate::pool::wide((*ctx).run_ref()));
+                crate::pool::free::enable(ctx);
             }
             if self.fuel.is_some() {
                 (*ctx).set_budgets(self.fuel, None);

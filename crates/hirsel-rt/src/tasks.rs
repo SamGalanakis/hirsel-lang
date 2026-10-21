@@ -143,6 +143,9 @@ struct Slot {
 
 struct Task {
     generation: u32,
+    /// Role-owned notification metadata. Remote wakes never read a running
+    /// TaskCtx, whose local runtime entries may hold an exclusive borrow.
+    dispatch: Option<std::sync::Arc<crate::pool::free::Frame>>,
     /// Its context: the root's is the run's first, a child's lies at the top of its stack.
     ctx: *mut TaskCtx,
     stack: Option<Stack>,
@@ -586,6 +589,7 @@ impl Task {
     ) -> Task {
         Task {
             generation,
+            dispatch: None,
             ctx,
             stack: None,
             state: State::Ready,
@@ -1120,6 +1124,30 @@ pub(crate) unsafe fn resume_row(
     let row = s.task(task);
     record_worker(row, here, metrics);
     (ctx, unsafe { (*ctx).task_sp })
+}
+
+/// Stable physical-dispatch identity. The caller already owns the scheduler
+/// role; acquiring a different task's role here would deadlock a notifier.
+///
+/// # Safety
+/// The run/task are live and the caller owns its role or root admission.
+pub(crate) unsafe fn dispatch_frame(
+    run: *mut crate::context::RunShared,
+    task: u32,
+) -> (
+    &'static mut Option<std::sync::Arc<crate::pool::free::Frame>>,
+    *mut TaskCtx,
+) {
+    unsafe {
+        let task = (*(*run).tasks.get()).as_deref_mut().unwrap().task(task);
+        (&mut task.dispatch, task.ctx)
+    }
+}
+
+pub(crate) fn dispatch_owner(ctx: *mut TaskCtx) -> Owner {
+    let s = scheduler(ctx);
+    let me = s.current;
+    s.task(me).owner
 }
 
 /// Dispatch the running task's foreign interval to a blocking-pool thread (S-13): it waits

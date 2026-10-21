@@ -45,6 +45,8 @@ use crate::fiber::{self, Stack};
 use crate::stop::{Stop, Stopped};
 use crate::{environmental, fault};
 
+pub(crate) mod free;
+
 /// The most blocking-pool threads one run starts.
 pub(crate) const POOL_THREADS: usize = 64;
 
@@ -86,11 +88,12 @@ struct Done {
 }
 
 /// What a thread is asked to do next.
-#[derive(Clone)]
 enum Post {
     /// Resume task `task`, taking a compute permit first when `permit` (a task resumed into C
     /// or into the home thread's Io takes none).
     Run { task: u32, permit: bool },
+    /// An exclusive saved physical segment, selected independently of policy.
+    Saved(free::Saved),
     /// Home only: run a closure for a waiting thread.
     Call(Call),
     /// Home only: the run's state changed (its root completed or it stopped): look again.
@@ -120,6 +123,10 @@ pub(crate) struct Exec {
     held: AtomicBool,
     exited: AtomicBool,
     lost: AtomicBool,
+    ready: Cell<Option<hirsel_free::work::Worker<free::Saved>>>,
+    active: Cell<Option<free::Active>>,
+    leaving: Cell<Option<free::Leave>>,
+    ready_epoch: AtomicU64,
 }
 
 // SAFETY: the cells are touched only by the exec's own thread while it runs.
@@ -145,6 +152,10 @@ impl Exec {
             held: AtomicBool::new(held),
             exited: AtomicBool::new(false),
             lost: AtomicBool::new(false),
+            ready: Cell::new(None),
+            active: Cell::new(None),
+            leaving: Cell::new(None),
+            ready_epoch: AtomicU64::new(0),
         })
     }
 
@@ -370,6 +381,7 @@ pub(crate) struct Execs {
     calls: hirsel_free::claim::Requests<()>,
     next_call: AtomicU64,
     activity: Mutex<()>,
+    dispatch: std::sync::OnceLock<free::Dispatch>,
 }
 
 /// Active destinations and workers draining after a shrink. Only the run-token
@@ -648,6 +660,7 @@ unsafe fn init_execs(ctx: *mut TaskCtx) -> &'static mut Execs {
                 calls: Default::default(),
                 next_call: AtomicU64::new(0),
                 activity: Mutex::new(()),
+                dispatch: std::sync::OnceLock::new(),
             })
         })
     }
@@ -790,6 +803,9 @@ unsafe fn idle_of(ctx: *mut TaskCtx, execs: &Execs, me: *const Exec) -> *mut u8 
 pub(crate) unsafe fn abandon(ctx: *mut TaskCtx) -> ! {
     // SAFETY: caller contract.
     unsafe {
+        if free::enabled((*ctx).run_ref()) {
+            free::finish_current(ctx);
+        }
         (*ctx).switch_out();
         let execs = execs(ctx);
         let me = current(execs);
@@ -894,13 +910,41 @@ unsafe fn run_call(call: Call) {
 unsafe fn serve(run: *mut RunShared, exec: &Exec) -> bool {
     // SAFETY: caller contract.
     unsafe { post_deferred(run, exec) };
-    let (post, queued) = exec.take();
+    unsafe { free::saved(run, exec) };
+    let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+    let (post, queued) = if execs.dispatch.get().is_none() {
+        exec.take()
+    } else {
+        loop {
+            let epoch = exec.ready_epoch.load(Ordering::Acquire);
+            if let Some(post) = exec.inbox.lock().unwrap().posts.pop_front() {
+                break post;
+            }
+            if let Some(saved) = free::next(execs, exec) {
+                break (Post::Saved(saved), None);
+            }
+            let mut inbox = exec.inbox.lock().unwrap();
+            if let Some(post) = inbox.posts.pop_front() {
+                break post;
+            }
+            if exec.ready_epoch.load(Ordering::Acquire) == epoch {
+                drop(exec.bell.wait(inbox).unwrap());
+            }
+        }
+    };
     match post {
-        Post::Exit => false,
+        Post::Exit => {
+            free::retire(execs, exec);
+            false
+        }
         Post::Wake => true,
         Post::Call(call) => {
             // SAFETY: a call's closure waits for it.
             unsafe { run_call(call) };
+            true
+        }
+        Post::Saved(saved) => {
+            unsafe { free::resume(run, exec, saved) };
             true
         }
         Post::Run { task, permit } => {
@@ -1073,6 +1117,11 @@ pub(crate) unsafe fn start_root(run: *mut RunShared, task: u32) {
     // SAFETY: caller contract.
     let execs = unsafe { (*(*run).execs.get()).as_deref() }
         .unwrap_or_else(|| fault("a run without workers"));
+    if execs.dispatch.get().is_some() {
+        // SAFETY: root admission owns the scheduler, before its first dispatch.
+        unsafe { free::schedule_saved(run, task, Owner::Any) };
+        return;
+    }
     execs.compute.lock().unwrap().active[0].post(Post::Run { task, permit: true }, None);
 }
 
@@ -1090,9 +1139,12 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
     loop {
         // SAFETY: this is the home thread, idle on its own stack.
         unsafe { post_deferred(run, &home) };
+        unsafe { free::saved(run, &home) };
         // SAFETY: the run is live.
         if unsafe { (*run).control.stopped().is_some() }
-            || (finished() && busy(unsafe { &*run }) == 0)
+            || (finished()
+                && busy(unsafe { &*run }) == 0
+                && !free::pending(unsafe { (*run).execs.as_deref().unwrap() }))
         {
             break;
         }
@@ -1101,6 +1153,7 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
                 // SAFETY: the post names a suspended task.
                 unsafe { resume(run, &home, task, permit) }
             }
+            Post::Saved(saved) => unsafe { free::resume(run, &home, saved) },
             // SAFETY: a call's closure waits for it.
             Post::Call(call) => unsafe { run_call(call) },
             Post::Wake => {}
