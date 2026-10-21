@@ -1219,13 +1219,38 @@ fn probe() {
   let choices: List[bool] = [true, false]
   for select in choices {
     let chosen = match (if select { if select { a } else { b } } else { b }) { value => value }
+    let again = match chosen { value => value }
+    touch(again)
     touch(chosen)
   }
 }
-fn main() {}
+pub fn main() -> Result[(), ()] { probe(); Ok(()) }
 "#;
         let (probe, signatures) = lowered(source, "probe");
         assert_eq!(kinds(&probe, &signatures), []);
+        let mut engine = new_engine();
+        let file = engine.sources.add("joined.hir", source.into()).unwrap();
+        let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+        let input = engine.export_native_input().unwrap();
+        let validated = engine.import_native_input(input).unwrap();
+        let options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
+        native::build(&validated, &options).unwrap();
+
+        // A whole forwarding chain supplies no permission for an ordinary
+        // counted-storage read whose original loan evidence is missing.
+        let mut forged = native::program(&validated);
+        for definition in forged.definitions.values_mut() {
+            for body in &mut std::sync::Arc::make_mut(definition).bodies {
+                for place in &mut body.places {
+                    place.loan = None;
+                }
+            }
+        }
+        let error = hirsel_rc::import::lower(&forged, &options.target)
+            .err()
+            .expect("forwarding cannot manufacture a loan");
+        assert!(error.to_string().contains("outside any loan"), "{error}");
     });
 }
 

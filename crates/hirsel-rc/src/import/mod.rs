@@ -1422,7 +1422,7 @@ fn view_temporaries(body: &tir::Body) -> Vec<Option<tir::PlaceId>> {
                 continue;
             }
             let (viewed, indexed) = match single(l) {
-                Some(ViewSource::Nested(viewed)) => (viewed, None),
+                Some(ViewSource::Nested(viewed) | ViewSource::Forwarded(viewed)) => (viewed, None),
                 Some(ViewSource::Indexed(viewed, at)) => (viewed, Some(at)),
                 _ => continue,
             };
@@ -1462,10 +1462,14 @@ fn joined_views(body: &tir::Body) -> Vec<bool> {
     let (assigned, _, pinned) = view_assignments(body);
     let root = |p: &tir::PlaceId| body.places[p.0 as usize].root.0 as usize;
     let mut moves = Vec::new();
+    let mut forwards = Vec::new();
     for (d, sources) in assigned.iter().enumerate() {
         for source in sources {
             if let Some(ViewSource::Moved(p)) = source {
                 moves.push((root(p), d));
+            }
+            if let Some(ViewSource::Forwarded(p)) = source {
+                forwards.push((root(p), d));
             }
         }
     }
@@ -1475,10 +1479,19 @@ fn joined_views(body: &tir::Body) -> Vec<bool> {
         .map(|(l, sources)| {
             view_storage(body, l)
                 && !pinned[l]
-                && sources
-                    .iter()
-                    .all(|a| matches!(a, Some(ViewSource::Loaned(_) | ViewSource::Moved(_))))
-                && (sources.len() > 1 || matches!(sources.as_slice(), [Some(ViewSource::Moved(_))]))
+                && sources.iter().all(|a| {
+                    matches!(
+                        a,
+                        Some(
+                            ViewSource::Loaned(_) | ViewSource::Moved(_) | ViewSource::Forwarded(_)
+                        )
+                    )
+                })
+                && (sources.len() > 1
+                    || matches!(
+                        sources.as_slice(),
+                        [Some(ViewSource::Moved(_) | ViewSource::Forwarded(_))]
+                    ))
         })
         .collect();
     // Each pass unjoins at least one local or stops.
@@ -1487,6 +1500,14 @@ fn joined_views(body: &tir::Body) -> Vec<bool> {
         for &(source, destination) in &moves {
             if joined[source] != joined[destination] {
                 joined[source] = false;
+                joined[destination] = false;
+                changed = true;
+            }
+        }
+        // A whole borrow forwards an existing SSA view without consuming it.
+        // It supplies no evidence for an ordinary unloaned storage read.
+        for &(source, destination) in &forwards {
+            if !joined[source] && joined[destination] {
                 joined[destination] = false;
                 changed = true;
             }
@@ -1715,6 +1736,8 @@ enum ViewSource {
     /// A loanless part of another local, with no index: a view only while
     /// that local is one.
     Nested(tir::PlaceId),
+    /// A whole borrow of another view, preserving its existing permissions.
+    Forwarded(tir::PlaceId),
     /// An element under a direct or inherited loan, assigned at `(block,
     /// instruction)`: a view only while its index stays put.
     Indexed(tir::PlaceId, (usize, usize)),
@@ -1760,7 +1783,7 @@ fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<ViewSource>>>, Vec<bool
                                 None if !indexed && !viewed.projection.is_empty() => {
                                     Some(ViewSource::Nested(o.place))
                                 }
-                                _ => None,
+                                None => Some(ViewSource::Forwarded(o.place)),
                             });
                         }
                         tir::Rvalue::Use(o)
