@@ -350,28 +350,11 @@ impl QueryEngine {
         definition: &hirsel_tir::Definition,
         artifact: Signature,
     ) -> Result<(), QueryError> {
-        let report = match self.verify {
-            Verify::On => {
-                let snapshot = self.signature_snapshot();
-                let views =
-                    snapshot.validation_with(&definition.path.path().0.package, Arc::new(artifact));
-                let _timing = timings::phase(Phase::Verify);
-                timings::count(Count::VRuns);
-                hirsel_validate::validate(definition, snapshot.types(), &views, &mut vec![])
-            }
-            Verify::Off => hirsel_validate::Validation::default(),
-        };
-        if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
-            return Err(error);
+        if self.verify == Verify::Off {
+            return Ok(());
         }
-        if report.violations.is_empty() {
-            Ok(())
-        } else {
-            Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                operation: "compile-time TIR validation".into(),
-                message: format!("{:?}", report.violations),
-            }))
-        }
+        let snapshot = self.signature_snapshot();
+        crate::comptime::validate_evaluation(&snapshot, definition, artifact, self.verify)
     }
     pub fn new(mut environment: QueryEnvironment, adapters: PhaseAdapters) -> Self {
         let registry = crate::registry::BuiltinRegistry::shared();

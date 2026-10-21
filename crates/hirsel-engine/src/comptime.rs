@@ -1,6 +1,7 @@
 //! Compile-time execution uses the runtime interpreter; lowering receives plain values.
 use crate::memo::{DepthEvidence, Entered};
 use crate::*;
+use hirsel_intern::timings::{self, Count, Phase};
 use hirsel_interp::Outcome;
 use hirsel_span::Span;
 use hirsel_syntax::{DefId, ExprId, ExprKind};
@@ -103,6 +104,37 @@ impl EvaluationInput<'_> {
             signature: artifact,
             ty,
         })
+    }
+}
+
+/// V over an evaluation's private artifact and the frozen signature universe.
+/// Both the serial caller and S1 workers use this immutable entry point.
+pub(crate) fn validate_evaluation(
+    snapshot: &SignatureSnapshot,
+    definition: &hirsel_tir::Definition,
+    artifact: Signature,
+    verify: Verify,
+) -> Result<(), QueryError> {
+    let report = match verify {
+        Verify::On => {
+            let views =
+                snapshot.validation_with(&definition.path.path().0.package, Arc::new(artifact));
+            let _timing = timings::phase(Phase::Verify);
+            timings::count(Count::VRuns);
+            hirsel_validate::validate(definition, snapshot.types(), &views, &mut vec![])
+        }
+        Verify::Off => hirsel_validate::Validation::default(),
+    };
+    if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
+        return Err(error);
+    }
+    if report.violations.is_empty() {
+        Ok(())
+    } else {
+        Err(QueryError::Operational(hirsel_types::OperationalFailure {
+            operation: "compile-time TIR validation".into(),
+            message: format!("{:?}", report.violations),
+        }))
     }
 }
 
