@@ -274,6 +274,8 @@ pub(crate) struct RunShared {
     pub(crate) free: RoleCell<Option<Box<crate::free::Free>>>,
     /// The admitted tasks.free@1 policy, independently of recording.
     pub(crate) free_mode: bool,
+    /// Fixed at native replay admission before any task starts.
+    pub(crate) free_replay: bool,
     /// Published at ordered admission, read without borrowing policy state.
     pub(crate) ordered_mode: std::sync::atomic::AtomicBool,
     /// Fast allocation preflight selector; MAX means no physical allowance cap.
@@ -828,6 +830,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         schedule: Default::default(),
         free: RoleCell::new(None),
         free_mode: false,
+        free_replay: false,
         ordered_mode: Default::default(),
         ordered_allowance: std::sync::atomic::AtomicU64::new(u64::MAX),
         ordered_memory: Default::default(),

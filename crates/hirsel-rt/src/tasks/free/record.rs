@@ -97,7 +97,11 @@ fn phase<T>(
 
 /// Begin a semantic operation once, including when it later parks/retries.
 pub(super) fn begin(ctx: *mut TaskCtx) {
+    if super::replay::at_cut(ctx) {
+        crate::tasks::park_final(ctx);
+    }
     entry(ctx);
+    super::replay::begin(ctx);
     if let Some(task) = unsafe { (*ctx).recording.as_mut() } {
         task.ordinal = task
             .ordinal
@@ -112,7 +116,20 @@ pub(super) fn publish<T>(
     phase: Phase,
     action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
 ) -> Stopped<T> {
+    let replay = super::replay::token(ctx);
+    publish_with_replay(ctx, phase, replay.as_ref(), action)
+}
+
+fn publish_with_replay<T>(
+    ctx: *mut TaskCtx,
+    phase: Phase,
+    replay: Option<&super::replay::Token>,
+    action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
+) -> Stopped<T> {
     if !on(ctx) {
+        if let Some(replay) = replay {
+            return replay.publish(ctx, phase, || action(None));
+        }
         // Live free mode has no recorder, section gate, ordinal, or encoder.
         return Ok(action(None));
     }
@@ -186,7 +203,7 @@ fn entry(ctx: *mut TaskCtx) {
     // A failed path or any operation other than the promised adjacent join
     // publishes the child normally before performing its own effect.
     unsafe { super::spawn::flush(ctx) };
-    if !on(ctx) {
+    if !on(ctx) && !super::replay::on(ctx) {
         // Live entry releases happen under the role, before obtaining a cell
         // or relinquishing scheduler ownership. Recorded roots instead apply
         // in the admitted prefix, with their deterministic tail afterward.
@@ -239,9 +256,10 @@ pub(crate) unsafe fn atomic_load(
     slot: *mut u8,
     size: u64,
 ) -> Stopped<()> {
-    entry(ctx);
+    begin(ctx);
+    let replay = super::replay::token(ctx);
     let size_bytes = usize::try_from(size).expect("an atomic image fits memory");
-    if on(ctx) {
+    if on(ctx) || super::replay::on(ctx) {
         assert!(size_bytes <= 16, "a recorded atomic image fits 128 bits");
     }
     let image = crate::tasks::scheduler(ctx).sync.image(word, size);
@@ -250,15 +268,26 @@ pub(crate) unsafe fn atomic_load(
     // progress is published, so its next accessor cannot observe an action
     // that the cutter cannot yet see. No scheduler borrow remains here.
     let access = image.access();
-    let result = phase(ctx, |writer| unsafe {
+    let result = publish_with_replay(ctx, Phase::Done, replay.as_ref(), |writer| unsafe {
         let out = std::slice::from_raw_parts_mut(slot, size_bytes);
         access.load(out);
-        if let Some(writer) = writer {
+        if writer.is_some() || replay.is_some() {
             let mut bits = [0; 16];
             bits[..size_bytes].copy_from_slice(out);
-            writer.load(u128::from_le_bytes(bits));
+            if let Some(writer) = writer {
+                writer.load(u128::from_le_bytes(bits));
+            } else {
+                let bits = replay
+                    .as_ref()
+                    .unwrap()
+                    .load(u128::from_le_bytes(bits))?
+                    .to_le_bytes();
+                out.copy_from_slice(&bits[..size_bytes]);
+            }
         }
-    });
+        Ok(())
+    })
+    .and_then(|result| result);
     drop(access);
     drop(image);
     unsafe { crate::tasks::role::enter(ctx) };
@@ -273,12 +302,13 @@ pub(crate) unsafe fn atomic_store(
     value: *const u8,
     size: u64,
 ) -> Stopped<()> {
-    entry(ctx);
+    begin(ctx);
+    let replay = super::replay::token(ctx);
     let image = crate::tasks::scheduler(ctx).sync.image(word, size);
     let value = unsafe { std::slice::from_raw_parts(value, image.size()) };
     unsafe { crate::tasks::role::release(ctx) };
     let access = image.access();
-    let result = phase(ctx, |_| access.store(value));
+    let result = publish_with_replay(ctx, Phase::Done, replay.as_ref(), |_| access.store(value));
     drop(access);
     drop(image);
     unsafe { crate::tasks::role::enter(ctx) };

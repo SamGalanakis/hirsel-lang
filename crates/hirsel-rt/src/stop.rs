@@ -432,6 +432,7 @@ unsafe extern "C" fn root_entry(ctx: *mut u8, frame: *mut u8) -> ! {
     unsafe {
         let _role = crate::tasks::role::Guard::new(ctx);
         check(ctx, observe(ctx));
+        crate::tasks::free::replay::start(ctx);
         let words = &raw mut *(*frame).words;
         let mut status = {
             let _segment = crate::tasks::role::Segment::new(ctx);

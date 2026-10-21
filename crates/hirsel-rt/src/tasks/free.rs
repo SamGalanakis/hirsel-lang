@@ -15,11 +15,14 @@ pub(crate) mod home;
 pub(crate) mod lifecycle;
 pub(crate) mod mutex;
 pub(crate) mod record;
+pub(crate) mod replay;
 pub(crate) mod sets;
 mod spawn;
 
 #[derive(Default)]
-pub(crate) struct Driver;
+pub(crate) struct Driver {
+    replay: Option<std::sync::Arc<replay::Replay>>,
+}
 
 /// Admit the free logical policy for explicit dispatcher tests. General
 /// activation additionally requires the semantic suspension/end branches,
@@ -28,7 +31,7 @@ pub(crate) struct Driver;
 /// Admission only, before the root starts. The body uses only saved-stack
 /// dispatch and supported waits; it cannot invoke cooperative switch paths.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
-    scheduler(ctx).logical = Logical::Free(Driver);
+    scheduler(ctx).logical = Logical::Free(Driver::default());
 }
 
 pub(crate) fn enabled(ctx: *mut TaskCtx) -> bool {
@@ -60,6 +63,9 @@ pub(super) unsafe fn publish_ready(s: &mut Scheduler, run: *mut crate::context::
 /// # Safety
 /// The running task holds the role; its operation's borrows have ended.
 pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
+    if replay::at_cut(ctx) {
+        park_final(ctx);
+    }
     // This experimental policy supports runtime waits only. Its home/driver
     // readiness bridge is not activated; no table borrow crosses a bridge.
     unsafe { super::readiness::poll_free(scheduler(ctx)) };
