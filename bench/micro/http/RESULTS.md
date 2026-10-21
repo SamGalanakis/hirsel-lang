@@ -1,3 +1,5 @@
+Current matched follow-up: [FAST-2.md](FAST-2.md). The ≤3× target remains **INCOMPLETE**.
+
 # HTTP serial measurements — 2026-10-21
 
 The serial HTTP/1 path improves, but the ≤3× hello-web target is **not met**.

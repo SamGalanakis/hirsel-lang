@@ -103,3 +103,23 @@ formatter check. The affected set also passes 71 importer programs, 25 existing
 HTTP Rust tests, seven example tests and 88 agreement variants (no divergence
 clusters). The instruction-budget run stops at the separately recorded main
 failure: `micro/bigint_mul` has no independent small-input output oracle.
+
+## Initial response storage
+
+The inline writer follows hyper
+`b07337878fe57b34b2065335ae8cae9ce5a780a0`,
+[`src/proto/h1/role.rs:423–427`](https://github.com/hyperium/hyper/blob/b07337878fe57b34b2065335ae8cae9ce5a780a0/src/proto/h1/role.rs#L423):
+reserve initial response storage before serializing fields. Hirsel reserves 128
+bytes only for the first response on a connection. This is a capacity hint;
+longer responses continue through the same growth path, and all header and
+framing checks remain in place. Unlike hyper's `30 + header_count * 30`
+estimate, the constant also covers the small body coalesced by this writer and
+adds no request-dependent capacity arithmetic. Reused initialized prefixes keep
+the existing cursor and ownership adapter, since the core List API has no
+truncate or mutable byte-slice operation.
+
+`SEM-1-http-server-output-reuse-run.hir` adapts the keep-alive/pipeline structure
+of hyper `tests/server.rs:691–728,1072–1113`. Its exact scripted responses grow
+past the initial reservation, then shrink through HEAD, 204 and 304 replies;
+leftover initialized bytes must never reach the wire. The driver additionally
+records and replays this case and the existing inline request/body case.

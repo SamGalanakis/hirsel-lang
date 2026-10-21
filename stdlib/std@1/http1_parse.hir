@@ -372,6 +372,12 @@ fn http_output_head(
   keep: bool
 ) -> Result[(), http.HttpError] uses {} {
   http.validate_headers(headers)?
+  // hyper b0733787 src/proto/h1/role.rs:423-427 reserves before encoding.
+  // Start a connection with enough storage for a small head and body. Later
+  // responses reuse the initialized prefix; larger messages still grow normally.
+  if core@1/list.len(buffer_state.bytes) == 0 {
+    core@1/list.reserve(mut buffer_state.bytes, 128)
+  }
   buffer_state.used = 0
   http_output_append(mut buffer_state, b"HTTP/1.1 ")
   http_output_decimal(mut buffer_state, core@1/int.widen(status))

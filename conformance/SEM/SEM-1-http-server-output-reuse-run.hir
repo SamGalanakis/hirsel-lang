@@ -1,0 +1,125 @@
+// rule: SEM-1
+// expect: run
+// hyper b0733787 src/proto/h1/role.rs:423-427 reserves serialization storage;
+// tests/server.rs:691-728,1072-1113 exercises keep-alive and pipelined replies.
+fn network(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let tasks = test.tasks(t)
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Send(
+                b"GET /small HTTP/1.1\r\nHost: example.com\r\n\r\nGET /grow HTTP/1.1\r\nHost: example.com\r\n\r\nHEAD /head HTTP/1.1\r\nHost: example.com\r\n\r\nGET /204 HTTP/1.1\r\nHost: example.com\r\n\r\nGET /304 HTTP/1.1\r\nHost: example.com\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nX-Test: one\r\nContent-Length: 3\r\nConnection: keep-alive\r\n\r\nabc"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nX-Long: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\nContent-Length: 3\r\nConnection: keep-alive\r\n\r\nxyz"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nX-Test: h\r\nContent-Length: 8\r\nConnection: keep-alive\r\n\r\n"
+              ),
+              Expect(b"HTTP/1.1 204 \r\nConnection: keep-alive\r\n\r\n"),
+              Expect(b"HTTP/1.1 304 \r\nConnection: keep-alive\r\n\r\n"),
+              Close()
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let socket = net.connect(n, "example.com", 80u16, Unbounded()) ? network
+  let mut c = http.server_connection(tasks, n, take socket, http.default_config())
+  for _ in 0u64..5u64 {
+    test.check(
+      t,
+      http.serve_next(
+        mut c,
+        None(),
+        fn(r: http.ServerRequestView) -> Result[http.ServerResponse, http.HttpError] uses {} {
+          let target = http.server_request_target(r)
+          if target == "/small" {
+            return Ok(
+              http.ServerResponse(
+                status: 200u16,
+                headers: [http.Header(name: "X-Test", value: "one")],
+                body: b"abc",
+                close: false
+              )
+            )
+          }
+          if target == "/grow" {
+            return Ok(
+              http.ServerResponse(
+                status: 200u16,
+                headers: [
+                  http.Header(
+                    name: "X-Long",
+                    value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  )
+                ],
+                body: b"xyz",
+                close: false
+              )
+            )
+          }
+          if target == "/head" {
+            return Ok(
+              http.ServerResponse(
+                status: 200u16,
+                headers: [http.Header(name: "X-Test", value: "h")],
+                body: b"metadata",
+                close: false
+              )
+            )
+          }
+          if target == "/204" {
+            return Ok(
+              http.ServerResponse(
+                status: 204u16,
+                headers: [],
+                body: b"ignored",
+                close: false
+              )
+            )
+          }
+          if target == "/304" {
+            return Ok(
+              http.ServerResponse(
+                status: 304u16,
+                headers: [],
+                body: b"ignored",
+                close: false
+              )
+            )
+          }
+          Error(OutOfOrder())
+        }
+      )?
+    )
+  }
+  test.check(
+    t,
+    !http.serve_next(
+      mut c,
+      None(),
+      fn(r: http.ServerRequestView) -> Result[http.ServerResponse, http.HttpError] uses {} {
+        Error(OutOfOrder())
+      }
+    )?
+  )
+  Ok(())
+}

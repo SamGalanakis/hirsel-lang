@@ -733,6 +733,8 @@ fn assert_http_script_replay(relative: &str) {
 fn streaming_http_scripts_replay_writes_completion_and_drop() {
     with_compiler_stack(|| {
         for relative in [
+            "conformance/SEM/SEM-1-http-server-inline-run.hir",
+            "conformance/SEM/SEM-1-http-server-output-reuse-run.hir",
             "conformance/SEM/SEM-1-http-server-stream-run.hir",
             "conformance/SEM/SEM-1-http-server-stream-drop-run.hir",
             "conformance/SEM/SEM-1-http-server-stream-malformed-run.hir",
