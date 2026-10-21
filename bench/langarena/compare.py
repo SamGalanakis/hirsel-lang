@@ -275,11 +275,11 @@ def report(data, published, output):
              f"Published host: {published.get('pc', 'unknown')}. Only Hirsel and Rust ran on this host.", '',
              'Runtime excludes warmup; process peak RSS includes preparation, warmup and runtime startup. '
              'Compiler and dependency downloads are excluded from compile measurements; cold Rust includes compiling fetched dependencies. '
-             'Compile numbers describe each whole suite, with different implemented coverage. '
+             'Compile numbers are diagnostic singleton observations outside the ten-round timing session, with different whole-suite coverage; compile ratios and projections are ineligible. '
              'Incremental compilation changes RECOMPILE_MARKER_0 to RECOMPILE_MARKER_1 in one source file, as benchmarks.rb:2721-2733.',
              f"CPU {data['cpu']}, shared timing lock `{data['timing_lock']}` held for all interleaved rounds. Immutable consumed-source, compiler, native toolchain/runtime and binary SHA-256 identities were checked before/after the session.",
              f"Consumed source identity: `{data['consumed_sources']['sha256']}`.",
-             f"Instruction verdict: {data['perf']}. Counters include startup and warmup. All local runs use nice -n 10 and tools/capped.", '',
+             f"Instruction counts are the verdict; cycles are supporting measurement. Available counters: {data['perf']}. Counters include startup and warmup. All local runs use nice -n 10 and tools/capped.", '',
              '## Local measurements', '',
              '| Task | Hirsel status | Rust status | Hirsel s | Rust s | Time H/R | Hirsel MiB | Rust MiB | RSS H/R | Instructions H/R |',
              '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
@@ -298,13 +298,14 @@ def report(data, published, output):
     for field in METRICS:
         ratios = [ratio for row in rows.values() if (ratio := paired_ratio(row, field, rounds)) is not None]
         lines.append(f'| {field} | {display(geometric(ratios))} | {len(ratios)} / 50 |')
-    lines += ['', '| Whole-suite compilation | Hirsel s | Local Rust s | H/R | Estimated on published host s |',
-              '| --- | ---: | ---: | ---: | ---: |']
-    for field, pubkey in [('cold', 'compile-time-cold'), ('incremental', 'compile-time-incremental')]:
+    lines += ['', '| Whole-suite compilation (diagnostic singleton) | Hirsel s | Local Rust s |',
+              '| --- | ---: | ---: |']
+    for field in ('cold', 'incremental'):
         h, r = data['participants']['hirsel'].get(field), data['participants']['rust'].get(field)
-        ratio = h / r if h and r else None
-        estimate = published_estimate(ratio, published.get(pubkey, {}).get('Rust'))
-        lines.append(f'| {field} | {display(h)} | {display(r)} | {display(ratio)} | {display(estimate)} |')
+        lines.append(f'| {field} | {display(h)} | {display(r)} |')
+    lines += ['', 'These are single sequential build observations, outside the locked interleaved runtime session. '
+              'They are ineligible for timing ratios, published-host projections or compile rankings. '
+              'No additional compile campaign was run.', '']
     lines += ['', '## Position against published languages', '',
               'Estimate = local Hirsel/Rust × published Rust for the same metric and task. '
               'These are projections, not measurements on the published host. '
@@ -325,8 +326,8 @@ def report(data, published, output):
         lines.append(f'| {task} | {display(estimate)} | {display(memory)} | {placement(estimate, values)} | '
                      + ' | '.join(display(r) for r in ratios) + ' |')
     lines += ['', '| Published production configuration | Geomean estimated H/reference time | Paired tasks | '
-              'Geomean estimated H/reference RSS | Cold H/reference | Incremental H/reference |',
-              '| --- | ---: | ---: | ---: | ---: | ---: |']
+              'Geomean estimated H/reference RSS |',
+              '| --- | ---: | ---: | ---: |']
     for lang in sorted(k for k, group in published['runs'].items() if group == 'prod'):
         time_ratios, rss_ratios = [], []
         if full:
@@ -336,14 +337,8 @@ def report(data, published, output):
                     estimate = published_estimate(paired_ratio(row, metric, rounds), vals.get('Rust'))
                     if estimate and isinstance(vals.get(lang), (int, float)) and vals[lang] > 0:
                         collector.append(estimate / vals[lang])
-        compile_ratios = []
-        for field, key in [('cold', 'compile-time-cold'), ('incremental', 'compile-time-incremental')]:
-            h, r = data['participants']['hirsel'].get(field), data['participants']['rust'].get(field)
-            values = published.get(key, {})
-            estimate = published_estimate(h / r if h and r else None, values.get('Rust'))
-            compile_ratios.append(estimate / values[lang] if estimate and values.get(lang) else None)
         lines.append(f'| {lang} | {display(geometric(time_ratios))} | {len(time_ratios)} / 50 | '
-                     f'{display(geometric(rss_ratios))} | {display(compile_ratios[0])} | {display(compile_ratios[1])} |')
+                     f'{display(geometric(rss_ratios))} |')
     lines += ['', f'Paired local runtime coverage: {len(eligible)} / 50. '
               'Printed upstream runtime zeros are below its millisecond resolution and excluded from runtime ratios.', '',
               '## Source / expressiveness', '',

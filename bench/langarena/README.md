@@ -76,7 +76,9 @@ RSS and perf counters are retained in ignored `build/SESSION/measurements.json`.
 Use `--output /tmp/my-groups.md` for a porter report to avoid editing RESULTS.md.
 
 Full mode runs `run.js`: estimated Hirsel on the published host = local Hirsel /
-local Rust × published Rust. Runtime, RSS and compile estimates are separate.
+local Rust × published Rust. Runtime and RSS estimates are separate. Compile seconds are diagnostic
+singleton observations; they receive no ratios, projections or ranks because
+compilation was not measured in ten seeded interleaved rounds.
 Other languages' raw times are never compared directly with this host. Quick
 mode (`--quick`, `test.js`) validates ports and gives local measurements; it
 makes no published runtime/memory projections because the workloads differ.
