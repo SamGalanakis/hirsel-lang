@@ -6,7 +6,7 @@ use crate::comptime::{
     ComptimeValueSource, EvaluatedConstant, EvaluationInput, StagedDeclarationInput,
     StagedRegistration, prepare_staged_types, prepare_values,
 };
-use crate::memo::{DepthEvidence, Entered, S1Coordinator, S1Worker};
+use crate::memo::{DepthEvidence, Entered, HoldStats, Holds, MemoKey, S1Coordinator, S1Worker};
 use crate::queries::generation::task::{GeneratedText, PreparedGenerator};
 use hirsel_interp::aggregate::RuntimeTypes;
 use hirsel_syntax::ExprKind;
@@ -39,6 +39,8 @@ pub(crate) struct TaskInputs {
     pub(crate) sources: SourceMap,
     pub(crate) limits: hirsel_interp::Limits,
     pub(crate) verify: Verify,
+    /// This worker's share of the frontier's retained lower-body budget.
+    pub(crate) lower_budget: u64,
 }
 
 pub(crate) struct TaskBody {
@@ -138,6 +140,8 @@ pub(crate) struct TaskShared {
     coordinator: Arc<S1Coordinator<DefPath>>,
     constants: Mutex<BTreeMap<DefPath, ConstantProduct>>,
     generators: Mutex<BTreeMap<DefPath, GeneratedText>>,
+    /// Aggregate counters; peak is the sum of per-worker insertion peaks.
+    lower_holds: Mutex<HoldStats>,
 }
 impl TaskShared {
     pub(crate) fn new(coordinator: Arc<S1Coordinator<DefPath>>) -> Self {
@@ -145,6 +149,7 @@ impl TaskShared {
             coordinator,
             constants: Mutex::new(BTreeMap::new()),
             generators: Mutex::new(BTreeMap::new()),
+            lower_holds: Mutex::new(HoldStats::default()),
         }
     }
     pub(super) fn take_generators(&mut self) -> Vec<GeneratedText> {
@@ -196,12 +201,30 @@ pub(crate) struct TaskWorker<'a, S: TirSource + ?Sized> {
     /// Clone once per worker; nested evaluation reuses this recorder stack.
     runtime: Arc<RuntimeTypes>,
     reads: Vec<ReadsBuilder>,
-    lowered: BTreeMap<DefPath, Arc<Lowered>>,
+    lowered: Holds<Arc<Lowered>>,
     pub(crate) registrations: Vec<StagedRegistration>,
     pub(crate) limit: Option<hirsel_tir::ToolingLimit>,
     pub(super) phase: Option<QueryKind>,
     pub(super) pending: Vec<Requirement>,
     pub(super) selections: Vec<SelectionEvent>,
+}
+impl<S: TirSource + ?Sized> Drop for TaskWorker<'_, S> {
+    fn drop(&mut self) {
+        let stats = self.lowered.stats();
+        timings::count_by(Count::S1LowerHoldEvictions, stats.evictions);
+        timings::count_by(Count::S1LowerHoldRecomputes, stats.recomputes);
+        timings::count_by(Count::S1LowerHoldPeakBytes, stats.peak_bytes);
+        let mut total = self
+            .shared
+            .lower_holds
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        total.held += stats.held;
+        total.bytes += stats.bytes;
+        total.peak_bytes += stats.peak_bytes;
+        total.evictions += stats.evictions;
+        total.recomputes += stats.recomputes;
+    }
 }
 impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
     pub(crate) fn new(source: &'a S, shared: &'a TaskShared) -> Self {
@@ -211,7 +234,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             stack: shared.coordinator.worker(),
             runtime: Arc::new((*source.inputs().runtime).clone()),
             reads: vec![],
-            lowered: BTreeMap::new(),
+            lowered: Holds::new(source.inputs().lower_budget),
             registrations: vec![],
             limit: None,
             phase: Some(QueryKind::Lower),
@@ -844,7 +867,8 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 .map_err(|site| self.overflow(site))?;
             return Ok(output);
         }
-        if let Some(hit) = self.lowered.get(path).cloned() {
+        let key = MemoKey::new(QueryKind::Lower, DefId::intern(path));
+        if let Some(hit) = self.lowered.get(&key).cloned() {
             self.stack
                 .replay_requests(&hit.depth)
                 .map_err(|site| self.overflow(site))?;
@@ -856,6 +880,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 dependencies: hit.dependencies.clone(),
             });
         }
+        self.lowered.demand_evicted(&key);
         self.stack.begin_requests();
         let registration_start = self.registrations.len();
         let product = self.capture(|worker| {
@@ -908,17 +933,26 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         let depth = self.stack.finish_requests(self.depth_limit());
         self.merge(&product.reads);
         let (definition, diagnostics, dependencies) = product.result?;
-        self.lowered.insert(
-            path.clone(),
-            Arc::new(Lowered {
-                definition: definition.clone(),
-                reads: product.reads,
-                depth,
-                registrations: self.registrations[registration_start..].to_vec(),
-                diagnostics: diagnostics.clone(),
-                dependencies: dependencies.clone(),
-            }),
-        );
+        let held = Arc::new(Lowered {
+            definition: definition.clone(),
+            reads: product.reads,
+            depth,
+            registrations: self.registrations[registration_start..].to_vec(),
+            diagnostics: diagnostics.clone(),
+            dependencies: dependencies.clone(),
+        });
+        let bytes = crate::memo::retained_tir_bytes(&held.definition)
+            .saturating_add(crate::memo::retained_arc_bytes(&*held))
+            .saturating_add(crate::memo::retained_lowering_metadata_bytes(
+                &held.reads,
+                &held.depth,
+                &held.registrations,
+            ))
+            .saturating_add(crate::memo::retained_lowering_output_bytes(
+                &held.diagnostics,
+                &held.dependencies,
+            ));
+        self.lowered.hold(key, held, bytes);
         Ok(QueryOutput {
             value: definition,
             diagnostics,
@@ -1268,10 +1302,138 @@ mod tests {
                 sources: engine.sources.clone(),
                 limits,
                 verify: Verify::On,
+                lower_budget: 1 << 20,
             },
             bodies,
         }
     }
+    #[test]
+    fn zero_and_small_lower_budgets_release_helper_cache_ownership() {
+        crate::with_compiler_stack(|| {
+            for budget in [0, 1] {
+                let mut source = source("const LEAF:()=()\nfn helper()->(){comptime LEAF}\n", 8);
+                source.inputs.lower_budget = budget;
+                let shared = TaskShared::new(S1Coordinator::new());
+                let mut worker = TaskWorker::new(&source, &shared);
+                let first = worker.capture(|worker| worker.lower(&path("helper")));
+                let definition = first.result.unwrap();
+                let weak = Arc::downgrade(&definition);
+                assert_eq!(
+                    Arc::strong_count(&definition),
+                    1,
+                    "budget={budget}: helper exceeds allowance"
+                );
+                drop(definition);
+                assert_eq!(weak.strong_count(), 0, "cache retains evicted helper");
+                assert_eq!(worker.lowered.stats().bytes, 0);
+                assert_eq!(worker.lowered.stats().evictions, 1);
+                let again = worker.capture(|worker| worker.lower(&path("helper")));
+                assert!(again.result.is_ok());
+                assert_eq!(worker.lowered.stats().recomputes, 1);
+                assert_eq!(worker.lowered.stats().evictions, 2);
+                assert_eq!(worker.lowered.stats().bytes, 0);
+                assert!(worker.lowered.stats().peak_bytes > budget);
+                assert_eq!(
+                    first.reads, again.reads,
+                    "recompute must preserve complete receipts"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn budgeted_helper_recompute_keeps_depth_reads_and_worker_totals() {
+        crate::with_compiler_stack(|| {
+            let mut source = source("const LEAF:()=()\nfn helper()->(){comptime LEAF}\n", 8);
+            let control_shared = TaskShared::new(S1Coordinator::new());
+            let mut control = TaskWorker::new(&source, &control_shared);
+            control.stack.begin_requests();
+            let expected = control.capture(|worker| worker.lower(&path("helper")));
+            assert!(expected.result.is_ok());
+            let expected_depth = control.stack.finish_requests(8);
+            drop(control);
+            for jobs in [1, 2, 8] {
+                for budget in [0, 1, 4096, 1 << 20] {
+                    source.inputs.lower_budget = budget / jobs;
+                    let shared = TaskShared::new(S1Coordinator::new());
+                    let results = jobs::map_with_state(
+                        Jobs::new(jobs as usize),
+                        vec![(); 16],
+                        |_| 1,
+                        || TaskWorker::new(&source, &shared),
+                        |worker, ()| {
+                            for _ in 0..2 {
+                                worker.stack.begin_requests();
+                                let product =
+                                    worker.capture(|worker| worker.lower(&path("helper")));
+                                assert!(product.result.is_ok());
+                                assert_eq!(product.reads, expected.reads);
+                                assert_eq!(worker.stack.finish_requests(8), expected_depth);
+                                assert!(worker.lowered.stats().bytes <= source.inputs.lower_budget);
+                            }
+                            worker.lowered.clear();
+                            worker.lowered.stats().bytes
+                        },
+                    );
+                    assert!(results.iter().all(|&bytes| bytes == 0));
+                    let stats = *shared.lower_holds.lock().unwrap();
+                    assert_eq!(stats.bytes, 0, "all completed roots released");
+                    assert!(stats.held > 0);
+                    assert!(stats.peak_bytes > 0);
+                    if budget <= 1 {
+                        assert_eq!(stats.evictions, 32);
+                        assert_eq!(stats.recomputes, 16);
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn finite_lower_budget_evicts_real_helpers_and_recomputes_with_identical_reads() {
+        crate::with_compiler_stack(|| {
+            let mut source = source(
+                "const LEAF:()=()\nfn helper1()->(){comptime LEAF}\nfn helper2()->(){comptime LEAF}\n",
+                8,
+            );
+            let probe_shared = TaskShared::new(S1Coordinator::new());
+            let mut probe = TaskWorker::new(&source, &probe_shared);
+            drop(probe.lower(&path("helper1")).unwrap());
+            let first_bytes = probe.lowered.stats().bytes;
+            drop(probe.lower(&path("helper2")).unwrap());
+            let second_bytes = probe.lowered.stats().bytes - first_bytes;
+            drop(probe);
+            source.inputs.lower_budget = first_bytes.max(second_bytes);
+            let shared = TaskShared::new(S1Coordinator::new());
+            let mut worker = TaskWorker::new(&source, &shared);
+            let first = worker.capture(|worker| worker.lower(&path("helper1")));
+            let definition = first.result.unwrap();
+            let first_weak = Arc::downgrade(&definition);
+            drop(definition);
+            assert!(first_weak.strong_count() > 0);
+            let second = worker.lower(&path("helper2")).unwrap();
+            let second_weak = Arc::downgrade(&second);
+            drop(second);
+            assert_eq!(
+                first_weak.strong_count(),
+                0,
+                "least-recent helper was evicted"
+            );
+            assert!(
+                second_weak.strong_count() > 0,
+                "one helper fits the finite budget"
+            );
+            let again = worker.capture(|worker| worker.lower(&path("helper1")));
+            assert!(again.result.is_ok());
+            assert_eq!(first.reads, again.reads);
+            assert_eq!(second_weak.strong_count(), 0);
+            let stats = worker.lowered.stats();
+            assert_eq!(stats.evictions, 2);
+            assert_eq!(stats.recomputes, 1);
+            assert!(stats.bytes <= source.inputs.lower_budget);
+        });
+    }
+
     #[test]
     fn completed_roots_release_worker_helper_lowerings() {
         crate::with_compiler_stack(|| {
@@ -1323,7 +1485,7 @@ mod tests {
                             let mut worker = TaskWorker::new(&source, &shared);
                             let result =
                                 worker.constant_at(&path(name), source.site(&path(name)).unwrap());
-                            (name, result, worker.limit)
+                            (name, result, worker.limit.take())
                         },
                     );
                     for (name, result, limit) in results {

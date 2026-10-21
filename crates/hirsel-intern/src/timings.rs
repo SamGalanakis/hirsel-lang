@@ -200,11 +200,17 @@ pub enum Count {
     S1ParkNs,
     /// Memos invalidated by a changed package-view universe input.
     InvalidatedValidationUniverse,
+    /// S1 worker helper lowerings evicted by the retention budget.
+    S1LowerHoldEvictions,
+    /// Evicted worker helper lowerings demanded again.
+    S1LowerHoldRecomputes,
+    /// Sum of each worker's insertion-before-eviction peak retained bytes.
+    S1LowerHoldPeakBytes,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 34] = [
+    pub const ALL: [Count; 37] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -239,6 +245,9 @@ impl Count {
         Count::S1LockWaitNs,
         Count::S1ParkNs,
         Count::InvalidatedValidationUniverse,
+        Count::S1LowerHoldEvictions,
+        Count::S1LowerHoldRecomputes,
+        Count::S1LowerHoldPeakBytes,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -277,6 +286,9 @@ impl Count {
             Count::S1LockWaitNs => "S1 lock wait ns",
             Count::S1ParkNs => "S1 park ns",
             Count::InvalidatedValidationUniverse => "invalidated by validation universe",
+            Count::S1LowerHoldEvictions => "S1 lower hold evictions",
+            Count::S1LowerHoldRecomputes => "S1 lower hold recomputes",
+            Count::S1LowerHoldPeakBytes => "S1 lower hold peak bytes sum",
         }
     }
 }

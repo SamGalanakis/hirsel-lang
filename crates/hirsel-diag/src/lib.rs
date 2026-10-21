@@ -77,6 +77,14 @@ impl RuleId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+    /// Owned buffer bytes retained by a decoded rule ID. Fixed rules borrow
+    /// static strings and retain no allocation.
+    pub fn retained_bytes(&self) -> usize {
+        match &self.0 {
+            Cow::Borrowed(_) => 0,
+            Cow::Owned(value) => value.capacity(),
+        }
+    }
     pub fn prefix(&self) -> &str {
         self.0.split_once('-').unwrap().0
     }

@@ -1588,3 +1588,76 @@ fn frozen_lowering_frontier_keeps_lower_warnings_and_current_hit_metadata() {
         }
     });
 }
+
+#[test]
+fn frozen_frontier_hold_budgets_preserve_staged_generated_cycle_and_depth_outcomes() {
+    with_compiler_stack(|| {
+        let cases = [
+            (
+                8,
+                "const LEAF:u32=1u32\nfn helper()->u32{comptime LEAF}\nconst A:u32=comptime helper()\nconst B:u32=comptime A\n",
+            ),
+            (
+                2,
+                "const LEAF:u32=1u32\nfn helper()->u32{comptime LEAF}\nconst A:u32=comptime helper()\nconst B:u32=comptime A\n",
+            ),
+            (8, "const A:u32=comptime B\nconst B:u32=comptime A\n"),
+            (
+                8,
+                "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime A\n",
+            ),
+            (
+                8,
+                "type Point{x:u64}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String]{Ok(codegen.body(\"fn(v:standalone@0/Point)->u64 uses {}{12}\"))}\nfn width[T](v:T)->u64 uses {}=comptime gen(shape(T))\nconst A:u64=comptime width(Point(x:1))\nconst B:u64=comptime A\n",
+            ),
+        ];
+        let roots = vec![path("B"), path("A"), path("B")];
+        for (limit, text) in cases {
+            let mut control = engine(text);
+            control.comptime_limits.call_depth = limit;
+            let expected: Vec<_> = roots
+                .iter()
+                .map(|root| {
+                    let result = control.materialize_value(root);
+                    let limit = format!("{:?}", control.last_comptime_limit);
+                    (
+                        outcome_text(&control, result),
+                        placed_evidence(&control.sources, limit),
+                    )
+                })
+                .collect();
+            for jobs in [1, 2, 8] {
+                for bytes in [0, 1, 8192] {
+                    let mut candidate = engine(text).with_config(CompileConfig {
+                        hold_bytes: bytes,
+                        retention: memo::Retention::Resident,
+                        ..CompileConfig::for_memory_cap(None)
+                    });
+                    candidate.comptime_limits.call_depth = limit;
+                    for warm in [false, true] {
+                        let actual: Vec<_> = candidate
+                            .materialize_value_outcomes(
+                                roots.clone(),
+                                hirsel_intern::jobs::Jobs::new(jobs),
+                            )
+                            .into_iter()
+                            .map(|outcome| {
+                                (
+                                    outcome_text(&candidate, outcome.result),
+                                    placed_evidence(
+                                        &candidate.sources,
+                                        format!("{:?}", outcome.limit),
+                                    ),
+                                )
+                            })
+                            .collect();
+                        assert_eq!(
+                            actual, expected,
+                            "jobs={jobs} budget={bytes} warm={warm} source={text}"
+                        );
+                    }
+                }
+            }
+        }
+    });
+}

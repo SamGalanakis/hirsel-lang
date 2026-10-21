@@ -605,7 +605,10 @@ impl TirSource for FrozenSource<'_> {
 impl QueryEngine {
     /// Freeze only handles and borrowed immutable tables. Demanded ordinary
     /// bodies use the same P worker after hold eviction; no body-table clone.
-    pub(crate) fn frozen_s1_source(&mut self) -> Result<FrozenSource<'_>, QueryError> {
+    pub(crate) fn frozen_s1_source(
+        &mut self,
+        lower_budget: u64,
+    ) -> Result<FrozenSource<'_>, QueryError> {
         self.note_environment();
         self.prepare_materialization_environment();
         let runtime = self.comptime_runtime_types()?;
@@ -626,6 +629,7 @@ impl QueryEngine {
                 sources: self.sources.clone(),
                 limits: self.comptime_limits,
                 verify: self.verify,
+                lower_budget,
             },
             items: &self.items,
             signatures: &self.signatures,
@@ -835,7 +839,9 @@ impl QueryEngine {
             return Some(results.into_iter().map(Option::unwrap).collect());
         }
         let mut shared = worker::TaskShared::new(self.s1.coordinator().clone());
-        let source = match self.frozen_s1_source() {
+        let workers = jobs.get().min(tasks.len()).max(1);
+        let lower_budget = self.hold_bytes / workers as u64;
+        let source = match self.frozen_s1_source(lower_budget) {
             Ok(source) => source,
             Err(_) => {
                 return Some(

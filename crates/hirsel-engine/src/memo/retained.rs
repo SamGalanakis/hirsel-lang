@@ -64,6 +64,46 @@ pub(crate) fn retained_lowering_metadata_bytes(
     weight.bytes
 }
 
+/// Owned buffers of lowering's returned warnings and ordered signature
+/// dependencies, excluding the containing Vec/inline fields of its wrapper.
+pub(crate) fn retained_lowering_output_bytes(
+    diagnostics: &Vec<hirsel_diag::Diagnostic>,
+    dependencies: &Vec<crate::SignatureDependency>,
+) -> u64 {
+    let mut weight = Weight::default();
+    weight.vec(dependencies, |w, dependency| {
+        w.def_path(&dependency.definition)
+    });
+    weight.vec(diagnostics, |w, diagnostic| {
+        let hirsel_diag::Diagnostic {
+            rule,
+            severity: _,
+            message,
+            primary: _,
+            secondary,
+            notes,
+            fix,
+            obligations,
+            root_cause: _,
+        } = diagnostic;
+        w.add(rule.retained_bytes());
+        w.add(message.capacity());
+        w.vec(secondary, |w, label| w.add(label.message.capacity()));
+        w.vec(notes, |w, note| w.add(note.capacity()));
+        if let Some(fix) = fix {
+            w.add(fix.replacement.capacity());
+            w.add(fix.message.capacity());
+        }
+        w.vec(obligations, |w, obligation| match obligation {
+            hirsel_diag::Obligation::GenericBound { arguments } => w.flat_vec(arguments),
+            hirsel_diag::Obligation::Multiplicity
+            | hirsel_diag::Obligation::CopyProof
+            | hirsel_diag::Obligation::ParameterMode { .. } => (),
+        });
+    });
+    weight.bytes
+}
+
 fn arc_bytes<T: ?Sized>(value: &T) -> usize {
     Layout::new::<[usize; 2]>()
         .extend(Layout::for_value(value))
@@ -565,6 +605,42 @@ mod tests {
         let one_destination = weight.bytes;
         weight.destination(&Destination::Caller(callers));
         assert_eq!(weight.bytes, one_destination);
+    }
+
+    #[test]
+    fn lowering_output_weight_includes_owned_diagnostic_and_dependency_buffers() {
+        let mut diagnostics = Vec::with_capacity(4);
+        let mut dependencies = Vec::with_capacity(8);
+        let base = retained_lowering_output_bytes(&diagnostics, &dependencies);
+        let mut diagnostic = hirsel_diag::Diagnostic::error(
+            hirsel_diag::RuleId::new("LANG-1").unwrap(),
+            hirsel_span::Span::default(),
+            "warning",
+        );
+        diagnostic.message.reserve(8192);
+        diagnostic.secondary.push(hirsel_diag::Label {
+            span: hirsel_span::Span::default(),
+            message: "label".repeat(200),
+        });
+        diagnostic.notes.push("note".repeat(400));
+        diagnostic.fix = Some(hirsel_diag::Fix {
+            span: hirsel_span::Span::default(),
+            replacement: "x".repeat(1000),
+            message: "fix".into(),
+        });
+        diagnostic
+            .obligations
+            .push(hirsel_diag::Obligation::GenericBound {
+                arguments: Vec::with_capacity(128),
+            });
+        diagnostics.push(diagnostic);
+        let warned = retained_lowering_output_bytes(&diagnostics, &dependencies);
+        assert!(warned > base + 10_000);
+        dependencies.push(crate::SignatureDependency {
+            definition: DefPath::core(&"helper".repeat(1000)),
+            fingerprint: Default::default(),
+        });
+        assert!(retained_lowering_output_bytes(&diagnostics, &dependencies) >= warned + 6000);
     }
 
     #[test]
