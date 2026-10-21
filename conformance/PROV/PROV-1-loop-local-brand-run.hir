@@ -16,7 +16,7 @@ fn inspect(r: R, b: Option[u8 of r]) -> u64 {
   r.x
 }
 
-pub fn main(t: Test) {
+pub fn main(t: Test) -> Result[(), ()] {
   let ns: List[u64] = [0, 1]
   let mut total = 0u64
   for n in ns {
@@ -25,4 +25,5 @@ pub fn main(t: Test) {
     total += inspect(r, b)
   }
   test.check(t, total == 1)
+  Ok(())
 }
