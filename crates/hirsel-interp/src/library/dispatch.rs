@@ -2208,7 +2208,12 @@ primary_operations! { library, call, context, name, a, value;
     Primitive: "list.push" => {
                 let item = take_arg(call.arguments, 1)?;
                 collection::push(arg_mut(call.arguments, 0)?, item)?;
-                return Ok(Some(OperationResult::returned(Value::Unit).transferring([1])));
+                return Ok(Some(OperationResult::Complete {
+                    value: Value::Unit,
+                    arguments: vec![],
+                    consumed: vec![1],
+                    released: vec![],
+                }));
             },
     Primitive: "map.len" | "set.len" => u64_value(collection::len(arg(a, 0)?)?),
     Primitive: "map.remove" => {
