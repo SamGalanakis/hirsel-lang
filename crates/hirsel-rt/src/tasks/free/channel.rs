@@ -8,6 +8,8 @@
 use super::super::*;
 
 #[cfg(test)]
+mod close_tests;
+#[cfg(test)]
 mod receive_tests;
 #[cfg(test)]
 mod tests;
@@ -191,4 +193,73 @@ pub(crate) unsafe fn receive(
             )
         }?;
     }
+}
+
+/// # Safety
+/// As for close_endpoint: the role and one endpoint credit are owned here.
+pub(crate) unsafe fn close(
+    ctx: *mut TaskCtx,
+    word: u64,
+    anchor: u64,
+    operation_site: u64,
+) -> Stopped<u8> {
+    super::record::begin(ctx);
+    let s = scheduler(ctx) as *mut Scheduler;
+    let (channel, sender) = unsafe { (*s).channels.endpoint_of(word) };
+    let cell = unsafe { (*s).channels.payload(channel) };
+    unsafe { (*s).channels.prepare_close() };
+    let inert = cell.element.inert;
+    let mut state = cell.lock();
+    let publication = super::record::publish(ctx, Phase::Done, |writer| {
+        let left = unsafe { (*s).channels.close_locked(word, &cell, &mut state) };
+        let version = cell.next_event();
+        if let Some(writer) = writer {
+            writer.touch(
+                cell.object.get().expect("a recorded channel identity"),
+                version,
+                0,
+                if sender {
+                    "close sender"
+                } else {
+                    "close receiver"
+                },
+            );
+        }
+        left
+    });
+    drop(state);
+    drop(cell);
+    let left = publication?.into_left();
+    // Close is Keep: it still publishes runnable receivers before returning
+    // to a segment that may never yield. No stop-aware ctx accessor can
+    // abandon a detached ring on this frame.
+    unsafe {
+        super::super::readiness::poll_free(&mut *s);
+        super::publish_ready(&mut *s, (*ctx).run_ptr());
+    }
+    let Some((left, descriptor)) = left else {
+        return Ok(STATUS_OK);
+    };
+    if inert {
+        // Even an inert buffer's deallocation stays outside the section.
+        return Ok(STATUS_OK);
+    }
+    let mut status = STATUS_OK;
+    for index in 0..left.len() {
+        let mut continuation = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
+        // Finalizers can yield and open or close arbitrary other channels.
+        // This detached ring belongs to the owner, outside the object lock.
+        status |= unsafe {
+            crate::finalize::hirsel_rt_v2_finalize(
+                ctx,
+                descriptor,
+                left.at(index),
+                std::ptr::null(),
+                continuation.as_mut_ptr(),
+                anchor,
+                operation_site,
+            )
+        };
+    }
+    Ok(status)
 }

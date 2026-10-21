@@ -77,7 +77,7 @@ fn immediate_receive_checks_cancellation_before_messages_and_shields_closed_read
                 image = none;
                 {
                     let _role = role::Guard::new(ctx);
-                    assert!(scheduler(ctx).channels.close(endpoints[0]).is_none());
+                    assert_eq!(close_endpoint(ctx, endpoints[0], 0, 0), STATUS_OK);
                 }
                 hirsel_rt_v2_channel_receive(
                     ctx,
@@ -139,7 +139,9 @@ fn a_saved_receive_replays_its_entered_cut_and_its_message_or_cancellation() {
     }
     crate::pool::set_compute_grant(2);
     for durable in [false, true] {
-        for canceled in [false, true] {
+        for case in ["msg", "canceled 0", "closed"] {
+            let canceled = case == "canceled 0";
+            let closed = case == "closed";
             let recording = record::Recording::new(b"native waiting receive", durable);
             let install = recording.clone();
             let cutter = recording.clone();
@@ -213,6 +215,11 @@ fn a_saved_receive_replays_its_entered_cut_and_its_message_or_cancellation() {
                             // Publish the notification to the saved owner.
                             super::super::try_yield(&mut *ctx).unwrap();
                         }
+                    } else if closed {
+                        unsafe {
+                            let _role = role::Guard::new(ctx);
+                            assert_eq!(close_endpoint(ctx, endpoints[0], 0, 0), STATUS_OK);
+                        }
                     } else {
                         let mut image = [1u64, 77];
                         let mut status = 99;
@@ -232,13 +239,15 @@ fn a_saved_receive_replays_its_entered_cut_and_its_message_or_cancellation() {
                         result.status.load(Ordering::Relaxed),
                         if canceled {
                             crate::channels::CANCELED + CANCEL_REQUESTED
+                        } else if closed {
+                            crate::channels::CLOSED
                         } else {
                             crate::channels::DONE
                         }
                     );
                     assert_eq!(
                         result.value.load(Ordering::Relaxed),
-                        if canceled { 0 } else { 77 }
+                        if canceled || closed { 0 } else { 77 }
                     );
                     STATUS_OK
                 },
@@ -279,14 +288,14 @@ fn a_saved_receive_replays_its_entered_cut_and_its_message_or_cancellation() {
                 if terminal {
                     if !canceled {
                         replay.begin(&[]);
-                        replay.touch(&[], 0, handle, "send").unwrap();
+                        replay
+                            .touch(&[], 0, handle, if closed { "close sender" } else { "send" })
+                            .unwrap();
                         replay.publish(&[], Phase::Done).unwrap();
                     }
                     let cause = replay.cancel_check(&[0], None).unwrap();
                     assert_eq!(cause, canceled.then_some(CANCEL_REQUESTED));
-                    replay
-                        .receive(&[0], handle, if canceled { "canceled 0" } else { "msg" })
-                        .unwrap();
+                    replay.receive(&[0], handle, case).unwrap();
                     replay.publish(&[0], Phase::Done).unwrap();
                 } else {
                     assert!(!replay.admits(&[0], Phase::Done));

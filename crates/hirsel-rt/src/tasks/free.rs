@@ -32,8 +32,14 @@ pub(super) fn enabled(ctx: *mut TaskCtx) -> bool {
 /// The calling task holds the role and no table borrow crosses publication.
 pub(super) unsafe fn dispatch_ready(ctx: *mut TaskCtx) {
     let run = unsafe { (*ctx).run_ptr() };
+    unsafe { publish_ready(scheduler(ctx), run) };
+}
+
+/// Publish already committed runtime wakes without a stop-aware ctx accessor.
+/// # Safety
+/// The role owns s and run; no table borrow survives queue publication.
+pub(super) unsafe fn publish_ready(s: &mut Scheduler, run: *mut crate::context::RunShared) {
     let ready = {
-        let s = scheduler(ctx);
         std::mem::take(&mut s.runnable)
             .into_iter()
             .map(|task| (task, s.task(task).owner))

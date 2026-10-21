@@ -339,7 +339,7 @@ fn a_canceled_native_sender_keeps_its_payload_when_the_receiver_is_closed() {
                     2,
                 );
                 let _role = role::Guard::new(ctx);
-                assert!(scheduler(ctx).channels.close(endpoints[1]).is_none());
+                assert_eq!(close_endpoint(ctx, endpoints[1], 0, 0), STATUS_OK);
                 scheduler(ctx).cancel(ROOT, CANCEL_REQUESTED);
             }
             let mut image = [1u64, 99];

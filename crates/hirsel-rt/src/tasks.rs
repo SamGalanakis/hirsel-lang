@@ -3509,6 +3509,11 @@ pub(crate) unsafe fn close_endpoint(
         }
         return STATUS_OK;
     }
+    if free::enabled(ctx) {
+        return unsafe {
+            crate::stop::check(ctx, free::channel::close(ctx, word, anchor, operation_site))
+        };
+    }
     let (channel, sender) = scheduler(ctx).channels.endpoint_of(word);
     let outcome = if sender {
         "close sender"

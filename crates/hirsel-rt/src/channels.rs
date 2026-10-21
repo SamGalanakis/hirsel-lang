@@ -287,6 +287,19 @@ impl ChannelCell {
     }
 }
 
+/// Storage detached in a close section, destroyed only after publication.
+pub(crate) struct ClosedChannel {
+    left: Option<(Ring, u32)>,
+    _row: Option<Channel>,
+    _pending: BTreeSet<u64>,
+}
+
+impl ClosedChannel {
+    pub(crate) fn into_left(self) -> Option<(Ring, u32)> {
+        self.left
+    }
+}
+
 /// A successful early send, published once by its turn's retirement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PendingSend {
@@ -636,18 +649,46 @@ impl Channels {
         unsafe { cell.receive(&mut cell.lock(), slot) }
     }
 
+    /// Reserve recycling lists before a native recording phase.
+    pub(crate) fn prepare_close(&mut self) {
+        self.vacant_endpoints.reserve(1);
+        self.vacant_channels.reserve(1);
+        self.touched.reserve(1);
+    }
+
     /// Close the endpoint `word`. The messages a channel's last receiver leaves are returned
     /// with their descriptor index, for the caller to drop oldest first; none when the element
     /// needs no drop.
     pub(crate) fn close(&mut self, word: u64) -> Option<(Ring, u32)> {
+        self.prepare_close();
+        let (channel, _) = self.endpoint_of(word);
+        let cell = self.payload(channel);
+        let mut state = cell.lock();
+        let closed = self.close_locked(word, &cell, &mut state);
+        cell.next_event();
+        drop(state);
+        let left = closed.into_left();
+        if cell.element.inert { None } else { left }
+    }
+
+    /// Detach without freeing image storage in the phase. The caller retains
+    /// the cell, holds its lock, and preallocated both recycling lists.
+    pub(crate) fn close_locked(
+        &mut self,
+        word: u64,
+        cell: &ChannelCell,
+        row: &mut ChannelState,
+    ) -> ClosedChannel {
         let Some((index, endpoint)) = self.lookup(word) else {
             fault("a channel endpoint closed twice or of another run");
         };
         self.endpoints[index as usize] = None;
         self.vacant_endpoints.push(index);
-        let cell = self.payload(endpoint.channel);
-        let mut row = cell.lock();
-        let mut left = None;
+        let mut detached = ClosedChannel {
+            left: None,
+            _row: None,
+            _pending: BTreeSet::new(),
+        };
         if endpoint.sender {
             row.senders -= 1;
         } else {
@@ -655,22 +696,19 @@ impl Channels {
             if row.receivers == 0 && row.queue.len() > 0 {
                 let empty = Ring::new(cell.element.size, row.queue.align);
                 let queue = std::mem::replace(&mut row.queue, empty);
-                row.pending.clear();
+                detached._pending = std::mem::take(&mut row.pending);
                 row.received = row.sent;
-                left = (!cell.element.inert).then_some((queue, cell.element.descriptor));
+                detached.left = Some((queue, cell.element.descriptor));
             }
         }
-        let (senders, receivers) = (row.senders, row.receivers);
-        cell.next_event();
-        drop(row);
-        if senders == 0 && receivers == 0 {
-            self.channels[endpoint.channel as usize] = None;
+        if row.senders == 0 && row.receivers == 0 {
+            detached._row = self.channels[endpoint.channel as usize].take();
             self.vacant_channels.push(endpoint.channel);
-        } else if senders == 0 && endpoint.sender {
+        } else if row.senders == 0 && endpoint.sender {
             // The parked receivers now see Closed.
             self.touch(endpoint.channel);
         }
-        left
+        detached
     }
 }
 

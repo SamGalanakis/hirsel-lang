@@ -4,7 +4,7 @@
 //! progress publication. No section or recorder borrow crosses a suspension.
 //!
 //! Admission is still limited to explicit runtime tests: atomic, mutex and
-//! channel boundaries and prepared children, without roots, closes, host calls
+//! channel boundaries and prepared children, without roots, mutex closes, host calls
 //! or other ops.
 //! General activation requires every boundary and stop to use this protocol.
 
