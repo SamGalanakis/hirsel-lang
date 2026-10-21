@@ -2124,13 +2124,29 @@ impl Checker<'_> {
                         self.sendable(actual)
                     };
                     if bounds.contains(&Bound::Sendable) && !sendable {
-                        self.explained(
-                            owner,
-                            primary,
-                            "each actual generic occurrence must be sendable before parameter weakening",
+                        let explanation = if matches!(
+                            intrinsic,
+                            Some(
+                                Intrinsic::TaskAsync
+                                    | Intrinsic::TaskIsolate
+                                    | Intrinsic::MutexWith
+                            )
+                        ) {
+                            self.callback_sendability_explanation(
+                                e,
+                                actual,
+                                self.span(arg.value),
+                                primary,
+                            )
+                        } else {
                             Explanation::default()
                                 .provided(Fact::new(Cause::NotSendable, self.span(arg.value), &[]))
-                                .required(Fact::new(Requirement::Sendable, primary, &[])),
+                                .required(Fact::new(Requirement::Sendable, primary, &[]))
+                        };
+                        self.explained(
+                            owner, primary,
+                            "each actual generic occurrence must be sendable before parameter weakening",
+                            explanation,
                         );
                         if self.out.failure.is_none() && !self.failed_read {
                             let bound = self.out.diagnostics.last_mut().unwrap();
@@ -2290,13 +2306,13 @@ impl Checker<'_> {
                             } else {
                                 span
                             };
+                            let explanation =
+                                self.callback_sendability_explanation(e, result, result_span, span);
                             self.explained(
                                 rule,
                                 result_span,
                                 "the callback result must be sendable",
-                                Explanation::default()
-                                    .provided(Fact::new(Cause::NotSendable, result_span, &[]))
-                                    .required(Fact::new(Requirement::Sendable, span, &[])),
+                                explanation,
                             );
                         }
                     }

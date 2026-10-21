@@ -207,3 +207,22 @@ ceiling failures show the field and destruction chain. Scoped lifetime, capture 
 defining-module destruction obligations keep their prerequisite order and primary sites.
 Launch, header and admission refusals are tooling errors before entry, not source
 diagnostics or language failures.
+
+## Repair metadata and nested crossing causes
+
+Replacement spans retain their semantic anchors inside the compiler. Edit consumers resolve
+`Fix.span` through the diagnostic's `SourceMap` before indexing UTF-8 source bytes; JSON
+locations already contain resolved file offsets. Moving a declaration or generating source
+does not turn an item-relative offset into a file-relative offset.
+
+LANG-14 replacement names use the lexer's reserved-word classifier. Before resolution, the
+parser conservatively avoids all identifiers in the file, including later declarations and
+references that a rename could capture. A machine edit is emitted only for a single occurrence;
+otherwise the help asks for the identifier and its references to be renamed together.
+
+MODE-4 callback result explanations name the rejected field/variant path and the declared
+result's sendability requirement. For a callback with one simple result expression, a
+`unique` result expression is suggested only when its copyability and structural crossing
+proofs succeed and allocation is permitted. Changing an ordinary-returning call's result
+annotation alone is not offered as a repair. These explanations preserve the rejection rule
+and primary site.

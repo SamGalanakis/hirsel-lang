@@ -347,11 +347,39 @@ impl Parser<'_> {
                         "extern" | "unsafe" => "foreign or unsafe operations",
                         _ => "language syntax",
                     };
-                    self.diagnostics.push(Diagnostic::error(
+                    // Parsing stops publication before resolution. Conservatively
+                    // avoid every identifier on the file's tape, including later
+                    // declarations and references that a rename could capture.
+                    let replacement = hirsel_diag::fresh_name("value", |candidate| {
+                        is_binding_name(candidate)
+                            && !self.tokens.iter().any(|token| {
+                                matches!(token.kind, TokenKind::Ident(s) if s.as_str() == candidate)
+                            })
+                    });
+                    let mut diagnostic = Diagnostic::error(
                         const { RuleId::of("LANG-14") },
                         self.span(),
                         format!("`{spelling}` is reserved for {role}; choose another name"),
+                    );
+                    diagnostic.notes.push(format!(
+                        "help: rename this identifier and its references to `{replacement}`"
                     ));
+                    // A single edit cannot rename multiple references. Repeated
+                    // recovery names get consistent prose, never a partial fix.
+                    if self
+                        .tokens
+                        .iter()
+                        .filter(|t| self.slice(t.span) == Some(&spelling))
+                        .count()
+                        == 1
+                    {
+                        diagnostic.fix = Some(hirsel_diag::Fix {
+                            span: self.span(),
+                            replacement,
+                            message: "use a fresh non-keyword name".into(),
+                        });
+                    }
+                    self.diagnostics.push(diagnostic);
                 }
                 self.pos += 1;
                 Ok(Symbol::intern(&spelling))

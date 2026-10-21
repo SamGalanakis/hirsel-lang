@@ -190,6 +190,67 @@ pub enum Keyword {
     True,
     False,
 }
+impl Keyword {
+    /// The lexer and diagnostic repair admission use the same reserved words.
+    pub fn from_spelling(text: &str) -> Option<Keyword> {
+        Some(match text {
+            "fn" => Keyword::Fn,
+            "let" => Keyword::Let,
+            "mut" => Keyword::Mut,
+            "match" => Keyword::Match,
+            "if" => Keyword::If,
+            "else" => Keyword::Else,
+            "for" => Keyword::For,
+            "in" => Keyword::In,
+            "while" => Keyword::While,
+            "break" => Keyword::Break,
+            "continue" => Keyword::Continue,
+            "return" => Keyword::Return,
+            "take" => Keyword::Take,
+            "copy" => Keyword::Copy,
+            "unique" => Keyword::Unique,
+            "type" => Keyword::Type,
+            "distinct" => Keyword::Distinct,
+            "flat" => Keyword::Flat,
+            "resource" => Keyword::Resource,
+            "drop" => Keyword::Drop,
+            "box" => Keyword::Box,
+            "pub" => Keyword::Pub,
+            "opaque" => Keyword::Opaque,
+            "const" => Keyword::Const,
+            "comptime" => Keyword::Comptime,
+            "shape" => Keyword::Shape,
+            "heap" => Keyword::Heap,
+            "before" => Keyword::Before,
+            "requires" => Keyword::Requires,
+            "ensures" => Keyword::Ensures,
+            "result" => Keyword::Result,
+            "where" => Keyword::Where,
+            "uses" => Keyword::Uses,
+            "of" => Keyword::Of,
+            "local" => Keyword::Local,
+            "global" => Keyword::Global,
+            "once" => Keyword::Once,
+            "todo" => Keyword::Todo,
+            "extern" => Keyword::Extern,
+            "unsafe" => Keyword::Unsafe,
+            "true" => Keyword::True,
+            "false" => Keyword::False,
+            _ => return None,
+        })
+    }
+}
+
+/// A legal ordinary identifier (LANG-14), excluding the discard pattern.
+pub fn is_binding_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    name != "_"
+        && bytes
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && Keyword::from_spelling(name).is_none()
+}
 /// Longest-match punctuation, independent of type information (LANG-1/2; issue #21).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Punct {

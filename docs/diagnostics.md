@@ -81,7 +81,7 @@ Typical fix: Keep the value inside `arena.with`, or declare the receiver `in a` 
 
 A reserved word appears where an ordinary identifier is required.
 
-Typical fix: Rename this identifier and its references, for example to `value` or `result`; reserved keywords cannot be used as binding names.
+Typical fix: Rename this identifier and its references to a fresh non-keyword name; reserved keywords cannot be used as binding names.
 
 ## CAP-2: Authority
 

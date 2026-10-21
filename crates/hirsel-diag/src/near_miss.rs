@@ -135,6 +135,22 @@ fn best_names(name: &str, candidates: impl IntoIterator<Item = String>) -> Vec<S
         .collect()
 }
 
+/// First fresh spelling admitted by the caller's syntax and scope rules.
+/// Declaration repairs must avoid capturing existing references as well as
+/// duplicate bindings; the caller supplies that contextual admission check.
+pub fn fresh_name(base: &str, mut available: impl FnMut(&str) -> bool) -> String {
+    if available(base) {
+        return base.into();
+    }
+    for suffix in 2u64.. {
+        let name = format!("{base}_{suffix}");
+        if available(&name) {
+            return name;
+        }
+    }
+    unreachable!("a finite source cannot occupy every suffix")
+}
+
 /// Add human/JSON help and, for one candidate at a precise name token, a fix.
 /// `prefix` is presentation only (e.g. `x.`); the edit replaces just the name.
 pub fn suggest_names(
@@ -176,6 +192,12 @@ mod tests {
     use super::*;
     fn best(name: &str, candidates: &[&str]) -> Vec<String> {
         best_names(name, candidates.iter().map(|s| (*s).into()))
+    }
+    #[test]
+    fn declaration_candidates_are_filtered_before_selection() {
+        let occupied = ["result", "value", "value_2"];
+        assert_eq!(fresh_name("result", |n| !occupied.contains(&n)), "result_2");
+        assert_eq!(fresh_name("value", |n| !occupied.contains(&n)), "value_3");
     }
     #[test]
     fn rustc_distance_vectors() {

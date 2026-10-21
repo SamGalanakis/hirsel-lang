@@ -167,7 +167,7 @@ impl<'a> Scanner<'a> {
                 }
                 // Identifier bytes are ASCII by construction.
                 let text = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap_or("");
-                keyword(text).map_or_else(
+                Keyword::from_spelling(text).map_or_else(
                     || TokenKind::Ident(Symbol::intern(text)),
                     TokenKind::Keyword,
                 )
@@ -232,7 +232,7 @@ impl<'a> Scanner<'a> {
         self.pos = self.label_end().expect("checked label prefix");
         let name = std::str::from_utf8(&self.bytes[start + 1..self.pos]).unwrap();
         let symbol = Symbol::intern(name);
-        if name == "_" || keyword(name).is_some() {
+        if name == "_" || Keyword::from_spelling(name).is_some() {
             self.error(
                 const { RuleId::of("LANG-1") },
                 start,
@@ -780,53 +780,7 @@ fn scalar(bytes: &[u8]) -> (Option<char>, usize) {
 fn bidi(ch: char) -> bool {
     matches!(ch, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
-fn keyword(text: &str) -> Option<Keyword> {
-    Some(match text {
-        "fn" => Keyword::Fn,
-        "let" => Keyword::Let,
-        "mut" => Keyword::Mut,
-        "match" => Keyword::Match,
-        "if" => Keyword::If,
-        "else" => Keyword::Else,
-        "for" => Keyword::For,
-        "in" => Keyword::In,
-        "while" => Keyword::While,
-        "break" => Keyword::Break,
-        "continue" => Keyword::Continue,
-        "return" => Keyword::Return,
-        "take" => Keyword::Take,
-        "copy" => Keyword::Copy,
-        "unique" => Keyword::Unique,
-        "type" => Keyword::Type,
-        "distinct" => Keyword::Distinct,
-        "flat" => Keyword::Flat,
-        "resource" => Keyword::Resource,
-        "drop" => Keyword::Drop,
-        "box" => Keyword::Box,
-        "pub" => Keyword::Pub,
-        "opaque" => Keyword::Opaque,
-        "const" => Keyword::Const,
-        "comptime" => Keyword::Comptime,
-        "shape" => Keyword::Shape,
-        "heap" => Keyword::Heap,
-        "before" => Keyword::Before,
-        "requires" => Keyword::Requires,
-        "ensures" => Keyword::Ensures,
-        "result" => Keyword::Result,
-        "where" => Keyword::Where,
-        "uses" => Keyword::Uses,
-        "of" => Keyword::Of,
-        "local" => Keyword::Local,
-        "global" => Keyword::Global,
-        "once" => Keyword::Once,
-        "todo" => Keyword::Todo,
-        "extern" => Keyword::Extern,
-        "unsafe" => Keyword::Unsafe,
-        "true" => Keyword::True,
-        "false" => Keyword::False,
-        _ => return None,
-    })
-}
+
 fn punctuation(bytes: &[u8]) -> Option<(usize, Punct)> {
     // Fixed-size table, longest first: bounded work per source position (#21).
     const TABLE: &[(&[u8], Punct)] = &[

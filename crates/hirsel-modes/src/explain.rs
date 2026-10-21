@@ -715,10 +715,18 @@ pub enum Repair {
     TakeAtLastUse(String),
     /// A counted part copied out of storage that is about to end.
     CopyPart(String),
+    /// A callback result whose counted parts cross when unique.
+    UniqueResult {
+        ty: String,
+        expression: String,
+    },
 }
 impl Repair {
     fn text(&self) -> String {
         match self {
+            Repair::UniqueResult { ty, expression } => format!(
+                "return a `unique {ty}` value with `unique {expression}` (deep copy: may allocate and costs O(size))"
+            ),
             Repair::CopyShared(x) => {
                 format!("`copy {x}` (no deep copy: a copied Shared root is global)")
             }
@@ -931,7 +939,7 @@ impl Repair {
             | Repair::PlaceParameter { .. }
             | Repair::PlaceResult { .. }
             | Repair::HeapParameter(_) => 1,
-            Repair::DeepCopy(_) => 2,
+            Repair::DeepCopy(_) | Repair::UniqueResult { .. } => 2,
             Repair::TakeChangesMeaning(_) => 3,
         }
     }

@@ -5,7 +5,7 @@ hirsel_guard::install!();
 
 mod near_miss;
 use hirsel_span::{SourceMap, Span};
-pub use near_miss::suggest_names;
+pub use near_miss::{fresh_name, suggest_names};
 use std::{borrow::Cow, fmt};
 use unicode_width::UnicodeWidthStr;
 /// A syntactically valid specification ID (FAIL-1); membership is checked against the spec.
@@ -368,6 +368,36 @@ mod tests {
         let d = Diagnostic::error(RuleId::of("FAIL-1"), Span::default(), "failed");
         assert_eq!(d.to_json(&sources)["notes"], serde_json::json!([]));
     }
+    #[test]
+    fn generated_fix_anchors_resolve_in_their_own_source_snapshot() {
+        let mut sources = SourceMap::default();
+        let generated = "// café 🐑\ntype E = Bad()\n";
+        let file = sources.add("generated.hir", generated.into()).unwrap();
+        let base = generated.find("type E").unwrap() as u32;
+        let anchor = sources.item_anchor(file, base);
+        let span = Span::new(anchor, 14, 14).unwrap();
+        let mut d = Diagnostic::error(RuleId::of("LANG-8"), span, "missing arm");
+        d.fix = Some(Fix {
+            span,
+            replacement: " | Other()".into(),
+            message: "add arm".into(),
+        });
+        for prefix in ["", "// moved 🐑\n\n"] {
+            let text = format!("{prefix}{generated}");
+            let moved = sources.add("generated.hir", text.clone()).unwrap();
+            sources.move_anchor(anchor, moved, prefix.len() as u32 + base);
+            let fix = d.fix.as_ref().unwrap();
+            let resolved = sources.resolve(fix.span);
+            assert_eq!(d.to_json(&sources)["fix"]["span"]["start"], resolved.start);
+            let mut repaired = text;
+            repaired.replace_range(
+                resolved.start as usize..resolved.end as usize,
+                &fix.replacement,
+            );
+            assert!(repaired.ends_with("type E = Bad() | Other()\n"));
+        }
+    }
+
     #[test]
     fn stable_json_and_unicode_locations() {
         let mut sources = SourceMap::default();

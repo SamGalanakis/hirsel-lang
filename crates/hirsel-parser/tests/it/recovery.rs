@@ -237,3 +237,18 @@ fn reserved_binding_names_recover_without_followup_syntax_errors() {
         );
     }
 }
+
+#[test]
+fn reserved_rename_preserves_references_without_a_partial_edit() {
+    let (output, _) =
+        support::parse("fn probe() { let value = 0u64\n let result = 1u64\n result }");
+    let [d] = &output.diagnostics[..] else {
+        panic!("{:?}", output.diagnostics)
+    };
+    assert_eq!(d.rule.as_str(), "LANG-14");
+    assert!(d.fix.is_none());
+    assert!(d.notes[0].contains("`value_2`"));
+    let (fixed, _) =
+        support::parse("fn probe() { let value = 0u64\n let value_2 = 1u64\n value_2 }");
+    assert!(fixed.diagnostics.is_empty(), "{:?}", fixed.diagnostics);
+}

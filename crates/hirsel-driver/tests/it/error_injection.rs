@@ -30,6 +30,14 @@ fn check(path: &Path) -> CheckOutput {
     })
 }
 
+fn check_text(source: &str) -> CheckOutput {
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine.sources.add("repair.hir", source.into()).unwrap();
+        check_progress(&mut engine, file, &default_context()).unwrap()
+    })
+}
+
 const NO_ARM: &str = r#"type ParseError = Empty()
 
 type ConfigError = Missing()
@@ -247,4 +255,178 @@ fn unconstructed_private_error_arms_warn() {
             ),
         ]
     );
+}
+
+#[test]
+fn reserved_name_repair_is_legal_and_fresh() {
+    for source in [
+        "pub fn main() { let result = 0u64 }",
+        "// café 🐑\nfn moved() {}\npub fn main() { let value = 1u64\n let result = value }",
+    ] {
+        let output = check_text(source);
+        let [d] = &output.diagnostics[..] else {
+            panic!("{:?}", output.diagnostics)
+        };
+        assert_eq!(d.rule.as_str(), "LANG-14");
+        assert_eq!(output.sources.slice(d.primary), Some("result"));
+        let fix = d.fix.as_ref().expect("a legal replacement name");
+        assert_ne!(fix.replacement, "result");
+        if source.contains("let value") {
+            assert_ne!(fix.replacement, "value");
+        }
+        let span = output.sources.resolve(fix.span);
+        let mut text = source.to_string();
+        text.replace_range(span.start as usize..span.end as usize, &fix.replacement);
+        let fixed = check_text(&text);
+        assert!(
+            fixed.diagnostics.is_empty(),
+            "{text}: {:?}",
+            fixed.diagnostics
+        );
+    }
+}
+
+#[test]
+fn nested_task_result_cause_and_repair() {
+    let source = include_str!("../../../../examples/kvd/repros/incident-3.hir");
+    let path = file(source);
+    let output = check(&path);
+    let first = &output.diagnostics[0];
+    assert_eq!(first.rule.as_str(), "MODE-4");
+    assert!(
+        output
+            .sources
+            .slice(first.primary)
+            .unwrap()
+            .starts_with("task.async(")
+    );
+    let human = first.render_human(&output.sources);
+    assert!(human.contains("E.Bad(String)"), "{human}");
+    assert!(
+        human.contains("declared") && human.contains("sendable"),
+        "{human}"
+    );
+    assert!(
+        !human.contains("declare the callback result `unique"),
+        "{human}"
+    );
+    assert!(human.contains("unique Result[(), E]"), "{human}");
+    let fix = first.fix.as_ref().expect("the complete expression repair");
+    let span = output.sources.resolve(fix.span);
+    let mut repaired = source.to_string();
+    repaired.replace_range(span.start as usize..span.end as usize, &fix.replacement);
+    std::fs::write(&path, &repaired).unwrap();
+    let fixed = check(&path);
+    assert!(
+        fixed
+            .diagnostics
+            .iter()
+            .all(|d| d.severity != hirsel_diag::Severity::Error),
+        "{:?}",
+        fixed.diagnostics
+    );
+}
+
+#[test]
+fn nested_task_result_repair_already_unique_and_noalloc_controls() {
+    let base = include_str!("../../../../examples/kvd/repros/incident-3.hir");
+    let source = base.replace("          work()", "          unique work()");
+    let output = check_text(&source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    // Allocation promises on named callbacks are declarations, not an
+    // expression attribute before a closure literal.
+    let source = base.replace(
+        "fn() -> Result[(), E] {\n          work()\n        }",
+        "callback",
+    ) + "\n@noalloc\nfn callback() -> Result[(), E] { Ok(()) }\n";
+    let output = check_text(&source);
+    let d = output
+        .diagnostics
+        .iter()
+        .find(|d| d.rule.as_str() == "MODE-4")
+        .unwrap_or_else(|| panic!("{:?}", output.diagnostics));
+    assert!(
+        d.fix.is_none(),
+        "an allocating deep copy is not a noalloc repair"
+    );
+    assert!(
+        !d.render_human(&output.sources)
+            .contains("return a `unique Result")
+    );
+}
+
+#[test]
+fn no_arm_repair_survives_moved_declarations_and_unicode() {
+    for source in [
+        format!("// café 🐑\nfn prefix() {{}}\n{NO_ARM}"),
+        NO_ARM.replace("type AppError = Input(ParseError) | Limit(u64)\n\n", "")
+            + "\n// moved after its use: café\ntype AppError = Input(ParseError) | Limit(u64)\n",
+    ] {
+        let output = check_text(&source);
+        let d = output
+            .diagnostics
+            .iter()
+            .find(|d| d.rule.as_str() == "LANG-8" && d.fix.is_some())
+            .unwrap();
+        let fix = d.fix.as_ref().unwrap();
+        let span = output.sources.resolve(fix.span);
+        assert_ne!(
+            span.start, fix.span.start,
+            "edit is anchored, not a raw offset"
+        );
+        let json = d.to_json(&output.sources);
+        assert_eq!(json["fix"]["span"]["start"], span.start);
+        let mut repaired = source.clone();
+        repaired.replace_range(span.start as usize..span.end as usize, &fix.replacement);
+        let fixed = check_text(&repaired);
+        assert!(fixed.diagnostics.is_empty(), "{:?}", fixed.diagnostics);
+    }
+}
+
+#[test]
+fn nested_task_result_names_record_and_variant_parts_without_a_false_repair() {
+    let base = include_str!("../../../../examples/kvd/repros/incident-3.hir");
+    let source = base.replace("type E = Bad(String)",
+        "type Detail { text: String }\ntype StoreError = Corrupt(Detail)\ntype E = Store(StoreError)");
+    let output = check_text(&source);
+    let first = &output.diagnostics[0];
+    assert_eq!(first.rule.as_str(), "MODE-4");
+    assert!(
+        output
+            .sources
+            .slice(first.primary)
+            .unwrap()
+            .starts_with("task.async(")
+    );
+    let human = first.render_human(&output.sources);
+    for part in ["E.Store", "StoreError.Corrupt", "Detail.text"] {
+        assert!(human.contains(part), "{human}");
+    }
+    let blocked = base.replace("type E = Bad(String)", "type E = Bad(Receiver[u64])");
+    let output = check_text(&blocked);
+    let first = &output.diagnostics[0];
+    assert_eq!(first.rule.as_str(), "MODE-4");
+    assert!(
+        output
+            .sources
+            .slice(first.primary)
+            .unwrap()
+            .starts_with("task.async(")
+    );
+    assert!(first.fix.is_none());
+    assert!(
+        !first
+            .render_human(&output.sources)
+            .contains("return a `unique Result")
+    );
+    // Scalar and already-unique parts retain their ordinary acceptance.
+    for replacement in ["type E = Bad(u64)", "type E = Bad(unique String)"] {
+        let source = base.replace("type E = Bad(String)", replacement);
+        let fixed = check_text(&source);
+        assert!(
+            fixed.diagnostics.is_empty(),
+            "{replacement}: {:?}",
+            fixed.diagnostics
+        );
+    }
 }

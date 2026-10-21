@@ -7,6 +7,221 @@ use hirsel_modes::explain::{
 };
 
 impl Checker<'_> {
+    /// Follow only parts that the existing MODE-4 proof rejects. Like rustc's
+    /// BuiltinDerived causes (a7c37f9, traits/suggestions.rs:4441-4499), expose
+    /// the containing field/variant chain without changing the judgment.
+    fn sendability_cause(&mut self, root: TypeId) -> Option<String> {
+        let mut pending = vec![(root, String::new(), false)];
+        let mut seen = HashSet::default();
+        while let Some((id, mut path, inherited_unique)) = pending.pop() {
+            if !seen.insert((id, inherited_unique)) || seen.len() > 256 {
+                continue; // A diagnostic may elide a huge or expanding type.
+            }
+            let mut row = self.t.get(id)?.clone();
+            let unique = inherited_unique || row.modes.uniqueness == Uniqueness::Unique;
+            if unique {
+                row.modes.uniqueness = Uniqueness::Unique;
+            }
+            let qualified = self.t.intern(row.clone());
+            if self.sendable(qualified) {
+                continue;
+            }
+            // Handles fail on the carrier itself, even with scalar parts;
+            // counted roots fail before their parts unless unique.
+            if !row.modes.relation.is_global()
+                || matches!(
+                    row.kind,
+                    TypeKind::Builtin {
+                        kind: BuiltinType::Receiver | BuiltinType::Task,
+                        ..
+                    }
+                )
+                || (!unique && matches!(row.kind, TypeKind::Box(_) | TypeKind::Builtin { .. }))
+            {
+                let ty = self.diagnostic_type(id);
+                return Some(if path.is_empty() {
+                    ty
+                } else {
+                    format!("{path}({ty})")
+                });
+            }
+            if let TypeKind::Named { definition, .. } = &row.kind {
+                let signature = self.read(*definition)?;
+                if signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque {
+                    return Some(format!("{path}{}", definition.path().0.name));
+                }
+                if !path.is_empty() {
+                    path.push('.');
+                }
+                path.push_str(&definition.path().0.name);
+            }
+            let kind = if matches!(row.kind, TypeKind::Named { .. }) {
+                self.layout(id)?
+            } else {
+                row.kind.clone()
+            };
+            let mut children = vec![];
+            match kind {
+                TypeKind::Record(fields) => {
+                    for field in fields.iter() {
+                        children.push((
+                            field.ty,
+                            format!("{path}.{}", field.name.as_str()),
+                            unique,
+                        ));
+                    }
+                }
+                TypeKind::Variant(variants) => {
+                    for variant in variants.iter() {
+                        for (index, (name, ty)) in variant.fields.iter().enumerate() {
+                            let suffix = name.map_or_else(
+                                || format!("[{index}]"),
+                                |n| format!(".{}", n.as_str()),
+                            );
+                            let leaf = self.t.get(*ty)?;
+                            let next = if matches!(leaf.kind, TypeKind::Primitive(_)) {
+                                format!(
+                                    "{path}.{}({})",
+                                    variant.name.as_str(),
+                                    self.diagnostic_type(*ty)
+                                )
+                            } else {
+                                format!("{path}.{}{suffix}", variant.name.as_str())
+                            };
+                            children.push((*ty, next, unique));
+                        }
+                    }
+                }
+                TypeKind::Tuple(parts) => {
+                    for (index, ty) in parts.iter().enumerate() {
+                        children.push((*ty, format!("{path}[{index}]"), unique));
+                    }
+                }
+                TypeKind::Builtin { arguments, .. } => {
+                    for (index, argument) in arguments.iter().enumerate() {
+                        if let GenericArgument::Type(ty) = argument {
+                            children.push((*ty, format!("{path}[{index}]"), unique));
+                        }
+                    }
+                }
+                TypeKind::Box(ty) => children.push((ty, format!("{path}.box"), unique)),
+                _ => (),
+            }
+            if children.is_empty() {
+                return Some(if path.is_empty() {
+                    self.diagnostic_type(id)
+                } else {
+                    path
+                });
+            }
+            pending.extend(children.into_iter().rev());
+        }
+        None
+    }
+    fn diagnostic_type(&self, root: TypeId) -> String {
+        hirsel_type_analysis::spelling::type_spelling(
+            self.t,
+            root,
+            &self.out.body.resolution.generic_declarations,
+            &self.signature.definition.path().0.package,
+            true,
+        )
+    }
+    /// A source result annotation, only for the callback literal actually
+    /// passed here. Never turn a declaration elsewhere into a local edit.
+    pub(super) fn callback_sendability_explanation(
+        &mut self,
+        call: ExprId,
+        result: TypeId,
+        provided: Span,
+        required: Span,
+    ) -> Explanation {
+        let cause = self.sendability_cause(result);
+        let mut explanation = Explanation::default()
+            .provided(Fact::new(
+                Cause::NotSendable,
+                provided,
+                &cause.as_deref().into_iter().collect::<Vec<_>>(),
+            ))
+            .required(Fact::new(Requirement::Sendable, required, &[]));
+        let ExprKind::Call { arguments, .. } = &self.tree.expressions[call.0 as usize].kind else {
+            return explanation;
+        };
+        let Some(argument) = arguments.last() else {
+            return explanation;
+        };
+        let ExprKind::Closure { signature, body } =
+            &self.tree.expressions[argument.value.0 as usize].kind
+        else {
+            return explanation;
+        };
+        let body = *body;
+        let contracts = !signature.contracts.is_empty();
+        let Some(annotation) = signature.result else {
+            return explanation;
+        };
+        let site = self.tree.types[annotation.0 as usize].origin.span;
+        let Some(function) = self
+            .ty(argument.value)
+            .and_then(|t| match &self.t.get(t)?.kind {
+                TypeKind::Function(f) => Some(f.clone()),
+                _ => None,
+            })
+        else {
+            return explanation;
+        };
+        let declared = function.result;
+        let spelling = self.diagnostic_type(declared);
+        explanation = explanation.required(Fact::new(
+            Requirement::SendableType,
+            site,
+            &[&hirsel_modes::explain::prose(&format!(
+                "the declared callback result `{spelling}`"
+            ))],
+        ));
+        // An annotation alone cannot repair an ordinary-returning call.
+        // A single simple tail has no other return paths to repair. Prove the
+        // copy and crossing obligations, and respect the allocation promise,
+        // before offering a deep unique result expression.
+        let ExprKind::Block {
+            label: None,
+            statements,
+            tail: Some(tail),
+        } = &self.tree.expressions[body.0 as usize].kind
+        else {
+            return explanation;
+        };
+        let tail = *tail;
+        if !statements.is_empty()
+            || contracts
+            || function.allocation == Allocation::NoAlloc
+            || !matches!(
+                self.tree.expressions[tail.0 as usize].kind,
+                ExprKind::Call { .. } | ExprKind::Path(_)
+            )
+        {
+            return explanation;
+        }
+        if let Some(expression) = self.spelled(tail)
+            && self.property(declared, Bound::Copyable)
+            && self.sendable_when_unique(declared)
+        {
+            explanation.repairs.push(Repair::UniqueResult {
+                ty: spelling,
+                expression,
+            });
+            let span = self.span(tail);
+            explanation.fix = Some(hirsel_diag::Fix {
+                span: Span {
+                    end: span.start,
+                    ..span
+                },
+                replacement: "unique ".into(),
+                message: "return a deep unique copy of the callback result".into(),
+            });
+        }
+        explanation
+    }
     pub(super) fn sites(&self) -> Sites<'_> {
         Sites {
             syntax: self.syntax,
