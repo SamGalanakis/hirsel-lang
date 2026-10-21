@@ -13,6 +13,7 @@ use hirsel_syntax::{
     TypeExpr, TypeExprId, TypeExprKind, TypeModifier, Visibility,
 };
 use hirsel_types::SignatureKind;
+pub(crate) mod task;
 
 /// A declaration's generated source, for diagnostics and `hirsel expand`.
 #[derive(Clone, Debug)]
@@ -291,80 +292,8 @@ impl QueryEngine {
         body: ExprId,
         reads: &mut Recording,
     ) -> Result<String, QueryError> {
-        let source = &snapshot.item;
-        let ItemKind::Function { signature, .. } = &source.kind else {
-            return Err(QueryError::NotImplemented);
-        };
-        let ExprKind::Comptime(value) = snapshot.tree.expressions[body.0 as usize].kind else {
-            return Err(QueryError::NotImplemented);
-        };
-        let site = snapshot.tree.expressions[body.0 as usize].origin;
-        let helper = renamed(definition, "generator");
-        // The helper reads the declaration's own arenas, at its anchor.
-        let mut file = (**snapshot).clone();
-        file.occurrence = 0;
-        let core = |name: &str| Path {
-            package: Some(PackageId {
-                name: "core".into(),
-                version: "1".into(),
-            }),
-            segments: vec![Symbol::intern(name)],
-        };
-        let push = |kind: TypeExprKind, tree: &mut hirsel_syntax::SyntaxTree| {
-            tree.types.push(TypeExpr { origin: site, kind });
-            TypeExprId(tree.types.len() as u32 - 1)
-        };
-        // F: the header's parameters with their passing modes, result and `uses`,
-        // without uniqueness, which the declaration alone decides.
-        for ty in signature
-            .parameters
-            .iter()
-            .map(|p| p.ty)
-            .chain(signature.result)
-        {
-            without_uniqueness(&mut file.tree, ty);
-        }
-        let function = push(
-            TypeExprKind::Function(FunctionSyntax {
-                parameters: signature.parameters.clone(),
-                result: signature.result,
-                uses: signature.uses.clone(),
-                ..Default::default()
-            }),
-            &mut file.tree,
-        );
-        let body_type = push(
-            TypeExprKind::Named {
-                path: core("Body"),
-                arguments: vec![TypeArgument::Type(function)],
-            },
-            &mut file.tree,
-        );
-        let string = push(
-            TypeExprKind::Named {
-                path: core("String"),
-                arguments: vec![],
-            },
-            &mut file.tree,
-        );
-        let ty = push(
-            TypeExprKind::Named {
-                path: core("Result"),
-                arguments: vec![TypeArgument::Type(body_type), TypeArgument::Type(string)],
-            },
-            &mut file.tree,
-        );
-        let mut item = source.clone();
-        item.name = Symbol::intern(&helper.0.name);
-        item.definition = helper.clone();
-        item.visibility = Visibility::Private;
-        item.attributes.clear();
-        item.kind = ItemKind::Const { ty, value };
-        item.generated = Some(Generated::Generator(
-            signature.parameters.iter().filter_map(|p| p.name).collect(),
-        ));
-        file.item = item;
-        let file = Arc::new(file);
+        let input = task::GeneratorInput::new(definition, snapshot, body)?;
+        let value = input.value;
         let adapters = (
             self.adapters.signature.clone(),
             self.adapters.resolver.clone(),
@@ -374,90 +303,35 @@ impl QueryEngine {
         let (Some(signer), Some(resolver), Some(checker), Some(modes)) = adapters else {
             return Err(QueryError::NotImplemented);
         };
-        let constant = self.recorded(definition, reads, |t, m, r| {
-            let declarations = r.engine.frozen_declarations();
-            let mut products = PhaseProducts::default();
-            let output = signer.signature(t, m, file.clone(), &declarations, &mut products, r);
-            r.observed.products = Arc::new(products);
-            output
+        let prepared = self.recorded(definition, reads, |t, m, recorder| {
+            let declarations = recorder.engine.frozen_declarations();
+            let mut products = (*recorder.observed.products).clone();
+            let result = input.check(
+                t,
+                m,
+                &declarations,
+                &task::GeneratorPhases {
+                    signature: &*signer,
+                    resolver: &*resolver,
+                    checker: &*checker,
+                    modes: &*modes,
+                },
+                &mut products,
+                recorder,
+            );
+            recorder.observed.products = Arc::new(products);
+            result
         })?;
-        if has_errors(&constant.diagnostics) {
-            return Err(QueryError::Diagnostics(constant.diagnostics));
-        }
-        let mut constant = constant.value;
-        constant.fingerprint = hirsel_types::encoding::fingerprint(&self.types, &constant, &[])
-            .map_err(|e| {
-                QueryError::Operational(hirsel_types::OperationalFailure {
-                    operation: "typed generation".into(),
-                    message: format!("generator signature: {e:?}"),
-                })
-            })?;
-        let resolution = self.recorded(definition, reads, |t, m, r| {
-            let declarations = r.engine.frozen_declarations();
-            let mut products = PhaseProducts::default();
-            let output = resolver.resolve(t, m, file.clone(), &declarations, &mut products, r);
-            r.observed.products = Arc::new(products);
-            output
-        })?;
-        if has_errors(&resolution.diagnostics) {
-            return Err(QueryError::Diagnostics(resolution.diagnostics));
-        }
-        let typed = self.recorded(definition, reads, |t, m, r| {
-            checker.check(t, m, file.clone(), resolution.value, &constant, r)
-        })?;
-        if has_errors(&typed.diagnostics) {
-            return Err(QueryError::Diagnostics(typed.diagnostics));
-        }
-        let analyzed = self.recorded(definition, reads, |t, m, r| {
-            let mut products = (*r.observed.products).clone();
-            let output =
-                modes.check_modes(t, m, Arc::new(typed.value), &constant, &mut products, r);
-            r.observed.products = Arc::new(products);
-            output
-        })?;
-        if has_errors(&analyzed.diagnostics) {
-            return Err(QueryError::Diagnostics(analyzed.diagnostics));
-        }
-        let analyzed = analyzed.value;
-        let SignatureKind::Const { ty, .. } = constant.kind else {
-            return Err(QueryError::NotImplemented);
-        };
-        let ty = analyzed
-            .typed
-            .checked
-            .expressions
-            .iter()
-            .find(|r| r.expression == value)
-            .map_or(ty, |r| r.ty);
+        let task::GeneratorBody {
+            analyzed,
+            signature: constant,
+            ty,
+        } = prepared;
         self.prepare_materialization_environment();
         let constants = self.prepare_values(&analyzed, &[], &constant)?;
         let (result, _) =
             self.run_evaluation(&analyzed, &[], &constant, value, value, ty, &constants, &[])?;
-        let site = site.span;
-        let unexpected = || {
-            QueryError::Operational(hirsel_types::OperationalFailure {
-                operation: "typed generation".into(),
-                message: "generator returned no Result[Body, String]".into(),
-            })
-        };
-        let hirsel_interp::Value::Variant { variant, fields } = result else {
-            return Err(unexpected());
-        };
-        let Some(Some(hirsel_interp::Value::String(text))) = fields.into_iter().next() else {
-            return Err(unexpected());
-        };
-        match variant {
-            0 => Ok(text),
-            _ => {
-                let mut d = Diagnostic::error(
-                    const { hirsel_diag::RuleId::of("CT-1") },
-                    site,
-                    "the generator returned an error",
-                );
-                d.notes.push(text);
-                Err(QueryError::Diagnostics(vec![d]))
-            }
-        }
+        input.decode(result)
     }
 
     /// Parse the generated function literal, compare its type with the header,
