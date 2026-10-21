@@ -5,6 +5,7 @@
 pub(crate) mod driver;
 pub(crate) mod drops;
 pub(crate) mod engine;
+pub(crate) mod events;
 pub(crate) mod foreign;
 pub(crate) mod home;
 pub(crate) mod host;
@@ -565,6 +566,26 @@ impl Backend<Command> for Objects<'_> {
 
     fn record(&mut self, task: TaskId, op: &Operation<Command>, result: &Outcome, retirement: u64) {
         (self.record)(task, op.descriptor.name, result, retirement);
+    }
+
+    fn record_retirement(
+        &mut self,
+        task: TaskId,
+        op: &Operation<Command>,
+        result: &Outcome,
+        retirement: crate::ordered::Retirement<'_>,
+    ) {
+        self.record(task, op, result, retirement.index);
+        events::record(
+            self.ctx,
+            task,
+            Some((op.descriptor.name, result)),
+            retirement,
+        );
+    }
+
+    fn record_continuation(&mut self, task: TaskId, retirement: crate::ordered::Retirement<'_>) {
+        events::record(self.ctx, task, None, retirement);
     }
 
     fn publish(&mut self, _: TaskId, _: &Operation<Command>, result: &Outcome) {

@@ -332,7 +332,12 @@ fn with_frontier<T>(
     let result = action(&mut frontier, &mut backend);
     let spawned = std::mem::take(&mut backend.spawned);
     drop(backend);
-    let driver = driver(ctx);
+    // The role is still held. Restore all owned commit state before a
+    // stop-aware entry can abandon this stack (including with tracing off).
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
     assert!(driver.frontier.replace(frontier).is_none());
     for (task, held) in spawned {
         driver.enqueue(task, held);
@@ -520,6 +525,18 @@ impl<F: FnOnce() -> (T, Next), T> Backend<Command> for HeadEffect<'_, '_, F, T> 
     }
     fn record(&mut self, task: TaskId, op: &Operation<Command>, result: &Outcome, retirement: u64) {
         self.objects.record(task, op, result, retirement);
+    }
+    fn record_retirement(
+        &mut self,
+        task: TaskId,
+        op: &Operation<Command>,
+        result: &Outcome,
+        retirement: crate::ordered::Retirement<'_>,
+    ) {
+        self.objects.record_retirement(task, op, result, retirement);
+    }
+    fn record_continuation(&mut self, task: TaskId, retirement: crate::ordered::Retirement<'_>) {
+        self.objects.record_continuation(task, retirement);
     }
     fn publish(&mut self, _: TaskId, _: &Operation<Command>, _: &Outcome) {
         unreachable!("strict head effect cannot have an early receipt")
