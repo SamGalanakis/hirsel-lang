@@ -394,22 +394,29 @@ pub fn summarize(t: &TypeInterner, typed: &TypedBody) -> (DefinitionSummary, Par
 /// parameter cycle, in source order. Depends only on the edge set.
 pub fn growing_sites(edges: &[GrowthEdge]) -> Vec<Span> {
     use std::collections::BTreeMap;
-    let mut graph: BTreeMap<_, Vec<_>> = BTreeMap::new();
+    let mut vertices = BTreeMap::new();
     for (from, to, _, _) in edges {
-        graph.entry(from).or_default().push(to);
+        for vertex in [from, to] {
+            let next = vertices.len();
+            vertices.entry(vertex).or_insert(next);
+        }
+    }
+    let mut graph = vec![Vec::new(); vertices.len()];
+    for (from, to, _, _) in edges {
+        graph[vertices[from]].push(vertices[to]);
+    }
+    // An edge lies on a cycle exactly when its endpoints share an SCC.
+    // Reuse the iterative Tarjan walk, including targets with no outgoing edges.
+    let mut component = vec![0; vertices.len()];
+    for (id, members) in hirsel_graph::components(&graph).into_iter().enumerate() {
+        for vertex in members {
+            component[vertex] = id;
+        }
     }
     let mut sites = BTreeMap::new();
     for (from, to, _, site) in edges.iter().filter(|edge| edge.2) {
-        let mut todo = vec![to];
-        let mut seen = BTreeSet::new();
-        while let Some(node) = todo.pop() {
-            if node == from {
-                sites.insert((site.anchor, site.start, site.end), *site);
-                break;
-            }
-            if seen.insert(node) {
-                todo.extend(graph.get(node).into_iter().flatten());
-            }
+        if component[vertices[from]] == component[vertices[to]] {
+            sites.insert((site.anchor, site.start, site.end), *site);
         }
     }
     sites.into_values().collect()

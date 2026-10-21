@@ -35,6 +35,7 @@ mod formatting;
 mod frozen_revision;
 mod generic_graph;
 mod growth_ir;
+mod growth_sites;
 mod header_diagnostics;
 mod host_io;
 mod id_salt;

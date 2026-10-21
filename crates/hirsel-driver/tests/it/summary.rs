@@ -528,6 +528,7 @@ fn published_summaries_match_mode_refined_selection_inputs() {
         ] {
             let (mut engine, output) = check(&source);
             assert!(output.diagnostics.is_empty(), "{source}\n{:?}", output.diagnostics);
+            assert!(super::growth_sites::source_compare(&mut engine).is_empty());
             let checked = engine.checked_definition_summaries().unwrap();
             if source.contains("fn width[T]") {
                 assert!(checked.iter().any(|(definition, checked)| *definition != checked.summary.owner),
