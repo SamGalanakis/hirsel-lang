@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1927 exported definitions; 809 variants.
+1975 exported definitions; 821 variants.
 
 ## Types and roots
 
@@ -3722,6 +3722,18 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i64`](#def-core_
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_401_2fi32), [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/Weekday`](#def-std_401_2ftime_2fWeekday)
 
+<a id="def-std_401_2fdate_2ffrom_5fjson"></a>
+
+- `pub fn date.from_json(value: json.Value) -> Result[time.Date, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2ffrom_5fjson_5freader"></a>
+
+- `pub fn date.from_json_reader(mut cursor: json.Reader) -> Result[time.Date, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
 <a id="def-std_401_2fdate_2ffrom_5fordinal"></a>
 
 - `@noalloc pub fn date.from_ordinal(y: i32, day_of_year: u16) -> Option[time.Date] uses {}`
@@ -3733,6 +3745,12 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_
 - `@noalloc pub fn date.iso_week(value: time.Date) -> time.IsoWeek uses {}`
 
 References: [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/IsoWeek`](#def-std_401_2ftime_2fIsoWeek)
+
+<a id="def-std_401_2fdate_2fjson_5finto"></a>
+
+- `@preserves_unique(out) pub fn date.json_into(value: time.Date, mut out: List[u8], depth: u64) -> Result[ (), json.JsonError ] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
 
 <a id="def-std_401_2fdate_2fmonth"></a>
 
@@ -3763,6 +3781,14 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 - `@noalloc pub fn date.to_epoch_days(value: time.Date) -> i64 uses {}`
 
 References: [`core@1/i64`](#def-core_401_2fi64), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2fto_5fjson"></a>
+
+- `pub fn date.to_json(value: time.Date) -> json.Value uses {}`
+
+The derived JSON form: a date string, never an object of calendar fields.
+
+References: [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
 
 <a id="def-std_401_2fdate_2fto_5fstring"></a>
 
@@ -4106,6 +4132,24 @@ References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/List`](#def-core_401
 
 References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
+<a id="def-std_401_2fderive_2ffrom_5fjson_5fbytes"></a>
+
+- `pub fn derive.from_json_bytes[T](s: TypeShape[T]) -> Result[ Body[fn(Bytes) -> Result[T, String] uses {}], String ] uses {}`
+
+Derive `type_from_json_bytes(Bytes)`: one complete UTF-8 document. Declare
+type_from_json_reader as well, so recursive/nested types share the reader.
+
+References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fderive_2ffrom_5fjson_5freader"></a>
+
+- `pub fn derive.from_json_reader[T](s: TypeShape[T]) -> Result[ Body[fn(mut json.Reader) -> Result[T, String] uses {}], String ] uses {}`
+
+Derive `type_from_json_reader(mut json.Reader)`: consumes one typed value
+within the caller's reader. Nested nominal types use their matching entry.
+
+References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
 <a id="def-std_401_2fderive_2fhash"></a>
 
 - `pub fn derive.hash[T](s: TypeShape[T]) -> Result[ Body[fn(T, mut siphash.State) -> () uses {}], String ] uses {}`
@@ -4152,6 +4196,12 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
 
+<a id="def-std_401_2fderive_2fjson_5fnon_5ffinite"></a>
+
+- `pub fn derive.json_non_finite(spelling: String) -> bool uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
+
 <a id="def-std_401_2fderive_2fjson_5fnumber"></a>
 
 - `pub fn derive.json_number(value: json.Value) -> Result[unique String, String] uses {}`
@@ -4181,6 +4231,36 @@ References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_4
 - `pub fn derive.parsed[N, E](take value: Result[N, E], ty: String) -> Result[N, String] uses {value}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fderive_2fread_5fbool"></a>
+
+- `pub fn derive.read_bool(mut cursor: json.Reader) -> Result[bool, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fderive_2fread_5fjson"></a>
+
+- `pub fn derive.read_json[T](take value: Result[T, json.JsonError]) -> Result[T, String] uses {value}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
+
+<a id="def-std_401_2fderive_2fread_5fnull"></a>
+
+- `pub fn derive.read_null(mut cursor: json.Reader) -> Result[(), String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fderive_2fread_5fstring"></a>
+
+- `pub fn derive.read_string(mut cursor: json.Reader) -> Result[unique String, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fderive_2freader_5finvalid_5ftype"></a>
+
+- `pub fn derive.reader_invalid_type(mut cursor: json.Reader, expected: String) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
 
 <a id="def-std_401_2fderive_2fschema_5fdecode"></a>
 
@@ -4419,6 +4499,10 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/Duration`](#
 <a id="def-core_401_2ferr_2fprint"></a>
 
 - `@noalloc fn err.print(s: Stderr, text: String) -> Result[(), OutputError]`
+
+<a id="def-core_401_2ferr_2fwrite"></a>
+
+- `@noalloc fn err.write(s: Stderr, bytes: Bytes) -> Result[(), OutputError]`
 
 
 ## f32
@@ -5984,6 +6068,22 @@ References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Tasks`](#def-core_401_
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/Version`](#def-std_401_2fhttp_2fVersion)
 
+<a id="def-std_401_2fhttp_2fServerRequestView"></a>
+
+- `pub opaque type http.ServerRequestView: copyable + inert + noalloc_drop uses {}`
+
+A parsed HTTP/1 head whose fields are byte spans over one retained buffer.
+Accessors materialize only the fields the handler uses. The view may outlive
+the callback: subsequent reads preserve its immutable bytes.
+
+<a id="def-std_401_2fhttp_2fServerResponse"></a>
+
+- `pub type http.ServerResponse { status: u16, headers: List[Header], body: Bytes, close: bool, }`
+
+A complete response produced by an inline handler. Framing belongs to HTTP.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u16`](#def-core_401_2fu16), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader)
+
 <a id="def-std_401_2fhttp_2fServerStream"></a>
 
 - `pub opaque resource type http.ServerStream: sendable + noalloc_drop uses {Net, Tasks}`
@@ -6269,6 +6369,16 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest)
 
+<a id="def-std_401_2fhttp_2fserve_5fnext"></a>
+
+- `pub fn http.serve_next( mut c: ServerConnection, clock: Option[MonotonicClock], handler: fn(incoming: ServerRequestView) -> Result[ServerResponse, HttpError] ) -> Result[bool, HttpError]`
+
+Receive, handle and respond on this task, retaining the connection locally.
+Returns false at clean EOF. Use next_stream when the response handle must
+leave this call (worker handoff, streaming, or protocol detachment).
+
+References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection), [`std@1/http/ServerRequestView`](#def-std_401_2fhttp_2fServerRequestView), [`std@1/http/ServerResponse`](#def-std_401_2fhttp_2fServerResponse)
+
 <a id="def-std_401_2fhttp_2fserve_5ftls"></a>
 
 - `pub fn http.serve_tls( tasks: Tasks, n: Net, take stream: Stream of n, server: TlsServer, config: Config ) -> Result[ServerConnection, HttpError]`
@@ -6283,6 +6393,42 @@ Construct an HTTP server over an accepted transport. Explicit prior knowledge
 enables cleartext h2c; otherwise this uses HTTP/1.1.
 
 References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/Tasks`](#def-core_401_2fTasks), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
+
+<a id="def-std_401_2fhttp_2fserver_5frequest_5fbody"></a>
+
+- `pub fn http.server_request_body(r: ServerRequestView) -> Bytes in r uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/http/ServerRequestView`](#def-std_401_2fhttp_2fServerRequestView)
+
+<a id="def-std_401_2fhttp_2fserver_5frequest_5fheader"></a>
+
+- `pub fn http.server_request_header(r: ServerRequestView, name: String) -> Option[String] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/http/ServerRequestView`](#def-std_401_2fhttp_2fServerRequestView)
+
+<a id="def-std_401_2fhttp_2fserver_5frequest_5fmethod"></a>
+
+- `pub fn http.server_request_method(r: ServerRequestView) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/http/ServerRequestView`](#def-std_401_2fhttp_2fServerRequestView)
+
+<a id="def-std_401_2fhttp_2fserver_5frequest_5fowned"></a>
+
+- `pub fn http.server_request_owned(r: ServerRequestView) -> unique ServerRequest uses {}`
+
+References: [`std@1/http/ServerRequest`](#def-std_401_2fhttp_2fServerRequest), [`std@1/http/ServerRequestView`](#def-std_401_2fhttp_2fServerRequestView)
+
+<a id="def-std_401_2fhttp_2fserver_5frequest_5ftarget"></a>
+
+- `pub fn http.server_request_target(r: ServerRequestView) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/http/ServerRequestView`](#def-std_401_2fhttp_2fServerRequestView)
+
+<a id="def-std_401_2fhttp_2fserver_5frequest_5fversion"></a>
+
+- `pub fn http.server_request_version(r: ServerRequestView) -> Version uses {}`
+
+References: [`std@1/http/ServerRequestView`](#def-std_401_2fhttp_2fServerRequestView), [`std@1/http/Version`](#def-std_401_2fhttp_2fVersion)
 
 <a id="def-std_401_2fhttp_2fsse_5fevent"></a>
 
@@ -7782,6 +7928,106 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
+<a id="def-std_401_2fjson_2fReader"></a>
+
+- `pub type json.Reader { data: Bytes, pos: u64, depth: u64, }`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fjson_2fTextView"></a>
+
+- `pub type json.TextView = Unescaped(Bytes) | Escaped(String)`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fjson_2fTextView_23Escaped"></a>
+
+- `Escaped(String) -> json.TextView`
+
+Variant of json.TextView.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fjson_2fTextView_23Unescaped"></a>
+
+- `Unescaped(Bytes) -> json.TextView`
+
+Variant of json.TextView.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fjson_2fToken"></a>
+
+- `pub type json.Token = NullToken | BoolToken(bool) | NumberToken(Bytes) | TextToken(TextView) | ArrayStart | ArrayEnd | ObjectStart | ObjectEnd | Colon | Comma`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool), [`std@1/json/TextView`](#def-std_401_2fjson_2fTextView)
+
+<a id="def-std_401_2fjson_2fToken_23ArrayEnd"></a>
+
+- `ArrayEnd -> json.Token`
+
+Variant of json.Token.
+
+<a id="def-std_401_2fjson_2fToken_23ArrayStart"></a>
+
+- `ArrayStart -> json.Token`
+
+Variant of json.Token.
+
+<a id="def-std_401_2fjson_2fToken_23BoolToken"></a>
+
+- `BoolToken(bool) -> json.Token`
+
+Variant of json.Token.
+
+References: [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fjson_2fToken_23Colon"></a>
+
+- `Colon -> json.Token`
+
+Variant of json.Token.
+
+<a id="def-std_401_2fjson_2fToken_23Comma"></a>
+
+- `Comma -> json.Token`
+
+Variant of json.Token.
+
+<a id="def-std_401_2fjson_2fToken_23NullToken"></a>
+
+- `NullToken -> json.Token`
+
+Variant of json.Token.
+
+<a id="def-std_401_2fjson_2fToken_23NumberToken"></a>
+
+- `NumberToken(Bytes) -> json.Token`
+
+Variant of json.Token.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fjson_2fToken_23ObjectEnd"></a>
+
+- `ObjectEnd -> json.Token`
+
+Variant of json.Token.
+
+<a id="def-std_401_2fjson_2fToken_23ObjectStart"></a>
+
+- `ObjectStart -> json.Token`
+
+Variant of json.Token.
+
+<a id="def-std_401_2fjson_2fToken_23TextToken"></a>
+
+- `TextToken(TextView) -> json.Token`
+
+Variant of json.Token.
+
+References: [`std@1/json/TextView`](#def-std_401_2fjson_2fTextView)
+
 <a id="def-std_401_2fjson_2fValue"></a>
 
 - `@serializable pub type json.Value = Null | Bool(bool) | Number(String) | Text(String) | Array(List[Value]) | Object( Map[String, Value] )`
@@ -7834,6 +8080,24 @@ Variant of json.Value.
 
 References: [`core@1/String`](#def-core_401_2fString)
 
+<a id="def-std_401_2fjson_2farray_5fnext"></a>
+
+- `pub fn json.array_next(mut cursor: Reader, mut first: bool) -> Result[bool, JsonError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fjson_2fbegin_5farray"></a>
+
+- `pub fn json.begin_array(mut cursor: Reader) -> Result[(), JsonError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fjson_2fbegin_5fobject"></a>
+
+- `pub fn json.begin_object(mut cursor: Reader) -> Result[(), JsonError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
 <a id="def-std_401_2fjson_2fcheck_5fdepth"></a>
 
 - `@noalloc pub fn json.check_depth(depth: u64) -> Result[(), JsonError] uses {}`
@@ -7842,11 +8106,107 @@ Check a writer's number of open containers, before writing its delimiter.
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
 
+<a id="def-std_401_2fjson_2fcolon"></a>
+
+- `pub fn json.colon(mut cursor: Reader) -> Result[(), JsonError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fjson_2ffinish_5freader"></a>
+
+- `pub fn json.finish_reader(mut cursor: Reader) -> Result[(), JsonError] uses {}`
+
+Require only whitespace after the decoded root.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fjson_2fnext_5ftoken"></a>
+
+- `pub fn json.next_token(mut cursor: Reader) -> Result[Token, JsonError] in cursor uses {}`
+
+Read one lexical token. Container consumers enforce delimiter grammar.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader), [`std@1/json/Token`](#def-std_401_2fjson_2fToken)
+
+<a id="def-std_401_2fjson_2fnumber_5ftext"></a>
+
+- `pub fn json.number_text(raw: Bytes) -> unique String uses {}`
+
+Copy only a token's bytes when an owned String is required by scalar.parse.
+The pull reader itself exposes the original spelling without allocation.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fjson_2fobject_5fkey"></a>
+
+- `pub fn json.object_key(mut cursor: Reader, mut first: bool) -> Result[ Option[TextView], JsonError ] in cursor uses {}`
+
+Next object key without allocating a key set. Generated records check their
+declared field slots and keep a set only for unknown fields.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader), [`std@1/json/TextView`](#def-std_401_2fjson_2fTextView)
+
+<a id="def-std_401_2fjson_2fobject_5fnext"></a>
+
+- `pub fn json.object_next(mut cursor: Reader, mut first: bool, mut keys: Set[String]) -> Result[ Option[String], JsonError ] uses {}`
+
+Next object key, rejecting decoded duplicates before reading its value.
+The caller owns the key set for this object, including ignored members.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Set`](#def-core_401_2fSet), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
 <a id="def-std_401_2fjson_2fparse"></a>
 
 - `pub fn json.parse(take text: String) -> Result[Value, JsonError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fjson_2fpeek"></a>
+
+- `pub fn json.peek(mut cursor: Reader) -> u8 uses {}`
+
+The next non-whitespace byte, or zero at end of cursor.
+
+References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fjson_2fread_5fnumber"></a>
+
+- `pub fn json.read_number(mut cursor: Reader) -> Result[Bytes, JsonError] in cursor uses {}`
+
+A lossless number spelling as a view of the cursor.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fjson_2fread_5fowned_5ftext"></a>
+
+- `pub fn json.read_owned_text(mut cursor: Reader) -> Result[unique String, JsonError] uses {}`
+
+An independently owned decoded string for an owned typed field. The reader's
+view path remains available for keys and transient consumers.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fjson_2fread_5ftext"></a>
+
+- `pub fn json.read_text(mut cursor: Reader) -> Result[TextView, JsonError] in cursor uses {}`
+
+A quoted string: a view when unescaped, independent storage otherwise.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader), [`std@1/json/TextView`](#def-std_401_2fjson_2fTextView)
+
+<a id="def-std_401_2fjson_2freader"></a>
+
+- `pub fn json.reader(data: Bytes) -> Reader in data uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fjson_2fskip"></a>
+
+- `pub fn json.skip(mut cursor: Reader) -> Result[(), JsonError] uses {}`
+
+Validate and skip one value, retaining only object key sets, never a DOM.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
 
 <a id="def-std_401_2fjson_2fstringify"></a>
 
@@ -7859,6 +8219,26 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 - `@preserves_unique(out) pub fn json.stringify_into(value: Value, mut out: List[u8]) -> Result[(), JsonError] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fjson_2ftext_5fis"></a>
+
+- `pub fn json.text_is(value: TextView, expected: String) -> bool uses {}`
+
+Compare a borrowed key against a field name quoted at compile time.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/json/TextView`](#def-std_401_2fjson_2fTextView)
+
+<a id="def-std_401_2fjson_2ftext_5fowned"></a>
+
+- `pub fn json.text_owned(value: TextView) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/json/TextView`](#def-std_401_2fjson_2fTextView)
+
+<a id="def-std_401_2fjson_2fvalid_5futf8"></a>
+
+- `pub fn json.valid_utf8(data: Bytes) -> bool uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool)
 
 <a id="def-std_401_2fjson_2fwrite_5ftext_5finto"></a>
 
@@ -9583,6 +9963,10 @@ References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/ordered_map/OrderedMa
 <a id="def-core_401_2fout_2fprint"></a>
 
 - `@noalloc fn out.print(s: Stdout, text: String) -> Result[(), OutputError]`
+
+<a id="def-core_401_2fout_2fwrite"></a>
+
+- `@noalloc fn out.write(s: Stdout, bytes: Bytes) -> Result[(), OutputError]`
 
 
 ## path
@@ -14577,6 +14961,30 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/i32`](#def-core_
 - `@noalloc pub fn time.compare(clock: MonotonicClock, a: Instant of clock, b: Instant of clock) -> i32`
 
 References: [`core@1/Instant`](#def-core_401_2fInstant), [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/i32`](#def-core_401_2fi32)
+
+<a id="def-std_401_2ftime_2fdate_5ffrom_5fjson"></a>
+
+- `pub fn time.date_from_json(value: json.Value) -> Result[Date, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2ftime_2fdate_5ffrom_5fjson_5freader"></a>
+
+- `pub fn time.date_from_json_reader(mut cursor: json.Reader) -> Result[Date, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2ftime_2fdate_5fjson_5finto"></a>
+
+- `@preserves_unique(out) pub fn time.date_json_into(value: Date, mut out: List[u8], depth: u64) -> Result[ (), json.JsonError ] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2ftime_2fdate_5fto_5fjson"></a>
+
+- `pub fn time.date_to_json(value: Date) -> json.Value uses {}`
+
+References: [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
 
 <a id="def-std_401_2ftime_2fdeadline"></a>
 
