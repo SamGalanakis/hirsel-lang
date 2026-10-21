@@ -3,14 +3,13 @@ use crate::tasks::free::record;
 use hirsel_free::projection::Projection;
 use hirsel_free::session::Session;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Default)]
 struct Race {
     checked: AtomicBool,
     canceled: AtomicBool,
     finished: AtomicBool,
-    scope: AtomicU64,
 }
 
 fn wait_until(mut done: impl FnMut() -> bool) {
@@ -72,24 +71,19 @@ fn native_cancel_and_unshielded_checks_record_observations_and_replay_the_cut() 
         let install = recording.clone();
         let cutter = recording.clone();
         let race = Arc::new(Race::default());
-        let setup = race.clone();
         let mut run = crate::host::BodyRun::new(2, false);
         run.free = true;
         unsafe { run.use_physical_dispatch() };
         let outcome = run.run(
             move |ctx| unsafe {
                 super::super::enable(ctx);
-                // Prepared fixture topology precedes recorder admission. The
-                // general ScopeEnter lifecycle is a separate boundary slice.
-                let _role = role::Guard::new(ctx);
-                let (scope, generation) = open_scope(ctx, None);
-                setup
-                    .scope
-                    .store(handle(scope, generation), Ordering::Release);
                 install.root(ctx);
             },
             move |ctx| {
-                let scope_word = race.scope.load(Ordering::Acquire);
+                let mut scope_word = 0;
+                unsafe {
+                    hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope_word, &0);
+                }
                 let word = unsafe {
                     let _role = role::Guard::new(ctx);
                     let stack = Stack::new();
@@ -145,7 +139,7 @@ fn native_cancel_and_unshielded_checks_record_observations_and_replay_the_cut() 
             let mut replay = Session::replay(bytes).unwrap();
             assert!(replay.start(&[]));
             assert!(replay.start(&[0]));
-            for _ in 0..if terminal { 3 } else { 1 } {
+            for _ in 0..if terminal { 4 } else { 2 } {
                 replay.begin(&[]);
                 replay.publish(&[], Phase::Done).unwrap();
             }

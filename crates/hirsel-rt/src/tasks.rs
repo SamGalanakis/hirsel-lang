@@ -2190,6 +2190,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
     if ordered::engine::on(ctx) {
         return unsafe { crate::stop::check(ctx, ordered::lifecycle::scope_enter(ctx, out)) };
     }
+    if free::enabled(ctx) {
+        unsafe { crate::stop::check(ctx, free::lifecycle::scope_enter(ctx, out)) };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     let (index, generation) = open_scope(ctx, None);
     crate::free::done(ctx);
