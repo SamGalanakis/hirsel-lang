@@ -336,6 +336,28 @@ impl MemoGraph {
         self.dirty.remove(&key);
     }
 
+    /// Adopts a stored value and its read record, restoring subscribers without
+    /// charging a recomputation to the current session.
+    pub fn adopt_value<T>(
+        &mut self,
+        key: MemoKey,
+        text: ContentHash,
+        value: Result<Arc<T>, hirsel_types::QueryError>,
+        reads: Arc<Reads>,
+        durability: Durability,
+    ) -> Memo<T> {
+        self.adopt(key, reads.clone(), durability);
+        Memo {
+            key,
+            text,
+            value,
+            reads,
+            durability,
+            changed_at: self.revision,
+            verified_at: AtomicU64::new(self.revision.get()),
+        }
+    }
+
     /// Forgets a memo and its subscriptions (a removed definition, a retired
     /// registration, an evicted hold).
     pub fn remove(&mut self, key: &MemoKey) {

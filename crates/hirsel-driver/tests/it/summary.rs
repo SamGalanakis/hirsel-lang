@@ -465,7 +465,9 @@ fn published_summary_survives_body_release_and_rejects_stale_seeds() {
         assert_eq!(seeded.summary, summary.summary);
         assert_eq!(seeded.growth, summary.growth);
         assert_eq!(seeded.reads, summary.reads);
+        let computations = engine.memo_stats().recomputed.clone();
         assert!(engine.seed_definition_summary(seeded.clone()));
+        assert_eq!(engine.memo_stats().recomputed, computations);
         assert!(Arc::ptr_eq(
             &seeded,
             &engine.definition_summary(main).unwrap()

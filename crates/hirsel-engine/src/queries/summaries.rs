@@ -48,7 +48,7 @@ impl QueryEngine {
             reads,
             text,
         });
-        self.record_summary(published.clone(), checked.detail.clone());
+        self.record_summary(published.clone(), checked.detail.clone(), false);
         self.active.remove(&(path.clone(), QueryKind::Summary));
         Ok(published)
     }
@@ -62,7 +62,7 @@ impl QueryEngine {
         {
             return false;
         }
-        self.record_summary(summary, Default::default());
+        self.record_summary(summary, Default::default(), true);
         true
     }
 
@@ -70,6 +70,7 @@ impl QueryEngine {
         &mut self,
         summary: std::sync::Arc<PublishedSummary>,
         detail: DependencyReads,
+        adopted: bool,
     ) {
         let definition = summary.summary.owner;
         let durability = summary
@@ -79,18 +80,19 @@ impl QueryEngine {
             .min()
             .unwrap_or(crate::memo::Durability::High);
         let reads = summary.reads.clone();
-        let memo = self.graph.insert(
-            crate::memo::MemoKey::new(QueryKind::Summary, definition),
-            summary.text,
-            Ok(std::sync::Arc::new(QueryOutput {
-                value: summary,
-                diagnostics: vec![],
-                dependencies: detail.signatures.clone(),
-            })),
-            reads,
-            durability,
-            false,
-        );
+        let key = crate::memo::MemoKey::new(QueryKind::Summary, definition);
+        let text = summary.text;
+        let value = Ok(std::sync::Arc::new(QueryOutput {
+            value: summary,
+            diagnostics: vec![],
+            dependencies: detail.signatures.clone(),
+        }));
+        let memo = if adopted {
+            self.graph.adopt_value(key, text, value, reads, durability)
+        } else {
+            self.graph
+                .insert(key, text, value, reads, durability, false)
+        };
         self.summaries.insert(
             definition,
             std::sync::Arc::new(crate::queries::Entry {
