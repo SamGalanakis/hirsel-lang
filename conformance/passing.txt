@@ -6511,3 +6511,5 @@ conformance/GEN/GEN-2-schema-evolution-run.hir
 conformance/SEM/SEM-1-http-server-informational-run.hir
 conformance/CONC/CONC-5-inline-branch-result-ok.hir
 conformance/CONC/CONC-5-inline-branch-result-bad.hir
+conformance/MODE/MODE-4-opaque-carrier-forwarding-ok.hir
+conformance/MODE/MODE-4-opaque-carrier-forwarding-bad.hir

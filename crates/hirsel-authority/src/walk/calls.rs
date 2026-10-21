@@ -885,10 +885,16 @@ impl Checker<'_> {
             .map(|(i, t)| {
                 let store = self.out.body.types.clone();
                 let generics = self.declarations();
-                let sendability = structural_sendability(&store, *t, &generics, &mut |path| {
-                    Ok::<_, hirsel_types::QueryError>(self.read(path))
-                })
-                .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable));
+                // A retained value carries its proven occurrence evidence,
+                // including an opaque carrier's checked erased environment.
+                let sendability = if self.sendable(*t) {
+                    Sendability::Sendable
+                } else {
+                    structural_sendability(&store, *t, &generics, &mut |path| {
+                        Ok::<_, hirsel_types::QueryError>(self.read(path))
+                    })
+                    .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
+                };
                 (
                     ParameterRef::bound(ParamId(i as u32)).into(),
                     CaptureProperties::from_type(

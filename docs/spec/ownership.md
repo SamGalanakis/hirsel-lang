@@ -430,6 +430,10 @@ enclosing owner invalidates every crossing proof that depended on the ownership 
 generic instantiation, written type, expected result or later projection cannot restore
 such a proof.
 
+Passing a proven opaque `@captures` carrier to another retaining function preserves
+its current crossing evidence; the opaque declaration is not a substitute for the
+environment proof established at construction.
+
 ### MODE-5: Closure rule
 
 A closure's modes are the weakest of its captures': capturing a local value makes it

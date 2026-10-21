@@ -1,0 +1,31 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 22
+// twin: MODE/MODE-4-opaque-carrier-forwarding-ok.hir
+@captures(next)
+pub opaque type Flow: () uses {} {
+  next: fn() -> u64,
+}
+
+@captures(next)
+fn make(take next: fn() -> u64) -> Flow uses {next} {
+  Flow(next: take next)
+}
+
+@captures(input)
+fn relay(take input: Flow) -> Flow uses {input} {
+  take input
+}
+
+fn send[T: sendable](take value: T) uses {value} {}
+
+fn f(take xs: List[u64]) uses {} {
+  send(
+    relay(
+      make(
+        fn() -> u64 uses {} {
+          list.len(xs)
+        }
+      )
+    )
+  )
+}

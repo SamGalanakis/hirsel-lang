@@ -2308,7 +2308,14 @@ impl<'a> Checker<'a> {
             .map(|a| {
                 let t = self.place_type(a.value.place);
                 let mut types = self.working_store();
-                let derived = self.derive_sendability(&mut types, t);
+                // Flow checks the occurrence independently. Retaining an
+                // opaque carrier must not erase that checked crossing proof.
+                let derived =
+                    if self.bound(&types, t, Bound::Sendable, &self.generic_declarations()) {
+                        t
+                    } else {
+                        self.derive_sendability(&mut types, t)
+                    };
                 let row = types.get(derived).unwrap();
                 let sendability = if origins.is_some_and(|o| o.currently_sendable(&a.value, row)) {
                     Sendability::Sendable

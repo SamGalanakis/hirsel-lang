@@ -10,5 +10,5 @@ fn send[T: sendable](take value: T) -> () uses {value} {}
 fn cross() -> () uses {} {
   let mut flow = stream.from(0u64, read)
   let _ = stream.next(mut flow)
-  send(take flow)
+  send(stream.to_iter(take flow))
 }
