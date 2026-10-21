@@ -413,6 +413,32 @@ fn large_buffers_return_pages_even_when_libc_would_retain_them() {
     release(&ctx, guard, empty);
 }
 
+// Both sides of the original backing threshold, including prefix/padding and
+// alignments that keep System's existing over-aligned allocation path.
+#[test]
+fn large_threshold_bursts_preserve_alignment_and_live_neighbors() {
+    let ctx = Ctx::production();
+    let empty = leaf(0);
+    let guard = alloc(&ctx, empty, 512 * 1024, 16);
+    unsafe { ptr::write_bytes(payload(guard), 0x71, 512 * 1024) };
+    for _ in 0..8 {
+        for bytes in [128 * 1024 - 128, 128 * 1024 - 1, 128 * 1024, 128 * 1024 + 1] {
+            for align in [8, 16, 64, 4096, 8192] {
+                let block = alloc(&ctx, empty, bytes, align);
+                assert_eq!(payload(block).addr() % align as usize, 0);
+                unsafe { ptr::write_bytes(payload(block), 0x39, bytes as usize) };
+                release(&ctx, block, empty);
+                assert_eq!(unsafe { *payload(guard) }, 0x71);
+                assert_eq!(unsafe { *payload(guard).add(512 * 1024 - 1) }, 0x71);
+            }
+        }
+        unsafe { hirsel_rt::context::hirsel_rt_v2_worker_collect(ctx.0) };
+        assert_eq!(ctx.stats().live_blocks, 1);
+    }
+    release(&ctx, guard, empty);
+    assert_eq!(ctx.stats().live_blocks, 0);
+}
+
 #[cfg(not(feature = "system-allocator"))]
 #[cfg(target_os = "linux")]
 #[test]

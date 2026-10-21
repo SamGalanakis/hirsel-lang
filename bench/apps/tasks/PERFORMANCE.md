@@ -130,3 +130,11 @@ built successfully at 1532.7/1530.8 MiB, respectively (raw
 reproduce a std-caused increase, but uses a different compiler build from the
 debug test. The debug assertion remains unresolved; it is not classified as
 unrelated or bypassed.
+
+## Reclamation follow-up
+
+The [matched allocator follow-up](../../../reports/rss-throughput-2.md) retains
+the RSS savings but declines targeted libc page purging: create/list/update
+still cost 11.9%/34.9%/11.0% more total instructions than the pre-RSS control.
+The ten-round session completes 200 samples without failed cells. The maximum
+2% instruction-regression goal remains NO-GO; production policy is unchanged.
