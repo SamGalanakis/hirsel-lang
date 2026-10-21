@@ -1,0 +1,5 @@
+// langarena-blocked: Etc::LogParser | regex lacks case-insensitive flags and a cursor-based non-overlapping match iterator
+// LangArena 3c9f84d rust/src/benchmarks/log_parser.rs:13-59,166-177
+// requires (?i) patterns and find_iter over the complete generated log.
+// std@1/regex.compile("(?i)bot", 1000) returns Syntax; only find/is_match exist.
+// Repeated find on copied suffixes would add quadratic copying to the workload.

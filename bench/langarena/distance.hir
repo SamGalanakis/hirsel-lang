@@ -1,0 +1,174 @@
+// langarena: Distance::Jaro
+// langarena: Distance::NGram
+// Port of LangArena 3c9f84d rust/src/benchmarks/distance.rs:30-312.
+// Byte lists replace Vec<u8>
+// Map keys and multiset intersection are unchanged.
+type Pair {
+  a: List[u8],
+  b: List[u8],
+}
+
+type State {
+  pairs: List[Pair],
+  jaro: bool,
+  total: u32,
+}
+
+fn random(mut seed: u64, max: u64) -> u64 {
+  seed = (seed * 3877 + 29573) % 139968
+  seed * max / 139968
+}
+
+fn jaro(a: List[u8], b: List[u8]) -> f64 {
+  let n = list.len(a)
+  let m = list.len(b)
+  if n == 0 || m == 0 {
+    return 0.0
+  }
+  let longest = if n > m {
+    n
+  } else {
+    m
+  }
+  let distance = if longest / 2 > 0 {
+    longest / 2 - 1
+  } else {
+    0
+  }
+  let mut am: List[bool] = []
+  let mut bm: List[bool] = []
+  for _ in 0u64..n {
+    list.push(mut am, false)
+  }
+  for _ in 0u64..m {
+    list.push(mut bm, false)
+  }
+  let mut matches = 0u64
+  for i in 0u64..n {
+    let start = if i > distance {
+      i - distance
+    } else {
+      0
+    }
+    let end = if i + distance < m {
+      i + distance
+    } else {
+      m - 1
+    }
+    for j in start..end + 1 {
+      if !bm[j] && a[i] == b[j] {
+        am[i] = true
+        bm[j] = true
+        matches += 1
+        break
+      }
+    }
+  }
+  if matches == 0 {
+    return 0.0
+  }
+  let mut transpositions = 0u64
+  let mut k = 0u64
+  for i in 0u64..n {
+    if am[i] {
+      while k < m && !bm[k] {
+        k += 1
+      }
+      if k < m {
+        if a[i] != b[k] {
+          transpositions += 1
+        }
+        k += 1
+      }
+    }
+  }
+  let count: f64 = float.from_int(matches)
+  let nf: f64 = float.from_int(n)
+  let mf: f64 = float.from_int(m)
+  let tf: f64 = float.from_int(transpositions / 2)
+  (count / nf + count / mf + (count - tf) / count) / 3.0
+}
+
+fn gram(s: List[u8], i: u64) -> u32 {
+  let a: u32 = int.widen(s[i])
+  let b: u32 = int.widen(s[i + 1])
+  let c: u32 = int.widen(s[i + 2])
+  let d: u32 = int.widen(s[i + 3])
+  a << 24u32 | b << 16u32 | c << 8u32 | d
+}
+
+fn ngram(a: List[u8], b: List[u8]) -> f64 {
+  if list.len(a) < 4 || list.len(b) < 4 {
+    return 0.0
+  }
+  let mut first: Map[u32, u64] = map.empty()
+  let mut second: Map[u32, u64] = map.empty()
+  for i in 0u64..list.len(a) - 3 {
+    let key = gram(a, i)
+    let count = option.unwrap_or(map.get(first, key), 0)
+    map.insert(mut first, key, count + 1)
+  }
+  let mut intersection = 0u64
+  for i in 0u64..list.len(b) - 3 {
+    let key = gram(b, i)
+    let count = option.unwrap_or(map.get(second, key), 0) + 1
+    map.insert(mut second, key, count)
+    if let Some(limit) = map.get(first, key) {
+      if count <= limit {
+        intersection += 1
+      }
+    }
+  }
+  let total: f64 = float.from_int(map.len(first) + map.len(second))
+  let common: f64 = float.from_int(intersection)
+  if total > 0.0 {
+    common / total
+  } else {
+    0.0
+  }
+}
+
+fn step(mut s: State, iteration: u64) {
+  for pair in s.pairs {
+    let value = if s.jaro {
+      jaro(pair.a, pair.b)
+    } else {
+      ngram(pair.a, pair.b)
+    }
+    let scaled: u32 = int.narrow(results.unwrap_or(float.to_i32(value * 1000.0), -1))
+    s.total = u32.wrapping_add(s.total, scaled)
+  }
+}
+
+fn checksum(s: State) -> u32 {
+  s.total
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let mut seed = 42u64
+  let size = harness.number(config, "size")
+  let mut pairs: List[Pair] = []
+  for _ in 0u64..harness.number(config, "count") {
+    let n = random(mut seed, size) + 4
+    let m = random(mut seed, size) + 4
+    let mut a: List[u8] = []
+    let mut b: List[u8] = []
+    for _ in 0u64..n {
+      list.push(mut a, 97u8 + int.narrow(random(mut seed, 10)))
+    }
+    for _ in 0u64..m {
+      list.push(mut b, 97u8 + int.narrow(random(mut seed, 10)))
+    }
+    list.push(mut pairs, Pair(a: take a, b: take b))
+  }
+  harness.measure(
+    rt,
+    config,
+    State(pairs: take pairs, jaro: name == "Distance::Jaro", total: 0),
+    step,
+    checksum
+  )
+}

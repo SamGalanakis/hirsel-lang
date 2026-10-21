@@ -28,19 +28,19 @@ Instruction counts are the verdict; cycles are supporting measurement. Available
 | Matmul::T16 | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
 | Base64::Encode | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
 | Base64::Decode | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
-| Json::Generate | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
-| Json::ParseDom | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
-| Json::ParseMapping | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
-| CSV::Parse | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
+| Json::Generate | pass: see Port 2 quick results | not measured: no Hirsel port | — | — | — | — | — | — | — |
+| Json::ParseDom | pass: see Port 2 quick results | not measured: no Hirsel port | — | — | — | — | — | — | — |
+| Json::ParseMapping | pass: see Port 2 quick results | not measured: no Hirsel port | — | — | — | — | — | — | — |
+| CSV::Parse | pass: see Port 2 quick results | not measured: no Hirsel port | — | — | — | — | — | — | — |
 | Etc::Sieve | OK (10/10) | OK (10/10) | 2.697060475 | 1.273500000 | 2.118 | 11.404 | 6.469 | 1.763 | 1.559 |
 | Etc::TextRaytracer | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
 | Etc::NeuralNet | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
 | Etc::CacheSimulation | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
 | Etc::GameOfLife | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
-| Etc::Words | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
-| Etc::LogParser | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
-| Template::Regex | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
-| Template::Parse | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
+| Etc::Words | pass: see Port 2 quick results | not measured: no Hirsel port | — | — | — | — | — | — | — |
+| Etc::LogParser | blocked: regex case-insensitive flags and match iteration | not measured: no Hirsel port | — | — | — | — | — | — | — |
+| Template::Regex | blocked: regex match iteration and capture replacement | not measured: no Hirsel port | — | — | — | — | — | — | — |
+| Template::Parse | pass: see Port 2 quick results | not measured: no Hirsel port | — | — | — | — | — | — | — |
 | Sort::Quick | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
 | Sort::Merge | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
 | Sort::Self | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
@@ -66,8 +66,8 @@ Instruction counts are the verdict; cycles are supporting measurement. Available
 | Compress::ArithDecode | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
 | Compress::LZWEncode | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
 | Compress::LZWDecode | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
-| Distance::Jaro | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
-| Distance::NGram | missing: unported task | not measured: no Hirsel port | — | — | — | — | — | — | — |
+| Distance::Jaro | pass: see Port 2 quick results | not measured: no Hirsel port | — | — | — | — | — | — | — |
+| Distance::NGram | pass: see Port 2 quick results | not measured: no Hirsel port | — | — | — | — | — | — | — |
 
 ## Geometric means and compile times
 
@@ -498,3 +498,78 @@ Consumed Hirsel source SHA-256: `f0ab7d1b9fc2647b80d8c4d562fcd309fce507c689fb7d8
 | --- | --- | --- |
 | hirsel | `03d450a061ab0ae62386f29067ba8495762412a4004e44cf207cb26b717ef25d` | `d7941780726fd300f7fedb339e4fa9f2c29c89a02f1ac38532ed42eb27b5dd70` |
 | rust | `f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f` | `34f46c760fcc739816add285f1328cd3fb8eef465143303f6c96ef7349dc8cb3` |
+
+## Port 2: regex blockers
+
+- **Template::Regex — blocked.** `std@1/regex` has `find` and `is_match`, but
+  lacks cursor-based non-overlapping match iteration and capture replacement.
+  Upstream `rust/src/benchmarks/template.rs:118-183` replaces every
+  `\{\{(.*?)\}\}` match with a trimmed variable lookup. Repeatedly copying
+  suffixes for `find` would add quadratic copying; using the manual parser
+  would duplicate Template::Parse rather than benchmark regex substitution.
+- **Etc::LogParser — blocked.** Case-insensitive patterns and cursor-based
+  non-overlapping match iteration are missing. Minimal unsupported pattern:
+  `regex.compile("(?i)bot", 1000)` returns `Error(Syntax(...))`.
+  Upstream `rust/src/benchmarks/log_parser.rs:13-59,166-177` requires `(?i)`
+  patterns and `find_iter` for thirteen independent scans of the full log.
+
+Both findings were sent to the owning lane. No standard-library or compiler
+changes are included in this port.
+
+
+## Port 2 quick results
+
+Eight ports pass both upstream `test.js` and `run.js` checksums using native
+LLVM release builds. The scoped `//:gate-langarena` run passed all 10 tests;
+its automatic quick-checksum coverage grew from 7 to 15 registered tasks.
+No tests or checksum assertions were removed or weakened.
+
+`compare.py --quick --filter Json:: --filter CSV:: --filter Template::
+--filter Etc::Words --filter Etc::LogParser --filter Distance::` completed
+10 seeded interleaved CPU31 rounds (seed 20261021), with both languages passing
+all 160 samples. Session: `la-port-2-quick-1`. These quick workloads receive no
+published-host projections. The full-size checks above establish correctness;
+they are separate from the quick comparison.
+
+| Task | Status | test.js checksum | run.js checksum | Runtime H/R | Instructions H/R |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Json::Generate | pass | 4 | 120 | unavailable¹ | 2.661 |
+| Json::ParseDom | pass | 2918383076 | 3989922952 | unavailable¹ | 2.605 |
+| Json::ParseMapping | pass | 1969907348 | 3826684672 | unavailable¹ | 2.740 |
+| CSV::Parse | pass | 3563398641 | 1071523081 | unavailable¹ | 2.824 |
+| Etc::Words | pass | 580539813 | 1998586832 | unavailable¹ | 2.641 |
+| Etc::LogParser | blocked: see regex blockers | — | — | — | — |
+| Template::Regex | blocked: see regex blockers | — | — | — | — |
+| Template::Parse | pass | 917360148 | 3554506535 | unavailable¹ | 2.636 |
+| Distance::Jaro | pass | 7020 | 567348912 | unavailable¹ | 2.609 |
+| Distance::NGram | pass | 42 | 397440 | unavailable¹ | 2.779 |
+
+¹ Runtime ratios are unavailable: the unchanged Rust runner prints three
+decimal places and reports `0.000s` for every quick sample in these groups
+(the reporting threshold is 0.0005 seconds). Dividing by zero or substituting
+whole-process times would not yield the requested timed-interval ratio.
+Instruction counts are available and are the comparison verdict; they include
+startup, preparation and warmup, which dominate these small quick workloads.
+
+The comparison froze and verified consumed sources, manifests, binaries,
+compiler and native toolchain/runtime inputs throughout the session.
+Consumed-source SHA-256:
+`a2c665f63507deaecc8c6e28feeda151d04257cc5b3838a6f3e12b3cafb57582`.
+Raw measurements SHA-256:
+`c56ef7f05c1b39e6e45db783032b1892590cdb62b9c5b818dc6886ea645abd4a`.
+The final formatted-source full-size checksum run used the separate
+`langarena-frozen` executable, SHA-256
+`5a3673a43a344fcb3370832e4994b78a7fd5c52496848efb21a319bd011a21d0`.
+Earlier builds whose formatting overlapped compilation are diagnostic only.
+
+Port adaptations: lists replace Rust byte vectors; the CSV parser and JSON
+DOM parser take owned text, requiring an input copy per iteration. Typed JSON
+uses Hirsel's derived direct writer and reader, corresponding to serde's
+serialization paths, including skipping unneeded coordinate fields. Template
+keys are copied into owned UTF-8 strings for map lookup. Words uses the Crystal
+port's deterministic first-insertion tie rule rather than Rust HashMap's
+randomized iteration order, and splits into owned words because Hirsel's std
+split API consumes its input. The LCG's integer range mapping uses exact integer
+arithmetic; exhaustive comparison over every seed state agrees with the upstream
+floating calculation for all range bounds in these workloads. No benchmark
+algorithms, workload sizes or configured warmup counts were replaced.

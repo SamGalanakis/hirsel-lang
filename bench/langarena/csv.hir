@@ -1,0 +1,95 @@
+// langarena: CSV::Parse
+// LangArena 3c9f84d rust/src/benchmarks/csv_parse.rs:37-142.
+// Uses std's strict quoted CSV parser instead of simd_csv
+// Same dialect and rows.
+type Point {
+  x: f64,
+  y: f64,
+  z: f64,
+}
+
+type State {
+  source: String,
+  total: u32,
+}
+
+fn random(mut seed: u64) -> f64 {
+  seed = (seed * 3877 + 29573) % 139968
+  let value: f64 = float.from_int(seed)
+  value / 139968.0
+}
+
+fn number(value: String) -> f64 {
+  let Ok(parsed) = f64.parse(value) else {
+    check(false)
+    return 0.0
+  }
+  parsed
+}
+
+fn step(mut s: State, iteration: u64) {
+  let Ok(rows) = std@1/csv.parse(unique s.source, std@1/csv.default_config()) else {
+    check(false)
+    return
+  }
+  let mut points: List[Point] = []
+  for row in rows {
+    list.push(
+      mut points,
+      Point(x: number(row[1]), y: number(row[5]), z: number(row[3]))
+    )
+  }
+  if list.len(points) == 0 {
+    return
+  }
+  let mut x: f64 = 0.0
+  let mut y: f64 = 0.0
+  let mut z: f64 = 0.0
+  for point in points {
+    x += point.x
+    y += point.y
+    z += point.z
+  }
+  let count: f64 = float.from_int(list.len(points))
+  s.total = u32.wrapping_add(s.total, harness.hash_float(x / count))
+  s.total = u32.wrapping_add(s.total, harness.hash_float(y / count))
+  s.total = u32.wrapping_add(s.total, harness.hash_float(z / count))
+}
+
+fn checksum(s: State) -> u32 {
+  u32.wrapping_add(s.total, harness.hash_bytes(string.as_bytes(s.source)))
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let mut seed = 42u64
+  let mut out: List[u8] = []
+  let letters = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  for i in 0u64..harness.number(config, "rows") {
+    let letter = option.unwrap_or(char.from_u32(int.widen(letters[i % 26])), '?')
+    let x = random(mut seed)
+    let z = random(mut seed)
+    let y = random(mut seed)
+    let flag = if i % 2 == 0 {
+      "true"
+    } else {
+      "false"
+    }
+    text.append(
+      mut out,
+      f"\"point {letter}\\n, \"\"{i % 100}\"\"\",{x:.10},,{z:.10},\"[{flag}\\n, {i % 100}]\",{y:.10}\n"
+    )
+  }
+  harness.measure(
+    rt,
+    config,
+    State(source: text.finish_valid(take out), total: 0),
+    step,
+    checksum
+  )
+}
+
+fn check(ok: bool) -> ()
+  requires ok {}

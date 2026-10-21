@@ -1,0 +1,126 @@
+// langarena: Template::Parse
+// langarena-blocked: Template::Regex | regex lacks a cursor-based non-overlapping match iterator and capture replacement
+// LangArena 3c9f84d rust/src/benchmarks/template.rs:39-115,201-262.
+// The parser retains all single-brace literals and trims double-brace keys.
+type State {
+  source: String,
+  vars: Map[String, String],
+  rendered: String,
+  total: u32,
+}
+
+fn part(data: Bytes, start: u64, end: u64) -> String {
+  let Ok(value) = string.from_bytes(unique bytes.slice(data, start, end)) else {
+    check(false)
+    return ""
+  }
+  take value
+}
+
+fn step(mut s: State, iteration: u64) {
+  let data = string.as_bytes(s.source)
+  let len = bytes.len(data)
+  let mut rendered: List[u8] = []
+  let mut i = 0u64
+  while i < len {
+    if i + 1 < len && data[i] == b'{' && data[i + 1] == b'{' {
+      let mut j = i + 2
+      while j + 1 < len {
+        if data[j] == b'}' && data[j + 1] == b'}' {
+          break
+        }
+        j += 1
+      }
+      if j + 1 < len {
+        let key = string.trim(part(data, i + 2, j))
+        if let Some(value) = map.get(s.vars, key) {
+          text.append(mut rendered, value)
+        }
+        i = j + 2
+        continue
+      }
+    }
+    list.push(mut rendered, data[i])
+    i += 1
+  }
+  s.total = u32.wrapping_add(s.total, int.narrow(list.len(rendered)))
+  s.rendered = text.finish_valid(take rendered)
+}
+
+fn checksum(s: State) -> u32 {
+  u32.wrapping_add(s.total, harness.hash_bytes(string.as_bytes(s.rendered)))
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let first: List[String] = [
+    "John",
+    "Jane",
+    "Bob",
+    "Alice",
+    "Charlie",
+    "Diana",
+    "Sarah",
+    "Mike"
+  ]
+  let last: List[String] = [
+    "Smith",
+    "Johnson",
+    "Brown",
+    "Taylor",
+    "Wilson",
+    "Davis",
+    "Miller",
+    "Jones"
+  ]
+  let cities: List[String] = [
+    "New York",
+    "Los Angeles",
+    "Chicago",
+    "Houston",
+    "Phoenix",
+    "San Francisco"
+  ]
+  let mut vars: Map[String, String] = map.empty()
+  map.insert(mut vars, "TITLE", "Template title")
+  let mut source: List[u8] = []
+  text.append(
+    mut source,
+    "<html><body><h1>{{TITLE}}</h1><p>Lorem {ipsum} dolor {sit} amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore {et} dolore magna aliqua. </p><table>"
+  )
+  for i in 0u64..harness.number(config, "count") {
+    if i % 3 == 0 {
+      text.append(mut source, "<!-- {comment} -->")
+    }
+    text.append(mut source, "<tr><td>{{ FIRST_NAME")
+    text.append(mut source, f"{i}")
+    text.append(mut source, " }}</td><td>{{LAST_NAME")
+    text.append(mut source, f"{i}")
+    text.append(mut source, "}}</td><td>{{  CITY")
+    text.append(mut source, f"{i}")
+    text.append(mut source, "  }}</td><td>{balance: ")
+    text.append(mut source, f"{i % 100}")
+    text.append(mut source, "}</td></tr>\n")
+    map.insert(mut vars, f"FIRST_NAME{i}", copy first[i % list.len(first)])
+    map.insert(mut vars, f"LAST_NAME{i}", copy last[i % list.len(last)])
+    map.insert(mut vars, f"CITY{i}", copy cities[i % list.len(cities)])
+  }
+  text.append(mut source, "</table></body></html>")
+  harness.measure(
+    rt,
+    config,
+    State(
+      source: text.finish_valid(take source),
+      vars: take vars,
+      rendered: "",
+      total: 0
+    ),
+    step,
+    checksum
+  )
+}
+
+fn check(ok: bool) -> ()
+  requires ok {}

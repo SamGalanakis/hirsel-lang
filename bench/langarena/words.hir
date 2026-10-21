@@ -1,0 +1,62 @@
+// langarena: Etc::Words
+// LangArena 3c9f84d crystal/main.cr:1442-1483 (insertion-order tie breaking).
+type State {
+  source: String,
+  total: u32,
+}
+
+fn random(mut seed: u64, max: u64) -> u64 {
+  seed = (seed * 3877 + 29573) % 139968
+  seed * max / 139968
+}
+
+fn step(mut s: State, iteration: u64) {
+  let mut frequencies: Map[String, u32] = map.empty()
+  let words = string.split_ascii_whitespace(unique s.source)
+  for word in words {
+    let count = option.unwrap_or(map.get(frequencies, word), 0)
+    map.insert(mut frequencies, copy word, count + 1)
+  }
+  // Crystal Hash.max_by chooses the first inserted word on equal frequency.
+  let mut best = ""
+  let mut maximum = 0u32
+  for word in words {
+    let count = option.unwrap_or(map.get(frequencies, word), 0)
+    if count > maximum {
+      best = word
+      maximum = count
+    }
+  }
+  s.total = u32.wrapping_add(s.total, maximum)
+  s.total = u32.wrapping_add(s.total, harness.hash_bytes(string.as_bytes(best)))
+  s.total = u32.wrapping_add(s.total, int.narrow(map.len(frequencies)))
+}
+
+fn checksum(s: State) -> u32 {
+  s.total
+}
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[
+  harness.Report,
+  String
+] {
+  let mut seed = 42u64
+  let mut source: List[u8] = []
+  let count = harness.number(config, "words")
+  for i in 0u64..count {
+    let len = random(mut seed, harness.number(config, "word_len")) + random(mut seed, 3) + 3
+    for _ in 0u64..len {
+      list.push(mut source, 97u8 + int.narrow(random(mut seed, 26)))
+    }
+    if i + 1 < count {
+      list.push(mut source, 32)
+    }
+  }
+  harness.measure(
+    rt,
+    config,
+    State(source: text.finish_valid(take source), total: 0),
+    step,
+    checksum
+  )
+}
