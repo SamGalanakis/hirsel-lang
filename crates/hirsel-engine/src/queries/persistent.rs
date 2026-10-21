@@ -377,7 +377,7 @@ impl QueryEngine {
         {
             return None;
         }
-        let record: LowerRecord = self.decode_record(&variant.payload)?;
+        let mut record: LowerRecord = self.decode_record(&variant.payload)?;
         if crate::comptime::has_staged_reads(&record.output.value) {
             return None;
         }
@@ -386,11 +386,21 @@ impl QueryEngine {
                 .insert((DefId::intern(path), QueryKind::Lower), variant);
             return None;
         }
-        if let Some(reads) = record.verdict {
+        if let Some(reads) = record.verdict.clone() {
             self.remember_lowered_verdict(record.output.value.clone(), reads);
         }
-        if self.verify == Verify::On && self.ensure_lowered_verdict(&record.output.value).is_err() {
-            return None;
+        if self.verify == Verify::On {
+            self.ensure_lowered_verdict(&record.output.value).ok()?;
+            let reads = self
+                .lower_verdicts
+                .get(&record.output.value.path)?
+                .1
+                .clone();
+            if record.verdict.as_ref() != Some(&reads) {
+                record.verdict = Some(reads);
+                self.write_record(path, QueryKind::Lower, &variant.reads, &record)
+                    .ok()?;
+            }
         }
         timings::count(Count::StoreHits);
         Some(self.adopted(
@@ -426,7 +436,7 @@ impl QueryEngine {
         &mut self,
         definition: &hirsel_tir::DefinitionRef,
     ) -> Result<(), QueryError> {
-        if self.lowered_verdict_holds(definition) {
+        if self.verify == Verify::Off || self.lowered_verdict_holds(definition) {
             return Ok(());
         }
         let mut reads = vec![];
