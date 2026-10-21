@@ -234,12 +234,17 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
     pub(super) fn root(&mut self, path: &DefPath) -> DependencyProduct<Materialized> {
         self.limit = None;
         self.phase = Some(QueryKind::Lower);
-        self.capture(|worker| {
+        let product = self.capture(|worker| {
             let site = worker.source.site(path)?;
             worker
                 .constant_at(path, site)
                 .map(|constant| constant.value)
-        })
+        });
+        // Go's function worker releases task-owned working data before taking
+        // the next task (gc/compile.go:166-184). Success products already own
+        // complete read/depth/registration replay; helper TIR is task-local.
+        self.lowered.clear();
+        product
     }
     fn merge(&mut self, reads: &Reads) {
         for frame in &mut self.reads {
@@ -1222,6 +1227,35 @@ mod tests {
             bodies,
         }
     }
+    #[test]
+    fn completed_roots_release_worker_helper_lowerings() {
+        crate::with_compiler_stack(|| {
+            let source = source("fn helper()->(){()}\nconst VALUE:()=comptime helper()\n", 8);
+            let shared = TaskShared::new(S1Coordinator::new());
+            let mut worker = TaskWorker::new(&source, &shared);
+            let helper = worker.lower(&path("helper")).unwrap();
+            let held = Arc::downgrade(&helper);
+            drop(helper);
+            assert!(
+                held.strong_count() > 0,
+                "helper is memoized before the root"
+            );
+            let first = worker.root(&path("VALUE"));
+            assert!(first.result.is_ok());
+            assert_eq!(
+                held.strong_count(),
+                0,
+                "completed root retains its helper TIR"
+            );
+            let again = worker.root(&path("VALUE"));
+            assert!(again.result.is_ok());
+            assert_eq!(
+                first.reads, again.reads,
+                "root success replay preserves complete reads"
+            );
+        });
+    }
+
     #[test]
     fn real_constant_workers_share_successes_with_serial_depth_and_reads() {
         crate::with_compiler_stack(|| {
