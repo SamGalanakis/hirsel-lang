@@ -1,6 +1,6 @@
 //! Pure per-id memos over immutable interned rows: graph validity and the
 //! normal forms that equality modulo names, modes or shape compares.
-use crate::interner::Entry;
+use crate::interner::NormalForms;
 use crate::*;
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -151,11 +151,11 @@ pub(crate) fn validate(t: &TypeInterner, root: TypeId) -> Result<(), GraphError>
 fn normalize(
     t: &TypeInterner,
     root: TypeId,
-    memo: fn(&Entry) -> &OnceLock<TypeId>,
+    memo: fn(&NormalForms) -> &OnceLock<TypeId>,
     local: fn(&Type) -> Type,
     sem: bool,
 ) -> TypeId {
-    if let Some(id) = t.entry(root).and_then(|e| memo(e).get()) {
+    if let Some(id) = t.normal_forms(root).and_then(|e| memo(e).get()) {
         if sem {
             t.count_sem(true);
         }
@@ -167,7 +167,10 @@ fn normalize(
     let mut pending = vec![(root, false)];
     while let Some((id, exit)) = pending.pop() {
         let entry = t.entry(id).expect("a valid graph's rows exist");
-        if memo(entry).get().is_some() {
+        let normals = t
+            .normal_forms(id)
+            .expect("a valid graph's normal-form slots exist");
+        if memo(normals).get().is_some() {
             continue;
         }
         if !exit {
@@ -185,21 +188,24 @@ fn normalize(
         }
         let mut row = local(&entry.row);
         row.kind = row.kind.map_edges(|child| {
-            *memo(t.entry(child).expect("a valid graph's rows exist"))
-                .get()
-                .expect("children are normalized before their parent")
+            *memo(
+                t.normal_forms(child)
+                    .expect("a valid graph's normal-form slots exist"),
+            )
+            .get()
+            .expect("children are normalized before their parent")
         });
         let normal = t.intern(row);
         if sem {
             t.count_sem(false);
         }
         hirsel_intern::work::count(hirsel_intern::work::Counter::TypeNormalRows);
-        let _ = memo(entry).set(normal);
-        if let Some(entry) = t.entry(normal) {
+        let _ = memo(normals).set(normal);
+        if let Some(entry) = t.normal_forms(normal) {
             let _ = memo(entry).set(normal);
         }
     }
-    *memo(t.entry(root).expect("the root exists"))
+    *memo(t.normal_forms(root).expect("the root exists"))
         .get()
         .expect("the root is normalized")
 }
@@ -292,6 +298,71 @@ fn contract_row(row: &Type) -> Type {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An image's immutable base can outlive several independent engines.
+    /// Normal forms may allocate rows beyond that base, so their ids cannot
+    /// be cached in the shared base's entries.
+    #[test]
+    fn shared_image_normal_forms_stay_in_the_owning_interner() {
+        for (name, normalize) in [
+            ("semantic", sem as fn(&TypeInterner, TypeId) -> TypeId),
+            ("modeless", strip_modes),
+            ("shape", shape),
+            ("contract", contract),
+        ] {
+            let base = TypeBase::build(2, |ids| {
+                let mut scalar = Type::with_kind(TypeKind::Primitive(Primitive::U32));
+                scalar.modes.relation = Relation::environment();
+                let callable = Type::with_kind(TypeKind::Function(FunctionType {
+                    state_promises: Default::default(),
+                    generics: Default::default(),
+                    parameters: vec![Parameter {
+                        name: Some("argument".into()),
+                        label: None,
+                        passing: PassingMode::Borrow,
+                        ty: ids[0],
+                    }]
+                    .into(),
+                    result: ids[0],
+                    error: None,
+                    allocation: Allocation::NoAlloc,
+                    authority: AuthoritySummary::inert(),
+                    uses: Uses::Unrestricted,
+                    contracts: Default::default(),
+                    incomplete: false,
+                    foreign: None,
+                }));
+                vec![scalar, callable]
+            });
+            let root = TypeBase::id(1);
+            let first = TypeInterner::new(Some(base.clone()));
+            let expected =
+                crate::encoding::canonical_type_encoding(&first, normalize(&first, root)).unwrap();
+            let allocated = first.stats().rows;
+            assert!(
+                allocated > 0,
+                "{name} must exercise an allocated normal form"
+            );
+            drop(first);
+            let next = TypeInterner::new(Some(base));
+            for count in 0..allocated + 3 {
+                next.intern(Type::with_kind(TypeKind::Tuple(
+                    vec![TypeBase::id(0); count as usize].into(),
+                )));
+            }
+            let actual = normalize(&next, root);
+            assert_eq!(
+                crate::encoding::canonical_type_encoding(&next, actual).unwrap(),
+                expected,
+                "{name} leaked a previous engine's TypeId"
+            );
+            assert_eq!(
+                normalize(&next, root),
+                actual,
+                "{name} remains memoized locally"
+            );
+        }
+    }
 
     #[test]
     fn edge_rewrites_preserve_unchanged_children_and_callback_order() {

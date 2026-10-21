@@ -40,15 +40,22 @@ impl std::fmt::Debug for TypeId {
     }
 }
 
-/// One interned row and its pure per-id memos. Rows are immutable, so each memo
-/// is computed at most once per id, by whichever thread first asks.
-pub(crate) struct Entry {
-    pub(crate) row: Type,
+/// Normal-form ids belong to the interner that allocated them, including
+/// when the input row belongs to a shared immutable image base.
+#[derive(Default)]
+pub(crate) struct NormalForms {
     pub(crate) sem: OnceLock<TypeId>,
-    pub(crate) valid: OnceLock<Result<(), GraphError>>,
     pub(crate) strip_modes: OnceLock<TypeId>,
     pub(crate) shape: OnceLock<TypeId>,
     pub(crate) contract: OnceLock<TypeId>,
+}
+
+/// One immutable row and content-only facts. The inline normal forms are used
+/// for session rows; shared base rows use the owning interner's separate slots.
+pub(crate) struct Entry {
+    pub(crate) row: Type,
+    normals: NormalForms,
+    pub(crate) valid: OnceLock<Result<(), GraphError>>,
     pub(crate) actual_key: OnceLock<Option<Arc<str>>>,
     pub(crate) rewrite_features: OnceLock<u8>,
 }
@@ -56,11 +63,8 @@ impl Entry {
     fn new(row: Type) -> Self {
         Self {
             row,
-            sem: OnceLock::new(),
+            normals: NormalForms::default(),
             valid: OnceLock::new(),
-            strip_modes: OnceLock::new(),
-            shape: OnceLock::new(),
-            contract: OnceLock::new(),
             actual_key: OnceLock::new(),
             rewrite_features: OnceLock::new(),
         }
@@ -174,6 +178,10 @@ pub struct InternerStats {
 pub struct TypeInterner {
     base: Option<Arc<TypeBase>>,
     base_len: u32,
+    // Like rustc15c1044 ty/context.rs:140-145,759-763, ids and caches that
+    // can allocate ids stay within one owning context. Base TypeIds are stable;
+    // their normal forms can refer to private rows beyond the shared prefix.
+    base_normals: Box<[NormalForms]>,
     entries: AppendTable<Entry>,
     assigned: AtomicU32,
     shards: [RwLock<HashMap<u64, Ids, IdHasher>>; SHARDS],
@@ -193,13 +201,19 @@ struct Counters {
 impl TypeInterner {
     pub fn new(base: Option<Arc<TypeBase>>) -> Arc<Self> {
         let base_len = base.as_ref().map_or(0, |b| b.len() as u32);
+        let base_normals: Box<[_]> = (0..base_len).map(|_| NormalForms::default()).collect();
+        let cache_bytes = std::mem::size_of_val(&*base_normals) as u64;
         Arc::new(Self {
             base,
             base_len,
+            base_normals,
             entries: AppendTable::new(),
             assigned: AtomicU32::new(0),
             shards: [const { RwLock::new(HashMap::with_hasher(IdHasher::new())) }; SHARDS],
-            counters: Counters::default(),
+            counters: Counters {
+                row_bytes: AtomicU64::new(cache_bytes),
+                ..Counters::default()
+            },
         })
     }
 
@@ -321,6 +335,16 @@ impl TypeInterner {
             return self.base.as_ref()?.entries.get(position as usize);
         }
         self.entries.get(position - self.base_len)
+    }
+
+    pub(crate) fn normal_forms(&self, id: TypeId) -> Option<&NormalForms> {
+        let position = id.position()?;
+        if position < self.base_len {
+            return self.base_normals.get(position as usize);
+        }
+        self.entries
+            .get(position - self.base_len)
+            .map(|entry| &entry.normals)
     }
 
     /// The row of `id`, or None for an id this interner never assigned.
