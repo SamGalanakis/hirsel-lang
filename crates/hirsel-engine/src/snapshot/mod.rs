@@ -433,21 +433,7 @@ impl QueryEngine {
             // Reuse this snapshot's own immutable row only when its exact
             // producer is still current and unmarked. A replacement, missing
             // entry, transient failure or changed input follows normal demand.
-            let retained = self.snapshot_sources.get(&d).and_then(|source| {
-                let current = self.signature_memo_source(d)?;
-                let source = source.upgrade()?;
-                if !Arc::ptr_eq(&source, current)
-                    || !current.consistent
-                    || self.graph.is_dirty(&current.memo.key)
-                {
-                    return None;
-                }
-                self.snapshot
-                    .as_ref()?
-                    .1
-                    .signature(d)
-                    .map(|row| row.cloned().map_err(Clone::clone))
-            });
+            let retained = self.retained_snapshot_signature(d);
             let signature = retained.unwrap_or_else(|| self.signature(d));
             if let Some(entry) = self.signature_memo_source(d) {
                 row_sources.insert(d, Arc::downgrade(entry));
@@ -507,6 +493,33 @@ impl QueryEngine {
         }
         snapshot
     }
+    /// Observe a published signature without another phase memo query. The
+    /// snapshot must describe the current universe and the immutable producer
+    /// must still be the exact unmarked source that supplied its row.
+    pub(crate) fn current_snapshot_signature(&self, d: DefId) -> Option<SignatureRef> {
+        let (stamp, _) = self.snapshot.as_ref()?;
+        if *stamp != self.snapshot_stamp() {
+            return None;
+        }
+        self.retained_snapshot_signature(d)?.ok()
+    }
+
+    fn retained_snapshot_signature(&self, d: DefId) -> Option<Result<SignatureRef, QueryError>> {
+        let source = self.snapshot_sources.get(&d)?.upgrade()?;
+        let current = self.signature_memo_source(d)?;
+        if !Arc::ptr_eq(&source, current)
+            || !current.consistent
+            || self.graph.is_dirty(&current.memo.key)
+        {
+            return None;
+        }
+        self.snapshot
+            .as_ref()?
+            .1
+            .signature(d)
+            .map(|row| row.cloned().map_err(Clone::clone))
+    }
+
     /// The inputs a snapshot built now would be built from.
     pub(crate) fn snapshot_stamp(&self) -> SnapshotStamp {
         SnapshotStamp {
@@ -567,6 +580,7 @@ pub(crate) struct SnapshotStamp {
 mod tests {
     use super::*;
     use crate::memo::{ReadKey, ReadsBuilder};
+    use hirsel_syntax::ItemKind;
     use hirsel_types::{SignatureKind, SignatureProvider, Type, TypeKind};
 
     fn constant(t: &TypeInterner, name: &str, primitive: hirsel_types::Primitive) -> SignatureRef {
@@ -581,6 +595,90 @@ mod tests {
             },
             fingerprint: ContentHash::of_bytes(name.as_bytes()),
         })
+    }
+
+    /// Receipt observation uses a settled immutable row without touching its
+    /// phase memo, but a changed header must still be queried before reuse.
+    #[test]
+    fn live_observation_reuses_a_settled_snapshot_and_requeries_an_edited_header() {
+        struct Header;
+        impl SignaturePhase for Header {
+            fn signature(
+                &self,
+                t: &TypeInterner,
+                _: &hirsel_types::TypeMemo,
+                syntax: Arc<ItemSyntax>,
+                _: &Declarations,
+                _: &mut PhaseProducts,
+                _: &mut dyn SignatureProvider,
+            ) -> Result<QueryOutput<Signature>, QueryError> {
+                let ItemKind::Function { abi: Some(abi), .. } = &syntax.item.kind else {
+                    panic!("header fixture")
+                };
+                Ok(QueryOutput {
+                    value: Signature {
+                        metadata: Default::default(),
+                        definition: DefId::intern(&syntax.item.definition),
+                        kind: SignatureKind::Const {
+                            ty: t.intern(Type::unit()),
+                            generics: Default::default(),
+                        },
+                        fingerprint: ContentHash::of_bytes(abi.literal.as_bytes()),
+                    },
+                    dependencies: vec![],
+                    diagnostics: vec![],
+                })
+            }
+        }
+        let mut adapters = crate::phases::engine_only_adapters();
+        adapters.signature = Some(Arc::new(Header));
+        let mut engine = QueryEngine::new(default_environment(), adapters);
+        let context = default_context();
+        let file = engine
+            .sources
+            .add("snapshot.hir", "extern \"first\" fn probe()".into())
+            .unwrap();
+        let parsed = engine.parse_file(file, &context).unwrap();
+        let owner = parsed.value.items[0].item.definition.clone();
+        let key = ReadKey::Signature(DefId::intern(&owner));
+        let snapshot = engine.signature_snapshot();
+        let expected = crate::queries::memos::signature_value(Some(
+            snapshot
+                .signature(DefId::intern(&owner))
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+        ));
+        let before = engine.memo_stats().touched;
+        assert_eq!(engine.observe(&owner, &key), Some(expected));
+        let executed = ReadKey::ExecutedSignature(DefId::intern(&owner));
+        assert_eq!(engine.observe(&owner, &executed), Some(expected));
+        assert_eq!(
+            engine.memo_stats().touched,
+            before,
+            "settled observation reads the snapshot, not phase memos"
+        );
+        let file = engine
+            .sources
+            .add("snapshot.hir", "extern \"second\" fn probe()".into())
+            .unwrap();
+        engine.parse_file(file, &context).unwrap();
+        let changed = engine.observe(&owner, &key).unwrap();
+        assert_ne!(
+            changed, expected,
+            "an old snapshot cannot authorize a changed producer"
+        );
+        let current = engine.signature_snapshot();
+        assert_eq!(
+            changed,
+            crate::queries::memos::signature_value(Some(
+                current
+                    .signature(DefId::intern(&owner))
+                    .unwrap()
+                    .unwrap()
+                    .fingerprint
+            ))
+        );
     }
 
     /// Eight workers read one snapshot through their own `FrozenProvider`s

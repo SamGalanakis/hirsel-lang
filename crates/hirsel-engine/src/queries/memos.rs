@@ -398,7 +398,10 @@ impl QueryEngine {
     pub(crate) fn observe(&mut self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
         Some(match *read {
             ReadKey::Signature(d) | ReadKey::ExecutedSignature(d) => {
-                signature_value(self.signature(d).ok().map(|s| s.fingerprint))
+                let signature = self
+                    .current_snapshot_signature(d)
+                    .or_else(|| self.signature(d).ok());
+                signature_value(signature.map(|s| s.fingerprint))
             }
             ReadKey::FailedSignature(d) => {
                 if self.signature(d).is_ok() {
