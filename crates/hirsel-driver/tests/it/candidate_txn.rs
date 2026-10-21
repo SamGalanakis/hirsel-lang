@@ -83,6 +83,7 @@ fn candidate_isolated_check_and_resident_promotion_do_not_write_sources() {
     let ra = result(&w, &a);
     let rb = result(&w, &b);
     assert_eq!(ra.completion, Completion::Complete, "{:?}", ra.loader_error);
+    assert!(ra.incomplete.is_none());
     assert_eq!(ra.verdict, Verdict::Pass, "{:?}", ra.loader_error);
     assert_eq!(rb.verdict, Verdict::Reject);
     assert_eq!(
@@ -153,6 +154,14 @@ fn candidate_duplicate_waiters_cancel_independently_and_result_never_polls_disk(
     assert_eq!(
         result(&w, &b).completion,
         Completion::Incomplete(IncompleteReason::Cancelled)
+    );
+    let cancelled = result(&w, &b);
+    assert_eq!(
+        cancelled.incomplete,
+        Some(IncompleteProgress {
+            uncompleted_packages: cancelled.scope.packages.clone(),
+            phase: None,
+        })
     );
     assert_eq!(result(&w, &a).verdict, Verdict::Pass);
     assert_eq!(w.counters().frozen_loads, 1);
@@ -322,6 +331,9 @@ fn candidate_exhaustion_and_quota_never_become_success_or_cached_verdicts() {
         Completion::Incomplete(IncompleteReason::ResourceLimit)
     );
     assert_eq!(actual.verdict, Verdict::Undecided);
+    let progress = actual.incomplete.as_ref().expect("incomplete progress");
+    assert_eq!(progress.uncompleted_packages, actual.scope.packages);
+    assert!(progress.phase.is_some(), "{:?}", actual.loader_error);
     let b = submit(&w, &base, 2, &old);
     let _ = result(&w, &b);
     assert_eq!(

@@ -74,6 +74,15 @@ pub enum Completion {
     Complete,
     Incomplete(IncompleteReason),
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IncompleteProgress {
+    /// Packages whose complete check has not been certified. This serial
+    /// implementation publishes an aggregate check, so the list conservatively
+    /// includes the selected closure; some phases may already have completed.
+    pub uncompleted_packages: Vec<PackageId>,
+    /// Last known affected phase; None if work stopped before a phase ran.
+    pub phase: Option<hirsel_engine::QueryKind>,
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Verdict {
     Pass,
@@ -112,6 +121,7 @@ pub struct CheckReceipt {
     pub compiler_environment: ContentHash,
     pub scope: CheckedScope,
     pub completion: Completion,
+    pub incomplete: Option<IncompleteProgress>,
     pub verdict: Verdict,
     pub output: Arc<CheckOutput>,
     pub loader_error: Option<String>,
@@ -316,6 +326,7 @@ enum WorkState {
 }
 struct Snapshot {
     completion: Completion,
+    phase: Option<hirsel_engine::QueryKind>,
     verdict: Verdict,
     output: Arc<CheckOutput>,
     loader_error: Option<String>,
@@ -380,6 +391,8 @@ struct Workspace {
     #[cfg(test)]
     before_compute: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     #[cfg(test)]
+    before_check: Mutex<Option<fn(&mut hirsel_engine::LoadedProgram)>>,
+    #[cfg(test)]
     before_capture_recheck: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 #[derive(Clone)]
@@ -443,6 +456,8 @@ impl CandidateWorkspace {
                 leases: AtomicUsize::new(0),
                 #[cfg(test)]
                 before_compute: Mutex::new(None),
+                #[cfg(test)]
+                before_check: Mutex::new(None),
                 #[cfg(test)]
                 before_capture_recheck: Mutex::new(None),
             }),
@@ -751,7 +766,7 @@ impl CandidateWorkspace {
                         .scope
                         .packages
                         .iter()
-                        .map(|p| p.name.len() + p.version.len() + 128)
+                        .map(|p| 2 * (p.name.len() + p.version.len() + 128))
                         .sum::<usize>(),
                 )
                 .ok_or(RequestError::ResourceLimit)?,
@@ -1031,7 +1046,30 @@ impl CandidateWorkspace {
         waiter: &Arc<Waiter>,
         snapshot: Arc<Snapshot>,
     ) -> Result<CandidateResult, RequestError> {
-        let receipt=Arc::new(CheckReceipt{id:waiter.id,base:waiter.parent.clone(),candidate_inputs:waiter.work.inputs.token.inputs,compiler_environment:self.inner.environment,scope:waiter.work.inputs.scope.clone(),completion:snapshot.completion.clone(),verdict:snapshot.verdict,output:snapshot.output.clone(),loader_error:snapshot.loader_error.clone(),failure_class:snapshot.failure_class,checked_products:snapshot.products.clone(),dependencies:DependencyDelta::Unknown{reason:"serial inputs do not retain a base dependency graph; checking delta is unknown, not execution/test impact".into()},head:HeadFreshness::CurrentAt(waiter.parent.generation),disk:DiskFreshness::Unobserved,_charge:snapshot._charge.clone(),_observation_charge:None});
+        let receipt = Arc::new(CheckReceipt {
+            id: waiter.id,
+            base: waiter.parent.clone(),
+            candidate_inputs: waiter.work.inputs.token.inputs,
+            compiler_environment: self.inner.environment,
+            scope: waiter.work.inputs.scope.clone(),
+            completion: snapshot.completion.clone(),
+            incomplete: (snapshot.completion != Completion::Complete).then(|| IncompleteProgress {
+                uncompleted_packages: waiter.work.inputs.scope.packages.clone(),
+                phase: snapshot.phase,
+            }),
+            verdict: snapshot.verdict,
+            output: snapshot.output.clone(),
+            loader_error: snapshot.loader_error.clone(),
+            failure_class: snapshot.failure_class,
+            checked_products: snapshot.products.clone(),
+            dependencies: DependencyDelta::Unknown {
+                reason: "serial inputs do not retain a base dependency graph; checking delta is unknown, not execution/test impact".into(),
+            },
+            head: HeadFreshness::CurrentAt(waiter.parent.generation),
+            disk: DiskFreshness::Unobserved,
+            _charge: snapshot._charge.clone(),
+            _observation_charge: None,
+        });
         let mut state = waiter.state.lock().unwrap();
         match &*state {
             WaiterState::Complete(receipt) => {
@@ -1064,6 +1102,10 @@ impl CandidateWorkspace {
             compiler_environment: self.inner.environment,
             scope: waiter.work.inputs.scope.clone(),
             completion: Completion::Incomplete(reason),
+            incomplete: Some(IncompleteProgress {
+                uncompleted_packages: waiter.work.inputs.scope.packages.clone(),
+                phase: None,
+            }),
             verdict: Verdict::Undecided,
             output: Arc::new(CheckOutput::default()),
             loader_error: None,
@@ -1085,7 +1127,7 @@ impl CandidateWorkspace {
                             .scope
                             .packages
                             .iter()
-                            .map(|p| p.name.len() + p.version.len() + 128)
+                            .map(|p| 2 * (p.name.len() + p.version.len() + 128))
                             .sum::<usize>(),
                     )
                     .ok_or(RequestError::ResourceLimit)?,
@@ -1095,6 +1137,7 @@ impl CandidateWorkspace {
     fn control_snapshot(&self, reason: IncompleteReason) -> Result<Snapshot, RequestError> {
         Ok(Snapshot {
             completion: Completion::Incomplete(reason),
+            phase: None,
             verdict: Verdict::Undecided,
             output: Arc::new(CheckOutput::default()),
             loader_error: None,
@@ -1131,6 +1174,10 @@ impl CandidateWorkspace {
                     Err(error) => return Ok(snapshot_error(error, charge.clone(), true)),
                 };
             w.state.lock().unwrap().counters.load_nanos += nanos(load_started);
+            #[cfg(test)]
+            if let Some(hook) = *w.before_check.lock().unwrap() {
+                hook(&mut program);
+            }
             let check_started = std::time::Instant::now();
             let result = program.check(LoweringPolicy::Comptime);
             w.state.lock().unwrap().counters.check_nanos += nanos(check_started);
@@ -1156,8 +1203,20 @@ impl CandidateWorkspace {
                         None
                     };
                     Ok(Snapshot {
+                        phase: if complete {
+                            None
+                        } else {
+                            match output.completion {
+                                CheckCompletion::Incomplete { phase } => Some(phase),
+                                CheckCompletion::Complete => {
+                                    program.engine.unavailable.or(program.engine.last_phase)
+                                }
+                            }
+                        },
                         completion: if complete {
                             Completion::Complete
+                        } else if !limit {
+                            Completion::Incomplete(IncompleteReason::MissingPhase)
                         } else {
                             Completion::Incomplete(IncompleteReason::ResourceLimit)
                         },
@@ -1193,6 +1252,7 @@ impl CandidateWorkspace {
             if limit {
                 snapshot.completion = Completion::Incomplete(IncompleteReason::ResourceLimit);
                 snapshot.verdict = Verdict::Undecided;
+                snapshot.phase = snapshot.phase.or(program.engine.last_phase);
             }
             drop(program);
             Ok(snapshot)
@@ -1259,11 +1319,22 @@ fn receipt_metadata_bytes(receipt: &CheckReceipt) -> usize {
             .iter()
             .map(|p| p.name.len() + p.version.len() + 128)
             .sum::<usize>()
+        + receipt.incomplete.as_ref().map_or(0, |progress| {
+            progress
+                .uncompleted_packages
+                .iter()
+                .map(|p| p.name.len() + p.version.len() + 128)
+                .sum::<usize>()
+        })
 }
 fn nanos(started: std::time::Instant) -> u64 {
     started.elapsed().as_nanos().min(u64::MAX as u128) as u64
 }
 fn snapshot_error(error: ToolError, charge: Arc<Charge>, loader: bool) -> Snapshot {
+    let phase = match &error {
+        ToolError::Query { phase, .. } => *phase,
+        _ => None,
+    };
     let failure_class = match &error {
         ToolError::Io(e) if e.get_ref().is_some_and(|e| e.is::<InputUnavailable>()) => {
             FailureClass::Unavailable
@@ -1278,6 +1349,9 @@ fn snapshot_error(error: ToolError, charge: Arc<Charge>, loader: bool) -> Snapsh
         matches!(&error,ToolError::Io(e) if e.get_ref().is_some_and(|e|e.is::<InputUnavailable>()));
     let limited = is_limit(&error);
     let mut output = CheckOutput::default();
+    if let ToolError::Query { sources, .. } = &error {
+        output.sources = sources.clone();
+    }
     let (completion, verdict) = match error {
         ToolError::Query {
             error: QueryError::Diagnostics(diagnostics),
@@ -1308,6 +1382,7 @@ fn snapshot_error(error: ToolError, charge: Arc<Charge>, loader: bool) -> Snapsh
     };
     Snapshot {
         completion,
+        phase,
         verdict,
         output: Arc::new(output),
         loader_error: Some(text),
@@ -1420,6 +1495,58 @@ mod tests {
         assert_eq!(w.head().as_ref(), Some(original.token()));
         *w.inner.before_capture_recheck.lock().unwrap() = None;
         assert!(w.capture(&manifest).unwrap().token().generation > original.token().generation);
+    }
+    #[test]
+    fn candidate_missing_phase_preserves_progress_and_never_promotes() {
+        let f = Fixture::new();
+        let w = workspace();
+        let base = w.capture(&f.0.join("main.hir")).unwrap();
+        *w.inner.before_check.lock().unwrap() = Some(|program| {
+            program.engine.adapters.modes = None;
+        });
+        let candidate = submit(&w, &base, 1);
+        let CandidateResult::Ready(receipt) = w.result(&candidate).unwrap() else {
+            panic!("missing incomplete receipt");
+        };
+        assert_eq!(
+            receipt.completion,
+            Completion::Incomplete(IncompleteReason::MissingPhase)
+        );
+        assert_eq!(receipt.verdict, Verdict::Undecided);
+        assert_eq!(
+            receipt.incomplete,
+            Some(IncompleteProgress {
+                uncompleted_packages: receipt.scope.packages.clone(),
+                phase: Some(hirsel_engine::QueryKind::Modes),
+            })
+        );
+        assert!(receipt.checked_products.is_none());
+        assert!(receipt.output.sources.anchors().next().is_some());
+        assert!(matches!(
+            w.promote(
+                CandidateId {
+                    client: 7,
+                    nonce: 1
+                },
+                &candidate,
+                base.token()
+            )
+            .unwrap(),
+            Promotion::Ineligible
+        ));
+        *w.inner.before_check.lock().unwrap() = None;
+        let retry = submit(&w, &base, 2);
+        let CandidateResult::Ready(retry) = w.result(&retry).unwrap() else {
+            panic!("missing recomputed receipt");
+        };
+        assert_eq!(retry.completion, Completion::Complete);
+        assert_eq!(retry.verdict, Verdict::Pass);
+        assert!(retry.incomplete.is_none());
+        assert_eq!(
+            w.counters().frozen_loads,
+            2,
+            "missing-phase outcome was cached"
+        );
     }
     #[test]
     fn candidate_capture_and_promotion_have_one_serial_head_order() {
