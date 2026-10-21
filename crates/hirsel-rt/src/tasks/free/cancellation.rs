@@ -29,14 +29,20 @@ pub(crate) unsafe fn check(ctx: *mut TaskCtx, out: *mut u32) -> Stopped<()> {
     super::record::begin(ctx);
     let s = scheduler(ctx) as *mut Scheduler;
     let shield = unsafe { (*ctx).shield };
-    super::record::publish(ctx, Phase::Done, |writer| {
-        let cause = unsafe { (*s).canceled(shield) };
+    let replay = super::replay::token(ctx);
+    let publication = super::record::publish(ctx, Phase::Done, |writer| {
+        let mut cause = unsafe { (*s).canceled(shield) };
         if shield == 0 {
             if let Some(writer) = writer {
                 writer.cancel(cause);
+            } else if let Some(replay) = &replay {
+                cause = replay.cancel(cause)?;
             }
         }
         unsafe { out.write(cause.map_or(0, |cause| cause + 1)) };
-    })?;
+        Ok(())
+    });
+    drop(replay);
+    publication??;
     unsafe { try_yield(&mut *ctx) }
 }

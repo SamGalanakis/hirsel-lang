@@ -744,3 +744,106 @@ unsafe fn thaw_wait_body(ctx: *mut TaskCtx, replay: bool, waited: *const AtomicB
         hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
     }
 }
+
+#[test]
+fn native_replay_forces_cancellation_changes_only_at_unshielded_checks() {
+    for durable in [false, true] {
+        let recording = super::super::record::Recording::new(b"native cancel replay", durable);
+        let install = recording.clone();
+        let cutter = recording.clone();
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                install.root(ctx);
+            },
+            move |ctx| unsafe {
+                let mut cause = 99;
+                hirsel_rt_v2_task_canceled(ctx, &mut cause, &0);
+                assert_eq!(cause, 0);
+                cutter.recorder.flush().unwrap().unwrap();
+                let _role = role::Guard::new(ctx);
+                scheduler(ctx).cancel(ROOT, CANCEL_REQUESTED);
+                (*ctx).shield = 1;
+                hirsel_rt_v2_task_canceled(ctx, &mut cause, &0);
+                assert_eq!(cause, 0);
+                (*ctx).shield = 0;
+                for _ in 0..2 {
+                    hirsel_rt_v2_task_canceled(ctx, &mut cause, &0);
+                    assert_eq!(cause, CANCEL_REQUESTED + 1);
+                }
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        recording.recorder.stop("returned", None).unwrap().unwrap();
+        let trace = recording.trace();
+        let bytes = Arc::try_unwrap(recording)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink()
+            .bytes;
+        let flush = (1..bytes.len())
+            .find(|&end| {
+                hirsel_free::tape::parse(&bytes[..end]).is_ok_and(|tape| {
+                    tape.cut.get(&Vec::new()) == Some(&Progress::new(1, Phase::Done))
+                })
+            })
+            .unwrap();
+        for end in [flush, flush + 1, bytes.len()] {
+            let parsed = hirsel_free::tape::parse(&bytes[..end]).unwrap();
+            let full = end == bytes.len();
+            let expected = Projection::new(
+                if full { "returned" } else { "truncated" },
+                &parsed.cut,
+                &trace,
+            );
+            for width in [2, 8] {
+                for live_cause in [None, Some(CANCEL_PARENT)] {
+                    let replay = Replay::new(&bytes[..end]).unwrap();
+                    let install = replay.clone();
+                    let outputs = Arc::new(std::array::from_fn::<_, 4, _>(|_| {
+                        std::sync::atomic::AtomicU32::new(99)
+                    }));
+                    let observed = outputs.clone();
+                    let mut run = crate::host::BodyRun::new(width, false);
+                    run.free = true;
+                    unsafe { run.use_physical_dispatch() };
+                    let outcome = run.run(
+                        move |ctx| unsafe { install.root(ctx) },
+                        move |ctx| unsafe {
+                            let _role = role::Guard::new(ctx);
+                            if let Some(cause) = live_cause {
+                                scheduler(ctx).cancel(ROOT, cause);
+                            }
+                            for (index, shield) in [0, 1, 0, 0].into_iter().enumerate() {
+                                (*ctx).shield = shield;
+                                hirsel_rt_v2_task_canceled(ctx, observed[index].as_ptr(), &0);
+                            }
+                            panic!("cancellation replay passed its cut");
+                        },
+                    );
+                    assert!(
+                        matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
+                        "{outcome:?}"
+                    );
+                    assert_eq!(outputs[0].load(Ordering::Acquire), 0);
+                    assert_eq!(
+                        outputs[1].load(Ordering::Acquire),
+                        if full { 0 } else { 99 }
+                    );
+                    for index in 2..4 {
+                        assert_eq!(
+                            outputs[index].load(Ordering::Acquire),
+                            if full { CANCEL_REQUESTED + 1 } else { 99 }
+                        );
+                    }
+                    assert_eq!(replay.finish().unwrap(), expected);
+                }
+            }
+        }
+    }
+}
