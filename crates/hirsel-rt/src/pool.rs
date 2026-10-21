@@ -1112,7 +1112,8 @@ fn worker_main(run: RunPtr, exec: Arc<Exec>, holders: Arc<Holders>) {
 ///
 /// # Safety
 /// `ctx` is the run's root context, on the admission thread, before the run's code runs;
-/// `width` is 2 to [`MAX_WIDTH`].
+/// `width` is 1 to [`MAX_WIDTH`]. Physical executor reference tests can
+/// use one compute worker beside home; ordinary width1 stays on home.
 pub(crate) unsafe fn start(ctx: *mut TaskCtx, width: u32, migrate: bool) {
     // SAFETY: caller contract.
     let run = unsafe { (*ctx).run_ptr() };

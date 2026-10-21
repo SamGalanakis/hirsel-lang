@@ -1024,7 +1024,7 @@ mod tests {
         };
         let layouts = [&environment as *const crate::Layout];
         let mut reference = None;
-        for width in [2, 4, 8] {
+        for width in [1, 2, 4, 8] {
             for reorder in [
                 hirsel_run_config::Reorder::Off,
                 hirsel_run_config::Reorder::Auto,
@@ -1226,7 +1226,7 @@ mod tests {
         let layouts = [&image as *const crate::Layout, &wrapper];
         let mut reference = None;
         let mut native_words = Vec::new();
-        for width in [2, 4, 8] {
+        for width in [1, 2, 4, 8] {
             for reorder in [
                 hirsel_run_config::Reorder::Off,
                 hirsel_run_config::Reorder::Auto,
@@ -1518,7 +1518,7 @@ mod tests {
 
     #[test]
     fn native_retirements_keep_owned_evidence_and_continuations_keep_the_ordinal() {
-        for width in [2, 4, 8] {
+        for width in [1, 2, 4, 8] {
             let mut run = crate::host::BodyRun::new(width, true);
             unsafe { run.use_physical_dispatch() };
             let outcome = run.run(
@@ -1623,7 +1623,7 @@ mod tests {
     fn native_atomic_events_normalize_identities_and_match_across_widths_and_reorder() {
         use std::sync::{Arc, Mutex};
         let mut reference = None;
-        for width in [2, 4, 8] {
+        for width in [1, 2, 4, 8] {
             for reorder in [
                 hirsel_run_config::Reorder::Off,
                 hirsel_run_config::Reorder::Auto,
@@ -1885,7 +1885,7 @@ mod tests {
     #[test]
     fn cancellation_trace_captures_the_observed_cause_before_the_check_yields() {
         use crate::tasks::*;
-        for width in [2, 4, 8] {
+        for width in [1, 2, 4, 8] {
             for cause in [None, Some(0), Some(2)] {
                 let mut run = crate::host::BodyRun::new(width, true);
                 unsafe { run.use_physical_dispatch() };
@@ -1974,7 +1974,7 @@ mod tests {
             scan_words: 0,
         };
         let layouts = [&layout as *const crate::Layout];
-        for (width, decoded) in [2, 4, 8]
+        for (width, decoded) in [1, 2, 4, 8]
             .into_iter()
             .flat_map(|width| [(width, false), (width, true)])
         {
@@ -2105,7 +2105,7 @@ mod tests {
         };
         let layouts = [&layout as *const crate::Layout, &scalar];
         let mut reference = None;
-        for width in [2, 4, 8] {
+        for width in [1, 2, 4, 8] {
             for reorder in [
                 hirsel_run_config::Reorder::Off,
                 hirsel_run_config::Reorder::Auto,
@@ -2202,6 +2202,18 @@ mod tests {
                         // Exercise the actual early-effect path as well: it must
                         // retain evidence without emitting an event or publishing.
                         use crate::ordered::Backend;
+                        let channel = crate::tasks::scheduler(ctx)
+                            .channels
+                            .channel(endpoints[1], false);
+                        let mut received = [0u64; 2];
+                        assert_eq!(
+                            crate::tasks::scheduler(ctx)
+                                .channels
+                                .receive(channel, received.as_mut_ptr().cast()),
+                            Ok(true)
+                        );
+                        assert_eq!(received[1], 42);
+                        assert!(!crate::tasks::scheduler(ctx).channels.ready(channel));
                         let id = super::super::engine::driver(ctx)
                             .objects
                             .identity(crate::ordered::objects::Kind::Sender, endpoints[0])
@@ -2248,7 +2260,15 @@ mod tests {
                                 .len(),
                             6
                         );
+                        assert!(
+                            !crate::tasks::scheduler(ctx).channels.ready(channel),
+                            "pending send stays invisible"
+                        );
                         backend.publish(0, &op, &receipt.result);
+                        assert!(
+                            crate::tasks::scheduler(ctx).channels.ready(channel),
+                            "retirement publication exposes send"
+                        );
 
                         crate::STATUS_OK
                     },

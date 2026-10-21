@@ -483,7 +483,11 @@ impl BodyRun {
             (*ctx).run().control = std::sync::Arc::clone(&self.control);
             (*ctx).run().worker_metrics = self.metrics.clone();
             (*ctx).run().free_mode = self.free;
-            if self.width > 1
+            // A single-worker physical reference uses the same dispatcher as
+            // wider tests, with home reserved for services. Ordinary width1
+            // BodyRun admission retains the cooperative home path.
+            if self.physical_dispatch
+                || self.width > 1
                 || self
                     .control
                     .width
