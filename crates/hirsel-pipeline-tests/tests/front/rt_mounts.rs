@@ -269,8 +269,8 @@ fn an_authorized_empty_virtual_mount_issues_a_directory_in_each_simulation() {
     )
     .unwrap();
     let io = reference.simulation.grant_root("Io").unwrap();
-    let mut types = TypeInterner::default();
-    let result_type = types.push(hirsel_types::Type::unit());
+    let types = TypeInterner::default();
+    let result_type = types.intern(hirsel_types::Type::unit());
     let sources = SourceMap::default();
     let mut stdout = vec![];
     let mut trace = vec![];

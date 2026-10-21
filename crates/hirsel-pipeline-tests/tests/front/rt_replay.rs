@@ -136,8 +136,8 @@ pub fn replay_interpreter_with_fixture(
                 id: 1
             }
         );
-        let mut types = hirsel_types::TypeInterner::default();
-        let result_type = types.push(hirsel_types::Type::unit());
+        let types = hirsel_types::TypeInterner::default();
+        let result_type = types.intern(hirsel_types::Type::unit());
         let sources = SourceMap::default();
         let mut output = vec![];
         let mut trace = vec![];
