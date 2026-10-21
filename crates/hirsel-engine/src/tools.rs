@@ -331,6 +331,38 @@ impl FileCheck {
     }
 }
 
+/// Publish one ordinary frontier's input-ordered outcomes into its files.
+/// Source diagnostics accumulate throughout P; an operational failure stops
+/// that file before any later generator request is admitted.
+fn mode_frontier(
+    engine: &mut QueryEngine,
+    checks: &mut [FileCheck],
+    pending: &mut Vec<(usize, DefPath)>,
+    jobs: hirsel_intern::jobs::Jobs,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let (owners, definitions): (Vec<_>, Vec<_>) = std::mem::take(pending).into_iter().unzip();
+    for (owner, mode) in owners
+        .into_iter()
+        .zip(engine.mode_definitions(definitions, jobs))
+    {
+        let check = &mut checks[owner];
+        if check.stopped.is_some() {
+            continue;
+        }
+        match mode.result {
+            Ok(output) => check.diagnostics.extend(output.diagnostics.iter().cloned()),
+            Err(QueryError::Diagnostics(errors)) => check.diagnostics.extend(errors),
+            Err(error) => {
+                check.missing_phase = mode.phase;
+                check.stopped = Some(error);
+            }
+        }
+    }
+}
+
 /// A program check's schedule over `files` (design §1c): S0 parses every
 /// file and checks its associations; P checks and mode-checks every item of
 /// every clean file; GEN-5 runs once, over the summaries P published; S1
@@ -378,16 +410,18 @@ pub(crate) fn check_files(
     let p = interval(Interval::Parallel);
     // Keep source order for per-file diagnostics, while the engine publishes
     // worker products in DefPath order. Every clean file contributes its body
-    // tasks and distinct-type fact helpers to the same P frontier.
-    let mut owners = vec![];
-    let mut definitions = vec![];
+    // tasks and distinct-type fact helpers to P, draining before generators.
+    let mut planned = vec![];
     for (owner, check) in checks.iter().enumerate().filter(|(_, check)| check.clean()) {
         let Some(parsed) = &check.parsed else {
             continue;
         };
         for syntax in &parsed.items {
-            owners.push(owner);
-            definitions.push(syntax.item.definition.clone());
+            planned.push((
+                owner,
+                syntax.item.definition.clone(),
+                crate::queries::generation::generator(syntax).is_some(),
+            ));
             if matches!(
                 &syntax.item.kind,
                 hirsel_syntax::ItemKind::Type {
@@ -395,33 +429,30 @@ pub(crate) fn check_files(
                     ..
                 }
             ) {
-                owners.push(owner);
-                definitions.push(hirsel_check_protocol::fact::fact_path(
-                    &syntax.item.definition,
+                planned.push((
+                    owner,
+                    hirsel_check_protocol::fact::fact_path(&syntax.item.definition),
+                    false,
                 ));
             }
         }
     }
     let jobs = hirsel_intern::jobs::Jobs::new(hirsel_guard::jobs());
-    for (owner, mode) in owners
-        .into_iter()
-        .zip(engine.mode_definitions(definitions, jobs))
-    {
-        let check = &mut checks[owner];
-        // Like the serial file step, continue after source diagnostics but
-        // withhold later results after this file's first operational failure.
-        if check.stopped.is_some() {
-            continue;
-        }
-        match mode.result {
-            Ok(output) => check.diagnostics.extend(output.diagnostics.iter().cloned()),
-            Err(QueryError::Diagnostics(errors)) => check.diagnostics.extend(errors),
-            Err(error) => {
-                check.missing_phase = mode.phase;
-                check.stopped = Some(error);
+    let mut pending = vec![];
+    for (owner, definition, generates) in planned {
+        if generates {
+            // A generator executes S1. Publish earlier ordinary outcomes first
+            // so an unavailable phase in this file can withhold that execution.
+            mode_frontier(engine, &mut checks, &mut pending, jobs);
+            if checks[owner].stopped.is_none() {
+                pending.push((owner, definition));
+                mode_frontier(engine, &mut checks, &mut pending, jobs);
             }
+        } else if checks[owner].stopped.is_none() {
+            pending.push((owner, definition));
         }
     }
+    mode_frontier(engine, &mut checks, &mut pending, jobs);
     drop(p);
     // GEN-5 is the program's: every clean file reports its verdict.
     if checks.iter().any(FileCheck::clean) {

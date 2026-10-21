@@ -529,3 +529,75 @@ fn package_diagnostics_and_warm_edits_match_at_every_worker_count() {
         }
     }
 }
+/// Ordinary bodies may run speculatively; generators must respect an earlier
+/// operational stop in their file, while source diagnostics still accumulate.
+#[test]
+fn a_later_generator_respects_its_files_operational_stop() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct PartialChecker {
+        inner: Arc<dyn CheckerPhase>,
+        unavailable: bool,
+        generators: Arc<AtomicUsize>,
+    }
+    impl CheckerPhase for PartialChecker {
+        fn check(
+            &self,
+            types: &hirsel_types::TypeInterner,
+            memo: &hirsel_types::TypeMemo,
+            syntax: Arc<hirsel_syntax::ItemSyntax>,
+            resolution: hirsel_types::Resolution,
+            signature: &hirsel_types::Signature,
+            provider: &mut dyn hirsel_types::SignatureProvider,
+        ) -> Result<QueryOutput<TypedBody>, hirsel_types::QueryError> {
+            if self.unavailable && syntax.item.definition.0.name == "first" {
+                return Err(hirsel_types::QueryError::NotImplemented);
+            }
+            if syntax.item.definition.0.name.ends_with("$generator") {
+                self.generators.fetch_add(1, Ordering::SeqCst);
+            }
+            self.inner
+                .check(types, memo, syntax, resolution, signature, provider)
+        }
+    }
+    with_compiler_stack(|| {
+        for unavailable in [true, false] {
+            let generators = Arc::new(AtomicUsize::new(0));
+            let mut adapters = compiler_adapters();
+            adapters.checker = Some(Arc::new(PartialChecker {
+                inner: adapters.checker.take().unwrap(),
+                unavailable,
+                generators: generators.clone(),
+            }));
+            let mut engine = QueryEngine::new(default_environment(), adapters);
+            let value = if unavailable { "1u32" } else { "true" };
+            let source = format!(
+                "fn first() -> u32 {{ {value} }}\nfn body() -> Result[Body[fn() -> u32 uses {{}}], String] {{ Ok(codegen.body(\"fn() -> u32 uses {{}} {{ 7u32 }}\")) }}\nfn later() -> u32 uses {{}} = comptime body()\n"
+            );
+            let file = engine.sources.add("partial.hir", source).unwrap();
+            let output = check_progress(&mut engine, file, &default_context()).unwrap();
+            if unavailable {
+                assert_eq!(
+                    output.completion,
+                    CheckCompletion::Incomplete {
+                        phase: QueryKind::Check
+                    }
+                );
+                assert_eq!(
+                    generators.load(Ordering::SeqCst),
+                    0,
+                    "generator after unavailable checker ran"
+                );
+            } else {
+                assert!(!output.diagnostics.is_empty(), "source error is reported");
+                assert_eq!(
+                    generators.load(Ordering::SeqCst),
+                    1,
+                    "source diagnostics do not stop later P work"
+                );
+            }
+        }
+    });
+}
