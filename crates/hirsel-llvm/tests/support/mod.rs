@@ -350,6 +350,7 @@ impl<'t> Unit<'t> {
     /// A unit named `name` with the signature `abi`, and its entry block.
     pub fn new(table: &'t Table, name: &str, abi: &str) -> Self {
         let mut lir = LirUnit::<Ready>::new(UnitHeader {
+            source_count: 1,
             key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
             track_caller: false,
             stage: StageKind::Ready,
@@ -367,7 +368,11 @@ impl<'t> Unit<'t> {
             body: 0,
             block: 0,
             statement: 0,
-            site: SiteRange { start: 10, end: 20 },
+            site: SiteRange {
+                source: 0,
+                start: 10,
+                end: 20,
+            },
         });
         let mut unit = Self {
             table,
@@ -383,7 +388,11 @@ impl<'t> Unit<'t> {
             body: 0,
             block: 0,
             statement: 0,
-            site: SiteRange { start, end },
+            site: SiteRange {
+                source: 0,
+                start,
+                end,
+            },
         });
         SourceAnchorId(self.builder.unit.tables.source_anchors.len() as u32 - 1)
     }
@@ -709,7 +718,11 @@ impl<'t> Unit<'t> {
                 body: 0,
                 cleanup: INSTRUCTION_DROP,
                 action: 0,
-                site: SiteRange { start, end },
+                site: SiteRange {
+                    source: 0,
+                    start,
+                    end,
+                },
             });
         CleanupAnchorId(self.builder.unit.tables.cleanup_anchors.len() as u32 - 1)
     }

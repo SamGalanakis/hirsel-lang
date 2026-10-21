@@ -668,6 +668,27 @@ mod tests {
             contracts: vec![],
         };
         assert_eq!(&*definition_types(&types, &definition), &[unit, pair, byte]);
+        // Equal offsets from a declaration and generated text stay distinct,
+        // including sources that first occur in a nested body. Unmapped spans
+        // never acquire the declaration's identity.
+        let mut definition = definition;
+        let declaration = hirsel_span::Anchor::fresh();
+        let generated = hirsel_span::Anchor::fresh();
+        let nested = hirsel_span::Anchor::fresh();
+        definition.bodies[0].locals[0].span = Span::new(declaration, 0, 1).unwrap();
+        definition.bodies[0].blocks[0].span = Span::new(generated, 0, 1).unwrap();
+        definition.bodies[1].blocks[0].instructions[0].span = Span::new(nested, 0, 1).unwrap();
+        assert_eq!(
+            source_anchors(&definition),
+            [declaration, generated, nested]
+        );
+        // Anchor allocation and unrelated source registration do not alter the
+        // selector of any cited source.
+        let _unrelated = hirsel_span::Anchor::fresh();
+        assert_eq!(
+            source_anchors(&definition),
+            [declaration, generated, nested]
+        );
     }
 }
 
@@ -846,4 +867,34 @@ pub fn constant_instance_path(definition: &DefPath, arguments: &[u64]) -> DefPat
         );
     }
     path
+}
+
+/// Existing source anchors in canonical first-encounter order, independent of
+/// process allocation, file placement and worker scheduling. Includes every
+/// nested body. The no-source anchor is never assigned a durable selector.
+///
+/// As in rustc's stable source-file index (`rustc_span/src/source_map.rs:171`),
+/// this indexes existing sources; it does not allocate a second source map.
+pub fn source_anchors(definition: &Definition) -> Vec<hirsel_span::Anchor> {
+    let mut anchors = Vec::new();
+    let mut add = |span: Span| {
+        if span.anchor != hirsel_span::Anchor(0) && !anchors.contains(&span.anchor) {
+            anchors.push(span.anchor);
+        }
+    };
+    for body in &definition.bodies {
+        for local in &body.locals {
+            add(local.span);
+        }
+        for scope in &body.scopes {
+            add(scope.span);
+        }
+        for block in &body.blocks {
+            add(block.span);
+            for instruction in &block.instructions {
+                add(instruction.span);
+            }
+        }
+    }
+    anchors
 }

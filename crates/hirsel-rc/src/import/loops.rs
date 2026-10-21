@@ -140,6 +140,7 @@ impl Importer<'_> {
             .ok_or_else(|| InstanceError::MissingRevision(self.def.path.path().clone()))?;
         let table = self.layouts.table();
         let mut unit = LirUnit::<Value>::new(UnitHeader {
+            source_count: self.source_anchors.len() as u32,
             key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
             track_caller: self.def.tracks_caller(view.body),
             stage: StageKind::Value,

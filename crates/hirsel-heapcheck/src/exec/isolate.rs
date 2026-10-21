@@ -71,7 +71,14 @@ impl<S: Stage> Machine<'_, S> {
                 let position = || -> Checked<(u64, u64)> {
                     Ok(self
                         .ops
-                        .failure_position(&failure.definition, failure.site)
+                        .failure_source_position(
+                            &failure.definition,
+                            hirsel_lir::ir::SiteRange {
+                                source: failure.source,
+                                start: failure.site.0,
+                                end: failure.site.1,
+                            },
+                        )
                         .unwrap_or((0, 0)))
                 };
                 let value = match name {

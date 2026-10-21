@@ -365,12 +365,9 @@ pub fn value() -> u64 { failure.check(false, Arithmetic()); 0u64 }
                 .unwrap()
                 .1;
             let source = loaded.engine.sources.file(generated.file).unwrap();
-            assert!(
-                source
-                    .logical_path()
-                    .to_str()
-                    .unwrap()
-                    .starts_with("helper@2/src/helper.hir#")
+            assert_eq!(
+                source.logical_path().to_str(),
+                Some("<generated:helper@2/generated>")
             );
             let input = loaded.engine.export_native_input().unwrap();
             let sources = native::profile_sources(&input);

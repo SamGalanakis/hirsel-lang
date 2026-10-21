@@ -6,8 +6,10 @@
 //!
 //! Items are named by `DefPath`, not by a `hirsel_span::Anchor` as design §3 spells it:
 //! intervals are stored with their unit's object, and anchors are process-local.
+use crate::ir::{LirUnit, SiteRange};
 use crate::profile::ProfileSources;
 use hirsel_syntax::DefPath;
+use std::collections::HashMap;
 
 /// One function's intervals.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -19,6 +21,9 @@ pub struct DebugFunction {
     /// The items its offsets are relative to; the first is its own definition. Code a
     /// backend inlined from another unit is relative to that unit's definition.
     pub items: Vec<DefPath>,
+    /// Canonical existing-source selector for each item entry. A definition
+    /// can appear more than once when code spans declaration and generated text.
+    pub sources: Vec<u32>,
     /// Its declaration's offset in the first item.
     pub declaration: u32,
     /// Mapped code, in address order and disjoint. Code outside every range (between two
@@ -67,16 +72,32 @@ impl DebugFunction {
         Self {
             symbol,
             size,
+            sources: vec![0; items.len()],
             items,
             declaration,
             ranges,
         }
     }
 
+    /// Source-aware rows; `items[0]` owns the declaration offset.
+    pub fn from_source_rows(
+        symbol: String,
+        size: u64,
+        items: Vec<(DefPath, u32)>,
+        declaration: u32,
+        rows: impl IntoIterator<Item = (u64, u64, u32, u32)>,
+    ) -> Self {
+        let (items, sources) = items.into_iter().unzip();
+        let mut function = Self::from_rows(symbol, size, items, declaration, rows);
+        function.sources = sources;
+        function
+    }
+
     /// Whether the ranges are in address order, disjoint, inside the function and name an
     /// item it lists.
     pub fn well_formed(&self) -> bool {
         !self.items.is_empty()
+            && self.sources.len() == self.items.len()
             && self.ranges.iter().all(|r| {
                 r.start < r.stop && r.stop <= self.size && (r.item as usize) < self.items.len()
             })
@@ -104,6 +125,48 @@ hirsel_codec::snapshot_struct!(DebugFunction {
     symbol,
     size,
     items,
+    sources,
     declaration,
     ranges
 });
+
+/// Complete content-only sites encoded in backend source locations. A backend
+/// index never means an offset under a different anchor. Zero is reserved for
+/// unmapped LLVM rows; Cranelift uses its own default location for a gap.
+#[derive(Clone, Debug, Default)]
+pub struct SiteTable {
+    sites: Vec<SiteRange>,
+    codes: HashMap<SiteRange, u32>,
+}
+impl SiteTable {
+    pub fn new<S>(unit: &LirUnit<S>) -> Self {
+        let mut table = Self::default();
+        for site in unit
+            .tables
+            .source_anchors
+            .iter()
+            .map(|a| a.site)
+            .chain(unit.tables.cleanup_anchors.iter().map(|a| a.site))
+        {
+            if site.source != u32::MAX && !table.codes.contains_key(&site) {
+                table.sites.push(site);
+                table.codes.insert(site, table.sites.len() as u32);
+            }
+        }
+        table
+    }
+    pub fn code(&self, site: SiteRange) -> Option<u32> {
+        self.codes.get(&site).copied()
+    }
+    pub fn site(&self, code: u32) -> Option<SiteRange> {
+        self.sites.get(code.checked_sub(1)? as usize).copied()
+    }
+    pub fn declaration<S>(&self, unit: &LirUnit<S>) -> SiteRange {
+        let site = unit.tables.source_anchors[unit.blocks[unit.entry.index()].anchor.index()].site;
+        if site.source != u32::MAX {
+            site
+        } else {
+            self.sites.first().copied().unwrap_or(SiteRange::UNMAPPED)
+        }
+    }
+}

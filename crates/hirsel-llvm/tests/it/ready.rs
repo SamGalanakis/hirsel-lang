@@ -61,6 +61,7 @@ fn checked(program: &hirsel_heapcheck::Program<Ready>, name: &str, a: i64, b: i6
             &failure.definition,
             &revision(&failure.definition.0.name),
             SiteRange {
+                source: failure.source,
                 start: failure.site.0,
                 end: failure.site.1,
             },
@@ -87,7 +88,11 @@ fn expected(program: &Program) -> String {
     let site = site_code(
         &path("bump"),
         &revision("bump"),
-        SiteRange { start: 10, end: 20 },
+        SiteRange {
+            source: 0,
+            start: 10,
+            end: 20,
+        },
     );
     let _ = writeln!(out, "c bump 41 ok 42");
     let _ = writeln!(
@@ -103,7 +108,11 @@ fn expected(program: &Program) -> String {
     let site = site_code(
         &path("close_held"),
         &revision("close_held"),
-        SiteRange { start: 80, end: 90 },
+        SiteRange {
+            source: 0,
+            start: 80,
+            end: 90,
+        },
     );
     let _ = writeln!(out, "c close 12 ok 5");
     let _ = writeln!(

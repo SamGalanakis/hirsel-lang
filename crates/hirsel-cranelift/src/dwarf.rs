@@ -23,26 +23,36 @@ use crate::CodegenError;
 use crate::module::Emitted;
 
 /// The intervals of `unit`'s function `symbol`, compiled as `code`. Its source locations
-/// are the item-relative offsets of the sites emission set (`SourceLoc` bits).
+/// encode complete sites in the unit's canonical `SiteTable` (`SourceLoc` bits).
 pub(crate) fn intervals(symbol: &str, unit: &LirUnit<Ready>, code: &CompiledCode) -> DebugFunction {
-    let entry = unit.tables.source_anchors[unit.blocks[unit.entry.index()].anchor.index()].site;
-    let rows = code
+    let sites = hirsel_lir::debug::SiteTable::new(unit);
+    let entry = sites.declaration(unit);
+    let mut items = vec![(unit.header.definition.clone(), entry.source)];
+    let rows: Vec<_> = code
         .buffer
         .get_srclocs_sorted()
         .iter()
-        .filter(|range| !range.loc.is_default())
-        .map(|range| {
-            (
+        .filter_map(|range| {
+            let site = sites.site(range.loc.bits())?;
+            let item = match items.iter().position(|(_, source)| *source == site.source) {
+                Some(i) => i,
+                None => {
+                    items.push((unit.header.definition.clone(), site.source));
+                    items.len() - 1
+                }
+            };
+            Some((
                 u64::from(range.start),
                 u64::from(range.end),
-                0,
-                range.loc.bits(),
-            )
-        });
-    DebugFunction::from_rows(
+                item as u32,
+                site.start,
+            ))
+        })
+        .collect();
+    DebugFunction::from_source_rows(
         symbol.to_owned(),
         code.code_buffer().len() as u64,
-        vec![unit.header.definition.clone()],
+        items,
         entry.start,
         rows,
     )
@@ -93,6 +103,19 @@ pub fn debug_object(
     resolve: &dyn Fn(&DefPath, u32) -> Option<Resolved>,
     target: &TargetSpec,
 ) -> Result<Vec<u8>, CodegenError> {
+    debug_object_sources(
+        functions,
+        &|definition, source, offset| (source == 0).then(|| resolve(definition, offset)).flatten(),
+        target,
+    )
+}
+
+/// Link-time debug binding with the complete source identity of each interval.
+pub fn debug_object_sources(
+    functions: &[&DebugFunction],
+    resolve: &dyn Fn(&DefPath, u32, u32) -> Option<Resolved>,
+    target: &TargetSpec,
+) -> Result<Vec<u8>, CodegenError> {
     use object::write::{Object, Symbol, SymbolSection};
     let architecture = if target.triple.starts_with("x86_64") {
         object::Architecture::X86_64
@@ -115,7 +138,12 @@ pub fn debug_object(
     let declared: Vec<(&DebugFunction, Resolved)> = functions
         .iter()
         .filter(|f| seen.insert(f.symbol.as_str()))
-        .filter_map(|f| Some((*f, resolve(f.items.first()?, f.declaration)?)))
+        .filter_map(|f| {
+            Some((
+                *f,
+                resolve(f.items.first()?, *f.sources.first()?, f.declaration)?,
+            ))
+        })
         .collect();
     let Some((_, first)) = declared.first() else {
         return product.write().map_err(error);
@@ -177,7 +205,11 @@ pub fn debug_object(
             .iter()
             .filter_map(|range| {
                 let item = function.items.get(range.item as usize)?;
-                let at = resolve(item, range.offset)?;
+                let at = resolve(
+                    item,
+                    *function.sources.get(range.item as usize)?,
+                    range.offset,
+                )?;
                 Some((range.start, range.stop, file(&at.path), at))
             })
             .collect();
@@ -367,5 +399,47 @@ mod tests {
         let empty = debug_object(&[&unplaced], &resolve, &target).unwrap();
         let file = cranelift_object::object::File::parse(&*empty).unwrap();
         assert!(file.section_by_name(".debug_line").is_none());
+    }
+    #[test]
+    fn generated_sources_with_equal_offsets_and_unmapped_gaps_stay_distinct() {
+        let function = DebugFunction::from_source_rows(
+            "hirsel_f".into(),
+            24,
+            vec![(item("f"), 0), (item("f"), 1), (item("f"), u32::MAX)],
+            0,
+            [
+                (0, 4, 0, 10),
+                (4, 8, 1, 10),
+                (8, 12, 2, 10),
+                (16, 20, 1, 30),
+            ],
+        );
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let resolve_source = |definition: &DefPath, source: u32, offset: u32| {
+            if source == u32::MAX {
+                return None;
+            }
+            let mut at = resolve(definition, offset)?;
+            if source == 1 {
+                at.line += 100;
+                at.path = "<generated:core@0/f>".into();
+            }
+            Some(at)
+        };
+        let bytes = debug_object_sources(&[&function], &resolve_source, &target).unwrap();
+        assert_eq!(
+            rows(&bytes),
+            [
+                (0, 2, 1, false),
+                (4, 102, 1, false),
+                (8, 102, 1, true),
+                (16, 104, 1, false),
+                (20, 104, 1, true)
+            ]
+        );
+        // The declaration-only compatibility API never reinterprets a generated
+        // selector under its declaration's anchor.
+        let legacy = debug_object(&[&function], &resolve, &target).unwrap();
+        assert_eq!(rows(&legacy), [(0, 2, 1, false), (4, 2, 1, true)]);
     }
 }

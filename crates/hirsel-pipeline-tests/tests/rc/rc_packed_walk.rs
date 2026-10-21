@@ -323,7 +323,11 @@ fn control(forgery: Forgery) -> Vec<ViolationKind> {
         body: 0,
         block: 0,
         statement: 0,
-        site: SiteRange { start: 0, end: 1 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 1,
+        },
     });
     let (zero, one, next, end) = (ValueId(1), ValueId(2), ValueId(3), ValueId(4));
     u.tables.constants = vec![

@@ -572,6 +572,7 @@ impl<S: Stage> Lir<S> {
     pub fn new(params: &[(Passing, LayoutId)], result: Option<LayoutId>) -> Self {
         let table = table();
         let mut unit = LirUnit::<S>::new(UnitHeader {
+            source_count: 1,
             key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
             track_caller: false,
             stage: S::KIND,
@@ -589,7 +590,11 @@ impl<S: Stage> Lir<S> {
             body: 0,
             block: 0,
             statement: 0,
-            site: SiteRange { start: 0, end: 1 },
+            site: SiteRange {
+                source: 0,
+                start: 0,
+                end: 1,
+            },
         });
         unit.tables.operations.push(operation());
         let mut lir = Self {
@@ -959,7 +964,11 @@ impl<S: Stage> Lir<S> {
                 body: 0,
                 cleanup: self.builder.unit.tables.cleanup_anchors.len() as u32,
                 action: 0,
-                site: SiteRange { start: 0, end: 1 },
+                site: SiteRange {
+                    source: 0,
+                    start: 0,
+                    end: 1,
+                },
             });
         CleanupAnchorId(self.builder.unit.tables.cleanup_anchors.len() as u32 - 1)
     }
@@ -972,7 +981,11 @@ impl<S: Stage> Lir<S> {
             body: 0,
             cleanup: INSTRUCTION_DROP,
             action: anchors.len() as u32,
-            site: SiteRange { start: 0, end: 1 },
+            site: SiteRange {
+                source: 0,
+                start: 0,
+                end: 1,
+            },
         });
         CleanupAnchorId(anchors.len() as u32 - 1)
     }

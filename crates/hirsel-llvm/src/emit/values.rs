@@ -24,6 +24,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             signature,
             manifested,
             builder: Builder::new(module),
+            debug_sites: None,
             debug: None,
             measured: None,
             prologue,

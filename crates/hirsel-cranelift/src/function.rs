@@ -143,6 +143,7 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     params: Vec<Vec<Param>>,
     failures: BTreeMap<FailureId, Block>,
     deferred: Vec<(ir::SourceLoc, Deferred)>,
+    debug_sites: Option<hirsel_lir::debug::SiteTable>,
     /// Per compiler-local region instance, its `hirsel_rt_v2_region` record in the frame.
     pub(crate) regions: Vec<Value>,
     funcs: HashMap<FuncId, FuncRef>,
@@ -184,10 +185,11 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         mut b: FunctionBuilder<'f>,
         sig: Sig<'a>,
     ) -> Self {
-        if em.debug {
+        let debug_sites = em.debug.then(|| hirsel_lir::debug::SiteTable::new(unit));
+        if let Some(sites) = &debug_sites {
             let site =
                 unit.tables.source_anchors[unit.blocks[unit.entry.index()].anchor.index()].site;
-            b.set_srcloc(ir::SourceLoc::new(site.start));
+            b.set_srcloc(ir::SourceLoc::new(sites.code(site).unwrap_or(u32::MAX)));
         }
         let prologue = b.create_block();
         b.append_block_params_for_function_params(prologue);
@@ -204,6 +206,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             Vec::new()
         };
         Self {
+            debug_sites,
             em,
             unit,
             b,
@@ -1173,8 +1176,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     }
 
     fn source_location(&mut self, site: SiteRange) {
-        if self.em.debug {
-            self.b.set_srcloc(ir::SourceLoc::new(site.start));
+        if let Some(sites) = &self.debug_sites {
+            self.b
+                .set_srcloc(ir::SourceLoc::new(sites.code(site).unwrap_or(u32::MAX)));
         }
     }
 

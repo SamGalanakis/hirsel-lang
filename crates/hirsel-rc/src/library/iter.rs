@@ -186,7 +186,11 @@ pub(crate) fn drop_local(b: &mut Body<'_, '_>, slot: SlotId, address: AddressId)
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 0 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 0,
+        },
     });
     b.push(Inst::Drop {
         address,

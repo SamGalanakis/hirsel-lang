@@ -422,7 +422,7 @@ impl Importer<'_> {
             },
             block,
             statement,
-            site: site(self.span),
+            site: self.site(self.span),
         };
         if let Some(&id) = self.out.source_anchor_index.get(&a) {
             return id;
@@ -443,7 +443,7 @@ impl Importer<'_> {
             body: self.body_id,
             cleanup,
             action,
-            site: site(span),
+            site: self.site(span),
         };
         if let Some(&id) = self.out.cleanup_anchor_index.get(&a) {
             return id;

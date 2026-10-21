@@ -768,7 +768,11 @@ fn failure_line(name: &str) -> String {
     let site = site_code(
         &path(name),
         &revision(name),
-        SiteRange { start: 10, end: 20 },
+        SiteRange {
+            source: 0,
+            start: 10,
+            end: 20,
+        },
     );
     format!("fail {} {} {site:016x}", code.kind, code.rule)
 }

@@ -301,6 +301,7 @@ impl<'c, 'a> Body<'c, 'a> {
         let table = cx.layouts.table();
         let key = cx.instances.view(cx.id).key.digest();
         let mut unit = LirUnit::<Value>::new(UnitHeader {
+            source_count: 1,
             key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
             track_caller: false,
             stage: StageKind::Value,
@@ -318,7 +319,11 @@ impl<'c, 'a> Body<'c, 'a> {
             body: 0,
             block: 0,
             statement: 0,
-            site: SiteRange { start: 0, end: 0 },
+            site: SiteRange {
+                source: 0,
+                start: 0,
+                end: 0,
+            },
         });
         let anchor = SourceAnchorId(0);
         let mut ed = Editor::new(unit);
@@ -591,7 +596,11 @@ impl<'c, 'a> Body<'c, 'a> {
             body: 0,
             cleanup: 0,
             action: 0,
-            site: SiteRange { start: 0, end: 0 },
+            site: SiteRange {
+                source: 0,
+                start: 0,
+                end: 0,
+            },
         });
         let a = CleanupAnchorId(self.ed.unit.tables.cleanup_anchors.len() as u32 - 1);
         self.drop_anchor = Some(a);

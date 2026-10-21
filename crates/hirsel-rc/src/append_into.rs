@@ -72,6 +72,7 @@ type StatementOrigins = Vec<Vec<Vec<Option<(u32, u32)>>>>;
 
 #[derive(Clone)]
 pub(crate) struct SourceMap {
+    pub anchors: Vec<hirsel_span::Anchor>,
     pub definition: DefPath,
     pub sites: StatementOrigins,
     pub places: Vec<Vec<u32>>,
@@ -81,6 +82,7 @@ impl SourceMap {
     fn new(def: &Definition) -> Self {
         Self {
             definition: def.path.path().clone(),
+            anchors: hirsel_tir::source_anchors(def),
             sites: def
                 .bodies
                 .iter()

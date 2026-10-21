@@ -91,6 +91,19 @@ pub fn profile_sources(input: &hirsel_engine::NativeInput) -> ProfileSources {
                     path: file.path.clone(),
                     file: file.clone(),
                     base,
+                    anchors: input
+                        .definitions
+                        .get(definition)
+                        .map_or_else(
+                            || vec![owner.syntax.anchor],
+                            |d| hirsel_tir::source_anchors(d),
+                        )
+                        .into_iter()
+                        .filter_map(|anchor| {
+                            let (file, base) = input.sources.anchor(anchor)?;
+                            Some((input.sources.file(file)?.clone(), base))
+                        })
+                        .collect(),
                 },
             ))
         })

@@ -1,6 +1,6 @@
 //! Debug intervals from LLVM (design §1e). A unit is lowered with content-only locations:
-//! one fixed file, each location's line the item-relative offset of its site plus one and
-//! its column the index of its item in the module's `DebugPlan::items` plus one, so the
+//! one fixed file, each location's line a complete site's `SiteTable` code and
+//! its column the index of its unit instance in the module's `DebugPlan` plus one, so the
 //! code is what a moved item would get. After codegen, `split` reads the object's own line
 //! tables back as `DebugFunction`s and rebuilds the object without them: a unit's object
 //! carries no DWARF, and the link's debug object resolves the intervals.
@@ -14,18 +14,30 @@ use std::collections::BTreeMap;
 pub(crate) struct DebugPlan {
     /// The items locations name, by column minus one.
     pub items: Vec<DefPath>,
+    pub sites: Vec<hirsel_lir::debug::SiteTable>,
+    instances: Vec<hirsel_syntax::ContentHash>,
     /// Each function with a scope: its symbol (a library unit's body, not its root
     /// adapter), its own item and its declaration's offset.
-    pub functions: Vec<(String, u32, u32)>,
+    pub functions: Vec<(String, u32, hirsel_lir::ir::SiteRange)>,
 }
 
 impl DebugPlan {
-    /// The column of `definition`'s locations, adding it as an item when new.
-    pub(crate) fn column(&mut self, definition: &DefPath) -> u32 {
-        let index = match self.items.iter().position(|item| item == definition) {
+    /// The column of this unit instance's locations, adding its sites when new.
+    pub(crate) fn column(
+        &mut self,
+        unit: &hirsel_lir::ir::LirUnit<hirsel_lir::stage::Ready>,
+    ) -> u32 {
+        let definition = &unit.header.definition;
+        let index = match self
+            .instances
+            .iter()
+            .position(|instance| *instance == unit.header.instance)
+        {
             Some(index) => index,
             None => {
                 self.items.push(definition.clone());
+                self.instances.push(unit.header.instance);
+                self.sites.push(hirsel_lir::debug::SiteTable::new(unit));
                 self.items.len() - 1
             }
         };
@@ -143,16 +155,21 @@ pub(crate) fn split(
         };
         let (begin, size) = (found.address(), found.size());
         let own = *own as usize;
-        let mut items = vec![plan.items[own].clone()];
-        let mut item = |column: u64| -> Option<u32> {
-            let definition = plan.items.get(column as usize - 1)?;
-            Some(match items.iter().position(|i| i == definition) {
-                Some(index) => index as u32,
-                None => {
-                    items.push(definition.clone());
-                    items.len() as u32 - 1
-                }
-            })
+        let mut items = vec![(plan.items[own].clone(), declaration.source)];
+        let mut item = |column: u64, source: u32| -> Option<u32> {
+            let definition = plan.items.get(column.checked_sub(1)? as usize)?;
+            Some(
+                match items
+                    .iter()
+                    .position(|(d, s)| d == definition && *s == source)
+                {
+                    Some(index) => index as u32,
+                    None => {
+                        items.push((definition.clone(), source));
+                        items.len() as u32 - 1
+                    }
+                },
+            )
         };
         let mut ranges: Vec<(u64, u64, u32, u32)> = mapped
             .get(&(section.0 as u64))
@@ -160,20 +177,24 @@ pub(crate) fn split(
             .flatten()
             .filter(|&&(start, stop, ..)| start >= begin && stop <= begin + size)
             .filter_map(|&(start, stop, line, column)| {
+                let site = plan
+                    .sites
+                    .get(column.checked_sub(1)? as usize)?
+                    .site(u32::try_from(line).ok()?)?;
                 Some((
                     start - begin,
                     stop - begin,
-                    item(column)?,
-                    u32::try_from(line - 1).ok()?,
+                    item(column, site.source)?,
+                    site.start,
                 ))
             })
             .collect();
         ranges.sort();
-        functions.push(DebugFunction::from_rows(
+        functions.push(DebugFunction::from_source_rows(
             symbol.clone(),
             size,
             items,
-            *declaration,
+            declaration.start,
             ranges,
         ));
     }

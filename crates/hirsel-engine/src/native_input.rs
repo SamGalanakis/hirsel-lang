@@ -9,6 +9,9 @@ use std::{collections::BTreeMap, sync::Arc};
 pub struct NativeSource {
     pub syntax: Arc<ItemSyntax>,
     pub implementation_revision: ContentHash,
+    /// Existing generated text and its declaring span, retained for origin
+    /// diagnostics; source selectors refer to the exact TIR anchors below it.
+    pub generated: Option<crate::queries::GeneratedSource>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NativeStatus {
@@ -139,6 +142,7 @@ impl QueryEngine {
                 NativeSource {
                     syntax: syntax.clone(),
                     implementation_revision: syntax.text_hash,
+                    generated: None,
                 },
             );
             if executable {
@@ -190,6 +194,9 @@ impl QueryEngine {
                     value.value.clone(),
                 );
             }
+        }
+        for (path, source) in &mut source_owners {
+            source.generated = self.generated_source(path).cloned();
         }
         let registry = registry::BuiltinRegistry::shared();
         let mut input = NativeInput {
@@ -342,6 +349,33 @@ impl QueryEngine {
                 && definition.as_ref() != current.value.as_ref()
             {
                 return Err(invalid("forged implementation"));
+            }
+            if input.source_owners[path].generated.as_ref() != self.generated_source(path) {
+                return Err(invalid("forged generated source origin"));
+            }
+            // Revalidate every source the exact TIR cites, including generated
+            // text and nested bodies. A valid declaration anchor alone cannot
+            // authorize remapping a generated operation to another file/base.
+            for anchor in hirsel_tir::source_anchors(definition) {
+                let expected = self.sources.anchor(anchor);
+                if input.sources.anchor(anchor) != expected {
+                    return Err(invalid("source anchor mismatch"));
+                }
+                let (file, _) = expected.ok_or_else(|| invalid("missing TIR source anchor"))?;
+                let expected = self
+                    .sources
+                    .file(file)
+                    .ok_or_else(|| invalid("missing TIR source"))?;
+                let actual = input
+                    .sources
+                    .file(file)
+                    .ok_or_else(|| invalid("missing TIR source"))?;
+                if actual.text() != expected.text()
+                    || actual.logical_path() != expected.logical_path()
+                    || actual.path != expected.path
+                {
+                    return Err(invalid("TIR source snapshot mismatch"));
+                }
             }
             if self.verify == Verify::On {
                 self.ensure_lowered_verdict(definition)?;

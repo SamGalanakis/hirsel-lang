@@ -16,7 +16,7 @@ use hirsel_types::SignatureKind;
 pub(crate) mod task;
 
 /// A declaration's generated source, for diagnostics and `hirsel expand`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneratedSource {
     pub file: FileId,
     pub text: String,
@@ -245,21 +245,12 @@ impl QueryEngine {
         let file = match self.generated.get(definition) {
             Some(g) if g.text == text => g.file,
             _ => {
-                let source = self.sources.file(self.item_file(snapshot)).unwrap();
-                let origin = source.path.display();
-                // An instance's source path already names its declaration and
-                // arguments; its hidden path would only repeat them.
-                let path = if definition.0.name.contains("$instance$") {
-                    format!("{origin}#body")
-                } else {
-                    format!("{origin}#{definition}")
-                };
-                let logical = source.logical_path().display();
-                let logical = if definition.0.name.contains("$instance$") {
-                    format!("{logical}#body")
-                } else {
-                    format!("{logical}#{definition}")
-                };
+                // Generated text belongs to the definition, not the physical
+                // location of its declaration. Moving that item must give a
+                // fresh session and a retained source the same synthetic name.
+                // `GeneratedSource.site` keeps the precise declaring origin.
+                let path = format!("<generated:{definition}>");
+                let logical = path.clone();
                 let file = self
                     .sources
                     .add_logical(path, logical, text.clone())

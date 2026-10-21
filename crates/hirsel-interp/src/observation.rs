@@ -35,6 +35,9 @@ pub struct FailureRecord {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SourceSite {
     pub definition: DefPath,
+    /// Resolved source for diagnostics, including synthetic generated sources.
+    /// Never part of a location-free object or semantic program identity.
+    pub file: String,
     pub line: u32,
     pub column: u32,
 }
@@ -63,6 +66,11 @@ impl Anchor {
         let loc = sources.location(self.site)?;
         Some(SourceSite {
             definition: self.definition.clone(),
+            file: sources
+                .file(sources.resolve(self.site).file)?
+                .path
+                .to_string_lossy()
+                .into_owned(),
             line: loc.line,
             column: loc.column,
         })
@@ -366,7 +374,7 @@ impl Execution {
         };
         Some(Observable {
             blocked,
-            schema_version: 2,
+            schema_version: 3,
             returned_type: None,
             returned,
             exit_code,

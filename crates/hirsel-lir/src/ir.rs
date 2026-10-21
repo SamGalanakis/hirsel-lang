@@ -1357,11 +1357,22 @@ pub struct LoanInfo {
     pub mutable: bool,
 }
 
-/// Byte range of a source site within its definition's source revision.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+/// Byte range relative to one existing source anchor of the original TIR
+/// definition. `source` is its canonical first-encounter selector, never a
+/// process Anchor id. `u32::MAX` is an unmapped site.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct SiteRange {
+    pub source: u32,
     pub start: u32,
     pub end: u32,
+}
+
+impl SiteRange {
+    pub const UNMAPPED: Self = Self {
+        source: u32::MAX,
+        start: 0,
+        end: 0,
+    };
 }
 
 /// `(BodyId, block, statement)` in the TIR body, plus a stable site. The
@@ -1501,6 +1512,8 @@ pub enum UnitOrigin {
 /// Identity and versions of one unit.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UnitHeader {
+    /// Number of existing source anchors in the original definition's canonical walk.
+    pub source_count: u32,
     pub track_caller: bool,
     pub stage: StageKind,
     pub lir_version: u32,
@@ -2516,6 +2529,23 @@ impl<S: Stage> LirUnit<S> {
             ));
         }
         let t = &self.tables;
+        for site in t
+            .source_anchors
+            .iter()
+            .map(|a| a.site)
+            .chain(t.cleanup_anchors.iter().map(|a| a.site))
+        {
+            if site.start > site.end {
+                return Err(SchemaError::Malformed("reversed source range"));
+            }
+            if site.source != u32::MAX && site.source >= self.header.source_count {
+                return Err(SchemaError::ForeignId {
+                    kind: "source selector",
+                    index: site.source,
+                    bound: self.header.source_count as usize,
+                });
+            }
+        }
         let p = &self.pools;
         let id = |kind, index: u32, bound: usize| {
             if (index as usize) < bound {
@@ -3081,7 +3111,7 @@ snapshot_struct!(Symbol {
     instance
 });
 snapshot_struct!(LoanInfo { address, mutable });
-snapshot_struct!(SiteRange { start, end });
+snapshot_struct!(SiteRange { source, start, end });
 snapshot_struct!(SourceAnchor {
     body,
     block,
@@ -3135,6 +3165,7 @@ snapshot_struct!(Pools {
 });
 snapshot_enum!(UnitOrigin { Source, Library });
 snapshot_struct!(UnitHeader {
+    source_count,
     track_caller,
     stage,
     lir_version,

@@ -262,6 +262,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         version: hirsel_lir::ABI_VERSION,
     };
     let mut unit = LirUnit::<Ready>::new(UnitHeader {
+        source_count: 1,
         key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
         track_caller: false,
         stage: StageKind::Ready,
@@ -277,7 +278,11 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 1 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 1,
+        },
     });
     unit.types.push(LirType {
         repr: ValueRepr::InitMask { fields: 2 },

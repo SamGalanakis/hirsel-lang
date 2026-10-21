@@ -11,8 +11,9 @@ use hirsel_driver::native::{
     differential, full_matrix, smoke_matrix, topology_matrix,
 };
 use hirsel_engine::{
-    DefPath, QueryEngine, RunConfiguration, SimulationConfig, ValidatedNativeInput, check_progress,
-    default_context, default_environment, entry_path, run_observed_snapshot, with_compiler_stack,
+    DefPath, DefinitionQueries, QueryEngine, RunConfiguration, SimulationConfig,
+    ValidatedNativeInput, check_progress, default_context, default_environment, entry_path,
+    run_observed_snapshot, with_compiler_stack,
 };
 use std::path::PathBuf;
 
@@ -39,7 +40,11 @@ fn checked_in(engine: &mut QueryEngine, source: &str) -> Checked {
         let output = check_progress(engine, file, &context).unwrap();
         assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
     }
-    let entry = entry_path(&context);
+    checked_engine(engine)
+}
+
+fn checked_engine(engine: &mut QueryEngine) -> Checked {
+    let entry = entry_path(&default_context());
     let config = RunConfiguration {
         entry: entry.clone(),
         hash_seed: 0,
@@ -1417,6 +1422,383 @@ fn intrinsic_static_objects_survive_unrelated_layouts_and_import_replay() {
             let replay = compile(&decoy, store, backend, opt);
             assert!(replay.unit_objects.as_ref().unwrap().hits > 0);
             assert_eq!(objects(&replay), shifted, "{backend:?} {opt:?}: replay");
+        }
+    });
+}
+
+fn generated_failure_sources() -> Vec<(&'static str, String, &'static str, u32, u32)> {
+    let make = |literal: &str, input: u64| {
+        format!(
+            "fn body()->Result[Body[fn(u64)->u64 uses {{}}],String]{{Ok(codegen.body({literal:?}))}}\nfn generated(x:u64)->u64 uses {{}}=comptime body()\npub fn main()->Result[(),()]{{let _=generated({input}u64);Ok(())}}\n"
+        )
+    };
+    let division = "fn(x:u64)->u64 uses {} {\n  9u64/x\n}";
+    let ownership = "fn(x:u64)->u64 uses {} {\n  let xs:unique List[u64]=unique [9u64]\n  xs[x]\n}";
+    let closure = "fn(x:u64)->u64 uses {} {\n  let f=fn(y:u64)->u64 {\n    9u64/y\n  }\n  f(x)\n}";
+    // CT-5-generator-cycle-ok's acyclic generator chain, with a runtime
+    // failure in the second generated body instead of its successful sum.
+    let nested = format!(
+        "fn first()->Result[Body[fn(u64)->u64 uses {{}}],String]{{Ok(codegen.body(\"fn(x:u64)->u64 uses {{}} {{x+1u64}}\"))}}\nfn plus_one(x:u64)->u64 uses {{}}=comptime first()\nfn body()->Result[Body[fn(u64)->u64 uses {{}}],String]{{let _=plus_one(1u64);Ok(codegen.body({division:?}))}}\nfn generated(x:u64)->u64 uses {{}}=comptime body()\npub fn main()->Result[(),()]{{let _=generated(0u64);Ok(())}}\n"
+    );
+    vec![
+        ("division", make(division, 0), "SEM-1", 2, 3),
+        ("ownership", make(ownership, 1), "MEM-14", 3, 3),
+        ("closure", make(closure, 0), "SEM-1", 3, 5),
+        ("nested-generator", nested, "SEM-1", 2, 3),
+    ]
+}
+
+#[test]
+fn generated_body_failure_uses_generated_source_in_every_engine() {
+    with_compiler_stack(|| {
+        let mut configurations = smoke_matrix();
+        configurations.push(Configuration {
+            options: configurations[0].options.clone(),
+            engine: Engine::Cranelift {
+                partition: Partition::Whole,
+                runtime: hirsel_driver::native::Runtime::Diagnostic,
+            },
+        });
+        let tools = toolchain(&configurations);
+        let mut mismatches = vec![];
+        for (name, source, rule, line, column) in generated_failure_sources() {
+            let program = checked(&source);
+            let [failure] = program.reference.failures.as_slice() else {
+                panic!("{name}: {:?}", program.reference)
+            };
+            assert_eq!(
+                (failure.rule.as_str(), failure.line, failure.column),
+                (rule, line, column),
+                "{name}"
+            );
+            assert!(failure.file.starts_with("<generated:"), "{failure:?}");
+            for (configuration, outcome) in differential(
+                &program.validated,
+                &program.entry,
+                &program.reference,
+                &configurations,
+                &tools,
+                &scratch(&format!("generated-{name}")),
+            ) {
+                if outcome != Outcome::Agree {
+                    mismatches.push(format!("{name}: {configuration}: {outcome:?}"));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    });
+}
+
+#[test]
+fn generated_body_sites_and_objects_do_not_depend_on_id_assignment() {
+    use hirsel_driver::native::{self, Backend, OptLevel, UnitObjects, Validation};
+    use hirsel_lir::objects::NoObjects;
+    use std::sync::Arc;
+    let Some(runs) = hirsel_intern::under_salts(
+        "native::generated_body_sites_and_objects_do_not_depend_on_id_assignment",
+        &[1, 2, 3],
+        || {
+            with_compiler_stack(|| {
+                let mut transcript = String::new();
+                for (_, source, _, _, _) in generated_failure_sources() {
+                    let program = checked(&source);
+                    transcript.push_str(&format!("{:?}\n", program.reference));
+                    for backend in [Backend::Cranelift, Backend::Llvm] {
+                        let mut options = native::Options::new(x86());
+                        options.validation = Validation::EveryStage;
+                        options.objects = Some(UnitObjects {
+                            store: Arc::new(NoObjects),
+                            backend,
+                            opt: OptLevel::None,
+                            debug: true,
+                            fuel: false,
+                            jobs: hirsel_intern::jobs::Jobs::new(2),
+                            byte_budget: None,
+                        });
+                        let ready = native::build(&program.validated, &options).unwrap();
+                        for (summary, object) in ready
+                            .summaries
+                            .iter()
+                            .zip(&ready.unit_objects.as_ref().unwrap().objects)
+                        {
+                            transcript.push_str(&format!("{:?}\n", object.digest()));
+                            for site in &summary.sites {
+                                transcript.push_str(&format!(
+                                    "{:?} {:?}\n",
+                                    site,
+                                    hirsel_lir::emission::site_code(
+                                        &summary.definition,
+                                        &summary.implementation_revision,
+                                        *site,
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                }
+                transcript
+            })
+        },
+    ) else {
+        return;
+    };
+    assert!(!runs[0].is_empty());
+    assert_eq!(runs[0], runs[1], "salt 2");
+    assert_eq!(runs[0], runs[2], "salt 3");
+}
+
+#[test]
+fn generated_body_source_mapping_is_independently_validated() {
+    with_compiler_stack(|| {
+        let text = "fn make()->Result[Body[fn(u64)->u64 uses {}],String]{Ok(codegen.body(\"fn(x:u64)->u64 uses {} {9u64/x}\"))}\nfn made(x:u64)->u64 uses {}=comptime make()\npub fn main()->Result[(),()]{let _=made(0u64);Ok(())}\n";
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        checked_in(&mut engine, text);
+        let input = engine.export_native_input().unwrap();
+        let mut made = entry_path(&default_context());
+        made.0.name = "made".into();
+        let declaration = input.source_owners[&made].syntax.anchor;
+        let generated = hirsel_tir::source_anchors(&input.definitions[&made])
+            .into_iter()
+            .find(|a| *a != declaration)
+            .expect("generated anchor");
+        let (file, base) = input.sources.anchor(declaration).unwrap();
+        let mut forged = input.clone();
+        forged.sources.move_anchor(generated, file, base);
+        assert!(
+            engine.import_native_input(forged).is_err(),
+            "declaration cannot authorize a generated source mapping"
+        );
+        engine.import_native_input(input).unwrap();
+    });
+}
+
+#[test]
+fn generated_body_origins_follow_item_moves_without_stale_source_names() {
+    with_compiler_stack(|| {
+        let maker = "fn make()->Result[Body[fn(u64)->u64 uses {}],String]{Ok(codegen.body(\"fn(x:u64)->u64 uses {} {\\n  9u64/x\\n}\"))}\n";
+        let made = "fn made(x:u64)->u64 uses {}=comptime make()\n";
+        let main = "pub fn main()->Result[(),()]{let _=made(0u64);Ok(())}\n";
+        let load = |engine: &mut QueryEngine, first: &str, second: &str| {
+            let files = [("one.hir", first), ("two.hir", second)]
+                .map(|(name, text)| engine.sources.add(name, text.into()).unwrap());
+            for file in files {
+                engine.parse_file(file, &default_context()).unwrap();
+            }
+            for file in files {
+                let output = check_progress(engine, file, &default_context()).unwrap();
+                assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+            }
+            let run = RunConfiguration {
+                entry: entry_path(&default_context()),
+                hash_seed: 0,
+                inputs: vec![],
+            };
+            let execution =
+                run_observed_snapshot(engine, &run, SimulationConfig::default()).unwrap();
+            Observation::of_reference(execution.observation.as_ref().unwrap())
+        };
+        let mut warm = QueryEngine::new(default_environment(), compiler_adapters());
+        let first = format!("{maker}{made}{main}");
+        let before = load(&mut warm, &first, "");
+        let moved = format!("// inserted source lines\n\n{made}");
+        let kept = format!("{maker}{main}");
+        let after = load(&mut warm, &kept, &moved);
+        let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
+        assert_eq!(after, load(&mut fresh, &kept, &moved));
+        assert_eq!(
+            before, after,
+            "generated coordinates and source identity survive a declaration move"
+        );
+        let mut path = entry_path(&default_context());
+        path.0.name = "made".into();
+        let origin = warm.generated_source(&path).unwrap().site;
+        assert_eq!(
+            warm.sources
+                .file(warm.sources.resolve(origin).file)
+                .unwrap()
+                .path
+                .to_str(),
+            Some("two.hir")
+        );
+        assert_eq!(warm.sources.location(origin).unwrap().line, 3);
+    });
+}
+
+#[test]
+fn generated_body_objects_rebind_debug_and_failures_after_source_moves() {
+    use hirsel_driver::native::{self, Backend, OptLevel, UnitObjects, Validation};
+    use hirsel_lir::objects::{NoObjects, ObjectStore, SimObjects};
+    use std::sync::Arc;
+    with_compiler_stack(|| {
+        let source = generated_failure_sources().remove(0).1;
+        let (maker, rest) = source.split_once('\n').unwrap();
+        let (made, main) = rest.split_once('\n').unwrap();
+        let all = format!("{maker}\n{made}\n{main}");
+        let shifted = format!("// inserted line\n\n{all}");
+        let kept = format!("{maker}\n{main}");
+        // Keep the moved item's owned leading trivia unchanged: a first
+        // item's inserted comment would change its implementation revision.
+        let moved = format!("// moved declaration\ntype Marker {{}}\n{made}\n");
+        let versions = [
+            (all.as_str(), ""),
+            (shifted.as_str(), ""),
+            (kept.as_str(), moved.as_str()),
+        ];
+        let load = |engine: &mut QueryEngine, first: &str, second: &str| {
+            let files = [("one.hir", first), ("two.hir", second)]
+                .map(|(name, text)| engine.sources.add(name, text.into()).unwrap());
+            for file in files {
+                engine.parse_file(file, &default_context()).unwrap();
+            }
+            for file in files {
+                let output = check_progress(engine, file, &default_context()).unwrap();
+                assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+            }
+            checked_engine(engine)
+        };
+        let matrix = smoke_matrix();
+        let tools = toolchain(&matrix).with_runtime(native::Runtime::Diagnostic.build());
+        let dwarf = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap())
+            .join("bin/llvm-dwarfdump");
+        for (backend, opt) in [
+            (Backend::Cranelift, OptLevel::None),
+            (Backend::Llvm, OptLevel::Default),
+        ] {
+            let store = Arc::new(SimObjects::default());
+            let mut warm_engine = QueryEngine::new(default_environment(), compiler_adapters());
+            let mut baseline = None;
+            for (version, (first, second)) in versions.iter().enumerate() {
+                let warm = load(&mut warm_engine, first, second);
+                let mut fresh_engine = QueryEngine::new(default_environment(), compiler_adapters());
+                let fresh = load(&mut fresh_engine, first, second);
+                assert_eq!(warm.reference, fresh.reference);
+                let compile = |checked: &Checked, store: Arc<dyn ObjectStore>, validation, jobs| {
+                    let mut options = native::Options::new(x86());
+                    options.validation = validation;
+                    options.objects = Some(UnitObjects {
+                        store,
+                        backend,
+                        opt,
+                        debug: true,
+                        fuel: false,
+                        jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                        byte_budget: None,
+                    });
+                    native::build(&checked.validated, &options).unwrap()
+                };
+                let cold = compile(&fresh, Arc::new(NoObjects), Validation::EveryStage, 1);
+                let cold_objects = &cold.unit_objects.as_ref().unwrap().objects;
+                if let Some(baseline) = &baseline {
+                    assert!(
+                        cold_objects == baseline,
+                        "{backend:?}: version={version}: moving source must retain unit objects"
+                    );
+                } else {
+                    baseline = Some(cold_objects.clone());
+                }
+                // O1 worker budgets, O2 warm=fresh, O3 moved resident inputs;
+                // O4 EveryStage independently recomputes and compares hits.
+                for (validation, jobs) in [
+                    (Validation::Ready, 1),
+                    (Validation::Ready, 2),
+                    (Validation::Ready, 8),
+                    (Validation::EveryStage, 2),
+                ] {
+                    let ready = compile(&warm, store.clone(), validation, jobs);
+                    let built = ready.unit_objects.as_ref().unwrap();
+                    assert!(
+                        &built.objects == cold_objects,
+                        "{backend:?}: version={version}, jobs={jobs}, {validation:?}: warm and fresh object bytes differ"
+                    );
+                    if version > 0 || jobs > 1 {
+                        assert!(built.hits > 0, "warm build must actually hit");
+                    }
+                    let sources = native::profile_sources(warm.validated.snapshot());
+                    let objects = native::emit_backend_objects(
+                        &ready,
+                        backend,
+                        opt,
+                        Partition::Whole,
+                        false,
+                        Some(&sources),
+                    )
+                    .unwrap();
+                    let dir = scratch(&format!(
+                        "generated-debug-{backend:?}-{version}-{jobs}-{validation:?}"
+                    ));
+                    let exe =
+                        native::link_objects(&ready, &warm.entry, &objects, &tools, &dir).unwrap();
+                    let launched = native::launch(&exe, &ready.target, &tools, &dir, true).unwrap();
+                    assert_eq!(launched.exit, Some(2));
+                    let actual = native::observe(
+                        &launched,
+                        &ready,
+                        &native::Sites::new(warm.validated.snapshot()),
+                    )
+                    .unwrap();
+                    assert_eq!(actual, warm.reference, "{backend:?}, version={version}");
+                    let verification = std::process::Command::new(&dwarf)
+                        .arg("--verify")
+                        .arg(&exe)
+                        .output()
+                        .unwrap();
+                    assert!(
+                        verification.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&verification.stdout)
+                    );
+                    let lines = std::process::Command::new(&dwarf)
+                        .arg("--debug-line")
+                        .arg(&exe)
+                        .output()
+                        .unwrap();
+                    assert!(lines.status.success());
+                    assert!(
+                        String::from_utf8_lossy(&lines.stdout)
+                            .contains("<generated:standalone@0/generated>"),
+                        "generated debug origin missing"
+                    );
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn generated_body_debug_preserves_nested_body_sites() {
+    use hirsel_driver::native::{self, Backend, OptLevel};
+    with_compiler_stack(|| {
+        for (name, source, _, line, column) in generated_failure_sources().into_iter().skip(2) {
+            let program = checked(&source);
+            let sources = native::profile_sources(program.validated.snapshot());
+            let ready = native::build(&program.validated, &native::Options::new(x86())).unwrap();
+            for backend in [Backend::Cranelift, Backend::Llvm] {
+                let objects = native::emit_backend_objects(
+                    &ready,
+                    backend,
+                    OptLevel::None,
+                    Partition::Whole,
+                    false,
+                    Some(&sources),
+                )
+                .unwrap();
+                let mut found = false;
+                for function in objects.iter().flat_map(|o| &o.debug) {
+                    assert!(function.well_formed());
+                    for range in &function.ranges {
+                        let item = range.item as usize;
+                        let source = &sources[&function.items[item]];
+                        let (file, base) = source.source(function.sources[item]).unwrap();
+                        let location = file.location(base + range.offset).unwrap();
+                        found |= file.path.to_string_lossy().starts_with("<generated:")
+                            && (location.line, location.column) == (line, column);
+                    }
+                }
+                assert!(
+                    found,
+                    "{backend:?}: {name}: generated failure debug coordinate {line}:{column} missing"
+                );
+            }
         }
     });
 }

@@ -54,7 +54,7 @@ struct Io {
     positions: Positions,
 }
 
-type Positions = std::sync::Arc<BTreeMap<(DefPath, (u32, u32)), (u64, u64)>>;
+type Positions = std::sync::Arc<BTreeMap<(DefPath, SiteRange), (u64, u64)>>;
 
 /// The positions `task.isolate` reports, of every site a failure can start at.
 fn positions(program: &ReadyProgram, sites: &Sites<'_>) -> Positions {
@@ -66,10 +66,7 @@ fn positions(program: &ReadyProgram, sites: &Sites<'_>) -> Positions {
             .into_values()
             .filter_map(|(definition, range)| {
                 let (line, column) = sites.position(&definition, range)?;
-                Some((
-                    (definition, (range.start, range.end)),
-                    (u64::from(line), u64::from(column)),
-                ))
+                Some(((definition, range), (u64::from(line), u64::from(column))))
             })
             .collect(),
     )
@@ -144,7 +141,7 @@ impl Operations for Io {
     fn fork_simulation(&self) -> Option<Box<dyn Operations>> {
         Some(Box::new(self.clone()))
     }
-    fn failure_position(&self, definition: &DefPath, site: (u32, u32)) -> Option<(u64, u64)> {
+    fn failure_source_position(&self, definition: &DefPath, site: SiteRange) -> Option<(u64, u64)> {
         self.positions.get(&(definition.clone(), site)).copied()
     }
     fn path_text(&self, id: u64) -> Option<&str> {
@@ -1869,6 +1866,7 @@ fn observation(
             .iter()
             .map(|f| {
                 let site = SiteRange {
+                    source: f.source,
                     start: f.site.0,
                     end: f.site.1,
                 };
@@ -1878,12 +1876,14 @@ fn observation(
                         &f.rule,
                         definition,
                         SiteRange {
+                            source: f.operation_source,
                             start: *start,
                             end: *end,
                         },
                     )?;
                     failure.operation = Some(hirsel_interp::observation::SourceSite {
                         definition: operation.definition,
+                        file: operation.file,
                         line: operation.line,
                         column: operation.column,
                     });

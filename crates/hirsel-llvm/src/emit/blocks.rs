@@ -64,20 +64,30 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
 
     pub(super) fn profile_location(&mut self, site: SiteRange, operation: &str) -> Emitted {
         if let Some((debug, scope, item)) = self.debug {
-            debug.location(&self.builder, scope, site.start.saturating_add(1), item);
+            debug.location(
+                &self.builder,
+                scope,
+                self.debug_sites
+                    .as_ref()
+                    .and_then(|sites| sites.code(site))
+                    .unwrap_or(0),
+                item,
+            );
         }
         let Some(source) = self.measured else {
             return Ok(());
         };
-        let Some(position) = source.location(site.start) else {
+        let Some(position) = source.site_location(site) else {
             return self.invalid("profile anchor is outside its source revision");
         };
         let (line, column) = (position.line, position.column);
+        let (file, _) = source.source(site.source).expect("resolved source");
         let digest = ContentHash::of_parts(
-            "hirsel.profile-site.v1",
+            "hirsel.profile-site.v2",
             [
                 self.unit.header.definition.fingerprint().0.as_slice(),
                 self.unit.header.implementation_revision.0.as_slice(),
+                &site.source.to_le_bytes(),
                 &site.start.to_le_bytes(),
                 &site.end.to_le_bytes(),
                 operation.as_bytes(),
@@ -91,7 +101,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let mut strings = Vec::new();
             for (index, text) in [
                 self.unit.header.definition.0.package.name.as_str(),
-                &source.logical_path().to_string_lossy(),
+                &file.logical_path().to_string_lossy(),
                 &self.unit.header.definition.to_string(),
                 operation,
             ]

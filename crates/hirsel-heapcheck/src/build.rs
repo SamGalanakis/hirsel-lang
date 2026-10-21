@@ -432,6 +432,7 @@ pub const CLEANUP: CleanupAnchorId = CleanupAnchorId(0);
 pub fn fixture_unit<S: Stage>(definition: DefPath) -> LirUnit<S> {
     let revision = ContentHash::of_parts("heapcheck fixture", [definition.0.name.as_bytes()]);
     let mut unit = LirUnit::<S>::new(UnitHeader {
+        source_count: 1,
         key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
         track_caller: false,
         stage: StageKind::Value,
@@ -449,13 +450,21 @@ pub fn fixture_unit<S: Stage>(definition: DefPath) -> LirUnit<S> {
         body: 0,
         block: 0,
         statement: 0,
-        site: SiteRange { start: 0, end: 0 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 0,
+        },
     });
     unit.tables.cleanup_anchors.push(CleanupAnchor {
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 0 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 0,
+        },
     });
     unit
 }

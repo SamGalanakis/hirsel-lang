@@ -746,7 +746,11 @@ fn cleanup_anchor(b: &mut Body<'_, '_>) -> CleanupAnchorId {
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 0 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 0,
+        },
     });
     id
 }
@@ -1131,7 +1135,11 @@ fn map_drop(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 0 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 0,
+        },
     });
     for (head, tail, failing) in [(normal, tail, false), (failed, failure_tail, true)] {
         b.at(head);

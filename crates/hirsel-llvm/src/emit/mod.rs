@@ -296,6 +296,17 @@ pub fn emit_object_profile(
             ],
         );
     }
+    if inputs.measurement
+        && let Some(sources) = profile.sources
+    {
+        artifact.reproducibility.options = ContentHash::of_parts(
+            "hirsel.resolved-profile-options.v1",
+            [
+                artifact.reproducibility.options.0.as_slice(),
+                hirsel_lir::profile::dependency_digest(sources).0.as_slice(),
+            ],
+        );
+    }
     artifact.debug = debug;
     Ok(artifact)
 }
@@ -429,12 +440,14 @@ fn lower<T>(
                     let site = unit.tables.source_anchors
                         [unit.blocks[unit.entry.index()].anchor.index()]
                     .site;
-                    let column = plan.column(&unit.header.definition);
-                    let line = site.start.saturating_add(1);
+                    let column = plan.column(unit);
+                    let line = hirsel_lir::debug::SiteTable::new(unit)
+                        .code(site)
+                        .unwrap_or(0);
                     let scope = debug.function(entry, &unit.header.definition.to_string(), line);
                     debug.locate_all(entry, scope, line, column);
                     if !inputs.available_externally.contains(&unit.header.instance) {
-                        plan.functions.push((name.clone(), column - 1, site.start));
+                        plan.functions.push((name.clone(), column - 1, site));
                     }
                 }
                 entry
@@ -536,9 +549,11 @@ fn lower<T>(
             if let Some(debug) = debug.as_ref() {
                 let site =
                     unit.tables.source_anchors[unit.blocks[unit.entry.index()].anchor.index()].site;
-                let column = plan.column(&unit.header.definition);
-                // Content-only locations: an item-relative offset plus one as the line.
-                let line = site.start.saturating_add(1);
+                let column = plan.column(unit);
+                // Content-only locations: a complete site's table code as the line.
+                let line = hirsel_lir::debug::SiteTable::new(unit)
+                    .code(site)
+                    .unwrap_or(0);
                 let scope = debug.function(function, &unit.header.definition.to_string(), line);
                 if !inputs.available_externally.contains(&unit.header.instance) {
                     // The scope is the body's: a library unit's behind its root adapter.
@@ -548,8 +563,9 @@ fn lower<T>(
                     } else {
                         name
                     };
-                    plan.functions.push((name, column - 1, site.start));
+                    plan.functions.push((name, column - 1, site));
                 }
+                emitter.debug_sites = Some(hirsel_lir::debug::SiteTable::new(unit));
                 emitter.debug = Some((debug, scope, column));
                 debug.location(&emitter.prologue, scope, line, column);
                 debug.location(&emitter.builder, scope, line, column);
@@ -894,6 +910,7 @@ struct FnEmitter<'m, 'a> {
     manifested: &'a mut Manifested,
     builder: Builder<'m>,
     /// With debug intervals: the function's scope and its item's column (`crate::debug`).
+    debug_sites: Option<hirsel_lir::debug::SiteTable>,
     debug: Option<(
         &'a crate::context::DebugInfo<'m>,
         crate::context::DebugScope,

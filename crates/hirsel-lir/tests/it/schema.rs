@@ -340,6 +340,7 @@ fn fixture_table(target: &TargetSpec) -> LayoutTable {
 /// every enum family the unit schema contains.
 fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     let mut u = LirUnit::<S>::new(UnitHeader {
+        source_count: 1,
         key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
         track_caller: false,
         stage: StageKind::Value,
@@ -499,13 +500,21 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         body: 0,
         block: 0,
         statement: 3,
-        site: SiteRange { start: 10, end: 24 },
+        site: SiteRange {
+            source: 0,
+            start: 10,
+            end: 24,
+        },
     }];
     t.cleanup_anchors = vec![CleanupAnchor {
         body: 0,
         cleanup: 1,
         action: 0,
-        site: SiteRange { start: 30, end: 31 },
+        site: SiteRange {
+            source: 0,
+            start: 30,
+            end: 31,
+        },
     }];
     t.loans = vec![LoanInfo {
         address: AddressId(0),
@@ -1319,10 +1328,10 @@ fn receipts_artifacts_and_manifests_round_trip_and_bind_the_unit_key() {
             lir_version: hirsel_lir::LIR_VERSION,
             runtime_abi_version: hirsel_lir::RUNTIME_ABI_VERSION,
         },
-        debug: vec![hirsel_lir::debug::DebugFunction::from_rows(
+        debug: vec![hirsel_lir::debug::DebugFunction::from_source_rows(
             "hirsel_f".into(),
             32,
-            vec![path("f"), path("g")],
+            vec![(path("f"), 0), (path("f"), 1)],
             4,
             [(0, 8, 0, 4), (8, 12, 0, 4), (16, 20, 1, 9), (20, 20, 0, 1)],
         )],
@@ -1448,6 +1457,44 @@ fn foreign_and_stale_identities_are_rejected() {
     assert_eq!(hirsel_lir::objects::references(&unit), (layouts, abis));
 
     assert_eq!(unit.check_identity(&table), Ok(()));
+
+    let mut foreign_source = unit.clone();
+    foreign_source.tables.source_anchors[0].site.source = unit.header.source_count;
+    assert!(matches!(
+        foreign_source.check_identity(&table),
+        Err(SchemaError::ForeignId {
+            kind: "source selector",
+            ..
+        })
+    ));
+    let mut reversed_source = unit.clone();
+    reversed_source.tables.cleanup_anchors[0].site = SiteRange {
+        source: 0,
+        start: 9,
+        end: 8,
+    };
+    assert_eq!(
+        reversed_source.check_identity(&table),
+        Err(SchemaError::Malformed("reversed source range"))
+    );
+    let mut gap = unit.clone();
+    gap.tables.source_anchors[0].site = SiteRange::UNMAPPED;
+    assert_eq!(gap.check_identity(&table), Ok(()));
+    let revision = hash("revision");
+    let declaration = SiteRange {
+        source: 0,
+        start: 10,
+        end: 24,
+    };
+    let generated = SiteRange {
+        source: 1,
+        ..declaration
+    };
+    assert_ne!(
+        hirsel_lir::emission::site_code(&path("f"), &revision, declaration),
+        hirsel_lir::emission::site_code(&path("f"), &revision, generated),
+        "equal offsets from different sources cannot share failure identity"
+    );
 
     let mut foreign_value = unit.clone();
     foreign_value.instructions[0] = Inst::Const {

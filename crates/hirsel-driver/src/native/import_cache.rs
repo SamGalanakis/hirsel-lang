@@ -93,21 +93,11 @@ fn representation(
 /// The TIR's exact item-relative sites matter to failure/debug metadata, but the
 /// process-local anchors do not. Number anchors by their first span in the item.
 fn definition(program: &Program, def: &hirsel_tir::Definition) -> Option<Vec<u8>> {
-    let mut anchors = BTreeMap::new();
-    for body in &def.bodies {
-        let spans = body
-            .locals
-            .iter()
-            .map(|v| v.span)
-            .chain(body.scopes.iter().map(|v| v.span))
-            .chain(body.blocks.iter().flat_map(|b| {
-                std::iter::once(b.span).chain(b.instructions.iter().map(|i| i.span))
-            }));
-        for span in spans {
-            let next = anchors.len() as u32 + 1;
-            anchors.entry(span.anchor).or_insert(next);
-        }
-    }
+    let anchors = hirsel_tir::source_anchors(def)
+        .into_iter()
+        .enumerate()
+        .map(|(i, anchor)| (anchor, i as u32 + 1))
+        .collect();
     let mut codec = hirsel_span::AnchorCodec::Encode(anchors);
     hirsel_span::with_anchor_codec(&mut codec, || {
         canonical(&program.types, || serde_json::to_vec(def))

@@ -1117,6 +1117,7 @@ fn import_mapped(
         plan,
         discharge,
         origin,
+        source_anchors: origin.map_or_else(|| tir::source_anchors(def), |o| o.anchors.clone()),
         def,
         body,
         body_id: view.body.0,
@@ -1230,6 +1231,7 @@ fn converged(used: &[Option<State>], entry: &[Option<State>]) -> bool {
 }
 
 struct Importer<'a> {
+    source_anchors: Vec<hirsel_span::Anchor>,
     /// Payload layouts are complete before construction; later rows cannot
     /// change their keys. Repeated empty constructions share this graph walk.
     static_layout_keys: HashMap<LayoutId, hirsel_lir::layout_types::LayoutKey>,
@@ -2031,10 +2033,17 @@ fn flat_fixed(layouts: &dyn crate::library::builder::Layouts, layout: LayoutId) 
     matches!(layouts.record(layout).size, SizeSpec::Fixed(_))
 }
 
-fn site(span: Span) -> SiteRange {
-    SiteRange {
-        start: span.start,
-        end: span.end,
+impl Importer<'_> {
+    fn site(&self, span: Span) -> SiteRange {
+        SiteRange {
+            source: self
+                .source_anchors
+                .iter()
+                .position(|a| *a == span.anchor)
+                .map_or(u32::MAX, |i| i as u32),
+            start: span.start,
+            end: span.end,
+        }
     }
 }
 

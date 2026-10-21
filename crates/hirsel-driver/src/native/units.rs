@@ -531,7 +531,7 @@ mod cache_tests {
             }
         }
         fn put(&self, key: &UnitKey, bytes: &[u8]) {
-            if bytes.starts_with(b"HIRFRG01") {
+            if bytes.starts_with(b"HIRFRG02") {
                 self.puts.fetch_add(1, Ordering::Relaxed);
             }
             self.rows.lock().unwrap().insert(*key, bytes.into());

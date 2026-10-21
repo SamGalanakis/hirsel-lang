@@ -222,10 +222,11 @@ pub fn callback_thunk_name(definition: &DefPath, instance: Option<&ContentHash>)
 /// observation layer maps it back by recomputing it for the input's anchors.
 pub fn site_code(definition: &DefPath, revision: &ContentHash, site: SiteRange) -> u64 {
     let digest = ContentHash::of_parts(
-        "hirsel.native-site.v1",
+        "hirsel.native-site.v2",
         [
             definition.fingerprint().0.as_slice(),
             revision.0.as_slice(),
+            &site.source.to_le_bytes(),
             &site.start.to_le_bytes(),
             &site.end.to_le_bytes(),
         ],

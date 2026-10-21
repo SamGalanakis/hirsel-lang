@@ -986,16 +986,17 @@ fn debug_artifact(
                 .filter(|f| defined.contains(f.symbol.as_str())),
         );
     }
-    let resolve = |item: &DefPath, offset: u32| {
+    let resolve = |item: &DefPath, selector: u32, offset: u32| {
         let source = sources.get(item)?;
-        let location = source.location(offset)?;
+        let (file, base) = source.source(selector)?;
+        let location = file.location(base.checked_add(offset)?)?;
         Some(hirsel_cranelift::Resolved {
-            path: source.logical_path().display().to_string(),
+            path: file.logical_path().display().to_string(),
             line: location.line,
             column: location.column,
         })
     };
-    let bytes = hirsel_cranelift::debug_object(&functions, &resolve, &program.target)
+    let bytes = hirsel_cranelift::debug_object_sources(&functions, &resolve, &program.target)
         .map_err(|e| failed(format!("the debug object: {e}")))?;
     let template = objects.last().expect("the glue object");
     Ok(hirsel_lir::stage::ObjectArtifact {
@@ -2581,6 +2582,7 @@ pub fn observe_run(
                     let operation = sites.failure(&rule, definition, *range)?;
                     failure.operation = Some(hirsel_interp::observation::SourceSite {
                         definition: operation.definition,
+                        file: operation.file,
                         line: operation.line,
                         column: operation.column,
                     });

@@ -327,7 +327,11 @@ fn replace_from(
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 0 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 0,
+        },
     });
     let failure = b.failure(None);
     b.push(Inst::Drop {
@@ -568,7 +572,11 @@ fn cursor_drop(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
         body: 0,
         cleanup: 0,
         action: 0,
-        site: SiteRange { start: 0, end: 0 },
+        site: SiteRange {
+            source: 0,
+            start: 0,
+            end: 0,
+        },
     });
     for (head, tail, failing) in [(normal, tail, false), (failed, failure_tail, true)] {
         b.at(head);

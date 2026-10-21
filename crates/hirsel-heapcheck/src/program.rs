@@ -290,6 +290,17 @@ pub trait Operations {
         None
     }
 
+    /// Source-aware counterpart; legacy providers describe the declaration source.
+    fn failure_source_position(
+        &self,
+        definition: &DefPath,
+        site: hirsel_lir::ir::SiteRange,
+    ) -> Option<(u64, u64)> {
+        (site.source == 0)
+            .then(|| self.failure_position(definition, (site.start, site.end)))
+            .flatten()
+    }
+
     fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome;
     /// The outcome of `op` in a task canceled with `cause` and not shielded (CONC-3), when
     /// `op` is a cancellation point: effect-free program errors win, otherwise it completes

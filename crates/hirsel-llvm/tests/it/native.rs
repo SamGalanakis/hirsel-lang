@@ -393,7 +393,11 @@ fn scalar_harness(program: &Program) -> (String, String) {
         let site = site_code(
             &path(case.name),
             &revision(case.name),
-            hirsel_lir::ir::SiteRange { start: 10, end: 20 },
+            hirsel_lir::ir::SiteRange {
+                source: 0,
+                start: 10,
+                end: 20,
+            },
         );
         let values = operands(case.kind);
         let rights = if binary { values.clone() } else { vec![0] };
@@ -555,7 +559,11 @@ fn abi_expected() -> String {
         let site = site_code(
             &path(unit),
             &revision(unit),
-            hirsel_lir::ir::SiteRange { start, end },
+            hirsel_lir::ir::SiteRange {
+                source: 0,
+                start,
+                end,
+            },
         );
         format!("fail {} {} {site:016x}", code.kind, code.rule)
     };
@@ -681,7 +689,11 @@ fn heap_expected() -> String {
     let site = site_code(
         &path("list_get"),
         &revision("list_get"),
-        hirsel_lir::ir::SiteRange { start: 60, end: 70 },
+        hirsel_lir::ir::SiteRange {
+            source: 0,
+            start: 60,
+            end: 70,
+        },
     );
     // Over i in 0..10000: box_roundtrip gives i, nested gives i, reuse gives i, and
     // list_get gives i unless i % 4 == 3, when it fails.

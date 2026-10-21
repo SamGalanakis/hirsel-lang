@@ -132,7 +132,7 @@ pub struct UnitFragment {
 }
 
 /// The magic at the start of an encoded fragment.
-const MAGIC: &[u8; 8] = b"HIRFRG01";
+const MAGIC: &[u8; 8] = b"HIRFRG02";
 
 impl UnitFragment {
     /// The fragment as the object store keeps it: the summary and the object's metadata as
