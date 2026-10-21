@@ -71,7 +71,8 @@ or privileges.
 
 `hirsel check launch.json` and `hirsel run launch.json` (interpreted or native) use this
 graph and its entry. A command on a source file uses that file's exact `file.hir.json`
-sidecar when present, else `standalone@0`; no parent manifest is searched for. A sidecar
+sidecar when present, else `standalone@0` with the toolchain's `std@1` as its only
+dependency; no parent manifest is searched for. A sidecar
 must assign the source to its root package. Formatting operates on one source file and
 needs no dependency bodies. Capability implementations and simulation inputs are separate,
 explicit launch inputs ([run configuration](determinism.md#run-configuration)); selecting a

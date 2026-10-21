@@ -11,6 +11,6 @@ fn change(mut d: Dir) -> () {
   ()
 }
 
-fn example(mut log: Log) -> () {
-  change(mut log.dir)
+fn example(mut value: Log) -> () {
+  change(mut value.dir)
 }

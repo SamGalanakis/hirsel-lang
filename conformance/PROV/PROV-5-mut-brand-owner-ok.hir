@@ -10,7 +10,7 @@ fn change(mut d: Dir) -> () {
   ()
 }
 
-fn example(mut log: Log) -> () {
-  let mut copied = log.dir
+fn example(mut value: Log) -> () {
+  let mut copied = value.dir
   change(mut copied)
 }

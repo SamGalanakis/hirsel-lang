@@ -61,7 +61,7 @@ impl Compiler {
         crate::package::load_package_declarations(self, manifest)
     }
     /// `.json` selects a launch manifest; `.hir` selects its exact `.hir.json`
-    /// sidecar if present, otherwise the explicit standalone@0 context.
+    /// sidecar if present, otherwise standalone@0 with the toolchain std@1.
     pub fn load_program(&self, path: &Path) -> Result<LoadedProgram, ToolError> {
         self.load_program_source(path, None)
     }
@@ -86,11 +86,6 @@ impl Compiler {
     /// Load an explicit test package without requiring a launch entry. The root
     /// package's sources are checked in full; no function is selected as main.
     pub fn load_test_package(&self, manifest: &Path) -> Result<LoadedProgram, ToolError> {
-        if manifest.extension().is_none_or(|e| e != "json") {
-            return Err(ToolError::Runtime(
-                "test requires a package manifest JSON path".into(),
-            ));
-        }
         crate::package::load_program_source_with_cache(
             self,
             manifest,
@@ -181,6 +176,7 @@ impl Compiler {
                 .check(LoweringPolicy::Comptime)
                 .map_err(|error| program.error(error))
         })
+        .or_else(check_diagnostics)
     }
     /// `check_path`, then, when the program checks complete and accepted, the
     /// escape from capability checking its entry reaches (CAP-6).
@@ -201,6 +197,7 @@ impl Compiler {
             let reach = program.unsafe_reach()?;
             Ok((output, Some((program.entry.clone(), reach))))
         })
+        .or_else(|error| check_diagnostics(error).map(|output| (output, None)))
     }
     pub fn format_path(&self, path: &Path) -> Result<String, ToolError> {
         with_compiler_stack(|| {
@@ -231,5 +228,22 @@ impl Compiler {
             inputs: vec![],
         };
         run_snapshot(&mut program.engine, &config, simulation, stdout)
+    }
+}
+
+/// Parsing may reject while the graph is indexed, before LoadedProgram exists.
+/// Checks return those language diagnostics through the same output as body errors.
+fn check_diagnostics(error: ToolError) -> Result<CheckOutput, ToolError> {
+    match error {
+        ToolError::Query {
+            error: QueryError::Diagnostics(diagnostics),
+            sources,
+            ..
+        } => Ok(CheckOutput {
+            diagnostics: select_diagnostics(diagnostics, Some(&sources)),
+            sources,
+            ..Default::default()
+        }),
+        error => Err(error),
     }
 }

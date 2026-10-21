@@ -19,6 +19,9 @@ Invariants and boundary:
 Commands (arguments use the shared lexopt parser):
 
 - `hirsel --help` and `hirsel help` print usage on stdout and exit 0.
+- `hirsel new <dir> [--lib]` creates a schema-1 package, source with one test and
+  explicit stdout grants. A manifestless source selects the toolchain std@1;
+  an exact sidecar continues to select its declared dependencies, including none.
 - `hirsel check [--json] <file>` emits human diagnostics on stderr or one schema-v1
   diagnostic JSON object per stdout line. A clean complete check exits 0; any error
   diagnostic exits 1; an unavailable phase exits 2 with a tool message on stderr.
@@ -31,7 +34,8 @@ Commands (arguments use the shared lexopt parser):
   Without `--run`, `--grants`, `--simulation` or `--replay` it admits the empty-grant
   record in either engine: an entry taking a root capability is refused at launch
   (`hirsel: launch: {"kind":"not_granted","root":"Io"}`, exit 3), followed by a line
-  naming `--grants` and `--simulation`.
+  naming `--grants` and `--simulation`, then an inline `--grants` template for
+  exactly the entry's requested roots.
   A sole `Test` parameter selects test admission, including exported records and
   explicit grants; the empty record supplies only the deterministic Test context.
 - `hirsel fmt [--check] <file>` writes canonical source to the file, or compares

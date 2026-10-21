@@ -255,7 +255,8 @@ impl Checker<'_, '_> {
                     self.span(id),
                     &format!(
                         "f-strings format through std@1, which this program does not select \
-                         ({operation} is unavailable); add std@1 to its manifest's dependencies"
+                         ({operation} is unavailable); add std@1 to the selected manifest's \
+                         dependencies (the source's .hir.json sidecar when checking a source)"
                     ),
                 );
                 return self.recover_format(id, callee, &arguments, expected, frame, checked);

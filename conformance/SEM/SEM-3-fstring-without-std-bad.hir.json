@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "standalone",
+    "version": "0"
+  },
+  "sources": [
+    {
+      "path": "SEM-3-fstring-without-std-bad.hir",
+      "module": []
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "dependencies": []
+}

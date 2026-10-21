@@ -139,6 +139,7 @@ RUNTIME_DATA = {
     "hirsel-cranelift": ["crates/hirsel-rt/include/**"],
     "hirsel-cli": [*CORPUS_DATA],
     "hirsel-conformance": [*CORPUS_DATA, "bench/native/programs/**", "crates/hirsel-conformance/oracles/**", "docs/spec/**", "native-tests/**"],
+    "hirsel-engine": ["stdlib/**"],
     "hirsel-driver": [*CORPUS_DATA, "docs/spec/**", "native-tests/**"],
     "hirsel-heapcheck": ["native-tests/**", "stdlib/**"],
     "hirsel-interp": [*CORPUS_DATA],
@@ -946,7 +947,7 @@ def first_party(meta: dict) -> str:
                             manifest="stdlib/std@1/hirsel.json", srcs=Raw('glob(["stdlib/std@1/**"])'),
                             visibility=["PUBLIC"]))
     out.append("\n" + call("hirsel_toolchain_bundle", name="hirsel-toolchain", hirsel="//:hirsel-cli-bin-hirsel",
-                            precheck=PRECHECK, visibility=["PUBLIC"]))
+                            precheck=PRECHECK, std=Raw('glob(["stdlib/std@1/**"])'), visibility=["PUBLIC"]))
     out.append("\n" + call("hirsel_link_hosts_test", name="gate-link-hosts", listing="native-tests/link/hosts.txt",
                             data=Raw(f"glob({starlark(['native-tests/link/**', 'examples/todo-api/**', 'examples/wordscan/**', 'examples/common.hir', 'stdlib/std@1/**'], 4)})")))
     out.append("\n" + call("hirsel_script_test", name="gate-perf-counts", script="tools/perf-counts",

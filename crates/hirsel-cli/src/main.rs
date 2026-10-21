@@ -7,11 +7,12 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | serve [--no-verify] <source|manifest.json> --host <json>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | serve [--no-verify] <source|manifest.json> --host <json>";
 
 mod allocator;
 mod execution_policy;
 mod measure;
+mod new;
 use execution_policy::{DEFAULT_BENCH_MILLISECONDS, DEFAULT_RUN_MAX_STEPS};
 
 fn main() -> ExitCode {
@@ -22,6 +23,7 @@ fn main() -> ExitCode {
 }
 enum Command {
     Help,
+    New(hirsel_cli_args::NewOptions),
     Test {
         manifest: OsString,
         filters: Vec<String>,
@@ -259,6 +261,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 source,
                 analysis,
             }
+        }
+        Some(Value(command)) if command == "new" => {
+            Command::New(hirsel_cli_args::NewOptions::parse(&mut args)?)
         }
         Some(Value(command)) if command == "test" => {
             let (mut manifest, mut filters, mut seed, mut json, mut native, mut selected) =
@@ -1151,6 +1156,12 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             };
         }
 
+        Command::New(options) => {
+            return match new::create(&options) {
+                Ok(()) => 0,
+                Err(error) => tool_error(error, false),
+            };
+        }
         Command::Help => {
             println!("{USAGE}");
             return 0;
@@ -1409,12 +1420,12 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             ) {
                 // The native driver already wrote the complete failure chain.
                 Ok(Ok(outcome @ RunOutcome::Failed { .. })) => outcome.exit_code() as u8,
-                Ok(Ok(outcome)) => run_result(Ok(outcome), json),
+                Ok(Ok(outcome)) => run_result_for_path(Ok(outcome), Path::new(&file), json),
                 Ok(Err(error)) => {
                     eprintln!("hirsel: {error}");
                     RunOutcome::Tooling(error.to_string()).exit_code() as u8
                 }
-                Err(error) => run_error(error, false),
+                Err(error) => run_result_for_path(Err(error), Path::new(&file), json),
             };
         }
         Command::Run {
@@ -1427,13 +1438,14 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             max_steps,
             json,
         } => {
-            return run_result(
+            return run_result_for_path(
                 hirsel_driver::run_path_on_host(
                     Path::new(&file),
                     launch.host(arguments.as_deref()),
                     max_steps,
                     verify,
                 ),
+                Path::new(&file),
                 json,
             );
         }
@@ -1766,6 +1778,23 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
         }
     }
     Ok(config)
+}
+
+fn run_result_for_path(result: Result<RunOutcome, ToolError>, path: &Path, json: bool) -> u8 {
+    let refused = matches!(
+        &result,
+        Err(ToolError::Launch(
+            hirsel_run_schema::RunRefusal::NotGranted { .. }
+        ))
+    ) || matches!(&result, Ok(RunOutcome::Refused(reason)) if reason.contains("\"kind\":\"not_granted\""));
+    let code = run_result(result, json);
+    if refused
+        && !json
+        && let Ok(grants) = hirsel_driver::entry_grants_hint(path)
+    {
+        eprintln!("hirsel: grant the entry's requested roots with --grants '{grants}'");
+    }
+    code
 }
 
 fn run_result(result: Result<RunOutcome, ToolError>, json: bool) -> u8 {

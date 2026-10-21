@@ -31,7 +31,7 @@ pub fn compiler_adapters() -> PhaseAdapters {
     COMPILER.adapters()
 }
 /// `.json` selects a launch manifest; `.hir` selects its exact `.hir.json`
-/// sidecar if present, otherwise the explicit standalone@0 context.
+/// sidecar if present, otherwise standalone@0 with the toolchain std@1.
 pub fn load_program(path: &Path) -> Result<LoadedProgram, ToolError> {
     COMPILER.load_program(path)
 }
@@ -274,6 +274,32 @@ pub(crate) fn launch_signature(
             e => program.error(e),
         })
 }
+/// A minimal inline template for the entry's requested roots, for launch hints.
+/// Io selects stdout only; no directory or other projection is implied.
+pub fn entry_grants_hint(path: &Path) -> Result<String, ToolError> {
+    let mut program = load_program(path)?;
+    program.check_for_execution()?;
+    let signature = launch_signature(&mut program)?;
+    let launch = hirsel_engine::entry_launch_kind(&signature).map_err(ToolError::Launch)?;
+    let roots = hirsel_engine::entry_roots(&signature, launch).map_err(ToolError::Launch)?;
+    let mut grants = serde_json::Map::new();
+    for root in roots {
+        use hirsel_run_config::Root;
+        let (name, value) = match root {
+            Root::Io => (
+                "io",
+                serde_json::json!({"stdout":"stdout.bytes@1","dirs":[]}),
+            ),
+            Root::Args => ("args", serde_json::json!([])),
+            Root::Env => ("env", serde_json::json!({})),
+            Root::Unsafe => ("unsafe", serde_json::json!(true)),
+            Root::Test => continue,
+        };
+        grants.insert(name.into(), value);
+    }
+    Ok(serde_json::Value::Object(grants).to_string())
+}
+
 /// Export the semantic binding and denial defaults; callers explicitly select grants.
 pub fn export_run_path(path: &Path) -> Result<Vec<u8>, ToolError> {
     let mut program = load_program(path)?;

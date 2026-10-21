@@ -638,7 +638,10 @@ diagnostics from lowering; every other dependency body lowers when the program
 package reaches it. Reachability is `semantic_program`'s read closure, so the check
 lowers exactly what a launch's semantic program revision can encode
 (`queries/lowering.rs`, `tests/it/lazy_lowering.rs`). `.hir.json` is an exact sidecar; there
-is no ancestor search, std fallback or source discovery.
+is no ancestor manifest search or source discovery. A manifestless source is
+`standalone@0` with the toolchain std@1 as its sole dependency; the ordinary graph
+loader supplies its module heads, dependency cache, precheck and program identity.
+An explicit sidecar selects exactly its declared dependencies, including none.
 
 The heap adapter models byte/position/path bridges with exact input-relative ranges. Wave-1 ordinary std algorithms remain Source-origin units; the source-origin and resource failure integration controls live in tests/it/stdlib_wave1.rs.
 

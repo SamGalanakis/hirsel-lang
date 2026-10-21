@@ -19,6 +19,18 @@ fn lowered(source: &str, lowering: LoweringPolicy) -> BTreeSet<String> {
     std::fs::create_dir_all(&dir).unwrap();
     let path: PathBuf = dir.join("main.hir");
     std::fs::write(&path, source).unwrap();
+    // This oracle measures only the supplied program's lowering, without any
+    // dependency's compile-time bodies or prechecks.
+    std::fs::write(
+        path.with_extension("hir.json"),
+        serde_json::json!({
+            "schema": 1, "package": {"name":"standalone", "version":"0"},
+            "sources": [{"path":"main.hir", "module":[]}],
+            "dependencies": [], "entry": {"module":[], "name":"main"},
+        })
+        .to_string(),
+    )
+    .unwrap();
     let names = with_compiler_stack(|| {
         let mut program =
             load_program_source_with_cache(&path, None, &PackageCache::disabled()).unwrap();

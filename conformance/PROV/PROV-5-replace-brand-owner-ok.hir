@@ -6,6 +6,6 @@ type Log {
   file: File of .dir,
 }
 
-fn example(mut log: Log, d: Dir) -> () {
+fn example(mut value: Log, d: Dir) -> () {
   let _ = d
 }

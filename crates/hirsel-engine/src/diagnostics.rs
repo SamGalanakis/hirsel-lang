@@ -120,6 +120,24 @@ pub fn select_diagnostics(
     mut diagnostics: Vec<Diagnostic>,
     sources: Option<&SourceMap>,
 ) -> Vec<Diagnostic> {
+    for diagnostic in &mut diagnostics {
+        if diagnostic.rule.as_str() == "SEM-3"
+            && diagnostic
+                .message
+                .starts_with("f-strings format through std@1, which this program does not select")
+            && let Some(source) = sources.and_then(|s| s.file(s.resolve(diagnostic.primary).file))
+        {
+            let mut sidecar = source.path.as_os_str().to_os_string();
+            sidecar.push(".json");
+            let note = format!(
+                "source sidecar: {}",
+                std::path::Path::new(&sidecar).display()
+            );
+            if !diagnostic.notes.contains(&note) {
+                diagnostic.notes.push(note);
+            }
+        }
+    }
     let bounds = diagnostics.clone();
     diagnostics.retain(|d| {
         !matches!(d.rule.as_str(), "MODE-1" | "MODE-2" | "MODE-3" | "MODE-4")

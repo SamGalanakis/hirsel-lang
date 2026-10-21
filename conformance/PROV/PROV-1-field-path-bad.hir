@@ -1,7 +1,7 @@
 // rule: PROV-1
 // expect: reject PROV-1 at line 15
 // twin: PROV/PROV-1-field-path-ok.hir
-// "A field path (log.dir)."
+// "A field path (value.dir)."
 type Log {
   dir: Dir,
   file: File of .dir,
@@ -11,6 +11,6 @@ fn inspect(d: Dir, value: File of d) -> () {
   ()
 }
 
-fn example(log: Log, other: Dir) -> () {
-  inspect(other, log.file)
+fn example(value: Log, other: Dir) -> () {
+  inspect(other, value.file)
 }

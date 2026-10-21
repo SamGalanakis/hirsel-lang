@@ -7,9 +7,9 @@ rules; [building](building.md) covers toolchains and launch details. The program
 below are small enough to copy and run from the repository root with
 `hirsel run --simulation docs/tour/world.json <linked-source.hir>`, in a simulated
 world that grants every root and projection but no host access; a bare `hirsel run`
-grants nothing, so it refuses any entry taking a root capability. Each selects
-`std@1` through its adjacent `.hir.json` manifest; copy that sidecar too, and
-adjust its source and dependency paths when moving a program. There are no imports
+grants nothing, so it refuses any entry taking a root capability. A source copied without its
+adjacent `.hir.json` manifest selects the toolchain's `std@1` automatically.
+The corpus keeps explicit sidecars to pin its package identities. There are no imports
 or dependency downloads. `json.parse` names a selected package definition;
 `out.print` is supplied by `core@1`.
 

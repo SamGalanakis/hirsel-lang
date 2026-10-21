@@ -20,6 +20,33 @@ coding agent. Its fixed goals:
 - reference counting with no lifetime variables;
 - deterministic behaviour outside capabilities.
 
+## Start a program or package
+
+A single `.hir` file needs no manifest: it belongs to `standalone@0` and selects
+exactly the `std@1` shipped with the toolchain, reusing its std precheck. An exact
+`<source>.hir.json` sidecar overrides that selection; a sidecar without std is the
+explicit std-free form. No parent manifest is searched and no dependency is downloaded.
+Selecting std grants no authority.
+
+```sh
+hirsel new demo
+hirsel test demo/hirsel.json
+hirsel run demo/hirsel.json --grants demo/grants.json
+# The generated source also runs on its own:
+hirsel run demo/main.hir --grants demo/grants.json
+hirsel new mylib --lib
+hirsel test mylib/hirsel.json
+```
+
+`new <dir> [--lib]` accepts a new or empty directory whose final name is a package
+identifier (letters, digits and underscores, starting with a letter or underscore;
+reserved keywords are refused).
+It writes a schema-1 `hirsel.json` for `<dir name>@0`, `main.hir` with a greeting
+and one `@test`, and `grants.json` granting only stdout. The manifest selects the
+installed toolchain's std manifest by its resolved path. The default package has a
+`main` entry taking `Io` and prints with an f-string; `--lib` omits the entry and
+writes a public greeting function with a test. Non-empty directories are refused.
+
 ## Document a package
 
 ```sh
@@ -29,7 +56,7 @@ hirsel doc app/manifest.json --json          # schema-1 JSON
 hirsel doc stdlib/std@1/hirsel.json          # core and std signatures on stdout
 ```
 
-`doc` accepts an explicit package manifest, including a library without an entry.
+`doc` accepts a source file or an explicit package manifest, including a library without an entry.
 It lists every definition visible to other packages under PROG-2, including
 transparent constructors, and keeps opaque representations and `internal` modules
 hidden. Signatures retain modes, brands and sibling origins, relations, `uses`,
@@ -203,7 +230,10 @@ including an explicitly empty snapshot. No other authority is implied. A bare
 `hirsel run program.hir`, in either engine, admits the empty-grant record: a root-free
 `main()` runs, and an entry taking `Io`, `Args` or `Env` is refused at launch
 (`{"kind":"not_granted","root":"Io"}`, exit 3), with a line naming `--grants` and
-`--simulation <json>`. A simulated world requires that explicit option and is available
+`--simulation <json>`, followed by a working inline `--grants '{...}'` template
+for exactly the entry's requested roots. The hint grants `Io` only stdout, `Args`
+an empty snapshot, `Env` an empty map and `Unsafe` its explicit root, as requested.
+It changes no grants until the caller supplies it. A simulated world requires that explicit option and is available
 only in the interpreter; ordinary runs follow [entry admission](spec/programs.md#prog-3-entry).
 
 Interpreted host runs (`--run` and `--grants`) have no default step budget;
@@ -564,9 +594,12 @@ bundle="$(.buck2/bin/buck2 build --target-platforms //tools/buck2:release \
 install -d "$HOME/.local/bin"
 install -m 755 "$bundle/hirsel" "$HOME/.local/bin/hirsel"
 install -m 644 "$bundle/hirsel-std.precheck" "$HOME/.local/bin/hirsel-std.precheck"
+install -d "$HOME/.local/bin/stdlib"
+cp -R "$bundle/stdlib/std@1" "$HOME/.local/bin/stdlib/"
 ```
 
-`//:hirsel-toolchain` produces a directory containing both files. Its executable
+`//:hirsel-toolchain` produces a directory containing the executable, its precheck
+and the matching `stdlib/std@1` source tree. Keep them together when installing. Its executable
 finds its sibling precheck immediately, including after installation. Plain
 `cargo build` users create that sibling with one command from the repository root
 (use `target/release/hirsel` after `cargo build --release`):

@@ -1,4 +1,4 @@
-//! PROG-1: explicit source packages. No directory discovery or std fallback.
+//! PROG-1: explicit source packages and the toolchain std for manifestless sources.
 mod dependency_card;
 pub use dependency_card::render_dependency_cards;
 
@@ -72,8 +72,7 @@ pub(crate) fn load_package_declarations(
     compiler: &Compiler,
     manifest: &Path,
 ) -> Result<PackageDeclarations, ToolError> {
-    let mut graph = Graph::default();
-    let package = graph.visit(manifest, None)?;
+    let (graph, package) = Graph::program(manifest)?;
     let mut engine = QueryEngine::new(default_environment(), compiler.adapters());
     engine
         .adapters
@@ -593,54 +592,7 @@ pub(crate) fn load_program_source_with_cache(
     package_only: bool,
 ) -> Result<LoadedProgram, ToolError> {
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
-    let manifest = if path.extension().is_some_and(|e| e == "json") {
-        Some(path.to_path_buf())
-    } else {
-        let mut sidecar = path.as_os_str().to_os_string();
-        sidecar.push(".json");
-        let sidecar = PathBuf::from(sidecar);
-        match std::fs::metadata(&sidecar) {
-            Ok(_) => Some(sidecar),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e.into()),
-        }
-    };
-    let Some(manifest) = manifest else {
-        let (mut engine, file) = compiler.load(path)?;
-        if let Some(text) = replacement {
-            engine.sources = SourceMap::default();
-            let file = engine
-                .sources
-                .add(path, text.into())
-                .ok_or(ToolError::SourceTooLarge)?;
-            return Ok(LoadedProgram {
-                engine,
-                files: vec![(file, default_context())],
-                entry: entry_path(&default_context()),
-                primary: file,
-                unsafe_ffi: vec![],
-                precheck_notes: vec![],
-                packages: vec![],
-                cache: cache.clone(),
-                identity: compiler.identity(),
-                indexed_revision: 0,
-            });
-        }
-        return Ok(LoadedProgram {
-            engine,
-            files: vec![(file, default_context())],
-            entry: entry_path(&default_context()),
-            primary: file,
-            unsafe_ffi: vec![],
-            precheck_notes: vec![],
-            packages: vec![],
-            cache: cache.clone(),
-            identity: compiler.identity(),
-            indexed_revision: 0,
-        });
-    };
-    let mut graph = Graph::default();
-    let package = graph.visit(&manifest, None)?;
+    let (graph, package) = Graph::program(path)?;
     let root = graph.packages.get(&package).unwrap();
     let entry = if package_only {
         entry_path(
@@ -1012,6 +964,74 @@ struct Graph {
     active: Vec<PathBuf>,
 }
 impl Graph {
+    /// Use the same graph for declarations, identities and executable programs.
+    fn program(path: &Path) -> Result<(Self, PackageId), ToolError> {
+        let mut graph = Self::default();
+        let package = if path.extension().is_some_and(|e| e == "json") {
+            graph.visit(path, None)?
+        } else {
+            let mut sidecar = path.as_os_str().to_os_string();
+            sidecar.push(".json");
+            let sidecar = PathBuf::from(sidecar);
+            match std::fs::metadata(&sidecar) {
+                Ok(_) => graph.visit(&sidecar, None)?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    let source = std::fs::canonicalize(path)?;
+                    let mut manifest = source.as_os_str().to_os_string();
+                    manifest.push(".json");
+                    let value = serde_json::json!({
+                        "schema": 1,
+                        "package": {"name": "standalone", "version": "0"},
+                        "sources": [{"path": source.file_name().unwrap().to_string_lossy(), "module": []}],
+                        "entry": {"module": [], "name": "main"},
+                        "dependencies": [{
+                            "manifest": toolchain_std_manifest()?,
+                            "package": {"name": "std", "version": "1"},
+                            "expose": [],
+                        }],
+                    });
+                    let std = graph.visit(
+                        &toolchain_std_manifest()?,
+                        Some(&PackageId {
+                            name: "std".into(),
+                            version: "1".into(),
+                        }),
+                    )?;
+                    let exposures = graph.packages[&std]
+                        .sources
+                        .iter()
+                        .filter_map(|(_, context)| {
+                            let head = context.modules.first()?.clone();
+                            Some(DependencyExposure {
+                                head: head.clone(),
+                                package: std.clone(),
+                                modules: vec![head],
+                            })
+                        })
+                        .collect();
+                    let context = default_context();
+                    let package = context.package.clone();
+                    let logical = PathBuf::from("standalone@0").join(source.file_name().unwrap());
+                    graph.packages.insert(
+                        package.clone(),
+                        SelectedPackage {
+                            path: PathBuf::from(manifest),
+                            manifest: serde_json::to_vec(&value).unwrap(),
+                            sources: vec![(source.clone(), context.clone())],
+                            logical_sources: BTreeMap::from([(source, logical)]),
+                            exposures,
+                            entry: Some(entry_path(&context)),
+                            dependencies: vec![std],
+                            unsafe_ffi: None,
+                        },
+                    );
+                    package
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
+        Ok((graph, package))
+    }
     fn closure(&self, id: &PackageId) -> BTreeSet<PackageId> {
         let mut result = BTreeSet::new();
         let mut todo = vec![id.clone()];
@@ -1289,6 +1309,10 @@ fn string(v: &Value) -> Result<&str, ToolError> {
     v.as_str()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| invalid("expected nonempty string"))
+}
+/// Validate a package name with the manifest's ordinary identifier rules.
+pub fn validate_package_name(name: &str) -> Result<(), ToolError> {
+    identifier(&Value::String(name.into())).map(|_| ())
 }
 fn identifier(v: &Value) -> Result<String, ToolError> {
     let s = string(v)?;

@@ -7,6 +7,6 @@ type Log {
   file: File of .dir,
 }
 
-fn example(mut log: Log, d: Dir) -> () {
-  log.dir = d
+fn example(mut value: Log, d: Dir) -> () {
+  value.dir = d
 }

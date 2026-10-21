@@ -616,6 +616,7 @@ def _toolchain_bundle_impl(ctx):
     bundle = ctx.actions.copied_dir("hirsel-toolchain", {
         "hirsel": ctx.attrs.hirsel[DefaultInfo].default_outputs[0],
         "hirsel-std.precheck": ctx.attrs.precheck[DefaultInfo].default_outputs[0],
+        "stdlib/std@1": ctx.actions.copied_dir("std@1", {src.short_path.removeprefix("stdlib/std@1/"): src for src in ctx.attrs.std}),
     })
     return [
         DefaultInfo(default_output = bundle),
@@ -627,6 +628,7 @@ hirsel_toolchain_bundle = rule(
     attrs = {
         "hirsel": attrs.dep(),
         "precheck": attrs.dep(),
+        "std": attrs.list(attrs.source()),
     },
 )
 

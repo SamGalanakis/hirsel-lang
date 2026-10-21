@@ -15,6 +15,28 @@ pub fn parse_or_exit<T>(result: Result<T, Error>) -> T {
     })
 }
 
+/// Arguments for creating a package; paths preserve the operating system spelling.
+pub struct NewOptions {
+    pub directory: PathBuf,
+    pub library: bool,
+}
+impl NewOptions {
+    pub fn parse(parser: &mut Parser) -> Result<Self, Error> {
+        let (mut directory, mut library) = (None, false);
+        while let Some(arg) = parser.next()? {
+            match arg {
+                Arg::Long("lib") if !library => library = true,
+                Arg::Value(path) if directory.is_none() => directory = Some(PathBuf::from(path)),
+                arg => return Err(arg.unexpected()),
+            }
+        }
+        Ok(Self {
+            directory: directory.ok_or("new requires a directory")?,
+            library,
+        })
+    }
+}
+
 /// Values are optional so callers retain their own defaults and can distinguish
 /// an explicit zero seed (artifact replay) from an omitted seed.
 #[derive(Default)]
@@ -115,6 +137,24 @@ mod tests {
             options.parse(option, &mut parser)?;
         }
         Ok(options)
+    }
+
+    #[test]
+    fn new_arguments_require_one_directory_and_accept_lib_in_either_position() {
+        for args in [["--lib", "demo"], ["demo", "--lib"]] {
+            let options = NewOptions::parse(&mut Parser::from_args(args)).unwrap();
+            assert!(options.library);
+            assert_eq!(options.directory, PathBuf::from("demo"));
+        }
+        for args in [
+            vec![],
+            vec!["--lib"],
+            vec!["demo", "extra"],
+            vec!["demo", "--lib", "--lib"],
+            vec!["--unknown", "demo"],
+        ] {
+            assert!(NewOptions::parse(&mut Parser::from_args(args)).is_err());
+        }
     }
 
     #[test]

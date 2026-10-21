@@ -56,6 +56,29 @@ impl From<io::Error> for ToolError {
     }
 }
 
+/// The std shipped with this toolchain. Source-tree builds use their checkout;
+/// distributed bundles carry the same tree beside the executable and precheck.
+pub fn toolchain_std_manifest() -> Result<std::path::PathBuf, ToolError> {
+    let executable = std::env::current_exe()?;
+    // Buck2 and Cargo executables live below their source tree; installed
+    // toolchains put stdlib immediately beside the binary.
+    for directory in executable.ancestors().skip(1) {
+        let manifest = directory.join("stdlib/std@1/hirsel.json");
+        if manifest.try_exists()? {
+            return Ok(std::fs::canonicalize(manifest)?);
+        }
+    }
+    // Relocated test harnesses retain repository-relative CARGO_MANIFEST_DIR.
+    Ok(std::fs::canonicalize(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("stdlib/std@1/hirsel.json"),
+    )?)
+}
+
 pub fn default_context() -> FileContext {
     // A source without an explicit launch manifest is standalone@0.
     FileContext {
