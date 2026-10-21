@@ -148,10 +148,11 @@ fn terminal_run(mode: u64) {
                     seen.terminal.store(engine::current(ctx), Ordering::Release);
                 }
                 seen.attempted.store(true, Ordering::Release);
-                if mode != 0 {
-                    crate::hirsel_rt_v2_unchecked_add_overflow(ctx, 0)
-                } else {
-                    crate::stop::raise(ctx, Stop::Refused("terminal fixture".into()))
+                match mode {
+                    0 => crate::stop::raise(ctx, Stop::Refused("terminal fixture".into())),
+                    4 => STATUS_OK,
+                    5 => crate::failure::hirsel_rt_v2_failure_begin(ctx, 1, 0, 0, 0),
+                    _ => crate::hirsel_rt_v2_unchecked_add_overflow(ctx, 0),
                 }
             },
         );
@@ -169,11 +170,13 @@ fn terminal_run(mode: u64) {
                 Err(Stop::BudgetExceeded(hirsel_run_schema::BudgetKind::Memory))
             ),
             3 => assert_eq!(outcome.ended, Err(Stop::Requested)),
+            4 => assert_eq!(outcome.ended, Ok(STATUS_OK)),
+            5 => assert_eq!(outcome.ended, Ok(STATUS_FAILURE)),
             _ => unreachable!(),
         }
         assert_eq!(
             probe.older_effect.load(Ordering::Acquire),
-            mode < 2,
+            !matches!(mode, 2 | 3),
             "wrong retired prefix at width {width}"
         );
     }
@@ -197,4 +200,14 @@ fn older_budget_stop_precedes_a_younger_pending_ub() {
 #[test]
 fn external_stop_interrupts_a_younger_pending_terminal_gate() {
     terminal_run(3);
+}
+
+#[test]
+fn root_success_waits_for_its_final_turn_to_retire_before_publication() {
+    terminal_run(4);
+}
+
+#[test]
+fn root_failure_waits_for_its_final_turn_to_retire_before_publication() {
+    terminal_run(5);
 }

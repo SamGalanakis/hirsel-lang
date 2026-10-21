@@ -440,6 +440,29 @@ pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
     }
 }
 
+/// Reporting a returned root error is a host effect and must wait for the
+/// root's turn before invoking its sink or any yielding result cleanup.
+pub(crate) fn root_report(ctx: *mut TaskCtx) -> Stopped<()> {
+    assert_eq!(current(ctx) as u32, 0);
+    at_head(ctx)
+}
+
+/// Finish the root only after its final segment/logs and all preceding turns
+/// retire. Returned-error reporting and its cleanup must already have run.
+/// Explicit harness end markers are idempotent; production calls this once.
+pub(crate) fn root_end(ctx: *mut TaskCtx) -> Stopped<()> {
+    let task = current(ctx);
+    assert_eq!(task as u32, 0, "only the root publishes the launch result");
+    if driver(ctx).is_finishing(task) {
+        return Ok(());
+    }
+    let (_, progress) = head_effect(ctx, "task.end", || ((), Next::End))?;
+    assert_eq!(progress, Progress::Poll);
+    poll(ctx)?;
+    driver(ctx).finishing(task);
+    Ok(())
+}
+
 /// A task-local terminal condition owns its native stack until promotion. Its
 /// existing log and stretch retire before the stop, just like an H boundary.
 /// A budget settlement that already closed Frontier keeps its original cause.

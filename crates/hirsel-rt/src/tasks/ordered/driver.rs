@@ -184,6 +184,13 @@ impl Driver {
         *execution = Execution::Saving { head_only };
     }
 
+    pub(super) fn is_finishing(&self, task: TaskId) -> bool {
+        matches!(
+            self.execution.get(&task),
+            Some(Execution::Finishing | Execution::Done)
+        )
+    }
+
     pub(crate) fn finishing(&mut self, task: TaskId) {
         let execution = self.execution.get_mut(&task).expect("a live task");
         assert_eq!(*execution, Execution::Running);

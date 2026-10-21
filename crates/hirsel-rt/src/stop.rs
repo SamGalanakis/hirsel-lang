@@ -444,6 +444,9 @@ unsafe extern "C" fn root_entry(ctx: *mut u8, frame: *mut u8) -> ! {
         if status == crate::STATUS_OK
             && let Some(returned) = (*(*(*ctx).run_ptr()).entry_result.get()).take()
         {
+            if (*ctx).run_ref().ordered_mode.load(Ordering::Acquire) {
+                check(ctx, crate::tasks::ordered::engine::root_report(ctx));
+            }
             if let Some(report) = (*frame).report {
                 crate::tasks::at_home(ctx, &mut || (*report)(&returned));
             }
@@ -458,6 +461,9 @@ unsafe extern "C" fn root_entry(ctx: *mut u8, frame: *mut u8) -> ! {
                 0,
                 0,
             );
+        }
+        if (*ctx).run_ref().ordered_mode.load(Ordering::Acquire) {
+            check(ctx, crate::tasks::ordered::engine::root_end(ctx));
         }
         (*frame).status = status;
         (*frame).done.store(true, Ordering::Release);
