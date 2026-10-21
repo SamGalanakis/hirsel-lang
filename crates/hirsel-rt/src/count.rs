@@ -84,7 +84,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_dup(ctx: *mut TaskCtx, block: *mut Header)
             (*block).count = COUNT_ARENA_SHARED;
             return;
         }
-        if count >= ctx.run().count_max {
+        if count >= ctx.run_ref().count_max {
             (*block).count = COUNT_IMMORTAL;
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
             {

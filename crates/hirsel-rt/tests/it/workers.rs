@@ -194,6 +194,33 @@ impl Drop for Home {
 }
 
 #[test]
+fn role_guards_follow_saved_fibers_and_task_table_growth() {
+    let _serial = serial();
+    take_threads();
+    for width in [1, 4] {
+        let mut run = BodyRun::new(width, width > 1);
+        run.config = config();
+        let ended = run.run(
+            |ctx| unsafe { hirsel_rt::tasks::role::enable(ctx) },
+            |ctx| {
+                let scope = enter(ctx);
+                // Grow the task Vec several times while old continuations
+                // retain save slots in stable TaskCtx storage.
+                let tasks: Vec<_> = (1..=48).map(|id| spawn(ctx, scope, yielding, id)).collect();
+                for (task, id) in tasks.into_iter().zip(1..) {
+                    assert_eq!(join(ctx, scope, task), [1, id]);
+                }
+                exit(ctx, scope);
+                0
+            },
+        );
+        assert_eq!(ended.ended, Ok(0), "width {width}");
+        assert_eq!(ended.pending, 0);
+    }
+    take_threads();
+}
+
+#[test]
 fn migrated_tasks_run_only_on_compute_workers_and_return_their_results() {
     let _serial = serial();
     take_threads();

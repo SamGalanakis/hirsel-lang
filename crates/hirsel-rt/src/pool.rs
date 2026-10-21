@@ -692,7 +692,9 @@ pub(crate) unsafe fn hand_off(
             .deferred
             .set(Some((to, Post::Run { task: next, permit })));
         let idle = idle_of(ctx, execs, me);
+        crate::tasks::role::release(ctx);
         fiber::switch(save, idle);
+        crate::tasks::role::enter(ctx);
     }
 }
 
@@ -732,6 +734,7 @@ pub(crate) unsafe fn abandon(ctx: *mut TaskCtx) -> ! {
         (*me).deferred.set(Some((home, Post::Wake)));
         let idle = idle_of(ctx, execs, me);
         let mut abandoned = std::ptr::null_mut();
+        crate::tasks::role::release(ctx);
         fiber::switch(&raw mut abandoned, idle);
     }
     fault("an abandoned fiber was resumed")

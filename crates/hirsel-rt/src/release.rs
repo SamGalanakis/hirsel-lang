@@ -1148,6 +1148,8 @@ unsafe fn finish(ctx: &mut TaskCtx, item: *mut Header) {
 /// caller owns and whose fields hold nothing owned any more.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_free(ctx: *mut TaskCtx, block: *mut Header) {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe {
         if (*ctx).heap().diagnostic {
             return free_glue_checked(ctx, block);
@@ -1293,6 +1295,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_release(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
@@ -1343,6 +1347,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_reset(
     operation_site: u64,
     out_token: *mut *mut Header,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;

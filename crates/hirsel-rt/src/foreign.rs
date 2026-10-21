@@ -127,6 +127,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_enter(
     previous: *mut c_void,
     dispatch: u64,
 ) {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let enclosing = save();
     let nested = !enclosing.context.is_null();
     let threads = dispatch & FOREIGN_THREADS_MASK;
@@ -193,6 +195,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_leave(previous: *const c_void) {
     let interval = unsafe { previous.cast::<Interval>().read() };
     restore(interval.enclosing);
     let ctx = interval.context;
+    // SAFETY: the saved interval belongs to this task and the C call returned.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     if interval.word & POOLED != 0 {
         // SAFETY: the context is the running task's, owned by this pool thread; this returns
         // on the home thread.

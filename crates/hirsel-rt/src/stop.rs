@@ -281,7 +281,7 @@ pub(crate) unsafe fn raise(ctx: *mut TaskCtx, stop: Stop) -> ! {
         std::process::abort();
     }
     // SAFETY: the context is live.
-    let run = unsafe { (*ctx).run() };
+    let run = unsafe { (*ctx).run_ref() };
     if crate::pool::wide(run) {
         // A wide run has no callee runs (runners execute at width 1, `crate::launch`).
         run.control.request_inside(stop);
@@ -404,9 +404,13 @@ unsafe extern "C" fn root_entry(ctx: *mut u8, frame: *mut u8) -> ! {
     let frame = frame.cast::<LaunchFrame>();
     // SAFETY: the run owns the frame until its last thread leaves it.
     unsafe {
+        let _role = crate::tasks::role::Guard::new(ctx);
         check(ctx, observe(ctx));
         let words = &raw mut *(*frame).words;
-        let mut status = ((*frame).entry)(ctx, words);
+        let mut status = {
+            let _segment = crate::tasks::role::Segment::new(ctx);
+            ((*frame).entry)(ctx, words)
+        };
         check(ctx, observe(ctx));
         if status == crate::STATUS_OK {
             crate::free::root_end(ctx);
@@ -431,7 +435,7 @@ unsafe extern "C" fn root_entry(ctx: *mut u8, frame: *mut u8) -> ! {
         }
         (*frame).status = status;
         (*frame).done.store(true, Ordering::Release);
-        if crate::pool::wide((*ctx).run()) {
+        if crate::pool::wide((*ctx).run_ref()) {
             crate::pool::abandon(ctx);
         }
         let mut finished = std::ptr::null_mut();

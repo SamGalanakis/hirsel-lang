@@ -1632,6 +1632,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
     max_output: u64,
     deadline: *const u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     let request = Request::ProcessRun {
         process: unsafe { process.read() },
@@ -1699,6 +1701,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_pipeline(
     max_output: u64,
     deadline: *const u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     let request = Request::ProcessPipeline {
         process: unsafe { process.read() },
@@ -1747,6 +1751,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_process(
     runs: *mut crate::Header,
     children: *mut crate::Header,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::TestProcess {
         test: unsafe { test.read() },
         runs: unsafe { list(runs, 96, |at| script(at)) },
@@ -1835,6 +1841,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_narrow(
     process: *const u64,
     rules: *mut crate::Header,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::ProcessNarrow {
         process: unsafe { process.read() },
         rules: unsafe {
@@ -1864,6 +1872,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn(
     process: *const u64,
     cmd: *const u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     let request = Request::ProcessSpawn {
         process: unsafe { process.read() },
@@ -1893,6 +1903,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_write(
     start: u64,
     length: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::ChildWrite {
         process: unsafe { p.read() },
         child: unsafe { c.read() },
@@ -1916,6 +1928,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_close_stdin(
     p: *const u64,
     c: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::ChildCloseStdin {
         process: unsafe { p.read() },
         child: unsafe { c.read() },
@@ -1969,6 +1983,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_read_stdout(
     buffer: *mut *mut crate::Header,
     max: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { child_read(ctx, out, p, c, buffer, max, ChildStream::Stdout) }
 }
 
@@ -1985,6 +2001,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_read_stderr(
     buffer: *mut *mut crate::Header,
     max: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { child_read(ctx, out, p, c, buffer, max, ChildStream::Stderr) }
 }
 
@@ -2003,6 +2021,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_wait(
     c: *mut u64,
     deadline: *const u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::ChildWait {
         process: unsafe { p.read() },
         child: unsafe { c.read() },
@@ -2030,6 +2050,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_kill(
     c: *mut u64,
     signal: *const u32,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::ChildKill {
         process: unsafe { p.read() },
         child: unsafe { c.read() },
@@ -2057,6 +2079,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn_pipeline(
     stages: *mut crate::Header,
     max_stderr: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     let request = Request::ProcessSpawnPipeline {
         process: unsafe { process.read() },
@@ -2117,6 +2141,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_wait_group(
     g: *mut u64,
     deadline: *const u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::GroupWait {
         process: unsafe { p.read() },
         group: unsafe { g.read() },

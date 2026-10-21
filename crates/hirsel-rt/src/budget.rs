@@ -227,7 +227,7 @@ impl TaskCtx {
         Counters {
             meter_ops,
             allocations,
-            fuel_refills: self.run().fuel.refills.load(Ordering::Relaxed),
+            fuel_refills: self.run_ref().fuel.refills.load(Ordering::Relaxed),
             held,
         }
     }
@@ -259,7 +259,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_fuel_refill(ctx: *mut TaskCtx) {
     // A refill is where a loop without runtime entries sees its run's stop (design §6 Stops).
     // SAFETY: caller contract: a fuel point holds nothing a stop must drop.
     unsafe { crate::stop::check(ctx, crate::stop::observe(ctx)) };
-    let chunk = ctx.run().fuel.take();
+    let chunk = ctx.run_ref().fuel.take();
     if chunk == 0 {
         // SAFETY: caller contract.
         unsafe { crate::stop::raise(ctx, crate::stop::Stop::BudgetExceeded(BudgetKind::Fuel)) }

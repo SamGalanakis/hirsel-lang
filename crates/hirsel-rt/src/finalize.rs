@@ -78,7 +78,7 @@ pub(crate) unsafe fn run_close(
             crate::tasks::close_endpoint(ctx, handle, anchor, operation_site)
         });
     }
-    let Some(close) = ctx.run().close_handle else {
+    let Some(close) = ctx.run_ref().close_handle else {
         fault("a handle drop in a context without an Io adapter's close_handle");
     };
     // SAFETY: the adapter receives this context and the handle the dropped value owned.
@@ -92,7 +92,12 @@ pub(crate) unsafe fn run_close(
 fn shielded(ctx: &mut TaskCtx, call: impl FnOnce(*mut TaskCtx) -> u8) -> u8 {
     let work = ctx.work;
     ctx.shield += 1;
-    let status = call(ctx);
+    let status = {
+        // SAFETY: the finalizer receives only task-local work, with no live
+        // scheduler borrow. Its semantic entries acquire their own role.
+        let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+        call(ctx)
+    };
     ctx.shield -= 1;
     if ctx.work != work {
         fault("a finalizer returned with release work still pending");
@@ -135,6 +140,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_finalize(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
@@ -174,6 +181,8 @@ pub(crate) unsafe fn finalize_item(
 /// `ctx` is live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_finalize_begin(ctx: *mut TaskCtx, _anchor: u64) {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract.
     unsafe { (*ctx).shield += 1 }
 }
@@ -186,6 +195,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_finalize_begin(ctx: *mut TaskCtx, _anchor:
 /// `ctx` is live.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_finalize_end(ctx: *mut TaskCtx, _anchor: u64) {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
@@ -209,6 +220,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_close_handle(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract.
     unsafe { run_close(&mut *ctx, handle, anchor, operation_site) }
 }

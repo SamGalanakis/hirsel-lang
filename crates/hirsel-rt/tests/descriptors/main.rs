@@ -15,6 +15,32 @@ use hirsel_rt_operations::descriptors::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+#[test]
+fn every_semantic_entry_acquires_the_scheduler_role_directly() {
+    let graph = source();
+    // These abort the process unconditionally and touch no scheduler or run
+    // object. The foreign-leave entry recovers its context from Interval.
+    let terminal = [
+        "hirsel_rt_v2_diag_panic",
+        "hirsel_rt_v2_invariant_fault",
+        "hirsel_rt_v2_foreign_violation",
+        "hirsel_rt_v2_callback_failed",
+    ];
+    let mut checked = 0;
+    for (symbol, key) in graph.entries() {
+        if entry_descriptor(symbol).unwrap().locality != Locality::Op || terminal.contains(&symbol)
+        {
+            continue;
+        }
+        assert!(
+            graph.directly_calls(key, "Guard::new"),
+            "unguarded semantic entry: {symbol} ({key})"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 150, "only checked {checked} semantic entries");
+}
+
 /// The runtime's call graph, parsed once on a thread with room for syn's recursion over the
 /// largest runtime files.
 fn source() -> &'static graph::Graph {

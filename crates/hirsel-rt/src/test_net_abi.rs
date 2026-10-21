@@ -166,6 +166,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_net(
     peers: *mut Header,
     listeners: *mut Header,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::TestNet {
         test: unsafe { test.read() },
         peers: unsafe { list(peers, 104, |at| peer(at)) },

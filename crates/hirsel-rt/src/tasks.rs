@@ -46,6 +46,7 @@
 
 #[cfg(feature = "measurement")]
 pub(crate) mod profile;
+pub mod role;
 
 use std::collections::VecDeque;
 use std::ptr::NonNull;
@@ -143,7 +144,6 @@ struct Task {
     generation: u32,
     /// Its context: the root's is the run's first, a child's lies at the top of its stack.
     ctx: *mut TaskCtx,
-    sp: *mut u8,
     stack: Option<Stack>,
     state: State,
     /// The scope it was spawned into (the root has none).
@@ -586,7 +586,6 @@ impl Task {
         Task {
             generation,
             ctx,
-            sp: std::ptr::null_mut(),
             stack: None,
             state: State::Ready,
             scope,
@@ -675,6 +674,8 @@ fn wake_in(tasks: &mut [Option<Task>], woken: &mut Vec<u32>, task: u32) {
 /// first.
 #[inline(always)]
 pub(crate) fn scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
+    // SAFETY: callers retain no scheduler reference across a role leave.
+    unsafe { role::enter(ctx) };
     // Admission also builds row zero before code starts; only code entries
     // may abandon a fiber here. Observe a host stop before a synchronizing
     // entry touches the object, rather than after its effect at yield.
@@ -846,22 +847,28 @@ unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
         // `next` runs on another thread: this one hands the run over and waits (`crate::pool`).
         let permit = crate::pool::resumes_into_hirsel(ctx, to);
         ctx.switch_out();
-        let save = &raw mut s.task(from).sp;
+        let save = &raw mut ctx.task_sp;
         // SAFETY: `next` is suspended; `save` is written before any other thread runs.
         unsafe { crate::pool::hand_off(ctx, save, to, next, permit) };
         recycle(ctx);
         return;
     }
     let to_ctx = s.task(next).ctx;
+    let save = &raw mut ctx.task_sp;
+    let to = unsafe { (*to_ctx).task_sp };
     ctx.switch_out();
+    // SAFETY: no scheduler borrow is used after transferring the role.
+    unsafe {
+        role::release(ctx);
+        role::enter(to_ctx);
+    }
     // SAFETY: `next`'s context is live and nothing else runs on this worker.
     unsafe { TaskCtx::switch_in(to_ctx, ctx.worker_ptr()) };
-    s.current = next;
-    ran_here(ctx, next);
-    let save = &raw mut s.task(from).sp;
-    let to = s.task(next).sp;
+    scheduler(to_ctx).current = next;
+    unsafe { ran_here(&mut *to_ctx, next) };
     // SAFETY: `to` is the suspended or prepared stack pointer of `next`.
     unsafe { fiber::switch(save, to) };
+    unsafe { role::enter(ctx) };
     recycle(ctx);
 }
 
@@ -909,7 +916,7 @@ unsafe fn migrate_self(ctx: &mut TaskCtx) {
     };
     let permit = crate::pool::resumes_into_hirsel(ctx, to);
     ctx.switch_out();
-    let save = &raw mut s.task(me).sp;
+    let save = &raw mut ctx.task_sp;
     // SAFETY: this task is suspended at `save` before the other thread resumes it.
     unsafe { crate::pool::hand_off(ctx, save, to, me, permit) };
     recycle(ctx);
@@ -1029,10 +1036,11 @@ pub(crate) unsafe fn from_home(ctx: &mut TaskCtx) {
 /// `ctx` is the run's root context; the run has compute workers and has not started.
 pub(crate) unsafe fn start_root(ctx: *mut TaskCtx, sp: *mut u8) {
     let s = scheduler(ctx);
-    s.task(ROOT).sp = sp;
+    unsafe { (*s.task(ROOT).ctx).task_sp = sp };
     // SAFETY: caller contract.
     unsafe {
         (*ctx).switch_out();
+        role::release(ctx);
         crate::pool::start_root((*ctx).run_ptr(), ROOT);
     }
 }
@@ -1067,15 +1075,21 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
         fault("a completed task was resumed");
     }
     let to_ctx = s.task(next).ctx;
+    let to = unsafe { (*to_ctx).task_sp };
     ctx.switch_out();
+    // SAFETY: the completed fiber retains no shared borrow.
+    unsafe {
+        role::release(ctx);
+        role::enter(to_ctx);
+    }
     // SAFETY: `next`'s context is live and nothing else runs on this worker.
     unsafe { TaskCtx::switch_in(to_ctx, ctx.worker_ptr()) };
-    s.current = next;
-    ran_here(ctx, next);
-    s.task(next).state = State::Ready;
+    scheduler(to_ctx).current = next;
+    unsafe { ran_here(&mut *to_ctx, next) };
+    scheduler(to_ctx).task(next).state = State::Ready;
     let mut abandoned = std::ptr::null_mut();
     // SAFETY: `next` is suspended; nothing resumes the abandoned stack pointer.
-    unsafe { fiber::switch(&raw mut abandoned, s.task(next).sp) };
+    unsafe { fiber::switch(&raw mut abandoned, to) };
     fault("a completed task was resumed")
 }
 
@@ -1089,6 +1103,9 @@ pub(crate) unsafe fn resume_row(
     task: u32,
     here: Option<u16>,
 ) -> (*mut TaskCtx, *mut u8) {
+    // SAFETY: the task is suspended; claim protects its table lookup from a
+    // concurrent spawn before the context's stable pointer is known.
+    let ctx = unsafe { role::claim(run, task) };
     // SAFETY: caller contract; the thread resuming it is the only one running the run.
     let (s, metrics) = unsafe {
         (
@@ -1102,7 +1119,7 @@ pub(crate) unsafe fn resume_row(
     s.current = task;
     let row = s.task(task);
     record_worker(row, here, metrics);
-    (row.ctx, row.sp)
+    (ctx, unsafe { (*ctx).task_sp })
 }
 
 /// Dispatch the running task's foreign interval to a blocking-pool thread (S-13): it waits
@@ -1128,7 +1145,7 @@ pub(crate) unsafe fn to_pool(ctx: &mut TaskCtx, site: u64) -> u16 {
     let to = crate::pool::target(ctx, Owner::Pool(slot), None)
         .unwrap_or_else(|| fault("a pool dispatch from its own pool thread"));
     ctx.switch_out();
-    let save = &raw mut s.task(me).sp;
+    let save = &raw mut ctx.task_sp;
     // SAFETY: this task is suspended at `save` before the pool thread resumes it.
     unsafe { crate::pool::hand_off(ctx, save, to, me, false) };
     recycle(ctx);
@@ -1471,7 +1488,7 @@ unsafe fn next_task(ctx: *mut TaskCtx) -> Stopped<u32> {
 /// # Safety
 /// `ctx` is live and no task can run.
 pub(crate) unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_schema::Wait> {
-    let table = unsafe { (*ctx).run().failure_table };
+    let table = unsafe { (*ctx).run_ref().failure_table };
     let s = scheduler(ctx);
     let mut waits = Vec::new();
     for (index, wait) in s.parked() {
@@ -1549,7 +1566,7 @@ pub(crate) unsafe fn sole_root(ctx: *mut TaskCtx) -> bool {
     if !unsafe { single_worker_fast_path(ctx) } {
         return false;
     }
-    let run = unsafe { (*ctx).run() };
+    let run = unsafe { (*ctx).run_ref() };
     run.tasks
         .as_ref()
         .is_none_or(|s| s.tasks.len() == 1 && s.runnable.is_empty() && s.woken.is_empty())
@@ -1571,13 +1588,15 @@ pub unsafe fn yield_now(ctx: &mut TaskCtx) {
 /// # Safety
 /// As for [`yield_now`].
 pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
+    // SAFETY: the running task owns this entry until its suspension or return.
+    let _role = unsafe { role::Guard::new(ctx) };
     #[cfg(feature = "diagnostic")]
     // SAFETY: the context and its roots are live.
     unsafe {
         crate::root_trace::point(ctx)
     };
     crate::stop::observe(ctx)?;
-    if ctx.run().tasks.is_none() {
+    if ctx.run_ref().tasks.is_none() {
         return Ok(());
     }
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
@@ -1664,6 +1683,8 @@ unsafe fn block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) {
 /// # Safety
 /// `ctx` is live; whatever `wait` names outlives the wait.
 unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> Stopped<()> {
+    // SAFETY: the running task owns this entry until its suspension or return.
+    let _role = unsafe { role::Guard::new(ctx) };
     #[cfg(feature = "diagnostic")]
     // SAFETY: the context and its roots are live.
     unsafe {
@@ -1733,6 +1754,8 @@ unsafe fn hand_off(ctx: &mut TaskCtx, child: u32) {
 unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
     let ctx = ctx.cast::<TaskCtx>();
     let index = task as usize as u32;
+    // SAFETY: this new fiber owns its stable task context.
+    let _role = unsafe { role::Guard::new(ctx) };
     // SAFETY: the task's context lies at the top of this stack and is bound to its worker.
     recycle(unsafe { &mut *ctx });
     let Some((code, environment, operation_site)) = scheduler(ctx).task(index).code.take() else {
@@ -1741,7 +1764,11 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
     #[cfg(feature = "measurement")]
     profile::resume(ctx);
     // SAFETY: compiled closure code and its owned environment, called once.
-    let mut status = unsafe { code(ctx, environment, operation_site, operation_site) };
+    let mut status = {
+        // SAFETY: no scheduler borrow survives the call into compiled code.
+        let _segment = unsafe { role::Segment::new(ctx) };
+        unsafe { code(ctx, environment, operation_site, operation_site) }
+    };
     // The caller of a closure releases its environment wholesale.
     status |= unsafe {
         crate::release::release_block(
@@ -1857,6 +1884,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
     out: *mut u64,
     _tasks: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_enter");
     crate::free::enter(ctx, Phase::Done);
@@ -1912,6 +1941,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
     _tasks: *const u64,
     deadline: *const [u64; 2],
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_enter_until");
     // SAFETY: caller contract.
@@ -1958,6 +1989,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
     scope: *const u64,
     error: u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_exit");
     // SAFETY: caller contract.
@@ -1979,6 +2012,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit_until(
     scope: *const u64,
     error: u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_exit_until");
     // SAFETY: caller contract.
@@ -2081,6 +2116,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     code: TaskCode,
     environment: *mut Header,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_spawn");
     crate::free::enter(ctx, Phase::Done);
@@ -2120,7 +2157,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
             (s.tasks.len() - 1) as u32
         }
     };
-    task.sp = stack.prepare(task_entry, child.cast(), index as usize as *mut u8);
+    unsafe {
+        (*child).task_id = index;
+        (*child).task_sp = stack.prepare(task_entry, child.cast(), index as usize as *mut u8);
+    }
     task.stack = Some(stack);
     let child = task.path.clone();
     s.tasks[index as usize] = Some(task);
@@ -2165,6 +2205,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     none: *const u8,
     size: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_finish");
     let s = scheduler(ctx);
@@ -2214,6 +2256,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     slot: *mut u8,
     size: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_join");
     let s = scheduler(ctx);
@@ -2287,6 +2331,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel(
     scope: *const u64,
     task: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_cancel");
     let s = scheduler(ctx);
@@ -2312,6 +2358,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
     scope: *const u64,
     task: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_detach");
     let s = scheduler(ctx);
@@ -2362,6 +2410,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set(
     out: *mut u64,
     scope: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_set");
     crate::free::enter(ctx, Phase::Done);
@@ -2406,6 +2456,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_add(
     set: *mut u64,
     task: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_add");
     let s = scheduler(ctx);
@@ -2445,6 +2497,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
     scope: *const u64,
     set: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_await_any");
     let s = scheduler(ctx);
@@ -2543,6 +2597,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_has(
     set: *const u64,
     index: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_set_has");
     let s = scheduler(ctx);
@@ -2573,6 +2629,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_take(
     set: *mut u64,
     index: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_set_take");
     let s = scheduler(ctx);
@@ -2603,6 +2661,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
     scope: *const u64,
     set: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_cancel_all");
     crate::free::enter(ctx, Phase::Entered);
@@ -2632,6 +2692,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach_all(
     scope: *const u64,
     set: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_detach_all");
     crate::free::enter(ctx, Phase::Done);
@@ -2693,6 +2755,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_canceled(
     out: *mut u32,
     _scope: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_canceled");
     crate::free::enter(ctx, Phase::Done);
@@ -2771,6 +2835,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_open(
     none: *const u8,
     descriptor: u32,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "channel_open");
     crate::free::enter(ctx, Phase::Done);
@@ -2803,6 +2869,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
     _tasks: *const u64,
     sender: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "sender_dup");
     crate::free::enter(ctx, Phase::Done);
@@ -2833,6 +2901,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
     sender: *mut u64,
     message: *mut u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "channel_send");
     crate::free::enter(ctx, Phase::Done);
@@ -2875,6 +2945,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     receiver: *mut u64,
     message: *mut u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "channel_receive");
     let s = scheduler(ctx);
@@ -3042,6 +3114,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
     descriptor: u32,
     wrapper: u32,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_create");
     // SAFETY: caller contract.
@@ -3073,6 +3147,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     m: *const u64,
     payload: *mut u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_take");
     // SAFETY: caller contract.
@@ -3123,6 +3199,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
     m: *const u64,
     payload: *mut u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_put");
     // SAFETY: caller contract.
@@ -3233,6 +3311,8 @@ fn stack_rss(ctx: &mut TaskCtx) -> u64 {
 /// `ctx` is live, its failure active, and `m` borrows a counted Mutex wrapper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u64) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_kill");
     let s = scheduler(ctx);
@@ -3258,6 +3338,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u6
 /// `ctx` is live and `m` borrows a dead Mutex's wrapper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut TaskCtx, m: *const u64) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_cause");
     // SAFETY: caller contract.
@@ -3283,6 +3365,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
     value: *const u8,
     size: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "atomic_create");
     // SAFETY: caller contract.
@@ -3306,6 +3390,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
     slot: *mut u8,
     size: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "atomic_load");
     // SAFETY: caller contract.
@@ -3340,6 +3426,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
     value: *const u8,
     size: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "atomic_store");
     // SAFETY: caller contract.

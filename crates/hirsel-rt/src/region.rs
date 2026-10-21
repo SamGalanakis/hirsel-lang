@@ -160,9 +160,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_owner(
                 fault("regional owner lies outside its region storage");
             }
             ctx.heap().forget_foreign_record(block.addr());
-            ctx.run()
+            ctx.run_ref()
                 .region_owners
-                .get_or_insert_with(Default::default)
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
                 .insert(
                     block.addr(),
                     OwnerRecord {
@@ -241,9 +242,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
         let block = payload.sub(8).cast::<Header>();
         if ctx.heap().diagnostic {
             ctx.heap().forget_foreign_record(block.addr());
-            ctx.run()
+            ctx.run_ref()
                 .region_owners
-                .get_or_insert_with(Default::default)
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
                 .insert(
                     block.addr(),
                     OwnerRecord {
@@ -1209,6 +1211,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract.
     unsafe {
         check_active(region);
@@ -1232,7 +1236,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
             }
             entry = prev;
         }
-        if let Some(owners) = &mut ctx.run().region_owners {
+        if ctx.heap_ref().diagnostic {
+            let mut owners = ctx
+                .run_ref()
+                .region_owners
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             for owner in owners.values_mut().filter(|owner| owner.region == region) {
                 owner.active = false;
             }

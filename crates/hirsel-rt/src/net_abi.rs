@@ -267,6 +267,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_narrow(
     n: *const u64,
     rules: *mut Header,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let payload = crate::alloc::payload(rules);
     let count = unsafe { payload.cast::<u64>().read() };
     let count = usize::try_from(count).unwrap_or_else(|_| crate::fault("rule count overflow"));
@@ -325,6 +327,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_connect(
     port: u16,
     timeout: *const NetTimeoutAbi,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::Connect {
         net: unsafe { n.read() },
@@ -351,6 +355,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_connect_addr(
     addr: *const SocketAddrAbi,
     timeout: *const NetTimeoutAbi,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::ConnectAddr {
         net: unsafe { n.read() },
@@ -380,6 +386,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_resolve(
     len: u64,
     port: u16,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::Resolve {
         net: unsafe { n.read() },
@@ -429,6 +437,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read(
     buffer: *mut *mut Header,
     max: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::NetRead {
         net: unsafe { n.read() },
         stream: unsafe { s.read() },
@@ -503,6 +513,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read_into(
     buffer: *mut u8,
     capacity: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: the caller grants capacity writable bytes; MaybeUninit preserves
     // the suffix and permits the same helper to fill a List's spare capacity.
     let storage = unsafe { std::slice::from_raw_parts_mut(buffer.cast(), capacity as usize) };
@@ -552,6 +564,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let bytes = unsafe { crate::io::slice_bytes(owner, start, len) };
 
     if let Some(result) = unsafe {
@@ -602,6 +616,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write_all(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let bytes = unsafe { crate::io::slice_bytes(owner, start, len) };
 
     if let Some(result) = unsafe {
@@ -650,6 +666,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_shutdown(
     s: *mut u64,
     how: *const u32,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let how = match unsafe { how.read() } {
         0 => ShutdownHow::Read,
         1 => ShutdownHow::Write,
@@ -710,6 +728,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_peer_addr(
     n: *const u64,
     s: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::PeerAddr {
         net: unsafe { n.read() },
         stream: unsafe { s.read() },
@@ -730,6 +750,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_close(
     n: *const u64,
     s: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let _ = unsafe { n.read() };
     let handle = unsafe { s.read() };
     #[cfg(feature = "measurement")]
@@ -759,6 +781,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_split(
     n: *const u64,
     s: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let stream = unsafe { s.read() };
     unsafe { s.write(0) };
     let request = Request::NetSplit {
@@ -789,6 +813,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_join(
     r: *mut u64,
     w: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let (read, write) = unsafe { (r.read(), w.read()) };
     unsafe {
         r.write(0);
@@ -820,6 +846,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_write_half_shutdown(
     n: *const u64,
     w: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Shutdown {
         net: unsafe { n.read() },
         stream: unsafe { w.read() },
@@ -843,6 +871,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_listen(
     n: *const u64,
     addr: *const SocketAddrAbi,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::Listen {
         net: unsafe { n.read() },
@@ -865,6 +895,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_unix_connect(
     n: *const u64,
     path: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::UnixConnect {
         net: unsafe { n.read() },
@@ -888,6 +920,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_unix_listen(
     n: *const u64,
     path: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::UnixListen {
         net: unsafe { n.read() },
@@ -910,6 +944,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_local_addr(
     n: *const u64,
     listener: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::LocalAddr {
         net: unsafe { n.read() },
         listener: unsafe { listener.read() },
@@ -940,6 +976,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_accept(
     n: *const u64,
     listener: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Accept {
         net: unsafe { n.read() },
         listener: unsafe { listener.read() },
@@ -980,6 +1018,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_udp_bind(
     n: *const u64,
     addr: *const SocketAddrAbi,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     let request = Request::UdpBind {
         net: unsafe { n.read() },
@@ -1006,6 +1046,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_udp_send_to(
     len: u64,
     addr: *const SocketAddrAbi,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::UdpSend {
         net: unsafe { n.read() },
         socket: unsafe { s.read() },
@@ -1042,6 +1084,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_udp_recv_from(
     buffer: *mut *mut Header,
     max: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::UdpRecv {
         net: unsafe { n.read() },
         socket: unsafe { s.read() },
@@ -1083,6 +1127,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_udp_close(
     n: *const u64,
     s: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { hirsel_rt_v2_net_close(ctx, n, s) }
 }
 

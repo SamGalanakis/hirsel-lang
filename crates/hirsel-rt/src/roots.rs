@@ -203,7 +203,7 @@ fn defers(ctx: *mut TaskCtx) -> bool {
         return false;
     }
     // SAFETY: the context is live.
-    let tasks = unsafe { (*ctx).run().tasks.is_some() };
+    let tasks = unsafe { (*ctx).run_ref().tasks.is_some() };
     !tasks || !crate::tasks::current_ended(ctx)
 }
 
@@ -327,6 +327,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_root_dup(ctx: *mut TaskCtx, block: *mut He
 /// `ctx` is live and the caller owns one root of the live root block `block`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_root_release(ctx: *mut TaskCtx, block: *mut Header) {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
@@ -364,6 +366,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_root_drop(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller owns a credit; consume handles exact atomic counts.
     unsafe {
         if consume(&mut *ctx, block) {

@@ -132,7 +132,7 @@ impl FailureTable {
 /// The failure table of the program `ctx` runs.
 fn table(ctx: *mut TaskCtx) -> FailureTable {
     // SAFETY: the context is live.
-    unsafe { (*ctx).run().failure_table }
+    unsafe { (*ctx).run_ref().failure_table }
         .unwrap_or_else(|| fault("an isolated failure without the program's failure table"))
 }
 
@@ -183,6 +183,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_begin(
     out: *mut u64,
     _tasks: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract.
     unsafe {
         out.write((*ctx).failure.count() as u64);
@@ -198,6 +200,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_begin(
 /// `ctx` is live and `start` a record count `hirsel_rt_v2_isolate_begin` returned.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_isolate_catch(ctx: *mut TaskCtx, start: u64) {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let path = crate::tasks::current_path(ctx);
     let start = usize::try_from(start).unwrap_or_else(|_| fault("an isolation start overflows"));
     // SAFETY: caller contract.

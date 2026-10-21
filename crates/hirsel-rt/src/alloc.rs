@@ -2219,8 +2219,12 @@ unsafe fn alloc_checked(
             fault("an allocation extent is smaller than its layout size");
         }
         let (block, capacity) = ctx.heap().allocate(index, extent, align);
-        if let Some(owners) = &mut ctx.run().region_owners {
-            owners.remove(&block.addr());
+        if ctx.heap_ref().diagnostic {
+            ctx.run_ref()
+                .region_owners
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&block.addr());
         }
         if ctx.heap().diagnostic {
             check_poison(block);
@@ -2237,6 +2241,8 @@ unsafe fn alloc_checked(
 /// `token` is null or a token produced by `hirsel_rt_v2_reset` and not yet consumed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_dispose(ctx: *mut TaskCtx, token: *mut Header) {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     if token.is_null() {
         return;
     }
@@ -2265,6 +2271,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_reuse(
     align: u64,
     out_block: *mut *mut Header,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     if token.is_null() {
         #[cfg(feature = "measurement")]
         unsafe {

@@ -73,7 +73,7 @@ pub(crate) fn retired(block: *mut Header) {
 pub(crate) unsafe fn point(ctx: &mut TaskCtx) {
     with(|t| {
         // A run without tasks yet is its root task.
-        let path = if ctx.run().tasks.is_some() {
+        let path = if ctx.run_ref().tasks.is_some() {
             crate::tasks::current_path(ctx)
         } else {
             Vec::new()

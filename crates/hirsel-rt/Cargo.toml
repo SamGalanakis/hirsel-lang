@@ -24,6 +24,7 @@ serde_json = { version = "1", optional = true }
 hirsel-free = { path = "../hirsel-free" }
 hirsel-kernels = { path = "../hirsel-kernels" }
 hirsel-core-contract = { path = "../hirsel-core-contract" }
+hirsel-rt-operations = { path = "../hirsel-rt-operations" }
 hirsel-run-config = { path = "../hirsel-run-config" }
 hirsel-run-schema = { path = "../hirsel-run-schema" }
 libc = { version = "0.2", default-features = false }
@@ -32,7 +33,6 @@ webpki-roots = "=1.0.9"
 sha2 = "0.10"
 
 [dev-dependencies]
-hirsel-rt-operations = { path = "../hirsel-rt-operations" }
 syn = { version = "2", default-features = false, features = ["full", "parsing", "visit", "clone-impls"] }
 hirsel-guard = { path = "../hirsel-guard" }
 hirsel-layout = { path = "../hirsel-layout" }

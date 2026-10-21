@@ -166,6 +166,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_thaw_turn(
     out: *mut u8,
     root: *mut Header,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract; the borrowed root stays live through any wait. The sole-holder
     // test acquires every other holder's release before the thaw restores interior counts; an
     // overflowed root is never the last.

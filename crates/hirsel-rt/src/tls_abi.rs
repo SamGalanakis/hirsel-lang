@@ -82,6 +82,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_connect(
     name_len: u64,
     roots: *const TlsRootsAbi,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe {
         connect(
             ctx,
@@ -114,6 +116,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_connect_as(
     roots: *const TlsRootsAbi,
     identity: *const TlsIdentityAbi,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe {
         connect(
             ctx,
@@ -155,6 +159,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_connect_with(
     name_len: u64,
     client: *const TlsClientAbi,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let identity = (!unsafe { (*client).identity.chain.owner }.is_null())
         .then(|| unsafe { &raw const (*client).identity });
     let alpn = unsafe { strings((*client).alpn) };
@@ -279,6 +285,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_accept(
     s: *mut u64,
     server: *const TlsServerAbi,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let stream = unsafe { s.read() };
     unsafe { s.write(0) };
     let (identities, clients, alpn) = unsafe { (*server).parts() };
@@ -320,6 +328,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_peer(
     n: *const u64,
     s: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::TlsPeer {
         net: unsafe { n.read() },
         stream: unsafe { s.read() },
@@ -345,6 +355,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_negotiated_protocol(
     n: *const u64,
     s: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::TlsProtocol {
         net: unsafe { n.read() },
         stream: unsafe { s.read() },
@@ -397,6 +409,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_close(
     n: *const u64,
     s: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let stream = unsafe { s.read() };
     unsafe { s.write(0) };
     let request = Request::TlsClose {

@@ -396,6 +396,14 @@ fn files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 }
 
 impl Graph {
+    /// Direct guard coverage matters: a transitive guard in one branch does
+    /// not protect the entry's other branches or its earlier shared reads.
+    pub fn directly_calls(&self, start: &str, target: &str) -> bool {
+        self.edges
+            .get(start)
+            .is_some_and(|edges| edges.contains(target))
+    }
+
     pub fn parse(root: &Path) -> Graph {
         let mut paths = Vec::new();
         files(root, &mut paths);

@@ -14,7 +14,7 @@
 //! `finalize.rs` instead of the Io adapter.
 
 use std::alloc::{Layout as Allocation, alloc, dealloc, handle_alloc_error};
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::ptr::NonNull;
 
 use crate::fault;
@@ -177,6 +177,17 @@ struct Channel {
     waiting: VecDeque<(u64, u32)>,
     /// A send or a sender's close since the last scheduling point.
     touched: bool,
+    /// Early sends are invisible to polls until their sender's turn retires.
+    pending: BTreeSet<u64>,
+    sent: u64,
+    received: u64,
+}
+
+/// A successful early send, published once by its turn's retirement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PendingSend {
+    channel: u32,
+    sequence: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -208,6 +219,9 @@ impl Channels {
             receivers: 1,
             waiting: VecDeque::new(),
             touched: false,
+            pending: BTreeSet::new(),
+            sent: 0,
+            received: 0,
         };
         let channel = match self.vacant_channels.pop() {
             Some(index) => {
@@ -270,7 +284,7 @@ impl Channels {
     pub(crate) fn ready(&self, channel: u32) -> bool {
         self.channels[channel as usize]
             .as_ref()
-            .is_some_and(|row| !row.queue.is_empty() || row.senders == 0)
+            .is_some_and(|row| row.visible() > 0 || (row.queue.is_empty() && row.senders == 0))
     }
 
     fn lookup(&self, word: u64) -> Option<(u32, Endpoint)> {
@@ -294,16 +308,59 @@ impl Channels {
     /// # Safety
     /// `slot` is a `Some` image of the channel's element in another frame.
     pub(crate) unsafe fn send(&mut self, channel: u32, slot: *mut u8) -> u32 {
+        // SAFETY: caller contract.
+        unsafe { self.send_inner(channel, slot, false) }.0
+    }
+
+    /// An E send's internal commit. It does not touch the channel: an older
+    /// scheduling point would consume the touch before the message is visible.
+    ///
+    /// # Safety
+    /// As for `send`; the executor has proved rules 1–3.
+    pub(crate) unsafe fn send_pending(
+        &mut self,
+        channel: u32,
+        slot: *mut u8,
+    ) -> (u32, Option<PendingSend>) {
+        // SAFETY: caller contract.
+        unsafe { self.send_inner(channel, slot, true) }
+    }
+
+    unsafe fn send_inner(
+        &mut self,
+        channel: u32,
+        slot: *mut u8,
+        early: bool,
+    ) -> (u32, Option<PendingSend>) {
         let row = self.row(channel);
         if row.receivers == 0 {
-            return CLOSED;
+            return (CLOSED, None);
         }
         let element = &row.element;
         row.queue.push(slot, element.size);
         // SAFETY: caller contract; the image moved, so the slot now holds `None`.
         unsafe { std::ptr::copy_nonoverlapping(element.none.as_ptr(), slot, element.size) };
-        self.touch(channel);
-        DONE
+        let sequence = row.sent;
+        row.sent = row
+            .sent
+            .checked_add(1)
+            .unwrap_or_else(|| fault("a channel send sequence overflowed"));
+        if early {
+            row.pending.insert(sequence);
+            (DONE, Some(PendingSend { channel, sequence }))
+        } else {
+            self.touch(channel);
+            (DONE, None)
+        }
+    }
+
+    /// Retirement step 3: clear pending AND touch the channel immediately
+    /// before polling. Consuming the ticket twice is an executor fault.
+    pub(crate) fn publish(&mut self, send: PendingSend) {
+        if !self.row(send.channel).pending.remove(&send.sequence) {
+            fault("an early send was published twice");
+        }
+        self.touch(send.channel);
     }
 
     /// A parked receiver may be served: the next scheduling point wakes it.
@@ -342,7 +399,11 @@ impl Channels {
     /// receivers in park order.
     pub(crate) fn waiting(&self, channel: u32) -> Option<(usize, bool, &VecDeque<(u64, u32)>)> {
         let row = self.channels.get(channel as usize)?.as_ref()?;
-        Some((row.queue.len(), row.senders == 0, &row.waiting))
+        Some((
+            row.visible(),
+            row.queue.is_empty() && row.senders == 0,
+            &row.waiting,
+        ))
     }
 
     /// Move the oldest queued message into the `None` slot `slot`: `Ok(true)`, `Err(CLOSED)`
@@ -353,7 +414,11 @@ impl Channels {
     /// `slot` is a `None` image of the channel's element in another frame.
     pub(crate) unsafe fn receive(&mut self, channel: u32, slot: *mut u8) -> Result<bool, u32> {
         let row = self.row(channel);
+        if row.pending.contains(&row.received) {
+            return Ok(false);
+        }
         if row.queue.pop(slot, row.element.size) {
+            row.received += 1;
             Ok(true)
         } else if row.senders == 0 {
             Err(CLOSED)
@@ -380,6 +445,8 @@ impl Channels {
             if row.receivers == 0 && row.queue.len() > 0 {
                 let empty = Ring::new(row.element.size, row.queue.align);
                 let queue = std::mem::replace(&mut row.queue, empty);
+                row.pending.clear();
+                row.received = row.sent;
                 left = (!row.element.inert).then_some((queue, row.element.descriptor));
             }
         }
@@ -392,5 +459,151 @@ impl Channels {
             self.touch(endpoint.channel);
         }
         left
+    }
+}
+
+impl Channel {
+    /// Visible FIFO prefix; a younger published message cannot pass a pending
+    /// older send, even if retirement is temporarily inside a holding call.
+    fn visible(&self) -> usize {
+        self.pending.first().map_or(self.queue.len(), |&first| {
+            usize::try_from(first - self.received)
+                .unwrap_or_else(|_| fault("a channel queue beyond the address space"))
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn channel() -> (Channels, u64, u64, u32) {
+        let mut channels = Channels::default();
+        let layout = Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+        };
+        let none = [0u64; 2];
+        let element = unsafe { Element::new(0, &layout, none.as_ptr().cast()) };
+        let (sender, receiver) = channels.open(element, &layout);
+        let channel = channels.channel(sender, true);
+        (channels, sender, receiver, channel)
+    }
+
+    #[test]
+    fn early_send_is_invisible_and_touches_at_retirement() {
+        let (mut c, _, _, channel) = channel();
+        c.wait(channel, 0, 7);
+        let mut image = [1u64, 42];
+        let (status, pending) = unsafe { c.send_pending(channel, image.as_mut_ptr().cast()) };
+        assert_eq!(status, DONE);
+        assert_eq!(image, [0, 0]);
+        assert!(!c.ready(channel));
+        assert_eq!(c.waiting(channel).unwrap().0, 0);
+        let mut out = [0u64; 2];
+        assert_eq!(
+            unsafe { c.receive(channel, out.as_mut_ptr().cast()) },
+            Ok(false)
+        );
+        for _ in 0..3 {
+            let mut touched = Vec::new();
+            c.take_touched(&mut touched);
+            assert!(
+                touched.is_empty(),
+                "an older head must not consume the send's touch"
+            );
+        }
+        c.publish(pending.unwrap());
+        assert!(c.ready(channel));
+        assert_eq!(c.waiting(channel).unwrap().0, 1);
+        let mut touched = Vec::new();
+        c.take_touched(&mut touched);
+        assert_eq!(touched, [channel]);
+        assert_eq!(
+            unsafe { c.receive(channel, out.as_mut_ptr().cast()) },
+            Ok(true)
+        );
+        assert_eq!(out, [1, 42]);
+    }
+
+    #[test]
+    fn visible_prefix_stops_at_the_first_pending_message_through_ring_growth() {
+        let (mut c, _, _, channel) = channel();
+        let mut pending = Vec::new();
+        for n in 0..20u64 {
+            let mut image = [1, n];
+            if n % 3 == 0 {
+                pending.push(
+                    unsafe { c.send_pending(channel, image.as_mut_ptr().cast()) }
+                        .1
+                        .unwrap(),
+                );
+            } else {
+                assert_eq!(unsafe { c.send(channel, image.as_mut_ptr().cast()) }, DONE);
+            }
+        }
+        assert!(!c.ready(channel));
+        // A later publication does not reveal messages behind the FIFO head.
+        let later = pending.pop().unwrap();
+        c.publish(later);
+        assert!(!c.ready(channel));
+        for send in pending {
+            c.publish(send);
+        }
+        assert_eq!(c.waiting(channel).unwrap().0, 20);
+        for n in 0..20u64 {
+            let mut out = [0u64; 2];
+            assert_eq!(
+                unsafe { c.receive(channel, out.as_mut_ptr().cast()) },
+                Ok(true)
+            );
+            assert_eq!(out, [1, n]);
+        }
+        assert!(!c.ready(channel));
+    }
+
+    #[test]
+    fn a_closed_receiver_keeps_the_early_senders_value() {
+        let (mut c, _, receiver, channel) = channel();
+        assert!(c.close(receiver).is_none());
+        let mut image = [1u64, 42];
+        assert_eq!(
+            unsafe { c.send_pending(channel, image.as_mut_ptr().cast()) },
+            (CLOSED, None)
+        );
+        assert_eq!(image, [1, 42]);
+    }
+
+    #[test]
+    fn published_messages_and_closed_are_seen_in_fifo_order() {
+        let (mut c, sender, _, channel) = channel();
+        let mut image = [1u64, 42];
+        let pending = unsafe { c.send_pending(channel, image.as_mut_ptr().cast()) }
+            .1
+            .unwrap();
+        assert!(c.close(sender).is_none());
+        assert!(!c.ready(channel));
+        assert!(!c.waiting(channel).unwrap().1);
+        c.publish(pending);
+        let mut out = [0u64; 2];
+        assert_eq!(
+            unsafe { c.receive(channel, out.as_mut_ptr().cast()) },
+            Ok(true)
+        );
+        assert_eq!(out, [1, 42]);
+        assert!(c.ready(channel));
+        assert_eq!(
+            unsafe { c.receive(channel, out.as_mut_ptr().cast()) },
+            Err(CLOSED)
+        );
     }
 }

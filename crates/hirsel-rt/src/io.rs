@@ -2620,6 +2620,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_io_close(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = crate::tasks::profile::Operation::new(ctx, "Close");
     let binding = unsafe { Binding::get(ctx) };
@@ -2692,6 +2694,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_out_print(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { hirsel_rt_v2_out_write(ctx, _destination, out, s, owner, start, len) }
 }
 
@@ -2708,6 +2712,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_out_write(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let stdout = unsafe { s.read() };
     let start =
         usize::try_from(start).unwrap_or_else(|_| crate::fault("Io start exceeds target usize"));
@@ -2735,6 +2741,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_err_print(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     unsafe { hirsel_rt_v2_err_write(ctx, _destination, out, s, owner, start, len) }
 }
 
@@ -2751,6 +2759,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_err_write(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let stderr = unsafe { s.read() };
     let start =
         usize::try_from(start).unwrap_or_else(|_| crate::fault("Io start exceeds target usize"));
@@ -2995,6 +3005,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_dir_read_only(
     out: *mut HandleResult,
     directory: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::ReadOnlyDir {
         directory: unsafe { directory.read() },
     };
@@ -3050,6 +3062,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mapped_view(
     directory: *const u64,
     mapped: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::MapView {
         directory: unsafe { directory.read() },
         mapped: unsafe { mapped.read() },
@@ -3079,6 +3093,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mapped_check(
     directory: *const u64,
     mapped: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::MapCheck {
         directory: unsafe { directory.read() },
         mapped: unsafe { mapped.read() },
@@ -3106,6 +3122,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_watch(
     path: *const u64,
     recursive: u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Watch {
         directory: unsafe { directory.read() },
         path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
@@ -3145,6 +3163,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_watcher_next(
     directory: *const u64,
     watcher: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::WatchNext {
         directory: unsafe { directory.read() },
         watcher: unsafe { watcher.read() },
@@ -3171,6 +3191,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_dir_event(
     directory: *const u64,
     event: *const [u64; 3],
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     use crate::watch::WatchEvent::*;
     let [tag, first, second] = unsafe { event.read() };
     let binding = unsafe { Binding::get(ctx) };
@@ -3220,6 +3242,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_narrow(
     directory: *const u64,
     file: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::NarrowFile {
         directory: unsafe { directory.read() },
         file: unsafe { file.read() },
@@ -3263,6 +3287,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_commit(
     directory: *const u64,
     file: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Commit {
         directory: unsafe { directory.read() },
         file: unsafe { file.read() },
@@ -3303,6 +3329,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_read(
     buffer: *mut *mut crate::Header,
     max: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::FileRead {
         directory: unsafe { directory.read() },
         file: unsafe { file.read() },
@@ -3329,6 +3357,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_seek(
     file: *mut u64,
     offset: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::FileSeek {
         directory: unsafe { directory.read() },
         file: unsafe { file.read() },
@@ -3353,6 +3383,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_write(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::FileWrite {
         directory: unsafe { directory.read() },
         file: unsafe { file.read() },
@@ -3377,6 +3409,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_append(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::FileAppend {
         directory: unsafe { directory.read() },
         file: unsafe { file.read() },
@@ -3402,6 +3436,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_write_bytes(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Write {
         directory: unsafe { directory.read() },
         path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
@@ -3430,6 +3466,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_sync(
     directory: *const u64,
     file: *mut u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Sync {
         directory: unsafe { directory.read() },
         file: unsafe { file.read() },
@@ -3455,6 +3493,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_put_new(
     len: u64,
     mode: *const u32,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let durable = match unsafe { mode.read() } {
         0 => true,
         1 => false,
@@ -3492,6 +3532,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_write_all(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::WriteAll {
         directory: unsafe { directory.read() },
         file: unsafe { file.read() },
@@ -3550,6 +3592,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_path(
     args: *const u64,
     index: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = crate::tasks::profile::Operation::new(ctx, "hirsel_rt_v2_arg_path");
     if unsafe { args.read() } != crate::launch::ARGS_HANDLE {
@@ -3580,6 +3624,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_len(
     out: *mut u64,
     args: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = crate::tasks::profile::Operation::new(ctx, "hirsel_rt_v2_arg_len");
     if unsafe { args.read() } != crate::launch::ARGS_HANDLE {
@@ -3600,6 +3646,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_text(
     args: *const u64,
     index: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = crate::tasks::profile::Operation::new(ctx, "hirsel_rt_v2_arg_text");
     if unsafe { args.read() } != crate::launch::ARGS_HANDLE {
@@ -3728,6 +3776,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_capture_begin(
     spec_start: u64,
     spec_len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     use hirsel_kernels::telemetry as kernel;
     let parent = unsafe { slice_bytes(parent_owner, parent_start, parent_len) };
     let spec = unsafe { slice_bytes(spec_owner, spec_start, spec_len) };
@@ -3770,6 +3820,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_capture_context(
     telemetry: *const u64,
     span: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let binding = unsafe { Binding::get(ctx) };
     let Some(context) = binding
         .adapter
@@ -3793,6 +3845,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_capture_event(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let payload = unsafe { slice_bytes(owner, start, len) };
     let checked = hirsel_kernels::telemetry::bounded(&[payload]);
     if checked.is_ok() {
@@ -3822,6 +3876,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_capture_finish(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let (telemetry, span) = unsafe { (telemetry.read(), span.read()) };
     let status = unsafe { slice_bytes(owner, start, len) };
     let checked = hirsel_kernels::telemetry::bounded(&[status]);
@@ -3906,6 +3962,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_signal_wait(
     signals: *const u64,
     kinds: *mut crate::Header,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let kinds = unsafe {
         crate::process::list(kinds, 4, |at| {
             hirsel_run_schema::SignalKind::from_ordinal(at.cast::<u32>().read())
@@ -4079,6 +4137,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_clock_sleep_until(
     clock: *const u64,
     deadline: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::SleepUntil {
         clock: unsafe { clock.read() },
         deadline: unsafe { deadline.read() },
@@ -4125,6 +4185,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_random_bytes(
     random: *const u64,
     count: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let value = if count == 0 {
         Ok(vec![])
     } else {
@@ -4159,6 +4221,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_instant_ticks(
     out: *mut u64,
     instant: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(_ctx) };
     unsafe { out.write(instant.read()) };
     crate::STATUS_OK
 }
@@ -4171,6 +4235,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_check(
     test: *const u64,
     condition: u8,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let Ok(completion) = (unsafe {
         capability_call(
             ctx,
@@ -4200,6 +4266,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_check_case(
     condition: u8,
     case: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let Ok(completion) = (unsafe {
         capability_call(
             ctx,
@@ -4227,6 +4295,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_check_case(
 /// it returns is failure, along the diverging call's failure edge.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_fail(ctx: *mut crate::TaskCtx, test: *const u64) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let Ok(completion) = (unsafe { capability_call(ctx, Request::TestFail { test: test.read() }) })
     else {
         return crate::STATUS_FAILURE;
@@ -4246,6 +4316,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_crash(
     directory: *const u64,
     seed: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::TestCrash {
         test: unsafe { test.read() },
         directory: unsafe { directory.read() },
@@ -4271,6 +4343,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_seed(
     out: *mut u64,
     test: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let Ok(completion) = (unsafe { capability_call(ctx, Request::TestSeed { test: test.read() }) })
     else {
         return crate::STATUS_FAILURE;
@@ -4291,6 +4365,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_tasks(
     out: *mut u64,
     test: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let Ok(completion) =
         (unsafe { capability_call(ctx, Request::TestTasks { test: test.read() }) })
     else {
@@ -4312,6 +4388,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_clock(
     out: *mut u64,
     test: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let Ok(Completion::Handle(Ok(clock))) =
         (unsafe { capability_call(ctx, Request::TestClock { test: test.read() }) })
     else {
@@ -4341,6 +4419,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_log(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let text = unsafe { borrowed_text(owner, start, len) };
     let Ok(completion) = (unsafe {
         capability_call(
@@ -4372,6 +4452,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_expect_snapshot(
     text_start: u64,
     text_len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let name = unsafe { borrowed_text(name_owner, name_start, name_len) };
     let text = unsafe { borrowed_text(text_owner, text_start, text_len) };
     let Ok(completion) = (unsafe {
@@ -4406,6 +4488,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_dir(
     test: *const u64,
     entries: *mut crate::Header,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let payload = crate::alloc::payload(entries);
     let count = unsafe { payload.cast::<u64>().read() };
     let count = usize::try_from(count).unwrap_or_else(|_| crate::fault("Test entries overflow"));
@@ -4458,6 +4542,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_read_bytes(
     directory: *const u64,
     path: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Read {
         directory: unsafe { directory.read() },
         path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
@@ -4562,6 +4648,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
     out: *mut WalkResult,
     directory: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let Ok(completion) = (unsafe {
         capability_call(
             ctx,
@@ -4619,6 +4707,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk_step(
     _destination: *mut u8,
     out: *mut WalkOption,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(_ctx) };
     let payload = crate::alloc::payload(environment);
     let position = unsafe { payload.cast::<u64>().read() };
     let count = unsafe { payload.add(8).cast::<u64>().read() };
@@ -4675,6 +4765,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_stdin_read(
     buffer: *mut *mut crate::Header,
     max: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::ReadStdin {
         stdin: unsafe { stdin.read() },
         max,
@@ -4730,6 +4822,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_env_get(
     start: u64,
     len: u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let data = crate::alloc::payload(owner)
         .wrapping_add(8)
         .wrapping_add(start as usize);
@@ -4780,6 +4874,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_env_narrow(
     env: *const u64,
     names: *mut crate::Header,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::EnvNarrow {
         env: unsafe { env.read() },
         names: unsafe { crate::process::list(names, 24, |at| crate::process::text(at)) },
@@ -4901,6 +4997,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_set_permissions(
     path: *const u64,
     permissions: u32,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::SetPermissions {
         directory: unsafe { directory.read() },
         path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
@@ -4924,6 +5022,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_rename(
     from: *const u64,
     to: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Rename {
         directory: unsafe { directory.read() },
         from: unsafe { Binding::get(ctx) }.path(unsafe { from.read() }),
@@ -4951,6 +5051,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_metadata(
     directory: *const u64,
     path: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::Metadata {
         directory: unsafe { directory.read() },
         path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
@@ -4988,6 +5090,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_read_dir(
     directory: *const u64,
     path: *const u64,
 ) -> u8 {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let request = Request::ReadDir {
         directory: unsafe { directory.read() },
         path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),

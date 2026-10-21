@@ -81,6 +81,7 @@ pub mod host;
 pub mod measurement;
 mod memcheck;
 pub mod multicore_policy;
+pub mod ordered;
 pub mod region;
 pub mod release;
 mod remote;
@@ -161,7 +162,7 @@ pub extern "C" fn hirsel_rt_v2_diag_panic() {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_hash_begin(ctx: *mut TaskCtx) -> u64 {
     // SAFETY: caller contract.
-    unsafe { (*ctx).run().hash_seed }
+    unsafe { (*ctx).run_ref().hash_seed }
 }
 
 /// SipHash-1-3 of a single scalar leaf, keyed by the run seed. Composite

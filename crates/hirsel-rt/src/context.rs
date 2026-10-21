@@ -125,6 +125,11 @@ pub struct TaskCtx {
     pub(crate) view: View,
     worker: *mut Worker,
     run: *mut RunShared,
+    /// Stable scheduler identity and save slot. The task table may grow while
+    /// another worker saves this fiber, so a save never points into its Vec.
+    pub(crate) task_id: u32,
+    pub(crate) task_sp: *mut u8,
+    pub(crate) role_depth: u32,
     /// Top of the release worklist (an intrusive stack of dead headers and continuations).
     pub(crate) work: *mut Header,
     pub(crate) shield: u32,
@@ -223,13 +228,15 @@ impl Worker {
 /// What every task of a run shares: its configuration, scheduler, Io binding, failure table and
 /// launcher.
 pub(crate) struct RunShared {
+    pub(crate) role: crate::tasks::role::Role,
     pub(crate) count_max: u32,
     pub(crate) close_handle: Option<CloseThunk>,
     pub(crate) hash_seed: u64,
     io_data: *mut std::ffi::c_void,
     /// The bound Io binding's Path identities and launch arguments (`crate::paths`).
     pub(crate) names: Option<std::sync::Arc<crate::paths::Names>>,
-    pub(crate) region_owners: Option<std::collections::BTreeMap<usize, crate::region::OwnerRecord>>,
+    pub(crate) region_owners:
+        std::sync::Mutex<std::collections::BTreeMap<usize, crate::region::OwnerRecord>>,
     pub(crate) entry_result: Option<crate::exit_report::Returned>,
     /// The run's tasks, from its first scope (CONC-2).
     pub(crate) tasks: Option<Box<crate::tasks::Scheduler>>,
@@ -294,6 +301,9 @@ impl TaskCtx {
             view: View::new(),
             worker,
             run,
+            task_id: 0,
+            task_sp: ptr::null_mut(),
+            role_depth: 0,
             work: ptr::null_mut(),
             shield: 0,
             failure: FailureState::default(),
@@ -524,8 +534,9 @@ impl TaskCtx {
         if let Some(owner) = self
             .run_ref()
             .region_owners
-            .as_ref()
-            .and_then(|owners| owners.get(&block.addr()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&block.addr())
         {
             if !owner.active {
                 crate::fault("count operation after a regional owner expired");
@@ -610,7 +621,12 @@ impl TaskCtx {
                 .write_sites(output)
                 .unwrap_or_else(|_| crate::environmental("could not write the source profile"));
         }
-        if let Some(owners) = &mut self.run().region_owners {
+        {
+            let mut owners = self
+                .run_ref()
+                .region_owners
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             for owner in owners.values_mut() {
                 owner.active = false;
             }
@@ -750,12 +766,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         meter: Default::default(),
     });
     let run = Box::into_raw(Box::new(RunShared {
+        role: Default::default(),
         count_max,
         close_handle: config.close_handle,
         hash_seed: config.hash_seed,
         io_data: ptr::null_mut(),
         names: None,
-        region_owners: None,
+        region_owners: Default::default(),
         entry_result: None,
         tasks: None,
         driver: crate::stop::Driver::default(),

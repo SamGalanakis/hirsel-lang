@@ -1786,6 +1786,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_codec_decode(
     bytes: *const c_void,
     out: *mut c_void,
 ) {
+    // SAFETY: this semantic entry owns its task until it suspends or returns.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract; the decoder's own storage is dropped before a stop.
     unsafe { crate::stop::check(ctx, decode(ctx, codec, bytes, out)) }
 }
