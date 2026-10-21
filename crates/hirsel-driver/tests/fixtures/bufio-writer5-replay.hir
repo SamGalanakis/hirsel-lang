@@ -1,0 +1,43 @@
+pub type Error = Grant(GrantError) | Flush(bufio.WriteError[u8])
+
+type Sink {
+  output: Stdout,
+  calls: u64,
+  accepted: List[u8],
+}
+
+fn scripted(mut s: Sink, data: List[u8], start: u64, end: u64) -> Result[u64, u8] {
+  let mut offered: List[u8] = []
+  for i in start..end {
+    list.push(mut offered, data[i])
+  }
+  let _ = out.print(s.output, f"offer {hex.encode(bytes.from_list(take offered))}\n")
+  let call = s.calls
+  s.calls += 1
+  if call == 1 {
+    return Error(7)
+  }
+  let count = if call == 0 {
+    2u64
+  } else {
+    end - start
+  }
+  for i in start..start + count {
+    list.push(mut s.accepted, data[i])
+  }
+  Ok(count)
+}
+
+pub fn main(rt: Io) -> Result[(), Error] {
+  let output = io.stdout(rt) ? Grant
+  let mut s = Sink(output: output, calls: 0, accepted: [])
+  let mut w = bufio.new_writer(5)
+  failure.check(bufio.write_buffered(mut w, b"abcde") == 5, Bounds())
+  failure.check(bufio.flush(mut w, mut s, scripted) == Error(Sink(7u8)), Bounds())
+  failure.check(bufio.buffered_len(w) == 3, Bounds())
+  bufio.flush(mut w, mut s, scripted) ? Flush
+  failure.check(bytes.from_list(unique s.accepted) == b"abcde", Bounds())
+  failure.check(bufio.buffered_len(w) == 0 && s.calls == 3, Bounds())
+  let _ = out.print(output, "abcde\n")
+  Ok(())
+}

@@ -1,0 +1,31 @@
+// rule: SEM-3
+// expect: run
+// Standalone adapter using file.write's one-call count/error contract.
+pub type Error = File(FileError) | Flush(bufio.WriteError[FileError])
+
+pub fn main(t: Test) -> Result[(), Error] {
+  let dir = test.dir(t, [])
+  let mut destination = file.create(dir, path.of("buffered.bin")) ? File
+  let mut writer = bufio.new_writer(3)
+  let data = b"\x00\xff\xc3\xa9\n"
+  let mut at = 0u64
+  while at < bytes.len(data) {
+    at += bufio.write_buffered(mut writer, bytes.slice(data, at, bytes.len(data)))
+    bufio.flush(
+      mut writer,
+      mut destination,
+      fn(mut f: File of dir, storage: List[u8], start: u64, end: u64) -> Result[
+        u64,
+        FileError
+      ] {
+        let mut offered: List[u8] = []
+        for i in start..end {
+          list.push(mut offered, storage[i])
+        }
+        file.write(dir, mut f, bytes.from_list(take offered))
+      }
+    ) ? Flush
+  }
+  test.check(t, file.read_bytes(dir, path.of("buffered.bin")) == Ok(data))
+  Ok(())
+}

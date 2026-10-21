@@ -1,0 +1,170 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef src/bufio/bufio.go:634-655; Rust 19833af7
+// library/alloctests/tests/io/buffered.rs:328-367, with explicit admission.
+type Sink {
+  script: List[Result[u64, u8]],
+  calls: u64,
+  offers: List[Bytes],
+  output: List[u8],
+}
+
+fn sink(script: List[Result[u64, u8]]) -> Sink {
+  Sink(script: unique script, calls: 0, offers: [], output: [])
+}
+
+fn write(mut s: Sink, data: List[u8], start: u64, end: u64) -> Result[u64, u8] uses {} {
+  let mut offered: List[u8] = []
+  for i in start..end {
+    list.push(mut offered, data[i])
+  }
+  list.push(mut s.offers, bytes.from_list(take offered))
+  let answer = if s.calls < list.len(s.script) {
+    copy s.script[s.calls]
+  } else {
+    Ok(end - start)
+  }
+  s.calls += 1
+  match answer {
+    Error(e) => Error(e),
+    Ok(n) => {
+      // Invalid results promise no acceptance too, making their retry observable.
+      if n <= end - start {
+        for i in start..start + n {
+          list.push(mut s.output, data[i])
+        }
+      }
+      Ok(n)
+    },
+  }
+}
+
+pub fn main(t: Test) -> Result[(), bufio.WriteError[u8]] {
+  let mut w = bufio.new_writer(4)
+  let mut s = sink([Ok(2), Error(7), Error(8), Ok(0), Ok(99), Ok(1), Ok(1)])
+  test.check(t, bufio.buffered_len(w) == 0)
+  test.check(t, bufio.flush(mut w, mut s, write) == Ok(()))
+  test.check(t, s.calls == 0)
+  test.check(t, bufio.write_buffered(mut w, b"") == 0)
+  test.check(t, bufio.write_buffered(mut w, b"abcdef") == 4)
+  test.check(t, bufio.buffered_len(w) == 4 && s.calls == 0)
+  test.check(t, bufio.write_buffered(mut w, b"x") == 0)
+  test.check(t, bufio.flush(mut w, mut s, write) == Error(Sink(7u8)))
+  test.check(t, bufio.buffered_len(w) == 2 && s.output == [b'a', b'b'])
+  test.check(t, bufio.flush(mut w, mut s, write) == Error(Sink(8u8)))
+  test.check(t, bufio.buffered_len(w) == 2)
+  test.check(t, bufio.write_buffered(mut w, b"EFG") == 2)
+  test.check(t, bufio.buffered_len(w) == 4 && s.calls == 3)
+  test.check(t, bufio.flush(mut w, mut s, write) == Error(WriteZero()))
+  test.check(t, bufio.buffered_len(w) == 4)
+  test.check(t, bufio.flush(mut w, mut s, write) == Error(InvalidWrite()))
+  test.check(t, bufio.buffered_len(w) == 4)
+  bufio.flush(mut w, mut s, write)?
+  test.check(t, bufio.buffered_len(w) == 0 && s.calls == 8)
+  test.check(t, bytes.from_list(unique s.output) == b"abcdEF")
+  test.check(
+    t,
+    s.offers == [b"abcd", b"cd", b"cd", b"cdEF", b"cdEF", b"cdEF", b"dEF", b"EF"]
+  )
+  // Full drain resets both indices and reuses all four slots.
+  test.check(t, bufio.write_buffered(mut w, b"01234") == 4)
+  bufio.flush(mut w, mut s, write)?
+  test.check(t, s.offers[8] == b"0123")
+  // Owned admission: neither the input lifetime nor a temporary source is retained.
+  let mut binary = bufio.new_writer(8)
+  {
+    let input = bytes.from_list(take [0u8, 255u8, 195u8, 169u8, 10u8])
+    test.check(t, bufio.write_buffered(mut binary, input) == 5)
+  }
+  let mut all = sink([Ok(1), Ok(1), Ok(1), Ok(1)])
+  bufio.flush(mut binary, mut all, write)?
+  test.check(t, bytes.from_list(unique all.output) == b"\x00\xff\xc3\xa9\n")
+  test.check(
+    t,
+    all.offers == [
+      b"\x00\xff\xc3\xa9\n",
+      b"\xff\xc3\xa9\n",
+      b"\xc3\xa9\n",
+      b"\xa9\n",
+      b"\n"
+    ]
+  )
+  // Independent short-write vectors: every split of a five-byte payload.
+  for split in 1u64..5u64 {
+    let mut other = bufio.new_writer(5)
+    let mut destination = sink([Ok(split)])
+    test.check(t, bufio.write_buffered(mut other, b"hello") == 5)
+    bufio.flush(mut other, mut destination, write)?
+    test.check(t, destination.calls == 2)
+    test.check(t, destination.offers[0] == b"hello")
+    test.check(t, destination.offers[1] == bytes.slice(b"hello", split, 5))
+    test.check(t, bytes.from_list(unique destination.output) == b"hello")
+  }
+  let mut one = bufio.new_writer(0)
+  test.check(t, bufio.write_buffered(mut one, b"xy") == 1)
+  let mut destination = sink([])
+  bufio.flush(mut one, mut destination, write)?
+  test.check(t, bufio.write_buffered(mut one, b"y") == 1)
+  bufio.flush(mut one, mut destination, write)?
+  test.check(t, destination.offers == [b"x", b"y"])
+  test.check(t, bytes.from_list(unique destination.output) == b"xy")
+  {
+    let mut abandoned = bufio.new_writer(3)
+    test.check(t, bufio.write_buffered(mut abandoned, b"bye") == 3)
+  }
+  test.check(t, destination.calls == 2)
+  // Go TestWriter (bufio_test.go:608-649): the original ASCII pattern and
+  // a bounded cross product of zero, tiny and boundary sizes. Explicit flush
+  // and suffix retry replace Go's implicit write-through on a full buffer.
+  let sizes: List[u64] = [0u64, 1u64, 2u64, 3u64, 7u64, 8u64, 9u64]
+  let mut pattern: List[u8] = []
+  for i in 0u8..9u8 {
+    list.push(mut pattern, 32u8 + i % 94u8)
+  }
+  let data = bytes.from_list(take pattern)
+  for length in sizes {
+    for capacity in sizes {
+      let mut writer = bufio.new_writer(capacity)
+      let mut matrix_sink = sink([])
+      let mut at = 0u64
+      while at < length {
+        let accepted = bufio.write_buffered(mut writer, bytes.slice(data, at, length))
+        test.check(t, accepted > 0)
+        at += accepted
+        bufio.flush(mut writer, mut matrix_sink, write)?
+      }
+      bufio.flush(mut writer, mut matrix_sink, write)?
+      test.check(t, bufio.buffered_len(writer) == 0)
+      test.check(
+        t,
+        bytes.from_list(unique matrix_sink.output) == bytes.slice(data, 0, length)
+      )
+    }
+  }
+  // Go TestWriteErrors (684-719), adapted from sticky to explicit retry.
+  let mut writer = bufio.new_writer(11)
+  let mut error_sink = sink([Ok(0), Ok(5), Ok(0), Error(9), Error(9)])
+  test.check(t, bufio.write_buffered(mut writer, b"hello world") == 11)
+  test.check(t, bufio.flush(mut writer, mut error_sink, write) == Error(WriteZero()))
+  test.check(t, bufio.buffered_len(writer) == 11)
+  test.check(t, bufio.flush(mut writer, mut error_sink, write) == Error(WriteZero()))
+  test.check(t, bufio.buffered_len(writer) == 6)
+  for retry in 0u64..2u64 {
+    test.check(t, bufio.flush(mut writer, mut error_sink, write) == Error(Sink(9u8)))
+    test.check(t, bufio.buffered_len(writer) == 6)
+  }
+  bufio.flush(mut writer, mut error_sink, write)?
+  test.check(
+    t,
+    error_sink.offers == [
+      b"hello world",
+      b"hello world",
+      b" world",
+      b" world",
+      b" world",
+      b" world"
+    ]
+  )
+  test.check(t, bytes.from_list(unique error_sink.output) == b"hello world")
+  Ok(())
+}

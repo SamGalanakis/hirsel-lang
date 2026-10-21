@@ -1461,6 +1461,94 @@ stay literal, and plus stays plus. For example `%+f%-0%2F` becomes `%+f%-0/`.
 The [prior-art inventory](../uri-prior-art.md) maps the Zig tests and all 42 RFC
 3986 §5.4 resolution examples to corpus fixtures and records adaptations.
 
+## Buffered writes
+
+`std@1/bufio.Writer` provides opt-in bounded output buffering. Construction
+normalizes zero capacity to one. `write_buffered` copies only the available
+prefix and performs no I/O; the caller flushes explicitly and retries the
+unaccepted input suffix. `buffered_len` counts pending payload bytes.
+
+```text
+WriteError[E] = Sink(E) | WriteZero | InvalidWrite
+fn bufio.new_writer(capacity: u64) -> unique Writer uses {}
+fn bufio.buffered_len(w: Writer) -> u64 uses {}
+fn bufio.write_buffered(mut w: unique Writer, data: Bytes) -> u64 uses {}
+fn bufio.flush[S,E](mut w: unique Writer, mut sink: S,
+  write: fn(mut S, List[u8], u64, u64) -> Result[u64,E])
+  -> Result[(),WriteError[E]] uses {write}
+```
+
+The callback receives borrowed, initialized backing storage and a half-open
+`[start,end)` range. Only that range is offered. It must return `Ok(n)` after
+accepting exactly its first `n` bytes, or `Error(e)` after accepting **zero**
+bytes in that call. It must not retain the borrowed storage in the sink; copy
+individual bytes if an independent snapshot is needed. Positive short writes
+continue with the remaining range. `Ok(0)` returns `WriteZero`; counts above
+`end-start` return `InvalidWrite`. Invalid callbacks cannot be repaired if they
+actually accepted bytes different from their report.
+
+Each successful prefix is committed immediately. Every failure leaves the
+unwritten suffix owned by the Writer, available for another flush, including
+repeated failures. New admissions can reclaim committed prefix space while
+preserving byte order. Empty flushes never call the callback. Full drain resets
+both indices. There is no sticky error, background task or flush on destruction;
+dropping a Writer discards pending bytes without effects.
+
+The fixed capacity bounds pending payload, not total allocated bytes. Storage
+is a preinitialized `unique List[u8]` reused across flushes. Native sequence
+storage includes 16 bytes of length/capacity metadata plus a counted allocation
+header (8 bytes in the current native ABI), allocator rounding and the Writer's own record/indices. The callback's
+range avoids allocating a byte snapshot on every flush; adapters that require
+`Bytes` may copy just the offered range using existing operations. Those adapter
+allocations are additional to Writer storage.
+
+The prefix-retention structure comes from Go
+`ebe2feefc400f813aefdc8a036e66d2619da6649`, `src/bufio/bufio.go:634-697`; its `bufio_test.go:608-649,684-719`
+writer matrix and error-writer cases are ported with explicit flush/retry.
+Deviations: explicit admission replaces automatic I/O; positive short writes
+loop rather than becoming short-write errors; errors are returned without a
+sticky latch; start/end indices retain the suffix until admission compacts it;
+borrowed list ranges replace Go slices to reuse storage using existing APIs.
+Rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f`
+`library/alloc/src/io/buffered/bufwriter.rs:208-277` supplies the drain loop.
+Each successful callback updates the cursor immediately; Hirsel needs no
+unwind guard because Writer has no destructor I/O. Generic callback errors
+are returned, including interrupted operations, so callers choose retries.
+Rust `19833af7224424e8b53e288097d56b6af43d5bcf`,
+`library/alloctests/tests/io/buffered.rs:328-367,734-755` supplies buffer and
+short-write/error controls adapted to explicit flush boundaries.
+
+A complete scripted-sink example, including retry after failure, is
+[`SEM-3-bufio-writer5-run.hir`](../../conformance/SEM/SEM-3-bufio-writer5-run.hir).
+A minimal callback can count or copy bytes directly:
+
+```hirsel
+fn count(mut total: u64, data: List[u8], start: u64, end: u64) -> Result[u64, ()] uses {} {
+  total += end - start
+  Ok(end - start)
+}
+
+fn buffered_example() -> Result[u64, bufio.WriteError[()]] {
+  let mut writer = bufio.new_writer(4)
+  let mut total = 0u64
+  let accepted = bufio.write_buffered(mut writer, b"hello")
+  bufio.flush(mut writer, mut total, count)?
+  let _ = bufio.write_buffered(mut writer, bytes.slice(b"hello", accepted, 5))
+  bufio.flush(mut writer, mut total, count)?
+  Ok(total)
+}
+```
+
+`file.write` performs a single successful write and reports its accepted count;
+an adapter may copy the offered range into `Bytes` and return that result, as
+in the executable [file adapter example](../../conformance/SEM/SEM-3-bufio-writer5-file-run.hir).
+`out.write`, `out.print` and `file.write_all` can fail after partial acceptance,
+so their errors do not satisfy this callback contract. Do not use them as
+retryable Writer callbacks. Existing print/file/HTTP behavior and tape flush
+boundaries are unchanged. Different application flush schedules deliberately
+produce different effect sequences; only an identical buffered program's
+recording and replay must match exactly.
+
 ## Buffered reads
 
 `std@1/bufio` adapts Rust `BufReader`'s refill/consume and delimiter loops. A `Reader`

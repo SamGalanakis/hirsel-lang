@@ -4,6 +4,9 @@ use hirsel_engine::*;
 use hirsel_lir::ir::UnitOrigin;
 use std::path::PathBuf;
 
+#[path = "bufio_writer5.rs"]
+mod bufio_writer5;
+
 fn source_codec(name: &str, module: &str, functions: &[&str]) {
     with_compiler_stack(|| {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

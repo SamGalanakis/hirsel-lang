@@ -1,0 +1,81 @@
+// Exact Go ebe2feef src/bufio/bufio_test.go:608-649,141-143.
+type Sink {
+  script: List[Result[u64, u8]],
+  calls: u64,
+  offers: List[Bytes],
+  output: List[u8],
+}
+
+fn sink(script: List[Result[u64, u8]]) -> Sink {
+  Sink(script: unique script, calls: 0, offers: [], output: [])
+}
+
+fn write(mut s: Sink, data: List[u8], start: u64, end: u64) -> Result[u64, u8] uses {} {
+  let mut offered: List[u8] = []
+  for i in start..end {
+    list.push(mut offered, data[i])
+  }
+  list.push(mut s.offers, bytes.from_list(take offered))
+  let answer = if s.calls < list.len(s.script) {
+    copy s.script[s.calls]
+  } else {
+    Ok(end - start)
+  }
+  s.calls += 1
+  match answer {
+    Error(e) => Error(e),
+    Ok(n) => {
+      // Invalid results promise no acceptance too, making their retry observable.
+      if n <= end - start {
+        for i in start..start + n {
+          list.push(mut s.output, data[i])
+        }
+      }
+      Ok(n)
+    },
+  }
+}
+
+pub fn main(t: Test) -> Result[(), bufio.WriteError[u8]] {
+  // Go TestWriter (bufio_test.go:608-649): the original ASCII pattern and
+  // a bounded cross product of zero, tiny and boundary sizes. Explicit flush
+  // and suffix retry replace Go's implicit write-through on a full buffer.
+  let sizes: List[u64] = [
+    0u64,
+    16u64,
+    23u64,
+    32u64,
+    46u64,
+    64u64,
+    93u64,
+    128u64,
+    1024u64,
+    4096u64
+  ]
+  let mut pattern: List[u8] = []
+  for i in 0u64..8192u64 {
+    let byte: u8 = int.narrow(i % 94u64)
+    list.push(mut pattern, 32u8 + byte)
+  }
+  let data = bytes.from_list(take pattern)
+  for length in sizes {
+    for capacity in sizes {
+      let mut writer = bufio.new_writer(capacity)
+      let mut matrix_sink = sink([])
+      let mut at = 0u64
+      while at < length {
+        let accepted = bufio.write_buffered(mut writer, bytes.slice(data, at, length))
+        test.check(t, accepted > 0)
+        at += accepted
+        bufio.flush(mut writer, mut matrix_sink, write)?
+      }
+      bufio.flush(mut writer, mut matrix_sink, write)?
+      test.check(t, bufio.buffered_len(writer) == 0)
+      test.check(
+        t,
+        bytes.from_list(unique matrix_sink.output) == bytes.slice(data, 0, length)
+      )
+    }
+  }
+  Ok(())
+}

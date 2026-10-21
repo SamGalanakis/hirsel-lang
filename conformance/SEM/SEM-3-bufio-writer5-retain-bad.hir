@@ -1,0 +1,20 @@
+// rule: SEM-3
+// expect: reject MODE-1 at line 11
+// twin: SEM/SEM-3-bufio-writer5-run.hir
+// A callback cannot keep a borrowed buffer in its caller-owned sink.
+type Sink {
+  retained: List[u8],
+}
+
+fn retain(mut s: Sink, data: List[u8], start: u64, end: u64) -> Result[u64, ()] uses {} {
+  // Copying a borrowed list shares its storage; copy individual bytes instead.
+  s.retained = copy data
+  Ok(end - start)
+}
+
+pub fn main() -> Result[(), bufio.WriteError[()]] {
+  let mut w = bufio.new_writer(3)
+  let mut s = Sink(retained: [])
+  let _ = bufio.write_buffered(mut w, b"abc")
+  bufio.flush(mut w, mut s, retain)
+}

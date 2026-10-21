@@ -5080,6 +5080,9 @@ conformance/SEM/SEM-3-blake2s-unkeyed-0-run.hir
 conformance/SEM/SEM-3-blake2s-unkeyed-1-run.hir
 conformance/SEM/SEM-3-bufio-peek-refill-bad.hir
 conformance/SEM/SEM-3-bufio-peek-run.hir
+conformance/SEM/SEM-3-bufio-writer5-file-run.hir
+conformance/SEM/SEM-3-bufio-writer5-retain-bad.hir
+conformance/SEM/SEM-3-bufio-writer5-run.hir
 conformance/SEM/SEM-3-byte-history-empty-buffer-bad.hir
 conformance/SEM/SEM-3-byte-history-empty-buffer-ok.hir
 conformance/SEM/SEM-3-byte-history-empty-zero-bad.hir

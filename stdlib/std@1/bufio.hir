@@ -517,3 +517,89 @@ pub fn stdin_read(s: Stdin, mut r: Reader, mut out: List[u8], max: u64) -> Resul
     max
   )
 }
+
+// Go ebe2feefc400f813aefdc8a036e66d2619da6649 src/bufio/bufio.go:634-655:
+// commit successful prefixes and retain the unwritten suffix on failure.
+// Admission copies min(Available(), len(data)) as in Go Write:676-697;
+// Buffered/Available:658-670. Rust f6c1107f library/alloc/src/io/buffered/
+// bufwriter.rs:208-277 supplies the positive-short-write loop and WriteZero.
+// Unlike Go, admission never writes and errors are retryable rather than sticky.
+// Commit the cursor after each success, so no deferred cleanup is needed on
+// failure; there is no destructor callback to repeat a write after unwinding.
+@serializable
+pub type WriteError[E] = Sink(E) | WriteZero | InvalidWrite
+
+pub opaque type Writer: () uses {} {
+  pending: unique List[u8],
+  start: u64,
+  end: u64,
+}
+
+/// Fixed pending-payload capacity; zero is normalized to one.
+pub fn new_writer(capacity: u64) -> unique Writer uses {} {
+  let size = if capacity == 0 {
+    1u64
+  } else {
+    capacity
+  }
+  let mut pending: unique List[u8] = []
+  core@1/list.reserve(mut pending, size)
+  for i in 0u64..size {
+    core@1/list.push(mut pending, 0u8)
+  }
+  Writer(pending: take pending, start: 0, end: 0)
+}
+
+pub fn buffered_len(w: Writer) -> u64 uses {} {
+  w.end - w.start
+}
+
+/// Accept only the available prefix; never call a sink. Reclaim committed space.
+pub fn write_buffered(mut w: unique Writer, data: Bytes) -> u64 uses {} {
+  let have = buffered_len(w)
+  let available = core@1/list.len(w.pending) - have
+  let count = if core@1/bytes.len(data) < available {
+    core@1/bytes.len(data)
+  } else {
+    available
+  }
+  if count == 0 {
+    return 0
+  }
+  if w.start != 0 {
+    for i in 0u64..have {
+      let byte = w.pending[w.start + i]
+      w.pending[i] = byte
+    }
+    w.start = 0
+    w.end = have
+  }
+  for i in 0u64..count {
+    w.pending[w.end + i] = data[i]
+  }
+  w.end += count
+  count
+}
+
+/// The callback borrows initialized storage, offering only [start,end).
+/// Ok(n) commits exactly that prefix; Error(e) must accept no bytes this call.
+/// A successful short write is retried. No empty callback, hidden error or drop I/O.
+pub fn flush[S, E](
+  mut w: unique Writer,
+  mut sink: S,
+  write: fn(mut S, List[u8], u64, u64) -> Result[u64, E]
+) -> Result[(), WriteError[E]] uses {write} {
+  while w.start < w.end {
+    let count = write(mut sink, w.pending, w.start, w.end) ? Sink
+    if count == 0 {
+      return Error(WriteZero())
+    }
+    if count > w.end - w.start {
+      return Error(InvalidWrite())
+    }
+    w.start += count
+  }
+  w.start = 0
+  w.end = 0
+  Ok(())
+}
