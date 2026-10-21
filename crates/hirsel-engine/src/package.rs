@@ -134,6 +134,10 @@ struct DependencyPackage {
     files: Vec<(FileId, FileContext)>,
 }
 impl LoadedProgram {
+    /// Check using the host's configured lowering policy.
+    pub fn check_configured(&mut self) -> Result<CheckOutput, QueryError> {
+        self.check(self.engine.configured_lowering)
+    }
     /// Check every package of the program, lowering what `lowering` selects:
     /// the diagnostics do not depend on it. The root package lowers under
     /// `lowering`, each dependency only what compile-time evaluation executes,

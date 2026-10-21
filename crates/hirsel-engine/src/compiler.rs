@@ -4,7 +4,7 @@
 use crate::*;
 use std::{io::Write, path::Path, sync::Arc};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Compiler {
     phases: fn() -> Arc<dyn Phases>,
     /// Digest of the compiler's own sources; std images record the one they
@@ -13,6 +13,11 @@ pub struct Compiler {
     /// Whether the sessions this compiler starts run V.
     verify: Verify,
     retention: crate::memo::Retention,
+    jobs: Option<hirsel_intern::jobs::Jobs>,
+    hold_bytes: Option<u64>,
+    lowering: LoweringPolicy,
+    result_store: Option<Arc<dyn crate::store::ResultStore>>,
+    verify_store: crate::store::VerifyStore,
     comptime_limits: Option<hirsel_interp::Limits>,
 }
 impl Compiler {
@@ -23,26 +28,43 @@ impl Compiler {
             identity,
             verify: Verify::On,
             retention: crate::memo::Retention::Batch,
+            jobs: None,
+            hold_bytes: None,
+            lowering: LoweringPolicy::Comptime,
+            result_store: None,
+            verify_store: crate::store::VerifyStore::Off,
             comptime_limits: None,
         }
     }
     /// This compiler with V `verify` (`--no-verify` selects `Verify::Off`).
-    pub const fn with_verify(self, verify: Verify) -> Self {
-        Self { verify, ..self }
+    pub const fn with_verify(mut self, verify: Verify) -> Self {
+        self.verify = verify;
+        self
     }
     /// Retain intermediate front bodies only for an explicit resident host.
-    pub const fn with_retention(self, retention: crate::memo::Retention) -> Self {
-        Self { retention, ..self }
+    pub const fn with_retention(mut self, retention: crate::memo::Retention) -> Self {
+        self.retention = retention;
+        self
+    }
+    /// Own explicit per-session policies and a shared result-store provider.
+    /// Cloning a compiler shares that provider; sessions retain separate memos.
+    pub fn with_config(mut self, config: CompileConfig) -> Self {
+        self.verify = config.verify;
+        self.retention = config.retention;
+        self.jobs = Some(config.jobs);
+        self.hold_bytes = Some(config.hold_bytes);
+        self.lowering = config.lowering;
+        self.verify_store = config.verify_store;
+        self.result_store = Some(config.store);
+        self
     }
     pub fn verify(&self) -> Verify {
         self.verify
     }
     /// Compile-time limits are part of every image's checked inputs.
-    pub const fn with_comptime_limits(self, limits: hirsel_interp::Limits) -> Self {
-        Self {
-            comptime_limits: Some(limits),
-            ..self
-        }
+    pub const fn with_comptime_limits(mut self, limits: hirsel_interp::Limits) -> Self {
+        self.comptime_limits = Some(limits);
+        self
     }
     pub(crate) fn comptime_limits(&self) -> hirsel_interp::Limits {
         self.comptime_limits.unwrap_or_default()
@@ -52,10 +74,18 @@ impl Compiler {
         let mut engine = QueryEngine::new(environment, self.adapters());
         engine.verify = self.verify;
         engine.set_retention(self.retention);
+        engine.configured_jobs = self.jobs;
+        engine.configured_lowering = self.lowering;
+        engine.hold_bytes = self
+            .hold_bytes
+            .unwrap_or_else(crate::config::configured_hold_bytes);
+        engine.verify_store = self.verify_store;
         engine.comptime_limits = self.comptime_limits();
         engine.session = true;
         engine.store_identity = self.identity();
-        if crate::policy::uses_persistent_results() {
+        if let Some(store) = &self.result_store {
+            engine = engine.with_result_store(store.clone());
+        } else if crate::policy::uses_persistent_results() {
             let name = std::env::var("HIRSEL_RESULTS").unwrap_or_else(|_| "dir@1".into());
             if std::env::var_os("HIRSEL_VERIFY_CACHE").is_some_and(|v| v != "0") {
                 engine.verify_store = crate::store::VerifyStore::Recompute;
@@ -198,7 +228,7 @@ impl Compiler {
         with_compiler_stack(|| {
             let mut program = self.load_program(path)?;
             program
-                .check(LoweringPolicy::Comptime)
+                .check(self.lowering)
                 .map_err(|error| program.error(error))
         })
     }
@@ -211,7 +241,7 @@ impl Compiler {
         with_compiler_stack(|| {
             let mut program = self.load_program(path)?;
             let output = program
-                .check(LoweringPolicy::Comptime)
+                .check(self.lowering)
                 .map_err(|error| program.error(error))?;
             if crate::queries::has_errors(&output.diagnostics)
                 || output.completion != CheckCompletion::Complete

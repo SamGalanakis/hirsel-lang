@@ -439,7 +439,7 @@ pub(crate) fn check_files(
             }
         }
     }
-    let jobs = hirsel_intern::jobs::Jobs::new(hirsel_guard::jobs());
+    let jobs = engine.jobs();
     let mut pending = vec![];
     for (owner, definition, generates) in planned {
         if generates {

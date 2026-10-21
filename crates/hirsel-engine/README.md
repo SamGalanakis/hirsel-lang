@@ -934,3 +934,14 @@ retires root-local entries and eviction markers while preserving cumulative
 counters. `peak_bytes` includes transient insertion-before-eviction occupancy.
 Worker lowering weights also include receipt/depth backing and staged signature
 payloads; the inline wrapper's Arc layout is accounted separately.
+
+`CompileConfig` selects jobs, verification, retention, lowering, ResultStore,
+VerifyStore and a total `hold_bytes` budget. `Compiler::with_config` owns this
+policy for fresh sessions; cloning the compiler shares its store provider.
+`Compiler::new` and the existing const scalar builders remain available.
+`QueryEngine::with_config` configures a directly constructed engine, and
+`LoadedProgram::check_configured` uses its selected lowering policy. Explicit
+stores override CLI environment selection, including an off provider.
+The default hold budget is min(256 MiB, 10% of HIRSEL_MEMORY_LIMIT); an explicit
+zero budget is preserved. Native object-store selection remains in the driver
+and LIR provider API, outside this front-end config's dependencies.

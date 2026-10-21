@@ -256,3 +256,8 @@ Native semantic binding checks every planned unit against the run identity's
 closure. Derived append forms retain explicit source owners; planned library
 bodies are covered by its shared runtime revision. Linking checks the sealed
 unit selection and every exported function's definition again.
+
+`Session::open_configured(entry, CompileConfig)` carries an explicit result-store
+provider, worker count, retention, lowering and total hold budget through reloads.
+`Session::open(entry, Verify)` keeps the ordinary Resident defaults. A configured
+Compiler is Clone: clones share the selected provider and create separate engines.

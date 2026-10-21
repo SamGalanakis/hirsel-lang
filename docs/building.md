@@ -82,6 +82,16 @@ hosts can select `Compiler::with_retention(Retention::Resident)` to retain front
 bodies; resident `Session` instances do so. This choice changes retention and
 recomputation, not program output.
 
+Library hosts can supply `CompileConfig` through `Compiler::with_config`,
+`QueryEngine::with_config` or `Session::open_configured`. It selects jobs,
+verification, retention, lowering, the result-store provider and verification,
+and total `hold_bytes`. The default budget is min(256 MiB, 10% of
+`HIRSEL_MEMORY_LIMIT`); explicit zero disables retained holds. Active evaluation
+artifacts remain in-flight memory. A configured Compiler is Clone, sharing its
+provider across fresh sessions. Use `LoadedProgram::check_configured` to select
+its configured lowering policy, or `check(policy)` for an explicit override.
+Native object storage uses the driver's existing separate provider.
+
 `HIRSEL_RESULTS` selects `dir@1` (the default), `mem@1`, `none@1` or `sim@1`;
 `HIRSEL_RESULTS_DIR` overrides the disk directory. `HIRSEL_VERIFY_CACHE=1`
 recomputes disk hits and compares their canonical bytes. Use `none@1` with

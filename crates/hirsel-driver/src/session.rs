@@ -9,7 +9,7 @@
 //! changed source under its old logical name, so the engine's memos decide
 //! what to recompute, and any change loading itself read (a manifest, a
 //! sidecar appearing, a prechecked package's source) loads the program again.
-use hirsel_engine::{CheckOutput, LoadedProgram, LoweringPolicy, ToolError, Verify};
+use hirsel_engine::{CheckOutput, LoadedProgram, ToolError, Verify};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -37,6 +37,7 @@ pub struct SessionStats {
 pub struct Session {
     entry: PathBuf,
     verify: Verify,
+    config: Option<hirsel_engine::CompileConfig>,
     program: Option<LoadedProgram>,
     /// Every file the loaded program depends on, with the bytes it was loaded
     /// or last applied with (None: absent). Sources are replaced in place;
@@ -56,12 +57,21 @@ impl Session {
         Self {
             entry: entry.to_path_buf(),
             verify,
+            config: None,
             program: None,
             seen: BTreeMap::new(),
             checked: None,
             stats: SessionStats::default(),
             loaded_revision: 0,
         }
+    }
+    /// A resident host's explicit compiler policy and shared result provider.
+    /// Retention and lowering follow this config, including an explicit Batch
+    /// or zero-byte allowance; `open` keeps its ordinary Resident defaults.
+    pub fn open_configured(entry: &Path, config: hirsel_engine::CompileConfig) -> Self {
+        let mut session = Self::open(entry, config.verify);
+        session.config = Some(config);
+        session
     }
     pub fn entry(&self) -> &Path {
         &self.entry
@@ -156,10 +166,14 @@ impl Session {
         let sidecar = PathBuf::from(sidecar);
         self.seen
             .insert(sidecar.clone(), (false, std::fs::read(sidecar).ok()));
-        let program = crate::COMPILER
+        let compiler = crate::COMPILER
             .with_verify(self.verify)
-            .with_retention(hirsel_engine::memo::Retention::Resident)
-            .load_program(&self.entry)?;
+            .with_retention(hirsel_engine::memo::Retention::Resident);
+        let compiler = match &self.config {
+            Some(config) => compiler.with_config(config.clone()),
+            None => compiler,
+        };
+        let program = compiler.load_program(&self.entry)?;
         // A source is watched with the text the program holds, so an edit
         // racing the load is applied on the next use.
         for (file, _) in &program.files {
@@ -194,7 +208,7 @@ impl Session {
             return Ok(output.clone());
         }
         let program = self.program.as_mut().unwrap();
-        let output = program.check(LoweringPolicy::Comptime);
+        let output = program.check_configured();
         self.stats.touched = program.engine.memo_stats().touched.saturating_sub(before);
         let output = output.map_err(|error| program.error(error))?;
         self.checked = Some((revision, output.clone()));

@@ -268,9 +268,9 @@ fn a_file_image_rebuilds_for_sources_compiler_and_limits_and_reuses_unchanged() 
         let edited = check(COMPILER);
         assert_ne!(edited, key);
         let other = Compiler::new(FrontPhases::shared, [7; 32]);
-        let compiler = check(other);
+        let compiler = check(other.clone());
         assert_ne!(compiler, edited);
-        let steps = check(other.with_comptime_limits(hirsel_interp::Limits {
+        let steps = check(other.clone().with_comptime_limits(hirsel_interp::Limits {
             steps: Some(999_999),
             call_depth: 256,
         }));

@@ -1478,3 +1478,59 @@ fn batch_warning_phase_lives_with_the_summary_and_retires_with_its_owner() {
         assert_eq!(engine.diagnostic_phase(&diagnostic), None);
     });
 }
+
+#[test]
+fn configured_compilers_and_sessions_share_providers_and_preserve_edit_results() {
+    use hirsel_intern::jobs::Jobs;
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        let source = fixture.0.join("main.hir");
+        let original = "fn helper()->u8{1u8}\nfn main()->u8{helper()}\n";
+        std::fs::write(&source, original).unwrap();
+        let store = Arc::new(store::MemStore::default());
+        let config = CompileConfig {
+            jobs: Jobs::new(8),
+            hold_bytes: 0,
+            store: store.clone(),
+            lowering: LoweringPolicy::Reachable,
+            ..CompileConfig::for_memory_cap(None)
+        };
+        let compiler = COMPILER.with_config(config.clone());
+        let mut first = compiler.load_program(&source).unwrap();
+        assert_eq!(first.engine.hold_bytes(), 0);
+        assert!(first.check_configured().unwrap().diagnostics.is_empty());
+        assert!(
+            first
+                .engine
+                .memo_reads(&path("main"), QueryKind::Lower)
+                .is_some(),
+            "configured Reachable lowers an ordinary body"
+        );
+        assert!(!store.is_empty());
+        drop(first);
+        let mut warm = compiler.clone().load_program(&source).unwrap();
+        assert!(warm.check_configured().unwrap().diagnostics.is_empty());
+        assert_eq!(
+            warm.engine.recompute_count(&path("main"), QueryKind::Check),
+            0,
+            "the cloned compiler shares its configured provider"
+        );
+        let mut session = session::Session::open_configured(&source, config);
+        assert!(session.check().unwrap().diagnostics.is_empty());
+        assert_eq!(session.program().unwrap().engine.hold_bytes(), 0);
+        for text in [original.replace("helper()}", "missing()}"), original.into()] {
+            std::fs::write(&source, &text).unwrap();
+            let actual = session.check().unwrap();
+            let mut cold = COMPILER
+                .with_config(CompileConfig {
+                    jobs: Jobs::ONE,
+                    hold_bytes: 0,
+                    ..CompileConfig::for_memory_cap(None)
+                })
+                .load_program(&source)
+                .unwrap();
+            let expected = cold.check_configured().unwrap();
+            assert_eq!(diagnostics(&actual), diagnostics(&expected));
+        }
+    });
+}

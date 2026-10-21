@@ -135,6 +135,9 @@ pub struct QueryEngine {
     /// Whether V validates what this session lowers; `run_v` is its only reader.
     pub verify: Verify,
     pub(crate) retention: crate::memo::Retention,
+    pub(crate) hold_bytes: u64,
+    pub(crate) configured_jobs: Option<hirsel_intern::jobs::Jobs>,
+    pub(crate) configured_lowering: LoweringPolicy,
     /// A `Compiler` opened this engine as a session (`free_sessions`).
     pub(crate) session: bool,
     /// Image construction requires closure-local evidence. Until worker V
@@ -430,6 +433,9 @@ impl QueryEngine {
             result_store: None,
             verify: Verify::On,
             retention: crate::memo::Retention::Resident,
+            hold_bytes: crate::config::configured_hold_bytes(),
+            configured_jobs: None,
+            configured_lowering: LoweringPolicy::Comptime,
             session: false,
             portable_products: false,
             comptime_limits: hirsel_interp::Limits::default(),
