@@ -1757,3 +1757,93 @@ fn signature_types_names_each_directly_named_row_in_encoding_order() {
     );
     assert!(roots.iter().all(|id| types.contains(*id)));
 }
+
+#[test]
+fn substitution_of_root_evidence_retains_unchanged_child_arrays() {
+    fn storage(kind: &TypeKind) -> usize {
+        match kind {
+            TypeKind::Tuple(parts) => parts.storage_identity(),
+            TypeKind::Record(fields) => fields.storage_identity(),
+            TypeKind::Variant(variants) => variants.storage_identity(),
+            TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
+                arguments.storage_identity()
+            }
+            TypeKind::Function(f) => f.parameters.storage_identity(),
+            _ => unreachable!(),
+        }
+    }
+    let t = TypeInterner::new(None);
+    let leaf = t.intern(scalar());
+    let mut callable = function(leaf, vec![]).kind;
+    let TypeKind::Function(f) = &mut callable else {
+        unreachable!()
+    };
+    f.parameters = vec![Parameter {
+        name: Some("value".into()),
+        label: None,
+        passing: hirsel_syntax::PassingMode::Borrow,
+        ty: leaf,
+    }]
+    .into();
+    let kinds = [
+        TypeKind::Tuple(vec![leaf; 64].into()),
+        TypeKind::Record(
+            vec![Field {
+                name: "field".into(),
+                ty: leaf,
+                growable: false,
+            }]
+            .into(),
+        ),
+        TypeKind::Variant(
+            vec![Variant {
+                name: "Case".into(),
+                fields: vec![(None, leaf)].into(),
+            }]
+            .into(),
+        ),
+        TypeKind::Named {
+            definition: DefId::intern(&path("Shell")),
+            arguments: vec![GenericArgument::Type(leaf)].into(),
+        },
+        TypeKind::Builtin {
+            kind: BuiltinType::Inline,
+            arguments: vec![
+                GenericArgument::Type(leaf),
+                GenericArgument::Size(Size::Constant(4)),
+            ]
+            .into(),
+        },
+        callable,
+    ];
+    for kind in kinds {
+        let source = t.intern(Type {
+            drop_allocation: DropAllocation::DependsOn(
+                vec![TypeParameterRef::bound(TypeParamId(0))].into(),
+            ),
+            kind,
+            ..scalar()
+        });
+        let old = t.row(source).clone();
+        let result = substitute(
+            &t,
+            &TypeMemo::new(),
+            source,
+            &Substitution {
+                binder: Some(GenericBinder::Bound(0)),
+                arguments: &[GenericArgument::Type(leaf)],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_ne!(source, result, "root evidence must change");
+        assert_eq!(t.row(result).drop_allocation, DropAllocation::NoAlloc);
+        assert_eq!(t.row(result).kind, old.kind);
+        assert_eq!(t.row(source), &old, "source snapshot remains immutable");
+        assert_eq!(
+            storage(&t.row(result).kind),
+            storage(&old.kind),
+            "changing root evidence must not copy unchanged child storage"
+        );
+    }
+}

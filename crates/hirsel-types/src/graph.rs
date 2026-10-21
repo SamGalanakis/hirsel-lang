@@ -582,47 +582,31 @@ impl Importer<'_> {
         }
         t.drop_allocation = self.drop_effect(t.drop_allocation, nested)?;
         t.modes.sendability = self.sendability(t.modes.sendability, nested)?;
-        match &mut t.kind {
-            TypeKind::Tuple(ts) => {
-                for t in ts {
-                    *t = self.ty(*t, nested)?;
-                }
-            }
-            TypeKind::Box(t) => *t = self.ty(*t, nested)?,
-            TypeKind::Record(fs) => {
-                for f in fs {
-                    f.ty = self.ty(f.ty, nested)?;
-                }
-            }
-            TypeKind::Variant(vs) => {
-                for v in vs {
-                    for (_, t) in &mut v.fields {
-                        *t = self.ty(*t, nested)?;
-                    }
-                }
-            }
-            TypeKind::Function(f) => {
-                for p in &mut f.parameters {
-                    p.ty = self.ty(p.ty, nested + 1)?;
-                }
-                f.result = self.ty(f.result, nested + 1)?;
-                f.error = f.error.map(|t| self.ty(t, nested + 1)).transpose()?;
-                if self.substitution.roles.result_type.is_some() {
-                    f.error = result_error(self.t, f.result, self.substitution.roles);
-                }
-                self.authority(&mut f.authority, nested + 1)?;
-                if let Uses::Only(a) = &mut f.uses {
-                    self.authority(a, nested + 1)?;
-                }
-            }
+        // Retain shared children until a substituted edge actually changes.
+        // Borrowed from rustc15c1044 rustc_type_ir/src/fold.rs:296-325's
+        // allocation-preserving fold. Hirsel's interned source remains shared,
+        // so defer Arc::make_mut until an edge changes instead of taking it.
+        t.kind = match &t.kind {
             TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
-                for a in arguments {
-                    match a {
-                        GenericArgument::Type(t) => *t = self.ty(*t, nested)?,
+                let mut kind = t.kind.clone();
+                let (TypeKind::Named {
+                    arguments: output, ..
+                }
+                | TypeKind::Builtin {
+                    arguments: output, ..
+                }) = &mut kind
+                else {
+                    unreachable!()
+                };
+                // Preserve argument order, including which malformed actual
+                // reports its GraphError first, across type and size edges.
+                for (i, argument) in arguments.iter().enumerate() {
+                    let new = match argument {
+                        GenericArgument::Type(ty) => GenericArgument::Type(self.ty(*ty, nested)?),
                         GenericArgument::Size(Size::Parameter(p)) => {
                             let (reference, selected) = self.reference(*p, nested);
                             if selected {
-                                *a = match self.argument(p.parameter().0)? {
+                                match self.argument(p.parameter().0)? {
                                     GenericArgument::Size(size) => {
                                         let mut size = size.clone();
                                         if let Size::Parameter(BinderRef::Bound { depth, .. }) =
@@ -633,17 +617,33 @@ impl Importer<'_> {
                                         GenericArgument::Size(size)
                                     }
                                     _ => return Err(GraphError::ArgumentKind(p.parameter().0)),
-                                };
+                                }
                             } else {
-                                *p = reference;
+                                GenericArgument::Size(Size::Parameter(reference))
                             }
                         }
-                        _ => (),
+                        argument => argument.clone(),
+                    };
+                    if new != *argument {
+                        output[i] = new;
                     }
                 }
+                kind
             }
             TypeKind::Error => return Err(GraphError::RecoveryType(id)),
-            _ => (),
+            kind => {
+                let depth = nested + u32::from(matches!(kind, TypeKind::Function(_)));
+                kind.try_map_edges(|child| self.ty(child, depth))?
+            }
+        };
+        if let TypeKind::Function(f) = &mut t.kind {
+            if self.substitution.roles.result_type.is_some() {
+                f.error = result_error(self.t, f.result, self.substitution.roles);
+            }
+            self.authority(&mut f.authority, nested + 1)?;
+            if let Uses::Only(a) = &mut f.uses {
+                self.authority(a, nested + 1)?;
+            }
         }
         let result = self.t.intern(t);
         self.memo.insert(key, result);
