@@ -4,6 +4,13 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(test)]
+thread_local! { static EDIT_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) fn copied_edit_rows() -> usize {
+    EDIT_ROWS.with(std::cell::Cell::get)
+}
+
 /// Immutable child storage shared by type rows. Editing an unpublished row uses
 /// copy-on-write; cloning or changing another qualifier never copies its children.
 #[derive(Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -89,6 +96,8 @@ impl<T: Clone> IntoIterator for SharedSlice<T> {
 }
 impl<T: Clone> SharedSlice<T> {
     fn edit(&mut self, f: impl FnOnce(&mut Vec<T>)) {
+        #[cfg(test)]
+        EDIT_ROWS.with(|rows| rows.set(rows.get() + self.len()));
         let mut v = self.to_vec();
         f(&mut v);
         *self = v.into();

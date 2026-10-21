@@ -472,11 +472,15 @@ impl AuthoritySummary {
     /// Join declared field summaries and explicit uses; Unknown cannot prove inert.
     pub fn join(self, other: Self) -> Self {
         match (self, other) {
-            (Self::Known(mut a), Self::Known(b)) => {
-                a.extend(b);
-                a.sort();
-                a.dedup();
-                Self::Known(a)
+            (Self::Known(a), Self::Known(b)) => {
+                // Rust alloc/src/vec/mod.rs:3631-3633,3790-3792: edit the
+                // owned buffer, then freeze once instead of copying each edit.
+                let mut terms = Vec::with_capacity(a.len() + b.len());
+                terms.extend_from_slice(&a);
+                terms.extend_from_slice(&b);
+                terms.sort();
+                terms.dedup();
+                Self::Known(terms.into())
             }
             _ => Self::Unknown,
         }
