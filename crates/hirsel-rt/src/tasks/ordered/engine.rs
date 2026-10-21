@@ -16,7 +16,16 @@ use super::driver::Driver;
 use super::{Command, Objects, Outcome, Returned};
 
 pub(crate) fn on(ctx: *mut TaskCtx) -> bool {
-    matches!(scheduler(ctx).logical, Logical::Ordered(_))
+    // Admission publishes this immutable mode before dispatch. A mode query
+    // must not create Scheduler, acquire its role or observe a stop: sole-root
+    // borrowed host paths depend on their allocation-free fast path.
+    // SAFETY: every caller supplies its live task context.
+    unsafe {
+        (*ctx)
+            .run_ref()
+            .ordered_mode
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 pub(super) fn driver(ctx: *mut TaskCtx) -> &'static mut Driver {
