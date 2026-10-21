@@ -486,6 +486,9 @@ fn frozen_frontier_diagnostics_and_tir_are_identical_at_three_salts() {
                         serial.unavailable = None;
                         let result = serial.mode_definition(path).map(std::sync::Arc::new);
                         ModeResult {
+                            summary: None,
+                            reads: std::sync::Arc::new(Reads::empty()),
+                            diagnostic_phases: vec![],
                             definition: path.clone(),
                             phase: serial
                                 .unavailable

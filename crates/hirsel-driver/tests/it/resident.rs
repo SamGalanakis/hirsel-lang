@@ -611,3 +611,143 @@ fn front_changes_survive_early_query_recomputation_and_selective_acknowledgment(
         assert!(!engine.frontier_changes().removed.contains(&b));
     });
 }
+
+#[test]
+fn frozen_frontier_publishes_compact_inputs_before_bodies_are_released() {
+    with_compiler_stack(|| {
+        use hirsel_intern::jobs::Jobs;
+        let source = "fn identity[T](take v:T) -> T { v }\nfn main() { let _ = identity(1u64) }\n";
+        for jobs in [1, 2, 8] {
+            let mut engine = engine(Arc::new(store::NoneStore));
+            let file = engine.sources.add("resident.hir", source.into()).unwrap();
+            engine.parse_file(file, &default_context()).unwrap();
+            let paths = vec![path("main"), path("identity")];
+            let outcomes = engine.mode_definitions(paths.clone(), Jobs::new(jobs));
+            assert!(
+                outcomes
+                    .iter()
+                    .all(|o| o.result.as_ref().unwrap().diagnostics.is_empty())
+            );
+            for outcome in &outcomes {
+                let recorded = engine
+                    .shared_memo_reads(&outcome.definition, QueryKind::Modes)
+                    .unwrap();
+                assert!(Arc::ptr_eq(&outcome.reads, &recorded));
+                assert!(Arc::ptr_eq(
+                    &outcome.summary.as_ref().unwrap().reads,
+                    &recorded
+                ));
+            }
+            for definition in &paths {
+                assert_eq!(
+                    engine.recompute_count(definition, QueryKind::Summary),
+                    1,
+                    "P publishes the final compact result directly"
+                );
+                let id = hirsel_syntax::DefId::intern(definition);
+                let before = engine.memo_stats().recomputed.clone();
+                let published = engine
+                    .publish_definition(id, memo::Retention::Batch)
+                    .unwrap();
+                assert_eq!(published.definition, id);
+                let checked = published.checked.as_ref().unwrap();
+                assert_eq!(
+                    engine.checked_definition_summary(id).unwrap(),
+                    (checked.summary.clone(), checked.growth.clone())
+                );
+                assert!(engine.memo_reads(definition, QueryKind::Check).is_none());
+                assert!(engine.memo_reads(definition, QueryKind::Modes).is_none());
+                assert_eq!(engine.memo_stats().recomputed, before);
+            }
+            drop(outcomes);
+            engine.mode_definition(&path("main")).unwrap();
+            assert_eq!(
+                engine.recompute_count(&path("main"), QueryKind::Check),
+                2,
+                "an explicit later body demand follows the ordinary miss path"
+            );
+        }
+    });
+}
+
+#[test]
+fn compact_front_results_preserve_diagnostics_after_batch_body_release() {
+    with_compiler_stack(|| {
+        use hirsel_intern::jobs::Jobs;
+        for source in [
+            "fn id[T](v:T) -> T { v }\n",
+            "fn id[T](take v:T) -> T { v }\n",
+        ] {
+            let mut expected = engine(Arc::new(store::NoneStore));
+            let baseline = checked(&mut expected, source);
+            for jobs in [1, 2, 8] {
+                let mut engine = engine(Arc::new(store::NoneStore));
+                let file = engine.sources.add("resident.hir", source.into()).unwrap();
+                engine.parse_file(file, &default_context()).unwrap();
+                let outputs = engine.publish_definitions(
+                    vec![path("id"), path("id")],
+                    Jobs::new(jobs),
+                    memo::Retention::Batch,
+                );
+                assert_eq!(outputs.len(), 2);
+                for output in outputs {
+                    assert!(
+                        output
+                            .reads
+                            .iter()
+                            .any(|(key, _)| *key == memo::ReadKey::Environment)
+                    );
+                    let (actual, summary) = match output.result {
+                        Ok(output) => (output.diagnostics, Some(output.summary)),
+                        Err(QueryError::Diagnostics(diagnostics)) => (diagnostics, None),
+                        Err(error) => panic!("{error:?}"),
+                    };
+                    let rendered: Vec<_> = actual
+                        .iter()
+                        .map(|d| d.render_human(&engine.sources))
+                        .collect();
+                    assert_eq!(rendered, diagnostics(&baseline));
+                    for (diagnostic, baseline_diagnostic) in
+                        actual.iter().zip(&baseline.diagnostics)
+                    {
+                        let expected = expected.diagnostic_phase(baseline_diagnostic);
+                        assert_eq!(
+                            output
+                                .diagnostic_phases
+                                .iter()
+                                .find(|(d, _)| d == diagnostic)
+                                .map(|(_, phase)| phase.clone()),
+                            expected
+                        );
+                    }
+                    if let Some(summary) = summary {
+                        assert_eq!(
+                            summary.definition,
+                            hirsel_syntax::DefId::intern(&path("id"))
+                        );
+                    } else {
+                        assert!(!baseline.diagnostics.is_empty());
+                    }
+                }
+                assert!(engine.memo_reads(&path("id"), QueryKind::Check).is_none());
+                if baseline.diagnostics.is_empty() {
+                    assert!(engine.memo_reads(&path("id"), QueryKind::Modes).is_none());
+                } else {
+                    assert!(
+                        engine.memo_reads(&path("id"), QueryKind::Modes).is_some(),
+                        "body-free failure receipts keep reverse subscriptions"
+                    );
+                    let checks = engine.recompute_count(&path("id"), QueryKind::Check);
+                    engine
+                        .checked_definition_summary(hirsel_syntax::DefId::intern(&path("id")))
+                        .unwrap();
+                    assert_eq!(
+                        engine.recompute_count(&path("id"), QueryKind::Check),
+                        checks
+                    );
+                }
+                assert_eq!(engine.recompute_count(&path("id"), QueryKind::Modes), 1);
+            }
+        }
+    });
+}

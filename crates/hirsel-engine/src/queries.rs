@@ -5,7 +5,7 @@ mod frontier;
 pub use frontier::FrontChanges;
 mod parallel;
 pub(crate) mod s1;
-pub use parallel::ModeResult;
+pub use parallel::{ModeResult, PublishedDefinition, PublishedResult};
 mod dead_arms;
 mod definition_hash;
 pub use definition_hash::DefinitionHashes;
@@ -497,6 +497,23 @@ impl QueryEngine {
             QueryKind::Lower => self.lowered.get(&id).map(|e| e.reads()),
             QueryKind::Summary => self.summaries.get(&id).map(|e| e.reads()),
             QueryKind::CheckedSummary => self.checked_summaries.get(&id).map(|e| e.reads()),
+            _ => None,
+        }
+    }
+    /// The recorded read allocation of a completed query, shared with its memo.
+    pub fn shared_memo_reads(&self, definition: &DefPath, kind: QueryKind) -> Option<Arc<Reads>> {
+        let id = DefId::intern(definition);
+        match kind {
+            QueryKind::Signature => self.signatures.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::Resolve => self.resolutions.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::Check => self.checked.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::Modes => self.modes.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::Lower => self.lowered.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::Summary => self.summaries.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::CheckedSummary => self
+                .checked_summaries
+                .get(&id)
+                .map(|e| e.memo.reads.clone()),
             _ => None,
         }
     }

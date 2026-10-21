@@ -1272,3 +1272,27 @@ fn frozen_frontier_retries_operational_headers_only_in_the_next_snapshot() {
         }
     });
 }
+
+#[test]
+fn compact_release_does_not_retry_an_unavailable_phase_through_an_old_checked_body() {
+    with_compiler_stack(|| {
+        let (mut engine, _) = make_engine(None, false);
+        parse(&mut engine, "fn a () { 1 }\n");
+        engine.mode_definition(&path("a")).unwrap();
+        engine.adapters.resolver = None;
+        parse(&mut engine, "fn a () { 2 }\n");
+        let before = engine.recompute_count(&path("a"), QueryKind::Resolve);
+        let outputs = engine.publish_definitions(
+            vec![path("a")],
+            hirsel_intern::jobs::Jobs::new(2),
+            memo::Retention::Batch,
+        );
+        assert!(matches!(outputs[0].result, Err(QueryError::NotImplemented)));
+        assert_eq!(outputs[0].phase, Some(QueryKind::Resolve));
+        assert_eq!(
+            engine.recompute_count(&path("a"), QueryKind::Resolve) - before,
+            1,
+            "retention must not reenter a stopped body query"
+        );
+    });
+}

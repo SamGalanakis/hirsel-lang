@@ -13,6 +13,24 @@ pub struct ModeResult {
     pub definition: DefPath,
     pub result: Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
     pub phase: Option<QueryKind>,
+    pub summary: Option<Arc<PublishedSummary>>,
+    pub reads: Arc<Reads>,
+    pub diagnostic_phases: Vec<(Diagnostic, String)>,
+}
+
+/// A published front result retaining no checked or analyzed body.
+#[derive(Clone, Debug)]
+pub struct PublishedResult {
+    pub definition: DefPath,
+    pub result: Result<PublishedDefinition, QueryError>,
+    pub phase: Option<QueryKind>,
+    pub diagnostic_phases: Vec<(Diagnostic, String)>,
+    pub reads: Arc<Reads>,
+}
+#[derive(Clone, Debug)]
+pub struct PublishedDefinition {
+    pub summary: Arc<PublishedSummary>,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 struct Task {
@@ -334,6 +352,128 @@ impl SignatureProvider for WorkerRecorder<'_> {
 }
 
 impl QueryEngine {
+    /// Publish compact outcomes before releasing bodies according to the
+    /// selected retention policy. No returned product retains a TypedBody.
+    /// Callers bound the in-flight frontier independently of the hold budget.
+    pub fn publish_definitions(
+        &mut self,
+        definitions: Vec<DefPath>,
+        jobs: Jobs,
+        retention: crate::memo::Retention,
+    ) -> Vec<PublishedResult> {
+        self.mode_definitions(definitions, jobs)
+            .into_iter()
+            .map(|outcome| {
+                let definition = DefId::intern(&outcome.definition);
+                let result = outcome.result.and_then(|output| {
+                    outcome
+                        .summary
+                        .map(|summary| PublishedDefinition {
+                            summary,
+                            diagnostics: output.diagnostics.clone(),
+                        })
+                        .ok_or_else(|| {
+                            QueryError::Operational(hirsel_types::OperationalFailure {
+                                operation: "definition publication".into(),
+                                message: "completed front result has no coherent summary".into(),
+                            })
+                        })
+                });
+                if retention == crate::memo::Retention::Batch {
+                    // Error entries contain no body; keep their complete receipts
+                    // and reverse subscriptions. Release never reenters a query.
+                    if self
+                        .checked
+                        .get(&definition)
+                        .is_some_and(|e| e.memo.value.is_ok())
+                    {
+                        self.forget(&MemoKey::new(QueryKind::Check, definition));
+                    }
+                    if self
+                        .modes
+                        .get(&definition)
+                        .is_some_and(|e| e.memo.value.is_ok())
+                    {
+                        self.forget(&MemoKey::new(QueryKind::Modes, definition));
+                    }
+                }
+                PublishedResult {
+                    definition: outcome.definition,
+                    result,
+                    phase: outcome.phase,
+                    reads: outcome.reads,
+                    diagnostic_phases: outcome.diagnostic_phases,
+                }
+            })
+            .collect()
+    }
+
+    /// Capture this request's products before any later serial boundary can
+    /// change inputs or replace the same definition's memo.
+    fn front_outcome(
+        &mut self,
+        definition: DefPath,
+        result: Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
+        phase: Option<QueryKind>,
+        inherited: Option<Arc<Reads>>,
+    ) -> ModeResult {
+        let inherited = inherited
+            .or_else(|| phase.and_then(|kind| self.shared_memo_reads(&definition, kind)))
+            .unwrap_or_else(|| Arc::new(Reads::empty()));
+        // Most outcomes already own one complete phase read allocation. Only
+        // an own-header stop adds a second, independently completed request.
+        let reads = if phase == Some(QueryKind::Signature)
+            && let Some(signature) = self.shared_memo_reads(&definition, QueryKind::Signature)
+        {
+            let mut merged = ReadsBuilder::new();
+            merged.merge(&inherited);
+            merged.merge(&signature);
+            merged.finish().map(Arc::new)
+        } else {
+            Ok(inherited)
+        };
+        let result = self.publish_front_result(&definition, result);
+        let summary = result
+            .is_ok()
+            .then(|| {
+                self.summaries
+                    .get(&DefId::intern(&definition))
+                    .and_then(|entry| entry.result().ok())
+                    .map(|o| o.value.clone())
+            })
+            .flatten();
+        let diagnostics = match &result {
+            Ok(output) => &output.diagnostics[..],
+            Err(QueryError::Diagnostics(diagnostics)) => &diagnostics[..],
+            Err(_) => &[],
+        };
+        let diagnostic_phases = diagnostics
+            .iter()
+            .filter_map(|diagnostic| {
+                self.diagnostic_phase(diagnostic)
+                    .map(|phase| (diagnostic.clone(), phase))
+            })
+            .collect();
+        let (result, summary, reads) = match reads {
+            Ok(reads) => (result, summary, reads),
+            Err(_) => (
+                Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "front receipt capture".into(),
+                    message: "completed phase reads disagree".into(),
+                })),
+                None,
+                Arc::new(Reads::empty()),
+            ),
+        };
+        ModeResult {
+            definition,
+            result,
+            phase,
+            summary,
+            reads,
+            diagnostic_phases,
+        }
+    }
     /// Fused resolve/check/modes work for one frontier. Every worker count uses
     /// jobs::map; only preparation and memo publication mutate the engine.
     /// Declarations that execute generators keep their ordinary serial S1 path.
@@ -366,11 +506,7 @@ impl QueryEngine {
                     } else {
                         self.unavailable.or(self.last_phase)
                     };
-                    outputs.push(ModeResult {
-                        definition,
-                        result,
-                        phase,
-                    });
+                    outputs.push(self.front_outcome(definition, result, phase, None));
                 }
             }
         }
@@ -411,18 +547,20 @@ impl QueryEngine {
                 }
                 Ok(_) => {
                     let result = self.mode_query(&definition);
-                    outputs[index] = Some(ModeResult {
+                    outputs[index] = Some(self.front_outcome(
                         definition,
                         result,
-                        phase: self.unavailable.or(self.last_phase),
-                    });
+                        self.unavailable.or(self.last_phase),
+                        None,
+                    ));
                 }
                 Err(error) => {
-                    outputs[index] = Some(ModeResult {
+                    outputs[index] = Some(self.front_outcome(
                         definition,
-                        result: Err(error),
-                        phase: self.unavailable.or(self.last_phase),
-                    })
+                        Err(error),
+                        self.unavailable.or(self.last_phase),
+                        None,
+                    ))
                 }
             }
         }
@@ -441,31 +579,33 @@ impl QueryEngine {
             let text = match self.key_text(&definition, QueryKind::Modes) {
                 Ok(text) => text,
                 Err(error) => {
-                    outputs[index] = Some(ModeResult {
-                        definition,
-                        result: Err(error),
-                        phase: None,
-                    });
+                    outputs[index] = Some(self.front_outcome(definition, Err(error), None, None));
                     continue;
                 }
             };
             if let Some(entry) = self.modes.get(&id).cloned()
                 && self.memo_valid(&definition, &entry, text)
             {
-                outputs[index] = Some(ModeResult {
+                let reads = entry.memo.reads.clone();
+                let result = self.mode_result(entry);
+                outputs[index] = Some(self.front_outcome(
                     definition,
-                    result: self.mode_result(entry),
-                    phase: Some(QueryKind::Modes),
-                });
+                    result,
+                    Some(QueryKind::Modes),
+                    Some(reads),
+                ));
                 continue;
             }
             if let Some(entry) = self.load_mode(&definition) {
                 self.modes.insert(id, entry.clone());
-                outputs[index] = Some(ModeResult {
+                let reads = entry.memo.reads.clone();
+                let result = self.mode_result(entry);
+                outputs[index] = Some(self.front_outcome(
                     definition,
-                    result: self.mode_result(entry),
-                    phase: Some(QueryKind::Modes),
-                });
+                    result,
+                    Some(QueryKind::Modes),
+                    Some(reads),
+                ));
                 continue;
             }
             self.syntax_views(&definition)
@@ -593,6 +733,7 @@ impl QueryEngine {
                     product,
                     inherited.as_deref(),
                 );
+                inherited = Some(entry.memo.reads.clone());
                 let result = self
                     .store_mode(&done.definition, &entry)
                     .and_then(|_| self.mode_result(entry.clone()));
@@ -613,11 +754,8 @@ impl QueryEngine {
             } else {
                 done.result
             };
-            outputs[done.index] = Some(ModeResult {
-                definition: done.definition,
-                result,
-                phase: Some(done.phase),
-            });
+            outputs[done.index] =
+                Some(self.front_outcome(done.definition, result, Some(done.phase), inherited));
         }
         for (index, previous) in duplicates {
             outputs[index] = outputs[previous].clone();

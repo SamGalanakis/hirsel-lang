@@ -62,7 +62,7 @@ impl QueryEngine {
         {
             return Ok(summary);
         }
-        let analyzed = self.mode_query(path)?;
+        self.mode_query(path)?;
         // Only the final mode result contains every planned call. Its complete
         // reads include the checked body's, as well as mode refinements.
         let completed = self.modes.get(&definition).cloned().ok_or_else(|| {
@@ -71,6 +71,24 @@ impl QueryEngine {
                 message: "mode result did not produce a coherent memo".into(),
             })
         })?;
+        self.publish_mode_summary(definition, &completed)
+    }
+
+    /// Publish from the already completed phase result; P does not demand the
+    /// body a second time just to retain its compact products.
+    pub(super) fn publish_mode_summary(
+        &mut self,
+        definition: DefId,
+        completed: &Arc<Entry<AnalyzedBody>>,
+    ) -> Result<Arc<PublishedSummary>, QueryError> {
+        let path = definition.path();
+        let text = self.key_text(path, QueryKind::Summary)?;
+        if let Some(entry) = self.summaries.get(&definition).cloned()
+            && self.memo_valid(path, &entry, text)
+        {
+            return entry.result().map(|o| o.value.clone());
+        }
+        let analyzed = completed.result()?;
         self.start(path, QueryKind::Summary)?;
         let (summary, growth) = summarize(self.types(), &analyzed.value.typed);
         let reads = completed.memo.reads.clone();
@@ -94,6 +112,48 @@ impl QueryEngine {
         self.record_summary(published.clone(), completed.detail.clone(), false);
         self.active.remove(&(path.clone(), QueryKind::Summary));
         Ok(published)
+    }
+
+    pub(super) fn publish_front_result(
+        &mut self,
+        definition: &DefPath,
+        result: Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
+    ) -> Result<Arc<QueryOutput<AnalyzedBody>>, QueryError> {
+        let saved = (self.last_phase, self.unavailable);
+        let id = DefId::intern(definition);
+        if let Some(checked) = self.checked.get(&id).cloned()
+            && checked.consistent
+            && !self.graph.is_dirty(&checked.memo.key)
+            && self.key_text(definition, QueryKind::CheckedSummary).ok() == Some(checked.memo.text)
+            && let Ok(output) = checked.result()
+            && !self.checked_summaries.get(&id).is_some_and(|entry| {
+                entry.memo.text == checked.memo.text && !self.graph.is_dirty(&entry.memo.key)
+            })
+        {
+            let (summary, growth) = summarize(self.types(), &output.value);
+            self.start(definition, QueryKind::CheckedSummary)?;
+            self.record_checked_summary(
+                id,
+                CheckedSummary { summary, growth },
+                checked.memo.text,
+                checked.memo.reads.clone(),
+                checked.detail.clone(),
+                false,
+            );
+            self.active
+                .remove(&(definition.clone(), QueryKind::CheckedSummary));
+        }
+        let publication = if result.is_ok()
+            && let Some(entry) = self.modes.get(&id).cloned()
+            && entry.consistent
+        {
+            self.publish_mode_summary(id, &entry).map(|_| ())
+        } else {
+            Ok(())
+        };
+        (self.last_phase, self.unavailable) = saved;
+        publication?;
+        result
     }
 
     /// Seed an image/store summary only when its complete key and reads still

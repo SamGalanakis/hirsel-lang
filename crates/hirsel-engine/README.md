@@ -852,3 +852,17 @@ calls retain direct changes, removals and actual reverse subscribers until
 A query that recomputes a memo early cannot erase the aggregate notification,
 and an older acknowledgment cannot erase a newer S1 publication. Tracking is
 inactive in scalar-only sessions. The driver still owns compact aggregation.
+
+Successful P workers, resident/store hits and serial generator boundaries publish
+final summaries directly from completed mode entries. `publish_definitions`
+returns compact results and per-diagnostic phase provenance without retaining
+body products. `Retention::Batch` releases body values after capturing the
+outcomes. Body-free failure memos keep complete receipts and reverse
+subscriptions; a released body is recomputed by its ordinary query. The caller still bounds the in-flight frontier and decides
+when S1 work has settled. This API does not yet enforce a production hold budget.
+
+Each `ModeResult` captures its summary, shared complete reads and diagnostic
+provenance at completion, before subsequent serial generators can change the
+signature context. Compact publication consumes those captured products without
+asking the body query again. Error entries carry no body and retain their
+subscriptions; transient failures remain retryable.
