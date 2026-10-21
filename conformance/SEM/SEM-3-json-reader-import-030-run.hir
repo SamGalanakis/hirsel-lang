@@ -1,0 +1,42 @@
+// rule: SEM-3
+// expect: run
+// JSONTestSuite 1ef36fa01286573e846ac449e8683f8833c5b26a test_parsing/*.json:1.
+// Differential reader twin of the existing imports; exact JsonError offsets.
+fn check(t: Test, source: String) -> () {
+  let expected: Result[(), json.JsonError] = match json.parse(unique source) {
+    Ok(_) => Ok(()),
+    Error(e) => Error(e),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let actual = match json.skip(mut cursor) {
+    Ok(()) => json.finish_reader(mut cursor),
+    Error(e) => Error(e),
+  }
+  test.equal(t, actual, expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // "y_object_empty.json:1"
+  check(t, "{}")
+  // "y_object_empty_key.json:1"
+  check(t, "{\"\":0}")
+  // "y_object_escaped_null_in_key.json:1"
+  check(t, "{\"foo\\u0000bar\": 42}")
+  // "y_object_extreme_numbers.json:1"
+  check(t, "{ \"min\": -1.0e+28, \"max\": 1.0e+28 }")
+  // "y_object_long_strings.json:1"
+  check(
+    t,
+    "{\"x\":[{\"id\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}], \"id\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+  )
+  // "y_object_simple.json:1"
+  check(t, "{\"a\":[]}")
+  // "y_object_string_unicode.json:1"
+  check(
+    t,
+    "{\"title\":\"\\u041f\\u043e\\u043b\\u0442\\u043e\\u0440\\u0430 \\u0417\\u0435\\u043c\\u043b\\u0435\\u043a\\u043e\\u043f\\u0430\" }"
+  )
+  // "y_object_with_newlines.json:1"
+  check(t, "{\n\"a\": \"b\"\n}")
+  Ok(())
+}

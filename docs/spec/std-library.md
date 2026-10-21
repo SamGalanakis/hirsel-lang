@@ -505,6 +505,44 @@ The constant `MAX_NESTING: u64 = 128` counts open arrays and objects, scalars us
 level; opening container 129 is `Nesting`. A partial tree is released through ordinary error
 cleanup.
 
+`json.reader(data: Bytes) -> Reader` borrows the input through retained byte views;
+it does not build a `Value`. `peek(mut reader)` skips JSON whitespace and returns
+the next byte (zero at EOF). `next_token(mut reader)` pulls a lexical `Token`:
+`NullToken`, `BoolToken(bool)`, `NumberToken(Bytes)`, `TextToken(TextView)`,
+`ArrayStart`, `ArrayEnd`, `ObjectStart`, `ObjectEnd`, `Colon`, or `Comma`.
+`TextView` is `Unescaped(Bytes) | Escaped(String)`: unescaped text and number
+spellings are byte views of the input; escaped text has independent storage.
+`text_is` compares a text view with a field name, and `text_owned` explicitly
+copies it when an owned String is needed. `read_owned_text` copies only its token for owned typed
+fields. All returned views retain their input owner.
+
+Structured consumers use `begin_array` / `array_next` and `begin_object` /
+`object_next`. Each container has its own mutable `first: bool` initialized to
+`true`; objects also have a fresh `Set[String]` of decoded keys. These operations
+check commas, colons, duplicate keys (including unknown members), and closing
+delimiters. `object_key` plus `colon` lets generated code check known field slots
+without hashing their names; its caller must reject duplicates. `skip` validates
+one complete value without a DOM; `finish_reader` requires only whitespace after the root.
+These structured operations return the same `JsonError` byte offsets as `parse`
+on UTF-8 input. Container opening uses `check_depth` with the same nesting limit,
+reporting the input position for reader errors. Lexical `next_token` alone does not
+validate container grammar; use the structured operations or `skip` for that.
+
+`derive.from_json_reader(shape(T))` generates a
+`fn(mut json.Reader) -> Result[T, String]` body; nominal fields call their type's
+`<snake_name>_from_json_reader`. `derive.from_json_bytes(shape(T))` generates a
+`fn(Bytes) -> Result[T, String]` document entry calling that reader function. It
+validates UTF-8, consumes exactly one root, and reports `not UTF-8` or `not JSON`
+at this String-error boundary. On a typed error it validates the whole document
+with `skip` first, preserving syntax/duplicate/nesting error precedence over type
+errors. Records ignore unknown fields; missing options become `None`, other
+missing fields fail. Variants retain the existing externally tagged JSON form;
+numbers use the existing fitting and nonfinite rules. `number_text` copies only
+the short spelling for the existing String-based scalar parsers. Successful decoding never
+constructs a `json.Value`. The byte boundary explicitly detaches the typed Result
+for independent ownership, currently costing one typed-result graph copy. The existing `derive.from_json` Value entry remains
+available for dynamic callers and shares scalar fitting and variant diagnostics.
+
 `json.stringify` borrows a `Value` and returns compact UTF-8 JSON; `json.stringify_into` borrows it
 and appends to a mutable builder, keeping existing content and possibly leaving a written
 prefix on error. Both validate every `Number` against

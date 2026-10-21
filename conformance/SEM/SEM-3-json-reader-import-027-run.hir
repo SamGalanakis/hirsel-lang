@@ -1,0 +1,39 @@
+// rule: SEM-3
+// expect: run
+// JSONTestSuite 1ef36fa01286573e846ac449e8683f8833c5b26a test_parsing/*.json:1.
+// Differential reader twin of the existing imports; exact JsonError offsets.
+fn check(t: Test, source: String) -> () {
+  let expected: Result[(), json.JsonError] = match json.parse(unique source) {
+    Ok(_) => Ok(()),
+    Error(e) => Error(e),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let actual = match json.skip(mut cursor) {
+    Ok(()) => json.finish_reader(mut cursor),
+    Error(e) => Error(e),
+  }
+  test.equal(t, actual, expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // "y_array_with_trailing_space.json:1"
+  check(t, "[2] ")
+  // "y_number.json:1"
+  check(t, "[123e65]")
+  // "y_number_0e+1.json:1"
+  check(t, "[0e+1]")
+  // "y_number_0e1.json:1"
+  check(t, "[0e1]")
+  // "y_number_after_space.json:1"
+  check(t, "[ 4]")
+  // "y_number_double_close_to_zero.json:1"
+  check(
+    t,
+    "[-0.000000000000000000000000000000000000000000000000000000000000000000000000000001]\n"
+  )
+  // "y_number_int_with_exp.json:1"
+  check(t, "[20e1]")
+  // "y_number_minus_zero.json:1"
+  check(t, "[-0]")
+  Ok(())
+}

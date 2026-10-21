@@ -1,0 +1,36 @@
+// rule: SEM-3
+// expect: run
+// JSONTestSuite 1ef36fa01286573e846ac449e8683f8833c5b26a test_parsing/*.json:1.
+// Differential reader twin of the existing imports; exact JsonError offsets.
+fn check(t: Test, source: String) -> () {
+  let expected: Result[(), json.JsonError] = match json.parse(unique source) {
+    Ok(_) => Ok(()),
+    Error(e) => Error(e),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let actual = match json.skip(mut cursor) {
+    Ok(()) => json.finish_reader(mut cursor),
+    Error(e) => Error(e),
+  }
+  test.equal(t, actual, expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // "n_structure_null-byte-outside-string.json:1"
+  check(t, "[\u{0}]")
+  // "n_structure_number_with_trailing_garbage.json:1"
+  check(t, "2@")
+  // "n_structure_object_followed_by_closing_object.json:1"
+  check(t, "{}}")
+  // "n_structure_object_unclosed_no_value.json:1"
+  check(t, "{\"\":")
+  // "n_structure_object_with_comment.json:1"
+  check(t, "{\"a\":/*comment*/\"b\"}")
+  // "n_structure_object_with_trailing_garbage.json:1"
+  check(t, "{\"a\": true} \"x\"")
+  // "n_structure_open_array_apostrophe.json:1"
+  check(t, "['")
+  // "n_structure_open_array_comma.json:1"
+  check(t, "[,")
+  Ok(())
+}

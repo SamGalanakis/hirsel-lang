@@ -9,3 +9,14 @@ rust_binary(
     rustc_flags = ["-Copt-level=3", "-Coverflow-checks=yes", "-Ccodegen-units=1"],
     visibility = ["PUBLIC"],
 )
+
+rust_binary(
+    name = "json-typed-reference",
+    crate = "json_typed_reference",
+    crate_root = "typed.rs",
+    srcs = ["typed.rs"],
+    deps = ["root//third-party:serde", "root//third-party:serde_json"],
+    edition = "2021",
+    rustc_flags = ["-Copt-level=3", "-Coverflow-checks=yes", "-Ccodegen-units=1"],
+    visibility = ["PUBLIC"],
+)

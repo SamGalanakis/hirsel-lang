@@ -1,0 +1,133 @@
+// rule: SEM-3
+// expect: run
+// serde_json tests/test.rs:1374-1425 (Animal), 1444-1475 (missing fields),
+// 8c535a260ce561eaab4111aafc29038eb9f77ff3. Existing Value expectations are
+// untouched; these exercise the byte entry and the same semantic messages.
+type Animal = Dog | Frog(String, List[i64]) | Cat(age: u64, name: String) | AntHive(
+  List[String]
+)
+
+fn animal_from_json_reader(mut input: json.Reader) -> Result[unique Animal, String] uses {} = comptime derive.from_json_reader(
+  shape(Animal)
+)
+
+fn animal_from_json_bytes(data: Bytes) -> Result[unique Animal, String] uses {} = comptime derive.from_json_bytes(
+  shape(Animal)
+)
+
+fn animal_equal(a: Animal, b: Animal) -> bool uses {} = comptime derive.equal(
+  shape(Animal)
+)
+
+type Foo {
+  x: Option[u32],
+}
+
+fn foo_from_json_reader(mut input: json.Reader) -> Result[unique Foo, String] uses {} = comptime derive.from_json_reader(
+  shape(Foo)
+)
+
+fn foo_from_json_bytes(data: Bytes) -> Result[unique Foo, String] uses {} = comptime derive.from_json_bytes(
+  shape(Foo)
+)
+
+type Zoo {
+  animals: Map[String, Animal],
+  flag: bool,
+  number: i128,
+  other: (u8, String),
+  values: Set[u64],
+  pairs: Map[u64, String],
+}
+
+fn zoo_from_json_reader(mut input: json.Reader) -> Result[unique Zoo, String] uses {} = comptime derive.from_json_reader(
+  shape(Zoo)
+)
+
+fn zoo_from_json_bytes(data: Bytes) -> Result[unique Zoo, String] uses {} = comptime derive.from_json_bytes(
+  shape(Zoo)
+)
+
+fn ok(t: Test, source: String, expected: Animal) -> () {
+  match animal_from_json_bytes(string.as_bytes(source)) {
+    Ok(actual) => test.check(t, animal_equal(actual, expected)),
+    Error(e) => test.equal(t, e, "decoded"),
+  }
+}
+
+fn bad(t: Test, source: String, expected: String) -> () {
+  match animal_from_json_bytes(string.as_bytes(source)) {
+    Ok(_) => test.equal(t, "decoded", expected),
+    Error(e) => test.equal(t, e, expected),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  ok(t, "\"Dog\"", Dog)
+  ok(t, " \"Dog\" ", Dog)
+  ok(t, "{\"Frog\":[\"Henry\",[]]}", Frog("Henry", []))
+  ok(t, " { \"Frog\": [ \"Henry\" , [ 349, 102 ] ] } ", Frog("Henry", [349, 102]))
+  ok(t, "{\"Cat\": {\"age\": 5, \"name\": \"Kate\"}}", Cat(age: 5, name: "Kate"))
+  ok(
+    t,
+    " { \"Cat\" : { \"age\" : 5 , \"name\" : \"Kate\" } } ",
+    Cat(age: 5, name: "Kate")
+  )
+  ok(t, " { \"AntHive\" : [\"Bob\", \"Stuart\"] } ", AntHive(["Bob", "Stuart"]))
+  ok(t, "{\"Dog\":null}", Dog)
+  ok(t, " { \"Dog\" : null } ", Dog)
+  ok(
+    t,
+    "{\"Cat\":{\"age\":5,\"name\":\"Ka\\u0074e\",\"ignored\":[{\"x\":1}]}}",
+    Cat(age: 5, name: "Kate")
+  )
+  bad(t, "{}", "invalid value: map, expected map with a single key")
+  bad(t, "[]", "invalid type: sequence, expected string or map")
+  bad(t, "\"Frog\"", "invalid type: unit variant, expected tuple variant")
+  bad(t, "{\"Frog\":[]}", "invalid type: null, expected tuple variant Animal::Frog")
+  bad(
+    t,
+    "{\"Frog\":[\"a\"]}",
+    "invalid length 1, expected tuple variant Animal::Frog with 2 elements"
+  )
+  bad(
+    t,
+    "{\"Frog\":[\"a\",[],3]}",
+    "invalid length 3, expected fewer elements in array"
+  )
+  bad(t, "{\"Cat\":{\"name\":\"Kate\"}}", "missing field `age`")
+  bad(
+    t,
+    "{\"Dog\":null,\"Cat\":null}",
+    "invalid value: map, expected map with a single key"
+  )
+  bad(t, "{\"Dog\":5}", "invalid type: integer `5`, expected unit")
+  bad(t, "{\"Cat\":{\"age\":5,\"age\":6,\"name\":\"Kate\"}}", "not JSON")
+  bad(t, "{\"Cat\":{\"age\":5,\"name\":\"Kate\",\"x\":1,\"x\":2}}", "not JSON")
+  bad(t, "{\"Dog\":null} 0", "not JSON")
+  bad(t, "\"Frog\" 0", "not JSON")
+  let Ok(empty) = foo_from_json_bytes(b"{}") else {
+    return Error(())
+  }
+  test.equal(t, empty.x, None)
+  let Ok(some) = foo_from_json_bytes(b"{\"x\":5}") else {
+    return Error(())
+  }
+  test.equal(t, some.x, Some(5))
+  let Ok(null) = foo_from_json_bytes(b"{\"x\":null}") else {
+    return Error(())
+  }
+  test.equal(t, null.x, None)
+  let Ok(zoo) = zoo_from_json_bytes(
+    b"{\"animals\":{\"a\":\"Dog\",\"b\":{\"Frog\":[\"Henry\",[]]}},\"flag\":true,\"number\":-170141183460469231731687303715884105728,\"other\":[255,\"owned\"],\"values\":[1,2],\"pairs\":[[1,\"a\"]]}"
+  ) else {
+    return Error(())
+  }
+  test.equal(t, map.len(zoo.animals), 2)
+  test.equal(t, zoo.flag, true)
+  test.equal(t, zoo.number, -170141183460469231731687303715884105728i128)
+  test.equal(t, zoo.other, (255u8, "owned"))
+  test.equal(t, set.len(zoo.values), 2)
+  test.equal(t, map.len(zoo.pairs), 1)
+  Ok(())
+}

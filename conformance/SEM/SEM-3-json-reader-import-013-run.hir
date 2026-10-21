@@ -1,0 +1,36 @@
+// rule: SEM-3
+// expect: run
+// JSONTestSuite 1ef36fa01286573e846ac449e8683f8833c5b26a test_parsing/*.json:1.
+// Differential reader twin of the existing imports; exact JsonError offsets.
+fn check(t: Test, source: String) -> () {
+  let expected: Result[(), json.JsonError] = match json.parse(unique source) {
+    Ok(_) => Ok(()),
+    Error(e) => Error(e),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let actual = match json.skip(mut cursor) {
+    Ok(()) => json.finish_reader(mut cursor),
+    Error(e) => Error(e),
+  }
+  test.equal(t, actual, expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // "n_number_with_leading_zero.json:1"
+  check(t, "[012]")
+  // "n_object_bad_value.json:1"
+  check(t, "[\"x\", truth]")
+  // "n_object_bracket_key.json:1"
+  check(t, "{[: \"x\"}\n")
+  // "n_object_comma_instead_of_colon.json:1"
+  check(t, "{\"x\", null}")
+  // "n_object_double_colon.json:1"
+  check(t, "{\"x\"::\"b\"}")
+  // "n_object_emoji.json:1"
+  check(t, "{🇨🇭}")
+  // "n_object_garbage_at_end.json:1"
+  check(t, "{\"a\":\"a\" 123}")
+  // "n_object_key_with_single_quotes.json:1"
+  check(t, "{key: 'value'}")
+  Ok(())
+}

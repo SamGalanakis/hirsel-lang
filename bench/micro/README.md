@@ -92,6 +92,8 @@ wrapping checksum. Harness rounds are independent process samples.
 | `map_remove` | 20000 | insert then remove all integer keys |
 | `map_str_upsert` | 2000000 | same counter using one upsert per selection |
 | `json` | 20000 | construct JSON, then ten std parse/stringify/drop round trips |
+| `json_typed` | 20000 | construct JSON, then ten derived byte-to-record decodes and checksums |
+| `json_typed_dom` | 20000 | identical typed checksum through parse plus derived Value conversion |
 | `channel` | 100000 | two-channel ping-pong, sum of replies; no epochs argument |
 
 The first seven pairs were promoted from perfsmash-rt's 2026-10-19 scratchpad.
@@ -132,3 +134,16 @@ both directories. The serde_json reference has its own sibling Buck2 package,
 
 The [post-perf remeasurement](reports/perf-remeasure-2026-10-19.md) records
 all native pairs and these micros, with current instruction gaps and limits.
+
+The typed JSON rows share a `Document { rows: List[Row] }` input and checksum.
+`json_typed_dom` is the prior parse/convert/drop path; `json_typed` uses the
+pull reader. Their Rust pair uses serde's derived `Deserialize` on the same
+fields. Each includes document construction and ten complete decode/drop passes.
+
+`typed-session --before OLD_TASKS --after NEW_TASKS --micro typed.json
+--micro-json dynamic.json --output session.json` combines both JSON rows with
+10k-task restart in one ten-round, seeded session. Each micro manifest has
+`rust`, `before`, and `after` participants. It uses the same CPU31 timing lock,
+server CPU31 and client CPU7, retains instruction/cycle counters and executable
+hashes, and refuses differing micro checksums. The optional dynamic row checks
+that retaining the DOM API has not changed its workload.

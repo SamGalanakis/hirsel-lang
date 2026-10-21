@@ -1,0 +1,36 @@
+// rule: SEM-3
+// expect: run
+// JSONTestSuite 1ef36fa01286573e846ac449e8683f8833c5b26a test_parsing/*.json:1.
+// Differential reader twin of the existing imports; exact JsonError offsets.
+fn check(t: Test, source: String) -> () {
+  let expected: Result[(), json.JsonError] = match json.parse(unique source) {
+    Ok(_) => Ok(()),
+    Error(e) => Error(e),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let actual = match json.skip(mut cursor) {
+    Ok(()) => json.finish_reader(mut cursor),
+    Error(e) => Error(e),
+  }
+  test.equal(t, actual, expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // "y_string_double_escape_n.json:1"
+  check(t, "[\"\\\\n\"]")
+  // "y_string_escaped_control_character.json:1"
+  check(t, "[\"\\u0012\"]")
+  // "y_string_escaped_noncharacter.json:1"
+  check(t, "[\"\\uFFFF\"]")
+  // "y_string_in_array.json:1"
+  check(t, "[\"asd\"]")
+  // "y_string_in_array_with_leading_space.json:1"
+  check(t, "[ \"asd\"]")
+  // "y_string_last_surrogates_1_and_2.json:1"
+  check(t, "[\"\\uDBFF\\uDFFF\"]")
+  // "y_string_nbsp_uescaped.json:1"
+  check(t, "[\"new\\u00A0line\"]")
+  // "y_string_nonCharacterInUTF-8_U+10FFFF.json:1"
+  check(t, "[\"􏿿\"]")
+  Ok(())
+}

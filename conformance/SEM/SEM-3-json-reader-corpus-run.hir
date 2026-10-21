@@ -1,0 +1,101 @@
+// rule: SEM-3
+// expect: run
+// Same malformed vectors as SEM-3-json-invalid-run (serde_json tests/test.rs),
+// compared structurally to the unchanged DOM parser, including byte offsets.
+fn validate(source: String) -> Result[(), json.JsonError] uses {} {
+  let mut input = json.reader(string.as_bytes(source))
+  json.skip(mut input)?
+  json.finish_reader(mut input)
+}
+
+fn same(t: Test, source: String) -> () {
+  let expected = match json.parse(unique source) {
+    Error(e) => e,
+    Ok(_) => {
+      test.check(t, false)
+      return
+    },
+  }
+  test.equal(t, validate(source), Error(expected))
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let inputs: List[String] = [
+    "NaN",
+    "Infinity",
+    "-Infinity",
+    "+",
+    ".",
+    "-",
+    "00",
+    "0x80",
+    "\\0",
+    ".0",
+    "0.",
+    "1.",
+    "1.a",
+    "1.e1",
+    "1e",
+    "1e+",
+    "1a",
+    "[1,]",
+    "{\"a\":1,}",
+    "[",
+    "{",
+    "tru",
+    "null true",
+    "\"",
+    "\"lol",
+    "\"lol\"a",
+    "\"\\uD83C\\uFFFF\"",
+    "\"\n\"",
+    "\"\u{1f}\"",
+    "\"\\uD800\"",
+    "\"\\uDC00\"",
+    "\"\\uD800\\n\"",
+    "\"\\uD800\\uD800\"",
+    "\"\\uZZZZ\"",
+    "\"\\x00\"",
+    "{\"a\" 1}",
+    "{1:2}",
+    "[1 2]",
+    "[false,]",
+    "[1,{\"a\":[\"owned\",{\"b\":true}]}, invalid]"
+  ]
+  for source in inputs {
+    same(t, source)
+  }
+  same(t, "{\"a\":1,\"\\u0061\":2}")
+  same(t, "[1,\"é\",?]")
+  same(t, "{\"a\":0, \"a\"}")
+  same(t, "{\"a\":0, \"a\":1}")
+  let mut nested: List[u8] = []
+  for _ in 0u64..129u64 {
+    text.append(mut nested, "[")
+  }
+  for _ in 0u64..129u64 {
+    text.append(mut nested, "]")
+  }
+  same(t, text.finish_valid(take nested))
+  let valid: List[String] = [
+    "null",
+    "true",
+    "false",
+    "-0.00E+09",
+    "\"é\"",
+    "\"\\ud834\\udd1e\"",
+    "[1,{},false]",
+    "{\"k\":[null,[]]}"
+  ]
+  for source in valid {
+    test.equal(t, validate(source), Ok(()))
+  }
+  let mut view = json.reader(b" \"borrowed\" -123.000e+19")
+  match json.read_text(mut view) {
+    Ok(v) => test.check(t, json.text_is(v, "borrowed")),
+    Error(_) => return Error(()),
+  }
+  test.equal(t, json.read_number(mut view), Ok(b"-123.000e+19"))
+  test.equal(t, json.finish_reader(mut view), Ok(()))
+  Ok(())
+}

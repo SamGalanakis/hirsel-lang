@@ -1,0 +1,36 @@
+// rule: SEM-3
+// expect: run
+// JSONTestSuite 1ef36fa01286573e846ac449e8683f8833c5b26a test_parsing/*.json:1.
+// Differential reader twin of the existing imports; exact JsonError offsets.
+fn check(t: Test, source: String) -> () {
+  let expected: Result[(), json.JsonError] = match json.parse(unique source) {
+    Ok(_) => Ok(()),
+    Error(e) => Error(e),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let actual = match json.skip(mut cursor) {
+    Ok(()) => json.finish_reader(mut cursor),
+    Error(e) => Error(e),
+  }
+  test.equal(t, actual, expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // "n_number_hex_1_digit.json:1"
+  check(t, "[0x1]")
+  // "n_number_hex_2_digits.json:1"
+  check(t, "[0x42]")
+  // "n_number_infinity.json:1"
+  check(t, "[Infinity]")
+  // "n_number_invalid+-.json:1"
+  check(t, "[0e+-1]")
+  // "n_number_invalid-negative-real.json:1"
+  check(t, "[-123.123foo]")
+  // "n_number_minus_infinity.json:1"
+  check(t, "[-Infinity]")
+  // "n_number_minus_sign_with_trailing_garbage.json:1"
+  check(t, "[-foo]")
+  // "n_number_minus_space_1.json:1"
+  check(t, "[- 1]")
+  Ok(())
+}

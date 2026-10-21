@@ -1,0 +1,39 @@
+// rule: SEM-3
+// expect: run
+// JSONTestSuite 1ef36fa01286573e846ac449e8683f8833c5b26a test_parsing/*.json:1.
+// Differential reader twin of the existing imports; exact JsonError offsets.
+fn check(t: Test, source: String) -> () {
+  let expected: Result[(), json.JsonError] = match json.parse(unique source) {
+    Ok(_) => Ok(()),
+    Error(e) => Error(e),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let actual = match json.skip(mut cursor) {
+    Ok(()) => json.finish_reader(mut cursor),
+    Error(e) => Error(e),
+  }
+  test.equal(t, actual, expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // "i_number_double_huge_neg_exp.json:1"
+  check(t, "[123.456e-789]")
+  // "i_number_huge_exp.json:1"
+  check(
+    t,
+    "[0.4e00669999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999969999999006]"
+  )
+  // "i_number_neg_int_huge_exp.json:1"
+  check(t, "[-1e+9999]")
+  // "i_number_pos_double_huge_exp.json:1"
+  check(t, "[1.5e+9999]")
+  // "i_number_real_neg_overflow.json:1"
+  check(t, "[-123123e100000]")
+  // "i_number_real_pos_overflow.json:1"
+  check(t, "[123123e100000]")
+  // "i_number_real_underflow.json:1"
+  check(t, "[123e-10000000]")
+  // "i_number_too_big_neg_int.json:1"
+  check(t, "[-123123123123123123123123123123]")
+  Ok(())
+}

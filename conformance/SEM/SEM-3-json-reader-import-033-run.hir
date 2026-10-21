@@ -1,0 +1,36 @@
+// rule: SEM-3
+// expect: run
+// JSONTestSuite 1ef36fa01286573e846ac449e8683f8833c5b26a test_parsing/*.json:1.
+// Differential reader twin of the existing imports; exact JsonError offsets.
+fn check(t: Test, source: String) -> () {
+  let expected: Result[(), json.JsonError] = match json.parse(unique source) {
+    Ok(_) => Ok(()),
+    Error(e) => Error(e),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let actual = match json.skip(mut cursor) {
+    Ok(()) => json.finish_reader(mut cursor),
+    Error(e) => Error(e),
+  }
+  test.equal(t, actual, expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // "y_string_nonCharacterInUTF-8_U+FFFF.json:1"
+  check(t, "[\"￿\"]")
+  // "y_string_null_escape.json:1"
+  check(t, "[\"\\u0000\"]")
+  // "y_string_one-byte-utf-8.json:1"
+  check(t, "[\"\\u002c\"]")
+  // "y_string_pi.json:1"
+  check(t, "[\"π\"]")
+  // "y_string_reservedCharacterInUTF-8_U+1BFFF.json:1"
+  check(t, "[\"𛿿\"]")
+  // "y_string_simple_ascii.json:1"
+  check(t, "[\"asd \"]")
+  // "y_string_space.json:1"
+  check(t, "\" \"")
+  // "y_string_surrogates_U+1D11E_MUSICAL_SYMBOL_G_CLEF.json:1"
+  check(t, "[\"\\uD834\\uDd1e\"]")
+  Ok(())
+}

@@ -1,0 +1,36 @@
+// rule: SEM-3
+// expect: run
+// JSONTestSuite 1ef36fa01286573e846ac449e8683f8833c5b26a test_parsing/*.json:1.
+// Differential reader twin of the existing imports; exact JsonError offsets.
+fn check(t: Test, source: String) -> () {
+  let expected: Result[(), json.JsonError] = match json.parse(unique source) {
+    Ok(_) => Ok(()),
+    Error(e) => Error(e),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let actual = match json.skip(mut cursor) {
+    Ok(()) => json.finish_reader(mut cursor),
+    Error(e) => Error(e),
+  }
+  test.equal(t, actual, expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // "n_object_missing_colon.json:1"
+  check(t, "{\"a\" b}")
+  // "n_object_missing_key.json:1"
+  check(t, "{:\"b\"}")
+  // "n_object_missing_semicolon.json:1"
+  check(t, "{\"a\" \"b\"}")
+  // "n_object_missing_value.json:1"
+  check(t, "{\"a\":")
+  // "n_object_no-colon.json:1"
+  check(t, "{\"a\"")
+  // "n_object_non_string_key.json:1"
+  check(t, "{1:1}")
+  // "n_object_non_string_key_but_huge_number_instead.json:1"
+  check(t, "{9999E9999:1}")
+  // "n_object_repeated_null_null.json:1"
+  check(t, "{null:null,null:null}")
+  Ok(())
+}

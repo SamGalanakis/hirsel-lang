@@ -38,9 +38,10 @@ def main():
     capped = str(ROOT / 'tools/capped')
     subprocess.run([capped, '--timeout', '900', str(Path(bundle) / 'hirsel'),
                     'build', '--release', str(source), '-o', str(output / args.case)], env=env, check=True)
-    if args.case == 'json':
+    if args.case in ('json', 'json_typed', 'json_typed_dom'):
+        target = 'json-reference' if args.case == 'json' else 'json-typed-reference'
         reference = buck2_build('--target-platforms', '//tools/buck2:release',
-                                '//bench/micro-json-reference:json-reference')['json-reference']
+                                '//bench/micro-json-reference:' + target)[target]
         shutil.copy2(reference, output / 'rust-json')
         rust_command = [str(output / 'rust-json')]
     else:

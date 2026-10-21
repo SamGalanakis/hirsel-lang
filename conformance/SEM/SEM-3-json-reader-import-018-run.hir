@@ -1,0 +1,36 @@
+// rule: SEM-3
+// expect: run
+// JSONTestSuite 1ef36fa01286573e846ac449e8683f8833c5b26a test_parsing/*.json:1.
+// Differential reader twin of the existing imports; exact JsonError offsets.
+fn check(t: Test, source: String) -> () {
+  let expected: Result[(), json.JsonError] = match json.parse(unique source) {
+    Ok(_) => Ok(()),
+    Error(e) => Error(e),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let actual = match json.skip(mut cursor) {
+    Ok(()) => json.finish_reader(mut cursor),
+    Error(e) => Error(e),
+  }
+  test.equal(t, actual, expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // "n_string_incomplete_escaped_character.json:1"
+  check(t, "[\"\\u00A\"]")
+  // "n_string_incomplete_surrogate.json:1"
+  check(t, "[\"\\uD834\\uDd\"]")
+  // "n_string_incomplete_surrogate_escape_invalid.json:1"
+  check(t, "[\"\\uD800\\uD800\\x\"]")
+  // "n_string_invalid_backslash_esc.json:1"
+  check(t, "[\"\\a\"]")
+  // "n_string_invalid_unicode_escape.json:1"
+  check(t, "[\"\\uqqqq\"]")
+  // "n_string_leading_uescaped_thinspace.json:1"
+  check(t, "[\\u0020\"asd\"]")
+  // "n_string_no_quotes_with_bad_escape.json:1"
+  check(t, "[\\n]")
+  // "n_string_single_doublequote.json:1"
+  check(t, "\"")
+  Ok(())
+}

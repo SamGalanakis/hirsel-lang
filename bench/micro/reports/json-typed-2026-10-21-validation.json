@@ -1,0 +1,226 @@
+{
+  "corpus": {
+    "before": 67,
+    "after": 108,
+    "new": 41,
+    "passed": 108
+  },
+  "json_test_suite_utf8_inputs": 293,
+  "native": {
+    "passed": 11
+  },
+  "tasks": {
+    "passed": 22
+  },
+  "stdlib": {
+    "shards": 71,
+    "passed": 277,
+    "failed_known": 1,
+    "ignored": 135
+  },
+  "agreement": {
+    "groups": [
+      {
+        "checked": 14,
+        "clusters": [],
+        "edits": {
+          "annotation/mode": 4,
+          "annotation/relation": 1,
+          "argument/passing": 2,
+          "comparison/relation": 1,
+          "expression/closure-call": 2,
+          "last-use/view-live": 1,
+          "parameter/passing": 2,
+          "return/local": 1
+        },
+        "eligible": 299563,
+        "executed": 4,
+        "executions": {
+          "run": 4
+        },
+        "generated": 5215370,
+        "hash_seed": 0,
+        "limit": 5000,
+        "programs": 3700,
+        "rejected": 8,
+        "runtime_limits": 2,
+        "seed": 1,
+        "skipped": 0,
+        "unavailable": 0,
+        "valid": 6,
+        "variants_per_program": 96
+      },
+      {
+        "checked": 37,
+        "clusters": [],
+        "edits": {
+          "annotation/brand": 1,
+          "annotation/mode": 4,
+          "annotation/relation": 1,
+          "argument/passing": 12,
+          "binding/twice": 3,
+          "expression/closure-call": 4,
+          "holder/sequence-element": 1,
+          "last-use/view-dead": 2,
+          "last-use/view-live": 2,
+          "return/local": 1,
+          "statement/discard": 1,
+          "statement/into-argument": 4,
+          "store/mut": 1
+        },
+        "eligible": 299563,
+        "executed": 8,
+        "executions": {
+          "run": 8
+        },
+        "generated": 5215409,
+        "hash_seed": 0,
+        "limit": 5000,
+        "programs": 3700,
+        "rejected": 11,
+        "runtime_limits": 18,
+        "seed": 1,
+        "skipped": 0,
+        "unavailable": 0,
+        "valid": 26,
+        "variants_per_program": 96
+      },
+      {
+        "checked": 31,
+        "clusters": [],
+        "edits": {
+          "annotation/mode": 2,
+          "annotation/relation": 1,
+          "argument/passing": 10,
+          "expression/closure-call": 9,
+          "holder/closure-result": 1,
+          "return/local": 2,
+          "statement/into-argument": 4,
+          "statement/swap": 2
+        },
+        "eligible": 299563,
+        "executed": 7,
+        "executions": {
+          "run": 7
+        },
+        "generated": 5215409,
+        "hash_seed": 0,
+        "limit": 5000,
+        "programs": 3700,
+        "rejected": 11,
+        "runtime_limits": 13,
+        "seed": 1,
+        "skipped": 0,
+        "unavailable": 0,
+        "valid": 20,
+        "variants_per_program": 96
+      },
+      {
+        "checked": 48,
+        "clusters": [],
+        "edits": {
+          "annotation/brand": 3,
+          "annotation/mode": 6,
+          "argument/passing": 10,
+          "binding/mut": 3,
+          "comparison/relation": 1,
+          "expression/closure-call": 12,
+          "last-use/view-live": 1,
+          "parameter/passing": 2,
+          "return/local": 1,
+          "statement/into-argument": 5,
+          "statement/swap": 1,
+          "statement/twice": 3
+        },
+        "eligible": 299563,
+        "executed": 0,
+        "executions": {},
+        "generated": 5215409,
+        "hash_seed": 0,
+        "limit": 5000,
+        "programs": 3700,
+        "rejected": 20,
+        "runtime_limits": 28,
+        "seed": 1,
+        "skipped": 0,
+        "unavailable": 0,
+        "valid": 28,
+        "variants_per_program": 96
+      },
+      {
+        "checked": 40,
+        "clusters": [],
+        "edits": {
+          "annotation/brand": 3,
+          "annotation/mode": 3,
+          "annotation/relation": 1,
+          "argument/passing": 11,
+          "binding/mut": 3,
+          "binding/twice": 1,
+          "expression/closure-call": 7,
+          "holder/sequence-element": 1,
+          "parameter/passing": 2,
+          "return/local": 1,
+          "statement/into-argument": 5,
+          "statement/swap": 2
+        },
+        "eligible": 299563,
+        "executed": 0,
+        "executions": {},
+        "generated": 5215409,
+        "hash_seed": 0,
+        "limit": 5000,
+        "programs": 3700,
+        "rejected": 22,
+        "runtime_limits": 18,
+        "seed": 1,
+        "skipped": 0,
+        "unavailable": 0,
+        "valid": 18,
+        "variants_per_program": 96
+      },
+      {
+        "checked": 29,
+        "clusters": [],
+        "edits": {
+          "annotation/brand": 1,
+          "annotation/mode": 3,
+          "argument/passing": 9,
+          "binding/mut": 1,
+          "binding/twice": 1,
+          "comparison/relation": 1,
+          "expression/closure-call": 8,
+          "parameter/passing": 1,
+          "statement/discard": 1,
+          "statement/twice": 2,
+          "store/mut": 1
+        },
+        "eligible": 299563,
+        "executed": 3,
+        "executions": {
+          "run": 3
+        },
+        "generated": 5215409,
+        "hash_seed": 0,
+        "limit": 5000,
+        "programs": 3700,
+        "rejected": 12,
+        "runtime_limits": 14,
+        "seed": 1,
+        "skipped": 0,
+        "unavailable": 0,
+        "valid": 17,
+        "variants_per_program": 96
+      }
+    ],
+    "totals": {
+      "checked": 199,
+      "executed": 22,
+      "rejected": 84,
+      "runtime_limits": 93,
+      "valid": 115,
+      "skipped": 0,
+      "unavailable": 0
+    }
+  }
+}

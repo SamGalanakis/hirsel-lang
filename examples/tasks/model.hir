@@ -483,3 +483,25 @@ pub fn priority_json_into(value: Priority, mut out: List[u8], depth: u64) -> Res
   (),
   json.JsonError
 ] uses {} = comptime derive.json_into(shape(Priority))
+
+// Snapshot decoding shares one pull reader across board, item and enum fields.
+pub fn board_from_json_reader(mut cursor: json.Reader) -> Result[unique Board, String] uses {} = comptime derive.from_json_reader(
+  shape(Board)
+)
+
+pub fn board_from_json_bytes(data: Bytes) -> Result[unique Board, String] uses {} = comptime derive.from_json_bytes(
+  shape(Board)
+)
+
+pub fn item_from_json_reader(mut cursor: json.Reader) -> Result[unique Item, String] uses {} = comptime derive.from_json_reader(
+  shape(Item)
+)
+
+pub fn status_from_json_reader(mut cursor: json.Reader) -> Result[unique Status, String] uses {} = comptime derive.from_json_reader(
+  shape(Status)
+)
+
+pub fn priority_from_json_reader(mut cursor: json.Reader) -> Result[
+  unique Priority,
+  String
+] uses {} = comptime derive.from_json_reader(shape(Priority))

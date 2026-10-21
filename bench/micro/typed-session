@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Interleave before/after tasks restart and typed JSON micro against Rust."""
+import argparse
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import time
+import uuid
+from types import SimpleNamespace
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'bench/micro'))
+sys.path.insert(0, str(ROOT / 'bench/apps/tasks'))
+from measure import bootstrap_ratio, ratio, sample, schedule, timing_lock
+
+loader = importlib.machinery.SourceFileLoader('tasks_bench', str(ROOT / 'bench/apps/tasks/bench'))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+tasks = importlib.util.module_from_spec(spec)
+loader.exec_module(tasks)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--before', type=Path, required=True)
+    parser.add_argument('--after', type=Path, required=True)
+    parser.add_argument('--micro', type=Path, required=True, help='manifest with rust/before/after argv')
+    parser.add_argument('--micro-json', type=Path, help='optional existing dynamic JSON row manifest')
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--seed', type=int, default=20261021)
+    parser.add_argument('--rounds', type=int, default=10)
+    args = parser.parse_args()
+    if args.rounds < 10:
+        parser.error('at least ten rounds are required')
+    # The server pins itself to CPU31; the request client and coordinator use CPU7.
+    os.sched_setaffinity(0, {7})
+    micros = {'typed': {p['name']: p for p in json.loads(args.micro.read_text())}}
+    if args.micro_json:
+        micros['json'] = {p['name']: p for p in json.loads(args.micro_json.read_text())}
+    if any(set(group) != {'rust', 'before', 'after'} for group in micros.values()):
+        parser.error('micro manifest must contain rust, before and after')
+    for group in micros.values():
+        for participant in group.values():
+            participant['binary_sha256'] = hashlib.sha256(Path(participant['command'][0]).read_bytes()).hexdigest()
+    binaries = {'before': args.before.resolve(), 'after': args.after.resolve(), 'rust': tasks.RUST}
+    archive = args.output.with_suffix('')
+    archive.mkdir(parents=True, exist_ok=False)
+    rows = {'restart': [], **{name: [] for name in micros}}
+    document = dict(schema=1, session=str(uuid.uuid4()), started=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                    seed=args.seed, rounds=args.rounds, server_cpu=31, client_cpu=7,
+                    binaries={name: {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+                              for name, path in binaries.items()}, micro_participants=micros, samples=rows, status='running')
+    try:
+        with timing_lock(31):
+            cells = [(workload, name) for workload in rows for name in binaries]
+            for round_number, (workload, name) in schedule(cells, args.rounds, args.seed):
+                print(f'round {round_number + 1}: {workload}/{name}', flush=True)
+                if workload == 'restart':
+                    result = tasks.sample('rust-one-worker' if name == 'rust' else 'hirsel', 'restart', 0,
+                                          SimpleNamespace(binary=binaries[name]),
+                                          archive / f'{round_number}-{workload}-{name}', round_number)
+                    result.update(name=name, counts=result['perf'])
+                else:
+                    result = sample(micros[workload][name], 31, 300)
+                    result.update(name=name, round=round_number)
+                rows[workload].append(result)
+                args.output.write_text(json.dumps(document, indent=2) + '\n')
+        for workload in micros:
+            if len({s['stdout_sha256'] for s in rows[workload]}) != 1:
+                raise ValueError(f'{workload} JSON checksums differ')
+        document['comparisons'] = {}
+        for workload, samples in rows.items():
+            by_name = {name: sorted((s for s in samples if s['name'] == name), key=lambda s: s['round']) for name in binaries}
+            comparisons = {}
+            for name in ('before', 'after'):
+                comparisons[name] = {}
+                for metric in ('instructions', 'instructions:u', 'cycles', 'task-clock'):
+                    left = [s['counts'][metric] for s in by_name[name]]
+                    right = [s['counts'][metric] for s in by_name['rust']]
+                    comparisons[name][metric] = dict(ratio=ratio(left, right), ci95=bootstrap_ratio(left, right, args.seed))
+            document['comparisons'][workload] = comparisons
+        document['status'] = 'ok'
+    except BaseException as error:
+        document.update(status='failed', error=str(error))
+        raise
+    finally:
+        args.output.write_text(json.dumps(document, indent=2) + '\n')
+    print(json.dumps(document['comparisons'], indent=2))
+
+
+if __name__ == '__main__':
+    main()

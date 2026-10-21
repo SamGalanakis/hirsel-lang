@@ -494,3 +494,332 @@ pub fn check_depth(depth: u64) -> Result[(), JsonError] uses {} {
     Ok(())
   }
 }
+
+// Pull decoding, ported from serde_json 8c535a260ce561eaab4111aafc29038eb9f77ff3:
+// src/de.rs:255 (whitespace), 1820 (struct), 1919-2045 (Seq/MapAccess),
+// src/read.rs:521-566 (SliceRead's borrowed string fast path).
+// Bytes/String views retain their backing owner; Reader never takes the cursor.
+pub type Reader {
+  data: Bytes,
+  pos: u64,
+  depth: u64,
+}
+
+pub type TextView = Unescaped(Bytes) | Escaped(String)
+
+pub type Token = NullToken | BoolToken(bool) | NumberToken(Bytes) | TextToken(TextView) | ArrayStart | ArrayEnd | ObjectStart | ObjectEnd | Colon | Comma
+
+pub fn reader(data: Bytes) -> Reader in data uses {} {
+  Reader(data: data, pos: 0, depth: 0)
+}
+
+/// The next non-whitespace byte, or zero at end of cursor.
+pub fn peek(mut cursor: Reader) -> u8 uses {} {
+  json_whitespace(cursor.data, mut cursor.pos)
+  json_peek(cursor.data, cursor.pos)
+}
+
+/// A quoted string: a view when unescaped, independent storage otherwise.
+pub fn read_text(mut cursor: Reader) -> Result[TextView, JsonError] in cursor uses {} {
+  if peek(mut cursor) != 34 {
+    return Error(Syntax(cursor.pos))
+  }
+  let mut end = cursor.pos + 1
+  while end < core@1/bytes.len(cursor.data) && cursor.data[end] >= 32 && cursor.data[end] != 34 && cursor.data[end] != 92 {
+    end += 1
+  }
+  if end < core@1/bytes.len(cursor.data) && cursor.data[end] == 34 {
+    let value = core@1/bytes.slice(cursor.data, cursor.pos + 1, end)
+    cursor.pos = end + 1
+    return Ok(Unescaped(value))
+  }
+  // Keep the DOM parser's exact escape, surrogate and control-byte errors.
+  Ok(Escaped(json_quoted(cursor.data, mut cursor.pos)?))
+}
+
+/// A lossless number spelling as a view of the cursor.
+pub fn read_number(mut cursor: Reader) -> Result[Bytes, JsonError] in cursor uses {} {
+  let _ = peek(mut cursor)
+  let start = cursor.pos
+  json_number_end(cursor.data, mut cursor.pos)?
+  Ok(core@1/bytes.slice(cursor.data, start, cursor.pos))
+}
+
+fn reader_open(mut cursor: Reader, delimiter: u8) -> Result[(), JsonError] uses {} {
+  if peek(mut cursor) != delimiter {
+    return Error(Syntax(cursor.pos))
+  }
+  if let Error(_) = check_depth(cursor.depth) {
+    // The writer counts levels; readers report the delimiter's byte position.
+    return Error(Nesting(cursor.pos))
+  }
+  cursor.pos += 1
+  cursor.depth += 1
+  Ok(())
+}
+
+/// Read one lexical token. Container consumers enforce delimiter grammar.
+pub fn next_token(mut cursor: Reader) -> Result[Token, JsonError] in cursor uses {} {
+  let c = peek(mut cursor)
+  if c == 34 {
+    return Ok(TextToken(read_text(mut cursor)?))
+  }
+  if c == 45 || std@1/ascii.is_digit(c) {
+    return Ok(NumberToken(read_number(mut cursor)?))
+  }
+  if c == 110 {
+    json_keyword(cursor.data, mut cursor.pos, "null")?
+    return Ok(NullToken)
+  }
+  if c == 116 {
+    json_keyword(cursor.data, mut cursor.pos, "true")?
+    return Ok(BoolToken(true))
+  }
+  if c == 102 {
+    json_keyword(cursor.data, mut cursor.pos, "false")?
+    return Ok(BoolToken(false))
+  }
+  if c == 91 {
+    reader_open(mut cursor, 91)?
+    return Ok(ArrayStart)
+  }
+  if c == 123 {
+    reader_open(mut cursor, 123)?
+    return Ok(ObjectStart)
+  }
+  if c == 93 || c == 125 {
+    if cursor.depth == 0 {
+      return Error(Syntax(cursor.pos))
+    }
+    cursor.depth -= 1
+    cursor.pos += 1
+    return Ok(
+      if c == 93 {
+        ArrayEnd
+      } else {
+        ObjectEnd
+      }
+    )
+  }
+  cursor.pos += 1
+  if c == 58 {
+    return Ok(Colon)
+  }
+  if c == 44 {
+    return Ok(Comma)
+  }
+  Error(Syntax(cursor.pos - 1))
+}
+
+pub fn begin_array(mut cursor: Reader) -> Result[(), JsonError] uses {} {
+  reader_open(mut cursor, 91)
+}
+
+pub fn begin_object(mut cursor: Reader) -> Result[(), JsonError] uses {} {
+  reader_open(mut cursor, 123)
+}
+
+// serde_json SeqAccess/MapAccess: the first item has no comma. After a comma
+// a value/key is mandatory, so trailing commas fail at the closing delimiter.
+fn reader_more(mut cursor: Reader, mut first: bool, end: u8) -> Result[bool, JsonError] uses {} {
+  let c = peek(mut cursor)
+  if c == end {
+    if cursor.depth == 0 {
+      return Error(Syntax(cursor.pos))
+    }
+    cursor.pos += 1
+    cursor.depth -= 1
+    return Ok(false)
+  }
+  if !first {
+    if c != 44 {
+      return Error(Syntax(cursor.pos))
+    }
+    cursor.pos += 1
+  }
+  first = false
+  Ok(true)
+}
+
+pub fn array_next(mut cursor: Reader, mut first: bool) -> Result[bool, JsonError] uses {} {
+  reader_more(mut cursor, mut first, 93)
+}
+
+/// Next object key without allocating a key set. Generated records check their
+/// declared field slots and keep a set only for unknown fields.
+pub fn object_key(mut cursor: Reader, mut first: bool) -> Result[
+  Option[TextView],
+  JsonError
+] in cursor uses {} {
+  if !reader_more(mut cursor, mut first, 125)? {
+    return Ok(None)
+  }
+  Ok(Some(read_text(mut cursor)?))
+}
+
+pub fn colon(mut cursor: Reader) -> Result[(), JsonError] uses {} {
+  if peek(mut cursor) != 58 {
+    return Error(Syntax(cursor.pos))
+  }
+  cursor.pos += 1
+  Ok(())
+}
+
+/// Next object key, rejecting decoded duplicates before reading its value.
+/// The caller owns the key set for this object, including ignored members.
+pub fn object_next(mut cursor: Reader, mut first: bool, mut keys: Set[String]) -> Result[
+  Option[String],
+  JsonError
+] uses {} {
+  let _ = peek(mut cursor)
+  let mut start = cursor.pos
+  if !first && json_peek(cursor.data, start) == 44 {
+    start += 1
+    json_whitespace(cursor.data, mut start)
+  }
+  if !reader_more(mut cursor, mut first, 125)? {
+    return Ok(None)
+  }
+  let key = read_owned_text(mut cursor)?
+  if core@1/set.contains(keys, key) {
+    return Error(DuplicateKey(start))
+  }
+  core@1/set.insert(mut keys, copy key)
+  colon(mut cursor)?
+  Ok(Some(key))
+}
+
+/// Validate and skip one value, retaining only object key sets, never a DOM.
+pub fn skip(mut cursor: Reader) -> Result[(), JsonError] uses {} {
+  let c = peek(mut cursor)
+  if c == 91 {
+    begin_array(mut cursor)?
+    let mut first = true
+    while array_next(mut cursor, mut first)? {
+      skip(mut cursor)?
+    }
+  } else if c == 123 {
+    begin_object(mut cursor)?
+    let mut first = true
+    let mut keys: Set[String] = core@1/set.empty()
+    while let Some(_) = object_next(mut cursor, mut first, mut keys)? {
+      skip(mut cursor)?
+    }
+  } else {
+    match next_token(mut cursor)? {
+      NullToken => (),
+      BoolToken(_) => (),
+      NumberToken(_) => (),
+      TextToken(_) => (),
+      _ => return Error(Syntax(cursor.pos - 1)),
+    }
+  }
+  Ok(())
+}
+
+/// Require only whitespace after the decoded root.
+pub fn finish_reader(mut cursor: Reader) -> Result[(), JsonError] uses {} {
+  let _ = peek(mut cursor)
+  if cursor.pos != core@1/bytes.len(cursor.data) {
+    return Error(Syntax(cursor.pos))
+  }
+  Ok(())
+}
+
+/// An independently owned decoded string for an owned typed field. The reader's
+/// view path remains available for keys and transient consumers.
+pub fn read_owned_text(mut cursor: Reader) -> Result[unique String, JsonError] uses {} {
+  if peek(mut cursor) != 34 {
+    return Error(Syntax(cursor.pos))
+  }
+  let mut stop = cursor.pos + 1
+  while stop < core@1/bytes.len(cursor.data) && cursor.data[stop] >= 32 && cursor.data[stop] != 34 && cursor.data[stop] != 92 {
+    stop += 1
+  }
+  if stop < core@1/bytes.len(cursor.data) && cursor.data[stop] == 34 {
+    let mut out: List[u8] = []
+    core@1/bytes.append(mut out, core@1/bytes.slice(cursor.data, cursor.pos + 1, stop))
+    cursor.pos = stop + 1
+    return match text.finish(take out) {
+      Ok(s) => Ok(take s),
+      Error(_) => Error(Syntax(stop)),
+    }
+  }
+  json_quoted(cursor.data, mut cursor.pos)
+}
+
+/// Compare a borrowed key against a field name quoted at compile time.
+pub fn text_is(value: TextView, expected: String) -> bool uses {} {
+  match value {
+    Unescaped(raw) => raw == core@1/string.as_bytes(expected),
+    Escaped(decoded) => decoded == expected,
+  }
+}
+
+/// Copy only a token's bytes when an owned String is required by scalar.parse.
+/// The pull reader itself exposes the original spelling without allocation.
+pub fn number_text(raw: Bytes) -> unique String uses {} {
+  json_owned_text(raw, 0, core@1/bytes.len(raw))
+}
+
+pub fn text_owned(value: TextView) -> unique String uses {} {
+  match value {
+    Unescaped(raw) => json_owned_text(raw, 0, core@1/bytes.len(raw)),
+    Escaped(decoded) => json_owned_text(
+      core@1/string.as_bytes(decoded),
+      0,
+      core@1/string.byte_len(decoded)
+    ),
+  }
+}
+
+// Same strict scalar validation as std@1/utf8.decode_lossy's accepted runs.
+// serde_json SliceRead delegates this check to Rust str::from_utf8. Keep it a
+// borrowed-byte scan here because core string.from_bytes consumes owned bytes.
+pub fn valid_utf8(data: Bytes) -> bool uses {} {
+  let mut at: u64 = 0
+  let size = core@1/bytes.len(data)
+  while at < size {
+    let first = data[at]
+    if first < 128 {
+      at += 1
+      continue
+    }
+    let width: u64 = if first >= 194 && first <= 223 {
+      2
+    } else if first >= 224 && first <= 239 {
+      3
+    } else if first >= 240 && first <= 244 {
+      4
+    } else {
+      return false
+    }
+    if width > size - at {
+      return false
+    }
+    let mut part: u64 = 1
+    while part < width {
+      let c = data[at + part]
+      let low: u8 = if part == 1 && first == 224 {
+        160
+      } else if part == 1 && first == 240 {
+        144
+      } else {
+        128
+      }
+      let high: u8 = if part == 1 && first == 237 {
+        159
+      } else if part == 1 && first == 244 {
+        143
+      } else {
+        191
+      }
+      if c < low || c > high {
+        return false
+      }
+      part += 1
+    }
+    at += width
+  }
+  true
+}

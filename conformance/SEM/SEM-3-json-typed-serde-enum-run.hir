@@ -1,0 +1,201 @@
+// rule: SEM-3
+// expect: run
+// Byte-reader twin of CT-5-std-derive-serde-enum-run. All its applicable
+// serde_json decode vectors and unchanged semantic expectations exercise the
+// direct entry here. Parser errors remain json.parse's own contract.
+type Animal = Dog | Frog(String, List[i64]) | Cat(age: u64, name: String) | AntHive(
+  List[String]
+)
+
+fn animal_to_json(a: Animal) -> json.Value uses {} = comptime derive.json_value(
+  shape(Animal)
+)
+
+fn animal_from_json_reader(mut cursor: json.Reader) -> Result[unique Animal, String] uses {} = comptime derive.from_json_reader(
+  shape(Animal)
+)
+
+fn animal_from_json_bytes(data: Bytes) -> Result[unique Animal, String] uses {} = comptime derive.from_json_bytes(
+  shape(Animal)
+)
+
+fn animal_equal(a: Animal, b: Animal) -> bool uses {} = comptime derive.equal(
+  shape(Animal)
+)
+
+@preserves_unique(out)
+fn animal_json_into(value: Animal, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Animal))
+
+fn animal_hash(a: Animal, mut state: siphash.State) -> () uses {} = comptime derive.hash(
+  shape(Animal)
+)
+
+fn decode(text: String) -> Result[unique Animal, String] uses {} {
+  animal_from_json_bytes(string.as_bytes(text))
+}
+
+fn decode_ok(t: Test, text: String, expected: Animal) -> () {
+  match decode(text) {
+    Ok(a) => test.check(t, animal_equal(a, expected)),
+    Error(e) => test.equal(t, e, "decoded"),
+  }
+}
+
+fn decode_error(t: Test, text: String, message: String) -> () {
+  match decode(text) {
+    Ok(_) => test.equal(t, "decoded", message),
+    Error(e) => test.equal(t, e, message),
+  }
+}
+
+fn parse_error(t: Test, text: String) -> () {
+  test.check(t, results.is_error(json.parse(unique text)))
+  decode_error(t, text, "not JSON")
+}
+
+// test_write_enum: the compact text, from the DOM and directly, which reads
+// back as the same value; and the value's Rust DefaultHasher hash.
+fn encode(t: Test, a: Animal, expected: String, hash: u64) -> () {
+  match json.stringify(animal_to_json(a)) {
+    Ok(text) => test.equal(t, text, expected),
+    Error(_) => test.equal(t, "unencodable", expected),
+  }
+  let mut out: List[u8] = []
+  test.check(t, animal_json_into(a, mut out, 0) == Ok(()))
+  test.equal(t, text.finish_valid(take out), expected)
+  decode_ok(t, expected, a)
+  test.equal(t, siphash.hash_one(a, animal_hash, 0, 0), hash)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  encode(t, Dog, "\"Dog\"", 0xbd60acb658c79e45)
+  encode(t, Frog("Henry", []), "{\"Frog\":[\"Henry\",[]]}", 0xd3754e50bcbc917e)
+  encode(t, Frog("Henry", [349]), "{\"Frog\":[\"Henry\",[349]]}", 0x81f1a2101551ae2c)
+  encode(
+    t,
+    Frog("Henry", [349, 102]),
+    "{\"Frog\":[\"Henry\",[349,102]]}",
+    0xc36dc6e2ee454595
+  )
+  encode(
+    t,
+    Cat(age: 5, name: "Kate"),
+    "{\"Cat\":{\"age\":5,\"name\":\"Kate\"}}",
+    0x180e919ab1be1b56
+  )
+  encode(
+    t,
+    AntHive(["Bob", "Stuart"]),
+    "{\"AntHive\":[\"Bob\",\"Stuart\"]}",
+    0xcb4d902e7430a32b
+  )
+  // test_parse_enum
+  decode_ok(t, "\"Dog\"", Dog)
+  decode_ok(t, " \"Dog\" ", Dog)
+  decode_ok(t, "{\"Frog\":[\"Henry\",[]]}", Frog("Henry", []))
+  decode_ok(
+    t,
+    " { \"Frog\": [ \"Henry\" , [ 349, 102 ] ] } ",
+    Frog("Henry", [349, 102])
+  )
+  decode_ok(t, "{\"Cat\": {\"age\": 5, \"name\": \"Kate\"}}", Cat(age: 5, name: "Kate"))
+  decode_ok(
+    t,
+    " { \"Cat\" : { \"age\" : 5 , \"name\" : \"Kate\" } } ",
+    Cat(age: 5, name: "Kate")
+  )
+  decode_ok(t, " { \"AntHive\" : [\"Bob\", \"Stuart\"] } ", AntHive(["Bob", "Stuart"]))
+  decode_ok(t, "{\"Dog\":null}", Dog)
+  decode_ok(t, " { \"Dog\" : null } ", Dog)
+  let Ok(Object(members)) = json.parse(
+    "{  \"a\": \"Dog\",  \"b\": {\"Frog\":[\"Henry\", []]}}"
+  ) else {
+    return Error(())
+  }
+  let mut decoded: Map[String, Animal] = map.empty()
+  for (key, member) in members {
+    let encoded = match json.stringify(member) {
+      Ok(s) => take s,
+      Error(_) => return Error(()),
+    }
+    let Ok(animal) = animal_from_json_bytes(string.as_bytes(encoded)) else {
+      return Error(())
+    }
+    map.insert(mut decoded, unique key, take animal)
+  }
+  test.equal(t, map.len(decoded), 2)
+  match map.get(decoded, "a") {
+    Some(a) => test.check(t, animal_equal(a, Dog)),
+    None => test.check(t, false),
+  }
+  match map.get(decoded, "b") {
+    Some(b) => test.check(t, animal_equal(b, Frog("Henry", []))),
+    None => test.check(t, false),
+  }
+  // test_parse_enum_errors
+  let one_of = "expected one of `Dog`, `Frog`, `Cat`, `AntHive`"
+  decode_error(t, "{}", "invalid value: map, expected map with a single key")
+  decode_error(t, "[]", "invalid type: sequence, expected string or map")
+  decode_error(t, "\"unknown\"", f"unknown variant `unknown`, {one_of}")
+  decode_error(t, "{\"unknown\":null}", f"unknown variant `unknown`, {one_of}")
+  parse_error(t, "{\"Dog\":")
+  parse_error(t, "{\"Dog\":}")
+  decode_error(t, "{\"Dog\":{}}", "invalid type: map, expected unit")
+  decode_error(t, "\"Frog\"", "invalid type: unit variant, expected tuple variant")
+  parse_error(t, "\"Frog\" 0 ")
+  decode_error(t, "{\"Frog\":{}}", "invalid type: map, expected tuple variant")
+  decode_error(t, "{\"Cat\":[]}", "invalid type: sequence, expected struct variant")
+  decode_error(t, "{\"Cat\":[0]}", "invalid type: sequence, expected struct variant")
+  decode_error(
+    t,
+    "{\"Cat\":[0, \"\", 2]}",
+    "invalid type: sequence, expected struct variant"
+  )
+  parse_error(t, "{\"Cat\":{\"age\": 5, \"name\": \"Kate\", \"foo\":\"bar\"}")
+  parse_error(t, "{\"Cat\":[0, \"Kate\",]}")
+  parse_error(t, "{\"Cat\":{\"age\": 2, \"name\": \"Kate\",}}")
+  // serde_json::from_value on further shapes (messages taken from serde_json
+  // 1.0.154): payload counts, a second member, a missing field, an unknown
+  // member, and the payload kinds of a unit variant.
+  decode_error(
+    t,
+    "{\"Frog\":[]}",
+    "invalid type: null, expected tuple variant Animal::Frog"
+  )
+  decode_error(
+    t,
+    "{\"Frog\":[\"a\"]}",
+    "invalid length 1, expected tuple variant Animal::Frog with 2 elements"
+  )
+  decode_error(
+    t,
+    "{\"Frog\":[\"a\",[],3]}",
+    "invalid length 3, expected fewer elements in array"
+  )
+  decode_error(
+    t,
+    "{\"Dog\":null,\"Cat\":null}",
+    "invalid value: map, expected map with a single key"
+  )
+  decode_error(t, "{\"Cat\":{\"name\":\"Kate\"}}", "missing field `age`")
+  // serde says `invalid type: string "x", expected a sequence`; leaf
+  // decoders keep their own messages.
+  decode_error(t, "{\"AntHive\":\"x\"}", "expected a JSON array")
+  decode_ok(
+    t,
+    "{\"Cat\":{\"age\":5,\"name\":\"Kate\",\"foo\":\"bar\"}}",
+    Cat(age: 5, name: "Kate")
+  )
+  decode_error(
+    t,
+    "{\"Cat\":\"x\"}",
+    "invalid type: string \"x\", expected struct variant"
+  )
+  decode_error(t, "{\"Dog\":5}", "invalid type: integer `5`, expected unit")
+  decode_error(t, "{\"Dog\":true}", "invalid type: boolean `true`, expected unit")
+  decode_error(t, "{\"Dog\":1.5}", "invalid type: floating point `1.5`, expected unit")
+  Ok(())
+}

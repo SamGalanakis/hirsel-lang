@@ -1,0 +1,36 @@
+// rule: SEM-3
+// expect: run
+// JSONTestSuite 1ef36fa01286573e846ac449e8683f8833c5b26a test_parsing/*.json:1.
+// Differential reader twin of the existing imports; exact JsonError offsets.
+fn check(t: Test, source: String) -> () {
+  let expected: Result[(), json.JsonError] = match json.parse(unique source) {
+    Ok(_) => Ok(()),
+    Error(e) => Error(e),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let actual = match json.skip(mut cursor) {
+    Ok(()) => json.finish_reader(mut cursor),
+    Error(e) => Error(e),
+  }
+  test.equal(t, actual, expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // "y_string_unicode_escaped_double_quote.json:1"
+  check(t, "[\"\\u0022\"]")
+  // "y_string_utf8.json:1"
+  check(t, "[\"€𝄞\"]")
+  // "y_string_with_del_character.json:1"
+  check(t, "[\"a\u{7f}a\"]")
+  // "y_structure_lonely_false.json:1"
+  check(t, "false")
+  // "y_structure_lonely_int.json:1"
+  check(t, "42")
+  // "y_structure_lonely_negative_real.json:1"
+  check(t, "-0.1")
+  // "y_structure_lonely_null.json:1"
+  check(t, "null")
+  // "y_structure_lonely_string.json:1"
+  check(t, "\"asd\"")
+  Ok(())
+}

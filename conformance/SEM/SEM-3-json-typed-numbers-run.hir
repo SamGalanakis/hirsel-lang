@@ -1,0 +1,81 @@
+// rule: SEM-3
+// expect: run
+// Lossless Hirsel number and string ownership rules on the pull path.
+type Numbers {
+  byte: u8,
+  unsigned: u128,
+  signed: i128,
+  decimal: f64,
+  special: f32,
+  text: String,
+}
+
+fn numbers_from_json_reader(mut cursor: json.Reader) -> Result[unique Numbers, String] uses {} = comptime derive.from_json_reader(
+  shape(Numbers)
+)
+
+fn numbers_from_json_bytes(data: Bytes) -> Result[unique Numbers, String] uses {} = comptime derive.from_json_bytes(
+  shape(Numbers)
+)
+
+type Tree = Leaf(String) | Branch(List[Tree])
+
+fn tree_from_json_reader(mut cursor: json.Reader) -> Result[unique Tree, String] uses {} = comptime derive.from_json_reader(
+  shape(Tree)
+)
+
+fn tree_from_json_bytes(data: Bytes) -> Result[unique Tree, String] uses {} = comptime derive.from_json_bytes(
+  shape(Tree)
+)
+
+fn tree_equal(a: Tree, b: Tree) -> bool uses {} = comptime derive.equal(shape(Tree))
+
+fn decode_error(t: Test, source: String, expected: String) -> () {
+  match numbers_from_json_bytes(string.as_bytes(source)) {
+    Ok(_) => test.equal(t, "decoded", expected),
+    Error(e) => test.equal(t, e, expected),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let Ok(n) = numbers_from_json_bytes(
+    b"{\"byte\":255,\"unsigned\":340282366920938463463374607431768211455,\"signed\":-170141183460469231731687303715884105728,\"decimal\":-0.00E+09,\"special\":\"NaN\",\"text\":\"\xc3\xa9 \\ud834\\udd1e\"}"
+  ) else {
+    return Error(())
+  }
+  test.equal(t, n.byte, 255)
+  test.equal(t, n.unsigned, 340282366920938463463374607431768211455u128)
+  test.equal(t, n.signed, -170141183460469231731687303715884105728i128)
+  test.equal(t, f64.bits(n.decimal), 0x8000000000000000)
+  test.check(t, n.special != n.special)
+  test.equal(t, n.text, "é 𝄞")
+  decode_error(t, "{\"byte\":256}", "expected a JSON number fitting u8")
+  decode_error(t, "{\"byte\":1.0}", "expected a JSON number fitting u8")
+  decode_error(t, "{\"byte\":1e0}", "expected a JSON number fitting u8")
+  decode_error(t, "{\"byte\":-1}", "expected a JSON number fitting u8")
+  decode_error(
+    t,
+    "{\"byte\":1,\"unsigned\":340282366920938463463374607431768211456}",
+    "expected a JSON number fitting u128"
+  )
+  decode_error(
+    t,
+    "{\"byte\":1,\"unsigned\":0,\"signed\":170141183460469231731687303715884105728}",
+    "expected a JSON number fitting i128"
+  )
+  decode_error(
+    t,
+    "{\"byte\":1,\"unsigned\":0,\"signed\":0,\"decimal\":\"1.5\"}",
+    "expected a JSON number"
+  )
+  decode_error(t, "{\"byte\":1,\"unknown\":{\"x\":0,\"\\u0078\":1}}", "not JSON")
+  decode_error(t, "{\"byte\":0,\"\\u0062yte\":1}", "not JSON")
+  // Invalid UTF-8 is rejected even in ignored keys and values.
+  test.equal(t, numbers_from_json_bytes(b"{\"x\":\"\xff\"}"), Error("not UTF-8"))
+  let source = "{\"Branch\":[{\"Leaf\":\"a\"},{\"Branch\":[{\"Leaf\":\"b\"}]}]}"
+  let Ok(tree) = tree_from_json_bytes(string.as_bytes(source)) else {
+    return Error(())
+  }
+  test.check(t, tree_equal(tree, Branch([Leaf("a"), Branch([Leaf("b")])])))
+  Ok(())
+}
