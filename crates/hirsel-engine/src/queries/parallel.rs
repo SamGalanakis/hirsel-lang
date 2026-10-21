@@ -446,7 +446,8 @@ impl QueryEngine {
     /// Publish compact outcomes before releasing bodies according to the
     /// selected retention policy. No returned product retains a TypedBody.
     /// Batch workers release bodies before accepting their next task; compact
-    /// receipts and optional store payload bytes await serial publication.
+    /// receipts await serial publication; encoded store bytes are drained by
+    /// the producing worker before it accepts another task.
     pub fn publish_definitions(
         &mut self,
         definitions: Vec<DefPath>,
@@ -895,6 +896,17 @@ impl QueryEngine {
             && self.result_store.is_some()
             && self.s1.is_empty()
             && self.s1.failure_is_own();
+        let writers: BTreeMap<_, _> = if capture_store {
+            tasks
+                .iter()
+                .filter_map(|task| {
+                    self.mode_writer(&task.definition)
+                        .map(|writer| (task.definition.clone(), writer))
+                })
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
         let completed = {
             let citations = self.citation_source();
             let worker = Worker {
@@ -922,13 +934,16 @@ impl QueryEngine {
                             candidates: candidates.get(&done.definition).copied(),
                             environment,
                         };
-                        WorkerCompleted::Compact(CompactCompleted::capture(
+                        let writer = writers.get(&done.definition);
+                        let mut done = CompactCompleted::capture(
                             done,
                             &worker,
                             self.types.clone(),
                             &mut source,
-                            capture_store,
-                        ))
+                            writer.is_some(),
+                        );
+                        done.write_payload(writer);
+                        WorkerCompleted::Compact(done)
                     } else {
                         WorkerCompleted::Resident(done)
                     }

@@ -111,9 +111,21 @@ pub(crate) struct CompactCompleted {
     dead_arms: Option<crate::tools::DeadArmUse>,
     lowering_inputs: Option<lowering::LoweringUse>,
     payload: Option<Vec<u8>>,
+    store_write: Option<Result<(), QueryError>>,
     outcome: PublishedResult,
 }
 impl CompactCompleted {
+    /// Drain the encoded bytes before this worker accepts another task. Only
+    /// the provider verdict returns to canonical serial memo publication.
+    pub(super) fn write_payload(&mut self, writer: Option<&persistent::EncodedWriter>) {
+        if let Some(payload) = self.payload.take()
+            && let Some(writer) = writer
+            && let Some(stage) = &self.modes
+        {
+            self.store_write = Some(writer.write(&stage.reads, payload));
+        }
+    }
+
     pub(crate) fn definition(&self) -> &DefPath {
         &self.outcome.definition
     }
@@ -263,6 +275,7 @@ impl CompactCompleted {
             dead_arms,
             lowering_inputs,
             payload: consistent.then_some(payload).flatten(),
+            store_write: None,
             outcome: PublishedResult {
                 definition: done.definition,
                 result,
@@ -285,9 +298,14 @@ impl QueryEngine {
             dead_arms,
             lowering_inputs,
             payload,
+            store_write,
             mut outcome,
             ..
         } = done;
+        debug_assert!(
+            payload.is_none(),
+            "worker payload must be drained before publication"
+        );
         let path = &outcome.definition;
         let id = DefId::intern(path);
         if let Some(product) = resolution {
@@ -332,11 +350,12 @@ impl QueryEngine {
         }
         if let Some(stage) = modes {
             let mut store_failed = false;
-            if let Some(payload) = payload
-                && let Err(error) = self.store_mode_payload(path, &stage.reads, payload)
-            {
-                outcome.result = Err(error);
-                store_failed = true;
+            if let Some(write) = store_write {
+                self.finish_mode_write(path);
+                if let Err(error) = write {
+                    outcome.result = Err(error);
+                    store_failed = true;
+                }
             }
             let detail = stage.detail.clone();
             if let Some(entry) =

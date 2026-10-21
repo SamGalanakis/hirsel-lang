@@ -177,6 +177,39 @@ pub(super) fn capture_mode(
     )
 }
 
+/// Immutable writer shared by serial and worker publication. Keys and expected
+/// verification bytes are selected by the engine before freezing; provider I/O
+/// owns no query state and retains no encoded payload after write returns.
+pub(super) struct EncodedWriter {
+    store: Arc<dyn crate::store::ResultStore>,
+    key: EntryKey,
+    path: DefPath,
+    kind: QueryKind,
+    expected: Option<Variant>,
+}
+impl EncodedWriter {
+    pub(super) fn write(&self, reads: &Reads, payload: Vec<u8>) -> Result<(), QueryError> {
+        if let Some(expected) = &self.expected
+            && (expected.payload.as_ref() != payload || expected.reads != *reads)
+        {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "verify-cache".into(),
+                message: format!(
+                    "{}: {:?} differs from its cached result",
+                    self.path, self.kind
+                ),
+            }));
+        }
+        let mut entry = StoredEntry::load(&*self.store, &self.key);
+        entry.insert(Variant {
+            reads: reads.clone(),
+            payload: payload.into(),
+        });
+        self.store.put(&self.key, &entry.encode());
+        Ok(())
+    }
+}
+
 impl QueryEngine {
     /// Select a persistent result store. Library engines default to no store;
     /// CLI engines use dir@1. Injected stores keep integration tests isolated.
@@ -285,25 +318,19 @@ impl QueryEngine {
         let Some(payload) = encode(self) else {
             return Ok(());
         };
-        if let Some(expected) = self
+        let expected = self
             .pending_store_checks
-            .remove(&(DefId::intern(path), kind))
-        {
-            if expected.payload.as_ref() != payload || expected.reads != *reads {
-                return Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                    operation: "verify-cache".into(),
-                    message: format!("{path}: {kind:?} differs from its cached result"),
-                }));
-            }
+            .remove(&(DefId::intern(path), kind));
+        EncodedWriter {
+            store,
+            key,
+            path: path.clone(),
+            kind,
+            expected,
         }
-        let mut entry = StoredEntry::load(&*store, &key);
-        entry.insert(Variant {
-            reads: reads.clone(),
-            payload: payload.into(),
-        });
-        store.put(&key, &entry.encode());
-        Ok(())
+        .write(reads, payload)
     }
+
     fn adopted<T>(
         &mut self,
         path: &DefPath,
@@ -426,19 +453,26 @@ impl QueryEngine {
             )
         })
     }
-    /// Commit an already canonical mode record after immutable workers have
-    /// released its body products. Provider, key and verify-cache behavior are
-    /// shared with the ordinary writer; no decoder or alternate format exists.
-    pub(super) fn store_mode_payload(
-        &mut self,
-        path: &DefPath,
-        reads: &Reads,
-        payload: Vec<u8>,
-    ) -> Result<(), QueryError> {
+    /// Snapshot this task's store policy without consuming its pending
+    /// verification obligation; canonical merge retires it only after encoding.
+    pub(super) fn mode_writer(&mut self, path: &DefPath) -> Option<EncodedWriter> {
         if !self.s1.is_empty() || !self.s1.failure_is_own() {
-            return Ok(());
+            return None;
         }
-        self.write_encoded(path, QueryKind::Modes, reads, |_| Some(payload))
+        Some(EncodedWriter {
+            store: self.result_store.clone()?,
+            key: self.store_key(path, QueryKind::Modes)?,
+            path: path.clone(),
+            kind: QueryKind::Modes,
+            expected: self
+                .pending_store_checks
+                .get(&(DefId::intern(path), QueryKind::Modes))
+                .cloned(),
+        })
+    }
+    pub(super) fn finish_mode_write(&mut self, path: &DefPath) {
+        self.pending_store_checks
+            .remove(&(DefId::intern(path), QueryKind::Modes));
     }
     pub(super) fn load_lower(
         &mut self,

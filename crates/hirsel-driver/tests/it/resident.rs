@@ -1643,3 +1643,101 @@ fn batch_serial_compile_time_demands_release_bodies_after_each_root() {
         assert_eq!(candidate.memo_stats().recomputed, before);
     });
 }
+
+#[test]
+fn durable_front_workers_drain_payloads_before_accepting_another_task() {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct ObservedStore {
+        pending: AtomicUsize,
+        peak: AtomicUsize,
+        writers: Mutex<Vec<std::thread::ThreadId>>,
+    }
+    impl store::ResultStore for ObservedStore {
+        fn get(&self, _: &store::EntryKey) -> Option<Arc<[u8]>> {
+            None
+        }
+        fn put(&self, _: &store::EntryKey, _: &[u8]) {
+            assert!(self.pending.fetch_sub(1, Ordering::SeqCst) > 0);
+            self.writers
+                .lock()
+                .unwrap()
+                .push(std::thread::current().id());
+        }
+        fn name(&self) -> &'static str {
+            "observed@1"
+        }
+    }
+    struct ObservedModes(Arc<dyn ModesPhase>, Arc<ObservedStore>);
+    impl ModesPhase for ObservedModes {
+        fn check_modes(
+            &self,
+            types: &hirsel_types::TypeInterner,
+            memo: &hirsel_types::TypeMemo,
+            body: Arc<TypedBody>,
+            signature: &Signature,
+            products: &mut PhaseProducts,
+            provider: &mut dyn SignatureProvider,
+        ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
+            let output = self
+                .0
+                .check_modes(types, memo, body, signature, products, provider)?;
+            let pending = self.1.pending.fetch_add(1, Ordering::SeqCst) + 1;
+            self.1.peak.fetch_max(pending, Ordering::SeqCst);
+            Ok(output)
+        }
+    }
+    with_compiler_stack(|| {
+        for jobs in [1, 2, 8] {
+            let store = Arc::new(ObservedStore {
+                pending: AtomicUsize::new(0),
+                peak: AtomicUsize::new(0),
+                writers: Mutex::new(vec![]),
+            });
+            let mut adapters = compiler_adapters();
+            adapters.modes = Some(Arc::new(ObservedModes(
+                adapters.modes.take().unwrap(),
+                store.clone(),
+            )));
+            let mut candidate =
+                QueryEngine::new(default_environment(), adapters).with_result_store(store.clone());
+            let source: String = (0..64)
+                .map(|i| format!("fn p{i}()->u64{{{i}u64}}\n"))
+                .collect();
+            let file = candidate.sources.add("pending-store.hir", source).unwrap();
+            candidate.parse_file(file, &default_context()).unwrap();
+            let owners: Vec<_> = (0..64).rev().map(|i| path(&format!("p{i}"))).collect();
+            let output = candidate.publish_definitions(
+                owners.clone(),
+                hirsel_intern::jobs::Jobs::new(jobs),
+                memo::Retention::Batch,
+            );
+            assert!(output.iter().all(|result| result.result.is_ok()));
+            assert_eq!(
+                output
+                    .iter()
+                    .map(|result| &result.definition)
+                    .collect::<Vec<_>>(),
+                owners.iter().collect::<Vec<_>>()
+            );
+            assert_eq!(store.pending.load(Ordering::SeqCst), 0);
+            assert!(
+                store.peak.load(Ordering::SeqCst) <= jobs,
+                "jobs={jobs} pending={} encoded roots accumulated before store publication",
+                store.peak.load(Ordering::SeqCst)
+            );
+            let writers = store.writers.lock().unwrap();
+            assert_eq!(writers.len(), 64);
+            if jobs > 1 {
+                assert!(
+                    writers
+                        .iter()
+                        .all(|thread| *thread != std::thread::current().id()),
+                    "workers must release payload buffers before their next task"
+                );
+            }
+        }
+    });
+}

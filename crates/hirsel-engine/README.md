@@ -951,3 +951,9 @@ compact front facts and release successful checked/analyzed bodies on completion
 under Batch retention. The request's active Arc remains valid through evaluation;
 Resident sessions keep the ordinary body memos. Later explicit body demands use
 the usual miss/recompute path.
+
+Compact P workers drain encoded result-store payloads through the same immutable
+writer as scalar queries before accepting another task. Only the write verdict
+joins canonical memo publication. Completed payload buffers therefore do not
+accumulate across the frontier; provider-owned caches remain the selected store's
+policy. VerifyStore still compares exact canonical payload bytes and reads.
