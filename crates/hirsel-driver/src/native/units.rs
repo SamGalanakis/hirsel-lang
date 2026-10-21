@@ -249,20 +249,31 @@ pub(crate) fn lower(
         |i| -> Result<(usize, LoweredUnit), NativeError> {
             let key = &keys[i];
             let stored = timed(Phase::StoreLookup, || program.objects.store.get(key));
-            if let Some(bytes) = stored
-                && let Ok(fragment) =
-                    UnitFragment::decode(&bytes, &|k| layout_ids.get(k).copied(), &|k| {
-                        abi_ids.get(k).copied()
-                    })
-            {
+            let cached = stored.as_ref().and_then(|bytes| {
+                UnitFragment::decode(bytes, &|k| layout_ids.get(k).copied(), &|k| {
+                    abi_ids.get(k).copied()
+                })
+                .ok()
+            });
+            let hit = cached.is_some();
+            if hit {
                 timings::count(Count::ObjectHits);
-                let hit = LoweredUnit {
-                    fragment: Some(fragment),
-                    hit: true,
-                };
-                return Ok((i, hit));
+            } else {
+                timings::count(Count::ObjectMisses);
             }
-            timings::count(Count::ObjectMisses);
+            // Go cache verification (cmd/go/internal/cache/cache.go:144-152,470-490):
+            // harness hits recompute and compare; production keeps the fast hit.
+            if let Some(fragment) = cached
+                && program.options.validation == super::stages::Validation::Ready
+            {
+                return Ok((
+                    i,
+                    LoweredUnit {
+                        fragment: Some(fragment),
+                        hit: true,
+                    },
+                ));
+            }
             let own = ready(i)?;
             let definition = &own.unit().header.definition;
             let mut named: Vec<(String, usize)> = copies[i]
@@ -319,10 +330,20 @@ pub(crate) fn lower(
                     format!("the unit's fragment: {e}"),
                 )
             })?;
+            if hit && stored.as_deref() != Some(bytes.as_slice()) {
+                return Err(NativeError::of(
+                    StageName::Emission,
+                    definition,
+                    format!(
+                        "EveryStage recomputation differs from cached fragment for unit key {}",
+                        key.hex()
+                    ),
+                ));
+            }
             program.objects.store.put(key, &bytes);
             let missed = LoweredUnit {
                 fragment: Some(fragment),
-                hit: false,
+                hit,
             };
             Ok((i, missed))
         },
@@ -504,4 +525,105 @@ fn references<S>(unit: &LirUnit<S>) -> impl Iterator<Item = Symbol> + '_ {
     calls
         .chain(refs)
         .filter_map(|s| unit.tables.symbols.get(s.index()).cloned())
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct Store {
+        rows: Mutex<BTreeMap<UnitKey, Arc<[u8]>>>,
+        puts: AtomicUsize,
+        tamper: AtomicBool,
+    }
+    impl ObjectStore for Store {
+        fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
+            let bytes = self.rows.lock().unwrap().get(key).cloned()?;
+            if self.tamper.load(Ordering::Relaxed) {
+                // Fragment metadata still decodes; change the trailing object payload.
+                let mut bytes = bytes.to_vec();
+                *bytes.last_mut().unwrap() ^= 1;
+                Some(bytes.into())
+            } else {
+                Some(bytes)
+            }
+        }
+        fn put(&self, key: &UnitKey, bytes: &[u8]) {
+            self.puts.fetch_add(1, Ordering::Relaxed);
+            self.rows.lock().unwrap().insert(*key, bytes.into());
+        }
+    }
+
+    #[test]
+    fn warm_ready_hits_skip_work_but_every_stage_recomputes_and_compares() {
+        hirsel_engine::with_compiler_stack(|| {
+            let mut engine = hirsel_engine::QueryEngine::new(
+                hirsel_engine::default_environment(),
+                crate::compiler_adapters(),
+            );
+            let file = engine
+                .sources
+                .add("warm-object.hir", "fn main() {}".into())
+                .unwrap();
+            let output =
+                hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
+                    .unwrap();
+            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+            let input = engine.export_native_input().unwrap();
+            let input = engine.import_native_input(input).unwrap();
+            let store = Arc::new(Store::default());
+            let mut options =
+                Options::new(hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu());
+            options.validation = super::super::Validation::Ready;
+            options.objects = Some(UnitObjects {
+                store: store.clone(),
+                backend: Backend::Cranelift,
+                opt: OptLevel::None,
+                debug: false,
+                fuel: false,
+                jobs: hirsel_intern::jobs::Jobs::new(1),
+            });
+            let cold = super::super::build(&input, &options)
+                .unwrap()
+                .unit_objects
+                .unwrap();
+            assert!(!cold.objects.is_empty());
+            assert_eq!(cold.hits, 0);
+            let puts = store.puts.load(Ordering::Relaxed);
+            assert!(puts > 0);
+            let warm = super::super::build(&input, &options)
+                .unwrap()
+                .unit_objects
+                .unwrap();
+            assert_eq!(warm.hits, cold.objects.len());
+            assert_eq!(warm.objects, cold.objects);
+            assert_eq!(store.puts.load(Ordering::Relaxed), puts);
+            options.validation = super::super::Validation::EveryStage;
+            let checked = super::super::build(&input, &options)
+                .unwrap()
+                .unit_objects
+                .unwrap();
+            assert_eq!(checked.hits, cold.objects.len());
+            assert_eq!(checked.objects, cold.objects);
+            assert_eq!(store.puts.load(Ordering::Relaxed), 2 * puts);
+            store.tamper.store(true, Ordering::Relaxed);
+            let error = match super::super::build(&input, &options) {
+                Ok(_) => panic!("EveryStage accepted changed cached object bytes"),
+                Err(error) => error,
+            };
+            assert_eq!(error.stage, StageName::Emission);
+            assert!(error.definition.is_some());
+            assert!(
+                error
+                    .message
+                    .contains("EveryStage recomputation differs from cached fragment for unit key"),
+                "{error}"
+            );
+            assert_eq!(store.puts.load(Ordering::Relaxed), 2 * puts);
+        });
+    }
 }
