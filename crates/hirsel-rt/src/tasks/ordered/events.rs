@@ -55,6 +55,29 @@ pub(super) struct HostCompletion {
     pub result: Result<crate::io::Completion, crate::io::AdapterError>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum OwnerOutcome {
+    ScopeExit {
+        status: u8,
+        expired: bool,
+    },
+    /// Payload is unavailable until a descriptor-aware initialized-field
+    /// decoder certifies it. Never copy padding or an unwritten carrier.
+    Receive {
+        status: u32,
+        descriptor: u32,
+        payload: Option<Vec<u8>>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct OwnerCompletion {
+    pub task: Vec<u32>,
+    pub ordinal: u64,
+    pub op: &'static str,
+    pub outcome: OwnerOutcome,
+}
+
 /// Canonical scalar event: no native handle word or physical worker enters it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CanonicalEvent {
@@ -91,6 +114,7 @@ pub(super) struct Log {
     last_ops: BTreeMap<Vec<u32>, &'static str>,
     completed: BTreeSet<(Vec<u32>, u64)>,
     pub host_completions: Vec<HostCompletion>,
+    pub owner_completions: Vec<OwnerCompletion>,
     pub boundaries: Vec<Boundary>,
     versions: BTreeMap<CanonicalItem, u64>,
     canonical: Vec<CanonicalEvent>,
@@ -165,6 +189,42 @@ pub(crate) fn complete_host(
         ordinal,
         op,
         result,
+    });
+}
+
+/// The owner fixes a waiting operation's final outcome after its saved
+/// continuations and called rests return. The encoder never runs when disabled.
+pub(super) fn complete_owner(
+    ctx: *mut TaskCtx,
+    op: &'static str,
+    outcome: impl FnOnce() -> OwnerOutcome,
+) {
+    // SAFETY: caller owns this role and output image; this window cannot yield.
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let Logical::Ordered(driver) = &s.logical else {
+        return;
+    };
+    if driver.events.is_none() {
+        return;
+    }
+    let path = s.task(unsafe { (*ctx).task_id }).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_mut().unwrap();
+    let ordinal = log.ordinals[&path]
+        .checked_sub(1)
+        .expect("completion follows entry");
+    assert_eq!(log.last_ops.get(&path), Some(&op));
+    assert!(
+        log.completed.insert((path.clone(), ordinal)),
+        "one completion per owner operation"
+    );
+    log.owner_completions.push(OwnerCompletion {
+        task: path,
+        ordinal,
+        op,
+        outcome: outcome(),
     });
 }
 
@@ -744,5 +804,185 @@ mod tests {
             },
         );
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+    }
+    #[test]
+    fn receive_completion_keeps_status_and_refuses_unclassified_payloads() {
+        use crate::tasks::*;
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&layout as *const crate::Layout];
+        for width in [2, 4, 8] {
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe {
+                    super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
+                    enable(ctx);
+                },
+                |ctx| unsafe {
+                    let none = [0u64; 2];
+                    let mut endpoints = [0u64; 2];
+                    assert_eq!(
+                        hirsel_rt_v2_channel_open(
+                            ctx,
+                            std::ptr::null_mut(),
+                            endpoints.as_mut_ptr(),
+                            &0,
+                            none.as_ptr().cast(),
+                            2
+                        ),
+                        crate::STATUS_OK
+                    );
+                    let mut image = [1u64, 42];
+                    let mut status = 99;
+                    assert_eq!(
+                        hirsel_rt_v2_channel_send(
+                            ctx,
+                            &mut status,
+                            &mut endpoints[0],
+                            image.as_mut_ptr().cast()
+                        ),
+                        crate::STATUS_OK
+                    );
+                    assert_eq!(status, crate::channels::DONE);
+                    assert_eq!(
+                        hirsel_rt_v2_channel_receive(
+                            ctx,
+                            0,
+                            0,
+                            &mut status,
+                            &mut endpoints[1],
+                            image.as_mut_ptr().cast()
+                        ),
+                        crate::STATUS_OK
+                    );
+                    assert_eq!(image, [1, 42]);
+                    image.fill(0);
+                    let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                    assert_eq!(log.owner_completions.len(), 1);
+                    let done = &log.owner_completions[0];
+                    assert_eq!(done.op, "channel.receive");
+                    assert_eq!(done.ordinal, 2);
+                    let OwnerOutcome::Receive {
+                        status,
+                        descriptor,
+                        payload,
+                    } = &done.outcome
+                    else {
+                        panic!("receive outcome")
+                    };
+                    assert_eq!(*status, crate::channels::DONE);
+                    assert_eq!(*descriptor, 2);
+                    assert_eq!(payload, &None);
+                    assert!(
+                        log.canonical().is_err(),
+                        "unsupported carrier cannot become a complete trace"
+                    );
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        }
+    }
+    #[test]
+    fn closed_and_canceled_receive_evidence_never_reads_the_unwritten_output() {
+        use crate::tasks::*;
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&layout as *const crate::Layout];
+        for canceled in [false, true] {
+            let mut run = crate::host::BodyRun::new(2, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe {
+                    super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
+                    enable(ctx);
+                },
+                move |ctx| unsafe {
+                    let mut endpoints = [0u64; 2];
+                    assert_eq!(
+                        hirsel_rt_v2_channel_open(
+                            ctx,
+                            std::ptr::null_mut(),
+                            endpoints.as_mut_ptr(),
+                            &0,
+                            [0u64; 2].as_ptr().cast(),
+                            2
+                        ),
+                        crate::STATUS_OK
+                    );
+                    if canceled {
+                        let _guard = role::Guard::new(ctx);
+                        scheduler(ctx).cancel(0, CANCEL_REQUESTED);
+                    } else {
+                        assert_eq!(
+                            crate::finalize::hirsel_rt_v2_close_handle(ctx, endpoints[0], 0, 0),
+                            crate::STATUS_OK
+                        );
+                    }
+                    let mut untouched = std::mem::MaybeUninit::<[u64; 2]>::uninit();
+                    let mut status = u32::MAX;
+                    assert_eq!(
+                        hirsel_rt_v2_channel_receive(
+                            ctx,
+                            0,
+                            0,
+                            &mut status,
+                            &mut endpoints[1],
+                            untouched.as_mut_ptr().cast()
+                        ),
+                        crate::STATUS_OK
+                    );
+                    let expected = if canceled {
+                        crate::channels::CANCELED + CANCEL_REQUESTED
+                    } else {
+                        crate::channels::CLOSED
+                    };
+                    assert_eq!(status, expected);
+                    let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                    assert_eq!(log.owner_completions.len(), 1);
+                    assert_eq!(
+                        log.owner_completions[0].outcome,
+                        OwnerOutcome::Receive {
+                            status: expected,
+                            descriptor: 2,
+                            payload: None
+                        }
+                    );
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        }
     }
 }

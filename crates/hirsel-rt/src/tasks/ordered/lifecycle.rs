@@ -553,14 +553,15 @@ unsafe fn exit_scope(
         unsafe { crate::host_waits::disarm(ctx, *token) };
     }
     let expired = deadline.is_some_and(|d| d.expired);
-    Ok((
-        if unsafe { (*ctx).failure.active() } {
-            STATUS_FAILURE
-        } else {
-            STATUS_OK
-        },
-        expired,
-    ))
+    let status = if unsafe { (*ctx).failure.active() } {
+        STATUS_FAILURE
+    } else {
+        STATUS_OK
+    };
+    super::events::complete_owner(ctx, "task.scope_exit", || {
+        super::events::OwnerOutcome::ScopeExit { status, expired }
+    });
+    Ok((status, expired))
 }
 
 /// # Safety
@@ -626,6 +627,16 @@ pub(crate) unsafe fn receive(
         // next segment refreshes the held set before any following E boundary.
         unsafe { engine::obtained_image(ctx, message, descriptor) };
     }
+    // The ABI guarantees the active value, not initialized inactive fields or
+    // padding. CLOSED/CANCELED may leave the whole output unwritten. Do not
+    // form a byte slice until descriptor-aware active-field decoding exists.
+    super::events::complete_owner(ctx, "channel.receive", || {
+        super::events::OwnerOutcome::Receive {
+            status,
+            descriptor,
+            payload: None,
+        }
+    });
     unsafe { out.write(status) };
     Ok(STATUS_OK)
 }

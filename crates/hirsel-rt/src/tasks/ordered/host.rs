@@ -232,6 +232,16 @@ mod tests {
                                 STATUS_OK
                             );
                             assert_eq!(expired, 1);
+                            let log = engine::driver(ctx).events.as_ref().unwrap();
+                            assert_eq!(log.owner_completions.len(), 1);
+                            assert_eq!(log.owner_completions[0].ordinal, before + 1);
+                            assert_eq!(
+                                log.owner_completions[0].outcome,
+                                super::super::events::OwnerOutcome::ScopeExit {
+                                    status: STATUS_OK,
+                                    expired: true
+                                }
+                            );
                         }
                         assert_eq!((*ctx).run_ref().host_waits.load(Ordering::Acquire), 0);
                         STATUS_OK
