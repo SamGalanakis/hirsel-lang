@@ -376,32 +376,51 @@ pub(crate) fn check_files(
         .collect();
     drop(s0);
     let p = interval(Interval::Parallel);
-    for check in &mut checks {
-        check.step(engine, |engine, parsed, diagnostics| {
-            for syntax in &parsed.items {
-                let source = &syntax.item;
-                match engine.mode_definition(&source.definition) {
-                    Ok(mode) => diagnostics.extend(mode.diagnostics),
-                    Err(QueryError::Diagnostics(errors)) => diagnostics.extend(errors),
-                    Err(error) => return Err(error),
+    // Keep source order for per-file diagnostics, while the engine publishes
+    // worker products in DefPath order. Every clean file contributes its body
+    // tasks and distinct-type fact helpers to the same P frontier.
+    let mut owners = vec![];
+    let mut definitions = vec![];
+    for (owner, check) in checks.iter().enumerate().filter(|(_, check)| check.clean()) {
+        let Some(parsed) = &check.parsed else {
+            continue;
+        };
+        for syntax in &parsed.items {
+            owners.push(owner);
+            definitions.push(syntax.item.definition.clone());
+            if matches!(
+                &syntax.item.kind,
+                hirsel_syntax::ItemKind::Type {
+                    body: hirsel_syntax::TypeBody::Distinct { fact: Some(_), .. },
+                    ..
                 }
-                if matches!(
-                    &source.kind,
-                    hirsel_syntax::ItemKind::Type {
-                        body: hirsel_syntax::TypeBody::Distinct { fact: Some(_), .. },
-                        ..
-                    }
-                ) {
-                    let predicate = hirsel_check_protocol::fact::fact_path(&source.definition);
-                    match engine.mode_definition(&predicate) {
-                        Ok(mode) => diagnostics.extend(mode.diagnostics),
-                        Err(QueryError::Diagnostics(errors)) => diagnostics.extend(errors),
-                        Err(error) => return Err(error),
-                    }
-                }
+            ) {
+                owners.push(owner);
+                definitions.push(hirsel_check_protocol::fact::fact_path(
+                    &syntax.item.definition,
+                ));
             }
-            Ok(())
-        });
+        }
+    }
+    let jobs = hirsel_intern::jobs::Jobs::new(hirsel_guard::jobs());
+    for (owner, mode) in owners
+        .into_iter()
+        .zip(engine.mode_definitions(definitions, jobs))
+    {
+        let check = &mut checks[owner];
+        // Like the serial file step, continue after source diagnostics but
+        // withhold later results after this file's first operational failure.
+        if check.stopped.is_some() {
+            continue;
+        }
+        match mode.result {
+            Ok(output) => check.diagnostics.extend(output.diagnostics.iter().cloned()),
+            Err(QueryError::Diagnostics(errors)) => check.diagnostics.extend(errors),
+            Err(error) => {
+                check.missing_phase = mode.phase;
+                check.stopped = Some(error);
+            }
+        }
     }
     drop(p);
     // GEN-5 is the program's: every clean file reports its verdict.
