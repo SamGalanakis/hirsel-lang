@@ -1,6 +1,8 @@
 use crate::memo::{MemoGraph, MemoKey, ReadKey, Reads, ReadsBuilder};
 use crate::*;
 mod arm_fixes;
+mod parallel;
+pub use parallel::ModeResult;
 mod dead_arms;
 mod definition_hash;
 pub use definition_hash::DefinitionHashes;
@@ -677,7 +679,7 @@ impl QueryEngine {
         }
     }
     /// A failed signature's key: its own content and what it read.
-    fn failed_signature_key(&self, path: &DefPath) -> Option<ContentHash> {
+    pub(crate) fn failed_signature_key(&self, path: &DefPath) -> Option<ContentHash> {
         self.signatures.get(&DefId::intern(path)).map(|entry| {
             ContentHash::of_parts(
                 "hirsel.failed-signature.v1",
@@ -732,20 +734,20 @@ impl QueryEngine {
         mut result: Result<QueryOutput<T>, QueryError>,
         observed: Observed,
     ) -> Entry<T> {
+        prepare_result(&mut reads, &mut result, &observed.products);
+        self.finish_prepared(key, text, reads, result, observed)
+    }
+    /// Worker results have already applied the same diagnostic/dependency
+    /// completion as serial phases; record them without adding reads twice.
+    fn finish_prepared<T>(
+        &mut self,
+        key: MemoKey,
+        text: ContentHash,
+        reads: DependencyReads,
+        result: Result<QueryOutput<T>, QueryError>,
+        observed: Observed,
+    ) -> Entry<T> {
         let definition = key.def.path();
-        if let Ok(output) = &mut result {
-            reads.signatures.extend(output.dependencies.clone());
-            output.dependencies = reads.signatures.clone();
-            if has_errors(&output.diagnostics) {
-                result = Err(QueryError::Diagnostics(output.diagnostics.clone()));
-            }
-        }
-        if let Some(error) = &reads.operational_failure {
-            result = Err(QueryError::Operational(error.clone()));
-        }
-        if let Some(resolution) = &observed.products.resolution {
-            reads.resolver = resolution.reads.clone();
-        }
         self.active.remove(&(definition.clone(), key.kind));
         if result.is_err() {
             self.last_phase = Some(key.kind);
@@ -2069,6 +2071,28 @@ pub(crate) fn output<T>(value: T) -> QueryOutput<T> {
 }
 pub(crate) fn has_errors(diagnostics: &[Diagnostic]) -> bool {
     diagnostics.iter().any(|d| d.severity == Severity::Error)
+}
+
+/// Complete a phase before the next phase consumes it. Shared by serial and
+/// frozen workers so diagnostic rejection and dependency order stay identical.
+fn prepare_result<T>(
+    reads: &mut DependencyReads,
+    result: &mut Result<QueryOutput<T>, QueryError>,
+    products: &PhaseProducts,
+) {
+    if let Ok(output) = result {
+        reads.signatures.extend(output.dependencies.clone());
+        output.dependencies = reads.signatures.clone();
+        if has_errors(&output.diagnostics) {
+            *result = Err(QueryError::Diagnostics(output.diagnostics.clone()));
+        }
+    }
+    if let Some(error) = &reads.operational_failure {
+        *result = Err(QueryError::Operational(error.clone()));
+    }
+    if let Some(resolution) = &products.resolution {
+        reads.resolver = resolution.reads.clone();
+    }
 }
 
 /// Keeps a recorded memo in its table, or forgets it to be recomputed:

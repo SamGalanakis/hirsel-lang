@@ -67,7 +67,7 @@ pub(crate) struct LookupInput {
     pub registry: crate::registry::BuiltinRegistry,
     pub builtins: std::collections::BTreeSet<DefId>,
     pub candidates: DefMap<ContentHash>,
-    pub failed: DefMap<ContentHash>,
+    pub failed: DefMap<Option<ContentHash>>,
 }
 const _: () = {
     const fn shared<T: Send + Sync>() {}
@@ -224,11 +224,10 @@ impl SignatureSnapshot {
     /// or the canonical absent-query receipt. A diagnostic's debug spelling is
     /// never an input identity.
     pub fn failed_signature_receipt(&self, d: DefId) -> ContentHash {
-        self.lookup
-            .failed
-            .get(&d)
-            .copied()
-            .unwrap_or_else(|| crate::queries::memos::optional(None))
+        crate::queries::memos::optional(self.failed_signature_key(d))
+    }
+    pub(crate) fn failed_signature_key(&self, d: DefId) -> Option<ContentHash> {
+        self.lookup.failed.get(&d).copied().flatten()
     }
     pub fn epoch(&self) -> Revision {
         self.epoch
@@ -355,7 +354,7 @@ impl QueryEngine {
             failed: signatures
                 .iter()
                 .filter(|(_, result)| result.is_err())
-                .map(|(d, _)| (*d, self.failed_key_value(d.path())))
+                .map(|(d, _)| (*d, self.failed_signature_key(d.path())))
                 .collect(),
             candidates: self
                 .source_paths()

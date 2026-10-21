@@ -361,3 +361,71 @@ fn live_and_frozen_bodies_record_the_same_private_view_receipt() {
         assert_eq!(engine.recompute_count(&build, QueryKind::Check), 2);
     });
 }
+
+/// A source edit's private-view subscriptions and warm reads survive real
+/// concurrent phases, rather than merely exercising the provider in isolation.
+#[test]
+fn frozen_frontier_matches_serial_private_edits_and_tir() {
+    with_compiler_stack(|| {
+        use hirsel_intern::jobs::Jobs;
+        for jobs in [1, 2, 8] {
+            let mut serial = QueryEngine::new(default_environment(), compiler_adapters());
+            let mut parallel = QueryEngine::new(default_environment(), compiler_adapters());
+            let context = default_context();
+            let paths: Vec<_> = ["read", "build", "main"]
+                .into_iter()
+                .map(|name| {
+                    let mut path = entry_path(&context);
+                    path.0.name = name.into();
+                    path
+                })
+                .collect();
+            for (field, value) in [("u64", 1), ("u8", 1), ("u8", 2)] {
+                let text = format!(
+                    "pub opaque type Hidden: plain uses {{}} {{ value: {field} }}\nfn build() -> Hidden {{ Hidden(value: {value}) }}\nfn read(x: Hidden) -> {field} {{ x.value }}\nfn main() -> {field} {{ read(build()) }}\n"
+                );
+                for engine in [&mut serial, &mut parallel] {
+                    let file = engine
+                        .sources
+                        .add("parallel-private.hir", text.clone())
+                        .unwrap();
+                    engine.parse_file(file, &context).unwrap();
+                }
+                let expected: Vec<_> = paths
+                    .iter()
+                    .map(|path| serial.mode_definition(path))
+                    .collect();
+                let actual = parallel.mode_definitions(paths.clone(), Jobs::new(jobs));
+                for ((path, expected), actual) in paths.iter().zip(expected).zip(actual) {
+                    expected.unwrap();
+                    actual.result.unwrap();
+                    for kind in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
+                        assert_eq!(
+                            serial.memo_reads(path, kind),
+                            parallel.memo_reads(path, kind),
+                            "{jobs}/{field}/{value}/{path:?}/{kind:?}"
+                        );
+                    }
+                    let a = serial.definition_summary(DefId::intern(path)).unwrap();
+                    let b = parallel.definition_summary(DefId::intern(path)).unwrap();
+                    assert_eq!(a.summary.frames, b.summary.frames);
+                    assert_eq!(a.summary.calls.len(), b.summary.calls.len());
+                    for (a, b) in a.summary.calls.iter().zip(&b.summary.calls) {
+                        assert_eq!(
+                            (a.callee, a.binder, a.class, a.owning_frame, a.target_frame),
+                            (b.callee, b.binder, b.class, b.owning_frame, b.target_frame)
+                        );
+                        let a = serial.sources.resolve(a.site);
+                        let b = parallel.sources.resolve(b.site);
+                        assert_eq!((a.start, a.end), (b.start, b.end));
+                    }
+                    assert_eq!(a.growth.edges.len(), b.growth.edges.len());
+                    assert_eq!(
+                        serial.export_tir(path).unwrap(),
+                        parallel.export_tir(path).unwrap()
+                    );
+                }
+            }
+        }
+    });
+}

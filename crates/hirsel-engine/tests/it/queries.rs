@@ -955,3 +955,123 @@ fn signature_hits_track_later_duplicate_headers_and_positions() {
         assert_eq!(engine.recompute_count(&path("a"), QueryKind::Signature), 3);
     });
 }
+
+/// The batch API is the same memo computation at every worker count, including
+/// per-input failures, typed receipts, reversed publication/input order and hits.
+#[test]
+fn frozen_frontier_preserves_reads_failures_and_warm_hits() {
+    with_compiler_stack(|| {
+        use hirsel_intern::jobs::Jobs;
+        for jobs in [1, 2, 8] {
+            for reject in [
+                None,
+                Some("resolve"),
+                Some("signature"),
+                Some("check"),
+                Some("modes"),
+            ] {
+                let (mut serial, _) = make_engine(reject, false);
+                let (mut parallel, _) = make_engine(reject, false);
+                let text = "fn a () { 1 }\nfn b () { 2 }\n";
+                parse(&mut serial, text);
+                parse(&mut parallel, text);
+                let paths = vec![path("b"), path("a")];
+                let expected: Vec<_> = paths
+                    .iter()
+                    .map(|path| serial.mode_definition(path))
+                    .collect();
+                let results = parallel.mode_definitions(paths.clone(), Jobs::new(jobs));
+                for ((path, expected), actual) in paths.iter().zip(expected).zip(results) {
+                    assert_eq!(&actual.definition, path);
+                    let phase = match reject {
+                        Some("resolve") => QueryKind::Resolve,
+                        Some("signature") if path.0.name == "b" => QueryKind::Resolve,
+                        Some("signature") => QueryKind::Signature,
+                        Some("check") => QueryKind::Check,
+                        _ => QueryKind::Modes,
+                    };
+                    assert_eq!(actual.phase, Some(phase));
+                    match (expected, actual.result) {
+                        (Ok(a), Ok(b)) => {
+                            assert_eq!(a.dependencies, b.dependencies);
+                            assert_eq!(a.diagnostics.len(), b.diagnostics.len());
+                            assert_eq!(
+                                a.value.typed.checked.resolution,
+                                b.value.typed.checked.resolution
+                            );
+                        }
+                        (Err(QueryError::Diagnostics(a)), Err(QueryError::Diagnostics(b))) => {
+                            assert_eq!(a.len(), b.len());
+                            for (a, b) in a.iter().zip(&b) {
+                                assert_eq!((&a.rule, &a.message), (&b.rule, &b.message));
+                                let a = serial.sources.resolve(a.primary);
+                                let b = parallel.sources.resolve(b.primary);
+                                assert_eq!((a.start, a.end), (b.start, b.end));
+                            }
+                        }
+                        (a, b) => panic!("jobs {jobs}, reject {reject:?}: {a:?} != {b:?}"),
+                    }
+                    for kind in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
+                        assert_eq!(
+                            serial.memo_reads(path, kind),
+                            parallel.memo_reads(path, kind),
+                            "jobs {jobs}, reject {reject:?}, {kind:?}, {path:?}"
+                        );
+                    }
+                }
+                let before: Vec<_> = paths
+                    .iter()
+                    .flat_map(|p| {
+                        [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes]
+                            .map(|k| parallel.recompute_count(p, k))
+                    })
+                    .collect();
+                let _ = parallel.mode_definitions(paths.clone(), Jobs::new(jobs));
+                let after: Vec<_> = paths
+                    .iter()
+                    .flat_map(|p| {
+                        [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes]
+                            .map(|k| parallel.recompute_count(p, k))
+                    })
+                    .collect();
+                assert_eq!(before, after, "warm jobs {jobs}, reject {reject:?}");
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_reports_each_missing_phase_and_retries_it() {
+    with_compiler_stack(|| {
+        use hirsel_intern::jobs::Jobs;
+        for jobs in [1, 2, 8] {
+            for missing in [
+                QueryKind::Resolve,
+                QueryKind::Signature,
+                QueryKind::Check,
+                QueryKind::Modes,
+            ] {
+                let (mut engine, _) = make_engine(None, false);
+                match missing {
+                    QueryKind::Resolve => engine.adapters.resolver = None,
+                    QueryKind::Signature => engine.adapters.signature = None,
+                    QueryKind::Check => engine.adapters.checker = None,
+                    QueryKind::Modes => engine.adapters.modes = None,
+                    _ => unreachable!(),
+                }
+                parse(&mut engine, "fn a () { 1 }\nfn b () { 2 }\n");
+                let paths = vec![path("b"), path("a")];
+                for _ in 0..2 {
+                    for result in engine.mode_definitions(paths.clone(), Jobs::new(jobs)) {
+                        assert_eq!(result.phase, Some(missing));
+                        assert!(matches!(result.result, Err(QueryError::NotImplemented)));
+                        assert!(engine.memo_reads(&result.definition, missing).is_none());
+                    }
+                }
+                for p in paths {
+                    assert!(engine.recompute_count(&p, missing) >= 2);
+                }
+            }
+        }
+    });
+}
