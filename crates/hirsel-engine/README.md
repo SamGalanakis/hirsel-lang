@@ -927,3 +927,10 @@ Retained TIR hold weights use structural allocation accounting: Vec capacities,
 owned strings and literals, Arc headers/alignment and deduplicated shared path or
 slice allocations within each artifact. Session interner rows and interned DefId
 storage are session costs; no serialization runs to estimate a hold's bytes.
+
+The hold cache returns within its byte budget even at zero or for one oversized
+artifact. Active callers retain in-flight Arcs independently. `Holds::clear`
+retires root-local entries and eviction markers while preserving cumulative
+counters. `peak_bytes` includes transient insertion-before-eviction occupancy.
+Worker lowering weights also include receipt/depth backing and staged signature
+payloads; the inline wrapper's Arc layout is accounted separately.

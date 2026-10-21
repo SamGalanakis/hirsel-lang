@@ -1,5 +1,7 @@
 //! Retained allocation accounting, adapted from Buck2 allocative's Arc and Vec
 //! visitors (third-party/NOTICES.md). This measures storage, never wire bytes.
+use super::{DepthEvidence, Reads};
+use crate::comptime::StagedRegistration;
 use hirsel_syntax::DefPath;
 use hirsel_tir::*;
 use hirsel_types::{Destination, Origin, OriginRoot, SharedPath, SharedSlice};
@@ -29,6 +31,36 @@ pub(crate) fn retained_tir_bytes(definition: &Definition) -> u64 {
     weight.arc_slice(types);
     weight.vec(bodies, Weight::body);
     weight.flat_vec(contracts);
+    weight.bytes
+}
+
+/// Arc allocation including its inline value; payload allocations are separate.
+pub(crate) fn retained_arc_bytes<T: ?Sized>(value: &T) -> u64 {
+    arc_bytes(value) as u64
+}
+
+/// Backing allocations of a worker's Lowered wrapper, excluding the wrapper's
+/// own Arc/inline layout and its DefinitionRef (charged by retained_tir_bytes).
+/// Signature and other shared payloads are deduplicated within the registration
+/// vector. Session interned rows are excluded, as with the TIR weight.
+pub(crate) fn retained_lowering_metadata_bytes(
+    reads: &Reads,
+    depth: &DepthEvidence<hirsel_span::Span>,
+    registrations: &Vec<StagedRegistration>,
+) -> u64 {
+    let mut weight = Weight::default();
+    weight.add(
+        reads
+            .len()
+            .saturating_mul(size_of::<(super::ReadKey, hirsel_syntax::ContentHash)>()),
+    );
+    weight.add(size_of_val(&*depth.first));
+    weight.vec(registrations, |w, registration| {
+        w.def_path(&registration.path);
+        w.def_path(&registration.constant.owner);
+        w.flat_vec(&registration.constant.inputs);
+        w.signature(&registration.constant.signature);
+    });
     weight.bytes
 }
 
@@ -68,6 +100,164 @@ impl Weight {
         let identity = value.storage_identity();
         if identity != 0 && self.shared.insert(identity) {
             self.add(arc_bytes(value.as_slice()));
+        }
+    }
+    fn shared_values<T>(&mut self, value: &SharedSlice<T>, mut visit: impl FnMut(&mut Self, &T)) {
+        let identity = value.storage_identity();
+        if identity != 0 && self.shared.insert(identity) {
+            self.add(arc_bytes(value.as_slice()));
+            for element in value {
+                visit(self, element);
+            }
+        }
+    }
+    fn generic(&mut self, value: &hirsel_types::GenericParameter) {
+        match value {
+            hirsel_types::GenericParameter::Type { name, bounds } => {
+                self.add(name.capacity());
+                self.shared_slice(bounds);
+            }
+            hirsel_types::GenericParameter::Size { name } => self.add(name.capacity()),
+        }
+    }
+    fn authority(&mut self, value: &hirsel_types::AuthoritySummary) {
+        match value {
+            hirsel_types::AuthoritySummary::Known(terms) => {
+                self.shared_values(terms, |w, term| match term {
+                    hirsel_types::AuthorityTerm::Capability(path) => w.def_path(path),
+                    hirsel_types::AuthorityTerm::Parameter(_)
+                    | hirsel_types::AuthorityTerm::TypeParameter(_) => (),
+                })
+            }
+            hirsel_types::AuthoritySummary::Unknown => (),
+        }
+    }
+    fn signature(&mut self, value: &hirsel_types::SignatureRef) {
+        if !self.shared.insert(std::sync::Arc::as_ptr(value) as usize) {
+            return;
+        }
+        self.add(arc_bytes(&**value));
+        let hirsel_types::Signature {
+            metadata,
+            definition: _,
+            kind,
+            fingerprint: _,
+        } = &**value;
+        let hirsel_types::SignatureMetadata {
+            visibility: _,
+            alias: _,
+            track_caller: _,
+            unsafe_ffi: _,
+            wrapper: _,
+            roles,
+            schema,
+            recursive_group: _,
+        } = metadata;
+        let hirsel_types::NominalRoles {
+            unsafe_capability,
+            result_type,
+            tasks_capability,
+            scope_capability,
+            heap,
+        } = roles;
+        for path in [
+            unsafe_capability,
+            result_type,
+            tasks_capability,
+            scope_capability,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            self.def_path(path);
+        }
+        if let Some(hirsel_types::HeapRole { arena, operation }) = heap {
+            self.def_path(arena);
+            self.def_path(operation);
+        }
+        self.flat_vec(schema);
+        match kind {
+            hirsel_types::SignatureKind::Const { generics, ty: _ } => {
+                self.shared_values(generics, Weight::generic)
+            }
+            hirsel_types::SignatureKind::Function(function) => {
+                let hirsel_types::FunctionType {
+                    state_promises,
+                    generics,
+                    parameters,
+                    result: _,
+                    error: _,
+                    allocation: _,
+                    authority,
+                    uses,
+                    contracts,
+                    incomplete: _,
+                    foreign,
+                } = function;
+                self.shared_values(state_promises, |w, promise| {
+                    w.path(&promise.selector.fields);
+                    w.shared_slice(&promise.unretained);
+                });
+                self.shared_values(generics, Weight::generic);
+                self.shared_values(parameters, |w, parameter| {
+                    for name in [&parameter.name, &parameter.label].into_iter().flatten() {
+                        w.add(name.capacity());
+                    }
+                });
+                self.authority(authority);
+                match uses {
+                    hirsel_types::Uses::Only(terms) => self.authority(terms),
+                    hirsel_types::Uses::Unrestricted => (),
+                }
+                self.shared_slice(contracts);
+                if let Some(foreign) = foreign {
+                    self.add(foreign.abi.capacity());
+                    self.add(foreign.aliasing_contract.capacity());
+                }
+            }
+            hirsel_types::SignatureKind::Type(definition) => {
+                let hirsel_types::TypeDefinition {
+                    loop_source,
+                    format,
+                    destructor_allocation: _,
+                    generics,
+                    representation: _,
+                    bounds,
+                    authority,
+                    capability: _,
+                    implementation_authority,
+                    serializable: _,
+                    serializable_check,
+                    layout: _,
+                    distinct: _,
+                    resource: _,
+                    drop,
+                    fact: _,
+                    captures,
+                } = definition;
+                if let Some(hirsel_types::LoopSourceDeclaration { open, next, option }) =
+                    loop_source
+                {
+                    self.def_path(open);
+                    self.def_path(next);
+                    self.def_path(option);
+                }
+                for path in [format, drop].into_iter().flatten() {
+                    self.def_path(path);
+                }
+                self.vec(generics, Weight::generic);
+                self.flat_vec(bounds);
+                self.authority(authority);
+                if let Some(authority) = implementation_authority {
+                    self.authority(authority);
+                }
+                if let Some(check) = serializable_check {
+                    self.def_path(&check.function);
+                }
+                if let Some(captures) = captures {
+                    self.shared_slice(captures);
+                }
+            }
         }
     }
     fn path<T>(&mut self, mut value: &SharedPath<T>) {
@@ -375,6 +565,67 @@ mod tests {
         let one_destination = weight.bytes;
         weight.destination(&Destination::Caller(callers));
         assert_eq!(weight.bytes, one_destination);
+    }
+
+    #[test]
+    fn lowering_metadata_accounts_for_receipts_depth_and_shared_registration_signatures() {
+        use std::sync::Arc;
+        let types = TypeInterner::new(None);
+        let signature = Arc::new(hirsel_types::Signature {
+            metadata: hirsel_types::SignatureMetadata::default(),
+            definition: hirsel_syntax::DefId::intern(&DefPath::core("staged")),
+            kind: hirsel_types::SignatureKind::Const {
+                ty: types.intern(Type::unit()),
+                generics: vec![hirsel_types::GenericParameter::Size {
+                    name: "n".repeat(65_536),
+                }]
+                .into(),
+            },
+            fingerprint: Default::default(),
+        });
+        let reads = Reads::from_vec(vec![(
+            super::super::ReadKey::Environment,
+            Default::default(),
+        )])
+        .unwrap();
+        let mut depth = DepthEvidence::leaf(3);
+        let mut registrations = Vec::with_capacity(2);
+        let no_registration = retained_lowering_metadata_bytes(&reads, &depth, &registrations);
+        depth.first = vec![None; 128].into_boxed_slice();
+        assert!(retained_lowering_metadata_bytes(&reads, &depth, &registrations) > no_registration);
+        let registration = StagedRegistration {
+            path: DefPath::core("staged"),
+            constant: crate::comptime::StagedConstant {
+                owner: DefPath::core("owner"),
+                expression: hirsel_syntax::ExprId(0),
+                inputs: Vec::with_capacity(512),
+                signature,
+            },
+        };
+        registrations.push(registration.clone());
+        let one = retained_lowering_metadata_bytes(&reads, &depth, &registrations);
+        registrations.push(registration);
+        let shared = retained_lowering_metadata_bytes(&reads, &depth, &registrations);
+        assert!(one > 65_536);
+        assert!(
+            shared - one < 65_536,
+            "same signature allocation charged once"
+        );
+        let mut independent = (*registrations[1].constant.signature).clone();
+        // Cloning a signature shares its generic list. Detach that list so the
+        // second registration now owns a separate large name allocation.
+        let hirsel_types::SignatureKind::Const { generics, .. } = &mut independent.kind else {
+            unreachable!()
+        };
+        *generics = generics.iter().cloned().collect();
+        registrations[1].constant.signature = Arc::new(independent);
+        assert!(
+            retained_lowering_metadata_bytes(&reads, &depth, &registrations) >= shared + 65_536
+        );
+        let with_reads = retained_lowering_metadata_bytes(&reads, &depth, &registrations);
+        assert!(
+            with_reads > retained_lowering_metadata_bytes(&Reads::empty(), &depth, &registrations)
+        );
     }
 
     #[test]

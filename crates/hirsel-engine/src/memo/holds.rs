@@ -64,8 +64,9 @@ impl<T> Holds<T> {
         self.budget
     }
     /// Holds `value` of `bytes`, then evicts least recently used holds until
-    /// within budget. A single hold larger than the budget is kept (it is in
-    /// flight) and evicted by the next hold. Returns the evicted keys.
+    /// within budget, including evicting this value if it alone exceeds the
+    /// budget. Active callers own their in-flight values separately. Returns
+    /// the evicted keys.
     pub fn hold(&mut self, key: MemoKey, value: T, bytes: u64) -> Vec<MemoKey> {
         self.release(&key);
         self.tick += 1;
@@ -75,11 +76,8 @@ impl<T> Holds<T> {
         self.stats.bytes += bytes;
         self.stats.peak_bytes = self.stats.peak_bytes.max(self.stats.bytes);
         let mut evicted = vec![];
-        while self.stats.bytes > self.budget && self.entries.len() > 1 {
+        while self.stats.bytes > self.budget {
             let (&tick, &victim) = self.by_use.iter().next().unwrap();
-            if victim == key {
-                break;
-            }
             self.by_use.remove(&tick);
             let (_, size, _) = self.entries.remove(&victim).unwrap();
             self.stats.bytes -= size;
@@ -88,6 +86,15 @@ impl<T> Holds<T> {
             evicted.push(victim);
         }
         evicted
+    }
+    /// Retire a completed root's holds and eviction markers, preserving
+    /// cumulative insertion, eviction, recompute and peak occupancy counters.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.by_use.clear();
+        self.evicted.clear();
+        self.stats.bytes = 0;
+        self.tick = 0;
     }
     /// Uses a held body, refreshing its recency.
     pub fn get(&mut self, key: &MemoKey) -> Option<&T> {
@@ -165,11 +172,49 @@ mod tests {
     }
 
     #[test]
-    fn an_oversized_hold_is_kept_until_the_next() {
-        let mut holds = Holds::new(10);
-        assert!(holds.hold(key(0), 0, 50).is_empty());
-        assert_eq!(holds.hold(key(1), 1, 5), vec![key(0)]);
+    fn zero_and_oversized_holds_release_cache_ownership_immediately() {
+        use std::sync::Arc;
+        for budget in [0, 10] {
+            let mut holds = Holds::new(budget);
+            let active = Arc::new(0);
+            let weak = Arc::downgrade(&active);
+            assert_eq!(holds.hold(key(0), active.clone(), 50), vec![key(0)]);
+            assert_eq!(holds.stats().bytes, 0);
+            assert!(holds.is_empty());
+            assert_eq!(
+                Arc::strong_count(&active),
+                1,
+                "only the active caller retains it"
+            );
+            drop(active);
+            assert!(weak.upgrade().is_none());
+            assert!(holds.demand_evicted(&key(0)));
+        }
         assert_eq!(default_hold_bytes(None), 256 << 20);
         assert_eq!(default_hold_bytes(Some(1 << 30)), (1 << 30) / 10);
+    }
+
+    #[test]
+    fn clearing_roots_preserves_counters_and_retires_eviction_markers() {
+        let mut holds = Holds::new(10);
+        holds.hold(key(0), 0, 7);
+        holds.hold(key(1), 1, 7);
+        assert!(holds.demand_evicted(&key(0)));
+        holds.hold(key(2), 2, 7);
+        let before = holds.stats();
+        holds.clear();
+        let after = holds.stats();
+        assert_eq!(after.bytes, 0);
+        assert!(holds.is_empty());
+        assert_eq!(after.held, before.held);
+        assert_eq!(after.evictions, before.evictions);
+        assert_eq!(after.recomputes, before.recomputes);
+        assert_eq!(after.peak_bytes, before.peak_bytes);
+        assert!(
+            !holds.demand_evicted(&key(1)),
+            "new roots have no stale eviction markers"
+        );
+        assert!(holds.hold(key(0), 3, 7).is_empty());
+        assert_eq!(holds.stats().bytes, 7);
     }
 }
