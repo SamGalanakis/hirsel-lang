@@ -1,0 +1,44 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef src/strings/strings_test.go:453-473 (BSD-3-Clause).
+// Negative n becomes u64::MAX. Empty-pattern failures are in the Rust harness;
+// invalid UTF-8 rows cannot be String. Rust bounded-field semantics are chosen.
+pub fn main() -> Result[(), ()] {
+  failure.check(list.len(string.splitn("abcd", "a", 0u64)) == 0, TextInvariant())
+  failure.check(
+    string.splitn("abcd", "a", 18446744073709551615u64) == ["", "bcd"],
+    TextInvariant()
+  )
+  failure.check(
+    string.splitn("abcd", "z", 18446744073709551615u64) == ["abcd"],
+    TextInvariant()
+  )
+  failure.check(
+    string.splitn("1,2,3,4", ",", 18446744073709551615u64) == ["1", "2", "3", "4"],
+    TextInvariant()
+  )
+  failure.check(
+    string.splitn("1....2....3....4", "...", 18446744073709551615u64) == [
+      "1",
+      ".2",
+      ".3",
+      ".4"
+    ],
+    TextInvariant()
+  )
+  failure.check(
+    string.splitn("☺☻☹", "☹", 18446744073709551615u64) == ["☺☻", ""],
+    TextInvariant()
+  )
+  failure.check(
+    string.splitn("☺☻☹", "~", 18446744073709551615u64) == ["☺☻☹"],
+    TextInvariant()
+  )
+  failure.check(
+    string.splitn("1 2 3 4", " ", 3u64) == ["1", "2", "3 4"],
+    TextInvariant()
+  )
+  failure.check(string.splitn("1 2", " ", 3u64) == ["1", "2"], TextInvariant())
+  failure.check(string.splitn("", "T", 2305843009213693951u64) == [""], TextInvariant())
+  Ok(())
+}

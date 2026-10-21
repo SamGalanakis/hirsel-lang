@@ -1,0 +1,47 @@
+// rule: SEM-3
+// expect: run
+// Rust a7c37f9f: library/alloctests/tests/str.rs:1412-1427,2278-2282.
+pub fn main() -> Result[(), ()] {
+  let data = "\nMäry häd ä little lämb\nLittle lämb\n"
+  failure.check(
+    string.splitn(string.concat(data, ""), " ", 4) == [
+      "\nMäry",
+      "häd",
+      "ä",
+      "little lämb\nLittle lämb\n"
+    ],
+    TextInvariant()
+  )
+  failure.check(
+    string.splitn(string.concat(data, ""), "ä", 4) == [
+      "\nM",
+      "ry h",
+      "d ",
+      " little lämb\nLittle lämb\n"
+    ],
+    TextInvariant()
+  )
+  failure.check(
+    string.splitn("foo::bar::baz", "::", 2) == ["foo", "bar::baz"],
+    TextInvariant()
+  )
+  failure.check(list.len(string.splitn("a:b:c", ":", 0)) == 0, TextInvariant())
+  failure.check(string.splitn("a:b:c", ":", 1) == ["a:b:c"], TextInvariant())
+  failure.check(
+    string.splitn("a:b:c", ":", 18446744073709551615u64) == ["a", "b", "c"],
+    TextInvariant()
+  )
+  failure.check(string.splitn("abc", "::", 9) == ["abc"], TextInvariant())
+  failure.check(string.splitn("::a::::", "::", 3) == ["", "a", "::"], TextInvariant())
+  failure.check(string.splitn("::a::::", "::", 9) == ["", "a", "", ""], TextInvariant())
+  failure.check(string.splitn("ababa", "aba", 3) == ["", "ba"], TextInvariant())
+  failure.check(string.splitn("ééé", "éé", 3) == ["", "é"], TextInvariant())
+  failure.check(string.splitn("界💚界💚界", "💚", 2) == ["界", "界💚界"], TextInvariant())
+  failure.check(string.splitn("", ":", 4) == [""], TextInvariant())
+  failure.check(list.len(string.splitn("", ":", 0)) == 0, TextInvariant())
+  failure.check(string.splitn("x:", ":", 2) == ["x", ""], TextInvariant())
+  // Existing split/rsplitn controls use the same source search engine.
+  failure.check(string.split("ababa", "aba") == ["", "ba"], TextInvariant())
+  failure.check(string.rsplitn("ababa", "aba", 2) == ["", "ab"], TextInvariant())
+  Ok(())
+}

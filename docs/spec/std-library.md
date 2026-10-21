@@ -4907,3 +4907,53 @@ Strict errors identify the absolute invalid sequence start, discard this call's
 output, and poison the decoder. Lossy concatenated output equals `decode_lossy`
 on the concatenated input, including at EOF. Successful EOF finishes exactly
 once. See [the full contract and in-memory example](utf8-streaming.md).
+
+### Bounded forward string fields
+
+`std@1/string.splitn(take s: String, separator: String, limit: u64) -> List[String]`
+returns at most `limit` fields from left to right. The separator must be nonempty:
+an empty separator fails SEM-3 even when `limit` is zero. Zero returns no fields;
+one returns the whole input. Higher limits consume at most `limit - 1`
+nonoverlapping separator matches and return the untouched suffix as the last
+field. Leading and trailing empty fields are preserved, including one empty
+field for empty input when the limit is positive. Valid UTF-8 separators preserve
+scalar boundaries, including on source slices with a nonzero byte origin.
+
+Like `split` and `rsplitn`, `splitn` takes ownership of its input. The returned
+list retains its pieces after the source is transferred or its local scope ends;
+ordinary list snapshots retain their original fields when another copy changes.
+The implementation prepares the existing substring search plan once and stops
+searching when only the final field remains; it never splits and discards the
+remaining fields.
+
+For a log prefix whose detail field itself contains separators:
+
+```hirsel
+let fields = string.splitn("INFO|worker|path=a|query=b|detail=c||", "|", 3)
+// ["INFO", "worker", "path=a|query=b|detail=c||"]
+```
+
+Executable examples and ownership controls live in
+`conformance/SEM/SEM-3-string-splitn-5-ownership-run.hir`; boundary vectors and
+empty-separator failure cases share that lane prefix. Prior art: Rust
+`a7c37f9f0ee5e93396106e9de20f4a86b4154e63`,
+`library/core/src/str/iter.rs:937-951` and
+`library/alloctests/tests/str.rs:1412-1427,2278-2282` (MIT).
+Hirsel collects an owning list instead of exposing a lazy borrowed iterator,
+accepts string separators rather than Rust's generic patterns (single-character
+and equivalent predicate vectors use one-scalar strings), uses a `u64` field
+limit, and rejects empty separators to match `split` and `rsplitn`.
+
+The independent Go table is ported in
+`conformance/SEM/SEM-3-string-splitn-5-go-run.hir` and the driver harness:
+Go `ebe2feefc400f813aefdc8a036e66d2619da6649`,
+`src/strings/strings.go:274-314` (`genSplit`/`SplitN`) and
+`src/strings/strings_test.go:453-473` (BSD-3-Clause).
+Its nonempty-separator outputs agree with the chosen Rust semantics. Go's
+negative unlimited count maps to `u64::MAX`, and its nil result at zero maps to
+an empty Hirsel list. All eight empty-separator rows instead assert SEM-3; the
+two rows containing invalid UTF-8 cannot be represented by Hirsel `String` and
+are excluded. Unlike Go's negative-count prepass and eager capacity sizing,
+Hirsel uses the Rust remaining-count loop and its existing list builder and
+substring plan, so it needs neither a delimiter-count pass nor a capacity
+proportional to the limit.

@@ -6663,3 +6663,9 @@ conformance/SEM/SEM-3-cli-error-context-5-reference-run.hir
 conformance/SEM/SEM-3-utf8-stream-5-run.hir
 conformance/SEM/SEM-3-base64-stream-5-run.hir
 conformance/SEM/SEM-3-base64-stream-5-importers-run.hir
+conformance/SEM/SEM-3-string-splitn-5-vectors-run.hir
+conformance/SEM/SEM-3-string-splitn-5-ownership-run.hir
+conformance/SEM/SEM-3-string-splitn-5-empty-0-fail.hir
+conformance/SEM/SEM-3-string-splitn-5-empty-1-fail.hir
+conformance/SEM/SEM-3-string-splitn-5-empty-2-fail.hir
+conformance/SEM/SEM-3-string-splitn-5-go-run.hir

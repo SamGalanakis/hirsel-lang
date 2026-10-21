@@ -1,0 +1,7 @@
+// rule: SEM-3
+// expect: fail SEM-3 at line 388
+// The failure anchor is the delimiter check in std string.
+pub fn main() -> Result[(), ()] {
+  let _ = string.splitn("a:b", "", 2)
+  Ok(())
+}

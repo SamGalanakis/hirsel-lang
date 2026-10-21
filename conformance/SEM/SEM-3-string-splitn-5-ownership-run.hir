@@ -1,0 +1,29 @@
+// rule: SEM-3
+// expect: run
+// Owning returns survive the transferred source and list snapshots.
+fn log_fields(take record: String) -> List[String] uses {} {
+  string.splitn(take record, "|", 3)
+}
+
+fn suffix() -> String uses {} {
+  let record = string.concat("INFO|worker|", "path=a|query=b|detail=c||")
+  let parts = log_fields(take record)
+  unique parts[2]
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(suffix() == "path=a|query=b|detail=c||", TextInvariant())
+  let mut parts = log_fields(string.concat("INFO|worker|", "a|b|c||"))
+  let saved = copy parts
+  parts[0] = "WARN"
+  failure.check(saved == ["INFO", "worker", "a|b|c||"], TextInvariant())
+  failure.check(parts == ["WARN", "worker", "a|b|c||"], TextInvariant())
+  // A nonzero-origin source slice must use offsets relative to that slice.
+  let wrapped = string.concat("  é::界::💚::tail", "  ")
+  let sliced = unique string.trim(wrapped)
+  failure.check(
+    string.splitn(take sliced, "::", 2) == ["é", "界::💚::tail"],
+    TextInvariant()
+  )
+  Ok(())
+}

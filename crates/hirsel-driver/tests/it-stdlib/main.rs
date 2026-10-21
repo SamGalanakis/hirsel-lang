@@ -42,6 +42,7 @@ mod stdlib_uri;
 mod stdlib_wave1;
 mod stdlib_wave2_num;
 mod stdlib_xxhash64;
+mod string_splitn_5;
 mod utf8_stream_5;
 
 mod base64_stream_5;

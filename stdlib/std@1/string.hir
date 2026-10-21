@@ -376,3 +376,32 @@ pub fn split_whitespace(take s: String) -> List[String] uses {} {
   }
   take parts
 }
+
+// Rust a7c37f9f0ee5e93396106e9de20f4a86b4154e63,
+// library/core/src/str/iter.rs:937-951 (MIT): SplitN remaining-count state.
+// As with split and rsplitn, validate the separator even for a zero limit.
+pub fn splitn(take s: String, separator: String, limit: u64) -> List[String] uses {} {
+  let source = core@1/string.as_bytes(s)
+  let delimiter = core@1/string.as_bytes(separator)
+  let len = core@1/bytes.len(source)
+  let width = core@1/bytes.len(delimiter)
+  core@1/failure.check(width != 0, TextInvariant())
+  let mut parts: List[String] = []
+  if limit != 0 {
+    let plan = internal.substring.prepare(delimiter)
+    let mut begin: u64 = 0
+    let mut remaining = limit
+    while remaining > 1 {
+      match internal.substring.find_from(source, delimiter, plan, begin) {
+        Some(at) => {
+          core@1/list.push(mut parts, piece(s, begin, at))
+          begin = at + width
+          remaining -= 1
+        },
+        None() => break,
+      }
+    }
+    core@1/list.push(mut parts, piece(s, begin, len))
+  }
+  take parts
+}
