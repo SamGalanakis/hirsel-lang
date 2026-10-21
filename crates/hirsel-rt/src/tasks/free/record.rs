@@ -1,0 +1,504 @@
+//! Native recorder admission at concrete runtime boundaries. The encoder is
+//! task-local; only stable logs are shared with a cutter. Effects and their
+//! records execute inside the same production recorder phase, before its
+//! progress publication. No section or recorder borrow crosses a suspension.
+//!
+//! Admission is still limited to explicit runtime tests: atomic boundaries
+//! and prepared children, without roots, host calls or other semantic ops.
+//! General activation requires every boundary and stop to use this protocol.
+
+use crate::TaskCtx;
+use crate::stop::{Stop, Stopped};
+use hirsel_free::concurrent::{Recorder, Writer};
+use hirsel_free::phase::{Phase, Progress};
+use hirsel_free::projection::Stamped;
+use hirsel_free::session::Marked;
+use std::sync::{Arc, Mutex};
+
+pub(crate) struct Recording {
+    pub(crate) recorder: Recorder<Marked>,
+    trace: Mutex<Vec<Stamped>>,
+}
+
+pub(crate) struct Task {
+    shared: Arc<Recording>,
+    log: hirsel_free::concurrent::Task,
+    ordinal: u64,
+}
+
+impl Drop for Task {
+    fn drop(&mut self) {
+        if !self.log.trace().is_empty() {
+            self.shared
+                .trace
+                .lock()
+                .unwrap()
+                .extend_from_slice(self.log.trace());
+        }
+    }
+}
+
+pub(crate) fn on(ctx: *mut TaskCtx) -> bool {
+    // SAFETY: only the running owner reaches its task-local recorder.
+    unsafe { (*ctx).recording.is_some() }
+}
+
+fn slot() -> usize {
+    // Home and compute workers have distinct slots. Blocking-pool recording
+    // is not admitted until foreign interval phases are wired.
+    assert!(!crate::pool::on_pool(), "pool recorder not admitted");
+    crate::pool::compute_index().map_or(0, |index| usize::from(index) + 1)
+}
+
+/// The caller owns the scheduler role and supplies bounded runtime work.
+/// The local recorder is removed from ctx before action borrows the context,
+/// and restored before any stop or physical suspension can leave this stack.
+fn phase<T>(ctx: *mut TaskCtx, action: impl FnOnce(&mut Writer<'_, '_>) -> T) -> Stopped<T> {
+    // Root walks need their own entered-phase integration; this admission
+    // fails before acting if an unsupported root release has been deferred.
+    assert!(
+        !unsafe { (*ctx).roots.has_pending() },
+        "root phases not admitted"
+    );
+    let mut task = unsafe { (*ctx).recording.take() }.expect("an admitted native recorder");
+    let shared = task.shared.clone();
+    let mut worker = shared
+        .recorder
+        .worker(slot())
+        .expect("one section owner per worker");
+    task.ordinal = task
+        .ordinal
+        .checked_add(1)
+        .expect("native op ordinal overflow");
+    let progress = Progress::new(task.ordinal, Phase::Done);
+    let result = shared
+        .recorder
+        .phase(&mut worker, &mut task.log, progress, action);
+    drop(worker);
+    unsafe { (*ctx).recording = Some(task) };
+    result.map_err(|_| Stop::Requested)
+}
+
+/// # Safety
+/// This is a supported atomic runtime entry, holding the scheduler role;
+/// out and value satisfy AtomicCreate's carrier contract.
+pub(crate) unsafe fn atomic_create(
+    ctx: *mut TaskCtx,
+    out: *mut u64,
+    value: *const u8,
+    size: u64,
+) -> Stopped<()> {
+    phase(ctx, |_| unsafe {
+        out.write(crate::tasks::scheduler(ctx).sync.create_image(value, size));
+    })
+}
+
+/// # Safety
+/// The role is held; word is a live atomic and slot writable for size bytes.
+pub(crate) unsafe fn atomic_load(
+    ctx: *mut TaskCtx,
+    word: u64,
+    slot: *mut u8,
+    size: u64,
+) -> Stopped<()> {
+    let size_bytes = usize::try_from(size).expect("an atomic image fits memory");
+    assert!(size_bytes <= 16, "an atomic image fits 128 bits");
+    phase(ctx, |writer| unsafe {
+        crate::tasks::scheduler(ctx).sync.read(word, slot, size);
+        let mut bits = [0; 16];
+        std::ptr::copy_nonoverlapping(slot, bits.as_mut_ptr(), size_bytes);
+        writer.load(u128::from_le_bytes(bits));
+    })
+}
+
+/// # Safety
+/// The role is held; word is live and value readable for size bytes.
+pub(crate) unsafe fn atomic_store(
+    ctx: *mut TaskCtx,
+    word: u64,
+    value: *const u8,
+    size: u64,
+) -> Stopped<()> {
+    phase(ctx, |_| unsafe {
+        crate::tasks::scheduler(ctx).sync.write(word, value, size)
+    })
+}
+
+#[cfg(test)]
+impl Recording {
+    pub(crate) fn new(binding: &[u8], durable: bool) -> Arc<Self> {
+        Arc::new(Self {
+            recorder: Recorder::new(
+                Marked::default(),
+                binding,
+                crate::pool::MAX_WIDTH as usize + 1,
+                durable,
+                true,
+                None,
+            )
+            .unwrap(),
+            trace: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// # Safety
+    /// Admission only, before any task runs; no F0 session is installed.
+    pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
+        assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
+        let mut worker = self.recorder.worker(0).unwrap();
+        let log = self.recorder.root(&mut worker).unwrap();
+        unsafe {
+            (*ctx).recording = Some(Box::new(Task {
+                shared: self.clone(),
+                log,
+                ordinal: 0,
+            }))
+        };
+    }
+
+    pub(crate) fn trace(&self) -> Vec<Stamped> {
+        self.trace.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+impl Task {
+    pub(crate) fn path(&self) -> &[u32] {
+        self.log.path()
+    }
+}
+
+/// A prepared child's registration is a phase of its spawning parent. The
+/// test transfers this owner into a fresh TaskCtx before scheduling its image.
+#[cfg(test)]
+pub(crate) fn child(ctx: *mut TaskCtx) -> Stopped<Task> {
+    let shared = unsafe { (*ctx).recording.as_ref().unwrap().shared.clone() };
+    let log = phase(ctx, |writer| writer.spawn())?;
+    Ok(Task {
+        shared,
+        log,
+        ordinal: 0,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tasks::*;
+    use hirsel_free::projection::Projection;
+    use hirsel_free::session::Session;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+    const OPS: u64 = 32;
+
+    struct Race {
+        word: u64,
+        started: AtomicU32,
+        finished: AtomicU32,
+        go: AtomicBool,
+        middle: AtomicU32,
+        resume: AtomicBool,
+        timed_out: AtomicBool,
+    }
+
+    fn exercise(ctx: *mut TaskCtx, race: &Race) {
+        race.started.fetch_add(1, Ordering::AcqRel);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !race.go.load(Ordering::Acquire) {
+            if std::time::Instant::now() >= until {
+                race.timed_out.store(true, Ordering::Release);
+                return;
+            }
+            std::thread::yield_now();
+        }
+        for value in 1..=OPS {
+            let mut loaded = 0;
+            unsafe {
+                assert_eq!(
+                    hirsel_rt_v2_atomic_store(ctx, &race.word, (&raw const value).cast(), 8),
+                    STATUS_OK
+                );
+                assert_eq!(
+                    hirsel_rt_v2_atomic_load(ctx, &race.word, (&raw mut loaded).cast(), 8),
+                    STATUS_OK
+                );
+            }
+            assert!((1..=OPS).contains(&loaded));
+            if value == OPS / 2 {
+                race.middle.fetch_add(1, Ordering::AcqRel);
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while !race.resume.load(Ordering::Acquire) {
+                    if std::time::Instant::now() >= until {
+                        race.timed_out.store(true, Ordering::Release);
+                        return;
+                    }
+                    std::thread::yield_now();
+                }
+            }
+        }
+        race.finished.fetch_add(1, Ordering::Release);
+    }
+
+    unsafe extern "C" fn segment(ctx: *mut u8, data: *mut u8) -> ! {
+        let ctx = ctx.cast::<TaskCtx>();
+        let race = unsafe { Box::from_raw(data.cast::<Arc<Race>>()) };
+        exercise(ctx, &race);
+        drop(race);
+        unsafe {
+            role::enter(ctx);
+            crate::pool::free::finish_current(ctx);
+        }
+    }
+
+    #[test]
+    fn native_atomic_boundaries_record_eight_started_stacks_during_cuts() {
+        const CHILD: &str = "HIRSEL_F1_NATIVE_RECORDING";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "tasks::free::record::tests::native_atomic_boundaries_record_eight_started_stacks_during_cuts", "--nocapture"])
+                .env(CHILD, "1")
+                .output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            return;
+        }
+        crate::pool::set_compute_grant(8);
+        for durable in [false, true] {
+            wide(durable);
+        }
+    }
+
+    fn wide(durable: bool) {
+        let shared = Recording::new(b"native atomic phases", durable);
+        let install = shared.clone();
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        unsafe { run.use_physical_dispatch() };
+        let (started, ready) = std::sync::mpsc::sync_channel::<Arc<Race>>(1);
+        let cutter = std::thread::spawn({
+            let shared = shared.clone();
+            move || {
+                let race = ready.recv().unwrap();
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while race.started.load(Ordering::Acquire) != 8 {
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "all eight stacks must start"
+                    );
+                    std::thread::yield_now();
+                }
+                // A cut while all eight actual stacks are inside segments:
+                // every registered child's START must be visible, yet no
+                // atomic load has acted. A replay starts none of them here.
+                let first = shared.recorder.flush().unwrap().unwrap();
+                assert_eq!(first.progress.len(), 8);
+                race.go.store(true, Ordering::Release);
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while race.middle.load(Ordering::Acquire) != 8 {
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "all eight stacks must publish their first half"
+                    );
+                    std::thread::yield_now();
+                }
+                let middle = shared.recorder.flush().unwrap().unwrap();
+                for (path, progress) in middle.progress {
+                    assert_eq!(progress.op, OPS + if path.is_empty() { 8 } else { 0 });
+                }
+                race.resume.store(true, Ordering::Release);
+                for _ in 0..12 {
+                    shared.recorder.flush().unwrap().unwrap();
+                }
+                race
+            }
+        });
+        let outcome = run.run(
+            move |ctx| unsafe {
+                crate::tasks::free::enable(ctx);
+                install.root(ctx);
+            },
+            move |ctx| {
+                let mut word = 0;
+                let initial = 0u64;
+                unsafe {
+                    hirsel_rt_v2_atomic_create(
+                        ctx,
+                        std::ptr::null_mut(),
+                        &mut word,
+                        (&raw const initial).cast(),
+                        8,
+                    )
+                };
+                let race = Arc::new(Race {
+                    word,
+                    started: AtomicU32::new(0),
+                    finished: AtomicU32::new(0),
+                    go: AtomicBool::new(false),
+                    middle: AtomicU32::new(0),
+                    resume: AtomicBool::new(false),
+                    timed_out: AtomicBool::new(false),
+                });
+                unsafe {
+                    role::enter(ctx);
+                    for _ in 0..7 {
+                        let stack = Stack::new();
+                        let ctx_child = stack.context();
+                        ctx_child.write(TaskCtx::new((*ctx).worker_ptr(), (*ctx).run_ptr()));
+                        let recording = child(ctx).unwrap();
+                        let path = recording.path().to_vec();
+                        (*ctx_child).recording = Some(Box::new(recording));
+                        let s = scheduler(ctx);
+                        let id = s.tasks.len() as u32;
+                        (*ctx_child).task_id = id;
+                        (*ctx_child).task_sp = stack.prepare(
+                            segment,
+                            ctx_child.cast(),
+                            Box::into_raw(Box::new(race.clone())).cast(),
+                        );
+                        let mut row = crate::tasks::Task::new(1, ctx_child, None, path, None);
+                        row.stack = Some(stack);
+                        s.tasks.push(Some(row));
+                        crate::pool::free::schedule_saved((*ctx).run_ptr(), id, Owner::Any);
+                    }
+                    role::release(ctx);
+                }
+                started.send(race.clone()).unwrap();
+                exercise(ctx, &race);
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while race.finished.load(Ordering::Acquire) != 8
+                    && !race.timed_out.load(Ordering::Acquire)
+                {
+                    if std::time::Instant::now() >= until {
+                        race.timed_out.store(true, Ordering::Release);
+                        break;
+                    }
+                    std::thread::yield_now();
+                }
+                STATUS_OK
+            },
+        );
+        let race = cutter.join().unwrap();
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+        assert!(!race.timed_out.load(Ordering::Acquire));
+        assert_eq!(race.finished.load(Ordering::Acquire), 8);
+        let cut = shared.recorder.stop("returned", None).unwrap().unwrap().0;
+        let trace = shared.trace();
+        let live = Projection::new("returned", &cut.progress, &trace);
+        assert_eq!(live.observed.len(), 8 * OPS as usize);
+        let marked = Arc::try_unwrap(shared).ok().unwrap().recorder.into_sink();
+        // The same backend-neutral session drives the interpreter replay.
+        // Replay every completed flush and terminal prefix, not just the end.
+        for end in marked.marks {
+            let bytes = &marked.bytes[..end];
+            if hirsel_free::tape::parse(bytes).unwrap().cut.is_empty() {
+                continue; // a durable header barrier has no admitted phases
+            }
+            let mut replay = Session::replay(bytes).unwrap();
+            assert!(replay.start(&[]));
+            let terminal = end == marked.bytes.len();
+            let mut paths = vec![Vec::new()];
+            paths.extend((0..7).map(|id| vec![id]));
+            for path in paths {
+                if !path.is_empty() && !replay.start(&path) {
+                    continue;
+                }
+                let spawn_ops = if path.is_empty() { 8 } else { 0 };
+                for op in 1..=spawn_ops + 2 * OPS {
+                    replay.begin(&path);
+                    if !replay.admits(&path, Phase::Done) {
+                        break;
+                    }
+                    if op > spawn_ops && (op - spawn_ops) % 2 == 0 {
+                        replay.load(&path, 0).unwrap();
+                    }
+                    replay.publish(&path, Phase::Done).unwrap();
+                }
+            }
+            let projection = replay.finish().unwrap();
+            if terminal {
+                assert_eq!(projection, live);
+            } else {
+                assert_eq!(
+                    projection,
+                    Projection::new("truncated", &projection.cut, &trace)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_native_atomic_action_cannot_pass_a_terminal_cut() {
+        let shared = Recording::new(b"native stop", false);
+        let install = shared.clone();
+        let (ready, wait_ready) = std::sync::mpsc::sync_channel(1);
+        let (stopped, wait_stopped) = std::sync::mpsc::sync_channel(1);
+        let cutter = std::thread::spawn({
+            let shared = shared.clone();
+            move || {
+                wait_ready.recv().unwrap();
+                let cut = shared.recorder.stop("stopped", None).unwrap().unwrap().0;
+                stopped.send(()).unwrap();
+                cut
+            }
+        });
+        let mut run = crate::host::BodyRun::new(2, false);
+        run.free = true;
+        unsafe { run.use_physical_dispatch() };
+        let acted = Arc::new(AtomicBool::new(false));
+        let observed = acted.clone();
+        let outcome = run.run(
+            move |ctx| unsafe {
+                crate::tasks::free::enable(ctx);
+                install.root(ctx);
+            },
+            move |ctx| {
+                let mut word = 0;
+                let value = 7u64;
+                unsafe {
+                    hirsel_rt_v2_atomic_create(
+                        ctx,
+                        std::ptr::null_mut(),
+                        &mut word,
+                        (&raw const value).cast(),
+                        8,
+                    );
+                }
+                ready.send(()).unwrap();
+                wait_stopped.recv().unwrap();
+                // Call the boundary helper so the test can inspect rejection
+                // before raising the stop; this is the same helper called by
+                // AtomicStore's ABI entry. No effect or progress may escape.
+                unsafe {
+                    let _role = role::Guard::new(ctx);
+                    let replacement = 9u64;
+                    assert_eq!(
+                        atomic_store(ctx, word, (&raw const replacement).cast(), 8),
+                        Err(Stop::Requested)
+                    );
+                    let mut after = 0u64;
+                    scheduler(ctx).sync.read(word, (&raw mut after).cast(), 8);
+                    assert_eq!(after, 7);
+                }
+                acted.store(true, Ordering::Release);
+                STATUS_OK
+            },
+        );
+        let cut = cutter.join().unwrap();
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+        assert!(observed.load(Ordering::Acquire));
+        assert_eq!(cut.progress[&Vec::new()], Progress::new(1, Phase::Done));
+        let live = Projection::new("stopped", &cut.progress, &shared.trace());
+        let bytes = Arc::try_unwrap(shared)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink()
+            .bytes;
+        let mut replay = Session::replay(&bytes).unwrap();
+        assert!(replay.start(&[]));
+        replay.begin(&[]);
+        replay.publish(&[], Phase::Done).unwrap();
+        assert_eq!(replay.finish().unwrap(), live);
+    }
+}

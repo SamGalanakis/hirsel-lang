@@ -61,6 +61,12 @@ pub(crate) struct TaskRoots {
     in_phase: bool,
 }
 
+impl TaskRoots {
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.pending.is_empty() || !self.deferred.is_empty()
+    }
+}
+
 #[inline(always)]
 unsafe fn word<'a>(block: *mut Header) -> &'a AtomicU32 {
     // SAFETY: a live root block's count word is only accessed atomically.

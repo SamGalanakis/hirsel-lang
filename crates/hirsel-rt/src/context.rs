@@ -149,6 +149,9 @@ pub struct TaskCtx {
     /// compute permit, which its leave gives back (`crate::foreign`).
     pub(crate) callback_permits: u64,
     pub(crate) callback_depth: u32,
+    /// Owner-local native recorder and ordinal. It moves with this task;
+    /// cutters read only its stable shared log, never the context.
+    pub(crate) recording: Option<Box<crate::tasks::free::record::Task>>,
     /// The task's measurement site while it is switched out.
     #[cfg(feature = "measurement")]
     site: u64,
@@ -315,6 +318,7 @@ impl TaskCtx {
             foreign: crate::foreign::ForeignScope::NONE,
             callback_permits: 0,
             callback_depth: 0,
+            recording: None,
             #[cfg(feature = "measurement")]
             site: 0,
         }

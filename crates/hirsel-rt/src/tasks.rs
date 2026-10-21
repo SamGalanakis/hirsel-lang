@@ -3693,6 +3693,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
         unsafe { crate::stop::check(ctx, ordered::engine::atomic_create(ctx, out, value, size)) };
         return STATUS_OK;
     }
+    if free::record::on(ctx) {
+        unsafe {
+            crate::stop::check(ctx, free::record::atomic_create(ctx, out, value, size));
+            yield_now(&mut *ctx);
+        }
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     unsafe {
         out.write(scheduler(ctx).sync.create_image(value, size));
@@ -3720,6 +3727,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
     // SAFETY: caller contract.
     if ordered::engine::on(ctx) {
         unsafe { crate::stop::check(ctx, ordered::engine::atomic_load(ctx, a.read(), slot, size)) };
+        return STATUS_OK;
+    }
+    if free::record::on(ctx) {
+        unsafe {
+            crate::stop::check(ctx, free::record::atomic_load(ctx, a.read(), slot, size));
+            yield_now(&mut *ctx);
+        }
         return STATUS_OK;
     }
     crate::free::enter(ctx, Phase::Done);
@@ -3765,6 +3779,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
                 ordered::engine::atomic_store(ctx, a.read(), value, size),
             )
         };
+        return STATUS_OK;
+    }
+    if free::record::on(ctx) {
+        unsafe {
+            crate::stop::check(ctx, free::record::atomic_store(ctx, a.read(), value, size));
+            yield_now(&mut *ctx);
+        }
         return STATUS_OK;
     }
     crate::free::enter(ctx, Phase::Done);

@@ -7,6 +7,8 @@
 
 use super::*;
 
+pub(crate) mod record;
+
 #[derive(Default)]
 pub(crate) struct Driver;
 
