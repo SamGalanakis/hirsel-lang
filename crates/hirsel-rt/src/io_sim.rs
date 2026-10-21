@@ -101,6 +101,11 @@ impl SimIo {
     pub fn set_projections(&mut self, projections: std::collections::BTreeSet<String>) {
         self.state.projections = projections;
     }
+    /// The harness's denied-output fixture only removes authority.
+    pub(crate) fn deny_output(&mut self) {
+        self.state.projections.remove("stdout");
+        self.state.projections.remove("stderr");
+    }
     pub fn new(tree: Tree, tape: Vec<Event>) -> Self {
         Self {
             state: State::default(),

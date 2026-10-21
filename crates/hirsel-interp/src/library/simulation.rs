@@ -1083,7 +1083,7 @@ impl Simulation {
         }
         Ok(Some(&event.output))
     }
-    /// Event payloads are length-framed UTF-8/bits, with no spans/host identities.
+    /// Event payloads are length-framed text, raw bytes or bits, with no spans/host identities.
     pub(crate) fn record(
         &mut self,
         capability: &str,

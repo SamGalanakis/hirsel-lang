@@ -1,0 +1,35 @@
+// rule: CAP-1
+// expect: run
+// Canceled writes emit no bytes, even for non-UTF-8 data; the parent can still write.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let errors = io.stderr(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let h = task.async(
+        s,
+        fn() -> bool {
+          let mut r = take receiver
+          let _ = channel.receive(tasks, mut r)
+          let no_stdout: bool = match out.write(output, b"\x00\xff") {
+            Error(Canceled(Requested)) => true,
+            _ => false,
+          }
+          let no_stderr: bool = match err.write(errors, b"\x80\xfe") {
+            Error(Canceled(Requested)) => true,
+            _ => false,
+          }
+          no_stdout && no_stderr
+        }
+      )
+      task.cancel(s, h)
+      failure.check(task.await(s, take h), Arithmetic())
+    }
+  )
+  failure.check(out.write(output, b"") == Ok(()), Arithmetic())
+  failure.check(err.write(errors, b"") == Ok(()), Arithmetic())
+  Ok(())
+}

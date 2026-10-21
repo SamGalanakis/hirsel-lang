@@ -2050,6 +2050,9 @@ fn launch_impl(
         .env("HIRSEL_RT_ROOT", &root)
         .env("HIRSEL_RT_OBSERVATION", &record)
         .env("HIRSEL_RT_REFUSAL", &refusal);
+    if fixture.deny_output {
+        command.env("HIRSEL_RT_DENY_OUTPUT", "1");
+    }
     if let Some(ticks) = fixture.monotonic {
         command.env("HIRSEL_RT_VIRTUAL_CLOCK", ticks.to_string());
     }

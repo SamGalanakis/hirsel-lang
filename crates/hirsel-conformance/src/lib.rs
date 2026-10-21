@@ -278,8 +278,14 @@ pub fn fixture(source: &str) -> Result<hirsel_driver::native::Fixture, String> {
         };
         match key {
             "grant" => {
+                if value.trim() == "no-output" {
+                    if std::mem::replace(&mut fixture.deny_output, true) {
+                        return Err("duplicate no-output grant directive".into());
+                    }
+                    continue;
+                }
                 if value.trim() != "clock" {
-                    return Err("grant must be clock".into());
+                    return Err("grant must be clock or no-output".into());
                 }
                 if fixture.monotonic.replace(0).is_some() {
                     return Err("duplicate grant directive".into());
@@ -382,6 +388,10 @@ pub(crate) fn simulation(source: &str) -> Result<hirsel_engine::SimulationConfig
         fault_seed: fixture.fault_seed.unwrap_or(0),
         ..Default::default()
     };
+    if fixture.deny_output {
+        simulation.projections.remove("stdout");
+        simulation.projections.remove("stderr");
+    }
     if let Some(ticks) = fixture.monotonic {
         simulation.monotonic = ticks;
         simulation.grants.insert("MonotonicClock".into());

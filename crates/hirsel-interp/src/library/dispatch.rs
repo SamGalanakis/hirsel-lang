@@ -393,10 +393,10 @@ impl Library {
                 }
             }
             "stdin.read" => return self.read_stdin(a, context).map(Some),
-            "err.print" | "out.print" => {
+            "err.print" | "out.print" | "err.write" | "out.write" => {
                 self.simulation.id(
                     arg(a, 0)?,
-                    if name == "err.print" {
+                    if name.starts_with("err.") {
                         "Stderr"
                     } else {
                         "Stdout"
@@ -565,7 +565,7 @@ impl Library {
             "Test"
         } else if name.starts_with("env.") {
             "Env"
-        } else if name == "err.print" {
+        } else if name.starts_with("err.") {
             "Stderr"
         } else if name.starts_with("out.") {
             "Stdout"
@@ -1208,7 +1208,7 @@ impl Library {
     }
 }
 impl Library {
-    /// `out.print` or `err.print`'s write, with the cancellation its check observed.
+    /// A text or byte write, with the cancellation its check observed.
     pub(super) fn print(
         &mut self,
         name: &str,
@@ -1216,11 +1216,11 @@ impl Library {
         canceled: Option<u32>,
         context: &mut OperationContext<'_>,
     ) -> Result<Value, Error> {
-        let text = text(arg(a, 1)?)?;
+        let bytes = output_bytes(name, arg(a, 1)?)?;
         let fault = canceled
             .map(Fault::Canceled)
             .or_else(|| self.simulation.fault(name));
-        let output = if name == "err.print" {
+        let output = if name.starts_with("err.") {
             &mut self.simulation.stderr
         } else {
             &mut *context.stdout
@@ -1228,14 +1228,14 @@ impl Library {
         Ok(match fault {
             Some(Fault::Canceled(cause)) => error(variant(1, vec![variant(cause, vec![])])),
             Some(Fault::Fault { code, partial }) => {
-                output.extend_from_slice(&text.as_bytes()[..partial.min(text.len())]);
+                output.extend_from_slice(&bytes[..partial.min(bytes.len())]);
                 error(variant(0, vec![u32_value(code)]))
             }
             Some(Fault::File { .. }) => {
                 return Err(invalid("file error supplied to output"));
             }
             None => {
-                output.extend_from_slice(text.as_bytes());
+                output.extend_from_slice(bytes);
                 ok(Value::Unit)
             }
         })
@@ -1798,7 +1798,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.signals" | "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.tasks" | "test.clock" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" | "file.map" | "file.watch" => {
+    Capability: "io.signals" | "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "err.write" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "out.write" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.tasks" | "test.clock" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" | "file.map" | "file.watch" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();
@@ -2694,5 +2694,14 @@ fn decode_stdin_completion(bytes: &[u8]) -> Result<Result<Vec<u8>, (u32, u32)>, 
             u32::from_le_bytes(bytes[5..9].try_into().unwrap()),
         ))),
         _ => Err(invalid("invalid stdin tape completion framing")),
+    }
+}
+
+/// Print is a write of the String's UTF-8 bytes; byte writes preserve every byte.
+pub(super) fn output_bytes<'a>(name: &str, value: &'a Value) -> Result<&'a [u8], Error> {
+    if name.ends_with(".print") {
+        text(value).map(str::as_bytes)
+    } else {
+        bytes(value)
     }
 }

@@ -1,0 +1,16 @@
+// oracle: expected-stdout
+// oracle-reason: byte-exact output includes NUL and invalid UTF-8; the sidecar is the literal concatenation
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let errors = io.stderr(rt) ? Grant
+  out.write(output, b"\x00\xff\x80") ? Output
+  let bytes = b"xx\xfe\x00\xc3\xa9yy"
+  out.write(output, bytes.slice(bytes, 2, 6)) ? Output
+  out.write(output, b"") ? Output
+  out.print(output, "é") ? Output
+  err.write(errors, b"\x00\xff\x80") ? Output
+  err.print(errors, "é") ? Output
+  Ok(())
+}

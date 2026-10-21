@@ -1,0 +1,16 @@
+// rule: CAP-1
+// expect: run
+// stdout: raw bytes é
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let errors = io.stderr(rt) ? Grant
+  let data = b"xxraw bytesxx"
+  out.write(output, bytes.slice(data, 2, 11)) ? Output
+  out.write(output, b"") ? Output
+  out.print(output, " é\n") ? Output
+  err.write(errors, b"\x00\xff\x80") ? Output
+  err.write(errors, b"") ? Output
+  Ok(())
+}

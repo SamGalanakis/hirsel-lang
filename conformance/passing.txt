@@ -68,6 +68,9 @@ conformance/CAP/CAP-1-net-tls-sni-run.hir
 conformance/CAP/CAP-1-net-tls-truncate-run.hir
 conformance/CAP/CAP-1-net-ungranted-host-run.hir
 conformance/CAP/CAP-1-normalize-tree-example.hir
+conformance/CAP/CAP-1-output-bytes-canceled-run.hir
+conformance/CAP/CAP-1-output-bytes-not-granted-run.hir
+conformance/CAP/CAP-1-output-bytes-run.hir
 conformance/CAP/CAP-1-output-no-added-newline.hir
 conformance/CAP/CAP-1-process-child-signal-run.hir
 conformance/CAP/CAP-1-process-env-run.hir

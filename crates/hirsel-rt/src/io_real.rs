@@ -132,6 +132,11 @@ impl RealIo {
     pub fn set_projections(&mut self, projections: std::collections::BTreeSet<String>) {
         self.state.projections = projections;
     }
+    /// The harness's denied-output fixture only removes authority.
+    pub(crate) fn deny_output(&mut self) {
+        self.state.projections.remove("stdout");
+        self.state.projections.remove("stderr");
+    }
     /// The caller explicitly grants this directory. No ambient directory is consulted later.
     pub fn grant(root: &Path) -> std::io::Result<Self> {
         Self::grant_with_output(root, std::io::sink())

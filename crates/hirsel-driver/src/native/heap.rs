@@ -24,6 +24,7 @@ mod signals;
 /// logical handles numbered as the runtime's adapter numbers them.
 #[derive(Clone)]
 struct Io {
+    deny_output: bool,
     next: u64,
     test_seed: u64,
     stdout: Vec<u64>,
@@ -88,6 +89,7 @@ impl Io {
         world: &HeapWorld,
     ) -> Result<Self, NativeError> {
         let mut io = Self::new();
+        io.deny_output = world.deny_output;
         io.test_seed = test_seed;
         io.monotonic = world.monotonic;
         io.random = hirsel_rt::io::RandomSource::SplitMix64(random_seed);
@@ -132,6 +134,7 @@ impl Io {
             telemetry_ids: hirsel_rt::telemetry::NullIds::new(0),
             telemetry_issued: Default::default(),
             yielded: false,
+            deny_output: false,
             monotonic: None,
             script_clocks: BTreeMap::new(),
             permissions: BTreeMap::new(),
@@ -247,7 +250,7 @@ impl Operations for Io {
                     }),
                 }),
             },
-            (Some("out"), "print", _) => {
+            (Some("out"), "print" | "write", _) => {
                 let canceled = UnitResult::of(Err(hirsel_rt::io::IoError::Canceled(cause)));
                 let mut bytes = Vec::with_capacity(12);
                 for word in [canceled.tag, canceled.error, canceled.code] {
@@ -255,7 +258,7 @@ impl Operations for Io {
                 }
                 OpValue::Plain(bytes)
             }
-            (Some("err"), "print", _) => {
+            (Some("err"), "print" | "write", _) => {
                 let mut bytes = 1u32.to_le_bytes().to_vec();
                 bytes.extend_from_slice(&cause.to_le_bytes());
                 OpValue::Variant {
@@ -422,12 +425,15 @@ impl Operations for Io {
                 OpOutcome::Value(OpValue::Unit)
             }
             (Some("io"), "stdout", [OpValue::Handle(IO_HANDLE)]) => {
+                if self.deny_output {
+                    return OpOutcome::Value(grant_not_granted());
+                }
                 let handle = self.next;
                 self.next += 1;
                 self.stdout.push(handle);
                 OpOutcome::Value(io_ok(OpValue::Handle(handle)))
             }
-            (Some("out"), "print", [OpValue::Handle(s), OpValue::Bytes(text)])
+            (Some("out"), "print" | "write", [OpValue::Handle(s), OpValue::Bytes(text)])
                 if self.stdout.contains(s) =>
             {
                 output.extend_from_slice(text);
@@ -535,6 +541,15 @@ fn io_ok(value: OpValue) -> OpValue {
     OpValue::Variant {
         tag: 0,
         value: Box::new(value),
+    }
+}
+fn grant_not_granted() -> OpValue {
+    OpValue::Variant {
+        tag: 1,
+        value: Box::new(OpValue::Variant {
+            tag: 0,
+            value: Box::new(OpValue::Unit),
+        }),
     }
 }
 fn io_error(code: u32) -> OpValue {
@@ -778,6 +793,9 @@ impl Io {
                 }),
             },
             (Some("io"), kind @ ("stdin" | "stderr"), [OpValue::Handle(IO_HANDLE)]) => {
+                if kind == "stderr" && self.deny_output {
+                    return Some(OpOutcome::Value(grant_not_granted()));
+                }
                 let grant = if kind == "stdin" {
                     IoGrant::Stdin
                 } else {
@@ -818,7 +836,7 @@ impl Io {
                     });
                 }
             }
-            (Some("err"), "print", [OpValue::Handle(stream), OpValue::Bytes(_)]) => {
+            (Some("err"), "print" | "write", [OpValue::Handle(stream), OpValue::Bytes(_)]) => {
                 if !matches!(self.grants.get(stream), Some(IoGrant::Stderr)) {
                     return Some(OpOutcome::Fail("CAP-2".into()));
                 }
@@ -2088,6 +2106,8 @@ fn observation(
 /// What a launch grants H's model beyond its entry's handles.
 #[derive(Clone, Debug, Default)]
 pub struct HeapWorld {
+    /// Deny stdout and stderr projection for a negative grant fixture.
+    pub deny_output: bool,
     /// A monotonic clock (`io.monotonic_clock`), whose virtual reading starts here, as the
     /// deterministic simulation's does.
     pub monotonic: Option<u64>,

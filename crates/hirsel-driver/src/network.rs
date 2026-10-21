@@ -730,13 +730,13 @@ impl HostLibrary {
         }
         // Free mode: the write is a host request whose host call runs between its claim and
         // its end, and only live.
-        if matches!(name, "err.print" | "out.print") {
+        if matches!(name, "err.print" | "out.print" | "err.write" | "out.write") {
             use hirsel_interp::library::FreePrint;
             match self.library.free_print_begin(name, a, cx)? {
                 None => {}
                 Some(FreePrint::Done(result)) => return Ok(Some(result)),
                 Some(FreePrint::Write(write)) => {
-                    let request = if name == "err.print" {
+                    let request = if name.starts_with("err.") {
                         R::PrintStderr {
                             stderr: self.id(&a[0])?,
                             bytes: bytes(&a[1])?,
@@ -755,8 +755,10 @@ impl HostLibrary {
         }
         // The library validates the handle/schema and returns Canceled without
         // consuming input or publishing output. Destruction's entered task is shielded.
-        if matches!(name, "stdin.read" | "err.print" | "out.print")
-            && self.library.cancellation().is_some()
+        if matches!(
+            name,
+            "stdin.read" | "err.print" | "out.print" | "err.write" | "out.write"
+        ) && self.library.cancellation().is_some()
         {
             return self.library.call(call, cx);
         }
@@ -784,7 +786,7 @@ impl HostLibrary {
                 },
             }));
         }
-        let request = if name == "err.print" {
+        let request = if name.starts_with("err.") {
             R::PrintStderr {
                 stderr: self.id(&a[0])?,
                 bytes: bytes(&a[1])?,
@@ -2470,7 +2472,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                     | "io.signals"
                     | "stdin.read"
                     | "err.print"
+                    | "err.write"
                     | "out.print"
+                    | "out.write"
                     | "env.get"
                     | "env.narrow"
             ) {

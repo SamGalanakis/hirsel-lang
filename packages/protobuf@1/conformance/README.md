@@ -12,9 +12,8 @@ hirsel run ../protoc/hirsel.json --grants <grants mounting proto/ at ""> -- \
 hirsel fmt messages.hir
 ```
 
-Stdout takes only text (`// GAP:` in `main.hir`), so the testee answers each request
-with one base64 line, and `adapter.py` turns the lines back into the runner's
-length-prefixed frames. To run the suite:
+The testee writes length-prefixed binary responses directly with `out.write`.
+`adapter.py` launches it with stdin and stdout granted. To run the suite:
 
 ```
 hirsel build hirsel.json -o testee

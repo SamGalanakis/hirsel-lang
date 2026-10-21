@@ -46,6 +46,10 @@ outside the gate exclusions.
 
 ## Deterministic run fixtures
 
+`// grant: no-output` denies stdout and stderr projection in the interpreter,
+heap checker, LLVM/Cranelift launches and native recording/replay. The accepted
+output fixture and its denied twin otherwise use the same byte-write operations.
+
 `// grant: clock` grants `io.monotonic_clock` in executable corpus cases. Its
 virtual nanosecond reading starts at zero, stays fixed while runnable work remains,
 and advances to the earliest live timer when every task waits. Expired or cancelled

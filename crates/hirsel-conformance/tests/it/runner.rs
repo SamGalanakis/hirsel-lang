@@ -882,6 +882,15 @@ fn fixture_headers_are_explicit_validated_and_header_only() {
     assert!(fixture.net.is_some());
     assert!(fixture.process.is_some());
     assert!(
+        hirsel_conformance::fixture("// grant: no-output\npub fn main() {}\n")
+            .unwrap()
+            .deny_output
+    );
+    assert!(
+        hirsel_conformance::fixture("// grant: no-output\n// grant: no-output\npub fn main() {}\n")
+            .is_err()
+    );
+    assert!(
         hirsel_conformance::fixture("// ordinary comment\npub fn main() {}\n")
             .unwrap()
             .monotonic

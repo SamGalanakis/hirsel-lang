@@ -358,6 +358,8 @@ fn same_options(a: &Options, b: &Options) -> bool {
 /// Deterministic providers selected explicitly by a semantic fixture, never a host grant.
 #[derive(Clone, Debug, Default)]
 pub struct Fixture {
+    /// The negative output-grant fixture, shared by every engine.
+    pub deny_output: bool,
     pub monotonic: Option<u64>,
     pub net: Option<hirsel_run_schema::NetGrant>,
     pub process: Option<hirsel_run_schema::ProcessGrant>,
@@ -417,6 +419,7 @@ pub fn differential_in(
     fixture: &Fixture,
 ) -> Vec<(String, Outcome)> {
     let world = super::HeapWorld {
+        deny_output: fixture.deny_output,
         monotonic: fixture.monotonic,
         process: fixture.process.clone(),
         net: fixture.net.clone(),

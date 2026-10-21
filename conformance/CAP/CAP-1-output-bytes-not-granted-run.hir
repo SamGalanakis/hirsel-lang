@@ -1,0 +1,22 @@
+// rule: CAP-1
+// expect: run
+// grant: no-output
+// No output capability can be projected, so neither byte writer can emit anything.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let no_out = match io.stdout(rt) {
+    Ok(s) => {
+      let _ = out.write(s, b"\xff\x00")
+      false
+    },
+    Error(NotGranted()) => true,
+  }
+  let no_err = match io.stderr(rt) {
+    Ok(s) => {
+      let _ = err.write(s, b"\x80\x00")
+      false
+    },
+    Error(NotGranted()) => true,
+  }
+  failure.check(no_out && no_err, Arithmetic())
+  Ok(())
+}

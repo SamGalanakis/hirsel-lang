@@ -36,7 +36,9 @@ fn arg.path(args: Args, index: u64) -> Result[Path, ArgError]
 fn path.of(text: String) -> Path
 @preserves_unique(buf) @unretained(s) fn stdin.read(s: Stdin, mut buf: List[u8], max: u64) -> Result[u64, InputError]
 N fn err.print(s: Stderr, text: String) -> Result[(), OutputError]
+N fn err.write(s: Stderr, bytes: Bytes) -> Result[(), OutputError]
 N fn out.print(s: Stdout, text: String) -> Result[(), OutputError]
+N fn out.write(s: Stdout, bytes: Bytes) -> Result[(), OutputError]
 fn env.get(e: Env, name: String) -> Result[Option[String], EnvError]
 fn env.narrow(e: Env, names: List[String]) -> Result[Env, EnvError]
 N fn test.check(t: Test, condition: bool) -> ()

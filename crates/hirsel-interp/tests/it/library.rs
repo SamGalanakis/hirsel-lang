@@ -1592,3 +1592,66 @@ fn filesystem_snapshot_metadata_survives_initialization_and_failed_create() {
         None
     );
 }
+
+#[test]
+fn output_bytes_capture_partial_fault_cancellation_and_replay() {
+    fn variant(variant: u32, fields: Vec<Value>) -> Value {
+        Value::Variant {
+            variant,
+            fields: fields.into_iter().map(Some).collect(),
+        }
+    }
+    let config = SimulationConfig {
+        faults: ["out.write", "err.write"]
+            .into_iter()
+            .map(|name| {
+                (
+                    name.into(),
+                    [
+                        Fault::Canceled(0),
+                        Fault::Fault {
+                            code: 42,
+                            partial: 2,
+                        },
+                    ]
+                    .into_iter()
+                    .collect(),
+                )
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let execute = |h: &mut Harness| {
+        let io = h.root("Io");
+        for (projection, name) in [("stdout", "out.write"), ("stderr", "err.write")] {
+            let stream = unok(h.value(&format!("io.{projection}"), vec![io.clone()]));
+            let data = Value::Bytes(vec![0xff, 0, 0x80, 0xfe]);
+            assert_eq!(
+                h.value(name, vec![stream.clone(), data.clone()]),
+                error(variant(1, vec![variant(0, vec![])]))
+            );
+            assert_eq!(
+                h.value(name, vec![stream.clone(), data.clone()]),
+                error(variant(0, vec![u32_value(42)]))
+            );
+            assert_eq!(h.value(name, vec![stream.clone(), data]), ok(Value::Unit));
+            assert_eq!(
+                h.value(name, vec![stream, Value::Bytes(vec![])]),
+                ok(Value::Unit)
+            );
+        }
+        assert_eq!(h.stdout, [0xff, 0, 0xff, 0, 0x80, 0xfe]);
+        assert_eq!(h.library.simulation.stderr, h.stdout);
+    };
+    let mut live = Harness::new(config.clone());
+    execute(&mut live);
+    let mut replay = Harness::new(config);
+    replay.run.inputs = live.library.simulation.events.clone();
+    replay.library = Library::new(&replay.run, replay.library.simulation.config.clone()).unwrap();
+    execute(&mut replay);
+    replay.library.simulation.finish_replay().unwrap();
+    assert_eq!(
+        live.library.simulation.events,
+        replay.library.simulation.events
+    );
+}

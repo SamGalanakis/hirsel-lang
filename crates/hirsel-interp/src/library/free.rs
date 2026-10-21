@@ -489,7 +489,7 @@ impl Library {
         self.free_done(result, context)
     }
 
-    /// `out.print` or `err.print` in free mode, up to its host call: `None` when free mode
+    /// A stdout or stderr text/byte write, up to its host call: `None` when free mode
     /// is off. [`FreePrint::Write`]: make the host write (live), then
     /// [`Library::free_print_end`]; a replay never gets there, since it makes no host call.
     pub fn free_print_begin(
@@ -511,14 +511,12 @@ impl Library {
                 .free_done(result, context)
                 .map(|r| Some(FreePrint::Done(r)));
         }
-        let sink = if name == "err.print" {
+        let sink = if name.starts_with("err.") {
             "stderr"
         } else {
             "stdout"
         };
-        let bytes = super::dispatch::text(super::dispatch::arg(a, 1)?)?
-            .as_bytes()
-            .to_vec();
+        let bytes = super::dispatch::output_bytes(name, super::dispatch::arg(a, 1)?)?.to_vec();
         let path = self.tasks.path();
         let free = self.free.as_mut().unwrap();
         let request = free.session.host_begin(&path, sink).map_err(diverged)?;

@@ -1522,3 +1522,12 @@ environment, checks without loading it that the image is whole and that its
 `main` (the generated launcher, which enters `hirsel_rt_v2_main`) and exits
 through `exit`. A failure before that is reported to the request's tooling path
 with exit status 125, never as a program outcome.
+
+`out.write` and `err.write` accept borrowed Bytes; `out.print` and `err.print`
+call the same byte-write entry points with their String slice. ABI revision 32
+adds the two exports without changing existing signatures. Like Rust std's
+`StdoutLock` and `StderrLock` `Write` implementations
+(`library/std/src/io/stdio.rs:845` and `:1074`, rust-lang/rust
+`19833af7224424e8b53e288097d56b6af43d5bcf`), output forwards the exact byte
+slice. Hirsel additionally checks capability ownership and cancellation and
+journals the accepted bytes through its existing Print/PrintStderr events.

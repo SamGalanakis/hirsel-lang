@@ -156,6 +156,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "bytes.slice"
         | "path.text"
         | "out.print"
+        | "out.write"
         | "io.dir"
         | "dir.narrow"
         | "dir.read_only"
@@ -216,6 +217,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "signal.wait"
         | "stdin.read"
         | "err.print"
+        | "err.write"
         | "env.get"
         | "env.narrow"
         | "io.process"
@@ -2131,6 +2133,18 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_err_write",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_env_get",
         destination: true,
         result: Some((32, 8)),
@@ -2151,6 +2165,18 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     AbiExport {
         caller_site: false,
         symbol: "hirsel_rt_v2_out_print",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_out_write",
         destination: true,
         result: Some((12, 4)),
         parameters: &[
@@ -2450,6 +2476,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "signal.wait",
     "stdin.read",
     "err.print",
+    "err.write",
     "env.get",
     "env.narrow",
     "io.stdout",
@@ -2501,6 +2528,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "mutex.create",
     "mutex.with",
     "out.print",
+    "out.write",
     "path.of",
     "region.with",
     "sender.dup",

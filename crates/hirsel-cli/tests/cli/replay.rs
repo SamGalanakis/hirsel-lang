@@ -1261,3 +1261,137 @@ fn narrowed_handles_record_and_replay_across_backends() {
         }
     }
 }
+
+#[test]
+fn output_bytes_record_and_replay_exactly_across_all_engines() {
+    let fixture = Fixture::new("output-bytes");
+    std::fs::write(
+        fixture.source(),
+        r#"pub type AppError = Grant(GrantError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let errors = io.stderr(rt) ? Grant
+  out.write(output, b"\x00\xff\x80") ? Output
+  let data = b"xx\xfe\x00\xc3\xa9yy"
+  out.write(output, bytes.slice(data, 2, 6)) ? Output
+  out.write(output, b"") ? Output
+  out.print(output, "é") ? Output
+  err.write(errors, b"\x00\xff\x80") ? Output
+  err.write(errors, b"") ? Output
+  err.print(errors, "é") ? Output
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let grants = fixture.0.join("grants.json");
+    std::fs::write(
+        &grants,
+        r#"{"io":{"stdout":"stdout.bytes@1","stderr":"stderr.bytes@1","dirs":[]}}"#,
+    )
+    .unwrap();
+    let command = |backend: &str| {
+        let mut cmd = hirsel(backend != "interpreter", &fixture.source(), &[]);
+        if backend != "interpreter" {
+            cmd.args(["--backend", backend]);
+        }
+        cmd
+    };
+    let check = |output: std::process::Output| {
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"\x00\xff\x80\xfe\x00\xc3\xa9\xc3\xa9");
+        assert_eq!(output.stderr, b"\x00\xff\x80\xc3\xa9");
+    };
+    let world = fixture.0.join("world.json");
+    std::fs::write(&world, r#"{"projections":["stdout","stderr"]}"#).unwrap();
+    check(
+        command("interpreter")
+            .arg("--simulation")
+            .arg(&world)
+            .output()
+            .unwrap(),
+    );
+    let engines = ["interpreter", "llvm", "cranelift"];
+    for engine in engines {
+        check(
+            command(engine)
+                .arg("--grants")
+                .arg(&grants)
+                .output()
+                .unwrap(),
+        );
+        let tape = fixture.tape(engine);
+        check(
+            command(engine)
+                .arg("--grants")
+                .arg(&grants)
+                .arg("--record")
+                .arg(&tape)
+                .output()
+                .unwrap(),
+        );
+        for replay_engine in engines {
+            check(
+                command(replay_engine)
+                    .arg("--replay")
+                    .arg(&tape)
+                    .stdin(Stdio::null())
+                    .output()
+                    .unwrap(),
+            );
+        }
+    }
+    // The same program cannot project either output capability without its grant.
+    std::fs::write(&grants, r#"{"io":{"dirs":[]}}"#).unwrap();
+    for engine in engines {
+        let output = command(engine)
+            .arg("--grants")
+            .arg(&grants)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{engine}: {output:?}");
+        assert!(output.stdout.is_empty(), "{engine}: {output:?}");
+        assert!(!output.stderr.contains(&0xff), "{engine}: {output:?}");
+    }
+}
+
+#[test]
+fn protobuf_conformance_testee_writes_binary_response_frames() {
+    let fixture = Fixture::new("protobuf-frames");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/protobuf@1/conformance/hirsel.json");
+    let grants = fixture.0.join("grants.json");
+    std::fs::write(
+        &grants,
+        r#"{"io":{"stdin":"stdin.bytes@1","stdout":"stdout.bytes@1","dirs":[]}}"#,
+    )
+    .unwrap();
+    // ConformanceRequest(protobuf_payload: TestAllTypesProto3(optional_bytes: 00 ff 80),
+    // requested_output_format: PROTOBUF, message_type: TestAllTypesProto3).
+    // Wire tags and field numbers come from the vendored upstream .proto files.
+    let name = b"protobuf_test_messages.proto3.TestAllTypesProto3";
+    let mut request = b"\x0a\x05\x7a\x03\x00\xff\x80\x18\x01\x22".to_vec();
+    request.push(name.len() as u8);
+    request.extend_from_slice(name);
+    let mut input = (request.len() as u32).to_le_bytes().to_vec();
+    input.extend_from_slice(&request);
+    input.extend_from_slice(&input.clone());
+    let response = b"\x07\x00\x00\x00\x1a\x05\x7a\x03\x00\xff\x80";
+    for native in [false, true] {
+        let mut child = hirsel(native, &source, &["--grants".as_ref(), grants.as_os_str()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(&input).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "native={native}: {output:?}");
+        assert_eq!(
+            output.stdout,
+            response.repeat(2),
+            "native={native}: {output:?}"
+        );
+        assert!(output.stderr.is_empty(), "native={native}: {output:?}");
+    }
+}

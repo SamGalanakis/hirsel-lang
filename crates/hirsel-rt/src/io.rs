@@ -2692,13 +2692,29 @@ pub unsafe extern "C" fn hirsel_rt_v2_out_print(
     start: u64,
     len: u64,
 ) -> u8 {
+    unsafe { hirsel_rt_v2_out_write(ctx, _destination, out, s, owner, start, len) }
+}
+
+/// Write the exact borrowed bytes to Stdout.
+/// # Safety
+/// Context and borrowed Stdout/Bytes are live; out is writable Result storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_out_write(
+    ctx: *mut crate::TaskCtx,
+    _destination: *mut u8,
+    out: *mut UnitResult,
+    s: *const u64,
+    owner: *mut crate::Header,
+    start: u64,
+    len: u64,
+) -> u8 {
     let stdout = unsafe { s.read() };
     let start =
         usize::try_from(start).unwrap_or_else(|_| crate::fault("Io start exceeds target usize"));
     let data = crate::alloc::payload(owner)
         .wrapping_add(8)
         .wrapping_add(start);
-    // String's validity was established when constructed; output needs only bytes.
+    // Bytes and String share the owner/start/length slice representation.
     let bytes = unsafe { std::slice::from_raw_parts(data, len as usize) };
     let Completion::Unit(value) = (unsafe { native_print(ctx, stdout, false, bytes) }) else {
         crate::fault("Io completion type mismatch");
@@ -2711,6 +2727,22 @@ pub unsafe extern "C" fn hirsel_rt_v2_out_print(
 /// Context and borrowed Stderr/String are live; out is writable Result storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_err_print(
+    ctx: *mut crate::TaskCtx,
+    _destination: *mut u8,
+    out: *mut UnitResult,
+    s: *const u64,
+    owner: *mut crate::Header,
+    start: u64,
+    len: u64,
+) -> u8 {
+    unsafe { hirsel_rt_v2_err_write(ctx, _destination, out, s, owner, start, len) }
+}
+
+/// Write the exact borrowed bytes to Stderr.
+/// # Safety
+/// Context and borrowed Stderr/Bytes are live; out is writable Result storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_err_write(
     ctx: *mut crate::TaskCtx,
     _destination: *mut u8,
     out: *mut UnitResult,

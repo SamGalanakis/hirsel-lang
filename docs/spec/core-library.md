@@ -74,7 +74,9 @@ fn arg.path(args: Args, index: u64) -> Result[Path, ArgError]
 fn path.of(text: String) -> Path
 @preserves_unique(buf) @unretained(s) fn stdin.read(s: Stdin, mut buf: List[u8], max: u64) -> Result[u64, InputError]
 N fn err.print(s: Stderr, text: String) -> Result[(), OutputError]
+N fn err.write(s: Stderr, bytes: Bytes) -> Result[(), OutputError]
 N fn out.print(s: Stdout, text: String) -> Result[(), OutputError]
+N fn out.write(s: Stdout, bytes: Bytes) -> Result[(), OutputError]
 fn env.get(e: Env, name: String) -> Result[Option[String], EnvError]
 fn env.narrow(e: Env, names: List[String]) -> Result[Env, EnvError]
 N fn test.check(t: Test, condition: bool) -> ()
@@ -725,7 +727,11 @@ operations are ([CONC-1](concurrency.md#conc-1-runtime)). None is a cancellation
 cleanup can still finish its spans and log why. No telemetry operation waits for an
 exporter, reads a clock or touches the network.
 
-`err.print` and `out.print` write exactly the supplied UTF-8 bytes, with no newline. `Canceled` means no
+`err.write` and `out.write` write exactly the supplied bytes, with no newline or
+encoding conversion. `err.print` and `out.print` are writes of the String’s UTF-8 bytes
+through the same output path. Both forms require the same Stderr or Stdout capability
+and share cancellation, failure, recording and replay semantics: recordings retain the
+exact bytes, replay re-emits them, and scripted worlds capture them. `Canceled` means no
 output or effect happened; another output or file error may follow partial effects.
 Output success records that the provider accepted all supplied bytes at its stated effect
 boundary; an unflushed private buffer is not that boundary. Neither an ordinary successful

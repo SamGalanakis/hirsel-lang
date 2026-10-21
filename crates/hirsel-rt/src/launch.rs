@@ -1808,6 +1808,9 @@ pub(crate) unsafe fn execute(
                     Some(binary) => SimIo::from_binary(tape.tree, binary),
                     None => SimIo::new(tape.tree, tape.events),
                 };
+                if std::env::var_os("HIRSEL_RT_DENY_OUTPUT").is_some() {
+                    io.deny_output();
+                }
                 io.set_net_rules(net_rules.clone());
                 if let Some(env) = &env {
                     io.set_env(env.clone());
@@ -1870,6 +1873,9 @@ pub(crate) unsafe fn execute(
                 |root| RealIo::grant_with_output(std::path::Path::new(&root), sinks.stdout.clone()),
             ) {
                 Ok(mut io) => {
+                    if std::env::var_os("HIRSEL_RT_DENY_OUTPUT").is_some() {
+                        io.deny_output();
+                    }
                     if let Some(ticks) = std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK") {
                         let Some(ticks) = ticks.to_str().and_then(|s| s.parse::<u64>().ok()) else {
                             return Err("invalid harness virtual clock".into());

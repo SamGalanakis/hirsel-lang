@@ -1,8 +1,6 @@
 // The testee of Google's protobuf conformance suite (conformance/conformance.proto).
 // It reads length-prefixed ConformanceRequests from stdin and answers each with
-// one base64 line of its ConformanceResponse.
-// GAP: Stdout writes only UTF-8 text (no binary stdout write); adapter.py turns
-// each line back into the suite's length-prefixed binary response.
+// one length-prefixed binary ConformanceResponse.
 pub type AppError = Grant(GrantError) | Output(OutputError)
 
 const TEST_ALL_TYPES: String = "protobuf_test_messages.proto3.TestAllTypesProto3"
@@ -108,8 +106,8 @@ fn run(request: pb.ConformanceRequest) -> pb.ConformanceResponse {
 }
 
 pub fn main(rt: Io) -> Result[(), AppError] {
-  let input = io.stdin(rt) ?
-  let output = io.stdout(rt) ?
+  let input = io.stdin(rt)?
+  let output = io.stdout(rt)?
   let mut reader = bufio.new(65536)
   while true {
     let mut header: List[u8] = []
@@ -132,7 +130,17 @@ pub fn main(rt: Io) -> Result[(), AppError] {
       Error(e) => result_of(runtime_error(decode_error(e))),
     }
     let encoded = pb.encode_ConformanceResponse(response)
-    out.print(output, f"{base64.encode(encoded, Standard(), Required())}\n") ?
+    let response_size = bytes.len(encoded)
+    let response_header = bytes.from_list(
+      [
+        int.truncate(response_size),
+        int.truncate(response_size >> 8),
+        int.truncate(response_size >> 16),
+        int.truncate(response_size >> 24)
+      ]
+    )
+    out.write(output, response_header)?
+    out.write(output, encoded)?
   }
   Ok(())
 }
