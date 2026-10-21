@@ -36,6 +36,7 @@ pub(crate) struct Driver {
     pub(super) waiting: BTreeMap<TaskId, u64>,
     pub(super) returned: BTreeMap<TaskId, super::Returned>,
     pub(super) host_poll: bool,
+    pub(super) carriers: BTreeMap<(crate::ordered::objects::Kind, u64), super::engine::Carrier>,
 }
 
 impl Driver {
@@ -51,6 +52,7 @@ impl Driver {
             waiting: BTreeMap::new(),
             returned: BTreeMap::new(),
             host_poll: false,
+            carriers: BTreeMap::new(),
         }
     }
 

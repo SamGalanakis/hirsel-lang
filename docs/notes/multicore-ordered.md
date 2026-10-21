@@ -93,9 +93,11 @@ the same reserve/init path. Native adapters cover atomic/mutex creation, channel
 open, sender duplication and mutex cause; cause chains are owned outcomes for
 the operation's task, not mutations of a different committing task's context.
 Mutex wrappers still belong to their owner's allocation/budget path.
-Atomic create/load/store adapters are installed behind the ordered selector.
-The other object adapters still need their native entry branches; drops, task
-operations and host operations also need native boundary adapters.
+All ten E operations have native entry branches behind the ordered selector.
+The driver retains payload descriptors and None images alongside provisional
+handles, so later same-owner commands can be logged before creation commits.
+Duplicated senders retain the source's logical object binding. Drops, task
+operations and host operations still need native boundary adapters.
 
 Native object retirement can return an owned `Progress::Poll` continuation.
 The caller restores policy metadata before accessing host readiness; wake merge
@@ -108,7 +110,7 @@ requires both a physical save and head promotion for full logs or allocation
 pauses. Scheduler.logical has an Ordered variant whose idle callback updates
 this metadata under the generic saved-flag publication guard. A real eight-worker
 control cycles the root through 256 saved-stack resumptions without duplicate
-notifications. Atomic create/load/store entries now have an ordered submission branch. A
+notifications. Every E entry now has an ordered submission branch. A
 command owns its image, an unaccepted full-log command remains on its owner's
 stack, and recorded outcomes are delivered to the owner's continuation by
 ordinal. Bounded object commit temporarily removes the frontier from its driver

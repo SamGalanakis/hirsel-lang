@@ -124,6 +124,17 @@ impl Registry {
         );
     }
 
+    /// A duplicated endpoint keeps the source's logical object and closure.
+    pub fn alias(&mut self, kind: Kind, source: u64, alias: u64) {
+        let binding = self
+            .handles
+            .get(&source)
+            .and_then(|kinds| kinds.get(&kind))
+            .expect("an admitted source handle")
+            .clone();
+        self.insert(kind, alias, binding);
+    }
+
     /// An explicitly classified handle which cannot name or obtain an E
     /// object (for example a scope token). Unknown handles never use this path.
     pub fn inert(&mut self, kind: Kind, word: u64) {

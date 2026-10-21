@@ -3044,6 +3044,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_open(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "channel_open");
+    if ordered::engine::on(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::engine::channel_open(ctx, out, none, descriptor),
+            )
+        };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller contract.
     let layout = unsafe { (*ctx).descriptor(descriptor) };
@@ -3078,6 +3087,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "sender_dup");
+    if ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, ordered::engine::sender_dup(ctx, sender.read(), out)) };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller contract.
     let sender = unsafe { sender.read() };
@@ -3110,6 +3123,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "channel_send");
+    if ordered::engine::on(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::engine::channel_send(ctx, sender.read(), message, out),
+            )
+        };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller contract.
     let channel = scheduler(ctx)
@@ -3324,6 +3346,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_create");
     // SAFETY: caller contract.
+    if ordered::engine::on(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::engine::mutex_create(ctx, out, payload, none, descriptor, wrapper),
+            )
+        };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     unsafe {
         let layout = (*ctx).descriptor(descriptor);
@@ -3358,6 +3389,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     let _segment = profile::Operation::new(ctx, "mutex_take");
     // SAFETY: caller contract.
     let word = unsafe { mutex_word(m) };
+    if ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, ordered::engine::mutex_take(ctx, word, payload, out)) };
+        return STATUS_OK;
+    }
     let free = crate::free::enter(ctx, Phase::Entered);
     let mut entered = false;
     if free {
@@ -3408,6 +3443,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_put");
+    if ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, ordered::engine::mutex_put(ctx, mutex_word(m), payload)) };
+        return STATUS_OK;
+    }
     // SAFETY: caller contract.
     unsafe {
         let word = mutex_word(m);
@@ -3547,6 +3586,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut TaskCtx, m: *const u
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "mutex_cause");
+    if ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, ordered::engine::mutex_cause(ctx, mutex_word(m))) };
+        return STATUS_OK;
+    }
     // SAFETY: caller contract.
     let chain = scheduler(ctx)
         .sync
