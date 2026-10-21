@@ -4,7 +4,7 @@ use crate::*;
 use hirsel_intern::timings::{self, Count, Phase};
 use hirsel_interp::Outcome;
 use hirsel_span::Span;
-use hirsel_syntax::{DefId, ExprId, ExprKind};
+use hirsel_syntax::{DefId, ExprId, ExprKind, ItemKind};
 use hirsel_tir::{Constant, DefinitionRef, TirProvider};
 use hirsel_tir::{Materialized, ValueKind};
 use hirsel_types::{
@@ -1295,15 +1295,14 @@ impl QueryEngine {
             .filter_map(|(path, items)| {
                 items
                     .first()
+                    .filter(|syntax| !matches!(syntax.item.kind, ItemKind::Const { .. }))
                     .map(|syntax| (path.clone(), syntax.item.origin.span))
             })
             .collect();
         let mut pending = VecDeque::new();
         for (path, site) in roots {
-            let signature = self.item_signature(&path)?.value;
-            if signature.generics().is_empty()
-                && !matches!(signature.kind, SignatureKind::Const { .. })
-            {
+            let published = self.front_summary(DefId::intern(&path))?;
+            if !published.summary.frames[0].generic {
                 let scope = NameSite::Item;
                 pending.push_back((
                     path.clone(),
@@ -1322,8 +1321,7 @@ impl QueryEngine {
             if seen.len() > 65536 {
                 return Err(operational("compile-time instance expansion limit"));
             }
-            let published = self.definition_summary(DefId::intern(&path))?;
-            self.merge_execution(&published.reads);
+            let published = self.front_summary(DefId::intern(&path))?;
             let summary = &published.summary;
             // Registration needs the analyzed body; traversal retains only the
             // published summary, including on repeated size instantiations.
