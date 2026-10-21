@@ -393,6 +393,183 @@ fn data_and_view_policy_memos_replay_reads_and_stay_in_their_context() {
 }
 
 #[test]
+fn current_normalization_batch_matches_single_roots_across_binders_and_views() {
+    let t = TypeInterner::new(None);
+    let byte = primitive(&t, Primitive::U8);
+    let parameter = t.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
+        TypeParamId(0),
+    ))));
+    let hidden = t.intern(row(TypeKind::Named {
+        definition: def("Hidden"),
+        arguments: vec![].into(),
+    }));
+    let pair = t.intern(row(TypeKind::Tuple(vec![parameter, hidden].into())));
+    let callable = |plain| {
+        let mut value = callable(&t, vec![], pair);
+        let TypeKind::Function(function) = &mut value.kind else {
+            unreachable!()
+        };
+        function.generics = vec![GenericParameter::Type {
+            name: "T".into(),
+            bounds: if plain { vec![Bound::Plain] } else { vec![] }.into(),
+        }]
+        .into();
+        t.intern(value)
+    };
+    let (plain, unknown) = (callable(true), callable(false));
+    let mut visible = (*nominal(Some(byte), vec![])).clone();
+    visible.definition = def("Hidden");
+    let mut opaque = visible.clone();
+    opaque.metadata.visibility = hirsel_syntax::Visibility::PublicOpaque;
+    for view in [visible, opaque] {
+        let view = Arc::new(view);
+        for bounds in [vec![], vec![Bound::Plain]] {
+            let generics = GenericDeclarations::signature(&[GenericParameter::Type {
+                name: "T".into(),
+                bounds: bounds.into(),
+            }]);
+            for reverse in [false, true] {
+                let mut roots = vec![
+                    plain,
+                    pair,
+                    unknown,
+                    hidden,
+                    parameter,
+                    pair,
+                    TypeId::DANGLING,
+                ];
+                if reverse {
+                    roots.reverse();
+                }
+                let mut single_reads = vec![];
+                let expected: Vec<_> = roots
+                    .iter()
+                    .map(|root| {
+                        canonical_current_type(&t, *root, &generics, &mut |d| {
+                            single_reads.push(d);
+                            Ok(Some(view.clone()))
+                        })
+                        .unwrap()
+                    })
+                    .collect();
+                let mut batch_reads = vec![];
+                canonical_current_types(&t, &mut roots, &generics, &mut |d| {
+                    batch_reads.push(d);
+                    Ok(Some(view.clone()))
+                })
+                .unwrap();
+                assert_eq!(roots, expected);
+                assert!(
+                    batch_reads.len() < single_reads.len(),
+                    "shared graph normalization must avoid repeated declaration work"
+                );
+                assert_eq!(
+                    batch_reads
+                        .into_iter()
+                        .collect::<std::collections::BTreeSet<_>>(),
+                    single_reads.into_iter().collect()
+                );
+            }
+        }
+    }
+    assert!(matches!(
+        canonical_current_types(
+            &t,
+            &mut [hidden],
+            &GenericDeclarations::default(),
+            &mut |_| Err(QueryError::NotImplemented)
+        ),
+        Err(QueryError::NotImplemented)
+    ));
+}
+
+#[test]
+fn authority_memos_replay_reads_and_bind_roles_generics_and_private_views() {
+    let t = TypeInterner::new(None);
+    let byte = primitive(&t, Primitive::U8);
+    let hidden = t.intern(row(TypeKind::Named {
+        definition: def("Hidden"),
+        arguments: vec![].into(),
+    }));
+    let mut visible = (*nominal(Some(byte), vec![])).clone();
+    visible.definition = def("Hidden");
+    let SignatureKind::Type(declaration) = &mut visible.kind else {
+        unreachable!()
+    };
+    declaration.authority = AuthoritySummary::inert();
+    let heap = t.intern(Type {
+        allocation_target: Some(AllocationTarget::Heap),
+        ..t.row(hidden).clone()
+    });
+    let mut unknown = visible.clone();
+    let SignatureKind::Type(declaration) = &mut unknown.kind else {
+        unreachable!()
+    };
+    declaration.authority = AuthoritySummary::Unknown;
+    for view in [visible, unknown] {
+        let SignatureKind::Type(declaration) = &view.kind else {
+            unreachable!()
+        };
+        let expected = declaration.authority.clone();
+        let view = Arc::new(view);
+        let reads = std::cell::RefCell::new(vec![]);
+        let mut lookup = |definition| {
+            reads.borrow_mut().push(definition);
+            Ok(Some(view.clone()))
+        };
+        let generics = GenericDeclarations::default();
+        let mut memo = ContextMemo::new(&t, &generics, &mut lookup);
+        let roles = NominalRoles::default();
+        assert_eq!(memo.authority(hidden, &roles).unwrap(), expected);
+        reads.borrow_mut().clear();
+        assert_eq!(memo.authority(hidden, &roles).unwrap(), expected);
+        assert_eq!(*reads.borrow(), [def("Hidden")]);
+        assert_eq!(memo.authority(heap, &roles).unwrap(), expected);
+        assert_eq!(
+            memo.authority(
+                heap,
+                &NominalRoles {
+                    heap: Some(HeapRole {
+                        arena: path("Hidden"),
+                        operation: path("heap")
+                    }),
+                    ..roles
+                }
+            )
+            .unwrap(),
+            AuthoritySummary::inert()
+        );
+    }
+    let parameter = t.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
+        TypeParamId(0),
+    ))));
+    for bounds in [vec![], vec![Bound::Inert]] {
+        let generics = GenericDeclarations::signature(&[GenericParameter::Type {
+            name: "T".into(),
+            bounds: bounds.clone().into(),
+        }]);
+        let mut lookup = |_| Ok(None);
+        let mut memo = ContextMemo::new(&t, &generics, &mut lookup);
+        let expected = if bounds.is_empty() {
+            AuthoritySummary::Known(
+                vec![AuthorityTerm::TypeParameter(TypeParameterRef::bound(
+                    TypeParamId(0),
+                ))]
+                .into(),
+            )
+        } else {
+            AuthoritySummary::inert()
+        };
+        for _ in 0..2 {
+            assert_eq!(
+                memo.authority(parameter, &NominalRoles::default()).unwrap(),
+                expected
+            );
+        }
+    }
+}
+
+#[test]
 fn instantiation_never_reuses_a_result_across_signature_or_private_shape_edits() {
     let t = TypeInterner::new(None);
     let memo = TypeMemo::new();

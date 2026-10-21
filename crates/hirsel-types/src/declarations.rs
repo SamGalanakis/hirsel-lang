@@ -1,4 +1,5 @@
 //! Declaration proofs for equality and held authority (GEN-1/CAP-2).
+type IdSet<T> = std::collections::HashSet<T, hirsel_intern::IdHasher>;
 use crate::*;
 
 /// Data/Key are representation properties. Parameter evidence belongs to the
@@ -21,7 +22,7 @@ pub fn structural_equality(
     }
     let store = source;
     let mut pending = vec![(root, false)];
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = IdSet::default();
     let mut nominals = NominalExpansions::default();
     while let Some((id, exit)) = pending.pop() {
         if exit {
@@ -143,7 +144,7 @@ pub fn structural_authority<E>(
     lookup: &mut impl FnMut(TypeId, Option<DefId>) -> Result<Option<SignatureRef>, E>,
 ) -> Result<AuthoritySummary, E> {
     let mut pending = vec![root];
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = IdSet::default();
     let mut summary = AuthoritySummary::inert();
     while let Some(id) = pending.pop() {
         if !seen.insert(id) {

@@ -1,4 +1,6 @@
 //! Lexical value-parameter transport, independent of syntax traversal and storage.
+type IdSet<T> = std::collections::HashSet<T, hirsel_intern::IdHasher>;
+type IdMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
 use crate::*;
 use std::collections::BTreeMap;
 
@@ -214,8 +216,8 @@ fn rewrite_parameter_graph(
         id: TypeId,
         depth: u32,
         map: &mut impl FnMut(TypeId, &mut Type, u32) -> Result<(), GraphError>,
-        memo: &mut std::collections::HashMap<(TypeId, u32), TypeId>,
-        active: &mut std::collections::HashSet<TypeId>,
+        memo: &mut IdMap<(TypeId, u32), TypeId>,
+        active: &mut IdSet<TypeId>,
     ) -> Result<TypeId, GraphError> {
         if let Some(id) = memo.get(&(id, depth)) {
             return Ok(*id);
@@ -240,8 +242,8 @@ fn rewrite_parameter_graph(
         root,
         0,
         &mut map,
-        &mut std::collections::HashMap::new(),
-        &mut std::collections::HashSet::new(),
+        &mut IdMap::default(),
+        &mut IdSet::default(),
     )
 }
 
@@ -451,10 +453,10 @@ pub fn refine_inferred_value_contract(
     actual: TypeId,
 ) -> Result<TypeId, GraphError> {
     let mut pending = vec![(root, actual, 0)];
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = IdSet::default();
     let mut origins = BTreeMap::new();
-    let mut captures = std::collections::HashMap::new();
-    let mut weakened = std::collections::HashSet::new();
+    let mut captures = IdMap::default();
+    let mut weakened = IdSet::default();
     while let Some((old, new, depth)) = pending.pop() {
         if !seen.insert((old, new, depth)) {
             continue;

@@ -271,6 +271,8 @@ pub struct ContextMemo<'q> {
     proofs: HashMap<ProofKey, ProofEntry>,
     compatible: HashMap<(TypeId, TypeId, TypeRelation, CompatPolicy), Recorded<bool>>,
     equality: HashMap<(TypeId, Bound), Recorded<bool>>,
+    authorities: HashMap<(TypeId, u32), Recorded<AuthoritySummary>>,
+    authority_roles: HashMap<NominalRoles, u32>,
     view_policies: HashMap<TypeId, Recorded<CompatPolicy>>,
     payload_ids: HashMap<Vec<TypeId>, PayloadSetId>,
     payload_sets: Vec<StdHashSet<TypeId>>,
@@ -291,6 +293,8 @@ impl<'q> ContextMemo<'q> {
             proofs: HashMap::default(),
             compatible: HashMap::default(),
             equality: HashMap::default(),
+            authorities: HashMap::default(),
+            authority_roles: HashMap::default(),
             view_policies: HashMap::default(),
             payload_ids: HashMap::default(),
             payload_sets: vec![],
@@ -829,6 +833,36 @@ impl<'q> ContextMemo<'q> {
             payloads: Some(self.payload_set(payloads)),
             received: true,
         })
+    }
+
+    /// Held authority under this query's exact declarations, roles and view.
+    /// Hits retain the same observed-read replay as contextual property proofs.
+    pub fn authority(
+        &mut self,
+        ty: TypeId,
+        roles: &NominalRoles,
+    ) -> Result<AuthoritySummary, QueryError> {
+        let role = match self.authority_roles.get(roles) {
+            Some(role) => *role,
+            None => {
+                let role = self.authority_roles.len() as u32;
+                self.authority_roles.insert(roles.clone(), role);
+                role
+            }
+        };
+        let key = (ty, role);
+        if let Some(entry) = self.authorities.get(&key).cloned() {
+            self.replay(&entry.reads);
+            return entry.value;
+        }
+        let entry = self.observed(|t, generics, lookup| {
+            structural_authority(t, ty, roles, generics, &mut |_, definition| {
+                definition.map_or(Ok(None), &mut *lookup)
+            })
+        });
+        let value = entry.value.clone();
+        self.authorities.insert(key, entry);
+        value
     }
 
     /// The Data representation proof, under this query's declarations and view.

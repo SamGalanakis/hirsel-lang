@@ -286,64 +286,65 @@ pub(super) fn normalize(
     physical: &mut [(hirsel_syntax::ExprId, TypeId)],
     signatures: &mut Signatures,
 ) -> Result<(), QueryError> {
-    let mut normalized = HashMap::default();
-    let mut normalize = |root: &mut TypeId| -> Result<(), QueryError> {
-        if let Some(replacement) = normalized.get(root) {
-            *root = *replacement;
-            return Ok(());
+    fn visit_roots(
+        body: &mut CheckedBody,
+        results: &mut [(hirsel_types::NameSite, TypeId)],
+        physical: &mut [(hirsel_syntax::ExprId, TypeId)],
+        mut normalize: impl FnMut(&mut TypeId),
+    ) {
+        let mut arguments = |args: &mut Vec<GenericArgument>| {
+            for argument in args {
+                if let GenericArgument::Type(ty) = argument {
+                    normalize(ty);
+                }
+            }
+        };
+        for instantiation in &mut body.instantiations {
+            arguments(&mut instantiation.arguments);
         }
-        // I has replayed construction, checked receipts, sharing and writes.
-        // These rows now carry current content facts, not structural guesses.
-        // Canonicalize inert qualifiers without rederiving (and resurrecting)
-        // evidence from a declaration or default permission.
-        let replacement =
-            canonical_current_type(t, *root, &body.resolution.generic_declarations, &mut |d| {
-                signatures.read(d, &mut body.resolution.reads).map(Some)
-            })?;
-        normalized.insert(*root, replacement);
-        *root = replacement;
-        Ok(())
-    };
-    let mut arguments = |args: &mut Vec<GenericArgument>| -> Result<(), QueryError> {
-        for argument in args {
-            if let GenericArgument::Type(ty) = argument {
-                normalize(ty)?;
+        for expression in &mut body.expressions {
+            arguments(&mut expression.instantiated_arguments);
+        }
+        for expression in &mut body.expressions {
+            normalize(&mut expression.ty);
+        }
+        for binding in &mut body.bindings {
+            normalize(&mut binding.ty);
+        }
+        for pattern in &mut body.patterns {
+            normalize(&mut pattern.ty);
+        }
+        for closure in &mut body.closures {
+            normalize(&mut closure.ty);
+            if let Some(result) = &mut closure.result_evidence {
+                normalize(result);
+            }
+            for capture in &mut closure.captures {
+                normalize(&mut capture.ty);
             }
         }
-        Ok(())
-    };
-    for instantiation in &mut body.instantiations {
-        arguments(&mut instantiation.arguments)?;
-    }
-    for expression in &mut body.expressions {
-        arguments(&mut expression.instantiated_arguments)?;
-    }
-    for expression in &mut body.expressions {
-        normalize(&mut expression.ty)?;
-    }
-    for binding in &mut body.bindings {
-        normalize(&mut binding.ty)?;
-    }
-    for pattern in &mut body.patterns {
-        normalize(&mut pattern.ty)?;
-    }
-    for closure in &mut body.closures {
-        normalize(&mut closure.ty)?;
-        if let Some(result) = &mut closure.result_evidence {
-            normalize(result)?;
+        for (_, ty) in physical {
+            normalize(ty);
         }
-        for capture in &mut closure.captures {
-            normalize(&mut capture.ty)?;
+        // A frame's formal result is the row its callable type publishes.
+        for (_, result) in results {
+            normalize(result);
         }
     }
-    for (_, ty) in physical {
-        normalize(ty)?;
-    }
-    // A frame's formal result is the row its callable type publishes.
-    for (_, result) in results {
-        normalize(result)?;
-    }
-    Ok(())
+    let mut roots = vec![];
+    visit_roots(body, results, physical, |root| roots.push(*root));
+    let result = canonical_current_types(
+        t,
+        &mut roots,
+        &body.resolution.generic_declarations,
+        &mut |d| signatures.read(d, &mut body.resolution.reads).map(Some),
+    );
+    let mut roots = roots.into_iter();
+    visit_roots(body, results, physical, |root| {
+        *root = roots.next().unwrap()
+    });
+    assert!(roots.next().is_none());
+    result
 }
 
 /// J supplies field identities before ownership refines the receiving binding.

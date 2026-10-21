@@ -2,10 +2,10 @@
 //! Callers supply every merge operation; the container makes no flow judgments.
 use hirsel_intern::work::{self, Counter};
 use std::{
-    collections::HashMap,
     ops::{Index, IndexMut},
     rc::Rc,
 };
+type HashMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
 const BITS: usize = 3;
 const WIDTH: usize = 1 << BITS;
 #[derive(Clone)]
@@ -41,7 +41,7 @@ impl<T, F> JoinCache<T, F> {
         Self {
             operation,
             default: None,
-            entries: HashMap::new(),
+            entries: HashMap::default(),
         }
     }
 }

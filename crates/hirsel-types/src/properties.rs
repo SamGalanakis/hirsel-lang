@@ -1,4 +1,6 @@
 //! Structural value properties use declaration snapshots, never implementations.
+type IdSet<T> = std::collections::HashSet<T, hirsel_intern::IdHasher>;
+type IdMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
 use crate::*;
 use std::collections::BTreeSet;
 
@@ -573,7 +575,7 @@ fn prove_flags(
         lookup,
     };
     let mut pending = vec![(root, false, false, false)];
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = IdSet::default();
     let mut nominal_roots = NominalExpansions::default();
     let mut dependencies = BTreeSet::new();
     while let Some((id, inherited_unique, mut plain_known, exit)) = pending.pop() {
@@ -715,6 +717,40 @@ pub fn canonical_current_type(
     normalize_graph(store, root, Some(generics), Normalization::Current, lookup)
 }
 
+/// Canonicalize the current rows of one query under one immutable signature
+/// view and generic context. Completed subgraphs are reused across roots; their
+/// first signature reads remain recorded by the query's lookup. A new batch
+/// must be used for a different private view or generic declaration context.
+///
+/// Borrowed from rustc traits/project.rs:310-319,350-365: normalize under the
+/// exact parameter environment and retain the obligations of reused answers.
+/// Here the query's Reader retains first reads, so a hit adds no new read.
+pub fn canonical_current_types(
+    store: &TypeInterner,
+    roots: &mut [TypeId],
+    generics: &GenericDeclarations,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<(), QueryError> {
+    let mut memo = Default::default();
+    for root in roots {
+        // Recovery/cyclic graphs retain the single-root traversal's behavior:
+        // an active-cycle fallback is not a completed result for another root.
+        *root = if store.valid(*root) {
+            normalize_graph_cached(
+                store,
+                *root,
+                Some(generics),
+                Normalization::Current,
+                lookup,
+                &mut memo,
+            )?
+        } else {
+            canonical_current_type(store, *root, generics, lookup)?
+        };
+    }
+    Ok(())
+}
+
 /// Resolve cleanup conjunctions from the bounds of each exact declaring binder.
 /// Traverses nested callable contracts without changing any other evidence.
 pub fn instantiate_cleanup_bounds(
@@ -747,6 +783,23 @@ fn normalize_graph(
     mode: Normalization,
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<TypeId, QueryError> {
+    normalize_graph_cached(
+        store,
+        root,
+        summaries,
+        mode,
+        lookup,
+        &mut Default::default(),
+    )
+}
+fn normalize_graph_cached(
+    store: &TypeInterner,
+    root: TypeId,
+    summaries: Option<&GenericDeclarations>,
+    mode: Normalization,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+    memo: &mut IdMap<(TypeId, Vec<TypeId>), TypeId>,
+) -> Result<TypeId, QueryError> {
     let unscoped = GenericDeclarations::default();
     let generics = summaries.unwrap_or(&unscoped);
     fn visit(
@@ -757,8 +810,8 @@ fn normalize_graph(
         root: TypeId,
         contract: bool,
         binders: &[TypeId],
-        memo: &mut std::collections::HashMap<(TypeId, Vec<TypeId>), TypeId>,
-        active: &mut std::collections::HashSet<TypeId>,
+        memo: &mut IdMap<(TypeId, Vec<TypeId>), TypeId>,
+        active: &mut IdSet<TypeId>,
         lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
     ) -> Result<TypeId, QueryError> {
         if let Some(id) = memo.get(&(id, binders.to_vec())) {
@@ -859,7 +912,7 @@ fn normalize_graph(
         root,
         false,
         &[],
-        &mut Default::default(),
+        memo,
         &mut Default::default(),
         lookup,
     )
