@@ -116,6 +116,56 @@ pub(crate) unsafe fn scope_exit(
 }
 
 /// # Safety
+/// As for TaskDetach. The role owns the child metadata; a held result is
+/// touched only after its physical image reaches idle.
+pub(crate) unsafe fn detach(ctx: *mut TaskCtx, scope: u64, word: u64) -> Stopped<()> {
+    super::record::begin(ctx);
+    let s = scheduler(ctx) as *mut Scheduler;
+    let scope = unsafe { (*s).scope_handle(scope) };
+    let child = unsafe { (*s).task_handle(word, scope) };
+    let saved = unsafe { readiness::saved(&*s, child) };
+    let state = unsafe { (*s).task(child).state };
+    if saved && state == State::Holding {
+        // The called rest can run finalizers or suspend. Keep the parent at
+        // entry until it returns; no recorder section spans the user code.
+        super::record::publish(ctx, Phase::Entered, |_| unsafe {
+            let row = (*s).task(child);
+            row.detached = true;
+            row.slot = None;
+        })?;
+        unsafe { hand_off(&mut *ctx, child) };
+        // Successful detached completion retired the row at idle; a failure
+        // remains owned by the scope. Never look it up through its old index.
+        super::record::publish(ctx, Phase::Done, |_| ())?;
+    } else {
+        let retire = saved && state == State::Done && unsafe { (*s).task(child).failure.is_none() };
+        if retire {
+            unsafe {
+                (*s).vacant_tasks.reserve(1);
+                let row = (*s).task(child);
+                if let Some((parent, _)) = row.parent {
+                    let children = row.children.len();
+                    (*s).task(parent).children.reserve(children);
+                }
+            }
+        }
+        let retired = super::record::publish(ctx, Phase::Done, |_| unsafe {
+            (*s).task(child).detached = true;
+            if retire {
+                (*s).scope(scope).children.retain(|&id| id != child);
+                Some((*s).retire_task(child))
+            } else {
+                None
+            }
+        })?;
+        drop(retired);
+        // A not-yet-saved Holding frame observes detached in after_save and
+        // resumes its own cleanup there, without a remote stack access here.
+    }
+    unsafe { try_yield(&mut *ctx) }
+}
+
+/// # Safety
 /// As for TaskJoin: handles are live and slot is this owner's None image.
 pub(crate) unsafe fn join(
     ctx: *mut TaskCtx,
@@ -542,8 +592,20 @@ mod tests {
 
     #[test]
     fn a_holding_native_result_has_published_its_end_before_its_saved_image_is_observed() {
+        holding_native_result(false, false);
+    }
+
+    #[test]
+    fn detaching_a_holding_native_result_keeps_the_parent_entered_through_its_rest() {
+        for durable in [false, true] {
+            holding_native_result(true, durable);
+        }
+    }
+
+    fn holding_native_result(detach: bool, durable: bool) {
         #[derive(Default)]
         struct Rest {
+            detach: bool,
             started: std::sync::atomic::AtomicBool,
             resume: std::sync::atomic::AtomicBool,
         }
@@ -566,7 +628,7 @@ mod tests {
             let status = unsafe {
                 hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16)
             };
-            assert_eq!(image, none);
+            assert_eq!(image, if rest.detach { [1, 99] } else { none });
             rest.started.store(true, Ordering::Release);
             let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
             while !rest.resume.load(Ordering::Acquire) {
@@ -578,10 +640,13 @@ mod tests {
             }
             status
         }
-        let recording = record::Recording::new(b"native holding end", false);
+        let recording = record::Recording::new(b"native holding end", durable);
         let install = recording.clone();
         let cutter = recording.clone();
-        let rest = std::sync::Arc::new(Rest::default());
+        let rest = std::sync::Arc::new(Rest {
+            detach,
+            ..Rest::default()
+        });
         let watched = rest.clone();
         let in_call = recording.clone();
         let observer = std::thread::spawn(move || {
@@ -594,11 +659,13 @@ mod tests {
                 std::thread::yield_now();
             }
             let cut = in_call.recorder.flush().unwrap().unwrap();
+            // Always release the called frame before asserting, so a bad
+            // parent phase reports its value instead of stranding cleanup.
+            watched.resume.store(true, Ordering::Release);
             assert_eq!(
                 cut.progress[&Vec::new()],
                 hirsel_free::phase::Progress::new(3, Phase::Entered)
             );
-            watched.resume.store(true, Ordering::Release);
         });
         let layout = crate::Layout {
             magic: crate::LAYOUT_MAGIC,
@@ -669,19 +736,24 @@ mod tests {
                     hirsel_free::phase::Progress::new(1, Phase::Done)
                 );
                 let mut out = [0u64; 2];
-                assert_eq!(
-                    hirsel_rt_v2_task_join(
-                        ctx,
-                        0,
-                        0,
-                        &scope,
-                        &mut child,
-                        out.as_mut_ptr().cast(),
-                        16
-                    ),
-                    STATUS_OK
-                );
-                assert_eq!(out, [1, 99]);
+                if detach {
+                    assert_eq!(hirsel_rt_v2_task_detach(ctx, &scope, &mut child), STATUS_OK);
+                    assert_eq!(out, [0, 0]);
+                } else {
+                    assert_eq!(
+                        hirsel_rt_v2_task_join(
+                            ctx,
+                            0,
+                            0,
+                            &scope,
+                            &mut child,
+                            out.as_mut_ptr().cast(),
+                            16
+                        ),
+                        STATUS_OK
+                    );
+                    assert_eq!(out, [1, 99]);
+                }
                 let _role = role::Guard::new(ctx);
                 assert!(scheduler(ctx).tasks[id as usize].is_none());
                 drop(_role);
@@ -715,6 +787,17 @@ mod tests {
             let bytes = &marked.bytes[..end];
             let tape = hirsel_free::tape::parse(bytes).unwrap();
             let mut replay = hirsel_free::session::Session::replay(bytes).unwrap();
+            if tape.cut.is_empty() {
+                // Durable header publication precedes registration. Its
+                // truncated prefix admits neither the root nor its child.
+                assert!(!replay.start(&[]));
+                assert!(!replay.start(&[0]));
+                assert_eq!(
+                    replay.finish().unwrap(),
+                    hirsel_free::projection::Projection::new("truncated", &tape.cut, &trace)
+                );
+                continue;
+            }
             assert!(replay.start(&[]));
             assert!(replay.start(&[0]));
             for _ in 0..2 {

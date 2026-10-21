@@ -2767,6 +2767,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
     if ordered::engine::on(ctx) {
         return unsafe { crate::stop::check(ctx, ordered::lifecycle::detach(ctx, scope, task)) };
     }
+    if free::enabled(ctx) {
+        unsafe { crate::stop::check(ctx, free::lifecycle::detach(ctx, scope.read(), task.read())) };
+        return STATUS_OK;
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
