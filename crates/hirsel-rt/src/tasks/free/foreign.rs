@@ -217,8 +217,102 @@ mod tests {
                 assert!(control.status().finished);
                 if let Some(recording) = recording {
                     recording.recorder.stop("stopped", None).unwrap().unwrap();
+                    // The last holder decrements its count immediately before
+                    // reclaiming RunShared. Observe destruction as well as its
+                    // public zero-pending status, under the same deadline.
+                    while std::sync::Arc::strong_count(&recording) != 1 {
+                        assert!(
+                            std::time::Instant::now() < until,
+                            "recording owner reclaims"
+                        );
+                        std::thread::yield_now();
+                    }
                     assert!(std::sync::Arc::try_unwrap(recording).is_ok());
                 }
+            }
+        }
+    }
+    #[test]
+    fn home_and_pool_callbacks_record_on_their_executing_thread() {
+        for width in [2, 8] {
+            for durable in [false, true] {
+                let recording = super::super::record::Recording::new(b"free pool record", durable);
+                let install = recording.clone();
+                let inspect = recording.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.free = true;
+                unsafe { run.use_physical_dispatch() };
+                let home = std::thread::current().id();
+                let outcome = run.run(
+                    move |ctx| unsafe {
+                        super::super::enable(ctx);
+                        install.root(ctx);
+                    },
+                    move |ctx| unsafe {
+                        for dispatch in [
+                            FOREIGN_THREADS_HOME | FOREIGN_BLOCKING,
+                            FOREIGN_THREADS_ANY | FOREIGN_BLOCKING,
+                            FOREIGN_THREADS_SERIAL
+                                | FOREIGN_BLOCKING
+                                | (7 << FOREIGN_PACKAGE_SHIFT),
+                        ] {
+                            let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                            hirsel_rt_v2_foreign_enter(
+                                ctx,
+                                0,
+                                interval.as_mut_ptr().cast(),
+                                dispatch,
+                            );
+                            let thread = std::thread::current().id();
+                            assert_eq!(
+                                thread == home,
+                                dispatch & FOREIGN_THREADS_MASK == FOREIGN_THREADS_HOME
+                            );
+                            assert_eq!(
+                                crate::pool::on_pool(),
+                                dispatch & FOREIGN_THREADS_MASK != FOREIGN_THREADS_HOME
+                            );
+                            assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                            let mut canceled = 99;
+                            assert_eq!(
+                                hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
+                                STATUS_OK
+                            );
+                            assert_eq!(canceled, 0);
+                            // An old exec can retain this numeric preferred slot
+                            // while a replacement runs. The phase must obtain a
+                            // different exclusive token, never alias or panic.
+                            let occupied = inspect
+                                .recorder
+                                .worker(crate::pool::recorder_slot())
+                                .unwrap();
+                            assert_eq!(
+                                hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
+                                STATUS_OK
+                            );
+                            drop(occupied);
+                            assert_eq!(std::thread::current().id(), thread);
+                            hirsel_rt_v2_callback_leave(ctx);
+                            hirsel_rt_v2_foreign_leave(interval.as_ptr().cast());
+                            assert!(!crate::pool::on_pool());
+                            assert!(crate::pool::compute_index().is_some());
+                        }
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                let cut = recording
+                    .recorder
+                    .stop("returned", None)
+                    .unwrap()
+                    .unwrap()
+                    .0;
+                assert_eq!(
+                    cut.progress[&Vec::new()],
+                    hirsel_free::phase::Progress::new(8, Phase::Done)
+                );
+                assert!(std::sync::Arc::try_unwrap(recording).is_ok());
             }
         }
     }

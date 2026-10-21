@@ -179,6 +179,18 @@ impl<S: TapeSink, B> Recorder<S, B> {
         })
     }
 
+    /// Reserve the preferred thread slot, or another idle slot when an old
+    /// retiring worker still owns that numeric index. The returned token
+    /// exclusively owns its section word until dropped. No section is open
+    /// while searching; a caller retries outside sections if all are held.
+    pub fn worker_available(&self, preferred: usize) -> Option<Worker<'_>> {
+        self.worker(preferred).or_else(|| {
+            (0..self.slots.len())
+                .filter(|&index| index != preferred)
+                .find_map(|index| self.worker(index))
+        })
+    }
+
     fn check_worker(&self, worker: &Worker<'_>) {
         assert!(
             std::ptr::eq(worker.gate, self.arbiter.gate().unwrap()),

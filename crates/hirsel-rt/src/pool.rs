@@ -652,6 +652,23 @@ pub(crate) fn compute_index() -> Option<u16> {
     }
 }
 
+/// Preferred recording section slot. A retiring compute exec and its
+/// replacement may share an index; the recorder reserves an exclusive token
+/// and falls back to an idle slot in that case. Home and pool have disjoint
+/// preferred ranges, and no slot token crosses a physical suspension.
+pub(crate) fn recorder_slot() -> usize {
+    let exec = own_exec();
+    if exec.is_null() {
+        return 0;
+    }
+    // SAFETY: the calling thread owns this exec until it exits the run.
+    match unsafe { (*exec).kind } {
+        Kind::Home => 0,
+        Kind::Compute(index) => usize::from(index) + 1,
+        Kind::Pool(index) => MAX_WIDTH as usize + 1 + usize::from(index),
+    }
+}
+
 /// Pin a foreign interval to its caller's compute exec. Only this thread may
 /// begin/end a pin; the count is atomic because resize may request its exit.
 /// Home and Pool already have exact owner routes.

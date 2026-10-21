@@ -4,8 +4,8 @@
 //! progress publication. No section or recorder borrow crosses a suspension.
 //!
 //! Admission is still limited to explicit runtime tests: atomic, mutex and
-//! channel/task boundaries, root entry tails, thaw and mutex closes, without
-//! host calls.
+//! channel/task boundaries, root entry tails, thaw, mutex closes and foreign
+//! callbacks on compute, home and pool threads, without host requests.
 //! General activation requires every boundary and stop to use this protocol.
 
 use crate::TaskCtx;
@@ -83,13 +83,6 @@ pub(crate) fn on(ctx: *mut TaskCtx) -> bool {
     unsafe { (*ctx).recording.is_some() }
 }
 
-fn slot() -> usize {
-    // Home and compute workers have distinct slots. Blocking-pool recording
-    // is not admitted until foreign interval phases are wired.
-    assert!(!crate::pool::on_pool(), "pool recorder not admitted");
-    crate::pool::compute_index().map_or(0, |index| usize::from(index) + 1)
-}
-
 /// The running task supplies bounded runtime work. Table actions hold the
 /// scheduler role; resolved cell actions instead hold their independent access.
 /// The local recorder is removed from ctx before action borrows the context,
@@ -139,10 +132,17 @@ fn publish_phase<T>(
     let mut roots = crate::roots::PhaseRoots::prepare(ctx);
     let mut task = unsafe { (*ctx).recording.take() }.expect("an admitted native recorder");
     let shared = task.shared.clone();
-    let mut worker = shared
-        .recorder
-        .worker(slot())
-        .expect("one section owner per worker");
+    let mut worker = loop {
+        if let Some(worker) = shared
+            .recorder
+            .worker_available(crate::pool::recorder_slot())
+        {
+            break worker;
+        }
+        // No section is open. Retiring execs may temporarily outnumber the
+        // active topology; another bounded section will release a token.
+        std::thread::yield_now();
+    };
     let progress = Progress::new(task.ordinal, phase);
     let mut action = Some(action);
     let result = loop {
@@ -292,7 +292,7 @@ impl Recording {
             recorder: Recorder::new(
                 Marked::default(),
                 binding,
-                crate::pool::MAX_WIDTH as usize + 1,
+                crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 1,
                 durable,
                 true,
                 None,

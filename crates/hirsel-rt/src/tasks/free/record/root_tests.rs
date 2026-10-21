@@ -95,7 +95,10 @@ fn nested_entry(cut_tail: bool) {
                         begin(ctx);
                         let mut tail = crate::roots::PhaseRoots::prepare(ctx);
                         let mut task = (*ctx).recording.take().unwrap();
-                        let mut worker = observer.recorder.worker(slot()).unwrap();
+                        let mut worker = observer
+                            .recorder
+                            .worker(crate::pool::recorder_slot())
+                            .unwrap();
                         observer
                             .recorder
                             .phase_if(

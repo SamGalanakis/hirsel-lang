@@ -280,6 +280,98 @@ fn section_slot_tokens_cannot_be_held_by_two_workers_at_once() {
 }
 
 #[test]
+fn retiring_workers_with_one_preferred_slot_keep_exclusive_tokens_and_closed_cuts() {
+    const WORKERS: usize = 8;
+    let recorder = Arc::new(
+        Recorder::<Vec<u8>>::new(Vec::new(), b"reused slots", WORKERS, true, true, None).unwrap(),
+    );
+    let mut root_worker = recorder.worker(0).unwrap();
+    let mut root = recorder.root(&mut root_worker).unwrap();
+    let children = recorder
+        .phase(&mut root_worker, &mut root, done(1), |writer| {
+            (0..WORKERS).map(|_| writer.spawn()).collect::<Vec<_>>()
+        })
+        .unwrap();
+    drop(root_worker);
+    let reserved = Arc::new(std::sync::Barrier::new(WORKERS + 1));
+    let resume = Arc::new(std::sync::Barrier::new(WORKERS + 1));
+    let threads: Vec<_> = children
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut task)| {
+            let recorder = recorder.clone();
+            let reserved = reserved.clone();
+            let resume = resume.clone();
+            std::thread::spawn(move || {
+                // A retiring exec and its replacement prefer the same index.
+                let mut worker = recorder.worker_available(0).unwrap();
+                reserved.wait();
+                resume.wait();
+                recorder
+                    .phase(&mut worker, &mut task, done(1), |writer| {
+                        writer.load(index as u128)
+                    })
+                    .unwrap();
+                drop(worker);
+                let mut worker = loop {
+                    if let Some(worker) = recorder.worker_available(0) {
+                        break worker;
+                    }
+                    std::thread::yield_now();
+                };
+                recorder
+                    .phase(&mut worker, &mut task, done(2), |writer| {
+                        writer.load(100 + index as u128)
+                    })
+                    .unwrap();
+                task
+            })
+        })
+        .collect();
+    reserved.wait();
+    assert!(
+        recorder.worker_available(0).is_none(),
+        "every token is exclusively held"
+    );
+    // Merely holding tokens does not block a cut: no phase is open yet.
+    let first = recorder.flush().unwrap().unwrap();
+    assert_eq!(first.progress.len(), WORKERS + 1);
+    assert!(
+        first
+            .progress
+            .iter()
+            .filter(|(path, _)| !path.is_empty())
+            .all(|(_, progress)| *progress == Progress::START)
+    );
+    resume.wait();
+    let _ = recorder.flush().unwrap().unwrap();
+    let tasks: Vec<_> = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect();
+    let cut = recorder.stop("returned", None).unwrap().unwrap().0;
+    let mut trace = root.trace().to_vec();
+    for task in tasks {
+        trace.extend_from_slice(task.trace());
+    }
+    let bytes = Arc::try_unwrap(recorder).ok().unwrap().into_sink();
+    let tape = tape::parse(&bytes).unwrap();
+    let mut replay = Replayer::new(&tape).unwrap();
+    replay.publish(&[], done(1)).unwrap();
+    for index in 0..WORKERS {
+        let path = [index as u32];
+        assert_eq!(replay.load(&path, 1).unwrap(), index as u128);
+        replay.publish(&path, done(1)).unwrap();
+        assert_eq!(replay.load(&path, 2).unwrap(), 100 + index as u128);
+        replay.publish(&path, done(2)).unwrap();
+    }
+    assert_eq!(
+        replay.finish(&cut.progress).unwrap(),
+        Projection::new("returned", &cut.progress, &trace)
+    );
+}
+
+#[test]
 #[should_panic(expected = "task belongs to another recording")]
 fn a_task_log_cannot_be_written_under_another_runs_gate() {
     let a = Recorder::<Vec<u8>>::new(Vec::new(), b"a", 1, false, false, None).unwrap();
