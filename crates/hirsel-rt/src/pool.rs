@@ -1177,6 +1177,9 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
         {
             break;
         }
+        if unsafe { crate::tasks::ordered::home::service(run) } {
+            continue;
+        }
         match home.take().0 {
             Post::Run { task, permit } => {
                 // SAFETY: the post names a suspended task.

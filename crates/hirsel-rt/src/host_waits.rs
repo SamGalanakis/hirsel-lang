@@ -445,6 +445,10 @@ unsafe fn expired_here(ctx: *mut TaskCtx, ready: &Ready) -> Stopped<Vec<u32>> {
     if binding.waits.armed.is_empty() {
         return Ok(Vec::new());
     }
+    expired_binding(binding, ready)
+}
+
+fn expired_binding(binding: &mut Binding, ready: &Ready) -> Stopped<Vec<u32>> {
     let mut armed: Vec<(u64, u64)> = binding
         .waits
         .armed
@@ -472,6 +476,41 @@ unsafe fn expired_here(ctx: *mut TaskCtx, ready: &Ready) -> Stopped<Vec<u32>> {
         due.push(scope);
     }
     Ok(due)
+}
+
+/// A context-free timer readiness step on the admission thread. The logical
+/// policy reserves its poll before calling this and holds no scheduler role.
+/// `idle` permits waiting only after every physical segment is saved.
+/// # Safety
+/// Home only; no other adapter/wait-table call may overlap this reservation.
+pub(crate) unsafe fn timers_home(
+    run: *mut crate::context::RunShared,
+    idle: bool,
+) -> Stopped<(Vec<u32>, bool)> {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    assert!(
+        binding.waits.parked.is_empty(),
+        "parked host requests require their completion adapter"
+    );
+    loop {
+        let ready = binding.adapter.ready().map_err(Stop::refusal)?;
+        let expired = expired_binding(binding, &ready)?;
+        unsafe {
+            (*run).host_waits.store(
+                binding.waits.armed.len() as u32,
+                std::sync::atomic::Ordering::Release,
+            )
+        };
+        if !idle || !expired.is_empty() {
+            return Ok((expired, true));
+        }
+        if !binding.adapter.wait().map_err(Stop::refusal)? {
+            return Ok((Vec::new(), false));
+        }
+        if let Some(stop) = unsafe { (*run).control.stopped() } {
+            return Err(stop);
+        }
+    }
 }
 
 /// A scope exited before its deadline: remove its timer, recording nothing.

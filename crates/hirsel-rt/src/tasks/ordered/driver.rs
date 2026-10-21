@@ -45,7 +45,7 @@ pub(crate) struct Driver {
     pub(super) memory: bool,
     pub(super) budgets: crate::budget::stretch::Budgets,
     /// A park/holding/end boundary cannot poll slots before its physical save.
-    poll_after_save: Option<TaskId>,
+    pub(super) poll_after_save: Option<TaskId>,
     return_after_save: Option<TaskId>,
     pub(super) carriers: BTreeMap<(crate::ordered::objects::Kind, u64), super::engine::Carrier>,
 }
@@ -221,6 +221,7 @@ pub(crate) fn after_save(
     s: &mut super::super::Scheduler,
     task: u32,
     completed: bool,
+    host_timers: bool,
 ) -> Vec<(u32, crate::pool::Owner)> {
     // The generation is part of the logical identity, even if the runtime
     // later recycles this native row index for a different child.
@@ -241,7 +242,7 @@ pub(crate) fn after_save(
     if let Some(retiring) = deferred {
         let task = retiring as u32;
         assert_eq!(s.task(task).generation, (retiring >> 32) as u32);
-        if super::super::readiness::saved(s, task)
+        if !host_timers && super::super::readiness::saved(s, task)
             // SAFETY: generic after_save owns IdleGuard and published saved.
             && unsafe { super::super::readiness::poll_ordered(s) }
         {

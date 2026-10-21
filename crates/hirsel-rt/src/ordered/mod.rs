@@ -269,6 +269,25 @@ impl<P, R> Frontier<P, R> {
         self.queue.iter().copied()
     }
 
+    /// Readiness after an idle host wait appends saved parked tasks without
+    /// manufacturing a turn retirement or a yielding task's requeue.
+    pub(crate) fn resume_idle(&mut self, woken: Vec<TaskId>) {
+        assert!(self.head.is_none() && self.polling.is_none() && self.queue.is_empty());
+        assert!(!self.stopped);
+        for task in woken {
+            let row = self.tasks.get_mut(&task).expect("a live waiter");
+            assert_eq!(row.state, State::Parked);
+            row.state = State::Queued;
+            self.queue.push_back(task);
+        }
+        self.head = self.queue.pop_front();
+        self.eligible_turns = self
+            .queue
+            .iter()
+            .map(|&id| (id, self.tasks[&id].retiring))
+            .collect();
+    }
+
     pub fn state(&self, task: TaskId) -> State {
         self.tasks[&task].state
     }

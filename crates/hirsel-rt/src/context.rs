@@ -301,6 +301,10 @@ pub(crate) struct RunShared {
 }
 
 impl RunShared {
+    pub(crate) fn io_binding(&self) -> *mut std::ffi::c_void {
+        self.io_data.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// The home thread's worker, the run's first.
     pub(crate) fn home_worker(&self) -> *mut Worker {
         self.home

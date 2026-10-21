@@ -56,6 +56,19 @@ impl Role {
         *owner = Some(IDLE_OWNER);
     }
 
+    fn try_acquire_idle(&self) -> bool {
+        let mut owner = match self.owner.try_lock() {
+            Ok(owner) => owner,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return false,
+        };
+        if owner.is_some() {
+            return false;
+        }
+        *owner = Some(IDLE_OWNER);
+        true
+    }
+
     fn release(&self, task: usize) {
         self.release_with(task, || {});
     }
@@ -80,6 +93,22 @@ pub(crate) struct IdleGuard {
 }
 
 impl IdleGuard {
+    /// Nonblocking idle claim for the home loop, which must keep serving a
+    /// worker's synchronous bridge while that worker owns the role.
+    /// # Safety
+    /// As for new; a failed claim acquires no runtime ownership.
+    pub(crate) unsafe fn try_new(run: *mut RunShared) -> Option<Self> {
+        let role = unsafe { &(*run).role };
+        let enabled = role.enabled.load(Ordering::Acquire);
+        if enabled && !role.try_acquire_idle() {
+            return None;
+        }
+        Some(Self {
+            run: if enabled { run } else { std::ptr::null_mut() },
+            _local: std::marker::PhantomData,
+        })
+    }
+
     /// # Safety
     /// The caller is on an idle stack and holds no role or runtime borrow.
     /// `run` outlives the guard. Enabled callbacks must raw-project role-owned
@@ -272,6 +301,20 @@ impl Drop for Segment {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn home_idle_claim_never_waits_for_a_worker_bridge_or_another_idle_callback() {
+        let role = Role::default();
+        role.enable();
+        role.acquire(8);
+        assert!(!role.try_acquire_idle());
+        role.release(8);
+        assert!(role.try_acquire_idle());
+        assert!(!role.try_acquire_idle());
+        role.release(IDLE_OWNER);
+        assert!(role.try_acquire_idle());
+        role.release(IDLE_OWNER);
+    }
 
     struct Run(*mut TaskCtx);
     impl Run {

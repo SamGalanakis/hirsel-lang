@@ -175,11 +175,18 @@ pub(super) unsafe fn after_save(
 /// # Safety
 /// The caller holds IdleGuard; no Scheduler borrow survives this call.
 pub(super) unsafe fn check_quiet(run: *mut crate::context::RunShared) {
+    if unsafe { (*run).host_waits.load(Ordering::Acquire) } != 0 {
+        return;
+    }
+    unsafe { check_quiet_without_sources(run) };
+}
+
+/// The home adapter proved no event source can wake this fully saved run.
+/// # Safety
+/// As for check_quiet; the caller additionally owns that source verdict.
+pub(super) unsafe fn check_quiet_without_sources(run: *mut crate::context::RunShared) {
     let waits = {
         let run = unsafe { &*run };
-        if run.host_waits.load(Ordering::Acquire) != 0 {
-            return;
-        }
         let Some(s) = (unsafe { (*run.tasks.get()).as_deref_mut() }) else {
             return;
         };

@@ -1355,7 +1355,9 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
         match s.logical {
             Logical::Cooperative => return,
             Logical::Free(_) => unsafe { free::after_save(s, task, completed) },
-            Logical::Ordered(_) => ordered::driver::after_save(s, task, completed),
+            Logical::Ordered(_) => ordered::driver::after_save(s, task, completed, unsafe {
+                (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) != 0
+            }),
         }
     };
     // No Scheduler or Task reference survives a fresh raw table lookup.
