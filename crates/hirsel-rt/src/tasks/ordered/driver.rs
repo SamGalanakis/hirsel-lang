@@ -125,6 +125,35 @@ impl Driver {
     }
 }
 
+/// IdleGuard protects this entire callback. Physical save publication has
+/// already happened; no context, host service or fiber switch is involved.
+pub(crate) fn after_save(
+    s: &mut super::super::Scheduler,
+    task: u32,
+    completed: bool,
+) -> Vec<(u32, crate::pool::Owner)> {
+    // The generation is part of the logical identity, even if the runtime
+    // later recycles this native row index for a different child.
+    let id = super::super::handle(task, s.task(task).generation);
+    let super::super::Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    driver.saved(id, completed);
+    let selected = driver.select();
+    selected
+        .into_iter()
+        .map(|id| {
+            let task = id as u32;
+            assert_eq!(
+                s.task(task).generation,
+                (id >> 32) as u32,
+                "selected stale task identity"
+            );
+            (task, s.task(task).owner)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +214,69 @@ mod tests {
             ),
             Ok(crate::ordered::Progress::Poll)
         );
+    }
+
+    #[test]
+    fn the_ordered_idle_callback_resumes_real_saved_root_frames_without_duplicate_notifications() {
+        let mut run = crate::host::BodyRun::new(8, false);
+        // SAFETY: this body routes every suspension/end through saved-frame
+        // dispatch. It uses no task/host effect or remote stack slot.
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| {
+                let s = super::super::super::scheduler(ctx);
+                let root = super::super::super::handle(0, s.task(0).generation);
+                let mut driver = Driver::new(
+                    root,
+                    Policy::admit(&Default::default(), None),
+                    Settled {
+                        level: 0,
+                        limit: u64::MAX,
+                        fuel: u64::MAX,
+                    },
+                    Registry::default(),
+                );
+                assert_eq!(driver.select(), vec![root]);
+                s.logical = super::super::super::Logical::Ordered(driver);
+            },
+            |ctx| {
+                unsafe {
+                    super::super::super::role::enter(ctx);
+                    let s = super::super::super::scheduler(ctx);
+                    let task = (*ctx).task_id;
+                    let id = super::super::super::handle(task, s.task(task).generation);
+                    let super::super::super::Logical::Ordered(driver) = &mut s.logical else {
+                        unreachable!()
+                    };
+                    driver.claimed(id, 0);
+                    for _ in 0..256 {
+                        let s = super::super::super::scheduler(ctx);
+                        let super::super::super::Logical::Ordered(driver) = &mut s.logical else {
+                            unreachable!()
+                        };
+                        assert!(driver.select().is_empty());
+                        driver.suspending(id, false);
+                        assert!(driver.select().is_empty());
+                        crate::pool::free::suspend_current(ctx, false);
+                        let s = super::super::super::scheduler(ctx);
+                        let super::super::super::Logical::Ordered(driver) = &mut s.logical else {
+                            unreachable!()
+                        };
+                        driver.claimed(id, 0);
+                        assert!(driver.select().is_empty());
+                    }
+                    let s = super::super::super::scheduler(ctx);
+                    let super::super::super::Logical::Ordered(driver) = &mut s.logical else {
+                        unreachable!()
+                    };
+                    driver.finishing(id);
+                    super::super::super::role::release(ctx);
+                }
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(outcome.pending, 0);
     }
 
     #[test]

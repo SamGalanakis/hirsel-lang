@@ -104,7 +104,11 @@ early send publishes and touches before the deferred poll is requested.
 `tasks::ordered::driver` tracks selection separately from logical turns and
 physical saved-frame ownership. It suppresses duplicate notifications and
 requires both a physical save and head promotion for full logs or allocation
-pauses. It is policy metadata awaiting installation in native boundary paths.
+pauses. Scheduler.logical has an Ordered variant whose idle callback updates
+this metadata under the generic saved-flag publication guard. A real eight-worker
+control cycles the root through 256 saved-stack resumptions without duplicate
+notifications. Native operation/budget boundaries and production admission still
+need installation; that control is not a parallel ordered corpus or speed gate.
 
 ## Integration status
 

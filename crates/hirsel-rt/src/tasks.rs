@@ -235,6 +235,7 @@ enum Logical {
     #[default]
     Cooperative,
     Free(free::Driver),
+    Ordered(ordered::driver::Driver),
 }
 
 /// Every task and scope of one run, and the runnable queue.
@@ -1224,6 +1225,7 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
         match s.logical {
             Logical::Cooperative => return,
             Logical::Free(_) => unsafe { free::after_save(s, task, completed) },
+            Logical::Ordered(_) => ordered::driver::after_save(s, task, completed),
         }
     };
     // No Scheduler or Task reference survives a fresh raw table lookup.
