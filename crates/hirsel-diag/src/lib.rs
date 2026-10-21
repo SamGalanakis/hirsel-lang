@@ -4,8 +4,10 @@
 hirsel_guard::install!();
 
 mod near_miss;
+mod rule_explain;
 use hirsel_span::{SourceMap, Span};
 pub use near_miss::{fresh_name, suggest_names};
+pub use rule_explain::{RuleGuidance, rule_guidance};
 use std::{borrow::Cow, fmt};
 use unicode_width::UnicodeWidthStr;
 /// A syntactically valid specification ID (FAIL-1); membership is checked against the spec.
@@ -192,12 +194,9 @@ impl Diagnostic {
         let typical = (self.fix.is_none()
             && !self.notes.iter().any(|note| note.starts_with("help: ")))
         .then(|| {
-            include_str!("guidance.tsv").lines().find_map(|line| {
-                let mut fields = line.splitn(4, '\t');
-                (fields.next()? == self.rule.as_str())
-                    .then(|| fields.nth(2))
-                    .flatten()
-            })
+            rule_explain::primary_guidance()
+                .find(|entry| entry.rule == self.rule.as_str())
+                .and_then(|entry| entry.repair)
         })
         .flatten();
         self.notes.iter().map(String::as_str).chain(typical)
