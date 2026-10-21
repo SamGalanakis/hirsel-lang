@@ -98,6 +98,7 @@ fn check_inner(
         dependencies: BTreeMap::new(),
         snapshots: BTreeMap::new(),
         representations: BTreeMap::new(),
+        property_normalizations: Default::default(),
         plans: Plans::default(),
         calls: vec![],
         formatters: BTreeMap::new(),
@@ -123,7 +124,8 @@ fn check_inner(
                 && c.diagnostics.is_empty()
             {
                 c.final_return(*body);
-                if hirsel_check_protocol::fact::fact_owner(c.input.signature.definition.path()).is_some()
+                if hirsel_check_protocol::fact::fact_owner(c.input.signature.definition.path())
+                    .is_some()
                 {
                     c.expected_sites
                         .insert(*body, (c.span(*body), const { RuleId::of("FACT-2") }));
@@ -324,6 +326,26 @@ enum After {
     LocalFunction(ast::StmtId, usize, usize, FunctionType),
     LoopEnd(usize, usize),
 }
+/// Completed property normalizations under the checker's current input view.
+/// As in rustc traits/project.rs:310-319,350-365, a type alone is not the key:
+/// generic declarations and the available nominal signatures must agree.
+#[derive(Default)]
+struct PropertyNormalizations {
+    context: Option<(GenericDeclarations, usize)>,
+    rows: std::collections::HashMap<TypeId, TypeId, hirsel_intern::IdHasher>,
+}
+impl PropertyNormalizations {
+    fn bind(&mut self, generics: &GenericDeclarations, signatures: usize) {
+        if !self
+            .context
+            .as_ref()
+            .is_some_and(|(known, count)| *count == signatures && known == generics)
+        {
+            self.rows.clear();
+            self.context = Some((generics.clone(), signatures));
+        }
+    }
+}
 struct Checker<'a, 'p> {
     input: Input<'a>,
     types: &'a TypeInterner,
@@ -346,6 +368,7 @@ struct Checker<'a, 'p> {
     /// append-only, so a nominal type is expanded into it once rather than
     /// once per projection of its fields (GAP 5).
     representations: BTreeMap<ast::DefPath, Vec<(Vec<GenericArgument>, TypeId)>>,
+    property_normalizations: PropertyNormalizations,
     plans: Plans,
     calls: Vec<calls::PendingCall>,
     /// F-string callees (SEM-3) with their selected operation and the declared
@@ -422,7 +445,8 @@ impl Checker<'_, '_> {
             modes.sendability = Sendability::Sendable;
         }
         let component = |id| {
-            self.types.get(id)
+            self.types
+                .get(id)
                 .map_or(DropAllocation::MayAllocate, |t| t.drop_allocation.clone())
         };
         let drop_allocation = cleanup_summary(&kind, |leaf| match leaf {
@@ -460,27 +484,52 @@ impl Checker<'_, '_> {
         self.types.intern(row)
     }
     fn normalize_properties(&mut self, id: TypeId) -> TypeId {
-        let generics = self.body.resolution.generic_declarations.clone();
-        let prior = self.types.get(id).unwrap().modes.sendability.clone();
-        let normalized =
-            normalize_type_properties(self.types, id, &generics, &mut |path| {
-                Ok::<_, hirsel_types::QueryError>(if path == self.input.signature.definition {
-                    Some(std::sync::Arc::new(self.input.signature.clone()))
-                } else {
-                    self.snapshots.get(&path).cloned()
-                })
-            })
-            .unwrap_or_else(|error| self.proof_failure(error, id));
-        if prior == Sendability::Sendable
-            && self.types.get(id).unwrap().sendability_requirement
-                == SendabilityRequirement::Sendable
-        {
-            let mut row = self.types.get(normalized).unwrap().clone();
-            row.modes.sendability = prior;
-            self.types.intern(row)
-        } else {
-            normalized
+        // Snapshots are inserted once and never replaced during a body query.
+        // Their count is therefore a view revision; own signature is immutable.
+        // Generic declarations can change without the signature view growing.
+        self.property_normalizations.bind(
+            &self.body.resolution.generic_declarations,
+            self.snapshots.len(),
+        );
+        if let Some(normalized) = self.property_normalizations.rows.get(&id).copied() {
+            #[cfg(test)]
+            assert_eq!(
+                normalized,
+                self.normalize_properties_uncached(id).unwrap(),
+                "cached body normalization differs from the original traversal"
+            );
+            return normalized;
         }
+        match self.normalize_properties_uncached(id) {
+            Ok(normalized) => {
+                self.property_normalizations.rows.insert(id, normalized);
+                normalized
+            }
+            Err(error) => self.proof_failure(error, id),
+        }
+    }
+    fn normalize_properties_uncached(&self, id: TypeId) -> Result<TypeId, QueryError> {
+        let generics = &self.body.resolution.generic_declarations;
+        let prior = self.types.get(id).unwrap().modes.sendability.clone();
+        let normalized = normalize_type_properties(self.types, id, generics, &mut |path| {
+            Ok::<_, hirsel_types::QueryError>(if path == self.input.signature.definition {
+                Some(std::sync::Arc::new(self.input.signature.clone()))
+            } else {
+                self.snapshots.get(&path).cloned()
+            })
+        })?;
+        Ok(
+            if prior == Sendability::Sendable
+                && self.types.get(id).unwrap().sendability_requirement
+                    == SendabilityRequirement::Sendable
+            {
+                let mut row = self.types.get(normalized).unwrap().clone();
+                row.modes.sendability = prior;
+                self.types.intern(row)
+            } else {
+                normalized
+            },
+        )
     }
     /// The arena an expected row places constructions in (PROV-4). Call-result
     /// hints still use the callee's allocator namespace here, whose bound
@@ -534,7 +583,7 @@ impl Checker<'_, '_> {
         let generics = self.body.resolution.generic_declarations.clone();
         let projected = {
             let mut lookup = |path: DefId| {
-            Ok::<_, hirsel_types::QueryError>(if path == self.input.signature.definition {
+                Ok::<_, hirsel_types::QueryError>(if path == self.input.signature.definition {
                     Some(std::sync::Arc::new(self.input.signature.clone()))
                 } else {
                     self.snapshots.get(&path).cloned()
@@ -895,8 +944,7 @@ impl Checker<'_, '_> {
         let result = bind_parameter_scopes(self.types, f.result, &scopes)
             .expect("checked lexical result scope");
         let error = f.error.map(|t| {
-            bind_parameter_scopes(self.types, t, &scopes)
-                .expect("checked lexical error scope")
+            bind_parameter_scopes(self.types, t, &scopes).expect("checked lexical error scope")
         });
         let frame = self.empty_frame(owner.clone(), parent, Some(result), error, f.incomplete);
         self.body
@@ -1291,7 +1339,9 @@ impl Checker<'_, '_> {
                     if inferred {
                         f.result = wanted.result;
                         f.error = wanted.error;
-                    } else if let Some(selection @ ErasedCaptures::FromArguments(_)) = self.types.get(wanted.result)
+                    } else if let Some(selection @ ErasedCaptures::FromArguments(_)) = self
+                        .types
+                        .get(wanted.result)
                         .and_then(|row| row.erased_captures.clone())
                     {
                         // A contextual `@captures` selection is the literal's
@@ -1309,11 +1359,7 @@ impl Checker<'_, '_> {
                         && wanted.parameters.len() == f.parameters.len()
                     {
                         let mut parameters = f.parameters.to_vec();
-                        apply_state_promises(
-                            self.types,
-                            &mut parameters,
-                            &wanted.state_promises,
-                        );
+                        apply_state_promises(self.types, &mut parameters, &wanted.state_promises);
                         f.parameters = parameters.into();
                         f.state_promises = wanted.state_promises.clone();
                     }
@@ -1977,9 +2023,7 @@ impl Checker<'_, '_> {
                 let written = if let Some(annotation) = annotation {
                     let mut written = self.written_modes(annotation);
                     let declared = self.syntax_type(annotation, frame)?;
-                    written.sendable |= self.types.get(declared)
-                        .unwrap()
-                        .sendability_requirement
+                    written.sendable |= self.types.get(declared).unwrap().sendability_requirement
                         == SendabilityRequirement::Sendable;
                     Some(written)
                 } else {
@@ -2327,7 +2371,9 @@ impl Checker<'_, '_> {
                     // The frame result names the body's own parameter
                     // scope; the callable type keeps its binder-relative
                     // `@captures` selection.
-                    if let Some(selection @ ErasedCaptures::FromArguments(_)) = self.types.get(declared)
+                    if let Some(selection @ ErasedCaptures::FromArguments(_)) = self
+                        .types
+                        .get(declared)
                         .and_then(|row| row.erased_captures.clone())
                     {
                         let mut row = self.types.get(f.result).unwrap().clone();
@@ -2335,11 +2381,7 @@ impl Checker<'_, '_> {
                         f.result = self.types.intern(row);
                     }
                 }
-                f.error = result_error(
-                    self.types,
-                    f.result,
-                    &self.input.signature.metadata.roles,
-                );
+                f.error = result_error(self.types, f.result, &self.input.signature.metadata.roles);
                 if !self.bottom(result)
                     && !self.invalid(result)
                     && self.frames[child]
