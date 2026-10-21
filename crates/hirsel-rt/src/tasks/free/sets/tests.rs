@@ -251,7 +251,14 @@ fn native_await_any_replay_uses_recorded_members_after_reversed_late_completion(
             .recorder
             .into_sink()
             .bytes;
-        for (width, early) in [(2, false), (8, false), (2, true), (8, true)] {
+        for (width, early) in [
+            (1, false),
+            (2, false),
+            (8, false),
+            (1, true),
+            (2, true),
+            (8, true),
+        ] {
             let replay = Replay::new(&bytes).unwrap();
             let install = replay.clone();
             let order = Arc::new(CompletionOrder {
@@ -428,7 +435,7 @@ fn an_entered_only_native_await_any_cut_needs_no_recorded_member() {
             .into_sink()
             .bytes;
         let cut = hirsel_free::tape::parse(&bytes).unwrap().cut;
-        for width in [2, 8] {
+        for width in [1, 2, 8] {
             let replay = Replay::new(&bytes).unwrap();
             let install = replay.clone();
             let mut run = crate::host::BodyRun::new(width, false);

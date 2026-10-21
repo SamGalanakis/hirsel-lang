@@ -81,7 +81,7 @@ fn native_atomic_replay_substitutes_loads_and_stops_before_the_cut_suffix() {
                 &parsed.cut,
                 &trace,
             );
-            for width in [2, 8] {
+            for width in [1, 2, 8] {
                 let replay = Replay::new(tape).unwrap();
                 let install = replay.clone();
                 let outputs = Arc::new([AtomicU64::new(0), AtomicU64::new(0)]);
@@ -260,7 +260,7 @@ fn native_task_replay_never_starts_a_queued_divergent_child_and_finishes_started
                 &parsed.cut,
                 &trace,
             );
-            for width in [2, 8] {
+            for width in [1, 2, 8] {
                 let replay = Replay::new(&bytes).unwrap();
                 let install = replay.clone();
                 let mut run = crate::host::BodyRun::new(width, false);
@@ -432,7 +432,7 @@ fn native_called_rests_run_only_when_the_child_cut_admits_the_rest() {
                 &parsed.cut,
                 &trace,
             );
-            for width in [2, 8] {
+            for width in [1, 2, 8] {
                 let replay = Replay::new(&marked.bytes[..end]).unwrap();
                 let install = replay.clone();
                 let probe = Arc::new(RestProbe {
@@ -552,7 +552,7 @@ fn native_thaw_replay_forces_a_recorded_failure_even_when_the_root_is_sole() {
             .recorder
             .into_sink()
             .bytes;
-        for width in [2, 8] {
+        for width in [1, 2, 8] {
             let replay = Replay::new(&bytes).unwrap();
             let install = replay.clone();
             let observed = Arc::new(std::sync::atomic::AtomicU8::new(99));
@@ -667,7 +667,7 @@ fn a_recorded_successful_native_thaw_saves_its_wait_until_another_task_releases(
             .recorder
             .into_sink()
             .bytes;
-        for width in [2, 8] {
+        for width in [1, 2, 8] {
             let replay = Replay::new(&bytes).unwrap();
             let install = replay.clone();
             let waited = Arc::new(AtomicBool::new(false));
@@ -809,7 +809,7 @@ fn native_replay_forces_cancellation_changes_only_at_unshielded_checks() {
                 &parsed.cut,
                 &trace,
             );
-            for width in [2, 8] {
+            for width in [1, 2, 8] {
                 for live_cause in [None, Some(CANCEL_PARENT)] {
                     let replay = Replay::new(&bytes[..end]).unwrap();
                     let install = replay.clone();

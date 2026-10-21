@@ -58,7 +58,7 @@ fn native_gate_replay_preserves_nested_depth_and_stops_before_foreign_cut_suffix
                 &parsed.cut,
                 &trace,
             );
-            for width in [2, 8] {
+            for width in [1, 2, 8] {
                 let replay = Replay::new(&bytes[..end]).unwrap();
                 let install = replay.clone();
                 let stage = Arc::new(std::sync::atomic::AtomicU8::new(0));
@@ -328,7 +328,7 @@ fn two_native_serial_callbacks_replay_gaps_with_one_compute_permit() {
             .recorder
             .into_sink()
             .bytes;
-        for width in [2, 8] {
+        for width in [1, 2, 8] {
             let replay = Replay::new(&bytes).unwrap();
             let install = replay.clone();
             let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));

@@ -495,7 +495,7 @@ fn native_replay_applies_nested_root_tails_at_an_entered_only_cut() {
                     &parsed.cut,
                     &trace,
                 );
-                for width in [2, 8] {
+                for width in [1, 2, 8] {
                     let replay = Replay::new(&bytes[..end]).unwrap();
                     let install = replay.clone();
                     let checked = Arc::new(AtomicBool::new(false));

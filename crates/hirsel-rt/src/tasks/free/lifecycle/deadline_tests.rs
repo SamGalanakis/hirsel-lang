@@ -103,7 +103,7 @@ fn native_deadline_replay_substitutes_expiry_without_calling_live_timers() {
                     &parsed.cut,
                     &trace,
                 );
-                for width in [2, 8] {
+                for width in [1, 2, 8] {
                     let replay = Replay::new(&bytes[..end]).unwrap();
                     let install = replay.clone();
                     let outputs = Arc::new((

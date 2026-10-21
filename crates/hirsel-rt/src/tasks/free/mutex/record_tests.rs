@@ -79,7 +79,7 @@ fn native_mutex_replay_creates_its_identity_and_consumes_scalar_take_put_version
                 &parsed.cut,
                 &trace,
             );
-            for width in [2, 8] {
+            for width in [1, 2, 8] {
                 let replay = Replay::new(&bytes[..end]).unwrap();
                 let install = replay.clone();
                 let stage = Arc::new(std::sync::atomic::AtomicU8::new(0));
@@ -273,7 +273,7 @@ fn native_mutex_replay_waits_for_versions_before_taking_an_available_cell() {
             .recorder
             .into_sink()
             .bytes;
-        for width in [2, 8] {
+        for width in [1, 2, 8] {
             let replay = Replay::new(&bytes).unwrap();
             let install = replay.clone();
             let checked = Arc::new(AtomicBool::new(false));

@@ -151,7 +151,7 @@ fn native_receive_replay_saves_before_send_and_admits_entered_only_cuts() {
                 &parsed.cut,
                 &trace,
             );
-            for width in [2, 8] {
+            for width in [1, 2, 8] {
                 let replay = Replay::new(&bytes[..end]).unwrap();
                 let install = replay.clone();
                 let probe = Arc::new(ReplayReceive { recording: None });

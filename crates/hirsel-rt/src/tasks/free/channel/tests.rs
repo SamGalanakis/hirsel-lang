@@ -84,7 +84,7 @@ fn native_scalar_channel_replay_consumes_send_and_receive_history() {
                 &parsed.cut,
                 &trace,
             );
-            for width in [2, 8] {
+            for width in [1, 2, 8] {
                 let replay = Replay::new(&bytes[..end]).unwrap();
                 let install = replay.clone();
                 let stage = Arc::new(AtomicU32::new(0));
