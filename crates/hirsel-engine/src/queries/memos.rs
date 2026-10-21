@@ -167,6 +167,133 @@ fn manifest_value(
     )
 }
 
+/// Source-dependent inputs to canonical read finishing. Frozen body tasks
+/// supply the same namespaces, citation text, candidate and environment values
+/// as the engine, without consulting or mutating a session during execution.
+pub(crate) trait ReadSource {
+    fn namespace(
+        &mut self,
+        context: &FileContext,
+        result: &Result<DefPath, LookupError>,
+    ) -> Option<hirsel_resolve::Namespace>;
+    fn cited(&self, path: &DefPath) -> ContentHash;
+    fn candidates(&self, owner: &DefPath) -> Option<ContentHash>;
+    fn environment(&self) -> ContentHash;
+}
+
+/// One canonical encoding for scalar queries and frozen tasks, including
+/// inherited reads and all failure receipts. The source only selects input
+/// values; the ordering, domains and conflict checks stay here.
+pub(crate) fn complete_reads(
+    owner: &DefPath,
+    detail: &DependencyReads,
+    observed: &Observed,
+    source: &mut impl ReadSource,
+) -> Result<Reads, crate::memo::Inconsistent> {
+    let mut reads = observed.merged.clone();
+    let def = DefId::intern;
+    for s in &detail.signatures {
+        reads.record(
+            ReadKey::Signature(def(&s.definition)),
+            signature_value(Some(s.fingerprint)),
+        );
+    }
+    for (path, key) in &detail.failed_signature_keys {
+        reads.record(ReadKey::FailedSignature(def(path)), optional(*key));
+    }
+    for read in detail.manifest_lookups.iter().chain(&detail.resolver) {
+        match read {
+            hirsel_types::DependencyRead::ProviderLookup {
+                context,
+                package,
+                segments,
+                output,
+            } => reads.record(
+                ReadKey::Lookup(LookupKey::of(
+                    LookupSource::Provider,
+                    context,
+                    package.as_ref(),
+                    segments,
+                )),
+                provider_value(&output.result),
+            ),
+            hirsel_types::DependencyRead::Lookup {
+                context,
+                package,
+                segments,
+                result,
+                ..
+            } => {
+                let namespace = source.namespace(context, result);
+                reads.record(
+                    ReadKey::Lookup(LookupKey::of(
+                        LookupSource::Manifest,
+                        context,
+                        package.as_ref(),
+                        segments,
+                    )),
+                    manifest_value(result, namespace),
+                )
+            }
+            hirsel_types::DependencyRead::ModuleHead {
+                context,
+                head,
+                exposed,
+                ..
+            } => reads.record(
+                ReadKey::Lookup(LookupKey::of(
+                    LookupSource::Head,
+                    context,
+                    None,
+                    std::slice::from_ref(head),
+                )),
+                tag("hirsel.read.head", &[&[u8::from(*exposed)]]),
+            ),
+            hirsel_types::DependencyRead::Signature {
+                definition,
+                fingerprint,
+            } => reads.record(
+                ReadKey::Signature(def(definition)),
+                signature_value(*fingerprint),
+            ),
+        }
+    }
+    for (path, _) in &detail.citations {
+        reads.record(ReadKey::CitedText(def(path)), source.cited(path));
+    }
+    // A recursive group's members are read by their text.
+    for (path, revision) in &observed.representations {
+        reads.record(ReadKey::ExecutedBody(def(path)), optional(Some(*revision)));
+    }
+    let owner_id = def(owner);
+    if let Some(candidates) = source.candidates(owner) {
+        reads.record(ReadKey::DeclarationCandidates(owner_id), candidates);
+    }
+    reads.record(ReadKey::Environment, source.environment());
+    reads.finish()
+}
+
+impl ReadSource for QueryEngine {
+    fn namespace(
+        &mut self,
+        context: &FileContext,
+        result: &Result<DefPath, LookupError>,
+    ) -> Option<hirsel_resolve::Namespace> {
+        self.lookup_namespace(context, result)
+    }
+    fn cited(&self, path: &DefPath) -> ContentHash {
+        self.cited_value(path)
+    }
+    fn candidates(&self, owner: &DefPath) -> Option<ContentHash> {
+        self.items
+            .contains_key(owner)
+            .then(|| self.candidates_value(owner))
+    }
+    fn environment(&self) -> ContentHash {
+        self.environment_value()
+    }
+}
+
 impl QueryEngine {
     /// The durability of what a read observes: std and core are High,
     /// dependency packages Medium, the program's own package Low.
@@ -248,90 +375,7 @@ impl QueryEngine {
         detail: &DependencyReads,
         observed: &Observed,
     ) -> Result<Reads, crate::memo::Inconsistent> {
-        let mut reads = observed.merged.clone();
-        let def = DefId::intern;
-        for s in &detail.signatures {
-            reads.record(
-                ReadKey::Signature(def(&s.definition)),
-                signature_value(Some(s.fingerprint)),
-            );
-        }
-        for (path, key) in &detail.failed_signature_keys {
-            reads.record(ReadKey::FailedSignature(def(path)), optional(*key));
-        }
-        for read in detail.manifest_lookups.iter().chain(&detail.resolver) {
-            match read {
-                hirsel_types::DependencyRead::ProviderLookup {
-                    context,
-                    package,
-                    segments,
-                    output,
-                } => reads.record(
-                    ReadKey::Lookup(LookupKey::of(
-                        LookupSource::Provider,
-                        context,
-                        package.as_ref(),
-                        segments,
-                    )),
-                    provider_value(&output.result),
-                ),
-                hirsel_types::DependencyRead::Lookup {
-                    context,
-                    package,
-                    segments,
-                    result,
-                    ..
-                } => {
-                    let namespace = self.lookup_namespace(context, result);
-                    reads.record(
-                        ReadKey::Lookup(LookupKey::of(
-                            LookupSource::Manifest,
-                            context,
-                            package.as_ref(),
-                            segments,
-                        )),
-                        manifest_value(result, namespace),
-                    )
-                }
-                hirsel_types::DependencyRead::ModuleHead {
-                    context,
-                    head,
-                    exposed,
-                    ..
-                } => reads.record(
-                    ReadKey::Lookup(LookupKey::of(
-                        LookupSource::Head,
-                        context,
-                        None,
-                        std::slice::from_ref(head),
-                    )),
-                    tag("hirsel.read.head", &[&[u8::from(*exposed)]]),
-                ),
-                hirsel_types::DependencyRead::Signature {
-                    definition,
-                    fingerprint,
-                } => reads.record(
-                    ReadKey::Signature(def(definition)),
-                    signature_value(*fingerprint),
-                ),
-            }
-        }
-        for (path, _) in &detail.citations {
-            reads.record(ReadKey::CitedText(def(path)), self.cited_value(path));
-        }
-        // A recursive group's members are read by their text.
-        for (path, revision) in &observed.representations {
-            reads.record(ReadKey::ExecutedBody(def(path)), optional(Some(*revision)));
-        }
-        let owner_id = def(owner);
-        if self.items.contains_key(owner) {
-            reads.record(
-                ReadKey::DeclarationCandidates(owner_id),
-                self.candidates_value(owner),
-            );
-        }
-        reads.record(ReadKey::Environment, self.environment_value());
-        reads.finish()
+        complete_reads(owner, detail, observed, self)
     }
 
     fn lookup_namespace(
