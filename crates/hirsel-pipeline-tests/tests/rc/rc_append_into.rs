@@ -97,16 +97,13 @@ fn calls(program: &Program, name: &str) -> Vec<String> {
 
 /// The IR checker accepts every definition the fusion changed or added.
 fn checked(source: &str, before: &Program, after: &Program) {
-    let signatures: hirsel_validate::SignatureMap = after
-        .signatures
-        .iter()
-        .map(|(p, s)| (p.clone(), (**s).clone()))
-        .collect();
+    let mut signatures = hirsel_validate::SignatureMap::new(after.types.clone());
+    signatures.extend_signatures(after.signatures.values().map(|s| (**s).clone()));
     for (path, def) in &after.definitions {
         if before.definitions.get(path) == Some(def) {
             continue;
         }
-        let v = hirsel_validate::validate(def, &signatures, &mut vec![]);
+        let v = hirsel_validate::validate(def, &after.types, &signatures, &mut vec![]);
         assert!(
             v.violations.is_empty(),
             "{source}\n{}: {:#?}",
