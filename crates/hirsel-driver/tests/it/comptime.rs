@@ -2503,3 +2503,102 @@ fn frozen_lowering_physical_work_counts_helpers_retries_and_discarded_suffixes()
         }
     });
 }
+
+#[test]
+fn frozen_lowering_workers_share_only_unoccupied_scalar_hold_bytes() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct CountHelper {
+        inner: Arc<dyn LoweringPhase>,
+        calls: AtomicUsize,
+        workers: bool,
+    }
+    impl LoweringPhase for CountHelper {
+        fn lower(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            comptime: &Comptime,
+            signature: &hirsel_types::Signature,
+        ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+            if self.workers {
+                assert_eq!(std::thread::current().name(), Some("hirsel-job"));
+            }
+            if body.typed.syntax.item.definition.0.name.as_str() == "helper" {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.lower(t, m, body, comptime, signature)
+        }
+        fn lower_evaluation(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
+            signature: &hirsel_types::Signature,
+            expression: hirsel_syntax::ExprId,
+            result: hirsel_types::TypeId,
+            constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
+        ) -> Result<hirsel_tir::Definition, QueryError> {
+            if self.workers {
+                assert_eq!(std::thread::current().name(), Some("hirsel-job"));
+            }
+            self.inner
+                .lower_evaluation(t, m, body, staged, signature, expression, result, constants)
+        }
+        fn entry_body(&self) -> hirsel_tir::BodyId {
+            self.inner.entry_body()
+        }
+    }
+    with_compiler_stack(|| {
+        let source = format!(
+            "fn filler()->u64{{{}7u64}}\nfn helper()->u64{{7u64}}\nfn A()->u64{{let a=comptime helper();let b=comptime helper();a+b}}\nfn B()->u64{{let a=comptime helper();let b=comptime helper();a+b}}\n",
+            (0..64)
+                .map(|i| format!("let _={i}u64; "))
+                .collect::<String>()
+        );
+        for jobs in [1, 2, 8] {
+            for occupied in [false, true] {
+                let config = |hold_bytes| CompileConfig {
+                    hold_bytes,
+                    retention: memo::Retention::Batch,
+                    ..CompileConfig::for_memory_cap(None)
+                };
+                let mut candidate = engine(&source).with_config(config(u64::MAX));
+                drop(candidate.lower_to_tir(&path("filler")).unwrap());
+                let bytes = candidate.lower_hold_stats().bytes;
+                assert!(bytes > 0);
+                candidate =
+                    candidate.with_config(config(if occupied { bytes } else { bytes + (1 << 20) }));
+                assert_eq!(
+                    candidate.available_hold_bytes(),
+                    if occupied { 0 } else { 1 << 20 }
+                );
+                let counter = Arc::new(CountHelper {
+                    inner: candidate.adapters.lowering.take().unwrap(),
+                    calls: AtomicUsize::new(0),
+                    workers: jobs > 1,
+                });
+                candidate.adapters.lowering = Some(counter.clone());
+                let outcomes = candidate.check_lower_definition_prefix(
+                    vec![path("A"), path("B")],
+                    hirsel_intern::jobs::Jobs::new(jobs),
+                );
+                assert_eq!(outcomes.len(), 2);
+                assert!(
+                    outcomes.iter().all(|outcome| outcome.result.is_ok()),
+                    "{outcomes:?}"
+                );
+                assert_eq!(
+                    counter.calls.load(Ordering::Relaxed),
+                    if occupied { 4 } else { 2 },
+                    "jobs={jobs} occupied={occupied}: only free bytes can retain a helper within a root"
+                );
+                assert!(candidate.lower_hold_stats().bytes <= candidate.hold_bytes());
+            }
+        }
+    });
+}
