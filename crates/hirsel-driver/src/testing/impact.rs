@@ -99,8 +99,9 @@ pub struct Snapshot {
     errors: BTreeSet<String>,
 }
 impl Snapshot {
-    /// Exact owned string/byte payload length, excluding containers, allocator
-    /// headers and spare capacity. Reported separately from the dense index.
+    /// Logical graph/evidence/input payload length, excluding duplicated map
+    /// indexing keys, containers, allocator headers and spare capacity.
+    /// Reported separately from the dense index.
     pub fn payload_bytes(&self) -> usize {
         let graph: usize = self
             .nodes

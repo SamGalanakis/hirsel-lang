@@ -86,8 +86,9 @@ content-change assertions remain necessary.
 
 `IndexStats.payload_bytes` counts retained dense reverse-edge, SCC-membership
 and BFS successor array payload only. `Snapshot::payload_bytes` separately
-counts owned byte/string data and evidence payload. Both exclude container and
-allocator overhead/spare capacity; neither is a total-memory or peak-RSS claim.
+counts logical graph/input byte and evidence payload. Duplicated map indexing
+keys are excluded, as are containers, allocator overhead and spare capacity;
+neither metric is a total-memory or peak-RSS claim.
 The index is rebuilt for each explicit pair: update cost equals reconstruction,
 not a claimed engine incremental update. The ignored `shadow_measurement` test
 provides index, interpreter, setup and native modes for capped instruction probes.
@@ -129,7 +130,7 @@ graphs solely for this use loses at this scale. Existing resident products could
 change the accounting, but require measured integration and completeness evidence.
 
 Each real pure graph has 6 nodes, 13 edges and 6 SCCs. The two sides each report
-344 bytes of retained dense index payload and 8,641 bytes of owned graph,
+344 bytes of retained dense index payload and 8,641 bytes of logical graph,
 evidence and input payload, with the exclusions stated above. Observed scoped
 peak was 21 MiB for the pure modes and 77 MiB for the first native matrix run,
 under the unchanged 4 GiB cap. These peaks include the harness, and are not index
