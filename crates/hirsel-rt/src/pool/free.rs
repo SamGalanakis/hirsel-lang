@@ -21,7 +21,7 @@ unsafe impl Send for Image {}
 
 pub(crate) struct Frame {
     notification: Notification<Image>,
-    owner: AtomicU32,
+    owner: AtomicUsize,
     saved: AtomicBool,
 }
 
@@ -95,18 +95,30 @@ pub(super) struct Dispatch {
     count: Arc<Count>,
 }
 
-fn owner_word(owner: Owner) -> u32 {
+fn owner_word(owner: Owner) -> usize {
     match owner {
         Owner::Any => 0,
         Owner::Home => 1,
-        Owner::Pool(slot) => u32::from(slot) + 2,
+        Owner::Pool(slot) => (usize::from(slot) << 2) | 2,
+        Owner::Compute(address) => {
+            assert_eq!(address & 3, 0);
+            address | 3
+        }
     }
 }
-fn word_owner(owner: u32) -> Owner {
-    match owner {
-        0 => Owner::Any,
-        1 => Owner::Home,
-        slot => Owner::Pool((slot - 2) as u16),
+fn word_owner(owner: usize) -> Owner {
+    match owner & 3 {
+        0 => {
+            assert_eq!(owner, 0);
+            Owner::Any
+        }
+        1 => {
+            assert_eq!(owner, 1);
+            Owner::Home
+        }
+        2 => Owner::Pool((owner >> 2) as u16),
+        3 => Owner::Compute(owner & !3),
+        _ => unreachable!(),
     }
 }
 
@@ -215,7 +227,7 @@ pub(crate) unsafe fn schedule_saved(run: *mut RunShared, task: u32, owner: Owner
             assert!(!(*ctx).task_sp.is_null(), "a prepared task has a stack");
             let frame = Arc::new(Frame {
                 notification,
-                owner: AtomicU32::new(owner_word(owner)),
+                owner: AtomicUsize::new(owner_word(owner)),
                 saved: AtomicBool::new(true),
             });
             *slot = Some(frame.clone());
@@ -259,6 +271,7 @@ fn publish(execs: &Execs, saved: Saved, yielded: bool, idle: bool) {
             let to = match owner {
                 Owner::Home => Arc::as_ptr(&execs.home),
                 Owner::Pool(slot) => pool_exec(execs, slot),
+                Owner::Compute(address) => std::ptr::with_exposed_provenance(address),
                 Owner::Any => unreachable!(),
             };
             // SAFETY: topology retains every destination until shutdown.

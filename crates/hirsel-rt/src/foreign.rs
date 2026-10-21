@@ -70,8 +70,9 @@ const REENTERED: u64 = 1 << 4;
 const POOLED: u64 = 1 << 5;
 /// The call moved its task to the home thread, at width > 1 (`crate::tasks::to_home`).
 const HOMED: u64 = 1 << 6;
-const HOW: u64 = ENTERED | REENTERED | POOLED | HOMED;
-const _: () = assert!(FOREIGN_PACKAGE_SHIFT >= 7 && FOREIGN_BLOCKING & HOW == 0);
+const COMPUTE_PINNED: u64 = 1 << 7;
+const HOW: u64 = ENTERED | REENTERED | POOLED | HOMED | COMPUTE_PINNED;
+const _: () = assert!(FOREIGN_PACKAGE_SHIFT >= 8 && FOREIGN_BLOCKING & HOW == 0);
 
 // Caller-owned storage in hirsel_rt_v2.h, transcribed in runtime_abi.
 const _: () = assert!(std::mem::size_of::<Interval>() == FOREIGN_SCOPE_BYTES);
@@ -171,6 +172,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_enter(
         let slot = unsafe { crate::tasks::to_pool(&mut *ctx, site) };
         word |= POOLED | u64::from(slot) << 48;
     }
+    if !nested && crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::foreign::pin(ctx)
+    {
+        word |= COMPUTE_PINNED;
+    }
     // C holds no compute permit. Nested calls reacquire on return so a callback's
     // Hirsel code is accounted even when it makes another synchronous extern call.
     crate::pool::release_permit(ctx);
@@ -216,6 +221,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_leave(previous: *const c_void) {
             crate::stop::check(ctx, crate::stop::observe(ctx));
             crate::tasks::from_home(&mut *ctx);
         }
+    }
+    if interval.word & COMPUTE_PINNED != 0 {
+        crate::tasks::ordered::foreign::unpin_compute(ctx);
     }
     // The call returned to a supported boundary. A host stop ends it here;
     // otherwise ordinary Hirsel code takes the process permit again.

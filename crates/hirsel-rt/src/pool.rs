@@ -62,6 +62,9 @@ pub(crate) enum Owner {
     Home,
     /// Pool slot `0`'s thread, during a blocking foreign interval.
     Pool(u16),
+    /// This exact compute exec, whose address the topology retains through shutdown.
+    /// A worker index is insufficient: growth may reuse a retiring worker's index.
+    Compute(usize),
 }
 
 /// What an exec's thread is.
@@ -127,6 +130,9 @@ pub(crate) struct Exec {
     active: Cell<Option<free::Active>>,
     leaving: Cell<Option<free::Leave>>,
     ready_epoch: AtomicU64,
+    /// Foreign frames may suspend here, but may never resume on another thread.
+    foreign_frames: AtomicU32,
+    exit_pending: Cell<bool>,
 }
 
 // SAFETY: the cells are touched only by the exec's own thread while it runs.
@@ -156,6 +162,8 @@ impl Exec {
             active: Cell::new(None),
             leaving: Cell::new(None),
             ready_epoch: AtomicU64::new(0),
+            foreign_frames: AtomicU32::new(0),
+            exit_pending: Cell::new(false),
         })
     }
 
@@ -644,6 +652,27 @@ pub(crate) fn compute_index() -> Option<u16> {
     }
 }
 
+/// Pin a foreign interval to its caller's compute exec. Only this thread may
+/// begin/end a pin; the count is atomic because resize may request its exit.
+/// Home and Pool already have exact owner routes.
+pub(crate) fn pin_foreign_compute() -> Option<Owner> {
+    let exec = own_exec();
+    if exec.is_null() || !matches!(unsafe { (*exec).kind }, Kind::Compute(_)) {
+        return None;
+    }
+    unsafe { (*exec).foreign_frames.fetch_add(1, Ordering::AcqRel) };
+    Some(Owner::Compute(exec.expose_provenance()))
+}
+
+pub(crate) fn unpin_foreign_compute(owner: Owner) {
+    let Owner::Compute(address) = owner else {
+        fault("a foreign compute pin lost its owner");
+    };
+    let exec = own_exec();
+    assert_eq!(exec.expose_provenance(), address);
+    assert!(unsafe { (*exec).foreign_frames.fetch_sub(1, Ordering::AcqRel) } > 0);
+}
+
 /// Whether `run` runs its tasks on compute workers beside its home thread (width > 1).
 #[inline]
 pub(crate) fn wide(run: &RunShared) -> bool {
@@ -723,6 +752,7 @@ pub(crate) fn target(ctx: *mut TaskCtx, owner: Owner, last: Option<u16>) -> Opti
     let to = match owner {
         Owner::Home => Arc::as_ptr(&execs.home),
         Owner::Pool(slot) => pool_exec(execs, slot),
+        Owner::Compute(address) => std::ptr::with_exposed_provenance(address),
         Owner::Any if compute.active.is_empty() => Arc::as_ptr(&execs.home),
         Owner::Any => {
             // SAFETY: the calling thread's exec lives while it serves the run.
@@ -941,6 +971,10 @@ unsafe fn serve(run: *mut RunShared, exec: &Exec) -> bool {
     unsafe { post_deferred(run, exec) };
     unsafe { free::saved(run, exec) };
     let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+    if exec.exit_pending.get() && exec.foreign_frames.load(Ordering::Acquire) == 0 {
+        free::retire(execs, exec);
+        return false;
+    }
     let (post, queued) = if execs.dispatch.get().is_none() {
         exec.take()
     } else {
@@ -963,8 +997,18 @@ unsafe fn serve(run: *mut RunShared, exec: &Exec) -> bool {
     };
     match post {
         Post::Exit => {
-            free::retire(execs, exec);
-            false
+            // A resize may have posted Exit before the running segment pinned
+            // itself. Its callbacks must still use this idle stack and thread.
+            // Stop abandons saved foreign frames, so shutdown need not wait.
+            if exec.foreign_frames.load(Ordering::Acquire) != 0
+                && unsafe { (*run).control.stopped().is_none() }
+            {
+                exec.exit_pending.set(true);
+                true
+            } else {
+                free::retire(execs, exec);
+                false
+            }
         }
         Post::Wake => true,
         Post::Call(call) => {

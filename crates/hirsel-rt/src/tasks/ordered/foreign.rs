@@ -8,6 +8,27 @@ pub(crate) fn enter(ctx: *mut TaskCtx) -> Stopped<()> {
     Ok(())
 }
 
+/// Pin only the outer interval. Nested calls share that interval's owner.
+pub(crate) fn pin(ctx: *mut TaskCtx) -> bool {
+    let Some(owner) = crate::pool::pin_foreign_compute() else {
+        return false;
+    };
+    let s = scheduler(ctx);
+    let me = s.current;
+    let row = s.task(me);
+    unpin(row);
+    assert_eq!(row.owner, Owner::Any);
+    row.owner = owner;
+    true
+}
+
+pub(crate) fn unpin_compute(ctx: *mut TaskCtx) {
+    let s = scheduler(ctx);
+    let me = s.current;
+    let owner = std::mem::replace(&mut s.task(me).owner, Owner::Any);
+    crate::pool::unpin_foreign_compute(owner);
+}
+
 pub(crate) fn gate_enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<bool> {
     engine::at_head(ctx)?;
     let s = scheduler(ctx);
@@ -162,6 +183,134 @@ mod tests {
             assert_eq!(outcome.pending, 0);
         }
     }
+    #[test]
+    fn caller_thread_callbacks_keep_their_exec_through_shrink_and_regrowth() {
+        use std::sync::atomic::Ordering;
+        for width in [2, 4, 8] {
+            for dispatch in [
+                FOREIGN_THREADS_ANY,
+                FOREIGN_THREADS_SERIAL | (7 << FOREIGN_PACKAGE_SHIFT),
+            ] {
+                for exit_before_entry in [false, true] {
+                    let mut run = crate::host::BodyRun::new(width, true);
+                    unsafe { run.use_physical_dispatch() };
+                    let outcome = run.run(
+                        |ctx| unsafe {
+                            engine::enable(ctx, Policy::admit(&Default::default(), None))
+                        },
+                        move |ctx| unsafe {
+                            // Choose a worker that shrink will remove. The test dispatcher
+                            // normally migrates on every explicit migration boundary.
+                            while crate::pool::compute_index() == Some(0) {
+                                engine::migrate(ctx).unwrap();
+                            }
+                            if exit_before_entry {
+                                (*ctx).run_ref().control.width.store(1, Ordering::Release);
+                                // Queue retirement without transferring this running frame.
+                                let _ = crate::pool::target(ctx, Owner::Any, None);
+                            }
+                            let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                            hirsel_rt_v2_foreign_enter(
+                                ctx,
+                                0,
+                                interval.as_mut_ptr().cast(),
+                                dispatch,
+                            );
+                            let thread = std::thread::current().id();
+                            let owner = scheduler(ctx).task((*ctx).task_id).owner;
+                            assert!(matches!(owner, Owner::Compute(_)));
+                            assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                            // Resize queues Exit while this task is still running.
+                            // Its next saved callback must defer that exit.
+                            (*ctx).run_ref().control.width.store(1, Ordering::Release);
+                            engine::migrate(ctx).unwrap();
+                            for _ in 0..8 {
+                                let mut canceled = 99;
+                                assert_eq!(
+                                    hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
+                                    STATUS_OK
+                                );
+                                assert_eq!(std::thread::current().id(), thread);
+                                assert_eq!(scheduler(ctx).task((*ctx).task_id).owner, owner);
+                            }
+                            // Growth can reuse the old numeric worker index. Routing
+                            // must retain the original exec, not select its replacement.
+                            (*ctx)
+                                .run_ref()
+                                .control
+                                .width
+                                .store(width, Ordering::Release);
+                            engine::migrate(ctx).unwrap();
+                            let mut nested = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                            hirsel_rt_v2_foreign_enter(
+                                ctx,
+                                0,
+                                nested.as_mut_ptr().cast(),
+                                dispatch | FOREIGN_BLOCKING,
+                            );
+                            let mut canceled = 99;
+                            assert_eq!(
+                                hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
+                                STATUS_OK
+                            );
+                            assert_eq!(std::thread::current().id(), thread);
+                            assert_eq!(scheduler(ctx).task((*ctx).task_id).owner, owner);
+                            hirsel_rt_v2_foreign_leave(nested.as_ptr().cast());
+                            assert_eq!(scheduler(ctx).task((*ctx).task_id).owner, owner);
+                            hirsel_rt_v2_callback_leave(ctx);
+                            hirsel_rt_v2_foreign_leave(interval.as_ptr().cast());
+                            assert_eq!(scheduler(ctx).task((*ctx).task_id).owner, Owner::Any);
+                            engine::migrate(ctx).unwrap();
+                            assert_ne!(std::thread::current().id(), thread);
+                            STATUS_OK
+                        },
+                    );
+                    assert_eq!(outcome.ended, Ok(STATUS_OK));
+                    assert_eq!(outcome.pending, 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_stop_abandons_a_saved_callback_on_a_pinned_retiring_worker() {
+        use std::sync::atomic::Ordering;
+        for width in [2, 4, 8] {
+            let mut run = crate::host::BodyRun::new(width, true);
+            unsafe { run.use_physical_dispatch() };
+            let control = run.control();
+            let outcome = run.run(
+                |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+                move |ctx| unsafe {
+                    while crate::pool::compute_index() == Some(0) {
+                        engine::migrate(ctx).unwrap();
+                    }
+                    let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                    hirsel_rt_v2_foreign_enter(
+                        ctx,
+                        0,
+                        interval.as_mut_ptr().cast(),
+                        FOREIGN_THREADS_ANY,
+                    );
+                    assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                    (*ctx).run_ref().control.width.store(1, Ordering::Release);
+                    engine::migrate(ctx).unwrap();
+                    let mut canceled = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
+                        STATUS_OK
+                    );
+                    // Stop at a supported callback boundary. No C leave is
+                    // required to release the pending worker retirement.
+                    control.stop();
+                    hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0);
+                    panic!("a stopped foreign callback resumed");
+                },
+            );
+            assert_eq!(outcome.ended, Err(crate::stop::Stop::Requested));
+        }
+    }
+
     #[derive(Default)]
     struct GateProbe {
         allow: std::sync::atomic::AtomicBool,
