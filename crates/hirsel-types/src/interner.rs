@@ -50,6 +50,7 @@ pub(crate) struct Entry {
     pub(crate) shape: OnceLock<TypeId>,
     pub(crate) contract: OnceLock<TypeId>,
     pub(crate) actual_key: OnceLock<Option<Arc<str>>>,
+    pub(crate) rewrite_features: OnceLock<u8>,
 }
 impl Entry {
     fn new(row: Type) -> Self {
@@ -61,6 +62,7 @@ impl Entry {
             shape: OnceLock::new(),
             contract: OnceLock::new(),
             actual_key: OnceLock::new(),
+            rewrite_features: OnceLock::new(),
         }
     }
 }

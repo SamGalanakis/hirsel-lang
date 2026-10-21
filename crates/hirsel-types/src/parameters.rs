@@ -4,6 +4,10 @@ type IdMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
 use crate::*;
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+thread_local! { static REWRITE_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+static FORCE_FULL_REWRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
 /// Rebuild a rooted graph while visiting parameter references with their binder
 /// depth. Root value qualifiers are outside a FunctionType's binder; its parameter,
 /// result, error, authority and uses rows are inside. Shared DAG edges at different
@@ -206,32 +210,119 @@ pub fn erase_comparison_crossing(store: &TypeInterner, root: TypeId) -> Result<T
     })
 }
 
+const BRANDS: u8 = 1;
+const RELATIONS: u8 = 2;
+const AUTHORITIES: u8 = 4;
+const CAPTURES: u8 = 8;
+const ALL_FEATURES: u8 = u8::MAX;
+
+/// Pure reachability summaries, like rustc15c1044 type_ir/flags.rs:5-23
+/// and middle/ty/erase_regions.rs:26-34: skip a rewrite when its input
+/// cannot contain any selected feature. Immutable rows share this summary.
+/// Image forward references require lazy computation. Invalid/recovery graphs
+/// conservatively retain the original walk and its first-error ordering.
+fn rewrite_features(store: &TypeInterner, root: TypeId) -> u8 {
+    #[cfg(test)]
+    if FORCE_FULL_REWRITE.with(std::cell::Cell::get) {
+        return ALL_FEATURES;
+    }
+    let cached = |id| {
+        store
+            .entry(id)
+            .and_then(|e| e.rewrite_features.get())
+            .copied()
+    };
+    if let Some(flags) = cached(root) {
+        return flags;
+    }
+    if !store.valid(root) {
+        return ALL_FEATURES;
+    }
+    let known = |authority: &AuthoritySummary| matches!(authority, AuthoritySummary::Known(terms) if !terms.is_empty());
+    let mut pending = vec![(root, false)];
+    while let Some((id, exit)) = pending.pop() {
+        if cached(id).is_some() {
+            continue;
+        }
+        let entry = store.entry(id).expect("a valid row");
+        let row = &entry.row;
+        if !exit {
+            pending.push((id, true));
+            pending.extend(
+                row.kind
+                    .graph_edges()
+                    .into_iter()
+                    .rev()
+                    .map(|edge| (edge.ty, false)),
+            );
+            continue;
+        }
+        let mut flags = 0;
+        if !row.brand.alternatives.is_empty() {
+            flags |= BRANDS;
+        }
+        if !row.modes.relation.is_global() {
+            flags |= RELATIONS;
+        }
+        match &row.erased_captures {
+            Some(ErasedCaptures::FromArguments(_)) => flags |= CAPTURES,
+            Some(ErasedCaptures::Known(authority)) if known(authority) => flags |= AUTHORITIES,
+            _ => (),
+        }
+        if let TypeKind::Function(f) = &row.kind
+            && (known(&f.authority) || matches!(&f.uses, Uses::Only(authority) if known(authority)))
+        {
+            flags |= AUTHORITIES;
+        }
+        for edge in row.kind.graph_edges() {
+            flags |= cached(edge.ty).expect("child summary before parent");
+        }
+        let _ = entry.rewrite_features.set(flags);
+    }
+    cached(root).expect("root summary completed")
+}
+
 fn rewrite_parameter_graph(
     store: &TypeInterner,
     root: TypeId,
+    map: impl FnMut(TypeId, &mut Type, u32) -> Result<(), GraphError>,
+) -> Result<TypeId, GraphError> {
+    rewrite_parameter_graph_for(store, root, ALL_FEATURES, map)
+}
+
+fn rewrite_parameter_graph_for(
+    store: &TypeInterner,
+    root: TypeId,
+    features: u8,
     mut map: impl FnMut(TypeId, &mut Type, u32) -> Result<(), GraphError>,
 ) -> Result<TypeId, GraphError> {
     fn walk(
         store: &TypeInterner,
         id: TypeId,
         depth: u32,
+        features: u8,
         map: &mut impl FnMut(TypeId, &mut Type, u32) -> Result<(), GraphError>,
         memo: &mut IdMap<(TypeId, u32), TypeId>,
         active: &mut IdSet<TypeId>,
     ) -> Result<TypeId, GraphError> {
+        if features != ALL_FEATURES && rewrite_features(store, id) & features == 0 {
+            return Ok(id);
+        }
         if let Some(id) = memo.get(&(id, depth)) {
             return Ok(*id);
         }
         if !active.insert(id) {
             return Err(GraphError::StructuralCycle(id));
         }
+        #[cfg(test)]
+        REWRITE_ROWS.with(|rows| rows.set(rows.get() + 1));
         let original = store.get(id).ok_or(GraphError::MissingType(id))?;
         let mut t = original.clone();
         map(id, &mut t, depth)?;
         let child_depth = depth + u32::from(matches!(t.kind, TypeKind::Function(_)));
         t.kind = t
             .kind
-            .try_map_edges(|id| walk(store, id, child_depth, map, memo, active))?;
+            .try_map_edges(|id| walk(store, id, child_depth, features, map, memo, active))?;
         active.remove(&id);
         let out = if &t == original { id } else { store.intern(t) };
         memo.insert((id, depth), out);
@@ -241,6 +332,7 @@ fn rewrite_parameter_graph(
         store,
         root,
         0,
+        features,
         &mut map,
         &mut IdMap::default(),
         &mut IdSet::default(),
@@ -379,7 +471,7 @@ fn instantiate_source_arguments(
         .map(|(p, a)| (*p, a.identity.clone()))
         .collect();
     let root = instantiate_origin_identities(store, root, &identities)?;
-    rewrite_parameter_graph(store, root, |_, t, depth| {
+    rewrite_parameter_graph_for(store, root, BRANDS | RELATIONS, |_, t, depth| {
         let mut alternatives = Vec::new();
         for origin in &t.brand.alternatives {
             if let OriginRoot::ArgumentBrand(p) = origin.root {
@@ -433,7 +525,7 @@ fn instantiate_origin_identities(
             o.fields.extend(fields);
         }
     }
-    rewrite_parameter_graph(store, root, |_, t, depth| {
+    rewrite_parameter_graph_for(store, root, BRANDS, |_, t, depth| {
         for o in &mut t.brand.alternatives {
             origin(o, depth, arguments);
         }
@@ -557,7 +649,7 @@ pub fn instantiate_parameter_authorities(
             )
         });
     }
-    rewrite_parameter_graph(store, root, |_, t, depth| {
+    rewrite_parameter_graph_for(store, root, AUTHORITIES, |_, t, depth| {
         if let Some(ErasedCaptures::Known(a)) = &mut t.erased_captures {
             summary(a, depth, arguments);
         }
@@ -605,7 +697,7 @@ pub fn instantiate_parameter_captures(
     root: TypeId,
     arguments: &BTreeMap<RelationPlace, CaptureProperties>,
 ) -> Result<TypeId, GraphError> {
-    rewrite_parameter_graph(store, root, |_, t, depth| {
+    rewrite_parameter_graph_for(store, root, CAPTURES, |_, t, depth| {
         let Some(ErasedCaptures::FromArguments(parameters)) = &t.erased_captures else {
             return Ok(());
         };
@@ -663,7 +755,7 @@ pub fn instantiate_allocation_targets(
     root: TypeId,
     arguments: &BTreeMap<ParameterRef, AllocationTarget>,
 ) -> Result<TypeId, GraphError> {
-    rewrite_parameter_graph(store, root, |_, t, depth| {
+    rewrite_parameter_graph_for(store, root, RELATIONS, |_, t, depth| {
         let heap = |r: &Reach| {
             let Reach::Place(Origin {
                 root: OriginRoot::Parameter(p),
@@ -705,7 +797,7 @@ pub fn map_brand_origins(
 /// Remove every brand of a type graph, nested rows included, leaving relation
 /// places, modes and shape.
 pub fn erase_brands(store: &TypeInterner, root: TypeId) -> Result<TypeId, GraphError> {
-    rewrite_parameter_graph(store, root, |_, row, _| {
+    rewrite_parameter_graph_for(store, root, BRANDS, |_, row, _| {
         row.brand = Brand::default();
         Ok(())
     })
@@ -736,33 +828,38 @@ fn map_origins(
     relations: bool,
     mut map: impl FnMut(&Origin, u32) -> Result<Origin, GraphError>,
 ) -> Result<TypeId, GraphError> {
-    rewrite_parameter_graph(store, root, |_, row, depth| {
-        if brands {
-            for origin in &mut row.brand.alternatives {
-                *origin = map(origin, depth)?;
+    rewrite_parameter_graph_for(
+        store,
+        root,
+        (u8::from(brands) * BRANDS) | (u8::from(relations) * RELATIONS),
+        |_, row, depth| {
+            if brands {
+                for origin in &mut row.brand.alternatives {
+                    *origin = map(origin, depth)?;
+                }
+                row.brand.alternatives.sort();
+                row.brand.alternatives.dedup();
             }
-            row.brand.alternatives.sort();
-            row.brand.alternatives.dedup();
-        }
-        if relations
-            && row
-                .modes
-                .relation
-                .reaches()
-                .iter()
-                .any(|r| matches!(r, Reach::Place(_)))
-        {
-            let mut reaches = Vec::new();
-            for r in row.modes.relation.reaches() {
-                reaches.push(match r {
-                    Reach::Place(origin) => Reach::Place(map(origin, depth)?),
-                    r => r.clone(),
-                });
+            if relations
+                && row
+                    .modes
+                    .relation
+                    .reaches()
+                    .iter()
+                    .any(|r| matches!(r, Reach::Place(_)))
+            {
+                let mut reaches = Vec::new();
+                for r in row.modes.relation.reaches() {
+                    reaches.push(match r {
+                        Reach::Place(origin) => Reach::Place(map(origin, depth)?),
+                        r => r.clone(),
+                    });
+                }
+                row.modes.relation = Relation::new(reaches);
             }
-            row.modes.relation = Relation::new(reaches);
-        }
-        Ok(())
-    })
+            Ok(())
+        },
+    )
 }
 
 /// Resolve a record field's sibling selectors from the supplied field identities.
@@ -789,4 +886,194 @@ pub fn instantiate_sibling_origins(
         actual.fields.extend(&origin.fields);
         Ok(actual)
     })
+}
+
+#[cfg(test)]
+mod rewrite_tests {
+    use super::*;
+
+    #[test]
+    fn irrelevant_call_rewrites_skip_unchanged_dags_and_preserve_error_order() {
+        let t = TypeInterner::new(None);
+        let mut root = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+        for _ in 0..128 {
+            root = t.intern(Type::with_kind(TypeKind::Tuple(vec![root, root].into())));
+        }
+        let before = REWRITE_ROWS.with(std::cell::Cell::get);
+        for _ in 0..5 {
+            assert_eq!(
+                instantiate_parameter_sources(&t, root, &BTreeMap::new(), &BTreeMap::new()),
+                Ok(root)
+            );
+            assert_eq!(
+                instantiate_allocation_targets(&t, root, &BTreeMap::new()),
+                Ok(root)
+            );
+            assert_eq!(
+                instantiate_parameter_authorities(&t, root, &BTreeMap::new()),
+                Ok(root)
+            );
+            assert_eq!(
+                instantiate_parameter_captures(&t, root, &BTreeMap::new()),
+                Ok(root)
+            );
+        }
+        assert_eq!(
+            REWRITE_ROWS.with(std::cell::Cell::get),
+            before,
+            "irrelevant call rewrites must not revisit an unchanged DAG"
+        );
+
+        let origin = Origin {
+            root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
+            fields: vec![].into(),
+        };
+        let mut broken = Type::with_kind(TypeKind::Box(TypeId::DANGLING));
+        broken.brand.alternatives = vec![origin].into();
+        let broken = t.intern(broken);
+        let expected = GraphError::UnboundParameter(ParameterRef::bound(ParamId(0)));
+        assert_eq!(
+            map_type_origins(&t, broken, |_, _| Err(expected.clone())),
+            Err(expected),
+            "the root callback error precedes a missing child"
+        );
+        assert_eq!(
+            instantiate_parameter_captures(&t, broken, &BTreeMap::new()),
+            Err(GraphError::MissingType(TypeId::DANGLING))
+        );
+        let cycle = t.intern_graph(1, |ids| vec![Type::with_kind(TypeKind::Box(ids[0]))])[0];
+        assert_eq!(
+            instantiate_parameter_authorities(&t, cycle, &BTreeMap::new()),
+            Err(GraphError::StructuralCycle(cycle))
+        );
+        let recovery = t.intern(Type::with_kind(TypeKind::Error));
+        assert_eq!(
+            instantiate_parameter_captures(&t, recovery, &BTreeMap::new()),
+            Ok(recovery)
+        );
+    }
+}
+
+#[cfg(test)]
+mod feature_oracle_tests {
+    use super::*;
+    use crate::declarations::tests::path;
+
+    fn rewrites(t: &TypeInterner, root: TypeId) -> Vec<Result<TypeId, GraphError>> {
+        let actual = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U8)));
+        let parameter = ParameterRef::bound(ParamId(0));
+        let origin = Origin {
+            root: OriginRoot::Definition(path("actual")),
+            fields: vec![FieldId(1)].into(),
+        };
+        let arguments = [(
+            parameter,
+            OriginArgument {
+                identity: origin.clone(),
+                brand: Brand {
+                    alternatives: vec![origin.clone()].into(),
+                },
+                relation: Relation::place(origin.clone()),
+            },
+        )]
+        .into();
+        let capture = CaptureProperties::from_type(
+            t.row(actual),
+            AuthoritySummary::inert(),
+            Sendability::Sendable,
+        );
+        vec![
+            instantiate_parameter_sources(t, root, &arguments, &[(parameter, actual)].into()),
+            instantiate_allocation_targets(t, root, &[(parameter, AllocationTarget::Heap)].into()),
+            instantiate_parameter_authorities(
+                t,
+                root,
+                &[(parameter, AuthoritySummary::inert())].into(),
+            ),
+            instantiate_parameter_captures(
+                t,
+                root,
+                &[(
+                    RelationPlace {
+                        parameter,
+                        fields: vec![].into(),
+                    },
+                    capture,
+                )]
+                .into(),
+            ),
+            map_type_origins(t, root, |_, _| Ok(origin.clone())),
+            erase_brands(t, root),
+        ]
+    }
+
+    #[test]
+    fn feature_pruning_matches_full_rewrites_across_nested_and_invalid_graphs() {
+        let t = TypeInterner::new(None);
+        let plain = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U8)));
+        let mut roots = vec![plain, TypeId::DANGLING];
+        for bits in 0..32 {
+            let origin = Origin {
+                root: if bits & 16 == 0 {
+                    OriginRoot::Parameter(ParameterRef::bound(ParamId(0)))
+                } else {
+                    OriginRoot::ArgumentBrand(ParameterRef::bound(ParamId(0)))
+                },
+                fields: vec![].into(),
+            };
+            let mut row = Type::with_kind(TypeKind::Tuple(vec![plain, plain].into()));
+            if bits & 1 != 0 {
+                row.brand.alternatives = vec![origin.clone(), origin.clone()].into();
+            }
+            if bits & 2 != 0 {
+                row.modes.relation = Relation::place(origin);
+            }
+            if bits & 4 != 0 {
+                row.erased_captures = Some(ErasedCaptures::FromArguments(
+                    vec![RelationPlace {
+                        parameter: ParameterRef::bound(ParamId(0)),
+                        fields: vec![].into(),
+                    }]
+                    .into(),
+                ));
+            }
+            let child = t.intern(row);
+            let function = t.intern(Type::with_kind(TypeKind::Function(FunctionType {
+                state_promises: Default::default(),
+                generics: vec![].into(),
+                parameters: vec![].into(),
+                result: child,
+                error: Some(plain),
+                allocation: Allocation::MayAllocate,
+                authority: if bits & 8 != 0 {
+                    AuthoritySummary::Known(
+                        vec![AuthorityTerm::Parameter(ParameterRef::bound(ParamId(0)))].into(),
+                    )
+                } else {
+                    AuthoritySummary::inert()
+                },
+                uses: Uses::Unrestricted,
+                contracts: vec![].into(),
+                incomplete: false,
+                foreign: None,
+            })));
+            roots.extend([
+                child,
+                function,
+                t.intern(Type::with_kind(TypeKind::Tuple(
+                    vec![function, child, plain].into(),
+                ))),
+            ]);
+        }
+        roots.push(t.intern_graph(1, |ids| vec![Type::with_kind(TypeKind::Box(ids[0]))])[0]);
+        roots.push(t.intern(Type::with_kind(TypeKind::Box(TypeId::DANGLING))));
+        roots.push(t.intern(Type::with_kind(TypeKind::Error)));
+        for root in roots {
+            let pruned = rewrites(&t, root);
+            FORCE_FULL_REWRITE.with(|force| force.set(true));
+            let original = rewrites(&t, root);
+            FORCE_FULL_REWRITE.with(|force| force.set(false));
+            assert_eq!(pruned, original, "root {root:?}");
+        }
+    }
 }
