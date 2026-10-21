@@ -285,6 +285,27 @@ pub(crate) unsafe fn raise(ctx: *mut TaskCtx, stop: Stop) -> ! {
         eprintln!("hirsel-rt: a run stopped inside a foreign call ({stop:?}); the process ends");
         std::process::abort();
     }
+    // A speculative task's local stop cannot close an older turn's prefix.
+    // The cause remains owned on this stack while its prior commands retire.
+    // External stop requests already won the run control and bypass this gate.
+    let stop = if unsafe { (*ctx).run_ref().ordered_mode.load(Ordering::Acquire) }
+        && unsafe { (*ctx).run_ref().control.stopped().is_none() }
+        && stop != Stop::Requested
+    {
+        let role = unsafe { crate::tasks::role::Guard::new(ctx) };
+        let stop = match crate::tasks::ordered::engine::terminal(ctx) {
+            Ok(()) => stop,
+            Err(earlier) => earlier,
+        };
+        // Publish the selected cause before releasing the role. Otherwise
+        // another worker can observe Frontier::Stopped and replace it with
+        // a generic failure in the gap before this task requests its stop.
+        let stop = unsafe { (*ctx).run_ref().control.request_inside(stop) };
+        drop(role);
+        stop
+    } else {
+        stop
+    };
     // SAFETY: the context is live.
     let run = unsafe { (*ctx).run_ref() };
     if crate::pool::wide(run) {

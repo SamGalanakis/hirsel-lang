@@ -217,6 +217,11 @@ pub struct Frontier<P, R> {
 }
 
 impl<P, R> Frontier<P, R> {
+    /// A terminal transition or budget settlement has closed the retired prefix.
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.stopped
+    }
+
     pub fn new(root: TaskId, policy: Policy, settled: Settled) -> Self {
         let mut tasks = BTreeMap::new();
         tasks.insert(root, Task::queued());

@@ -440,6 +440,23 @@ pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
     }
 }
 
+/// A task-local terminal condition owns its native stack until promotion. Its
+/// existing log and stretch retire before the stop, just like an H boundary.
+/// A budget settlement that already closed Frontier keeps its original cause.
+/// No callback or diagnostic publication is allowed before this gate returns.
+pub(crate) fn terminal(ctx: *mut TaskCtx) -> Stopped<()> {
+    let frontier = driver(ctx)
+        .frontier
+        .as_ref()
+        .expect("restored terminal frontier");
+    if frontier.is_stopped() || frontier.head().is_none() {
+        return Ok(());
+    }
+    let (_, progress) = head_effect(ctx, "stop", || ((), Next::Stop))?;
+    assert_eq!(progress, Progress::Stopped);
+    Ok(())
+}
+
 struct HeadEffect<'a, 'b, F, T> {
     objects: &'a mut Objects<'b>,
     effect: Option<F>,
