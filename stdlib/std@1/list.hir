@@ -223,22 +223,31 @@ fn partition_range[T](
     } else {
       0u64
     }
-    for k in 0u64..take_left {
-      let misplaced = if by(xs[left + k], xs[begin]) >= 0 {
-        1u64
-      } else {
-        0u64
+    // The unique list and pivot are only borrowed during classification.
+    // End the pivot loan before any swap; callbacks remain ordinary fallible
+    // calls in left-then-right order. Empty blocks perform no pivot read.
+    if take_left != 0 {
+      let pivot_value = xs[begin]
+      for k in 0u64..take_left {
+        let misplaced = if by(xs[left + k], pivot_value) >= 0 {
+          1u64
+        } else {
+          0u64
+        }
+        offsets_left = offsets_left | misplaced << k
       }
-      offsets_left = offsets_left | misplaced << k
     }
     left += take_left
-    for k in 0u64..take_right {
-      let misplaced = if by(xs[right - 1 - k], xs[begin]) < 0 {
-        1u64
-      } else {
-        0u64
+    if take_right != 0 {
+      let pivot_value = xs[begin]
+      for k in 0u64..take_right {
+        let misplaced = if by(xs[right - 1 - k], pivot_value) < 0 {
+          1u64
+        } else {
+          0u64
+        }
+        offsets_right = offsets_right | misplaced << k
       }
-      offsets_right = offsets_right | misplaced << k
     }
     right -= take_right
     while offsets_left != 0 && offsets_right != 0 {

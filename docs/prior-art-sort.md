@@ -93,3 +93,27 @@ independent controls. Added record and failure fixtures pin a 129-element
 pre-change equal-key permutation and the first of two distinct callback failure
 sites. The permutation pin is a regression control for this storage change,
 not a new public stability guarantee.
+
+### Partition pivot loans
+
+Block classification now borrows `xs[begin]` once per nonempty left or right
+block, following libc++'s borrowed `__pivot` parameter in the same pinned
+`sort.h:372–399`. The loan's scope ends before the first ownership-preserving
+swap. All element index arithmetic, comparisons, bitmap updates and swaps keep
+their original order. Empty blocks do not read the pivot.
+
+This needs no callback-purity promise. `xs` enters through exclusive unique
+storage; its elements are borrowed read-only by the comparator (OWN-1/OWN-3).
+No swap or other list mutation occurs within either classification block.
+The pivot index is the nonempty range's `begin`, and every scan index lies
+strictly above it and below `end <= len`. Hoisting that checked pivot read
+therefore cannot expose a bounds failure before a previously observable
+callback failure. Ordinary comparator failures still propagate at their
+original comparator source sites. Generic elements are borrowed, never copied
+or moved into a temporary owner. Stable sort and the public signatures are
+unchanged.
+
+LLVM can remove the repeated pivot bounds check and address calculation, and
+vectorize a concrete infallible integer comparison where its existing rules
+permit it. Fallible or generic callbacks retain their ordinary call sequence;
+no compiler, IR, runtime or callback contract changes are involved.
