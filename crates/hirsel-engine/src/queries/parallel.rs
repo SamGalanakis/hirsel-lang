@@ -246,7 +246,6 @@ impl Worker<'_> {
             done.phase = stage.unavailable.unwrap_or(done.phase);
         }
         let product = Product::Computed(stage);
-        done.result = product.result();
         done.modes = Some(product);
         done
     }
@@ -342,9 +341,68 @@ impl QueryEngine {
     /// jobs::map; only preparation and memo publication mutate the engine.
     /// Declarations that execute generators keep their ordinary serial S1 path.
     pub fn mode_definitions(&mut self, definitions: Vec<DefPath>, jobs: Jobs) -> Vec<ModeResult> {
+        let mut outputs = Vec::with_capacity(definitions.len());
+        let mut frontier = Vec::new();
+        for definition in definitions {
+            self.last_phase = None;
+            self.unavailable = None;
+            match self
+                .materialize(&definition)
+                .and_then(|_| self.snapshot(&definition))
+            {
+                Ok(syntax) if generation::generator(&syntax).is_none() => frontier.push(definition),
+                state => {
+                    let materialization_phase = self.unavailable.or(self.last_phase);
+                    let materialization_failed = state.is_err();
+                    // Generators can change source/signature inputs. Publish
+                    // the preceding frontier before serial S1 work, then build
+                    // a fresh immutable context for the following frontier.
+                    outputs
+                        .extend(self.mode_source_definitions(std::mem::take(&mut frontier), jobs));
+                    self.last_phase = None;
+                    self.unavailable = None;
+                    let result = state.and_then(|_| self.mode_query(&definition));
+                    let phase = if materialization_failed {
+                        materialization_phase
+                    } else if result.is_ok() {
+                        Some(QueryKind::Modes)
+                    } else {
+                        self.unavailable.or(self.last_phase)
+                    };
+                    outputs.push(ModeResult {
+                        definition,
+                        result,
+                        phase,
+                    });
+                }
+            }
+        }
+        outputs.extend(self.mode_source_definitions(frontier, jobs));
+        if let Some(last) = outputs.last() {
+            self.last_phase = last.phase;
+            self.unavailable = if matches!(last.result, Err(QueryError::NotImplemented)) {
+                last.phase
+            } else {
+                None
+            };
+        }
+        outputs
+    }
+    fn mode_source_definitions(
+        &mut self,
+        definitions: Vec<DefPath>,
+        jobs: Jobs,
+    ) -> Vec<ModeResult> {
         let mut outputs: Vec<Option<ModeResult>> = (0..definitions.len()).map(|_| None).collect();
         let mut sources = Vec::new();
+        let mut first = BTreeMap::new();
+        let mut duplicates = Vec::new();
         for (index, definition) in definitions.into_iter().enumerate() {
+            if let Some(&previous) = first.get(&definition) {
+                duplicates.push((index, previous));
+                continue;
+            }
+            first.insert(definition.clone(), index);
             self.last_phase = None;
             self.unavailable = None;
             let syntax = self
@@ -372,15 +430,14 @@ impl QueryEngine {
             }
         }
         if sources.is_empty() {
+            for (index, previous) in duplicates {
+                outputs[index] = outputs[previous].clone();
+            }
             return outputs
                 .into_iter()
                 .map(|result| result.expect("one outcome per input"))
                 .collect();
         }
-        let saved_phase = (self.last_phase, self.unavailable);
-        let snapshot = self.signature_snapshot();
-        let declarations = self.frozen_declarations();
-        (self.last_phase, self.unavailable) = saved_phase;
         let mut tasks = Vec::new();
         for (index, definition, syntax) in sources {
             let id = DefId::intern(&definition);
@@ -420,16 +477,39 @@ impl QueryEngine {
             } else {
                 None
             };
-            let signature = self.signature_output(&definition);
             tasks.push(Task {
                 index,
                 definition,
                 syntax,
-                signature,
+                signature: Err(QueryError::NotImplemented),
                 resolution,
                 checked,
                 text,
             });
+        }
+        // Validation of dirty predecessors may normalize a signature. Freeze
+        // only afterwards, and never retry a failed header after freezing: a
+        // transient provider failure must not mix two universes in one task.
+        let saved_phase = (self.last_phase, self.unavailable);
+        let snapshot = self.signature_snapshot();
+        let declarations = self.frozen_declarations();
+        (self.last_phase, self.unavailable) = saved_phase;
+        for task in &mut tasks {
+            let id = DefId::intern(&task.definition);
+            task.signature = match snapshot.signature(id) {
+                Some(Ok(signature)) => self
+                    .signatures
+                    .get(&id)
+                    .and_then(|entry| entry.result().ok())
+                    .or_else(|| {
+                        self.image_signature(&task.definition)
+                            .map(|image| image.output.clone())
+                    })
+                    .map(Ok)
+                    .unwrap_or_else(|| Ok(Arc::new(output(signature.clone())))),
+                Some(Err(error)) => Err(error.clone()),
+                None => Err(QueryError::NotImplemented),
+            };
         }
         let completed = {
             let citations = self.citation_source();
@@ -513,12 +593,18 @@ impl QueryEngine {
                 phase: Some(done.phase),
             });
         }
+        for (index, previous) in duplicates {
+            outputs[index] = outputs[previous].clone();
+        }
         let outputs: Vec<_> = outputs
             .into_iter()
             .map(|result| result.expect("one outcome per input"))
             .collect();
         if !self.execution_stack.is_empty() {
             for output in &outputs {
+                if output.phase != Some(QueryKind::Modes) {
+                    continue;
+                }
                 let reads = self
                     .modes
                     .get(&DefId::intern(&output.definition))

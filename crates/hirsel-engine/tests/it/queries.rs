@@ -975,7 +975,7 @@ fn frozen_frontier_preserves_reads_failures_and_warm_hits() {
                 let text = "fn a () { 1 }\nfn b () { 2 }\n";
                 parse(&mut serial, text);
                 parse(&mut parallel, text);
-                let paths = vec![path("b"), path("a")];
+                let paths = vec![path("b"), path("a"), path("b")];
                 let expected: Vec<_> = paths
                     .iter()
                     .map(|path| serial.mode_definition(path))
@@ -1072,6 +1072,112 @@ fn frozen_frontier_reports_each_missing_phase_and_retries_it() {
                     assert!(engine.recompute_count(&p, missing) >= 2);
                 }
             }
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_runs_independent_checkers_concurrently() {
+    struct Together {
+        fake: Arc<dyn CheckerPhase>,
+        barrier: std::sync::Barrier,
+    }
+    impl CheckerPhase for Together {
+        fn check(
+            &self,
+            t: &TypeInterner,
+            m: &TypeMemo,
+            syntax: Arc<ItemSyntax>,
+            resolution: Resolution,
+            signature: &Signature,
+            provider: &mut dyn SignatureProvider,
+        ) -> Result<QueryOutput<TypedBody>, QueryError> {
+            // Exactly two tasks/workers: a serialized implementation cannot
+            // satisfy this rendezvous. No wall-clock threshold is involved.
+            self.barrier.wait();
+            self.fake
+                .check(t, m, syntax, resolution, signature, provider)
+        }
+    }
+    with_compiler_stack(|| {
+        let (mut engine, _) = make_engine(None, false);
+        let fake = engine.adapters.checker.take().unwrap();
+        engine.adapters.checker = Some(Arc::new(Together {
+            fake,
+            barrier: std::sync::Barrier::new(2),
+        }));
+        parse(&mut engine, "fn a () { 1 }\nfn b () { 2 }\n");
+        let results = engine.mode_definitions(
+            vec![path("b"), path("a")],
+            hirsel_intern::jobs::Jobs::new(2),
+        );
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.result.is_ok()));
+    });
+}
+
+#[test]
+fn frozen_frontier_retries_operational_headers_only_in_the_next_snapshot() {
+    struct Flaky {
+        original: Arc<dyn SignaturePhase>,
+        calls: std::sync::atomic::AtomicU32,
+    }
+    impl SignaturePhase for Flaky {
+        fn signature(
+            &self,
+            t: &TypeInterner,
+            m: &TypeMemo,
+            syntax: Arc<ItemSyntax>,
+            d: &Declarations,
+            p: &mut PhaseProducts,
+            provider: &mut dyn SignatureProvider,
+        ) -> Result<QueryOutput<Signature>, QueryError> {
+            if syntax.item.definition.0.name == "a"
+                && self
+                    .calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    == 0
+            {
+                return Err(QueryError::Operational(OperationalFailure {
+                    operation: "snapshot signature".into(),
+                    message: "temporarily unavailable".into(),
+                }));
+            }
+            self.original.signature(t, m, syntax, d, p, provider)
+        }
+    }
+    with_compiler_stack(|| {
+        for jobs in [1, 2, 8] {
+            let (mut engine, _) = make_engine(None, false);
+            let adapter = Arc::new(Flaky {
+                original: engine.adapters.signature.take().unwrap(),
+                calls: std::sync::atomic::AtomicU32::new(0),
+            });
+            engine.adapters.signature = Some(adapter.clone());
+            parse(&mut engine, "fn a () { 1 }\nfn b () { 2 }\n");
+            let results = engine.mode_definitions(
+                vec![path("b"), path("a")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(
+                results
+                    .iter()
+                    .all(|r| matches!(r.result, Err(QueryError::Operational(_))))
+            );
+            assert_eq!(
+                adapter.calls.load(std::sync::atomic::Ordering::Relaxed),
+                1,
+                "no post-freeze retry"
+            );
+            for p in [path("a"), path("b")] {
+                assert!(engine.memo_reads(&p, QueryKind::Modes).is_none());
+            }
+            let results = engine.mode_definitions(
+                vec![path("b"), path("a")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(results.iter().all(|r| r.result.is_ok()));
+            assert_eq!(adapter.calls.load(std::sync::atomic::Ordering::Relaxed), 2);
         }
     });
 }

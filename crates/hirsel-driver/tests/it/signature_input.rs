@@ -429,3 +429,147 @@ fn frozen_frontier_matches_serial_private_edits_and_tir() {
         }
     });
 }
+
+#[test]
+fn frozen_frontier_diagnostics_and_tir_are_identical_at_three_salts() {
+    fn run() -> String {
+        with_compiler_stack(|| {
+            use hirsel_intern::jobs::Jobs;
+            fn transcript(engine: &mut QueryEngine, results: Vec<ModeResult>) -> String {
+                let mut text = String::new();
+                let accepted = results.iter().all(|result| result.result.is_ok());
+                for result in results {
+                    text.push_str(&format!("{:?} {:?}\n", result.definition, result.phase));
+                    let diagnostics = match result.result {
+                        Ok(output) => {
+                            if accepted {
+                                let tir = engine.export_tir(&result.definition).unwrap();
+                                text.push_str(&tir);
+                            }
+                            output.diagnostics.clone()
+                        }
+                        Err(QueryError::Diagnostics(ds)) => ds,
+                        Err(error) => panic!("unexpected operational failure {error:?}"),
+                    };
+                    for diagnostic in diagnostics {
+                        text.push_str(&diagnostic.to_json(&engine.sources).to_string());
+                        text.push('\n');
+                    }
+                }
+                text
+            }
+            let programs = [
+                "fn id[T](take v: T) -> T { v }\nfn left() -> u64 { id(1u64) }\nfn right() -> u8 { id(2u8) }\n",
+                "pub opaque type Hidden: plain uses {} { value: u64 }\nfn make() -> Hidden { Hidden(value: 1) }\nfn read(v: Hidden) -> u64 { v.value }\n",
+                "fn bad() -> u64 { absent }\nfn good() -> u64 { 1 }\n",
+            ];
+            let mut all = String::new();
+            for source in programs {
+                let mut serial = QueryEngine::new(default_environment(), compiler_adapters());
+                let file = serial
+                    .sources
+                    .add("frozen-oracle.hir", source.into())
+                    .unwrap();
+                let parsed = serial.parse_file(file, &default_context()).unwrap();
+                let paths: Vec<_> = parsed
+                    .value
+                    .items
+                    .iter()
+                    .filter(|s| matches!(s.item.kind, hirsel_syntax::ItemKind::Function { .. }))
+                    .map(|s| s.item.definition.clone())
+                    .rev()
+                    .collect();
+                let expected: Vec<_> = paths
+                    .iter()
+                    .map(|path| {
+                        serial.last_phase = None;
+                        serial.unavailable = None;
+                        let result = serial.mode_definition(path).map(std::sync::Arc::new);
+                        ModeResult {
+                            definition: path.clone(),
+                            phase: serial
+                                .unavailable
+                                .or(serial.last_phase)
+                                .or(Some(QueryKind::Modes)),
+                            result,
+                        }
+                    })
+                    .collect();
+                let expected = transcript(&mut serial, expected);
+                for jobs in [1, 2, 8] {
+                    let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+                    let file = engine
+                        .sources
+                        .add("frozen-oracle.hir", source.into())
+                        .unwrap();
+                    engine.parse_file(file, &default_context()).unwrap();
+                    for _ in 0..2 {
+                        let results = engine.mode_definitions(paths.clone(), Jobs::new(jobs));
+                        assert_eq!(
+                            transcript(&mut engine, results),
+                            expected,
+                            "jobs {jobs}: {source}"
+                        );
+                    }
+                }
+                all.push_str(&expected);
+            }
+            all
+        })
+    }
+    let Some(outputs) = hirsel_intern::under_salts(
+        "signature_input::frozen_frontier_diagnostics_and_tir_are_identical_at_three_salts",
+        &[1, 2, 3],
+        run,
+    ) else {
+        return;
+    };
+    assert!(outputs[0].contains("(Export\n"));
+    assert!(outputs[0].contains("\"severity\":\"error\""));
+    assert!(outputs.iter().all(|output| output == &outputs[0]));
+}
+
+#[test]
+fn frozen_frontier_keeps_serial_generation_between_source_frontiers() {
+    with_compiler_stack(|| {
+        let source = "fn make() -> Result[Body[fn() -> u64 uses {}], String] uses {} { Ok(codegen.body(\"fn() -> u64 uses {} { 7 }\")) }\nfn first() -> u64 uses {} { 1 }\nfn generated() -> u64 uses {} = comptime make()\nfn last() -> u64 uses {} { generated() }\n";
+        for jobs in [1, 2, 8] {
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+            let file = engine
+                .sources
+                .add("parallel-generated.hir", source.into())
+                .unwrap();
+            engine.parse_file(file, &default_context()).unwrap();
+            let paths: Vec<_> = ["first", "generated", "last"]
+                .into_iter()
+                .map(|name| {
+                    let mut p = entry_path(&default_context());
+                    p.0.name = name.into();
+                    p
+                })
+                .collect();
+            let results =
+                engine.mode_definitions(paths.clone(), hirsel_intern::jobs::Jobs::new(jobs));
+            for result in results {
+                result.result.unwrap();
+            }
+            let mut serial = QueryEngine::new(default_environment(), compiler_adapters());
+            let file = serial
+                .sources
+                .add("parallel-generated.hir", source.into())
+                .unwrap();
+            serial.parse_file(file, &default_context()).unwrap();
+            for p in paths {
+                serial.mode_definition(&p).unwrap();
+                assert_eq!(
+                    serial.export_tir(&p).unwrap(),
+                    engine.export_tir(&p).unwrap()
+                );
+                assert_eq!(
+                    serial.memo_reads(&p, QueryKind::Modes),
+                    engine.memo_reads(&p, QueryKind::Modes)
+                );
+            }
+        }
+    });
+}

@@ -806,3 +806,14 @@ Repeat-literal counts use the ordinary closed compile-time evaluator as u64.
 Before lowering, O checks Array/Inline target kind and exact Inline length.
 Counts depending on abstract size parameters report CT-2 at the count; this
 form currently requires a definition-time-known size.
+
+`mode_definitions` runs a source frontier through `jobs::map` at every worker
+count. Workers share immutable declarations, type tables, phase handles and the
+signature snapshot; each owns its dependency collector and phase products.
+Publication records resolve/check/modes memos in DefPath order, while returned
+`ModeResult`s retain input order and each input's stopping phase. Repeated paths
+share one task. Current-source citation inputs are borrowed separately from the
+body-stable signature snapshot. A generator drains the preceding source frontier
+and uses the existing exclusive S1 path before a new frontier is frozen.
+This front API does not yet provide parallel S1 execution, budgeted body holds,
+or incremental program diagnostic aggregation.
