@@ -576,6 +576,26 @@ pub(crate) unsafe fn poll_home(
     unsafe { poll_binding(binding, token, cause, ready) }
 }
 
+/// Owned evidence of a request whose poll just completed. The caller must
+/// still publish its wake before another request can remove this wait row.
+/// # Safety
+/// Home only, under the same reserved poll as poll_home; no Binding borrow
+/// overlaps this access. No borrowed request buffer or native mapping escapes.
+pub(crate) unsafe fn completed_home(
+    run: *mut crate::context::RunShared,
+    token: u64,
+) -> Result<Completion, AdapterError> {
+    let binding = unsafe { &*(*run).io_binding().cast::<Binding>() };
+    crate::tasks::ordered::events::owned_host_result(
+        binding
+            .waits
+            .parked
+            .get(&token)
+            .and_then(|row| row.completion.as_ref())
+            .expect("a completed reserved host poll"),
+    )
+}
+
 /// # Safety
 /// Home only, after no running segment or runnable turn remains. No role is held.
 pub(crate) unsafe fn wait_home(run: *mut crate::context::RunShared) -> Stopped<bool> {

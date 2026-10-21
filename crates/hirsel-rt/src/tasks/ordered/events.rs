@@ -55,6 +55,17 @@ pub(super) struct HostCompletion {
     pub result: Result<crate::io::Completion, crate::io::AdapterError>,
 }
 
+/// The completion's scheduling position, before its owner can be unparked.
+/// Idle polls share the next retirement position but retain their own ordered
+/// sequence; native worker/host-token identities are deliberately absent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct HostPollCompletion {
+    pub completion: HostCompletion,
+    pub retirement: u64,
+    pub idle: bool,
+    pub sequence: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum OwnerOutcome {
     ScopeExit {
@@ -158,6 +169,8 @@ pub(super) struct Log {
     last_ops: BTreeMap<Vec<u32>, &'static str>,
     completed: BTreeSet<(Vec<u32>, u64)>,
     pub host_completions: Vec<HostCompletion>,
+    pub host_polls: Vec<HostPollCompletion>,
+    host_polled: BTreeSet<(Vec<u32>, u64)>,
     pub owner_completions: Vec<OwnerCompletion>,
     pub boundaries: Vec<Boundary>,
     versions: BTreeMap<CanonicalItem, u64>,
@@ -167,6 +180,58 @@ pub(super) struct Log {
     tasks: BTreeMap<u64, ObjectId>,
     canonical: Vec<CanonicalEvent>,
     unsupported: Vec<Unsupported>,
+}
+
+/// Copy a mapped view while its backing storage is still owned by the host
+/// request. All other completion variants already own their data.
+pub(crate) fn owned_host_result(
+    result: &Result<crate::io::Completion, crate::io::AdapterError>,
+) -> Result<crate::io::Completion, crate::io::AdapterError> {
+    match result {
+        Ok(crate::io::Completion::View(view)) => Ok(crate::io::Completion::View(
+            crate::io::MapView::of(view.contents()),
+        )),
+        value => value.clone(),
+    }
+}
+
+/// IdleGuard owns the scheduler, but no TaskCtx is installed or sampled.
+pub(super) fn record_host_poll(
+    s: &mut super::super::Scheduler,
+    task: u32,
+    result: Result<crate::io::Completion, crate::io::AdapterError>,
+    idle: bool,
+) {
+    let path = s.task(task).path.clone();
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let retirement = driver.frontier.as_ref().unwrap().retired();
+    let log = driver.events.as_mut().expect("poll evidence enabled");
+    let ordinal = log.ordinals[&path]
+        .checked_sub(1)
+        .expect("host poll follows entry");
+    let op = log.last_ops[&path];
+    assert_eq!(op, "host.request");
+    assert!(
+        log.host_polled.insert((path.clone(), ordinal)),
+        "one completing poll per host request"
+    );
+    log.host_polls.push(HostPollCompletion {
+        completion: HostCompletion {
+            task: path,
+            ordinal,
+            op,
+            result,
+        },
+        retirement,
+        idle,
+        sequence: log
+            .host_polls
+            .len()
+            .try_into()
+            .expect("host poll sequence fits u64"),
+    });
 }
 
 impl Log {
@@ -226,12 +291,7 @@ pub(crate) fn complete_host(
     );
     // A MapView can borrow host mapping storage. Copy its actual bytes while
     // the request still owns the view, rather than retaining a native address.
-    let result = match result {
-        Ok(crate::io::Completion::View(view)) => Ok(crate::io::Completion::View(
-            crate::io::MapView::of(view.contents()),
-        )),
-        value => value.clone(),
-    };
+    let result = owned_host_result(result);
     log.host_completions.push(HostCompletion {
         task: path,
         ordinal,

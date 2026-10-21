@@ -205,7 +205,19 @@ mod tests {
                             assert!(engine::driver(ctx).host_ops.is_empty());
                             let log = engine::driver(ctx).events.as_ref().unwrap();
                             assert_eq!(log.host_completions.len(), 1);
+                            assert_eq!(log.host_polls.len(), 1);
                             let done = &log.host_completions[0];
+                            let poll = &log.host_polls[0];
+                            assert_eq!(
+                                &poll.completion, done,
+                                "the owner returns the poll's actual result"
+                            );
+                            assert_eq!(poll.sequence, 0);
+                            assert!(log.boundaries.iter().any(|row| row.task == done.task
+                                && row.ordinal == done.ordinal
+                                && row.transition
+                                    == crate::tasks::ordered::events::Transition::Park
+                                && row.retirement <= poll.retirement));
                             assert_eq!(done.ordinal, before);
                             assert!(done.task.is_empty());
                             assert_eq!(done.op, "host.request");

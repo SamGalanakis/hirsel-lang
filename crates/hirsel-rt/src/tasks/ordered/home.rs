@@ -52,7 +52,7 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
         }
         let crate::host_waits::HomeReady { expired, hosts } =
             unsafe { crate::host_waits::ready_home(run) }?;
-        let candidates = {
+        let (candidates, observing) = {
             let _guard = unsafe { role::IdleGuard::new(run) };
             let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
             for scope in expired {
@@ -72,11 +72,22 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
                 })
                 .collect();
             hosts.sort_unstable_by_key(|&(deadline, parked, ..)| (deadline, parked));
-            hosts
+            let Logical::Ordered(driver) = &s.logical else {
+                unreachable!()
+            };
+            (hosts, driver.events.is_some())
         };
         let mut ready = Vec::new();
         for (_, _, task, token, cause, available) in candidates {
             if unsafe { crate::host_waits::poll_home(run, token, cause, available) }? {
+                if observing {
+                    // The home service borrow ends before claiming IdleGuard;
+                    // a saved request still owns its completion until wake.
+                    let result = unsafe { crate::host_waits::completed_home(run, token) };
+                    let _guard = unsafe { role::IdleGuard::new(run) };
+                    let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+                    super::events::record_host_poll(s, task, result, !retiring);
+                }
                 ready.push(task);
             }
         }
