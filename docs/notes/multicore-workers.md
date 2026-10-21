@@ -23,6 +23,10 @@ facade forwards every adapter method to admission, including from a foreign
 callback that cannot move its C frames. Call buffers remain with the posting
 fiber until home has completed or withdrawn the call. No detached worker owns
 the actual adapter.
+After a blocked test run quiesces, admission reports parked wait kinds directly
+from the run-owned table. Reporting must not enter a stop-aware binding accessor:
+that would abandon admission after its home service loop has already returned.
+The compiled `CONC-8-watch-no-event-blocked` fixture covers this path.
 
 `RunControl` can request a stop or read status from any thread. A stopped pure
 loop can retain its worker, heap, stack and compute permit until it reaches an
