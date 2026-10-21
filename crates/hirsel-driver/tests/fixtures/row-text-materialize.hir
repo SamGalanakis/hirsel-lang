@@ -1,0 +1,20 @@
+flat type TextFields {
+  title: String,
+}
+
+type Row {
+  text: TextFields,
+}
+
+fn detached(row: Row) -> unique String {
+  unique row.text.title
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let title = {
+    let row = Row(text: TextFields(title: "abc"))
+    detached(row)
+  }
+  let _ = out.print(io.stdout(rt)?, title)
+  Ok(())
+}

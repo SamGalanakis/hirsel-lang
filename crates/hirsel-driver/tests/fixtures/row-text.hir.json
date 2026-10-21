@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "row_text",
+    "version": "0"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "row-text.hir",
+      "module": []
+    },
+    {
+      "path": "../../../../examples/tasks/model.hir",
+      "module": [
+        "model"
+      ]
+    },
+    {
+      "path": "../../../../examples/tasks/store.hir",
+      "module": [
+        "store"
+      ]
+    },
+    {
+      "path": "row-text-parts.hir",
+      "module": [
+        "model"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

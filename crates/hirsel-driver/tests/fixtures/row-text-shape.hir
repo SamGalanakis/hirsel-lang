@@ -1,0 +1,59 @@
+flat type TextFields {
+  title: String,
+  description: String,
+  tags: List[String],
+}
+
+type Row {
+  id: u64,
+  text: TextFields,
+}
+
+fn read(rows: List[Row]) -> u64 {
+  let mut n = 0u64
+  for row in rows {
+    n += row.id + string.byte_len(row.text.title) + string.byte_len(
+      row.text.description
+    )
+    for tag in row.text.tags {
+      n += string.byte_len(tag)
+    }
+  }
+  n
+}
+
+fn erase(mut rows: unique List[Row], id: u64) -> bool {
+  for i in 0u64..list.len(rows) {
+    if rows[i].id == id {
+      let _ = list.remove(mut rows, i)
+      return true
+    }
+  }
+  false
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  // Goose 8511ae34, print_variable_size_elements.goose:1-10: nested
+  // variable strings "A-1" and "B", walked in declaration order.
+  let mut rows: List[Row] = [
+    Row(id: 1, text: TextFields(title: "a", description: "", tags: ["A-1", "B"])),
+    Row(id: 2, text: TextFields(title: "b", description: "", tags: [])),
+    Row(id: 3, text: TextFields(title: "c", description: "", tags: ["🦊", "e\u{301}"]))
+  ]
+  let mut valid = read(rows) == 20
+  // Rust a7c37f9, alloc/src/vec/mod.rs:2307-2312: [a,b,c] -> [a,c].
+  valid = valid && erase(mut rows, 2) && !erase(mut rows, 2)
+  valid = valid && list.len(rows) == 2 && rows[0].id == 1 && rows[1].id == 3
+  valid = valid && rows[0].text.title == "a" && rows[1].text.title == "c"
+  valid = valid && erase(mut rows, 1) && !erase(mut rows, 1)
+  valid = valid && list.len(rows) == 1 && rows[0].id == 3 && rows[0].text.title == "c"
+  let _ = out.print(
+    io.stdout(rt)?,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

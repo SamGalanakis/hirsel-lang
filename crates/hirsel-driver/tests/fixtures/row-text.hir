@@ -1,0 +1,336 @@
+// Isolated MEM-12 experiment. The tasks application's Item, Board and JSON stay ordinary.
+// Goose 8511ae3 test/codegen/print_variable_size_elements.goose:1-10 supplies
+// the nested variable walk; Rust a7c37f9 library/alloc/src/vec/mod.rs:2307-2312
+// supplies ordered ['a','b','c'] removal. Hirsel retains independent row owners.
+flat type TextFields {
+  title: String,
+  description: String,
+  tags: List[String],
+}
+
+type Row {
+  id: u64,
+  status: model.Status,
+  priority: model.Priority,
+  due: Option[time.Date],
+  text: TextFields,
+}
+
+type Rows {
+  next_id: u64,
+  revision: u64,
+  rows: List[Row],
+}
+
+fn from_item(take task: model.Item) -> unique Row uses {} {
+  let (id, status, priority, due, title, description, tags) = model.row_parts(take task)
+  Row(
+    id: id,
+    status: status,
+    priority: priority,
+    due: due,
+    text: unique TextFields(
+      title: take title,
+      description: take description,
+      tags: take tags
+    )
+  )
+}
+
+fn build(take board: unique model.Board) -> unique Rows uses {} {
+  let (next_id, revision, tasks) = model.board_parts(take board)
+  let mut rows: List[Row] = []
+  list.reserve(mut rows, list.len(tasks))
+  for task in take tasks {
+    list.push(mut rows, from_item(take task))
+  }
+  Rows(next_id: next_id, revision: revision, rows: take rows)
+}
+
+// Workaround: keep the flat view borrowed across this call; direct `unique row.text.title`
+// currently fails native import validation (row-text-materialize.hir).
+fn own_text(value: String) -> unique String uses {} {
+  unique value
+}
+
+fn materialize(row: Row) -> unique model.Item uses {} {
+  let mut tags: List[String] = []
+  for tag in row.text.tags {
+    list.push(mut tags, own_text(tag))
+  }
+  model.Item(
+    id: row.id,
+    status: row.status,
+    priority: row.priority,
+    due: row.due,
+    title: own_text(row.text.title),
+    description: own_text(row.text.description),
+    tags: take tags
+  )
+}
+
+fn title_owned(row: Row) -> unique String uses {} {
+  own_text(row.text.title)
+}
+
+fn snapshot(rows: Rows) -> unique model.Board uses {} {
+  let mut items: List[model.Item] = []
+  list.reserve(mut items, list.len(rows.rows))
+  for row in rows.rows {
+    list.push(mut items, materialize(row))
+  }
+  model.Board(next_id: rows.next_id, revision: rows.revision, tasks: take items)
+}
+
+fn index_of(rows: Rows, id: u64) -> Option[u64] uses {} {
+  for i in 0u64..list.len(rows.rows) {
+    if rows.rows[i].id == id {
+      return Some(i)
+    }
+  }
+  None()
+}
+
+fn replace_text(mut rows: unique Rows, id: u64, take edit: unique model.Item) -> bool uses {} {
+  let Some(i) = index_of(rows, id) else {
+    return false
+  }
+  // Publish one complete immutable owner before releasing the displaced text.
+  let (_, _, priority, due, title, description, tags) = model.row_parts(take edit)
+  let text = unique TextFields(
+    title: take title,
+    description: take description,
+    tags: take tags
+  )
+  rows.rows[i].text = take text
+  rows.rows[i].priority = priority
+  rows.rows[i].due = due
+  rows.revision += 1
+  true
+}
+
+fn set_status(mut rows: unique Rows, id: u64, status: model.Status) -> bool uses {} {
+  let Some(i) = index_of(rows, id) else {
+    return false
+  }
+  rows.rows[i].status = status
+  rows.revision += 1
+  true
+}
+
+fn remove(mut rows: unique Rows, id: u64) -> bool uses {} {
+  let Some(i) = index_of(rows, id) else {
+    return false
+  }
+  let _ = list.remove(mut rows.rows, i)
+  rows.revision += 1
+  true
+}
+
+// Reads borrow the title/description and sequentially walk variable tags.
+fn read_all(rows: Rows) -> u64 uses {} {
+  let mut total = 0u64
+  for i in 0u64..list.len(rows.rows) {
+    total += rows.rows[i].id + string.byte_len(rows.rows[i].text.title)
+    total += string.byte_len(rows.rows[i].text.description)
+    for tag in rows.rows[i].text.tags {
+      total += string.byte_len(tag)
+    }
+  }
+  total
+}
+
+fn make_item(id: u64, title: String, description: String, tags: List[String]) -> unique model.Item uses {} {
+  model.Item(
+    id: id,
+    title: unique title,
+    description: unique description,
+    tags: unique tags,
+    status: Todo(),
+    priority: Medium(),
+    due: None()
+  )
+}
+
+fn stress_item() -> unique model.Item uses {} {
+  make_item(
+    0,
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    ["1", "22", "333", "4444", "五", "🦊", "e\u{301}", ""]
+  )
+}
+
+fn seed() -> unique model.Board uses {} {
+  model.Board(
+    next_id: 4,
+    revision: 1,
+    tasks: [
+      make_item(1, "a", "A-1", ["x", "yz"]),
+      make_item(2, "b", "B", []),
+      make_item(3, "c", "", ["🦊", "e\u{301}"])
+    ]
+  )
+}
+
+fn direct() -> unique Rows uses {} {
+  Rows(
+    next_id: 4,
+    revision: 1,
+    rows: [
+      Row(
+        id: 1,
+        status: Todo(),
+        priority: Medium(),
+        due: None(),
+        text: TextFields(title: "a", description: "A-1", tags: ["x", "yz"])
+      ),
+      Row(
+        id: 2,
+        status: Todo(),
+        priority: Medium(),
+        due: None(),
+        text: TextFields(title: "b", description: "B", tags: [])
+      ),
+      Row(
+        id: 3,
+        status: Todo(),
+        priority: Medium(),
+        due: None(),
+        text: TextFields(title: "c", description: "", tags: ["🦊", "e\u{301}"])
+      )
+    ]
+  )
+}
+
+fn same(rows: Rows, board: model.Board) -> bool uses {} {
+  store.encode(snapshot(rows)) == store.encode(board)
+}
+
+fn edits() -> bool uses {} {
+  let mut board = seed()
+  let mut rows = build(seed())
+  if !same(rows, board) || !same(direct(), board) {
+    return false
+  }
+  if read_all(rows) != 23 {
+    return false
+  }
+  // Retain both independent encoded and explicit deep snapshots through edits.
+  let encoded = store.encode(board)
+  let deep = snapshot(rows)
+  let detached = title_owned(rows.rows[0])
+  // A separate title-only 1 -> 200-byte update leaves description/tags intact.
+  let title_edit = make_item(
+    0,
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "B",
+    []
+  )
+  if !replace_text(
+    mut rows,
+    2,
+    make_item(
+      0,
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "B",
+      []
+    )
+  ) || !model.update(mut board, 2, take title_edit) {
+    return false
+  }
+  if !same(rows, board) || rows.rows[1].text.description != "B" {
+    return false
+  }
+  for round in 0u64..2u64 {
+    let edit = make_item(999, "Updated", "benchmark", ["bench"])
+    if !replace_text(mut rows, 1, make_item(999, "Updated", "benchmark", ["bench"])) || !model.update(
+      mut board,
+      1,
+      take edit
+    ) {
+      return false
+    }
+    if !same(rows, board) || rows.rows[0].id != 1 {
+      return false
+    }
+  }
+  if !set_status(mut rows, 1, Done()) || !model.set_status(mut board, 1, Done()) {
+    return false
+  }
+  if !same(rows, board) {
+    return false
+  }
+  let long = stress_item()
+  if !replace_text(mut rows, 1, stress_item()) || !model.update(mut board, 1, take long) {
+    return false
+  }
+  if !same(rows, board) {
+    return false
+  }
+  // Rust remove middle ['a','b','c'] -> ['a','c']; then remove the first.
+  if !remove(mut rows, 2) || !model.delete(mut board, 2) {
+    return false
+  }
+  if rows.rows[0].id != 1 || rows.rows[1].id != 3 || !same(rows, board) {
+    return false
+  }
+  if remove(mut rows, 2) || model.delete(mut board, 2) {
+    return false
+  }
+  if !remove(mut rows, 1) || !model.delete(mut board, 1) {
+    return false
+  }
+  if rows.rows[0].id != 3 || !same(rows, board) {
+    return false
+  }
+  if replace_text(mut rows, 999, make_item(0, "", "", [])) {
+    return false
+  }
+  if set_status(mut rows, 999, Done()) {
+    return false
+  }
+  if store.encode(deep) != encoded || detached != "a" {
+    return false
+  }
+  true
+}
+
+fn retained(drop_source_first: bool) -> bool uses {} {
+  let mut detached = ""
+  if drop_source_first {
+    let (deep, encoded) = {
+      let mut rows = direct()
+      detached = title_owned(rows.rows[0])
+      let saved = snapshot(rows)
+      let bytes = store.encode(saved)
+      let _ = remove(mut rows, 1)
+      (take saved, take bytes)
+    }
+    store.encode(deep) == encoded && encoded == store.encode(seed()) && detached == "a"
+  } else {
+    let mut rows = direct()
+    {
+      let saved = snapshot(rows)
+      let encoded = store.encode(saved)
+      if encoded != store.encode(seed()) {
+        return false
+      }
+    }
+    let _ = remove(mut rows, 1)
+    rows.rows[0].id == 2
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let valid = edits() && retained(true) && retained(false)
+  let _ = out.print(
+    io.stdout(rt)?,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

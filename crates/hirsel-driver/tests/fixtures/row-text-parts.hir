@@ -1,0 +1,26 @@
+// Test-package-only moves at the owning module seam; production manifests omit this file.
+pub fn row_parts(take source: Item) -> (
+  u64,
+  Status,
+  Priority,
+  Option[time.Date],
+  String,
+  String,
+  List[String]
+) uses {} {
+  let Item(
+    id: id,
+    status: status,
+    priority: priority,
+    due: due,
+    title: title,
+    description: description,
+    tags: tags
+  ) = take source
+  (id, status, priority, due, take title, take description, take tags)
+}
+
+pub fn board_parts(take source: unique Board) -> (u64, u64, unique List[Item]) uses {} {
+  let Board(next_id: next_id, revision: revision, tasks: tasks) = take source
+  (next_id, revision, take tasks)
+}

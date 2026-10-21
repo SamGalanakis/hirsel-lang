@@ -1,0 +1,18 @@
+// Native-only fixture builders: benchmark seed10k, not a new application schema.
+fn seed10k() -> unique model.Board uses {} {
+  let mut tasks: List[model.Item] = []
+  list.reserve(mut tasks, 10000)
+  for id in 1u64..10001u64 {
+    list.push(mut tasks, make_item(id, f"Task {id}", "Benchmark description", ["bench", f"group-{id % 10}"]))
+  }
+  model.Board(next_id: 10001, revision: 1, tasks: take tasks)
+}
+fn direct10k() -> unique Rows uses {} {
+  let mut rows: List[Row] = []
+  list.reserve(mut rows, 10000)
+  for id in 1u64..10001u64 {
+    list.push(mut rows, Row(id: id, status: Todo(), priority: Medium(), due: None(),
+      text: unique TextFields(title: f"Task {id}", description: "Benchmark description", tags: ["bench", f"group-{id % 10}"])))
+  }
+  Rows(next_id: 10001, revision: 1, rows: take rows)
+}

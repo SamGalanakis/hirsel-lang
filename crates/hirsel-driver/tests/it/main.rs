@@ -72,6 +72,7 @@ mod recursive_groups;
 mod registry_sources;
 mod representation;
 mod resident;
+mod row_text;
 mod run_isolation;
 mod runner;
 mod runtime;
