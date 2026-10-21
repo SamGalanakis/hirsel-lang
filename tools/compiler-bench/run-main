@@ -45,7 +45,7 @@ toolchain="$out/toolchain-$stamp-$sha"
 tools/toolchain-dist/build --pgo --output "$toolchain" --work "$out/pgo-$stamp-$sha" >> "$log" 2>&1
 stage="suite"
 result="$out/$stamp-$sha.json"
-tools/compiler-bench/run --toolchain "$toolchain" --work "$out/work" --output "$result" "$@" >> "$log" 2>&1 || status=$?
+tools/compiler-bench/run --quick --toolchain "$toolchain" --work "$out/work" --output "$result" "$@" >> "$log" 2>&1 || status=$?
 rm -rf "$toolchain"
 stage="comparison"
 compare=0

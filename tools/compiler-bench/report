@@ -11,7 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 # The cargo command of each Rust mode.
-CARGO = {'check': 'check', 'debug': 'build', 'edit-body': 'check after a body edit',
+CARGO = {'check': 'check', 'debug': 'build', 'release': 'build --release', 'edit-body': 'check after a body edit',
          'edit-private-sig': 'check after a private signature edit', 'edit-public-sig': 'check after a public signature edit'}
 
 
@@ -24,15 +24,91 @@ def number(value, digits=2):
     return '—' if value is None else f'{value:.{digits}f}'
 
 
+def scoreboard(data, cells):
+    """One table per mode; preserve unavailable phases and missing Rust ports."""
+    by_id = {c['id']: c for c in cells}
+    paired = {p['hirsel']: p for p in data.get('pairs', []) if p['rust_jobs'] == 1}
+    print('# Compiler speed scoreboard\n')
+    print(f"Compiler main `{data['commit']}`; {data['started']}; CPU {data.get('cpu')}; "
+          f"{data['repeat']} seeded rounds, cold followed by unchanged warm.\n")
+    print('Instructions are user-mode instructions including children. Wall seconds and peak RSS MiB '
+          'come from GNU time; native wall stops at first stdout byte or listening. Native counters/RSS '
+          'include bounded shutdown. Warm retains the preceding cold run’s artifacts. Cold removes '
+          'program/native caches, retaining the shipped std precheck and prebuilt Rust dependencies; '
+          'neither run flushes the host page cache. Rust runs offline at one job. Wall ratios require an uninterrupted ten-round session; round-scoped or resumed measurements retain descriptive wall values and instruction ratios.\n')
+    print('A ratio above 1 means Hirsel costs more. Native compares startup (compile + launch) with '
+          '`cargo build --release` (compile only). Times are session-local; instructions are the verdict. '
+          '— means no paired port or unavailable telemetry. Tasks reuses its existing app benchmark Rust port. No Rust ports exist for hello-web, '
+          'the tour, conformance or std; existing pairs are retained. Std is measured by `precheck` '
+          '(whole std from source), which has no native entry and accepts no timings flag. '
+          'Tour/conformance fixtures without an executable entry remain check-only.\n')
+    modes = list(dict.fromkeys(['check', 'debug', 'release', 'native', *[c['mode'] for c in cells if c['language'] == 'hirsel']]))
+    for mode in modes:
+        selected = [c for c in cells if c['language'] == 'hirsel' and c['mode'] == mode]
+        if not selected:
+            continue
+        print(f'## {mode}\n')
+        print('| input | lines | cache | status / n | wall s | instructions G | RSS MiB | Rust wall s / instructions G / RSS MiB | H/R wall / instructions / RSS | H/R instructions per line | top five phases by self time (s) |')
+        print('|---|---:|---|---|---:|---:|---:|---|---|---:|---|')
+        for c in selected:
+            pair = paired.get(c['id'])
+            rust = by_id.get(pair['rust']) if pair else None
+            metrics = [median(c, m) for m in ('wall_s', 'instructions_u', 'rss_mib')]
+            reference = [median(rust, m) for m in ('wall_s', 'instructions_u', 'rss_mib')] if rust else [None]*3
+            ratios = [h/r if h is not None and r else None for h, r in zip(metrics, reference)]
+            if c['status'] != 'ok' or rust and rust['status'] != 'ok':
+                ratios = [None]*3
+            if not c.get('wall_ratio_valid', data.get('wall_ratio_valid', False)):
+                ratios[0] = None
+            phases = sorted(c['summary'].get('phases', {}).items(), key=lambda x: x[1]['median'], reverse=True)[:5]
+            if not phases and c['runs'][-1].get('phases'):
+                phases = sorted(((k, {'median': v}) for k, v in c['runs'][-1]['phases'].items()), key=lambda x: x[1]['median'], reverse=True)[:5]
+            per_line = ratios[1] * rust['lines'] / c['lines'] if ratios[1] is not None and c['lines'] else None
+            phase_text = '; '.join(f"{name} {value['median']:.3f}" for name, value in phases) or '—'
+            if mode == 'native' and any(r.get('startup', {}).get('status') == 'no-output' for r in c['runs']):
+                phase_text += '; silent program: wall to exit'
+            if mode == 'native' and c['status'] != 'ok' and any(r.get('startup', {}).get('wall_s') is not None for r in c['runs']):
+                phase_text += '; readiness observed, then failed: excluded from startup summaries'
+            if mode == 'native' and not phases and c['status'] == 'ok':
+                phase_text += '; stopped before CLI report'
+            n = (c['summary'].get('wall_s') or {}).get('n', 0)
+            if not n and c['runs']:
+                last = c['runs'][-1]
+                metrics = [last.get(m) for m in ('wall_s', 'instructions_u', 'rss_mib')]
+            hwall, hi, hrss = metrics
+            rw, ri, rm = reference
+            print(f"| {c['program']} | {c['lines']} | {c.get('temperature', 'legacy')} | {c['status']} / {n} | "
+                  f"{number(hwall, 3)} | {number(hi/1e9 if hi else None, 3)} | {number(hrss, 0)} | "
+                  f"{number(rw, 3)} / {number(ri/1e9 if ri else None, 3)} / {number(rm, 0)} | "
+                  + ' / '.join(number(r, 2) + ('x' if r is not None else '') for r in ratios)
+                  + f" | {number(per_line, 2)} | {phase_text} |")
+    incomplete = [c for c in cells if c['status'] != 'ok']
+    if incomplete:
+        print('\n## Findings from runs that did not complete\n')
+        for c in incomplete:
+            r = c['runs'][-1]
+            diagnostic = [line for line in r.get('stderr', '').splitlines()
+                          if line.startswith(('hirsel:', 'error:', 'runtime failure', 'perf counter', 'perf counters'))]
+            detail = (diagnostic[0] if diagnostic else c.get('classification', 'See raw evidence; excluded from accepted-program ratios.')).replace('|', '/')[:400]
+            print(f"- `{c['id']}`: {c['status']}; {r.get('capped_report', '')}. {detail}")
+    print('\nA failed/capped/timeout pair is attempted once and not repeated across later rounds. '
+          'A smaller capped/timed-out scale program blocks larger sizes in that language/mode. '
+          'No cap is raised and no failed cell is represented as a speedup.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('results')
+    parser.add_argument('--scoreboard', action='store_true', help='per-mode cold/warm tables and top five self phases')
     parser.add_argument('--groups', help='only cells of these groups')
     args = parser.parse_args()
     data = json.loads(Path(args.results).read_text())
     groups = set(args.groups.split(',')) if args.groups else None
     cells = [c for c in data['cells'] if groups is None or set(c['groups']) & groups or
              (c['mode'].startswith('edit-') and 'edit' in groups)]
+    if args.scoreboard:
+        scoreboard(data, cells)
+        return 0
     ids = {c['id'] for c in cells}
     print(f"compiler-bench at {data.get('commit')} ({data.get('started')}, load1 {data['host']['load1']:.1f}, "
           f"{data.get('repeat')} runs per cell)\n")

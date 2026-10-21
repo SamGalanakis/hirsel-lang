@@ -11,6 +11,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
+import socket
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH = ROOT / 'tools/compiler-bench'
@@ -100,6 +103,10 @@ class Timings(unittest.TestCase):
               'comptime_verify': {'work_ns': 0, 'cpu_ns': 0, 'calls': 0}, 'wait_ns': 0,
               'counts': {'units': 168}}
 
+    def test_startup_metadata_after_the_report_does_not_hide_phases(self):
+        stderr = json.dumps(self.REPORT) + '\ncompiler-startup: {"status":"ready"}\n'
+        self.assertEqual(run.timings(stderr)['phases'], {'parse': .003})
+
     def test_the_last_stderr_line_is_the_report(self):
         stderr = 'warning: something\n' + json.dumps(self.REPORT) + '\n'
         found = run.timings(stderr)
@@ -157,6 +164,22 @@ class Corpus(unittest.TestCase):
             rust = sorted(p.stem for p in (Path(one) / 'rust/syn3k/src').glob('*.rs') if p.stem != 'main')
             self.assertEqual(hirsel, rust)
 
+    def test_generated_nested_matches_have_unique_binders(self):
+        hirsel, rust = corpus.stress_nested_match(32)
+        for source in (hirsel, rust):
+            names = re.findall(r'Some\((v\d+)\) =>', source)
+            self.assertEqual(len(names), 32)
+            self.assertEqual(len(set(names)), 32)
+
+    def test_derive_stress_has_a_complete_source_manifest(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            _, source, _ = corpus.stress(Path(scratch), 'derive', 64)
+            manifest = json.loads(source.with_name(source.name + '.json').read_text())
+            self.assertEqual(manifest['schema'], 1)
+            self.assertEqual(manifest['sources'], [{'path': source.name, 'module': []}])
+            self.assertEqual(manifest['entry']['name'], 'main')
+            self.assertTrue(manifest['dependencies'])
+
     def test_each_edit_changes_exactly_one_marked_text(self):
         with tempfile.TemporaryDirectory() as scratch:
             corpus.corpus(Path(scratch), scale=(10000,))
@@ -166,6 +189,190 @@ class Corpus(unittest.TestCase):
                 for text in variants.values():
                     self.assertNotEqual(text, base)
                     self.assertEqual(len(text.splitlines()), len(base.splitlines()))
+
+
+class Matrix(unittest.TestCase):
+    def test_pairing_keeps_cold_and_warm_separate(self):
+        cells = []
+        for language, mode, temp, cost in [('hirsel', 'release', 'cold', 9), ('hirsel', 'release', 'warm', 8),
+                                            ('rust', 'release', 'cold', 3), ('rust', 'release', 'warm', 1)]:
+            c = cell(f'p/{language}/{temp}', [cost], language=language, mode=mode)
+            c['temperature'] = temp
+            cells.append(c)
+        self.assertEqual([p['ratio'] for p in run.pairs(cells)], [3, 8])
+
+    def test_release_clean_removes_release_artifacts(self):
+        runner = object.__new__(run.Runner)
+        with patch.object(run.subprocess, 'run', return_value=SimpleNamespace(stdout='{"packages":[{"name":"p"}]}')) as command:
+            runner.clean_rust(Path('/tmp/project'), {}, 'release')
+            self.assertIn('--release', command.call_args.args[0])
+            runner.clean_rust(Path('/tmp/project'), {}, 'check')
+            self.assertNotIn('--release', command.call_args.args[0])
+
+    def test_new_cold_cells_still_compare_against_the_existing_baseline(self):
+        before = cell('p/hirsel/check', [1.0])
+        after = cell('p/hirsel/check/cold', [2.0])
+        rows, _ = compare.compare(result(before), result(after), BUDGET)
+        self.assertTrue(rows[0]['regressed'])
+
+    def test_basic_startup_grants_have_the_required_directory_list(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            path, endpoint = run.startup_config(corpus.Program('hello', 'hirsel', Path(scratch), 3), Path(scratch))
+            self.assertEqual(json.loads(path.read_text())['io']['dirs'], [])
+            self.assertEqual(endpoint, 'stdout')
+
+    def test_native_selects_release_rust_and_std_stays_precheck(self):
+        rust = corpus.Program('p', 'rust', Path('/tmp'), 3)
+        std = corpus.Program('std@1', 'hirsel', Path('/tmp'), 3, check_only=True)
+        self.assertEqual(run.modes(rust, ['native']), ['release'])
+        self.assertEqual(run.modes(std, ['check', 'native']), ['precheck'])
+
+    def test_cold_warm_are_adjacent_and_failure_does_not_drop_the_rust_pair(self):
+        with tempfile.TemporaryDirectory() as work:
+            args = SimpleNamespace(toolchain=work, work=work, groups=None, modes='check', select=None,
+                                   jobs='1', repeat=2, seed=10, output=work+'/r.json', quick=False, checkpoint_identity={})
+            with patch.object(run.subprocess, 'run', return_value=SimpleNamespace(stdout='--timings')):
+                runner = run.Runner(args, {'base': {}, 'native': {}})
+            seen = []
+            def sample(p, mode, jobs, temperature, cache):
+                seen.append((p.language, temperature))
+                return {'status': 'failed' if p.language == 'hirsel' else 'ok', 'wall_s': 1}
+            runner.sample = sample
+            runner.untimed = lambda *a: None
+            programs = [corpus.Program('p', lang, Path(work), 3) for lang in ('hirsel', 'rust')]
+            cells = runner.go(programs)
+            self.assertEqual(len(cells), 4)
+            self.assertEqual(seen.count(('hirsel', 'cold')), 1)
+            self.assertEqual(seen.count(('rust', 'cold')), 2)
+            for i in range(0, len(seen), 2):
+                self.assertEqual(seen[i][0], seen[i+1][0])
+                self.assertEqual((seen[i][1], seen[i+1][1]), ('cold', 'warm'))
+
+    def test_resume_keeps_finished_inputs_and_rounds_without_repeating_them(self):
+        with tempfile.TemporaryDirectory() as work:
+            args = SimpleNamespace(toolchain=work, work=work, groups=None, modes='check', select=None,
+                                   jobs='1', repeat=2, seed=10, output=work+'/r.json', quick=False,
+                                   checkpoint_identity={'fixture': True})
+            def runner():
+                with patch.object(run.subprocess, 'run', return_value=SimpleNamespace(stdout='--timings')):
+                    r = run.Runner(args, {'base': {}, 'native': {}})
+                r.untimed = lambda *a: None
+                return r
+            programs = [corpus.Program('done', 'hirsel', Path(work), 3),
+                        corpus.Program('p', 'hirsel', Path(work), 3), corpus.Program('p', 'rust', Path(work), 3)]
+            seen = []
+            def first(p, mode, jobs, temperature, cache):
+                if p.name == 'p' and sum(n == 'p' for n, _ in seen) == 4:
+                    raise RuntimeError('interrupted after checkpoint')
+                seen.append((p.name, temperature))
+                return {'status': 'ok', 'wall_s': 1}
+            before = runner()
+            before.sample = first
+            with self.assertRaisesRegex(RuntimeError, 'interrupted'):
+                before.go(programs)
+            args.checkpoint = json.loads(Path(args.output + '.partial').read_text())
+            seen.clear()
+            after = runner()
+            def second(p, mode, jobs, temperature, cache):
+                seen.append((p.name, temperature))
+                return {'status': 'ok', 'wall_s': 1}
+            after.sample = second
+            cells = after.go(programs)
+            self.assertEqual(len(seen), 4)
+            self.assertTrue(all(name == 'p' for name, _ in seen))
+            self.assertEqual(len(cells), 6)
+            self.assertTrue(all(len(c['runs']) == 2 for c in cells))
+
+    def test_round_lock_is_released_after_each_cold_warm_round(self):
+        from contextlib import contextmanager
+        with tempfile.TemporaryDirectory() as work:
+            args = SimpleNamespace(toolchain=work, work=work, groups=None, modes='check', select=None,
+                                   jobs='1', repeat=2, seed=10, output=work+'/r.json', quick=False,
+                                   checkpoint_identity={}, lock_scope='round', cpu=31)
+            with patch.object(run.subprocess, 'run', return_value=SimpleNamespace(stdout='--timings')):
+                r = run.Runner(args, {'base': {}, 'native': {}})
+            events = []
+            @contextmanager
+            def lock(cpu):
+                events.append('enter')
+                try:
+                    yield
+                finally:
+                    events.append('exit')
+            def sample(*a):
+                self.assertEqual(events[-1], 'enter')
+                return {'status': 'ok', 'wall_s': 1}
+            r.sample = sample
+            with patch.object(run, 'timing_lock', lock):
+                r.go([corpus.Program('p', 'hirsel', Path(work), 3)])
+            self.assertEqual(events, ['enter', 'exit', 'enter', 'exit'])
+
+
+class Startup(unittest.TestCase):
+    def probe(self, code, endpoint='stdout'):
+        return subprocess.run([sys.executable, str(BENCH/'startup.py'), '--endpoint', endpoint,
+                               '--', sys.executable, '-c', code], capture_output=True, text=True, timeout=5)
+
+    def report(self, done):
+        line = next(l for l in done.stderr.splitlines() if l.startswith('compiler-startup: '))
+        return json.loads(line.removeprefix('compiler-startup: '))
+
+    def test_first_output_precedes_process_completion(self):
+        done = self.probe('import time; print("hello", flush=True); time.sleep(.3)')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertLess(self.report(done)['wall_s'], .25)
+        self.assertEqual(self.report(done)['status'], 'ready')
+
+    def test_silent_exit_is_not_reported_as_first_output(self):
+        done = self.probe('pass')
+        self.assertEqual(done.returncode, 0)
+        self.assertEqual(self.report(done)['status'], 'no-output')
+        self.assertIsNone(self.report(done)['wall_s'])
+
+    def test_failure_is_preserved(self):
+        self.assertEqual(self.probe('raise SystemExit(7)').returncode, 7)
+
+    def test_a_listening_announcement_allows_graceful_shutdown(self):
+        done = self.probe('import sys; print("listening on http://127.0.0.1:1/", flush=True); '
+                          'assert sys.stdin.readline() == "quit\\n"', 'listening')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertFalse(self.report(done)['forced_stop'])
+
+    def test_stopping_the_native_child_keeps_the_compiler_report(self):
+        code = ('import subprocess, sys; '
+                'p = subprocess.Popen([sys.executable, "-c", '
+                '"import time; print(123, flush=True); time.sleep(30)"]); '
+                'p.wait(); print("compiler phases", file=sys.stderr)')
+        done = self.probe(code)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('compiler phases', done.stderr)
+        self.assertTrue(self.report(done)['forced_stop'])
+
+    def test_output_followed_by_failure_is_not_an_accepted_startup(self):
+        done = self.probe('print("ready", flush=True); raise SystemExit(7)')
+        self.assertEqual(done.returncode, 7)
+        self.assertEqual(self.report(done)['status'], 'ready-then-failed')
+
+    def test_http_readiness_sends_a_valid_request_and_drains_the_response(self):
+        with socket.socket() as reservation:
+            reservation.bind(('127.0.0.1', 0))
+            port = reservation.getsockname()[1]
+        code = (f'import socket, time; s=socket.socket(); s.bind(("127.0.0.1", {port})); s.listen(); '
+                'c,_=s.accept(); data=c.recv(4096); '
+                'assert data.startswith(b"GET / HTTP/1.1\\r\\n"), data; '
+                'c.sendall(b"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\nOK"); '
+                'c.close(); time.sleep(30)')
+        done = self.probe(code, f'http:127.0.0.1:{port}')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.report(done)['status'], 'ready')
+
+    def test_a_preexisting_listener_is_refused(self):
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            done = self.probe('print("bad readiness")', f'tcp:127.0.0.1:{listener.getsockname()[1]}')
+            self.assertNotEqual(done.returncode, 0)
+            self.assertNotIn('compiler-startup:', done.stderr)
 
 TIMINGS = ROOT / 'crates/hirsel-intern/src/timings.rs'
 

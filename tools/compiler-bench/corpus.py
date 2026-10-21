@@ -43,7 +43,7 @@ CONFORMANCE = (
 
 # Synthetic program sizes in source lines. Each size above the first is
 # measured only when the one before it completed under the cap.
-SCALE = (3000, 10000, 30000, 50000, 100000)
+SCALE = (3000, 10000, 30000)
 
 # Stress families: generator name and the parameters each is run at.
 STRESS = {
@@ -246,14 +246,14 @@ def stress_nested_match(d):
         pad = '  ' * indent
         if k == d:
             return f'{pad}{k}u64\n'
-        return (f'{pad}match o{k} {{\n{pad}  Some(v) => {{\n{pad}    let o{k + 1}: Option[u64] = Some(v + 1)\n'
+        return (f'{pad}match o{k} {{\n{pad}  Some(v{k}) => {{\n{pad}    let o{k + 1}: Option[u64] = Some(v{k} + 1)\n'
                 + h_level(k + 1, indent + 2) + f'{pad}  }},\n{pad}  None() => 0u64,\n{pad}}}\n')
 
     def r_level(k, indent):
         pad = '    ' * indent
         if k == d:
             return f'{pad}{k}\n'
-        return (f'{pad}match o{k} {{\n{pad}    Some(v) => {{\n{pad}        let o{k + 1}: Option<u64> = Some(v + 1);\n'
+        return (f'{pad}match o{k} {{\n{pad}    Some(v{k}) => {{\n{pad}        let o{k + 1}: Option<u64> = Some(v{k} + 1);\n'
                 + r_level(k + 1, indent + 2) + f'{pad}    }}\n{pad}    None => 0,\n{pad}}}\n')
     h = ('fn deep(o0: Option[u64]) -> u64 {\n' + h_level(0, 1) + '}\n\n'
          'pub fn main() {\n  let _ = deep(Some(1u64))\n}\n')
@@ -316,7 +316,7 @@ def stress(work: Path, family: str, n: int):
     write(source, hirsel)
     if family in STD_STRESS:
         write(source.with_name(source.name + '.json'), json.dumps(
-            {k: v for k, v in std_manifest([], name).items() if k == 'dependencies'}))
+            std_manifest([{'path': source.name, 'module': []}], name)))
     project = cargo_project(work / 'rust' / 'stress' / name, name, rust, {})
     return name, source, project
 
@@ -372,6 +372,14 @@ def corpus(work: Path, scale=SCALE) -> list[Program]:
         add(Program(unit, 'hirsel', manifest, lines_of(manifest), ('pairs', 'examples')))
         project = rust_example(work, unit)
         add(Program(unit, 'rust', project, lines_of(project), ('pairs', 'examples')))
+    for name, filename in (('tasks', 'hirsel.json'), ('hello-web', 'main.hir')):
+        path = ROOT / 'examples' / name / filename
+        add(Program(name, 'hirsel', path, lines_of(path), ('examples',)))
+        if name == 'tasks':
+            project = ROOT / 'bench/apps/tasks/rust'
+            app_lines = sum(lines_of(project / 'src' / f) for f in
+                            ('main.rs', 'model.rs', 'store.rs', 'unicode.rs', 'view.rs')) + lines_of(project / 'build.rs')
+            add(Program(name, 'rust', project, app_lines, ('examples',)))
     for relative in CONFORMANCE:
         path = ROOT / 'conformance' / relative
         add(Program('conformance/' + Path(relative).stem, 'hirsel', path, lines_of(path), ('conformance',), True))

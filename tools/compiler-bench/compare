@@ -16,7 +16,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 # The cargo command of each Rust mode.
-CARGO = {'check': 'check', 'debug': 'build', 'edit-body': 'check after a body edit',
+CARGO = {'check': 'check', 'debug': 'build', 'release': 'build --release', 'edit-body': 'check after a body edit',
          'edit-private-sig': 'check after a private signature edit', 'edit-public-sig': 'check after a public signature edit'}
 
 
@@ -42,6 +42,11 @@ def compare(baseline, current, budget):
     or appear in only one file."""
     old = {c['id']: c for c in baseline['cells']}
     new = {c['id']: c for c in current['cells']}
+    # An older cold-only baseline names its cells without a temperature.
+    # Match only the explicit cold cell, never an unchanged warm cell.
+    for cid in list(old):
+        if cid not in new and cid + '/cold' in new:
+            old[cid + '/cold'] = old.pop(cid)
     rows, notes = [], []
     for cid in sorted(old.keys() | new.keys()):
         if cid not in new:
@@ -76,14 +81,14 @@ def compare(baseline, current, budget):
 
 
 def scoreboard(baseline, current):
-    old = {(p['program'], p['mode'], p['rust_jobs']): p for p in baseline.get('pairs', [])}
+    old = {(p['program'], p['mode'], p['rust_jobs'], p.get('temperature')): p for p in baseline.get('pairs', [])}
     lines = []
     for p in current.get('pairs', []):
         if p['ratio'] is None:
             continue
-        was = old.get((p['program'], p['mode'], p['rust_jobs']))
+        was = old.get((p['program'], p['mode'], p['rust_jobs'], p.get('temperature')))
         change = f"  (was {was['ratio']:.1f}x)" if was and was['ratio'] else ''
-        lines.append(f"  {p['program']:<24} {p['mode']:<17} vs cargo {CARGO[p['rust_mode']]} -j{p['rust_jobs']}: "
+        lines.append(f"  {p['program']:<24} {p['mode']:<17} {p.get('temperature') or 'cold'} vs cargo {CARGO[p['rust_mode']]} -j{p['rust_jobs']}: "
                      f"{p['hirsel_instructions_u']:.0f} / {p['rust_instructions_u']:.0f} insn:u = {p['ratio']:.3f}x{change}")
     return lines
 

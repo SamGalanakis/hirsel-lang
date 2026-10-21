@@ -1,50 +1,24 @@
 #!/usr/bin/env python3
-"""Compile the benchmark corpus with Hirsel and its Rust pairs and write a
-schema-1 result file.
+"""Count the compiler corpus, cold and unchanged warm, with Rust pairs.
 
-    tools/compiler-bench/run --toolchain DIR --output results.json
-        [--work DIR] [--groups G,...] [--select REGEX] [--modes M,...]
-        [--repeat N] [--jobs 1,8] [--timeout S]
+    tools/compiler-bench/run --toolchain DIR --output results.json [--quick]
 
-DIR holds `hirsel` and its sibling `hirsel-std.precheck` (the release
-`//:hirsel-toolchain` bundle). Each cell is one program in one mode at one job
-count, run N times; the file keeps every run and each metric's median and
-median absolute deviation. Hirsel check and build cells also keep the
-compiler's own report (`--timings=json`, the last line on stderr): the wall
-time of each driver interval, which add up to the command's wall time, and the
-work time of each phase, which overlap them. `compare` reads two such files.
-
-Modes. Hirsel: check, clif (`build --debug --backend cranelift`), llvm-o0
-(`build --debug`), llvm-o2 (`build`), all four for the examples and check and
-clif for stress and scale programs; std is measured by `precheck`. Rust:
-check (`cargo check`) and debug (`cargo build`). The edit loop (group `edit`)
-measures `check` after one edit to the 10k synthetic program: edit-body,
-edit-private-sig, edit-public-sig.
-
-Caches. Every Hirsel run is a fresh process that reads the std precheck and
-retains nothing else: its query cache is process-local, so cold and warm are
-the same command and a cell's `cache` says so. A Rust cell's dependencies are
-built beforehand, in one target directory all pairs share (as Hirsel's std is
-prechecked); a cold run first removes the program's own artifacts and
-incremental state (`cargo clean -p`), and an edit
-cell runs after an untimed check of the unedited program, keeping Cargo's
-incremental cache: the warm number.
-
-Local runs. Each measured compile, and each untimed Cargo build of a Rust
-pair's dependencies, is its own `tools/capped` call: it takes the host's capped
-lock for that one command (memory cap HIRSEL_MEMORY_LIMIT, default 4G, no swap,
-and --timeout), so the lock is released between runs. A command the kernel
-killed at the cap is recorded as `cap`. A scale series stops at the first size
-that reaches the cap or the timeout. The suite itself runs one command at a
-time; never run two suites at once. Every compile is pinned under perf stat;
-only instructions:u is compared between sessions, at a 1% threshold.
+Every measurement takes its own tools/capped slot. Default: ten seeded,
+interleaved rounds of check, debug, release and native startup, including the
+3k/10k/30k scale series. --quick selects hello and csvjson, one round, with a
+540-second active-work budget. Toolchain preparation and capped queue time
+are outside that budget. Legacy clif/llvm-o0/llvm-o2 and edit modes remain
+selectable. Cold removes only this runner's program/native caches; std's
+published precheck and Rust dependency artifacts are retained on both sides.
 """
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import os
 import platform
 import re
+import random
 import shutil
 import statistics
 import subprocess
@@ -62,17 +36,17 @@ sys.path.insert(0, str(ROOT / 'bench/micro'))
 from measure import cpu_snapshot, siblings, busy_share, perf_counts, perf_command, timing_lock  # noqa: E402
 
 CAPPED = ROOT / 'tools/capped'
-HIRSEL_MODES = ('check', 'clif', 'llvm-o0', 'llvm-o2')
-RUST_MODES = ('check', 'debug')
+HIRSEL_MODES = ('check', 'debug', 'release', 'native')
+RUST_MODES = ('check', 'debug', 'release')
 EDITS = ('edit-body', 'edit-private-sig', 'edit-public-sig')
 # The Rust mode a Hirsel mode is compared with in the scoreboard.
-PAIRED = {'check': 'check', 'clif': 'debug', 'llvm-o0': 'debug', **{e: e for e in EDITS}}
-NATIVE = ('clif', 'llvm-o0', 'llvm-o2')
+PAIRED = {'debug': 'debug', 'release': 'release', 'native': 'release', 'check': 'check', 'clif': 'debug', 'llvm-o0': 'debug', **{e: e for e in EDITS}}
+NATIVE = ('debug', 'release', 'native', 'clif', 'llvm-o0', 'llvm-o2')
 HIRSEL_CACHE = 'none retained: fresh process, std precheck read, query cache process-local'
 RUST_COLD = 'cold: dependencies built, package artifacts and incremental state removed'
 RUST_WARM = 'warm: incremental cache of the unedited program retained'
 # Environment that would change what a run reads or caches.
-UNSET = ('HIRSEL_PRECHECK', 'HIRSEL_PACKAGE_CACHE', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL')
+UNSET = ('HIRSEL_PRECHECK', 'HIRSEL_PACKAGE_CACHE', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL', 'HIRSEL_NATIVE_CACHE')
 
 
 def say(text):
@@ -135,11 +109,18 @@ def measured(command, env, timeout, cpu=31):
         except ValueError as error:
             run['status'] = status = 'failed'
             stderr += str(error) + '\n'
-    if status == 'ok' and len(fields) >= 4:
+    if len(fields) >= 4:
         wall, user, system, rss = fields[-4:]
-        run.update(wall_s=float(wall), cpu_s=float(user) + float(system), rss_mib=int(rss) / 1024)
+        try:
+            run.update(wall_s=float(wall), cpu_s=float(user) + float(system), rss_mib=int(rss) / 1024)
+        except ValueError:
+            pass
+    run['capped_report'] = report
+    peak = re.search(r'peak ([0-9.]+) MiB', report)
+    if peak:
+        run['scope_peak_mib'] = float(peak[1])
     if status != 'ok':
-        run['stderr'] = stderr[-1500:]
+        run['stderr'] = stderr[:1500] + ('\n...\n' + stderr[-500:] if len(stderr) > 1500 else '')
     return run, stderr
 
 
@@ -147,11 +128,15 @@ def timings(stderr: str):
     """The intervals (seconds, with `(untimed)`), phase work times (seconds,
     phases entered at least once) and counts of a `--timings=json` report: the
     last stderr line, schema 1."""
-    lines = stderr.rstrip('\n').rsplit('\n', 1)
-    try:
-        report = json.loads(lines[-1])
-    except ValueError:
-        return None
+    report = None
+    for line in reversed(stderr.splitlines()):
+        try:
+            candidate = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(candidate, dict) and candidate.get('schema') == 1 and 'phases' in candidate:
+            report = candidate
+            break
     if not isinstance(report, dict) or report.get('schema') != 1:
         return None
     intervals = {i['interval']: i['wall_ns'] / 1e9 for i in report['intervals']}
@@ -177,10 +162,12 @@ class Runner:
                                env=dict(os.environ, LLVM_PROFILE_FILE=os.devnull)).stdout
         self.timings = ['--timings=json'] if '--timings' in usage else []
         self.cells = []
+        self.active_s = 0.0
 
     def env(self, native=False, jobs=None):
         env = dict(self.native_env if native else self.base_env)
-        # Measure compilation even when the program cache already holds an executable.
+        # Preserve the existing compiler-work benchmark policy. Warm retains
+        # native/runtime artifacts but does not skip the compiler via an exe hit.
         env['HIRSEL_PROGRAM_CACHE'] = 'off'
         if jobs:
             # Rust pairs share one target directory, so the dependencies build once.
@@ -193,36 +180,47 @@ class Runner:
         if mode == 'precheck':
             # precheck has no phase report; perf still counts it.
             return [hirsel, 'precheck', str(path), '-o', str(self.scratch / 'std.precheck')]
+        if mode == 'native':
+            return [hirsel, 'run', *self.timings, '--native', str(path)]
         if mode == 'check' or mode in EDITS:
             return [hirsel, 'check', *self.timings, str(path)]
-        profile = {'clif': ['--debug', '--backend', 'cranelift'], 'llvm-o0': ['--debug'], 'llvm-o2': []}[mode]
+        profile = {'clif': ['--debug', '--backend', 'cranelift'], 'llvm-o0': ['--debug'], 'llvm-o2': [], 'debug': ['--debug'], 'release': ['--release']}[mode]
         return [hirsel, 'build', *self.timings, *profile, str(path), '-o', str(self.scratch / 'program')]
 
     def cargo(self, project, verb, jobs):
-        return ['cargo', verb, '--offline', '--quiet', '-j', str(jobs), '--manifest-path', str(project / 'Cargo.toml')]
+        return ['cargo', 'check' if verb == 'check' else 'build', '--offline', '--locked', '--quiet',
+                *(['--bin', 'tasks-rust'] if project == ROOT / 'bench/apps/tasks/rust' else []),
+                *(['--release'] if verb == 'release' else []), '-j', str(jobs),
+                '--manifest-path', str(project / 'Cargo.toml')]
 
     def untimed(self, command, env):
-        subprocess.run([str(CAPPED), '--timeout', str(self.args.timeout), *command], env=env,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        started = time.monotonic()
+        done = subprocess.run([str(CAPPED), '--timeout', str(self.args.timeout), *command], env=env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        self.active_s += time.monotonic() - started
+        if done.returncode:
+            raise RuntimeError('dependency preparation failed: ' + done.stderr[-2000:])
 
-    def clean_rust(self, project, env):
+    def clean_rust(self, project, env, mode=None):
         manifest = str(project / 'Cargo.toml')
         package = json.loads(subprocess.run(
             ['cargo', 'metadata', '--offline', '--no-deps', '--format-version', '1', '--manifest-path', manifest],
             capture_output=True, text=True, check=True, env=env).stdout)['packages'][0]['name']
-        subprocess.run(['cargo', 'clean', '--offline', '--quiet', '-p', package, '--manifest-path', manifest],
+        subprocess.run(['cargo', 'clean', '--offline', '--quiet', *(['--release'] if mode == 'release' else []), '-p', package, '--manifest-path', manifest],
                        check=True, stdout=subprocess.DEVNULL, env=env)
 
-    def cell(self, program, mode, jobs, cache, runs):
+    def cell(self, program, mode, jobs, cache, runs, temperature=None):
         statuses = [r['status'] for r in runs]
         cell = {
-            'id': cell_id(program.name, program.language, mode, jobs),
+            'id': cell_id(program.name, program.language, mode, jobs) + (f'/{temperature}' if temperature else ''),
+            'temperature': temperature,
+            'wall_ratio_valid': getattr(self.args, 'lock_scope', 'session') == 'session' and self.args.repeat >= 10 and not getattr(self.args, 'resume', None),
             'program': program.name, 'language': program.language, 'mode': mode, 'jobs': jobs,
             'lines': program.lines, 'groups': list(program.groups), 'cache': cache,
             'status': next((s for s in statuses if s != 'ok'), 'ok'),
             'runs': runs,
             'summary': {metric: summary([r.get(metric) for r in runs if r['status'] == 'ok'])
-                        for metric in ('instructions_u', 'wall_s', 'cpu_s', 'rss_mib')},
+                        for metric in ('instructions_u', 'wall_s', 'cpu_s', 'rss_mib', 'total_wall_s')},
         }
         for part in ('intervals', 'phases'):
             reported = [r[part] for r in runs if r.get(part) and r['status'] == 'ok']
@@ -282,43 +280,162 @@ class Runner:
         cache = HIRSEL_CACHE if program.language == 'hirsel' else RUST_WARM
         self.cell(program, edit, jobs, cache, self.repeated(program, once))
 
+    def sample(self, program, mode, jobs, temperature, cache):
+        if self.args.quick and self.active_s >= 540:
+            return {'status': 'budget', 'exit': None}
+        env = self.env(native=mode in NATIVE and program.language == 'hirsel', jobs=jobs if program.language == 'rust' else None)
+        env.update(HIRSEL_NATIVE_CACHE=str(cache / 'native'), XDG_CACHE_HOME=str(cache / 'xdg'))
+        if temperature == 'cold':
+            shutil.rmtree(cache, ignore_errors=True)
+            if program.language == 'rust':
+                self.clean_rust(program.path, env, mode)
+        temporary = cache / 'tmp'
+        temporary.mkdir(parents=True, exist_ok=True)
+        env['TMPDIR'] = str(temporary)
+        command = self.cargo(program.path, mode, jobs) if program.language == 'rust' else self.hirsel_command(program.path, mode)
+        if mode == 'native' and program.language == 'hirsel':
+            grants, endpoint = startup_config(program, self.scratch)
+            command += ['--grants', str(grants)]
+            command = [sys.executable, str(HERE / 'startup.py'), '--endpoint', endpoint, '--', *command]
+        timeout = min(self.args.timeout, max(1, int(540 - self.active_s))) if self.args.quick else self.args.timeout
+        result, stderr = measured(command, env, timeout, self.args.cpu)
+        logs = self.work / 'logs'
+        logs.mkdir(exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode='w', dir=logs, prefix=program.name.replace('/', '-') + '-' + program.language + '-' + mode + '-' + temperature + '-', suffix='.stderr', delete=False) as log:
+            log.write(stderr)
+            result['stderr_path'] = log.name
+        self.active_s += result.get('wall_s', 0)
+        result.update(timings(stderr) or {})
+        if mode == 'native':
+            for line in stderr.splitlines():
+                if line.startswith('compiler-startup: '):
+                    startup = json.loads(line.removeprefix('compiler-startup: '))
+                    result['startup'] = startup
+                    result['total_wall_s'] = result.get('wall_s')
+                    if startup.get('wall_s') is not None:
+                        result['wall_s'] = startup['wall_s']
+                    if result['status'] == 'ok' and startup['status'] not in ('ready', 'no-output'):
+                        result['status'] = startup['status']
+        result['command'] = command
+        return result
+
     def go(self, programs):
-        """Every selected cell, in corpus order."""
+        """Seed language order per round; cold is immediately followed by warm.
+
+        Stop a failing cell after its first pair, retaining the other language.
+        A capped scale cell blocks larger sizes in that language/mode only.
+        """
         args = self.args
         want = set(args.groups.split(',')) if args.groups else None
-        wanted = args.modes.split(',') if args.modes else None
+        wanted = args.modes.split(',') if args.modes else list(HIRSEL_MODES)
         select = re.compile(args.select) if args.select else None
-        jobs = [int(j) for j in args.jobs.split(',')]
-        blocked = set()
-        for program in programs:
-            if getattr(args, 'quick', False) and not quick_program(program):
+        selected = [p for p in programs if (not select or select.search(p.name))
+                    and (want is None or set(p.groups) & want or 'edit' in want and p.name == corpus.EDIT_PROGRAM)]
+        names = list(dict.fromkeys(p.name for p in selected))
+        saved = getattr(args, 'checkpoint', None) or {}
+        self.cells = list(saved.get('completed_cells', []))
+        completed = {c['program'] for c in self.cells}
+        blocked = {(c['language'], c['mode'], c['jobs']) for c in self.cells
+                   if 'scale' in c['groups'] and c['status'] in ('cap', 'timeout')}
+        prepared = set()
+        rng = random.Random(args.seed)
+        for name in names:
+            members = [p for p in selected if p.name == name]
+            tasks = [(p, mode, j) for p in members for mode in modes(p, wanted)
+                     for j in ([int(j) for j in args.jobs.split(',')] if p.language == 'rust' else [1])]
+            results = {((s['language'], s['mode'], s['jobs']), s['temperature']): s['runs']
+                       for s in saved.get('samples', [])} if saved.get('program') == name else {}
+            resume_round = max((r.get('round', 0) for runs in results.values() for r in runs), default=-1) + 1
+            for key, temperature in results:
+                if key[0] == 'rust':
+                    prepared.add((name, key))
+            for round_number in range(args.repeat):
+                order = list(tasks)
+                rng.shuffle(order)
+                if name in completed or round_number < resume_round:
+                    continue
+                with timing_lock(args.cpu) if getattr(args, 'lock_scope', 'session') == 'round' else nullcontext():
+                    for p, mode, j in order:
+                        key = (p.language, mode, j)
+                        if (round_number and any(r['status'] != 'ok' for t in ('cold', 'warm') for r in results.get((key, t), []))):
+                            continue
+                        if 'scale' in p.groups and (p.language, mode, j) in blocked:
+                            continue
+                        if args.quick and self.active_s >= 540:
+                            for temperature in ('cold', 'warm'):
+                                results.setdefault((key, temperature), []).append({'status': 'budget', 'exit': None})
+                            continue
+                        if p.language == 'rust' and (name, key) not in prepared:
+                            try:
+                                self.untimed(self.cargo(p.path, mode, j), self.env(jobs=j))
+                            except RuntimeError as error:
+                                for temperature in ('cold', 'warm'):
+                                    results[(key, temperature)] = [{'status': 'failed', 'exit': None, 'stderr': str(error)}]
+                                continue
+                            prepared.add((name, key))
+                        cache = self.scratch / 'caches' / p.language / name.replace('/', '-') / mode / str(j)
+                        for temperature in ('cold', 'warm'):
+                            run = self.sample(p, mode, j, temperature, cache)
+                            run['round'] = round_number
+                            results.setdefault((key, temperature), []).append(run)
+                            say(f"  {name}/{p.language}/{mode}/j{j}/{temperature} r{round_number}: {run['status']} {run.get('wall_s', 0):.2f}s")
+                # Recoverable checkpoint, including rounds of an unfinished program.
+                pending = Path(args.output + '.partial.pending')
+                pending.write_text(json.dumps({'program': name, 'round': round_number,
+                    'identity': args.checkpoint_identity, 'completed_cells': self.cells,
+                    'samples': [{'language': k[0][0], 'mode': k[0][1], 'jobs': k[0][2], 'temperature': k[1], 'runs': v}
+                                for k, v in results.items()]}, indent=1) + '\n')
+                pending.replace(args.output + '.partial')
+            if name in completed:
                 continue
-            if select and not select.search(program.name):
-                continue
-            counts = jobs if program.language == 'rust' else [1]
-            if want is None or set(program.groups) & want:
-                for mode in modes(program, wanted, quick=getattr(args, 'quick', False)):
-                    if 'scale' in program.groups and (program.language, mode) in blocked:
-                        say(f'  {program.name}/{program.language}/{mode}: skipped (a smaller size reached the cap or timeout)')
-                        continue
-                    for j in counts:
-                        if program.language == 'hirsel':
-                            self.hirsel_cell(program, mode)
-                        else:
-                            self.rust_cell(program, mode, j)
-                        if 'scale' in program.groups and self.cells[-1]['status'] in ('cap', 'timeout'):
-                            blocked.add((program.language, mode))
-            if program.name == corpus.EDIT_PROGRAM and (want is None or 'edit' in want):
-                for edit in EDITS:
-                    if wanted is None or edit in wanted:
-                        for j in counts:
-                            self.edit_cell(program, edit, j)
+            for p, mode, j in tasks:
+                key = (p.language, mode, j)
+                for temperature in ('cold', 'warm'):
+                    runs = results.get((key, temperature))
+                    if not runs and 'scale' in p.groups and key in blocked:
+                        runs = [{'status': 'skipped', 'exit': None, 'stderr': 'smaller scale input reached the cap or timeout'}]
+                    if runs:
+                        self.cell(p, mode, j, temperature + ': program/native caches isolated; std/dependencies retained', runs, temperature)
+                        if 'scale' in p.groups and any(r['status'] in ('cap', 'timeout') for r in runs):
+                            blocked.add((p.language, mode, j))
+            if name == corpus.EDIT_PROGRAM and want and 'edit' in want:
+                for p in members:
+                    for edit in EDITS:
+                        if edit in wanted:
+                            self.edit_cell(p, edit, 1)
         return self.cells
 
 
+def startup_config(program, scratch):
+    """Rebind host directories into owned scratch, never an example's data."""
+    config = {'io': {'stdout': 'stdout.bytes@1', 'stderr': 'stderr.bytes@1', 'dirs': []}, 'args': []}
+    endpoint = 'stdout'
+    if program.name in ('logq', 'mdtoc'):
+        config['args'] = ['--help']
+    if program.name in ('tasks', 'hello-web', 'todo-api', 'kvstore'):
+        source = 'todo-api' if program.name == 'kvstore' else program.name
+        config = json.loads((ROOT / 'examples' / source / 'grants.json').read_text())
+        endpoint = ('http:127.0.0.1:8080' if program.name == 'hello-web' else
+                    'listening' if program.name == 'tasks' else 'stdout')
+        if program.name != 'hello-web':
+            config['args'] = ['--port', '0'] if program.name == 'tasks' else ['0']
+            config['io']['net']['rules'][0]['service'] = '0'
+            for directory in config['io']['dirs']:
+                if directory['path'] == 'data':
+                    data = scratch / (program.name + '-data')
+                    shutil.rmtree(data, ignore_errors=True)
+                    data.mkdir(parents=True)
+                    directory['host'] = str(data)
+                else:
+                    directory['host'] = str(ROOT / 'examples/tasks/static')
+    path = scratch / 'startup-grants.json'
+    path.write_text(json.dumps(config))
+    return path, endpoint
+
+
 def quick_program(program):
-    """The distribution smoke matrix: the seven examples and syn3k, Hirsel only."""
-    return program.language == 'hirsel' and ('examples' in program.groups or program.name == 'syn3k')
+    """Legacy distribution smoke inventory, retained for callers inspecting it."""
+    return program.language == 'hirsel' and program.name in ('hello', *corpus.UNITS, 'syn3k')
 
 
 def modes(program, wanted, quick=False):
@@ -327,11 +444,11 @@ def modes(program, wanted, quick=False):
     elif program.language == 'hirsel' and program.check_only:
         own = ('check',)
     elif program.language == 'hirsel':
-        # Every backend for the examples; check and the debug backend elsewhere.
-        own = HIRSEL_MODES if quick or 'examples' in program.groups else ('check', 'clif')
+        own = (*HIRSEL_MODES, 'clif', 'llvm-o0', 'llvm-o2')
     else:
         own = RUST_MODES
-    return [m for m in own if wanted is None or m in wanted or (m == 'precheck' and 'check' in wanted)]
+    return [m for m in own if wanted is None or m in wanted or (m == 'precheck' and 'check' in wanted)
+            or (program.language == 'rust' and m in {PAIRED.get(h) for h in wanted})]
 
 
 def environment(native):
@@ -347,19 +464,20 @@ def environment(native):
 
 def pairs(cells):
     """Hirsel/Rust ratios of median user instructions and peak RSS."""
-    by_key = {(c['program'], c['language'], c['mode'], c['jobs']): c for c in cells}
+    by_key = {(c['program'], c['language'], c['mode'], c['jobs'], c.get('temperature')): c for c in cells}
     found = []
     for c in cells:
         if c['language'] != 'hirsel' or c['mode'] not in PAIRED:
             continue
-        for jobs in (1, 8):
-            rust = by_key.get((c['program'], 'rust', PAIRED[c['mode']], jobs))
+        for jobs in sorted({r['jobs'] for r in cells if r['language'] == 'rust'}):
+            rust = by_key.get((c['program'], 'rust', PAIRED[c['mode']], jobs, c.get('temperature')))
             if not rust:
                 continue
-            h, r = c['summary']['instructions_u'], rust['summary']['instructions_u']
-            hm, rm = c['summary']['rss_mib'], rust['summary']['rss_mib']
+            accepted = c['status'] == rust['status'] == 'ok'
+            h, r = (c['summary']['instructions_u'], rust['summary']['instructions_u']) if accepted else (None, None)
+            hm, rm = (c['summary']['rss_mib'], rust['summary']['rss_mib']) if accepted else (None, None)
             found.append({
-                'program': c['program'], 'mode': c['mode'], 'rust_mode': rust['mode'], 'rust_jobs': jobs,
+                'program': c['program'], 'mode': c['mode'], 'temperature': c.get('temperature'), 'rust_mode': rust['mode'], 'rust_jobs': jobs,
                 'hirsel': c['id'], 'rust': rust['id'],
                 'hirsel_instructions_u': h and h['median'], 'rust_instructions_u': r and r['median'],
                 'ratio': h['median'] / r['median'] if h and r and r['median'] else None,
@@ -370,21 +488,28 @@ def pairs(cells):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--quick', action='store_true', help='Hirsel examples and syn3k: check, debug Cranelift and release LLVM')
     parser.add_argument('--toolchain', required=True, help='directory with hirsel and hirsel-std.precheck')
     parser.add_argument('--output', required=True, help='result file to write')
     parser.add_argument('--work', default=None, help='corpus and scratch directory (default: a temporary one)')
     parser.add_argument('--groups', help='comma-separated: examples, pairs, conformance, tour, std, stress, scale, edit')
     parser.add_argument('--select', help='only programs whose name matches this regular expression')
     parser.add_argument('--modes', help='comma-separated modes (default: every mode of each program)')
-    parser.add_argument('--cpu', type=int, default=31, help='pinned CPU (default 31; session holds its timing lock)')
-    parser.add_argument('--repeat', type=int, default=3, help='runs per cell (default 3)')
+    parser.add_argument('--cpu', type=int, default=31, help='pinned CPU (default 31; timing lock held per --lock-scope)')
+    parser.add_argument('--repeat', type=int, default=10, help='seeded rounds (default 10)')
+    parser.add_argument('--seed', type=int, default=20261021)
+    parser.add_argument('--environment', help='prepared environment JSON, avoids rebuilding native tools')
+    parser.add_argument('--resume', help='resume a matching .partial checkpoint in the same work directory')
+    parser.add_argument('--lock-scope', choices=('round', 'session'), default='round',
+                        help='yield CPU timing lock between rounds by default; session enables wall ratios')
+    parser.add_argument('--quick', action='store_true', help='hello + csvjson, all four modes, one cold/warm round, 45s cells')
     parser.add_argument('--repeat-large', action='store_true', help='repeat programs of 30k lines or more too')
-    parser.add_argument('--jobs', default='1,8', help='cargo job counts (default 1,8); Hirsel is single-threaded')
+    parser.add_argument('--jobs', default='1', help='cargo job counts (default 1); Hirsel is single-threaded')
     parser.add_argument('--timeout', type=int, default=300, help='seconds per run (default 300)')
     args = parser.parse_args()
-    if args.quick and args.modes is None:
-        args.modes = 'check,clif,llvm-o2'
+    if args.quick:
+        args.groups = 'examples'
+        args.select = '^(hello|csvjson)$'
+        args.repeat, args.jobs, args.timeout = 1, '1', min(args.timeout, 45)
     if not (Path(args.toolchain) / 'hirsel').exists():
         parser.error(f'{args.toolchain}/hirsel does not exist')
     if args.repeat < 1 or args.cpu not in os.sched_getaffinity(0):
@@ -395,30 +520,38 @@ def main():
         args.work = temporary.name
     work = Path(args.work).resolve()
     started = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    commit = git_commit()
     say(f'compiler-bench: writing the corpus to {work}')
     programs = corpus.corpus(work, scale=(3000,)) if args.quick else corpus.corpus(work)
     native = args.modes is None or any(m in NATIVE for m in args.modes.split(','))
-    if native:
+    if native and not args.environment:
         say('compiler-bench: building the pinned native toolchains on the pool')
-    env = environment(native)
-    say(f'compiler-bench: waiting for CPU{args.cpu} timing lock')
-    with timing_lock(args.cpu):
-        say(f'compiler-bench: CPU{args.cpu} lock acquired; starting measurements')
-        cells = Runner(args, env).go(programs)
+    prepared_environment = json.loads(Path(args.environment).read_text()) if args.environment else environment(native)
+    args.checkpoint_identity = {'commit': commit, 'cpu': args.cpu, 'repeat': args.repeat, 'seed': args.seed,
+                                'work': str(work), 'groups': args.groups, 'select': args.select, 'modes': args.modes,
+                                'jobs': args.jobs, 'hirsel_sha256': file_hash(Path(args.toolchain) / 'hirsel')}
+    args.checkpoint = json.loads(Path(args.resume).read_text()) if args.resume else None
+    if args.checkpoint and args.checkpoint.get('identity') != args.checkpoint_identity:
+        parser.error('checkpoint identity differs (compiler, commit, CPU, selection, seed, rounds or work directory)')
+    with timing_lock(args.cpu) if args.lock_scope == 'session' else nullcontext():
+        cells = Runner(args, prepared_environment).go(programs)
     rustc = subprocess.run(['rustc', '--version'], capture_output=True, text=True).stdout.strip()
     result = {
-        'schema': 1, 'suite': 'compiler-bench', 'commit': git_commit(), 'started': started,
+        'schema': 1, 'suite': 'compiler-bench', 'commit': commit, 'started': started,
         'cpu': args.cpu,
         'host': {'machine': platform.machine(), 'cpus': os.cpu_count(), 'load1': os.getloadavg()[0]},
         'toolchain': {'hirsel': str(Path(args.toolchain).resolve() / 'hirsel'), 'rustc': rustc,
                       'hirsel_sha256': file_hash(Path(args.toolchain) / 'hirsel'),
                       'std_precheck_sha256': file_hash(Path(args.toolchain) / 'hirsel-std.precheck')},
         'selection': {'quick': args.quick, 'groups': args.groups, 'select': args.select, 'modes': args.modes, 'jobs': args.jobs},
-        'repeat': args.repeat, 'cells': cells, 'pairs': pairs(cells),
+        'lock_scope': args.lock_scope, 'resumed_from': args.resume,
+        'wall_ratio_valid': args.lock_scope == 'session' and args.repeat >= 10 and not args.resume,
+        'seed': args.seed, 'protocol': 'seeded language/mode order, adjacent cold then unchanged warm; instruction ratios are the verdict',
+        'repeat': args.repeat, 'active_s': sum(r.get('total_wall_s', r.get('wall_s', 0)) or 0 for c in cells for r in c['runs']), 'cells': cells, 'pairs': pairs(cells),
     }
     Path(args.output).write_text(json.dumps(result, indent=1) + '\n')
     say(f'compiler-bench: {len(cells)} cells written to {args.output}')
-    failed = [c['id'] for c in cells if c['status'] not in ('ok', 'cap', 'timeout')]
+    failed = [c['id'] for c in cells if c['status'] not in ('ok', 'cap', 'timeout', 'skipped', 'budget')]
     if failed:
         say('compiler-bench: failed cells: ' + ', '.join(failed))
     return 1 if failed else 0

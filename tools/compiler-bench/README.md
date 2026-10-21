@@ -1,218 +1,152 @@
 # Compiler benchmarks
 
-This suite measures how fast Hirsel compiles: the whole compiler, each of its
-phases, and Hirsel against Rust on equivalent programs. (`bench/native`
-measures the speed of the generated code instead.) It records a result file,
-compares user-mode instruction counts with a stored baseline, and runs only when
-invoked by hand.
+This extends the compiler corpus and offline Rust ports; `bench/native` measures
+execution speed instead. Every measured command and dependency preparation takes
+its own `tools/capped` slot, released between commands. Never wrap the runner in
+another capped call. Do not run your own compiler builds during a measurement.
 
 ```sh
-# The distribution CLI: fat LTO, one codegen unit, PGO; sibling std precheck.
+# Distribution measurements: fat LTO, one codegen unit, PGO and std precheck.
 tools/toolchain-dist/build --pgo --output /tmp/hirsel-dist
-# Developer release builds keep their existing profile.
-tools/compiler-bench/run --quick --toolchain <bundle> --output quick.json       # Hirsel examples + syn3k, no Rust
-tools/compiler-bench/run --toolchain <bundle> --output results.json            # whole suite
-tools/compiler-bench/run --toolchain <bundle> --groups examples --modes check --output r.json
-tools/compiler-bench/compare baseline.json results.json   # exit 1 on a regression
+# Developer release bundle (keeps its existing profile):
+.buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-toolchain --show-full-output
+# The bundle contains hirsel and its sibling hirsel-std.precheck.
+tools/compiler-bench/run --quick --toolchain <bundle> --output quick.json
+tools/compiler-bench/report quick.json --scoreboard > scoreboard.md
 ```
 
-Each measured compile is its own `tools/capped` call, and so is each untimed
-Cargo build of a Rust pair's dependencies. The host's capped lock is held for
-that one command and released between runs. Never wrap the suite, or any part
-of it, in one capped call: that holds the lock for the whole campaign and blocks
-every other lane's local runs. Each command runs under the memory cap
-(`HIRSEL_MEMORY_LIMIT`, default 4G, no swap) and `--timeout`. The suite runs one
-command at a time; never run two suites at once.
+`--quick` selects hello and csvjson, all four modes and their Rust pairs, one
+cold/warm round, at one job. Each command has a 45-second timeout and the runner
+stops issuing measurements after a 540-second work budget. This keeps the
+reduced matrix below ten minutes of active work, including dependency setup;
+waiting for another lane's capped slot and initial Buck2 tool preparation are
+outside the budget. A timeout is a result, never an invitation to raise the cap.
+Quick is for iteration and counter comparisons, not stable wall-time ratios.
 
-A command the kernel kills at the cap is recorded as a `cap` cell, which is a
-finding and not something to retry. A scale series stops at the first size that
-reaches the cap or the timeout. Native build modes first build the pinned native
-toolchains on the Buck2 pool, as `bench/native/suite.py` does.
-The runtime archives come from the tree `run` is in, and the toolchain bundle
-has none. So build `--toolchain` from that same commit, or a native link can
-fail on runtime symbols the two disagree on.
+The archived historical campaign used ten rounds, with seeded language/mode order within each input
+(`--seed 20261021`). Cold is immediately followed by unchanged warm. Both sides
+are pinned to `--cpu` (31 by default) and counted with the existing microbench
+`perf stat` wrapper: task-clock, cycles, instructions, cycles:u, instructions:u.
+Each round holds the CPU timing lock and yields it before the next round, so a
+large compiler corpus cannot block other lanes for hours. Only individual
+commands hold capped. `--lock-scope session` explicitly holds the convention
+lock for all ten rounds; only that uninterrupted mode permits wall ratios.
+Only user instructions decide cross-session regressions (`compare`, +1%). Wall
+ratios require an uninterrupted ten-round session; normal round-scoped runs
+retain descriptive wall values and instruction ratios. SMT sibling busy shares and perf
+multiplex percentages remain in the raw JSON.
 
-## Per-phase timings
-
-The suite times nothing inside the compiler itself. Each `check` and `build`
-run passes `--timings=json`, and the suite reads the compiler's own report:
-the last line on stderr, schema 1, documented in `docs/building.md`
-("Compile timings") and produced by `hirsel_intern::timings`. A cell keeps two
-parts of that report:
-
-- the wall time of each driver **interval**, together with `(untimed)`. These add
-  up to the command's wall time.
-- the work time of each **phase**, which excludes the phases nested in it.
-  Phases overlap the intervals, so they do not add up.
-
-It also keeps the report's counts, such as definitions, units and V runs.
-`hirsel precheck` takes no `--timings`, so the std cell has wall time, CPU time
-and RSS plus perf counters. When a toolchain's usage shows no `--timings`, as before that
-report existed, every cell records wall time, CPU time and RSS plus perf counters.
-Peak RSS always comes from `/usr/bin/time`, never from `--mem-usage`, because
-measuring held memory walks the allocator and slows the run.
-
-## Corpus
-
-| group | programs | probes |
+| mode | Hirsel | Rust pair |
 |---|---|---|
-| `examples` (`pairs`) | hello, todo-api, kvstore, logq, csvjson, mdtoc, bench-lite, each with its Rust port | real programs with std: JSON with derive, HTTP, tasks, channels, mutexes, files, CSV, base64, SHA-256, NFC |
-| `conformance` | 14 accepted programs, one per rule family (`corpus.CONFORMANCE`) | small-program fixed cost across features |
-| `tour` | every runnable program `docs/tour.md` links | the documented feature tour |
-| `std` | `hirsel precheck stdlib/std@1/hirsel.json` | std checked whole, from source |
-| `stress` (`pairs`) | nest 8/16/32, instances 32/128, wide 2000, long 2000, arms 200, nested-match 16/32, table 2000, derive 64, closures 200, each with a Rust twin | known cliffs: nested generic depth, many generic instances, many definitions, long bodies, wide and deep matches, big literals, comptime derive, closures |
-| `scale` (`pairs`) | synthetic 3k, 10k, 30k, 50k, 100k lines | size scaling: copies of the six examples, one module each, all reachable from `main` |
-| `edit` | the 10k synthetic program after one edit | the edit loop: a body edit, a private signature edit and a public signature edit |
+| check | `check --timings=json` | `cargo check --offline` |
+| debug | `build --debug --timings=json` | `cargo build --offline` |
+| release | `build --release --timings=json` | `cargo build --release --offline` |
+| native | `run --native --timings=json` until first output/listening | `cargo build --release --offline` (compile only) |
+| precheck | `precheck stdlib/std@1/hirsel.json` | none |
 
-The Rust ports (`rust/units/`) keep each example's types, functions and error
-cases (not its tests, which no bench mode compiles), and use std plus a pinned dependency set that stands in for
-Hirsel's std (`serde`/`serde_json` with derive, `sha2`, `base64`, `csv`,
-`unicode-normalization`; `rust/Cargo.toml.in`, `rust/Cargo.lock.in`, built
-`--offline`). Each port has about the same size as its example (1,765 lines
-against 1,817 in all; csvjson is the largest difference, since Rust has
-no flag parser in std). HTTP request parsing, a
-seeded generator and a bounded arena are written out in the ports, where Hirsel
-gets them from std. Their output is not compared byte for byte with Hirsel's:
-the pair measures compile time for the same program shape.
+The older explicit modes `clif`, `llvm-o0`, `llvm-o2` and the `edit-*` selectors
+remain accepted. `--groups`, `--select`, `--modes`, `--jobs`, `--repeat` and
+`--timeout` narrow a run; a native-only selection still includes Rust release.
+The edit group must be explicitly selected with its `edit-*` modes. It uses the
+existing body/private/public signature probes on syn10k. They do not measure a
+resident engine; unchanged warm is not an edit benchmark.
 
-## Modes, pairs and caches
+Cold deletes the runner-owned native/cache directory and removes the Rust
+package's own artifacts and incremental state. It retains the published std
+precheck and builds Rust dependencies beforehand (the pinned Cargo manifest and
+lockfile under `rust/`, offline). Warm runs the exact command again without
+cleaning. Neither flushes the host page cache or deletes shared host caches.
+The existing `HIRSEL_PROGRAM_CACHE=off` policy is retained so compiler work is
+measured even for unchanged commands; this is not an executable-cache-hit
+benchmark. Each mode and input has its own native cache; Rust modes share dependency
+artifacts. The runner never cleans another lane's cache or example data.
 
-| Hirsel mode | command | Rust pair |
-|---|---|---|
-| `check` | `hirsel check` | `cargo check` |
-| `clif` | `hirsel build --debug --backend cranelift` | `cargo build` (debug) |
-| `llvm-o0` | `hirsel build --debug` | `cargo build` (debug) |
-| `llvm-o2` | `hirsel build` | — |
-| `precheck` | `hirsel precheck` (std only) | — |
-| `edit-*` | `hirsel check` after the edit | `cargo check` after the edit |
+The corpus includes the seven original example pairs (hello, todo-api, kvstore,
+logq, csvjson, mdtoc, bench-lite), tasks and hello-web, the 14 conformance probes,
+the runnable tour, std alone, all existing stress pairs, and synthetic copies of
+the six examples at 3k, 10k and 30k lines. The generators can still accept larger
+sizes explicitly. Every scale module is reachable. Tasks reuses the existing `bench/apps/tasks/rust` port and pinned lockfile,
+compiling only its app binary (not its load-generator binaries). Hello-web, std,
+tour and conformance have no paired Rust port; their ratios are unavailable.
+Tour/conformance programs without an executable entry run check only; std has no
+native entry, so it runs precheck only. `precheck` accepts no timing flag.
 
-The examples run all four Hirsel modes; stress and scale programs run `check`
-and `clif`; conformance and tour programs run `check`. Rust cells run at `-j1`
-and `-j8` (`--jobs`). `HIRSEL_JOBS` gives the capped
-scope the same number of CPUs. Hirsel compiles on one thread, so its cells are
-`jobs: 1`. The scoreboard (`pairs` in the result, printed by `compare`) is each
-Hirsel cell's median `instructions:u` divided by its Rust pair's. Above 1x,
-Hirsel executes more user instructions. Wall and CPU times are descriptive only.
+Native wall time is measured by `startup.py` inside the counted command, from
+launch to the first stdout byte. Tasks stops at its listening announcement and
+gets `quit` on stdin. Hello-web prints no stdout: the endpoint is its first
+successful TCP connection, after refusing a pre-existing listener. The probe
+then sends and drains a valid HTTP GET using Python `http.client`; a bare
+connect-and-close exposed a pinned-runtime MEM-13 EOF path. Those original
+failed samples remain failed and are excluded from accepted startup summaries. Other server
+examples also stop at their listening announcement; their native child is
+terminated so the CLI can still emit its actual compilation phases. Example filesystem grants
+point at private scratch; tasks uses its original static assets and an ephemeral
+port. Silent stress programs report wall to exit, explicitly labeled in the
+scoreboard. Logq/mdtoc use `--help` so their first output needs no input fixture.
+Counters and peak RSS include bounded shutdown (one second maximum grace before
+termination); `total_wall_s` retains that duration. A server killed before CLI
+exit cannot emit the CLI's phase report: the scoreboard marks it unavailable.
+Finite programs and gracefully stopped tasks retain their actual report. No
+build-mode phase timings are substituted for native timings.
 
-Each cell states its cache in its `cache` field. Compiler benchmarks disable
-the native program cache (`HIRSEL_PROGRAM_CACHE=off`) so repeated builds exercise
-the compiler. `--quick` selects only Hirsel: the seven examples plus syn3k, in
-check, debug Cranelift and release LLVM modes (24 cells). Explicit `--modes`
-can narrow this selection.
+Each schema-1 cell has a temperature-suffixed ID, source line count, exact
+commands, status, every run and median/MAD summaries of wall, CPU, instructions,
+peak RSS, driver intervals, phase self time and compiler counts. Native samples
+also retain the readiness endpoint and whether termination was needed. Raw
+intervals sum to the CLI wall; phases exclude nested phases and overlap driver
+intervals. `report --scoreboard` prints one table per mode, Rust wall/count/RSS
+and ratios, and the five largest self phases per input and temperature.
 
-- **Hirsel**: every run is a fresh process. It reads the std precheck and keeps
-  nothing else between runs, because the query cache is process-local. So a
-  cold run and a warm run are the same command.
-- **Rust, cold**: the dependencies are built beforehand, as Hirsel's std is
-  prechecked. Before each timed run, `cargo clean -p` removes the package's own
-  artifacts and incremental state.
-- **Rust, warm** (`edit-*`): the edit runs after an untimed `cargo check` of the
-  unedited copy, keeping Cargo's incremental cache.
+The runner writes a `.partial` checkpoint after every round.
+`--resume <file.partial>` in the same `--work` directory skips completed inputs
+and rounds while preserving the seeded order. It refuses mismatched compiler
+hashes, commit, CPU, selection, seed, round count or work directory. Resumed
+cells never claim wall ratios across the gap; their instruction counts remain
+usable. A continuous completed input from before a resume keeps its original
+wall-ratio validity. A failed pair is
+not retried in later rounds. A capped/timed-out scale input blocks larger sizes
+in that language/mode; all failures remain findings. Partial successes never
+turn a failed cell into a claimed speedup. Native tools/runtime archives are
+prepared from the same tree as the compiler. `--environment FILE` reuses the
+JSON returned by the runner's `environment(True)` helper after preparation has
+finished, so no own Buck2 build overlaps measurements.
 
-## Result file
+`run-main` builds the PGO distribution bundle (see `tools/toolchain-dist/README.md`),
+runs the quick selection on a detached origin/main and saves results
+under `$HIRSEL_MAIN_RUNS/compiler-bench/`. It compares instructions with the
+committed `baseline.json` (the original check-only baseline), or records a first
+host baseline when none exists. It writes alarms on regressions. Nothing here
+installs a timer. See `RESULTS.md` for the superseded, incomplete historical baseline. New
+measurements use `--quick` against current main or arch; the old multi-hour
+campaign must not be repeated.
 
-`run` writes schema 1. The top level has `commit`, `started`, `host`,
-`toolchain`, `repeat`, `cells` and `pairs`. Each cell has:
+## Prior art and deliberate differences
 
-- `id` (`program/language/mode[/jN]`), `lines`, `groups`, `cache`;
-- `status`: `ok`, `failed`, `cap` or `timeout`;
-- every run, with exit status, wall and CPU seconds, peak RSS in MiB from
-  `/usr/bin/time`, and Hirsel's intervals, phases and counts;
-- a `summary`: the median, the median absolute deviation (MAD) and `n` for wall,
-  CPU, RSS, `instructions_u` and each interval and phase. Every run also records
-  all five perf events, multiplex running percentages, and SMT sibling snapshots
-  and busy shares from `/proc/stat`.
-
-By default each cell runs 3 times (`--repeat`). Programs of 30k lines or more
-run once unless `--repeat-large` is given.
-
-## Budget and regressions
-
-`compare BASELINE RESULTS` compares only `instructions_u`, with a +1% threshold.
-A cell that completed in the baseline but now fails, times out, or hits its cap
-also regresses. Missing counters fail the measured cell; legacy successful
-results without counters are rejected. Wall/CPU time, RSS, intervals and phases
-remain descriptive in `report` and never influence this cross-session verdict.
-`compare` exits 1 on a regression and 2 on unusable input.
-
-Every compile is pinned to `--cpu` (31 by default), under
-`perf stat -e task-clock,cycles,instructions,cycles:u,instructions:u`. The whole
-suite holds CPU31's timing lock (other CPUs use a per-CPU lock in `/tmp`).
-Cargo job counts select parallel jobs; all their threads share the pinned CPU. Each compile still gets its own capped slot.
-Counters include compiler child processes (including rustc and the linker).
-
-The following interval and phase names remain documented for attribution:
-
-| interval | driver step |
-|---|---|
-| `image open` | reading and decoding the std precheck |
-| `S0` | loading the package graph and sources, parsing, publishing std's declarations, the program check's own steps |
-| `parallel` | checking each file's definitions and lowering the reachable closure (resolve, check, modes, lowering, V) |
-| `S1` | reserved; 0 until the driver step exists |
-| `parallel2` | reserved; 0 until the driver step exists |
-| `merge` | publishing checked packages and dropping the session |
-| `plan` | exporting, importing and adapting the native input |
-| `units` | each unit's LIR import, placement, RC, reuse, cleanup lowering, LIR validation and code generation |
-| `link` | the toolchain, the link and the output copy |
-| `(untimed)` | the rest of the wall time: CLI startup, and a program's own execution under `run` and `test` |
-
-| phase | work |
-|---|---|
-| `parse` | lexing and parsing |
-| `resolve` | name resolution |
-| `signatures` | signature normalization |
-| `check` | body type checking (H) |
-| `modes` | ownership and authority (I, J) |
-| `lower` | lowering to TIR (K) |
-| `verify` | the TIR checker V |
-| `comptime` | compile-time evaluation |
-| `plan` | native input planning |
-| `import` | TIR to LIR import |
-| `place` | placement |
-| `rc` | reference-count insertion |
-| `reuse` | reuse |
-| `ready` | Ready lowering |
-| `lir validate` | the LIR checker C |
-| `codegen` | LLVM or Cranelift code generation |
-| `store lookup` | code-store lookups |
-
-The instruction threshold exceeds the audit's 0.024% within-session range for
-`hirsel check todo-api`. Shared-host wall time can drift by 140% between
-sessions; use `bench/micro/run` with old/new compiler commands in one interleaved
-session when descriptive timing ratios are needed.
-
-The baseline is the result of an explicit manual run on main, on the same
-host. `run-main` records the first run as
-`$HIRSEL_MAIN_RUNS/compiler-bench/baseline.json`; later manual runs compare
-with it. A committed `tools/compiler-bench/baseline.json` takes precedence.
-Reproduce the initial selection with:
-
-```sh
-tools/compiler-bench/run --toolchain <bundle> --groups examples --modes check --jobs 1 --cpu 30 --output baseline.json
-```
-
-The committed first baseline covers the seven example programs in Hirsel and
-Rust `check` mode at one job (three runs each), on CPU30; its `selection` records the exact scope. It is
-an initial count baseline, not coverage of all backend/stress/scale cells.
-
-After a change that intends to move the numbers, replace the baseline with
-the next manual run's result (copy `latest.json` over it).
-
-## Run against main by hand
-
-```sh
-tools/compiler-bench/run-main
-# Extra arguments select cells, for example:
-tools/compiler-bench/run-main --groups examples --modes check
-```
-
-`run-main` fetches `origin/main` into a detached worktree and builds the
-PGO distribution bundle on the Buck2 pool, training on the examples and syn3k
-through tools/capped. See `tools/toolchain-dist/README.md`. It runs the suite (one capped process at a
-time) and compares the result with the baseline. Each result and comparison
-is kept under `$HIRSEL_MAIN_RUNS/compiler-bench/`, and a regression appends
-one line to `$HIRSEL_MAIN_RUNS/alarms.log`, the file `tools/main-stall-alarm`
-writes. `HIRSEL_MAIN_RUNS` defaults to
-`${XDG_STATE_HOME:-$HOME/.local/state}/hirsel/main-runs`. Timestamped results
-are named `<UTC timestamp>-<commit>.json`; `latest.json` holds the most recent
-result. Nothing is installed or enabled by these commands.
+- Cold/unchanged scenarios follow rust-lang/rustc-perf `collector/src/compile/benchmark/mod.rs:496–550`
+  (commit `10c88d4`; inspected clone `/tmp/ref-rustc-perf`). It prepares dependencies,
+  then measures a fresh incremental state and an unchanged second compilation.
+  This suite measures whole Cargo commands, including Cargo's no-op fast path,
+  because the requested unit is command-to-output latency; rustc-perf forces the
+  leaf rustc invocation. Cold removes only package artifacts rather than copying
+  the entire prepared target directory, keeping the existing harness's approach.
+- Counts, affinity, sibling snapshots and ten-round seeded interleaving reuse
+  `bench/micro/measure.py:79–125`, also used by the app benchmark at
+  `bench/apps/tasks/bench:511–539`. Cold/warm stay adjacent because the second
+  command must inherit exactly the first command's cache state.
+- Readiness observation and directory rebinding follow
+  `bench/apps/tasks/support.py:26–49,80–104`: selectors observe readiness, filesystem
+  grants target scratch, and stdin allows graceful shutdown. `startup.py` observes
+  the first byte instead of requiring a complete line for finite programs. It
+  stops only the launcher's native child for other servers so the CLI can emit
+  its phase report; whole-group termination is reserved for final cleanup.
+  Hello-web needs a TCP readiness probe because it prints no announcement. Its
+  valid-request/drained-body behavior follows `bench/micro/http/load.py:14,29–38`;
+  Python stdlib `http.client.HTTPResponse.read` handles HTTP framing. This differs
+  from a bare connect-and-close because that triggered a real runtime EOF error
+  in the pinned baseline, and differs from the old firstout.py GET probe by
+  draining the response before closing the connection.
+- Cache ownership follows rustc's private-session separation documented in
+  `compiler/rustc_incremental/src/persist/fs.rs:4–37` (rust-lang/rust commit
+  `15c1044`; `/tmp/ref-rustc`). The harness owns disposable per-input/mode
+  directories and never cleans a shared published compiler cache. It measures
+  existing compiler caches; it does not implement an artifact cache.
