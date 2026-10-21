@@ -8,6 +8,8 @@ use std::{
 mod budgets;
 #[path = "cli/cache_defaults.rs"]
 mod cache_defaults;
+#[path = "cli/candidate.rs"]
+mod candidate;
 #[path = "cli/deadlines.rs"]
 mod deadlines;
 #[path = "cli/dependency_card.rs"]

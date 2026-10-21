@@ -26,6 +26,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[path = "serve_candidate.rs"]
+mod candidate;
 #[path = "serve_watch.rs"]
 mod watch_events;
 
@@ -41,6 +43,7 @@ fn identity() -> String {
     hash.update(include_bytes!("main.rs"));
     hash.update(include_bytes!("serve.rs"));
     hash.update(include_bytes!("serve_watch.rs"));
+    hash.update(include_bytes!("serve_candidate.rs"));
     hash.finalize()[..8]
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -103,6 +106,10 @@ fn umask() -> Option<u32> {
         8,
     )
     .ok()
+}
+
+pub fn candidate_client(args: &[OsString]) -> u8 {
+    candidate::client(args)
 }
 
 // ---- the client ----
@@ -329,7 +336,7 @@ pub fn serve(args: &[OsString]) -> u8 {
     let startup = environment().unwrap_or_default();
     hirsel_driver::session::enable_resident(8);
     hirsel_engine::free_sessions(true);
-    let code = run_server(&listener, Duration::from_secs(idle), &startup);
+    let code = run_server(&listener, Duration::from_secs(idle), &startup, &workspace);
     let _ = std::fs::remove_file(&socket);
     code
 }
@@ -376,7 +383,12 @@ fn bind(socket: &Path) -> std::io::Result<Option<UnixListener>> {
 /// environment while it runs); another accepts connections and answers busy
 /// (`B`) at once while a command runs, so a client never waits on another's
 /// command and runs its own in-process instead.
-fn run_server(listener: &UnixListener, idle: Duration, startup: &[(String, String)]) -> u8 {
+fn run_server(
+    listener: &UnixListener,
+    idle: Duration,
+    startup: &[(String, String)],
+    root: &Path,
+) -> u8 {
     use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
     use std::sync::{Arc, mpsc};
     let ours = compatible_environment(startup);
@@ -404,10 +416,14 @@ fn run_server(listener: &UnixListener, idle: Duration, startup: &[(String, Strin
         };
         // A request that panicked may have left a session half-updated:
         // answer it, then stop, and the next client starts afresh.
-        let served = serve_one(stream, &ours);
+        let served = serve_one(stream, &ours, root);
         busy.store(false, SeqCst);
-        if served.is_err() {
-            return 3;
+        match served {
+            Err(()) => return 3,
+            // Drain the connection before retiring process-global append-only
+            // Symbol/DefId tables. Live handles are never silently evicted.
+            Ok(true) => return 0,
+            Ok(false) => {}
         }
     }
 }
@@ -420,21 +436,28 @@ struct Request {
     umask: u32,
 }
 
-fn serve_one(mut stream: UnixStream, ours: &[(String, String)]) -> Result<(), ()> {
+fn serve_one(mut stream: UnixStream, ours: &[(String, String)], root: &Path) -> Result<bool, ()> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let Some(request) = read_request(&stream) else {
+    let Some((magic, value, fds)) = read_wire(&stream) else {
         let _ = stream.write_all(b"R");
-        return Ok(());
+        return Ok(false);
+    };
+    if &magic == candidate::MAGIC {
+        return candidate::serve(stream, value, fds, ours, root).map(|_| true);
+    }
+    let Some(request) = legacy_request(value, fds) else {
+        let _ = stream.write_all(b"R");
+        return Ok(false);
     };
     if compatible_environment(&request.env) != ours
         || request.fds.len() != 3
         || Some(request.umask) != umask()
     {
         let _ = stream.write_all(b"R");
-        return Ok(());
+        return Ok(false);
     }
     if stream.write_all(b"A").is_err() {
-        return Ok(());
+        return Ok(false);
     }
     let _ = stream.set_read_timeout(None);
     // A run ends with its client: a client that goes away (interrupted,
@@ -473,22 +496,30 @@ fn serve_one(mut stream: UnixStream, ours: &[(String, String)]) -> Result<(), ()
     );
     let _ = stream.write_all(&[b'X', code]);
     let _ = stream.shutdown(std::net::Shutdown::Both);
-    outcome.map(|_| ()).map_err(|_| ())
+    outcome.map(|_| false).map_err(|_| ())
 }
 
+#[cfg(test)]
 fn read_request(stream: &UnixStream) -> Option<Request> {
-    let mut buffer = vec![0u8; 64 * 1024];
+    let (magic, value, fds) = read_wire(stream)?;
+    (&magic == MAGIC).then_some(())?;
+    legacy_request(value, fds)
+}
+
+fn read_wire(stream: &UnixStream) -> Option<([u8; 4], serde_json::Value, Vec<OwnedFd>)> {
+    let mut buffer = [0u8; 8];
     let (received, fds) = recv_with_fds(stream, &mut buffer).ok()?;
     let mut bytes = buffer[..received].to_vec();
     while bytes.len() < 8 {
-        let mut more = [0u8; 4096];
-        let n = (&*stream).read(&mut more).ok()?;
+        let mut more = [0u8; 8];
+        let remaining = 8 - bytes.len();
+        let n = (&*stream).read(&mut more[..remaining]).ok()?;
         if n == 0 {
             return None;
         }
         bytes.extend(&more[..n]);
     }
-    if &bytes[..4] != MAGIC {
+    if &bytes[..4] != MAGIC && &bytes[..4] != candidate::MAGIC {
         return None;
     }
     let length = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
@@ -507,6 +538,10 @@ fn read_request(stream: &UnixStream) -> Option<Request> {
     if value["identity"].as_str()? != identity() {
         return None;
     }
+    Some((bytes[..4].try_into().ok()?, value, fds))
+}
+
+fn legacy_request(value: serde_json::Value, fds: Vec<OwnedFd>) -> Option<Request> {
     let strings = |v: &serde_json::Value| -> Option<Vec<String>> {
         v.as_array()?
             .iter()

@@ -918,6 +918,9 @@ fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
     if args.first().is_some_and(|a| a == "serve") && !args.iter().any(|a| a == "--host") {
         return serve::serve(&args[1..]);
     }
+    if args.first().is_some_and(|a| a == "candidate") {
+        return serve::candidate_client(&args[1..]);
+    }
     // A running resident compiler for this workspace takes the command.
     // Verification must exercise the selected store in this command's process,
     // even if a resident server already has a checked result.

@@ -129,6 +129,52 @@ Use `none@1` with
 `HIRSEL_DAEMON=off` for a cache-free reference check. Source snapshots are
 renewed from disk results after 64 edited revisions to bound retained history.
 
+### Isolated candidate checks
+
+`hirsel candidate --workspace DIR` reads version-1 JSON lines on stdin and
+writes one JSON reply for each line. It opens a structured connection to the
+same resident socket as ordinary commands. A connection owns its base and
+candidate handles; closing it releases them. Transport refusal/failure exits 3
+without checking the unedited disk program.
+
+Start by sending `{"version":1,"op":"capture","entry":"hirsel.json"}`.
+The reply's `ok.base` is an owned base handle; `ok.sources` lists each source's
+canonical `file`, full-content `expected` digest and UTF-8 byte length. Submit
+an alternative against that handle:
+
+```json
+{"version":1,"op":"submit","id":1,"base":1,"priority":"selected","edits":[{"file":"main.hir","expected":"<digest from capture>","edits":[{"start":0,"end":0,"replacement":"// alternative\n"}]}]}
+```
+
+Use the returned `ok.lease` in `result`, `cancel`, `observe_disk` and `release`.
+`result` returns `{"pending":true}` while the worker runs, then a receipt with
+completion/verdict, fixed On/Comptime policy, package scope, snapshot diagnostics,
+checked-product digest and independent head/disk freshness. Polling does not
+perform compiler work. An incomplete result has no successful checked product.
+Different request IDs with exactly identical resulting inputs compute once;
+waiter cancellation remains independent. Reusing an ID with different edits
+rejects. A selected priority affects queued admission only.
+
+`promote` takes `id` (an idempotent operation ID), `lease` and the expected
+`base` handle. A complete successful candidate promotes only if that base is
+still the exact head generation. It selects an in-memory head and writes no
+source files. `head` returns another owned base handle; `release` drops a base
+or candidate handle. `counters` reports actual loads, recomputations, retained
+bytes and queue/compute time. Dependency deltas remain explicitly unknown.
+
+The enabled policy is serial frozen-input checking: one active candidate uses
+the host's compiler worker budget, with at most 64 owned handles, 1024 new-work
+requests per connection before new-work admission stops, and 8 MiB frames.
+Polling and other controls count toward that threshold. Exhaustion refuses new work while
+allowing cancellation, release, promotion and existing-result lookup. An idle
+connection closes after 30 seconds without a frame; disconnect requests
+cancellation and drains active work at the core's safe boundaries. The server
+then exits to reclaim process-global intern tables. Live connections are never
+silently replaced to reclaim memory. Legacy commands and other connections
+receive Busy while this structured connection owns the host. Fast engine
+forks and concurrent distinct candidates are not enabled. Ordinary single
+checks continue using the ordinary resident path.
+
 ## Build and launch a program
 
 ```sh
