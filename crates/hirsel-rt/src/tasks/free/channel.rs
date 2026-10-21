@@ -8,6 +8,8 @@
 use super::super::*;
 
 #[cfg(test)]
+mod receive_tests;
+#[cfg(test)]
 mod tests;
 
 /// # Safety
@@ -112,4 +114,81 @@ pub(crate) unsafe fn send(
         scheduler(ctx).channels.touch(channel);
     }
     unsafe { try_yield(&mut *ctx) }
+}
+
+/// # Safety
+/// The role is held; receiver is open, message is its None carrier, out writable.
+pub(crate) unsafe fn receive(
+    ctx: *mut TaskCtx,
+    receiver: u64,
+    message: *mut u8,
+    out: *mut u32,
+    caller_site: u64,
+) -> Stopped<()> {
+    super::record::begin(ctx);
+    let channel = scheduler(ctx).channels.channel(receiver, false);
+    let mut entered = false;
+    loop {
+        // Cancellation flags and the shield snapshot remain stable while
+        // this role is held. Senders drop the object lock before reentering
+        // the role, so acquiring this lock cannot invert their lock order.
+        let cause = unsafe { canceled(ctx) };
+        let shielded = unsafe { (*ctx).shield } != 0;
+        let canceled_outcome = cause.map(|cause| format!("canceled {cause}"));
+        let cell = scheduler(ctx).channels.payload(channel);
+        let mut state = cell.lock();
+        let mut result = None;
+        let publication = if cause.is_some() || cell.ready(&state) {
+            super::record::publish(ctx, Phase::Done, |writer| {
+                let (status, outcome) = if let Some(cause) = cause {
+                    (
+                        crate::channels::CANCELED + cause,
+                        canceled_outcome.as_deref().unwrap(),
+                    )
+                } else {
+                    match unsafe { cell.receive(&mut state, message) } {
+                        Ok(true) => (crate::channels::DONE, "msg"),
+                        Err(status) => (status, "closed"),
+                        Ok(false) => unreachable!("the receiver owns this channel's ready message"),
+                    }
+                };
+                if let Some(writer) = writer {
+                    if !shielded {
+                        writer.cancel(cause);
+                    }
+                    writer.receive(
+                        cell.object
+                            .get()
+                            .expect("a recorded channel identity")
+                            .clone(),
+                        outcome,
+                    );
+                }
+                unsafe { out.write(status) };
+                result = Some(status);
+            })
+        } else if !entered {
+            super::record::publish(ctx, Phase::Entered, |_| ())
+        } else {
+            Ok(())
+        };
+        drop(state);
+        drop(cell);
+        drop(canceled_outcome);
+        publication?;
+        if result.is_some() {
+            return unsafe { try_yield(&mut *ctx) };
+        }
+        entered = true;
+        // No object lock, Arc, recorder borrow, or frame slot is retained by
+        // the poll. A send racing this park is caught by its first idle poll.
+        unsafe {
+            try_block(
+                &mut *ctx,
+                Wait::ReceiveReady { channel },
+                false,
+                caller_site,
+            )
+        }?;
+    }
 }

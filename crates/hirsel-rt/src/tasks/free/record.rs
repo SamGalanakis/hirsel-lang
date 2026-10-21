@@ -3,8 +3,9 @@
 //! records execute inside the same production recorder phase, before its
 //! progress publication. No section or recorder borrow crosses a suspension.
 //!
-//! Admission is still limited to explicit runtime tests: atomic and mutex
-//! boundaries and prepared children, without roots, host calls or other ops.
+//! Admission is still limited to explicit runtime tests: atomic, mutex and
+//! channel boundaries and prepared children, without roots, closes, host calls
+//! or other ops.
 //! General activation requires every boundary and stop to use this protocol.
 
 use crate::TaskCtx;

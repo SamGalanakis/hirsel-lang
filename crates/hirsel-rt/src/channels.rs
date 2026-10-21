@@ -262,6 +262,10 @@ impl ChannelCell {
         (DONE, early.then_some(sequence))
     }
 
+    pub(crate) fn ready(&self, state: &ChannelState) -> bool {
+        state.visible() > 0 || (state.queue.is_empty() && state.senders == 0)
+    }
+
     /// # Safety
     /// slot is a writable None carrier; the object lock is held.
     pub(crate) unsafe fn receive(
@@ -491,7 +495,7 @@ impl Channels {
     pub(crate) fn ready(&self, channel: u32) -> bool {
         self.channels[channel as usize].as_ref().is_some_and(|row| {
             let state = row.payload.lock();
-            state.visible() > 0 || (state.queue.is_empty() && state.senders == 0)
+            row.payload.ready(&state)
         })
     }
 

@@ -102,6 +102,9 @@ enum Wait {
     Exit { scope: u32 },
     /// A receive on `channel`, which moves a message into `slot` (CONC-6).
     Receive { channel: u32, slot: *mut u8 },
+    /// Native Free receive: only readiness is polled; its resumed owner moves
+    /// the image and publishes Done through its own recorder.
+    ReceiveReady { channel: u32 },
     /// A host request that would block, parked under its readiness token
     /// (`crate::host_waits`); its poll re-issues the request.
     Host { token: u64 },
@@ -452,7 +455,9 @@ impl Scheduler {
         self.woken.push(current);
         match wait {
             Wait::Join { child, .. } => self.task(child).awaited_by = Some(current),
-            Wait::Receive { channel, .. } => self.channels.wait(channel, at, current),
+            Wait::Receive { channel, .. } | Wait::ReceiveReady { channel } => {
+                self.channels.wait(channel, at, current)
+            }
             Wait::Any { .. } | Wait::Drain { .. } => self.set_waiters.push(current),
             Wait::Gate { gate } => self.gate(gate).waiters.push(current),
             Wait::Pool => self.pool_waiters.push(current),
@@ -488,7 +493,9 @@ impl Scheduler {
                     child.awaited_by = None;
                 }
             }
-            Some(Wait::Receive { channel, .. }) => self.channels.unwait(channel, at),
+            Some(Wait::Receive { channel, .. } | Wait::ReceiveReady { channel }) => {
+                self.channels.unwait(channel, at)
+            }
             Some(Wait::Any { .. } | Wait::Drain { .. }) => self.set_waiters.retain(|&t| t != task),
             Some(Wait::Gate { gate }) => self.gate(gate).waiters.retain(|&t| t != task),
             Some(Wait::Pool) => self.pool_waiters.retain(|&t| t != task),
@@ -863,7 +870,7 @@ pub(crate) fn test_waits(ctx: *mut TaskCtx) -> String {
             let kind = match wait {
                 Wait::Join { .. } => "task.await",
                 Wait::Exit { .. } => "task.scope",
-                Wait::Receive { .. } => "channel.receive",
+                Wait::Receive { .. } | Wait::ReceiveReady { .. } => "channel.receive",
                 Wait::Host { token } => unsafe { crate::host_waits::kind(ctx, token) },
                 Wait::Any { .. } => "task.await_any",
                 Wait::Drain { .. } => "task.cancel_all",
@@ -1592,6 +1599,10 @@ unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stoppe
                 None => false,
             }
         }
+        Some(Wait::ReceiveReady { channel }) => {
+            let shield = s.task(task).shield();
+            s.canceled_task(task, shield).is_some() || s.channels.ready(channel)
+        }
         Some(Wait::Host { token }) => {
             let shield = s.task(task).shield();
             let cause = s.canceled_task(task, shield);
@@ -1749,7 +1760,9 @@ pub(crate) unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_schema::
                     .map(u64::from)
                     .collect(),
             ),
-            Wait::Receive { channel, .. } => ("channel.receive", vec![u64::from(channel)]),
+            Wait::Receive { channel, .. } | Wait::ReceiveReady { channel } => {
+                ("channel.receive", vec![u64::from(channel)])
+            }
             Wait::Any { set, .. } => (
                 "task.await_any",
                 s.set(set)
@@ -3362,6 +3375,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
                 ordered::lifecycle::receive(ctx, receiver, message, out, caller_site),
             )
         };
+    }
+    if free::enabled(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                free::channel::receive(ctx, receiver.read(), message, out, caller_site),
+            )
+        };
+        return STATUS_OK;
     }
     let s = scheduler(ctx);
     // SAFETY: caller contract.

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 const OPS: u64 = 32;
 
-fn layout() -> crate::Layout {
+pub(super) fn layout() -> crate::Layout {
     crate::Layout {
         magic: crate::LAYOUT_MAGIC,
         version: crate::LAYOUT_VERSION,
@@ -39,7 +39,7 @@ struct Race {
     finished: AtomicU32,
 }
 
-fn wait_until(mut done: impl FnMut() -> bool) {
+pub(super) fn wait_until(mut done: impl FnMut() -> bool) {
     let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while !done() {
         assert!(

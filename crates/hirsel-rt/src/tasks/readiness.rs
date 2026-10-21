@@ -54,6 +54,10 @@ unsafe fn poll(s: &mut Scheduler, task: u32) -> Option<bool> {
                 false
             }
         }
+        Wait::ReceiveReady { channel } => {
+            let shield = s.task(task).shield();
+            s.canceled_task(task, shield).is_some() || s.channels.ready(channel)
+        }
         Wait::Any { set, member: None } => s.first_completed(set).is_some(),
         Wait::Any {
             set,

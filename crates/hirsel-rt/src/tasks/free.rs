@@ -243,7 +243,9 @@ pub(super) unsafe fn check_quiet(run: *mut crate::context::RunShared) {
                             .map(|&child| u64::from(child))
                             .collect(),
                     ),
-                    Wait::Receive { channel, .. } => ("channel.receive", vec![u64::from(channel)]),
+                    Wait::Receive { channel, .. } | Wait::ReceiveReady { channel } => {
+                        ("channel.receive", vec![u64::from(channel)])
+                    }
                     Wait::Any { set, .. } => (
                         "task.await_any",
                         s.set(set)
