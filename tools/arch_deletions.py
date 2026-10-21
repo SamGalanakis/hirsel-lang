@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """The compiler-architecture deletion list (compiler-arch design §2): what survives.
 
-    tools/arch_deletions.py            # survivors; exit 1 if any (the cutover needs none)
+    tools/arch_deletions.py            # matching entries; exit 1 if any
     tools/arch_deletions.py --present  # entries that match nothing; exit 1 if any
 
-Each entry is checked mechanically: a path that must be gone, a word or text
-that must not occur in crates/, a struct field or a method that must be gone.
+Each entry checks the spelling of an original deletion obligation: a path,
+word, literal text, struct field or method. A match requires a source-level
+disposition; it does not prove that the obsolete mechanism survives. For
+example, an Arc<TypeInterner> clone is not a copied TypeStore, and linked
+descriptor identity is not a per-unit layout digest. Preserve the raw matches
+and manual checks even when an audit establishes an intentional retention.
 Items the design names by line range or behaviour, which no pattern can find,
 are listed as MANUAL for the integrator to confirm by reading. `--present`
 checks the list itself against a tree before the cutover: every mechanical
-entry must find something there, so that zero survivors after it means the
-item was deleted rather than misspelled.
+entry must find something there, so that a later absence has a positive
+control. Neither absence nor presence replaces the behavioural manual audit.
+Keep historical positives when changing scopes; never rename compiler symbols
+or delete unrelated mechanisms merely to obtain exit 0.
 """
 
 import re
