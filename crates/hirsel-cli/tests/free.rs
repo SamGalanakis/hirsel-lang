@@ -337,13 +337,31 @@ fn every_f0_trace_replays_to_its_live_projection_at_every_cut_on_every_engine() 
 /// engine, and that seed's durable recording replays as above.
 #[test]
 fn the_racing_traces_reach_both_outcomes_and_replay_on_every_engine() {
+    // A diagnostic invocation can select one of the nine trace/engine pairs,
+    // preserving its seed search, both outcomes and every replay cut. With no
+    // selection the test still covers the full matrix.
+    let selection = std::env::var("HIRSEL_FREE_MATRIX").ok().map(|value| {
+        let (trace, engine) = value.split_once(':').expect("trace:engine selection");
+        assert!(["mutex_cycle", "acquire_reply", "thaw_race"].contains(&trace));
+        let engine = ["interpreter", "llvm", "cranelift"]
+            .iter()
+            .position(|name| *name == engine)
+            .expect("engine selection must be interpreter, llvm or cranelift");
+        (trace.to_owned(), engine)
+    });
     std::thread::scope(|scope| {
         for (name, outcomes) in [
             ("mutex_cycle", ["thawed\n", "shared\n"]),
             ("acquire_reply", ["a first\n", "b first\n"]),
             ("thaw_race", ["thawed\n", "shared\n"]),
         ] {
-            for engine in ENGINES {
+            for (index, engine) in ENGINES.into_iter().enumerate() {
+                if selection
+                    .as_ref()
+                    .is_some_and(|(trace, selected)| trace != name || *selected != index)
+                {
+                    continue;
+                }
                 scope.spawn(move || {
                     for want in outcomes {
                         let seed = (0..64u64)
