@@ -2,7 +2,7 @@
 //! must be accepted; each surviving fault the stage ladder rejects must also be
 //! rejected at Ready. A normalized-away fault must yield the identical final unit after packing live operand ranges.
 use super::*;
-use hirsel_lir::ir::{Inst, LirUnit};
+use hirsel_lir::ir::{Inst, LirUnit, ReadMode};
 use hirsel_lir::stage::{Stage, StageKind};
 use hirsel_lir::validate::{Inputs, ValidationContext};
 use hirsel_rc::cleanup::Finalizers;
@@ -16,7 +16,11 @@ enum Fault {
     MissingDecrement,
 }
 
-fn mutants<S: Stage>(unit: &LirUnit<S>) -> Vec<(Fault, LirUnit<S>)> {
+fn mutants<S: Stage>(
+    unit: &LirUnit<S>,
+    inputs: &Inputs<'_>,
+    context: &ValidationContext<'_>,
+) -> Vec<(Fault, LirUnit<S>)> {
     let mut out = Vec::new();
     if !unit.parameters.is_empty() {
         let mut u = unit.clone();
@@ -28,19 +32,36 @@ fn mutants<S: Stage>(unit: &LirUnit<S>) -> Vec<(Fault, LirUnit<S>)> {
     for (b, code) in ed.code.iter().enumerate() {
         for (i, inst) in code.iter().enumerate() {
             let fault = match inst {
-                Inst::Dup { .. } => Fault::MissingIncrement,
+                Inst::Dup { .. } | Inst::Copy { .. } => Fault::MissingIncrement,
                 Inst::Release { .. } => Fault::MissingDecrement,
                 _ => continue,
             };
-            if !seen.insert(fault) {
+            if seen.contains(&fault) {
                 continue;
             }
             let mut ed = Editor::new(unit.clone());
             ed.code[b][i] = match *inst {
                 Inst::Dup { value } | Inst::Release { value, .. } => Inst::Share { value },
+                Inst::Copy {
+                    result,
+                    address,
+                    reaching,
+                    ..
+                } => Inst::Read {
+                    result,
+                    address,
+                    reaching,
+                    mode: ReadMode::Take,
+                },
                 _ => unreachable!(),
             };
-            out.push((fault, ed.finish()));
+            let mutant = ed.finish();
+            // The first increment may be a static/immortal no-op. Select
+            // the first mutation whose lost credit the stage ladder catches.
+            if !context.check(&mutant, inputs).is_empty() {
+                seen.insert(fault);
+                out.push((fault, mutant));
+            }
         }
     }
     out
@@ -89,7 +110,7 @@ fn judge<S: Stage>(
         S::KIND,
         unit.header.definition
     );
-    for (fault, mutant) in mutants(unit) {
+    for (fault, mutant) in mutants(unit, inputs, context) {
         let ladder = context.check(&mutant, inputs);
         if ladder.is_empty() {
             continue;
