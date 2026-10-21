@@ -16,6 +16,7 @@ pub(crate) use program_revision::SemanticProgram;
 mod image;
 pub(crate) use image::ImageBuild;
 mod safety;
+mod summaries;
 pub use safety::{Escape, UnsafeReach};
 mod type_groups;
 use hirsel_diag::Severity;
@@ -135,6 +136,7 @@ pub struct QueryEngine {
     checked: Table<TypedBody>,
     modes: Table<AnalyzedBody>,
     lowered: Table<hirsel_tir::DefinitionRef>,
+    pub(crate) summaries: Table<Arc<PublishedSummary>>,
     /// The memo records, the reverse subscriber index and the dirty marks.
     pub(crate) graph: MemoGraph,
     /// Each indexed definition's inputs as last indexed (S0's diff).
@@ -208,6 +210,7 @@ impl Drop for QueryEngine {
         released("engine: lowered", take(&mut self.lowered));
         released("engine: modes", take(&mut self.modes));
         released("engine: checked", take(&mut self.checked));
+        released("engine: summaries", take(&mut self.summaries));
         released("engine: resolutions", take(&mut self.resolutions));
         released("engine: signatures", take(&mut self.signatures));
         released("engine: memo graph", take(&mut self.graph));
@@ -398,6 +401,7 @@ impl QueryEngine {
             checked: Default::default(),
             modes: Default::default(),
             lowered: Default::default(),
+            summaries: Default::default(),
             graph: MemoGraph::default(),
             inputs: Default::default(),
             environment_seen: None,
@@ -461,6 +465,7 @@ impl QueryEngine {
             QueryKind::Check => self.checked.get(&id).map(|e| &e.detail),
             QueryKind::Modes => self.modes.get(&id).map(|e| &e.detail),
             QueryKind::Lower => self.lowered.get(&id).map(|e| &e.detail),
+            QueryKind::Summary => self.summaries.get(&id).map(|e| &e.detail),
             _ => None,
         }
     }
@@ -473,6 +478,7 @@ impl QueryEngine {
             QueryKind::Check => self.checked.get(&id).map(|e| e.reads()),
             QueryKind::Modes => self.modes.get(&id).map(|e| e.reads()),
             QueryKind::Lower => self.lowered.get(&id).map(|e| e.reads()),
+            QueryKind::Summary => self.summaries.get(&id).map(|e| e.reads()),
             _ => None,
         }
     }

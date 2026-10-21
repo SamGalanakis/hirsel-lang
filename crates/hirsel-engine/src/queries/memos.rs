@@ -765,6 +765,9 @@ impl QueryEngine {
             QueryKind::Check => {
                 self.checked.remove(&key.def);
             }
+            QueryKind::Summary => {
+                self.summaries.remove(&key.def);
+            }
             QueryKind::Modes => {
                 self.modes.remove(&key.def);
             }

@@ -28,7 +28,7 @@ pub use generic_graph::{InstanceEdge, InstanceGraph, InstanceKind};
 mod summary;
 pub use summary::{
     CallClass, DefinitionSummary, Frame, FrameKind, GenericParameterRef, GrowthEdge,
-    ParameterGrowth, SummaryCall, growing_sites, summarize,
+    ParameterGrowth, PublishedSummary, SummaryCall, growing_sites, summarize,
 };
 mod semantic;
 mod snapshot;
@@ -138,6 +138,7 @@ pub enum QueryKind {
     Modes,
     Check,
     Lower,
+    Summary,
 }
 impl QueryKind {
     pub fn phase_name(self) -> &'static str {
@@ -151,6 +152,7 @@ impl QueryKind {
             Self::Lower => "TIR lowering",
             Self::Format => "formatting",
             Self::Interpret => "interpretation",
+            Self::Summary => "definition summary",
         }
     }
 }
@@ -194,6 +196,7 @@ impl DefinitionKey {
             QueryKind::Signature => 1,
             QueryKind::Check => 2,
             QueryKind::Lower => 3,
+            QueryKind::Summary => 9,
         };
         let mut parts = vec![
             vec![kind],

@@ -427,3 +427,71 @@ fn growth_edges_give_the_checked_bodies_gen5_verdict_on_compiler_thread() {
         assert_eq!(growing_sites(&edges), graph.growing_sites(), "{source}");
     }
 }
+
+/// Published summaries survive body release, serialize using canonical type
+/// rows, restore reverse subscriptions, and reject stale source/read inputs.
+#[test]
+fn published_summary_survives_body_release_and_rejects_stale_seeds() {
+    with_compiler_stack(|| {
+        use std::sync::Arc;
+        let source = "fn helper(x: u64) -> u64 { x }\nfn main() -> u64 { helper(1) }\n";
+        let (mut engine, output) = check(source);
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        let main = hirsel_syntax::DefId::intern(&path("main"));
+        let summary = engine
+            .publish_definition(main, hirsel_engine::memo::Retention::Batch)
+            .unwrap();
+        let checks = engine.recompute_count(main.path(), QueryKind::Check);
+        assert!(Arc::ptr_eq(
+            &summary,
+            &engine.definition_summary(main).unwrap()
+        ));
+        assert_eq!(
+            engine.recompute_count(main.path(), QueryKind::Check),
+            checks
+        );
+
+        let (_, roots) =
+            hirsel_types::with_table_collection(|| serde_json::to_vec(&*summary).unwrap());
+        let (table, _) = hirsel_types::encode_table(engine.types(), &roots);
+        let bytes = hirsel_types::with_table_encoding(engine.types(), &roots, || {
+            serde_json::to_vec(&*summary).unwrap()
+        });
+        let ids = hirsel_types::decode_table(engine.types(), &table);
+        let seeded = hirsel_types::with_table_decoding(&ids, || {
+            serde_json::from_slice::<PublishedSummary>(&bytes).unwrap()
+        });
+        let seeded = Arc::new(seeded);
+        assert_eq!(seeded.summary, summary.summary);
+        assert_eq!(seeded.growth, summary.growth);
+        assert_eq!(seeded.reads, summary.reads);
+        assert!(engine.seed_definition_summary(seeded.clone()));
+        assert!(Arc::ptr_eq(
+            &seeded,
+            &engine.definition_summary(main).unwrap()
+        ));
+
+        engine.mode_definition(main.path()).unwrap();
+        assert_eq!(
+            engine.recompute_count(main.path(), QueryKind::Check),
+            checks + 1
+        );
+        let changed = source.replace("helper(1)", "helper(2)");
+        let file = engine.sources.add("summary.hir", changed).unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        assert!(!engine.seed_definition_summary(seeded));
+        let body = engine.definition_summary(main).unwrap();
+        assert!(!Arc::ptr_eq(&body, &summary));
+
+        let file = engine
+            .sources
+            .add(
+                "summary.hir",
+                "fn helper(x: u8) -> u64 { 1 }\nfn main() -> u64 { helper(2) }\n".into(),
+            )
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        assert!(!engine.seed_definition_summary(body));
+        engine.definition_summary(main).unwrap();
+    });
+}

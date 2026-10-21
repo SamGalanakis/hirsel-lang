@@ -26,12 +26,16 @@ use hirsel_types::{
 use std::collections::{BTreeSet, HashSet};
 
 /// A generic parameter named by its declaring binder (contract rev 3).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash,
+)]
 pub enum GenericParameterRef {
     Type(TypeParameterRef),
     Size(SizeParameterRef),
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash,
+)]
 pub enum FrameKind {
     Item,
     LocalFunction,
@@ -39,7 +43,7 @@ pub enum FrameKind {
     ComptimeRegion,
 }
 /// How a call's instance is selected.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum CallClass {
     /// A written call outside every comptime region: selected when its frame is.
     Runtime,
@@ -51,7 +55,7 @@ pub enum CallClass {
     /// outside every comptime region: selected with its frame.
     StaticSelection,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Frame {
     pub site: NameSite,
     pub parent: Option<u32>,
@@ -64,7 +68,7 @@ pub struct Frame {
     /// a selection entering the frame carries exactly these from its parent.
     pub size_bindings: Box<[(SizeParameterRef, Size)]>,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct SummaryCall {
     pub callee: DefId,
     /// The callee's generic binder: its item, or for a call of a local
@@ -77,7 +81,7 @@ pub struct SummaryCall {
     pub class: CallClass,
     pub site: Span,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct DefinitionSummary {
     pub owner: DefId,
     pub frames: Box<[Frame]>,
@@ -96,9 +100,21 @@ pub type GrowthEdge = (
 );
 /// GEN-5's input: each owner parameter that flows into a callee parameter,
 /// whether it flows nested (strict growth), and the call site.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct ParameterGrowth {
     pub edges: Box<[GrowthEdge]>,
+}
+
+/// The compact published input of CT-5, staged selection and GEN-5. Its reads
+/// share the memo's allocation; retaining it never retains a checked body.
+/// Durable encodings use the same canonical type table as the other outputs.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct PublishedSummary {
+    pub summary: DefinitionSummary,
+    pub growth: ParameterGrowth,
+    pub reads: std::sync::Arc<crate::memo::Reads>,
+    /// The owner's body and package-manifest key, as for a body memo.
+    pub text: hirsel_syntax::ContentHash,
 }
 
 impl ParameterGrowth {
@@ -529,19 +545,5 @@ fn owned<P: Copy>(
             parameter,
         } if bound == depth => owner_binder.map(|scope| BinderRef::Body { scope, parameter }),
         BinderRef::Bound { .. } => None,
-    }
-}
-
-impl QueryEngine {
-    /// The summary and growth edges of every program definition, from its
-    /// checked body; prechecked packages carry their own verdicts.
-    pub fn definition_summaries(
-        &mut self,
-    ) -> Result<Vec<(DefinitionSummary, ParameterGrowth)>, QueryError> {
-        Ok(self
-            .instantiation_bodies()?
-            .iter()
-            .map(|(_, typed)| summarize(self.types(), &typed.value))
-            .collect())
     }
 }
