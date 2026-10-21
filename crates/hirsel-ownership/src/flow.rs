@@ -2002,20 +2002,51 @@ fn solve(checker: &mut Checker<'_, '_>, initial: State, live: &LiveSets) -> Vec<
         checker.node = id;
         checker.transfer(&graph.nodes[id].op, &mut output);
         checker.release_temporaries(&mut output, live.at(id));
-        for successor in &graph.nodes[id].next {
-            let changed = if let Some(input) = &mut inputs[*successor] {
-                input.join(&output, &mut slots)
-            } else {
-                inputs[*successor] = Some(output.clone());
-                true
-            };
-            if changed {
-                pending.insert((rank[*successor], *successor));
-            }
-        }
+        forward_output(
+            output,
+            &graph.nodes[id].next,
+            &mut inputs,
+            &rank,
+            &mut pending,
+            &mut slots,
+        );
     }
     inputs
 }
+#[cfg(test)]
+thread_local! { static FORWARD_STATE_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn forward_output(
+    output: State,
+    next: &[usize],
+    inputs: &mut [Option<State>],
+    rank: &[usize],
+    pending: &mut BTreeSet<(usize, usize)>,
+    slots: &mut SlotJoins,
+) {
+    // Rustc19833af7 mir_dataflow/framework/mod.rs:351-375 minimizes
+    // state copies around propagation. A new final target can take ownership:
+    // no later edge needs this output, and earlier snapshots stay shared.
+    for (index, successor) in next.iter().enumerate() {
+        if index + 1 == next.len() && inputs[*successor].is_none() {
+            inputs[*successor] = Some(output);
+            pending.insert((rank[*successor], *successor));
+            return;
+        }
+        let changed = if let Some(input) = &mut inputs[*successor] {
+            input.join(&output, slots)
+        } else {
+            #[cfg(test)]
+            FORWARD_STATE_CLONES.with(|n| n.set(n.get() + 1));
+            inputs[*successor] = Some(output.clone());
+            true
+        };
+        if changed {
+            pending.insert((rank[*successor], *successor));
+        }
+    }
+}
+
 impl Checker<'_, '_> {
     fn finalizer_self(&self, index: usize) -> bool {
         let binding = &self.body.bindings[index];
@@ -7841,6 +7872,98 @@ fn annotation_modes(
 #[cfg(test)]
 mod loan_tests {
     use super::*;
+
+    #[test]
+    fn successor_forwarding_moves_last_new_state_and_keeps_original_joins() {
+        let mut output = State {
+            slots: hirsel_types::rows::Rows::new(Slot::default(), 4),
+            values: BTreeMap::from([(ExprId(3), Value::new(Modes::global()))]),
+            iteration_loans: BTreeMap::new(),
+            argument_loans: BTreeMap::new(),
+            argument_conflicts: BTreeSet::from([ExprId(9)]),
+        };
+        output.slots[1].available = LIVE;
+        output.slots[1].value.modes.uniqueness = Uniqueness::Unique;
+        output.slots[1].value.bound_by(2, Site::Frame);
+        output
+            .values
+            .get_mut(&ExprId(3))
+            .unwrap()
+            .bound_by(1, Site::Binding(2));
+        let mut previous = output.clone();
+        previous.slots[1].available = MOVED;
+        previous.slots[1].value.share();
+        previous.values.get_mut(&ExprId(3)).unwrap().share();
+        let retained = output.clone();
+        let rank = [3, 2, 1, 0];
+        let routes: &[&[usize]] = &[
+            &[],
+            &[1],
+            &[1, 2],
+            &[1, 1],
+            &[0],
+            &[1, 0],
+            &[0, 1],
+            &[2, 1, 2],
+            &[3, 2, 1],
+            &[1, 2, 3, 1],
+        ];
+        let mut removable_clones = 0;
+        for mask in 0..16u32 {
+            for &next in routes {
+                let mut inputs: Vec<_> = (0..4)
+                    .map(|i| (mask & (1 << i) != 0).then(|| previous.clone()))
+                    .collect();
+                let initial = inputs.clone();
+                let mut expected = inputs.clone();
+                let mut reference_pending = BTreeSet::from([(99, 99)]);
+                let mut reference_slots = SlotJoins::new(Slot::join);
+                let mut expected_clones = 0;
+                // Independent original algorithm: preserve successor order,
+                // clone to initialize and join every already-reached target.
+                for (index, &successor) in next.iter().enumerate() {
+                    let changed = if let Some(input) = &mut expected[successor] {
+                        input.join(&output, &mut reference_slots)
+                    } else {
+                        expected[successor] = Some(output.clone());
+                        expected_clones += usize::from(index + 1 != next.len());
+                        true
+                    };
+                    if changed {
+                        reference_pending.insert((rank[successor], successor));
+                    }
+                }
+                let mut pending = BTreeSet::from([(99, 99)]);
+                let mut slots = SlotJoins::new(Slot::join);
+                let before = FORWARD_STATE_CLONES.with(std::cell::Cell::get);
+                forward_output(
+                    output.clone(),
+                    next,
+                    &mut inputs,
+                    &rank,
+                    &mut pending,
+                    &mut slots,
+                );
+                let clones = FORWARD_STATE_CLONES.with(std::cell::Cell::get) - before;
+                assert_eq!(inputs, expected, "mask {mask} route {next:?}");
+                assert_eq!(pending, reference_pending);
+                assert_eq!(output, retained);
+                for value in initial.iter().flatten() {
+                    assert_eq!(value, &previous);
+                }
+                removable_clones += clones.saturating_sub(expected_clones);
+                // Branch snapshots must remain independent after publication.
+                if let Some(input) = &mut inputs[1] {
+                    input.slots[1].value.share();
+                }
+                assert_eq!(output, retained);
+            }
+        }
+        assert_eq!(
+            removable_clones, 0,
+            "move the consumed output to a final uninitialized successor"
+        );
+    }
 
     #[test]
     fn value_snapshots_isolate_loans_and_keep_compact_branch_entries() {
