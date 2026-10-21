@@ -21,6 +21,25 @@ pub use provider::FrozenProvider;
 
 pub use views::{PackageViews, View, ViewTable};
 
+/// Durable signature views and successful per-view validation receipts.
+/// Encoders use the canonical type table and image anchor relocation scopes.
+/// Digests are independently recomputed on import; fingerprints are no proof.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SnapshotSeed {
+    pub public: Vec<SignatureRef>,
+    pub private: Vec<SignatureRef>,
+    pub verdicts: Vec<(ValidationDigest, Vec<hirsel_validate::VRead>)>,
+}
+impl SnapshotSeed {
+    fn verdicts(&self) -> ValidatedSignatures {
+        let mut store = ValidatedSignatures::default();
+        for (digest, reads) in &self.verdicts {
+            store.seed_success(*digest, reads.clone());
+        }
+        store
+    }
+}
+
 /// One revision's signatures, private views and V verdicts.
 pub struct SignatureSnapshot {
     epoch: Revision,
@@ -61,6 +80,29 @@ impl SignatureSnapshot {
         private: impl IntoIterator<Item = SignatureRef>,
         previous: Option<&SignatureSnapshot>,
     ) -> Self {
+        Self::build(epoch, types, signatures, private, previous, None)
+    }
+    /// Import the views, independently digesting them before any successful
+    /// receipt is reused. Changed views or contextual reads are checked again.
+    pub fn from_seed(epoch: Revision, types: Arc<TypeInterner>, seed: &SnapshotSeed) -> Self {
+        let store = seed.verdicts();
+        Self::build(
+            epoch,
+            types,
+            seed.public.iter().map(|s| (s.definition, Ok(s.clone()))),
+            seed.private.iter().cloned(),
+            None,
+            Some(&store),
+        )
+    }
+    fn build(
+        epoch: Revision,
+        types: Arc<TypeInterner>,
+        signatures: impl IntoIterator<Item = (DefId, Result<SignatureRef, QueryError>)>,
+        private: impl IntoIterator<Item = SignatureRef>,
+        previous: Option<&SignatureSnapshot>,
+        seeds: Option<&ValidatedSignatures>,
+    ) -> Self {
         let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Verify);
         let t = &*types;
         let signatures: DefMap<_> = signatures.into_iter().collect();
@@ -68,7 +110,16 @@ impl SignatureSnapshot {
             .into_iter()
             .map(|view| (view.definition, view))
             .collect();
-        let old = previous.map(|p| &p.validated);
+        let mut combined;
+        let old = if let Some(seeds) = seeds.filter(|store| !store.is_empty()) {
+            combined = previous.map(|p| p.validated.clone()).unwrap_or_default();
+            for (digest, reads) in seeds.successful() {
+                combined.seed_success(digest, reads.to_vec());
+            }
+            Some(&combined)
+        } else {
+            previous.map(|p| &p.validated)
+        };
         let mut validated = ValidatedSignatures::default();
         let views = Arc::new(ViewTable::new(
             t,
@@ -104,6 +155,28 @@ impl SignatureSnapshot {
             packages,
             validated,
             lookup: LookupInput::default(),
+        }
+    }
+    /// Retain only successful verdicts; failures are checked again on import.
+    pub fn seed(&self) -> SnapshotSeed {
+        let mut public: Vec<_> = self
+            .signatures
+            .values()
+            .filter_map(|s| s.as_ref().ok().cloned())
+            .collect();
+        public.sort_by_key(|s| s.definition);
+        let mut private: Vec<_> = self.private.values().cloned().collect();
+        private.sort_by_key(|s| s.definition);
+        let mut verdicts: Vec<_> = self
+            .validated
+            .successful()
+            .map(|(digest, reads)| (digest, reads.to_vec()))
+            .collect();
+        verdicts.sort_unstable();
+        SnapshotSeed {
+            public,
+            private,
+            verdicts,
         }
     }
     pub(crate) fn with_lookup(mut self, lookup: LookupInput) -> Self {
@@ -211,6 +284,15 @@ impl SignatureSnapshot {
 }
 
 impl QueryEngine {
+    /// Prime V's receipt candidates without replacing any source or image view.
+    /// Snapshot construction independently digests the actual views and verifies
+    /// all contextual reads before using a receipt.
+    pub fn seed_signature_verdicts(&mut self, seed: &SnapshotSeed) {
+        for (digest, reads) in &seed.verdicts {
+            self.snapshot_seed_verdicts
+                .seed_success(*digest, reads.clone());
+        }
+    }
     /// This revision's snapshot, built once after its inputs changed. It is
     /// kept only when every signature normalized, so a failed one is retried.
     pub fn signature_snapshot(&mut self) -> Arc<SignatureSnapshot> {
@@ -263,16 +345,18 @@ impl QueryEngine {
                 .collect(),
         };
         let snapshot = Arc::new(
-            SignatureSnapshot::new(
+            SignatureSnapshot::build(
                 self.snapshot_epoch,
                 self.types.clone(),
                 signatures,
                 private,
                 previous.as_deref(),
+                Some(&self.snapshot_seed_verdicts),
             )
             .with_lookup(lookup),
         );
         if complete {
+            self.snapshot_seed_verdicts = ValidatedSignatures::default();
             self.snapshot = Some((stamp, snapshot.clone()));
         }
         snapshot
@@ -428,5 +512,149 @@ mod tests {
                 .iter()
                 .any(|(key, _)| *key == ReadKey::FailedSignature(absent.definition))
         );
+    }
+    #[test]
+    fn durable_verdicts_recompute_independent_digests_and_reject_changed_views() {
+        use hirsel_intern::work::{self, Counter};
+        let types = TypeInterner::new(None);
+        let signature = constant(&types, "durable", hirsel_types::Primitive::U64);
+        let snapshot = SignatureSnapshot::new(
+            Revision::FIRST,
+            types.clone(),
+            [(signature.definition, Ok(signature.clone()))],
+            [],
+            None,
+        );
+        let seed = snapshot.seed();
+        assert!(!seed.verdicts.is_empty());
+        // Encode in one interner, decode in another with deliberately different
+        // row numbers: the durable receipt names canonical content, never ids.
+        let (_, roots) = hirsel_types::with_table_collection(|| serde_json::to_vec(&seed).unwrap());
+        let (table, _) = hirsel_types::encode_table(&types, &roots);
+        let bytes = hirsel_types::with_table_encoding(&types, &roots, || {
+            serde_json::to_vec(&seed).unwrap()
+        });
+        let other = TypeInterner::new(None);
+        other.intern(Type::with_kind(TypeKind::Primitive(
+            hirsel_types::Primitive::U8,
+        )));
+        let ids = hirsel_types::decode_table(&other, &table);
+        let mut decoded: SnapshotSeed =
+            hirsel_types::with_table_decoding(&ids, || serde_json::from_slice(&bytes).unwrap());
+        let before = work::read(Counter::ValidateSignatureRows);
+        let imported = SignatureSnapshot::from_seed(Revision::FIRST, other.clone(), &decoded);
+        assert_eq!(work::read(Counter::ValidateSignatureRows), before);
+        assert!(
+            imported
+                .validation(&signature.definition.path().0.package)
+                .universe_errors()
+                .1
+                .is_empty()
+        );
+        // Malformed data with the producer fingerprint unchanged must miss the
+        // imported success and fail V's own check.
+        let changed = Arc::make_mut(&mut decoded.public[0]);
+        let fingerprint = changed.fingerprint;
+        let SignatureKind::Const { ty, .. } = &mut changed.kind else {
+            unreachable!()
+        };
+        *ty = other.intern(Type::with_kind(TypeKind::Error));
+        assert_eq!(changed.fingerprint, fingerprint);
+        let changed = SignatureSnapshot::from_seed(Revision::FIRST, other, &decoded);
+        assert_eq!(work::read(Counter::ValidateSignatureRows), before + 1);
+        assert!(
+            !changed
+                .validation(&signature.definition.path().0.package)
+                .universe_errors()
+                .1
+                .is_empty()
+        );
+        assert!(changed.seed().verdicts.is_empty());
+    }
+
+    #[test]
+    fn durable_private_views_reject_shape_changes_without_public_fingerprint_changes() {
+        use hirsel_intern::work::{self, Counter};
+        use hirsel_types::{Allocation, AuthoritySummary, Bound, Layout, TypeDefinition};
+        let types = TypeInterner::new(None);
+        let mut public = (*constant(&types, "Opaque", hirsel_types::Primitive::U64)).clone();
+        public.metadata.visibility = hirsel_syntax::Visibility::PublicOpaque;
+        public.kind = SignatureKind::Type(TypeDefinition {
+            loop_source: None,
+            format: None,
+            destructor_allocation: Allocation::NoAlloc,
+            generics: vec![],
+            representation: None,
+            bounds: vec![Bound::Plain],
+            authority: AuthoritySummary::inert(),
+            capability: None,
+            implementation_authority: None,
+            serializable: false,
+            serializable_check: None,
+            layout: Layout::default(),
+            distinct: false,
+            resource: false,
+            drop: None,
+            fact: None,
+            captures: None,
+        });
+        let mut private = public.clone();
+        let SignatureKind::Type(declaration) = &mut private.kind else {
+            unreachable!()
+        };
+        declaration.representation = Some(types.intern(Type::with_kind(TypeKind::Primitive(
+            hirsel_types::Primitive::U64,
+        ))));
+        let public = Arc::new(public);
+        let snapshot = SignatureSnapshot::new(
+            Revision::FIRST,
+            types.clone(),
+            [(public.definition, Ok(public.clone()))],
+            [Arc::new(private)],
+            None,
+        );
+        let mut seed = snapshot.seed();
+        assert_eq!(seed.private.len(), 1);
+        let before = work::read(Counter::ValidateSignatureRows);
+        let imported = SignatureSnapshot::from_seed(Revision::FIRST, types.clone(), &seed);
+        assert_eq!(work::read(Counter::ValidateSignatureRows), before);
+        let package = &public.definition.path().0.package;
+        assert!(imported.validation(package).universe_errors().1.is_empty());
+        let private = Arc::make_mut(&mut seed.private[0]);
+        let SignatureKind::Type(declaration) = &mut private.kind else {
+            unreachable!()
+        };
+        // String fails the declared plain bound; the unchanged public view
+        // still has a reusable pass, while this private view must be checked.
+        declaration.representation = Some(types.intern(Type::with_kind(TypeKind::Primitive(
+            hirsel_types::Primitive::String,
+        ))));
+        assert_eq!(private.fingerprint, public.fingerprint);
+        let changed = SignatureSnapshot::from_seed(Revision::FIRST, types, &seed);
+        assert_eq!(work::read(Counter::ValidateSignatureRows), before + 1);
+        assert!(!changed.validation(package).universe_errors().1.is_empty());
+        assert_eq!(changed.seed().verdicts.len(), 1);
+    }
+    #[test]
+    fn engine_seed_reuses_verdicts_without_granting_declaration_authority() {
+        use hirsel_intern::work::{self, Counter};
+        let mut original =
+            QueryEngine::new(default_environment(), crate::phases::engine_only_adapters());
+        let mut seed = original.signature_snapshot().seed();
+        let injected = constant(
+            original.types(),
+            "not_declared",
+            hirsel_types::Primitive::U64,
+        );
+        seed.public.push(injected.clone());
+        let mut imported =
+            QueryEngine::new(default_environment(), crate::phases::engine_only_adapters());
+        imported.seed_signature_verdicts(&seed);
+        assert!(!imported.snapshot_seed_verdicts.is_empty());
+        let before = work::read(Counter::ValidateSignatureRows);
+        let snapshot = imported.signature_snapshot();
+        assert_eq!(work::read(Counter::ValidateSignatureRows), before);
+        assert!(snapshot.signature(injected.definition).is_none());
+        assert!(imported.snapshot_seed_verdicts.is_empty());
     }
 }

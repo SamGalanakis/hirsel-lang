@@ -35,7 +35,7 @@ mod snapshot;
 pub use semantic::*;
 pub use snapshot::{
     DeclarationIndex, Declarations, FrozenProvider, ModuleInputs, PackageViews, SignatureSnapshot,
-    View, ViewTable,
+    SnapshotSeed, View, ViewTable,
 };
 mod adapters;
 mod facts;

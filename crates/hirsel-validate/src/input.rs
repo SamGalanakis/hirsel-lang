@@ -16,11 +16,15 @@ use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
 
 /// V's identity of one signature view: a hash over every field it holds.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub struct ValidationDigest(pub ContentHash);
 
 /// One input V observed.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub enum VRead {
     /// The view of a signature V read, by its digest.
     View(DefId, ValidationDigest),
@@ -222,6 +226,30 @@ pub struct ValidatedSignatures {
     verdicts: HashMap<ValidationDigest, Vec<Arc<ViewVerdict>>>,
 }
 impl ValidatedSignatures {
+    /// Successful per-view receipts, for durable snapshot publication. The
+    /// consumer recomputes each view's digest and checks every contextual read.
+    pub fn successful(&self) -> impl Iterator<Item = (ValidationDigest, &[VRead])> {
+        self.verdicts.iter().flat_map(|(digest, verdicts)| {
+            verdicts
+                .iter()
+                .filter(|verdict| verdict.error.is_none())
+                .map(move |verdict| (*digest, verdict.reads.as_slice()))
+        })
+    }
+    /// Restore a successful view receipt. This supplies a candidate only:
+    /// `verdict_from` still requires V's independently computed view digest
+    /// and every observed read to agree with the current universe.
+    pub fn seed_success(&mut self, digest: ValidationDigest, mut reads: Vec<VRead>) {
+        reads.sort_unstable();
+        reads.dedup();
+        let kept = self.verdicts.entry(digest).or_default();
+        if !kept
+            .iter()
+            .any(|verdict| verdict.error.is_none() && verdict.reads == reads)
+        {
+            kept.push(Arc::new(ViewVerdict { error: None, reads }));
+        }
+    }
     /// The verdict on view `d` of `signatures`, reused or computed.
     pub fn verdict(
         &mut self,

@@ -175,6 +175,8 @@ pub struct QueryEngine {
         Arc<crate::snapshot::SignatureSnapshot>,
     )>,
     pub(crate) snapshot_epoch: crate::memo::Revision,
+    /// Successful durable view receipts, candidates for the next snapshot.
+    pub(crate) snapshot_seed_verdicts: hirsel_validate::ValidatedSignatures,
     /// Signatures published or retired outside declaration indexing (S1).
     pub(crate) snapshot_inputs_revision: u64,
     /// The session's one type interner (design §1(a)), over the core rows.
@@ -219,6 +221,10 @@ impl Drop for QueryEngine {
         released("engine: items", take(&mut self.items));
         released("engine: parsed", take(&mut self.parsed));
         released("engine: signature snapshot", take(&mut self.snapshot));
+        released(
+            "engine: imported signature verdicts",
+            take(&mut self.snapshot_seed_verdicts),
+        );
         released("engine: instance bodies", take(&mut self.instance_bodies));
         released("engine: staged values", take(&mut self.staged_values));
         released("engine: generated", take(&mut self.generated));
@@ -416,6 +422,7 @@ impl QueryEngine {
             comptime_runtime: None,
             generic_verdict: None,
             snapshot: None,
+            snapshot_seed_verdicts: Default::default(),
             snapshot_epoch: crate::memo::Revision::from_u64(1).expect("a nonzero revision"),
             snapshot_inputs_revision: 0,
             types: crate::registry::session_types(),

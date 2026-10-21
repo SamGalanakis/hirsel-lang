@@ -1383,3 +1383,58 @@ fn a_change_in_heap_role_selection_invalidates() {
     none.insert(id("Zzz"), heap("Zzz"));
     assert!(!read_holds(&VRead::FirstHeap(None), &none));
 }
+
+#[test]
+fn restored_success_rechecks_private_shape_reads_under_unchanged_fingerprints() {
+    use hirsel_intern::work::{self, Counter};
+    let mut signatures = SignatureMap::new(session());
+    signatures.insert(
+        id("Inner"),
+        declaration(
+            "Inner",
+            TypeKind::Primitive(Primitive::U32),
+            vec![Bound::Plain],
+            true,
+            false,
+        ),
+    );
+    signatures.insert(
+        id("Hidden"),
+        declaration(
+            "Hidden",
+            TypeKind::Named {
+                definition: id("Inner"),
+                arguments: vec![].into(),
+            },
+            vec![Bound::Plain],
+            true,
+            false,
+        ),
+    );
+    let mut original = ValidatedSignatures::default();
+    let verdict = original.verdict(interner(), id("Hidden"), &signatures);
+    assert!(verdict.error.is_none() && reads_view(&verdict, "Inner"));
+    let mut restored = ValidatedSignatures::default();
+    for (digest, reads) in original.successful() {
+        restored.seed_success(digest, reads.to_vec());
+    }
+    let before = work::read(Counter::ValidateSignatureRows);
+    let mut next = ValidatedSignatures::default();
+    let reused = next.verdict_from(interner(), id("Hidden"), &signatures, Some(&restored));
+    assert_eq!(*reused, *verdict);
+    assert_eq!(work::read(Counter::ValidateSignatureRows), before);
+    let fingerprint = signatures.get(&path("Inner")).unwrap().fingerprint;
+    represent(
+        &mut signatures,
+        "Inner",
+        TypeKind::Primitive(Primitive::String),
+    );
+    assert_eq!(
+        signatures.get(&path("Inner")).unwrap().fingerprint,
+        fingerprint
+    );
+    let recomputed = next.verdict_from(interner(), id("Hidden"), &signatures, Some(&restored));
+    assert!(!std::sync::Arc::ptr_eq(&reused, &recomputed));
+    assert!(recomputed.error.is_some());
+    assert_eq!(work::read(Counter::ValidateSignatureRows), before + 1);
+}
