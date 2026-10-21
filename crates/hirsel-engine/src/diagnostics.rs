@@ -218,8 +218,10 @@ pub fn select_diagnostics(
     });
     diagnostics.dedup_by(|a, b| {
         a == b
-            || sources
-                .is_some_and(|sources| located(a.clone(), sources) == located(b.clone(), sources))
+            || sources.is_some_and(|sources| {
+                let mut files = std::collections::BTreeMap::new();
+                located(a.clone(), sources, &mut files) == located(b.clone(), sources, &mut files)
+            })
     });
     fold_root_causes(diagnostics)
 }
