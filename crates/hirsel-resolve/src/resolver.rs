@@ -177,7 +177,7 @@ pub fn resolve_view(
             },
         },
         scopes: vec![Scope::default()],
-        signatures: BTreeMap::new(),
+        signatures: DefMap::default(),
         next_local: 0,
         alternative_locals: Vec::new(),
         generator_parameters: Vec::new(),
@@ -226,7 +226,7 @@ struct Resolver<'a, P: ?Sized> {
     context: FileContext,
     output: ResolveOutput,
     scopes: Vec<Scope>,
-    signatures: BTreeMap<DefPath, Option<ty::SignatureRef>>,
+    signatures: DefMap<Option<ty::SignatureRef>>,
     next_local: u32,
     callees: BTreeSet<ExprId>,
     local_function_depth: usize,
@@ -399,10 +399,11 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
         }
     }
     fn signature(&mut self, definition: &DefPath) -> Option<ty::SignatureRef> {
-        if let Some(signature) = self.signatures.get(definition) {
+        let id = DefId::intern(definition);
+        if let Some(signature) = self.signatures.get(&id) {
             return signature.clone();
         }
-        let result = self.provider.signature(DefId::intern(definition));
+        let result = self.provider.signature(id);
         let signature = match result {
             Ok(signature) => {
                 self.output
@@ -433,8 +434,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             .value
             .dependencies
             .push(definition.clone());
-        self.signatures
-            .insert(definition.clone(), signature.clone());
+        self.signatures.insert(id, signature.clone());
         signature
     }
     fn namespace(&mut self, definition: &DefPath) -> Option<Namespace> {

@@ -13,9 +13,9 @@ impl Normalizer<'_, '_> {
         // Include used signatures and earlier header reads as conservative inputs.
         // All of these reads also remain in the signature query dependencies.
         e.number(self.dependencies.len() as u64);
-        for (p, h) in &self.dependencies {
-            e.path(p);
-            e.atom(&h.0);
+        for (definition, fingerprint) in self.ordered_dependency_rows() {
+            e.path(definition.path());
+            e.atom(&fingerprint.0);
         }
         Ok(Contract {
             kind,

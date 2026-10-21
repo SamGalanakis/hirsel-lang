@@ -47,13 +47,13 @@ impl Normalizer<'_, '_> {
             .iter()
             .filter_map(|t| match &self.types.row(*t).kind {
                 TypeKind::Named { definition, .. } if definition.path() != owner => {
-                    Some(definition.path().clone())
+                    Some(*definition)
                 }
                 _ => None,
             })
             .collect();
         for definition in dependencies {
-            self.snapshot(&definition)?;
+            self.snapshot(definition)?;
         }
         // Transport preserves occurrence qualifiers. A substituted nominal
         // Plain argument needs its declaration to erase inert locality and
@@ -61,7 +61,7 @@ impl Normalizer<'_, '_> {
         let generics = self.declarations();
         let types = self.types;
         canonical_plain_type_in(types, result, &generics, &mut |definition| {
-            self.property_signature(definition.path())
+            self.property_signature(definition)
         })
     }
 }

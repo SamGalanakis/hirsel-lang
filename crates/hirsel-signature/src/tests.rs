@@ -1589,7 +1589,7 @@ impl Fixture {
             .provider
             .signatures
             .iter()
-            .map(|(p, s)| (p.clone(), std::sync::Arc::new(s.clone())))
+            .map(|(p, s)| (DefId::intern(p), std::sync::Arc::new(s.clone())))
             .collect();
         let n = Normalizer {
             proof_failure: &std::cell::RefCell::new(None),
@@ -1604,12 +1604,12 @@ impl Fixture {
             outer_parameters: vec![],
             outer_generics: vec![],
             siblings: vec![],
-            dependencies: BTreeMap::new(),
+            dependencies: DefMap::default(),
             snapshots,
             group: BTreeMap::new(),
             group_key: None,
             group_drop: BTreeMap::new(),
-            builtin_declarations: std::collections::HashMap::new(),
+            builtin_declarations: Default::default(),
             active: BTreeSet::new(),
             aliases: BTreeSet::new(),
             public: false,

@@ -1,13 +1,13 @@
 //! Declared cleanup effects, independent of invocation effects (MEM-5, GEN-1).
 use super::*;
-use std::collections::HashSet;
 use hirsel_type_analysis::cleanup::{
     CleanupLeaf, cleanup_summary, declared_cleanup, parameter_cleanup, specialized_cleanup,
 };
+type HashSet<T> = IdSet<T>;
 
 impl Normalizer<'_, '_> {
     pub(super) fn drop_summary(&self, id: TypeId) -> DropAllocation {
-        self.drop_visit(id, &mut HashSet::new())
+        self.drop_visit(id, &mut HashSet::default())
     }
 
     fn drop_visit(&self, id: TypeId, active: &mut HashSet<TypeId>) -> DropAllocation {
@@ -54,13 +54,13 @@ impl Normalizer<'_, '_> {
                             .map_or(DropAllocation::NoAlloc, |r| self.drop_visit(r, active));
                     }
                 }
-                if let Some(effect) = self.group_drop.get(definition.path()) {
+                if let Some(effect) = self.group_drop.get(&definition) {
                     return specialized_cleanup(effect, arguments, |t| self.drop_visit(t, active));
                 }
                 let Some(Signature {
                     kind: SignatureKind::Type(def),
                     ..
-                }) = self.snapshots.get(definition.path()).map(|s| s.as_ref())
+                }) = self.snapshots.get(&definition).map(|s| s.as_ref())
                 else {
                     return DropAllocation::MayAllocate;
                 };
@@ -83,12 +83,12 @@ impl Normalizer<'_, '_> {
         let Some(own_root) = self.own_representation else {
             return;
         };
-        let own = self.own_definition();
-        let mut effects: BTreeMap<ast::DefPath, DropAllocation> = self
+        let own = DefId::intern(&self.own_definition());
+        let mut effects: BTreeMap<DefId, DropAllocation> = self
             .group
             .keys()
             .chain([&own])
-            .map(|d| (d.clone(), DropAllocation::NoAlloc))
+            .map(|d| (*d, DropAllocation::NoAlloc))
             .collect();
         loop {
             self.group_drop = effects.clone();
@@ -105,17 +105,17 @@ impl Normalizer<'_, '_> {
                                 self.member_drop(
                                     &GenericDeclarations::signature(&d.generics),
                                     root,
-                                    &mut HashSet::new(),
+                                    &mut HashSet::default(),
                                 )
                             })
                     }
                     _ => DropAllocation::MayAllocate,
                 };
-                next.insert(definition.clone(), effect);
+                next.insert(*definition, effect);
             }
             // Members reach this declaration through its entry; it reaches
             // itself directly (`drop_kind`).
-            next.insert(own.clone(), self.drop_summary(own_root));
+            next.insert(own, self.drop_summary(own_root));
             if next == effects {
                 self.group_drop.remove(&own);
                 return;
@@ -142,7 +142,7 @@ impl Normalizer<'_, '_> {
             CleanupLeaf::Component(t) => self.member_drop(generics, t, active),
             CleanupLeaf::Parameter(p) => parameter_cleanup(generics, p),
             CleanupLeaf::Nominal(definition, arguments) => {
-                if let Some(effect) = self.group_drop.get(definition.path()) {
+                if let Some(effect) = self.group_drop.get(&definition) {
                     return specialized_cleanup(effect, arguments, |t| {
                         self.member_drop(generics, t, active)
                     });
@@ -150,7 +150,7 @@ impl Normalizer<'_, '_> {
                 let Some(Signature {
                     kind: SignatureKind::Type(def),
                     ..
-                }) = self.snapshots.get(definition.path()).map(|s| s.as_ref())
+                }) = self.snapshots.get(&definition).map(|s| s.as_ref())
                 else {
                     return DropAllocation::MayAllocate;
                 };

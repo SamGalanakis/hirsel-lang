@@ -15,10 +15,11 @@ use hirsel_check_protocol::header::{Input, NormalizedDeclaration, OwnerRepresent
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_span::Span;
 use hirsel_syntax as ast;
-use hirsel_syntax::DefId;
+use hirsel_syntax::{DefId, DefMap};
 use hirsel_types::encoding::fingerprint;
 use hirsel_types::*;
 use std::collections::{BTreeMap, BTreeSet};
+type IdSet<T> = std::collections::HashSet<T, hirsel_intern::IdHasher>;
 
 /// Normalizes one header/type declaration. TypeIds belong to the returned store.
 /// Dependencies include contracts and named types; query errors propagate unchanged.
@@ -80,8 +81,8 @@ fn normalize_inner(
         parameter_syntax: vec![],
         outer_parameters: vec![],
         siblings: vec![],
-        dependencies: BTreeMap::new(),
-        snapshots: BTreeMap::new(),
+        dependencies: DefMap::default(),
+        snapshots: DefMap::default(),
         group: BTreeMap::new(),
         group_key: None,
         group_drop: BTreeMap::new(),
@@ -326,9 +327,8 @@ fn normalize_inner(
             )?;
             n.group_key = group.key;
             for member in group.members {
-                n.snapshots
-                    .insert(member.definition.path().clone(), member.clone());
-                n.group.insert(member.definition.path().clone(), member);
+                n.snapshots.insert(member.definition, member.clone());
+                n.group.insert(member.definition, member);
             }
             n.load_group_nominals()?;
             let public_deps = n.dependencies.clone();
@@ -360,7 +360,7 @@ fn normalize_inner(
                 None
             };
             if *flavor == ast::TypeFlavor::Flat
-                && repr.is_some_and(|r| !n.flat_storage(r, &mut std::collections::HashSet::new()))
+                && repr.is_some_and(|r| !n.flat_storage(r, &mut IdSet::default()))
             {
                 return Err(diagnostic(
                     const { RuleId::of("MEM-12") },
@@ -588,14 +588,7 @@ fn normalize_inner(
         }
     };
     n.finish_drop_summaries(&mut kind);
-    let dependencies = n
-        .dependencies
-        .into_iter()
-        .map(|(definition, fingerprint)| SignatureDependency {
-            definition,
-            fingerprint,
-        })
-        .collect::<Vec<_>>();
+    let dependencies = n.ordered_dependencies();
     let owner = match &kind {
         SignatureKind::Type(declaration) => n.own_representation.map(|root| OwnerRepresentation {
             declaration: TypeDefinition {
@@ -720,14 +713,7 @@ fn provisional(
                 fingerprint: ast::ContentHash::default(),
             },
             diagnostics: vec![],
-            dependencies: n
-                .dependencies
-                .iter()
-                .map(|(definition, fingerprint)| SignatureDependency {
-                    definition: definition.clone(),
-                    fingerprint: *fingerprint,
-                })
-                .collect(),
+            dependencies: n.ordered_dependencies(),
         },
         owner: None,
     }
@@ -754,23 +740,24 @@ struct Normalizer<'a, 'b> {
     parameter_syntax: Vec<ast::TypeExprId>,
     outer_parameters: Vec<(Vec<Option<String>>, Vec<ast::TypeExprId>)>,
     siblings: Vec<String>,
-    dependencies: BTreeMap<ast::DefPath, ast::ContentHash>,
-    snapshots: BTreeMap<ast::DefPath, SignatureRef>,
+    dependencies: DefMap<ast::ContentHash>,
+    snapshots: DefMap<SignatureRef>,
     /// The other members of this type's recursive group, as provisional
     /// signatures (headers or representations). They are read in place of
     /// their published signatures, which would wait on this one, and are not
     /// dependencies: `group_key` covers them.
-    group: BTreeMap<ast::DefPath, SignatureRef>,
+    group: BTreeMap<DefId, SignatureRef>,
     group_key: Option<ast::ContentHash>,
     /// The group members' settled cleanup effects over their own parameters
     /// (`settle_group_drop`), read in place of their provisional summaries.
-    group_drop: BTreeMap<ast::DefPath, DropAllocation>,
+    group_drop: BTreeMap<DefId, DropAllocation>,
     /// The core declaration each builtin row was resolved to. Interning merges
     /// equal occurrences, so a row any occurrence spelled without a resolved
     /// declaration maps to None: its authority stays unproved.
-    builtin_declarations: std::collections::HashMap<TypeId, Option<SignatureRef>>,
+    builtin_declarations:
+        std::collections::HashMap<TypeId, Option<SignatureRef>, hirsel_intern::IdHasher>,
     active: BTreeSet<ast::TypeExprId>,
-    aliases: BTreeSet<ast::DefPath>,
+    aliases: BTreeSet<DefId>,
     /// Relation places lowered from a written arena placement (PROV-4).
     arena_places: BTreeSet<Origin>,
     /// The parameter whose type is being lowered, so `take x: T in x` names
@@ -781,6 +768,20 @@ struct Normalizer<'a, 'b> {
     proof_failure: &'b std::cell::RefCell<Option<QueryError>>,
 }
 impl Normalizer<'_, '_> {
+    fn ordered_dependency_rows(&self) -> impl Iterator<Item = (DefId, ast::ContentHash)> {
+        let mut dependencies: Vec<_> = self.dependencies.iter().map(|(d, h)| (*d, *h)).collect();
+        dependencies.sort_by_key(|(definition, _)| definition.path());
+        dependencies.into_iter()
+    }
+    fn ordered_dependencies(&self) -> Vec<SignatureDependency> {
+        self.ordered_dependency_rows()
+            .map(|(definition, fingerprint)| SignatureDependency {
+                definition: definition.path().clone(),
+                fingerprint,
+            })
+            .collect()
+    }
+
     /// A relation's lifetime sources: every reach except its arena places,
     /// which are where its blocks live (PROV-4).
     fn lifetime(&self, relation: &Relation) -> Relation {
@@ -1409,7 +1410,7 @@ impl Normalizer<'_, '_> {
             modes.relation = Relation::environment();
         }
         let id = self.types.intern(Type {
-            drop_allocation: self.drop_kind(&kind, &mut std::collections::HashSet::new()),
+            drop_allocation: self.drop_kind(&kind, &mut IdSet::default()),
             modes,
             ..Type::with_kind(kind)
         });
@@ -1422,7 +1423,7 @@ impl Normalizer<'_, '_> {
             id,
             StructuralProperty::Plain,
             &generics,
-            &mut |definition: DefId| self.property_signature(definition.path()),
+            &mut |definition: DefId| self.property_signature(definition),
         );
         if plain? {
             adjusted.canonicalize_plain();
@@ -1433,14 +1434,14 @@ impl Normalizer<'_, '_> {
     }
     fn property_signature(
         &mut self,
-        path: &ast::DefPath,
+        definition: DefId,
     ) -> Result<Option<SignatureRef>, QueryError> {
-        if *path == self.input.syntax.item.definition {
+        if definition.path() == &self.input.syntax.item.definition {
             // The current declaration is not published yet. Recursive nominal
             // proofs remain conservative until its representation is complete.
-            return Ok(self.snapshots.get(path).cloned());
+            return Ok(self.snapshots.get(&definition).cloned());
         }
-        self.snapshot(path).map(Some)
+        self.snapshot(definition).map(Some)
     }
     fn sendability(&mut self, root: TypeId) -> Result<Sendability, QueryError> {
         // A declared receiving contract supplies entry assumptions, with every
@@ -1452,7 +1453,7 @@ impl Normalizer<'_, '_> {
         let generics = self.declarations();
         let types = self.types;
         structural_sendability(types, root, &generics, &mut |definition: DefId| {
-            self.property_signature(definition.path())
+            self.property_signature(definition)
         })
     }
     fn definition(
@@ -1474,25 +1475,27 @@ impl Normalizer<'_, '_> {
     /// A declaration that cannot be read stays absent and the proof conservative.
     fn load_schema_nominals(&mut self, root: TypeId) -> Result<(), QueryError> {
         let own = self.input.syntax.item.definition.clone();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = IdSet::default();
         let mut pending = vec![root];
         while let Some(id) = pending.pop() {
             if !seen.insert(id) {
                 continue;
             }
-            let Some(row) = self.types.get(id) else { continue };
+            let Some(row) = self.types.get(id) else {
+                continue;
+            };
             if matches!(row.kind, TypeKind::Function(_)) {
                 continue;
             }
             let named = match &row.kind {
                 TypeKind::Named { definition, .. } if definition.path() != &own => {
-                    Some(definition.path().clone())
+                    Some(*definition)
                 }
                 _ => None,
             };
             pending.extend(row.kind.value_parts());
             let Some(definition) = named else { continue };
-            let s = match self.snapshot(&definition) {
+            let s = match self.snapshot(definition) {
                 Ok(s) => s,
                 Err(e @ QueryError::Operational(_)) => return Err(e),
                 Err(_) => continue,
@@ -1505,24 +1508,25 @@ impl Normalizer<'_, '_> {
         }
         Ok(())
     }
-    fn snapshot(&mut self, d: &ast::DefPath) -> Result<SignatureRef, QueryError> {
-        if let Some(member) = self.group.get(d) {
+    fn snapshot(&mut self, definition: impl Into<DefId>) -> Result<SignatureRef, QueryError> {
+        let d = definition.into();
+        if let Some(member) = self.group.get(&d) {
             return Ok(member.clone());
         }
-        if let Some(s) = self.snapshots.get(d) {
-            self.dependencies.insert(d.clone(), s.fingerprint);
+        if let Some(s) = self.snapshots.get(&d) {
+            self.dependencies.insert(d, s.fingerprint);
             return Ok(s.clone());
         }
-        let s = self.provider.signature(DefId::intern(d))?;
-        if s.definition.path() != d {
+        let s = self.provider.signature(d)?;
+        if s.definition != d {
             return Err(diagnostic(
                 const { RuleId::of("LANG-6") },
                 self.span,
                 "provider returned the wrong definition",
             ));
         }
-        self.dependencies.insert(d.clone(), s.fingerprint);
-        self.snapshots.insert(d.clone(), s.clone());
+        self.dependencies.insert(d, s.fingerprint);
+        self.snapshots.insert(d, s.clone());
         Ok(s)
     }
     fn ty(&mut self, id: ast::TypeExprId, pos: Position) -> Result<TypeId, QueryError> {
@@ -1716,7 +1720,7 @@ impl Normalizer<'_, '_> {
                                     "recursive type alias",
                                 )
                             })?;
-                            if !self.aliases.insert(d.clone()) {
+                            if !self.aliases.insert(DefId::intern(&d)) {
                                 return Err(diagnostic(
                                     const { RuleId::of("LANG-7") },
                                     t.origin.span,
@@ -1734,7 +1738,7 @@ impl Normalizer<'_, '_> {
                                 )
                             })?;
                             let imported = self.import(r, &args)?;
-                            self.aliases.remove(&d);
+                            self.aliases.remove(&DefId::intern(&d));
                             let mut ty = self.types.get(imported).unwrap().clone();
                             if matches!(pos, Position::Borrow)
                                 && !self.satisfies(imported, Bound::Plain)
@@ -1754,7 +1758,9 @@ impl Normalizer<'_, '_> {
                                 if let Some(repr) = def.representation {
                                     // A group member is read as this declaration
                                     // reads itself: its fields are its own to check.
-                                    if !args.is_empty() && !self.group.contains_key(&d) {
+                                    if !args.is_empty()
+                                        && !self.group.contains_key(&DefId::intern(&d))
+                                    {
                                         // Import normalizes actual declaration fields and records
                                         // their signature reads; proof policy lives in shared helpers.
                                         self.import(repr, &args)?;
@@ -2098,7 +2104,7 @@ impl Normalizer<'_, '_> {
                     definition,
                     arguments,
                 } => {
-                    let sig = self.snapshot(definition.path())?;
+                    let sig = self.snapshot(definition)?;
                     if let SignatureKind::Type(def) = &sig.kind {
                         if let Some(r) = def.representation {
                             if let Some(Type {
@@ -2107,8 +2113,10 @@ impl Normalizer<'_, '_> {
                             }) = self.types.get(r)
                             {
                                 let fs = fs.clone();
-                                let i =
-                                    fs.iter().position(|f| f.name.as_str() == name).ok_or_else(|| {
+                                let i = fs
+                                    .iter()
+                                    .position(|f| f.name.as_str() == name)
+                                    .ok_or_else(|| {
                                         diagnostic(
                                             const { RuleId::of("LANG-6") },
                                             self.span,
@@ -2136,13 +2144,16 @@ impl Normalizer<'_, '_> {
                     ));
                 }
             };
-            let i = fs.iter().position(|f| f.name.as_str() == name).ok_or_else(|| {
-                diagnostic(
-                    const { RuleId::of("LANG-6") },
-                    self.span,
-                    "unknown origin field",
-                )
-            })?;
+            let i = fs
+                .iter()
+                .position(|f| f.name.as_str() == name)
+                .ok_or_else(|| {
+                    diagnostic(
+                        const { RuleId::of("LANG-6") },
+                        self.span,
+                        "unknown origin field",
+                    )
+                })?;
             fields.push(FieldId(i as u32));
             current = Some(fs[i].ty);
         }
@@ -2452,12 +2463,12 @@ impl Normalizer<'_, '_> {
             return false;
         };
         self.snapshots
-            .get(definition.path())
+            .get(&definition)
             .is_some_and(|s| matches!(&s.kind, SignatureKind::Type(d) if d.captures.is_some()))
     }
     fn capability(&self, t: TypeId) -> Option<CapabilityKind> {
         if let TypeKind::Named { definition, .. } = &self.types.get(t)?.kind {
-            if let SignatureKind::Type(d) = &self.snapshots.get(definition.path())?.kind {
+            if let SignatureKind::Type(d) = &self.snapshots.get(&definition)?.kind {
                 return d.capability;
             }
         }
@@ -2512,10 +2523,10 @@ impl Normalizer<'_, '_> {
         };
         let roles = self.roles();
         let mut own = AuthoritySummary::inert();
-        let mut summaries: BTreeMap<ast::DefPath, AuthoritySummary> = self
+        let mut summaries: BTreeMap<DefId, AuthoritySummary> = self
             .group
             .keys()
-            .map(|d| (d.clone(), AuthoritySummary::inert()))
+            .map(|d| (*d, AuthoritySummary::inert()))
             .collect();
         loop {
             self.install_group_authority(&summaries);
@@ -2525,7 +2536,7 @@ impl Normalizer<'_, '_> {
                     continue;
                 };
                 let Some(root) = declaration.representation else {
-                    next.insert(definition.clone(), AuthoritySummary::Unknown);
+                    next.insert(*definition, AuthoritySummary::Unknown);
                     continue;
                 };
                 let generics = GenericDeclarations::signature(&declaration.generics);
@@ -2535,12 +2546,12 @@ impl Normalizer<'_, '_> {
                             Some(path) if *path.path() == self.own_definition() => {
                                 Some(self.own_authority_view(&own))
                             }
-                            Some(path) => self.snapshots.get(path.path()).cloned(),
+                            Some(path) => self.snapshots.get(&path).cloned(),
                             None => None,
                         })
                     })
                     .unwrap();
-                next.insert(definition.clone(), summary);
+                next.insert(*definition, summary);
             }
             let next_own = self.authority_proof(own_root, &own);
             if next == summaries && next_own == own {
@@ -2562,7 +2573,7 @@ impl Normalizer<'_, '_> {
                 continue;
             };
             let mut pending: Vec<TypeId> = declaration.representation.into_iter().collect();
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = IdSet::default();
             while let Some(id) = pending.pop() {
                 if !seen.insert(id) {
                     continue;
@@ -2573,9 +2584,9 @@ impl Normalizer<'_, '_> {
                 pending.extend(row.kind.value_parts());
                 if let TypeKind::Named { definition, .. } = &row.kind
                     && *definition.path() != own
-                    && !self.group.contains_key(definition.path())
+                    && !self.group.contains_key(&definition)
                 {
-                    if let Err(e @ QueryError::Operational(_)) = self.snapshot(definition.path()) {
+                    if let Err(e @ QueryError::Operational(_)) = self.snapshot(*definition) {
                         return Err(e);
                     }
                 }
@@ -2584,7 +2595,7 @@ impl Normalizer<'_, '_> {
         Ok(())
     }
     /// Gives every group member its current authority summary.
-    fn install_group_authority(&mut self, summaries: &BTreeMap<ast::DefPath, AuthoritySummary>) {
+    fn install_group_authority(&mut self, summaries: &BTreeMap<DefId, AuthoritySummary>) {
         for (definition, summary) in summaries {
             let member = self.group.get_mut(definition).unwrap();
             if let SignatureKind::Type(declaration) = &member.kind
@@ -2597,7 +2608,7 @@ impl Normalizer<'_, '_> {
                 declaration.authority = summary.clone();
             }
             *member = std::sync::Arc::new(updated);
-            self.snapshots.insert(definition.clone(), member.clone());
+            self.snapshots.insert(*definition, member.clone());
         }
     }
     fn roles(&self) -> NominalRoles {
@@ -2668,7 +2679,7 @@ impl Normalizer<'_, '_> {
                     {
                         Some(self.own_authority_view(own))
                     }
-                    Some(path) => self.snapshots.get(path.path()).cloned(),
+                    Some(path) => self.snapshots.get(&path).cloned(),
                     None => self.builtin_declarations.get(&id).cloned().flatten(),
                 })
             },
@@ -2712,7 +2723,7 @@ impl Normalizer<'_, '_> {
                     return false;
                 }
                 if *b == Bound::Flat || *b == Bound::Sendable {
-                    return t.is_some_and(|t| self.flat_storage(t, &mut std::collections::HashSet::new()));
+                    return t.is_some_and(|t| self.flat_storage(t, &mut IdSet::default()));
                 }
             }
             t.is_some_and(|t| self.satisfies(t, *b))
@@ -2724,14 +2735,14 @@ impl Normalizer<'_, '_> {
             return true;
         };
         if terms.iter().any(|term| match term {
-            AuthorityTerm::Capability(path) => self.snapshots.get(path).is_some_and(|s|
+            AuthorityTerm::Capability(path) => self.snapshots.get(&DefId::intern(path)).is_some_and(|s|
                 matches!(&s.kind, SignatureKind::Type(d) if d.capability == Some(CapabilityKind::Scoped))),
             _ => false,
         }) {
             return true;
         }
         let mut pending = vec![root];
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = IdSet::default();
         while let Some(id) = pending.pop() {
             if !seen.insert(id) {
                 continue;
@@ -2763,7 +2774,7 @@ impl Normalizer<'_, '_> {
         }
         false
     }
-    fn flat_storage(&self, id: TypeId, seen: &mut std::collections::HashSet<TypeId>) -> bool {
+    fn flat_storage(&self, id: TypeId, seen: &mut IdSet<TypeId>) -> bool {
         if !seen.insert(id) {
             return false;
         }
@@ -2776,7 +2787,7 @@ impl Normalizer<'_, '_> {
             TypeKind::Named { definition, arguments } => {
                 // MEM-12: "no capability/function/handle/resource". Plain
                 // alone is not layout evidence (capabilities are Plain too).
-                self.snapshots.get(definition.path()).is_some_and(|s| matches!(&s.kind,
+                self.snapshots.get(&definition).is_some_and(|s| matches!(&s.kind,
                     SignatureKind::Type(d) if d.capability.is_none() && !d.resource))
                     && arguments.iter().all(|a| match a {
                         GenericArgument::Type(t) => self.flat_storage(*t, seen),
@@ -2797,9 +2808,15 @@ impl Normalizer<'_, '_> {
                 .unwrap_or_else(|error| self.proof_failure(error, false));
         }
         if matches!(b, Bound::Data | Bound::Key) {
-            return structural_equality(self.types, t, b, &self.declarations(), &mut |definition: DefId| {
-                Ok::<_, hirsel_types::QueryError>(self.snapshots.get(definition.path()).cloned())
-            })
+            return structural_equality(
+                self.types,
+                t,
+                b,
+                &self.declarations(),
+                &mut |definition: DefId| {
+                    Ok::<_, hirsel_types::QueryError>(self.snapshots.get(&definition).cloned())
+                },
+            )
             .unwrap_or_else(|error| self.proof_failure(error, false));
         }
         if b == Bound::Inert {
@@ -2809,9 +2826,14 @@ impl Normalizer<'_, '_> {
             return self.drop_summary(t) == DropAllocation::NoAlloc;
         }
         if b == Bound::Flat {
-            return structural_flat(self.types, t, &self.declarations(), &mut |definition: DefId| {
-                Ok::<_, hirsel_types::QueryError>(self.snapshots.get(definition.path()).cloned())
-            })
+            return structural_flat(
+                self.types,
+                t,
+                &self.declarations(),
+                &mut |definition: DefId| {
+                    Ok::<_, hirsel_types::QueryError>(self.snapshots.get(&definition).cloned())
+                },
+            )
             .unwrap_or_else(|error| self.proof_failure(error, false));
         }
         let property = match b {
@@ -2826,7 +2848,7 @@ impl Normalizer<'_, '_> {
             property,
             &self.declarations(),
             &mut |definition: DefId| {
-                Ok::<_, hirsel_types::QueryError>(self.snapshots.get(definition.path()).cloned())
+                Ok::<_, hirsel_types::QueryError>(self.snapshots.get(&definition).cloned())
             },
         )
         .unwrap_or_else(|error| self.proof_failure(error, false))
@@ -2869,7 +2891,7 @@ impl Normalizer<'_, '_> {
         structural_serializable(self.types, root, declarations, &mut |definition: DefId| {
             let path = definition.path();
             if path != &item.definition {
-                return Ok(self.snapshots.get(path).cloned());
+                return Ok(self.snapshots.get(&definition).cloned());
             }
             let ast::ItemKind::Type { flavor, body, .. } = &item.kind else {
                 return Ok(None);
@@ -2946,7 +2968,7 @@ impl Normalizer<'_, '_> {
                     _ => None,
                 }
             }
-            TypeKind::Named { definition, .. } => match &self.snapshots.get(definition.path())?.kind {
+            TypeKind::Named { definition, .. } => match &self.snapshots.get(&definition)?.kind {
                 SignatureKind::Type(d) if d.layout.flat => Some(FfiClass::Record),
                 SignatureKind::Type(d) if d.layout.c && implies(&d.bounds, Bound::Data) => {
                     Some(FfiClass::Record)
