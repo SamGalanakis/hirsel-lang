@@ -208,7 +208,12 @@ pub(super) unsafe fn check_quiet(run: *mut crate::context::RunShared) {
         let Some(s) = (unsafe { (*run.tasks.get()).as_deref_mut() }) else {
             return;
         };
-        if !matches!(s.logical, Logical::Free(_))
+        let quiet_policy = match &s.logical {
+            Logical::Free(_) => true,
+            Logical::Ordered(driver) => driver.quiet(),
+            Logical::Cooperative => false,
+        };
+        if !quiet_policy
             || s.tasks.iter().flatten().any(|row| {
                 row.state == State::Ready
                     || row.dispatch.as_ref().is_some_and(|frame| !frame.is_saved())

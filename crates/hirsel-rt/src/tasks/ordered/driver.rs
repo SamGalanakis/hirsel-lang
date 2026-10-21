@@ -137,6 +137,15 @@ impl Driver {
         assert!(self.poll_after_save.replace(task).is_none());
     }
 
+    pub(in crate::tasks) fn quiet(&self) -> bool {
+        !self.host_poll
+            && !self.poll_deferred()
+            && self
+                .frontier
+                .as_ref()
+                .is_some_and(|f| f.head().is_none() && f.queue().next().is_none())
+    }
+
     pub(super) fn poll_deferred(&self) -> bool {
         self.poll_after_save.is_some() || self.return_after_save.is_some()
     }
@@ -216,6 +225,9 @@ pub(crate) fn after_save(
             driver.frontier.as_mut().unwrap().complete_poll(ready);
             driver.poll_after_save = None;
         }
+    }
+    if completed {
+        super::lifecycle::retire_detached(s, task);
     }
     let super::super::Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()

@@ -2271,7 +2271,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
     let _segment = profile::Operation::new(ctx, "task_scope_exit");
     if ordered::engine::on(ctx) {
         return unsafe {
-            crate::stop::check(ctx, ordered::lifecycle::empty_scope_exit(ctx, scope))
+            crate::stop::check(
+                ctx,
+                ordered::lifecycle::scope_exit(ctx, scope, error, caller_site),
+            )
         };
     }
     // SAFETY: caller contract.
@@ -2685,6 +2688,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_detach");
+    if ordered::engine::on(ctx) {
+        return unsafe { crate::stop::check(ctx, ordered::lifecycle::detach(ctx, scope, task)) };
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -3296,6 +3302,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "channel_receive");
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::lifecycle::receive(ctx, receiver, message, out, caller_site),
+            )
+        };
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let channel = s.channels.channel(unsafe { receiver.read() }, false);

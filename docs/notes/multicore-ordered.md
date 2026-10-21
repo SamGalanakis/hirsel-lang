@@ -50,7 +50,8 @@ Remote cancellation and readiness read a task-row shield snapshot. The owner
 publishes it at role handoff and finalizer shield changes, including width 1.
 Parked receive slots and both join frames are inaccessible until physical idle
 save; the logical policy's after-save hook must retry those deferred polls.
-Completion, direct handoffs and stack recycling still need policy integration.
+Ordered task completion and calls now use the shared physical-save publication
+order; host and remaining boundary interactions still need integration.
 
 The scan-format constants live in the data-only `hirsel-core-contract` crate;
 `hirsel-kernels::handle_scan` retains its public compatibility re-export. LIR
@@ -74,7 +75,8 @@ remain inert during value scans. Static closure may conservatively include them.
 Ambiguous raw words contribute every registered family. Creation entries that
 erase their generic type register objects under every linked type of that family;
 this admits extra conflicts rather than excluding a possible object. The
-metadata and registry still need installation at native admission and spawn.
+test-only native admission and committed-spawn adapters install this metadata
+and registry; production admission remains gated.
 
 `ordered::objects::Registry` supplies stable identities and obtainable-type
 bindings. A raw word shared by multiple native handle families contributes all
@@ -98,14 +100,23 @@ The driver retains payload descriptors and None images alongside provisional
 handles, so later same-owner commands can be logged before creation commits.
 Duplicated senders retain the source's logical object binding. Drops, remaining task operations and host operations still need native
 boundary adapters. Strict-head adapters now cover scope entry, committed spawn,
-holding result publication, join, empty scope exit and physical completion.
+holding result publication, join, detach, nonempty scope exit, receive and
+physical completion.
 Spawn scans the unstarted environment with the linked capture program. Task
 result types remain erased by the native spawn ABI, so captured Task handles
-are conservatively unknown. A join calls a saved holding child's rest; its
+are conservatively unknown, including the spawning parent's obtainable footprint.
+Receive outputs are scanned into their owner's next-turn held set. A join calls a saved holding child's rest; its
 completion returns to the caller without polling, and an already-holding join
 yields after that return. A waiting join's call/cleanup continuation consumes no
 new operation ordinal. The actual task effects execute inside Frontier's commit
 or continuation callback, after settlement, rather than preceding a marker op.
+Nonempty scope exit calls unjoined holding children in reverse spawn order.
+Detach of a holding child calls its rest; a still-running detached child retains
+its result for its own cleanup. Successful detached rows retire only in idle,
+after the completed image has been invalidated and its retirement poll/return
+barrier has finished. Receive polls access a saved destination; only a retired
+send can wake it. Runtime-only CONC-8 additionally requires no frontier head,
+queue, pending poll/return, running image or armed host request.
 
 Native object retirement can return an owned `Progress::Poll` continuation.
 The caller restores policy metadata before accessing host readiness; wake merge
@@ -133,10 +144,10 @@ stack, and recorded outcomes are delivered to the owner's continuation by
 ordinal. Bounded object commit temporarily removes the frontier from its driver
 slot, restoring it before host polling or suspension; during a home poll other
 boundaries wait. The test-only admission path accepts supported E and strict task boundaries,
-dropless closure environments, no budgets or root/host effects, no detached
-tasks or task sets/deadlines, and only scopes whose children have been joined
-before exit. Native controls at widths 2/4/8 cover both running and already
-holding joins, yielding rests, physical completion and repeated row/stack reuse.
+dropless closure environments, no budgets or root/host effects, and no task
+sets/deadlines. Endpoint cleanup is still explicit in the fixtures. Native controls at widths 2/4/8 cover both running and already
+holding joins, yielding rests, scope exit, detach, receive, runtime Blocked,
+physical completion and repeated row/stack reuse.
 The remaining native boundaries, budget hooks and production admission still
 need installation. These controls are not a parallel ordered
 corpus or speed gate.

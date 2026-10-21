@@ -37,8 +37,8 @@ pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
 /// Admission only, with physical dispatch installed and before root start.
 /// The body uses only supported ordered boundaries and explicit dispatch end;
 /// no budgets, fuel, root release, host or terminal effects. Native task tests
-/// use only nondetached children, supported joins and empty scope exits, with
-/// dropless closure environments; no task sets or deadlines are admitted.
+/// use supported task/receive boundaries and dropless closure environments;
+/// no task sets or deadlines are admitted.
 /// No native object exists before this admission.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
     let mut objects = Registry::default();
@@ -444,6 +444,29 @@ pub(crate) unsafe fn atomic_store(
         Command::AtomicStore { word, image }.operation(footprint(ctx, Kind::Atomic, word, true));
     submit(ctx, op)?;
     Ok(())
+}
+
+pub(super) fn carrier_descriptor(ctx: *mut TaskCtx, kind: Kind, word: u64) -> u32 {
+    driver(ctx).carriers[&(kind, word)].descriptor
+}
+
+/// # Safety
+/// The caller owns a live output image matching the linked descriptor.
+pub(super) unsafe fn obtained_image(ctx: *mut TaskCtx, image: *const u8, descriptor: u32) {
+    let captures = unsafe { crate::ordered::capture::scan(ctx, image, descriptor) };
+    let task = current(ctx);
+    let driver = driver(ctx);
+    let obtained = driver.objects.captured(&captures);
+    let held = driver
+        .frontier
+        .as_mut()
+        .unwrap()
+        .held
+        .get_mut(&task)
+        .unwrap();
+    held.objects.extend(obtained.objects);
+    held.obtains.extend(obtained.obtains);
+    held.unknown |= obtained.unknown;
 }
 
 /// # Safety
