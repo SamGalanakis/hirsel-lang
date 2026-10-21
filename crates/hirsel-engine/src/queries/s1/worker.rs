@@ -194,6 +194,15 @@ struct Lowered {
     dependencies: Vec<SignatureDependency>,
 }
 
+/// Check consumers retain the facts, while the active worker releases its TIR.
+pub(super) fn discard_lowered_output(output: QueryOutput<DefinitionRef>) -> QueryOutput<()> {
+    QueryOutput {
+        value: (),
+        diagnostics: output.diagnostics,
+        dependencies: output.dependencies,
+    }
+}
+
 pub(crate) struct TaskWorker<'a, S: TirSource + ?Sized> {
     source: &'a S,
     shared: &'a TaskShared,
@@ -278,6 +287,19 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         &mut self,
         path: &DefPath,
     ) -> DependencyProduct<(QueryOutput<DefinitionRef>, DepthEvidence<Span>)> {
+        self.lower_root_with(path, |output| output)
+    }
+    pub(super) fn check_lower_root(
+        &mut self,
+        path: &DefPath,
+    ) -> DependencyProduct<(QueryOutput<()>, DepthEvidence<Span>)> {
+        self.lower_root_with(path, discard_lowered_output)
+    }
+    fn lower_root_with<T>(
+        &mut self,
+        path: &DefPath,
+        finish: impl FnOnce(QueryOutput<DefinitionRef>) -> QueryOutput<T>,
+    ) -> DependencyProduct<(QueryOutput<T>, DepthEvidence<Span>)> {
         self.limit = None;
         self.phase = Some(QueryKind::Lower);
         self.stack.begin_requests();
@@ -288,7 +310,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         let depth = self.stack.finish_requests(self.depth_limit());
         self.lowered.clear();
         DependencyProduct {
-            result: product.result.map(|output| (output, depth)),
+            result: product.result.map(|output| (finish(output), depth)),
             reads: product.reads,
         }
     }
@@ -1307,6 +1329,47 @@ mod tests {
             bodies,
         }
     }
+    #[test]
+    fn compact_root_facts_release_tir_before_the_next_worker_task() {
+        crate::with_compiler_stack(|| {
+            let source = source("const LEAF:()=()\nfn helper()->(){comptime LEAF}\n", 8);
+            for jobs in [1, 2, 8] {
+                let shared = TaskShared::new(S1Coordinator::new());
+                let live = Mutex::new(Vec::<std::sync::Weak<hirsel_tir::Definition>>::new());
+                let results = jobs::map_with_state(
+                    Jobs::new(jobs),
+                    vec![(); 64],
+                    |_| 1,
+                    || TaskWorker::new(&source, &shared),
+                    |worker, ()| {
+                        worker.lower_root_with(&path("helper"), |output| {
+                            let mut live = live.lock().unwrap();
+                            live.push(Arc::downgrade(&output.value));
+                            assert!(
+                                live.iter().filter(|weak| weak.strong_count() > 0).count() <= jobs
+                            );
+                            discard_lowered_output(output)
+                        })
+                    },
+                );
+                assert!(results.iter().all(|result| result.result.is_ok()));
+                assert!(
+                    live.lock()
+                        .unwrap()
+                        .iter()
+                        .all(|weak| weak.strong_count() == 0)
+                );
+                for result in &results[1..] {
+                    assert_eq!(result.reads, results[0].reads);
+                    assert_eq!(
+                        result.result.as_ref().unwrap().1,
+                        results[0].result.as_ref().unwrap().1
+                    );
+                }
+            }
+        });
+    }
+
     #[test]
     fn zero_and_small_lower_budgets_release_helper_cache_ownership() {
         crate::with_compiler_stack(|| {

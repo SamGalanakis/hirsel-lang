@@ -1585,6 +1585,34 @@ fn frozen_lowering_frontier_keeps_lower_warnings_and_current_hit_metadata() {
                             .any(|(key, _)| matches!(key, memo::ReadKey::ValidationUniverse(_)))
                     );
                 }
+                let compact = candidate.check_lower_definition_prefix(
+                    vec![path("A"), path("A")],
+                    hirsel_intern::jobs::Jobs::new(jobs),
+                );
+                assert_eq!(compact.len(), 2);
+                for outcome in compact {
+                    assert_eq!(outcome.phase, Some(QueryKind::Lower));
+                    assert!(outcome.limit.is_none());
+                    assert_eq!(
+                        placed_evidence(
+                            &candidate.sources,
+                            format!("{:?}", outcome.depth.as_ref().unwrap())
+                        ),
+                        placed_evidence(&control.sources, format!("{expected_depth:?}"))
+                    );
+                    let output = outcome.result.unwrap();
+                    assert_eq!(output.dependencies, expected.dependencies);
+                    assert_eq!(
+                        placed_evidence(&candidate.sources, format!("{:?}", output.diagnostics)),
+                        placed_evidence(&control.sources, format!("{:?}", expected.diagnostics))
+                    );
+                    assert!(
+                        outcome
+                            .reads
+                            .iter()
+                            .any(|(key, _)| matches!(key, memo::ReadKey::ValidationUniverse(_)))
+                    );
+                }
             }
         }
     });
@@ -1671,7 +1699,7 @@ fn frozen_lowering_prefix_withholds_later_generated_and_staged_publication() {
             let mut control = engine(source);
             let expected = control.lower_to_tir(&path("FIRST")).unwrap_err();
             let mut candidate = engine(source);
-            let outcomes = candidate.lower_definition_prefix(
+            let outcomes = candidate.check_lower_definition_prefix(
                 vec![path("FIRST"), path("LATER")],
                 hirsel_intern::jobs::Jobs::new(jobs),
             );
@@ -1935,4 +1963,70 @@ fn frozen_s1_prefix_tir_receipts_and_diagnostics_are_invariant_under_jobs_and_sa
     assert!(outputs[0].contains("DefinitionSection") || outputs[0].contains("Definition"));
     assert!(outputs[0].contains("ValidationUniverse"));
     assert!(outputs.iter().all(|output| output == &outputs[0]));
+}
+
+#[test]
+fn compact_lowering_prefix_preserves_all_output_facts_and_barriers() {
+    fn facts<T>(engine: &QueryEngine, outcome: LoweringResult<T>) -> String {
+        let output = outcome
+            .result
+            .map(|output| (output.diagnostics, output.dependencies));
+        placed_evidence(
+            &engine.sources,
+            format!(
+                "{:?} {output:?} {:?} {:?} {:?} {:?}",
+                outcome.definition, outcome.phase, outcome.limit, outcome.depth, outcome.reads
+            ),
+        )
+    }
+    with_compiler_stack(|| {
+        let cases = [
+            "const LEAF:u64=7\nfn A()->u64{comptime LEAF}\nconst B:u64=comptime A()\n",
+            "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime A\n",
+            "type Point{x:u64}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String]{Ok(codegen.body(\"fn(v:standalone@0/Point)->u64 uses {}{12}\"))}\nfn width[T](v:T)->u64 uses {}=comptime gen(shape(T))\nconst A:u64=comptime width(Point(x:1))\nconst B:u64=comptime A\n",
+            "const A:u64=comptime B\nconst B:u64=comptime A\n",
+        ];
+        for source in cases {
+            for jobs in [1, 2, 8] {
+                let mut control = engine(source);
+                let mut candidate = engine(source);
+                for revision in [
+                    source.to_owned(),
+                    source.replace("7", "23"),
+                    source.to_owned(),
+                ] {
+                    for engine in [&mut control, &mut candidate] {
+                        let file = engine
+                            .sources
+                            .add("comptime.hir", revision.clone())
+                            .unwrap();
+                        engine.parse_file(file, &default_context()).unwrap();
+                    }
+                    for warm in [false, true] {
+                        let roots = vec![path("B"), path("A"), path("B")];
+                        let expected = control
+                            .lower_definition_prefix(
+                                roots.clone(),
+                                hirsel_intern::jobs::Jobs::new(jobs),
+                            )
+                            .into_iter()
+                            .map(|outcome| facts(&control, outcome))
+                            .collect::<Vec<_>>();
+                        let actual = candidate
+                            .check_lower_definition_prefix(
+                                roots,
+                                hirsel_intern::jobs::Jobs::new(jobs),
+                            )
+                            .into_iter()
+                            .map(|outcome| facts(&candidate, outcome))
+                            .collect::<Vec<_>>();
+                        assert_eq!(
+                            actual, expected,
+                            "jobs={jobs} warm={warm} source={revision}"
+                        );
+                    }
+                }
+            }
+        }
+    });
 }

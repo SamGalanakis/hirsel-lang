@@ -10,9 +10,9 @@ use std::sync::Mutex;
 /// One lowering root with its captured operational provenance and complete
 /// execution reads. Publication of its TIR remains the caller's policy.
 #[derive(Clone, Debug)]
-pub struct LoweringResult {
+pub struct LoweringResult<T = DefinitionRef> {
     pub definition: DefPath,
-    pub result: Result<QueryOutput<DefinitionRef>, QueryError>,
+    pub result: Result<QueryOutput<T>, QueryError>,
     pub phase: Option<QueryKind>,
     pub limit: Option<hirsel_tir::ToolingLimit>,
     pub reads: Arc<Reads>,
@@ -22,11 +22,13 @@ pub struct LoweringResult {
 enum RootKind {
     Constant,
     Lower,
+    CheckLower,
 }
 #[derive(Clone)]
 enum RootValue {
     Constant(hirsel_tir::Materialized),
     Lowered(QueryOutput<DefinitionRef>, DepthEvidence<Span>),
+    Checked(QueryOutput<()>, DepthEvidence<Span>),
 }
 #[derive(Clone)]
 struct RootOutcome {
@@ -35,6 +37,28 @@ struct RootOutcome {
     phase: Option<QueryKind>,
     limit: Option<hirsel_tir::ToolingLimit>,
     reads: Arc<Reads>,
+}
+impl RootOutcome {
+    fn lowering<T>(
+        self,
+        value: impl FnOnce(RootValue) -> (QueryOutput<T>, DepthEvidence<Span>),
+    ) -> LoweringResult<T> {
+        let (result, depth) = match self.result {
+            Ok(root) => {
+                let (output, depth) = value(root);
+                (Ok(output), Some(depth))
+            }
+            Err(error) => (Err(error), None),
+        };
+        LoweringResult {
+            definition: self.definition,
+            result,
+            phase: self.phase,
+            limit: self.limit,
+            reads: self.reads,
+            depth,
+        }
+    }
 }
 pub(crate) struct FrozenSource<'a> {
     pub(crate) inputs: TaskInputs,
@@ -715,19 +739,10 @@ impl QueryEngine {
         self.s1_root_outcomes(definitions, jobs, RootKind::Lower, prefix)
             .into_iter()
             .map(|outcome| {
-                let (result, depth) = match outcome.result {
-                    Ok(RootValue::Lowered(output, depth)) => (Ok(output), Some(depth)),
-                    Err(error) => (Err(error), None),
+                outcome.lowering(|value| match value {
+                    RootValue::Lowered(output, depth) => (output, depth),
                     _ => unreachable!("lower task"),
-                };
-                LoweringResult {
-                    definition: outcome.definition,
-                    result,
-                    depth,
-                    phase: outcome.phase,
-                    limit: outcome.limit,
-                    reads: outcome.reads,
-                }
+                })
             })
             .collect()
     }
@@ -739,6 +754,24 @@ impl QueryEngine {
         jobs: hirsel_intern::jobs::Jobs,
     ) -> Vec<LoweringResult> {
         self.lower_root_results(definitions, jobs, true)
+    }
+    /// Check an ordered prefix without retaining its completed root TIR.
+    /// Each worker drops the body before returning its diagnostics, ordered
+    /// dependencies, read receipts and transparent depth to serial publication.
+    pub fn check_lower_definition_prefix(
+        &mut self,
+        definitions: Vec<DefPath>,
+        jobs: hirsel_intern::jobs::Jobs,
+    ) -> Vec<LoweringResult<()>> {
+        self.s1_root_outcomes(definitions, jobs, RootKind::CheckLower, true)
+            .into_iter()
+            .map(|outcome| {
+                outcome.lowering(|value| match value {
+                    RootValue::Checked(output, depth) => (output, depth),
+                    _ => unreachable!("check lower task"),
+                })
+            })
+            .collect()
     }
     fn s1_root_outcomes(
         &mut self,
@@ -776,7 +809,7 @@ impl QueryEngine {
         self.execution_stack.push(ReadsBuilder::new());
         let mut result = match kind {
             RootKind::Constant => self.materialize_value(path).map(RootValue::Constant),
-            RootKind::Lower => {
+            RootKind::Lower | RootKind::CheckLower => {
                 // An image shortcut replays its stored execution, but has no
                 // resident memo whose root input or V origin we can inherit.
                 // Match worker admission at this outcome boundary.
@@ -796,7 +829,12 @@ impl QueryEngine {
                 self.s1.begin_requests();
                 let result = self.lower_to_tir(path);
                 let depth = self.s1.finish_requests(self.depth_limit());
-                result.map(|output| RootValue::Lowered(output, depth))
+                result.map(|output| match kind {
+                    RootKind::CheckLower => {
+                        RootValue::Checked(worker::discard_lowered_output(output), depth)
+                    }
+                    _ => RootValue::Lowered(output, depth),
+                })
             }
         };
         let reads = self
@@ -903,6 +941,15 @@ impl QueryEngine {
                             result: product
                                 .result
                                 .map(|(output, depth)| RootValue::Lowered(output, depth)),
+                            reads: product.reads,
+                        }
+                    }
+                    RootKind::CheckLower => {
+                        let product = worker.check_lower_root(&path);
+                        DependencyProduct {
+                            result: product
+                                .result
+                                .map(|(output, depth)| RootValue::Checked(output, depth)),
                             reads: product.reads,
                         }
                     }
