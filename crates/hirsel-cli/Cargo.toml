@@ -23,4 +23,5 @@ mimalloc = { version = "=0.1.52", default-features = false }
 serde_json = "1"
 
 [dev-dependencies]
+hirsel-rt = { path = "../hirsel-rt" }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }

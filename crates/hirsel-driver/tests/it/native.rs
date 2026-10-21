@@ -706,9 +706,10 @@ fn native_main_records_closed_stdout_and_broken_pipe_as_output_errors() {
             }
             let output = command.output().unwrap();
             assert_eq!(output.status.code(), Some(0), "{output:?}");
-            let record =
-                hirsel_rt::launch::parse_recording(&std::fs::read_to_string(&tape).unwrap())
-                    .unwrap();
+            let record = hirsel_rt::launch::parse_recording(
+                &hirsel_rt::launch::read_recording_text(&tape).unwrap(),
+            )
+            .unwrap();
             assert!(matches!(
                 record.events[1].completion,
                 hirsel_rt::io::Completion::Unit(Err(_))
@@ -733,9 +734,10 @@ fn native_main_records_closed_stdout_and_broken_pipe_as_output_errors() {
             assert_eq!(output.status.code(), Some(expected), "{output:?}");
             if expected == 0 {
                 assert_eq!(output.stdout, checked.reference.output);
-                let record =
-                    hirsel_rt::launch::parse_recording(&std::fs::read_to_string(&tape).unwrap())
-                        .unwrap();
+                let record = hirsel_rt::launch::parse_recording(
+                    &hirsel_rt::launch::read_recording_text(&tape).unwrap(),
+                )
+                .unwrap();
                 assert_eq!(record.arguments, ["é"]);
                 std::fs::remove_file(&tape).unwrap();
             } else {
@@ -760,8 +762,10 @@ fn native_main_records_closed_stdout_and_broken_pipe_as_output_errors() {
             .unwrap();
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, checked.reference.output);
-        let record =
-            hirsel_rt::launch::parse_recording(&std::fs::read_to_string(&tape).unwrap()).unwrap();
+        let record = hirsel_rt::launch::parse_recording(
+            &hirsel_rt::launch::read_recording_text(&tape).unwrap(),
+        )
+        .unwrap();
         assert_eq!(record.tree.links["escape"], "../outside");
         std::fs::remove_file(tape).unwrap();
         // Keep the fd close local to the child without adding a production dependency.
@@ -887,9 +891,10 @@ fn generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry() {
                 .unwrap();
                 assert_eq!(recorded.exit, Some(0));
                 assert_eq!(recorded.stdout, checked.reference.output);
-                let record =
-                    hirsel_rt::launch::parse_recording(&std::fs::read_to_string(&tape).unwrap())
-                        .unwrap();
+                let record = hirsel_rt::launch::parse_recording(
+                    &hirsel_rt::launch::read_recording_text(&tape).unwrap(),
+                )
+                .unwrap();
                 assert_eq!(
                     (
                         record.hash_seed,

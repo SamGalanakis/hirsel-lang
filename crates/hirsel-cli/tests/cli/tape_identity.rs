@@ -50,19 +50,18 @@ const SCHEDULERS: &[Option<(&str, u64)>] = &[None, Some(("random", 1)), Some(("p
 /// The events a tape records: every Io request, its completion and every scheduling choice,
 /// in order. The header before them names the launch (the host's admission clock, the run
 /// record a launcher binds), which differs between `hirsel run` and an executable.
-fn events(tape: &Path, what: &str, output: &std::process::Output) -> String {
-    let text = std::fs::read_to_string(tape)
-        .unwrap_or_else(|e| panic!("{what} wrote no tape ({e}): {output:?}"));
-    let events: String = text
-        .lines()
-        .skip_while(|line| *line != "events")
-        .map(|line| format!("{line}\n"))
-        .collect();
-    assert!(!events.is_empty(), "{what}: no events section\n{text}");
-    events
+fn events(tape: &Path, what: &str, output: &std::process::Output) -> Vec<u8> {
+    let bytes =
+        std::fs::read(tape).unwrap_or_else(|e| panic!("{what} wrote no tape ({e}): {output:?}"));
+    assert!(bytes.starts_with(hirsel_run_schema::tape::MAGIC));
+    let header =
+        hirsel_run_schema::tape::read(&bytes, hirsel_run_schema::tape::MAGIC.len(), 0).unwrap();
+    // Compare exact binary event frames (including CRC and sequence), excluding
+    // admission provenance that legitimately differs between live launches.
+    bytes[header.range.end..].to_vec()
 }
 
-fn run(command: &mut Command, tape: &Path, what: &str) -> String {
+fn run(command: &mut Command, tape: &Path, what: &str) -> Vec<u8> {
     let _ = std::fs::remove_file(tape);
     let output = command
         .stdin(Stdio::null())

@@ -1,15 +1,13 @@
 //! The recording seam (determinism.md, Recording and resuming). Every capability request of a
 //! host run passes through its [`Journaled`] gate, whose [`Journal`] is the recording level the
-//! run record selects: [`NoJournal`] (none), [`TapeJournal`] (record: the v7 tape, byte for
-//! byte), or [`DurableJournal`] (durable: framed, checksummed records over a [`JournalFile`],
+//! run record selects: [`NoJournal`] (none), [`TapeJournal`] (record: the v8 binary tape), or [`DurableJournal`] (durable: framed, checksummed records over a [`JournalFile`],
 //! the host's file or the simulated disk's [`SimJournalFile`]). The performer (`RealIo`) only
 //! performs; the gate decides when a request may be issued and when its completion may be
 //! delivered. [`recover`] reads a durable journal back: a torn tail is cut, earlier damage is
 //! `Corrupt`, and a `Prepared` request with no completion is in doubt.
 use crate::io::{Completion, Event, Request};
-use crate::launch::{
-    Recording, RecordingWriter, parse_recording, parse_tape, render_recording, render_tape,
-};
+use crate::launch::{Recording, RecordingWriter, render_tape};
+use crate::tape_wire::{Decode, Wire, decode};
 use hirsel_run_schema::RunOutcome;
 use std::collections::BTreeMap;
 use std::io;
@@ -70,8 +68,8 @@ impl Journal for NoJournal {
     }
 }
 
-/// Recording level `record`: the frozen v7 tape, each completion flushed before delivery and
-/// labelled with an unknown suffix until its `complete` line.
+/// Recording level `record`: the v8 binary tape, each completion flushed before delivery and
+/// labelled with an unknown suffix until its terminal frame.
 pub struct TapeJournal<W: io::Write>(pub RecordingWriter<W>);
 impl<W: io::Write> Journal for TapeJournal<W> {
     fn event(&mut self, _: Option<u64>, event: &Event) -> io::Result<()> {
@@ -98,7 +96,7 @@ impl JournalFile for std::fs::File {
 }
 
 /// The first bytes of every durable journal.
-pub const MAGIC: &[u8] = b"hirsel-journal 1\n";
+pub const MAGIC: &[u8] = b"hirsel-journal 2\n";
 /// Frame header: payload length, CRC-32C, sequence number, kind.
 const FRAME: usize = 4 + 4 + 8 + 1;
 /// Group commit bounds (determinism.md, Durable journal).
@@ -144,7 +142,6 @@ impl<F: JournalFile> DurableJournal<F> {
         if !header.events.is_empty() {
             return Err(io::Error::other("journal header contains events"));
         }
-        let text = render_recording(header).map_err(io::Error::other)?;
         let mut journal = Self {
             file: {
                 file.append(MAGIC)?;
@@ -155,23 +152,20 @@ impl<F: JournalFile> DurableJournal<F> {
             events: 0,
             ended: false,
         };
-        journal.frame(Kind::Header, text.as_bytes());
+        journal.frame(Kind::Header, header)?;
         journal.barrier()?;
         Ok(journal)
     }
     pub fn file(&self) -> &F {
         &self.file
     }
-    fn frame(&mut self, kind: Kind, payload: &[u8]) {
-        let seq = self.seq;
+    fn frame<T: Wire>(&mut self, kind: Kind, payload: &T) -> io::Result<()> {
+        let start = hirsel_run_schema::tape::begin(&mut self.buffer);
+        payload.encode(&mut self.buffer);
+        hirsel_run_schema::tape::finish(&mut self.buffer, start, self.seq, kind as u8)
+            .map_err(io::Error::other)?;
         self.seq += 1;
-        self.buffer
-            .extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        self.buffer
-            .extend_from_slice(&checksum(seq, kind as u8, payload).to_le_bytes());
-        self.buffer.extend_from_slice(&seq.to_le_bytes());
-        self.buffer.push(kind as u8);
-        self.buffer.extend_from_slice(payload);
+        Ok(())
     }
     fn open(&self) -> io::Result<()> {
         if self.ended {
@@ -186,35 +180,23 @@ impl<F: JournalFile> Journal for DurableJournal<F> {
     }
     fn prepare(&mut self, prepared: &Prepared) -> io::Result<()> {
         self.open()?;
-        let line = event_line(&Event {
-            request: prepared.request.clone(),
-            completion: Completion::Checked(false),
-            fault: None,
-        })?;
-        let payload = format!(
-            "{} {} {} {}",
-            prepared.id,
-            task_text(&prepared.task),
-            prepared.issue,
-            line.split_once(" -> ").map_or(line.as_str(), |(r, _)| r)
-        );
-        self.frame(Kind::Prepared, payload.as_bytes());
+        self.frame(Kind::Prepared, prepared)?;
         Ok(())
     }
     fn event(&mut self, id: Option<u64>, event: &Event) -> io::Result<()> {
         self.open()?;
-        let payload = format!(
-            "{} {}",
-            id.map_or_else(|| "-".into(), |id| id.to_string()),
-            event_line(event)?
-        );
-        self.frame(Kind::Event, payload.as_bytes());
+        let start = hirsel_run_schema::tape::begin(&mut self.buffer);
+        id.encode(&mut self.buffer);
+        event.encode(&mut self.buffer);
+        hirsel_run_schema::tape::finish(&mut self.buffer, start, self.seq, Kind::Event as u8)
+            .map_err(io::Error::other)?;
+        self.seq += 1;
         self.events += 1;
         Ok(())
     }
     fn withdraw(&mut self, id: u64) -> io::Result<()> {
         self.open()?;
-        self.frame(Kind::Withdrawn, id.to_string().as_bytes());
+        self.frame(Kind::Withdrawn, &id)?;
         Ok(())
     }
     fn barrier(&mut self) -> io::Result<()> {
@@ -230,8 +212,12 @@ impl<F: JournalFile> Journal for DurableJournal<F> {
     }
     fn end(&mut self, outcome: &RunOutcome) -> io::Result<()> {
         self.open()?;
-        let payload = format!("{} {}", self.events, render_outcome(outcome));
-        self.frame(Kind::Trailer, payload.as_bytes());
+        let start = hirsel_run_schema::tape::begin(&mut self.buffer);
+        self.events.encode(&mut self.buffer);
+        outcome.encode(&mut self.buffer);
+        hirsel_run_schema::tape::finish(&mut self.buffer, start, self.seq, Kind::Trailer as u8)
+            .map_err(io::Error::other)?;
+        self.seq += 1;
         self.ended = true;
         self.barrier()
     }
@@ -243,14 +229,6 @@ fn event_line(event: &Event) -> io::Result<String> {
     let (_, line) = text.split_once('\n').expect("tape header");
     Ok(line.trim_end_matches('\n').to_owned())
 }
-fn parse_event_line(line: &str) -> Result<Event, String> {
-    let text = render_tape(&[])?;
-    let mut events = parse_tape(&format!("{text}{line}\n"))?;
-    match (events.pop(), events.is_empty()) {
-        (Some(event), true) => Ok(event),
-        _ => Err("not one tape event".into()),
-    }
-}
 fn task_text(task: &[u32]) -> String {
     if task.is_empty() {
         "-".into()
@@ -261,19 +239,6 @@ fn task_text(task: &[u32]) -> String {
             .join(".")
     }
 }
-fn parse_task(text: &str) -> Result<Vec<u32>, String> {
-    if text == "-" {
-        return Ok(vec![]);
-    }
-    text.split('.')
-        .map(|n| canonical_number(n).map(|n: u64| n as u32))
-        .collect::<Result<Vec<_>, _>>()
-        .and_then(|path| {
-            (task_text(&path) == text)
-                .then_some(path)
-                .ok_or_else(|| "bad task path".into())
-        })
-}
 fn canonical_number(word: &str) -> Result<u64, String> {
     word.parse::<u64>()
         .ok()
@@ -281,36 +246,16 @@ fn canonical_number(word: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("bad journal number {word:?}"))
 }
 
-/// CRC-32C (Castagnoli, reflected) over the sequence number, the kind and the payload.
+/// CRC-32C (Castagnoli, reflected) over the encoded length, sequence number, kind and payload.
 fn checksum(seq: u64, kind: u8, payload: &[u8]) -> u32 {
-    const TABLE: [u32; 256] = {
-        let mut table = [0u32; 256];
-        let mut i = 0;
-        while i < 256 {
-            let mut c = i as u32;
-            let mut k = 0;
-            while k < 8 {
-                c = if c & 1 != 0 {
-                    (c >> 1) ^ 0x82f6_3b78
-                } else {
-                    c >> 1
-                };
-                k += 1;
-            }
-            table[i] = c;
-            i += 1;
-        }
-        table
-    };
-    let mut crc = !0u32;
-    for byte in seq.to_le_bytes().iter().chain([kind].iter()).chain(payload) {
-        crc = TABLE[((crc ^ u32::from(*byte)) & 0xff) as usize] ^ (crc >> 8);
-    }
-    !crc
+    use hirsel_run_schema::tape::crc32c_append;
+    let crc = crc32c_append(0, &(payload.len() as u32).to_le_bytes());
+    let crc = crc32c_append(crc, &seq.to_le_bytes());
+    crc32c_append(crc32c_append(crc, &[kind]), payload)
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    hirsel_run_schema::hex(bytes)
 }
 fn unhex(word: &str) -> Result<String, String> {
     if !word.is_ascii() || !word.len().is_multiple_of(2) {
@@ -570,7 +515,7 @@ pub fn incomplete(recovered: &Recovered) -> String {
     text
 }
 
-/// Whether `bytes` begin a durable journal (rather than a v7 tape).
+/// Whether `bytes` begin a durable journal (rather than an ordinary tape).
 pub fn is_journal(bytes: &[u8]) -> bool {
     bytes.starts_with(MAGIC) || (!bytes.is_empty() && MAGIC.starts_with(bytes))
 }
@@ -635,8 +580,8 @@ pub fn recover(bytes: &[u8]) -> Result<Recovered, Unrecoverable> {
     let Some((at, Kind::Header, header)) = records.next() else {
         return Err(Unrecoverable::NoHeader);
     };
-    let text = std::str::from_utf8(header).map_err(|_| corrupt(at, "header UTF-8".into()))?;
-    let mut recording = parse_recording(text).map_err(|e| corrupt(at, e))?;
+    let mut recording: Recording = decode(header).map_err(|e| corrupt(at, e))?;
+    crate::tape_binary::validate_header(&recording).map_err(|e| corrupt(at, e))?;
     if !recording.events.is_empty() {
         return Err(corrupt(at, "header contains events".into()));
     }
@@ -645,79 +590,56 @@ pub fn recover(bytes: &[u8]) -> Result<Recovered, Unrecoverable> {
     let mut open: BTreeMap<u64, Prepared> = BTreeMap::new();
     let mut outcome = None;
     for (at, kind, payload) in records {
-        let text = std::str::from_utf8(payload).map_err(|_| corrupt(at, "record UTF-8".into()))?;
         if outcome.is_some() {
             return Err(corrupt(at, "a record after the trailer".into()));
         }
         match kind {
             Kind::Header => return Err(corrupt(at, "a second header".into())),
             Kind::Prepared => {
-                let mut words = text.splitn(4, ' ');
-                let (Some(id), Some(task), Some(issue), Some(request)) =
-                    (words.next(), words.next(), words.next(), words.next())
-                else {
-                    return Err(corrupt(at, "short Prepared record".into()));
-                };
-                let id = canonical_number(id).map_err(|e| corrupt(at, e))?;
+                let record: Prepared = decode(payload).map_err(|e| corrupt(at, e))?;
+                let id = record.id;
                 if id != prepared.len() as u64 {
                     return Err(corrupt(at, "Prepared ordinals out of order".into()));
                 }
-                let record = Prepared {
-                    id,
-                    task: parse_task(task).map_err(|e| corrupt(at, e))?,
-                    issue: canonical_number(issue).map_err(|e| corrupt(at, e))?,
-                    request: parse_event_line(&format!("{request} -> checked 0"))
-                        .map_err(|e| corrupt(at, e))?
-                        .request,
-                };
                 open.insert(id, record.clone());
                 prepared.push(record);
             }
             Kind::Event => {
-                let (id, line) = text
-                    .split_once(' ')
-                    .ok_or_else(|| corrupt(at, "short Event record".into()))?;
-                let event = parse_event_line(line).map_err(|e| corrupt(at, e))?;
-                match id {
-                    "-" => {}
-                    id => {
-                        let id = canonical_number(id).map_err(|e| corrupt(at, e))?;
-                        let Some(record) = prepared.get(id as usize) else {
-                            return Err(corrupt(at, "an event of no Prepared request".into()));
-                        };
-                        if record.request != event.request {
-                            return Err(corrupt(at, "an event of another request".into()));
-                        }
-                        if !matches!(event.completion, Completion::Blocked { .. })
-                            && open.remove(&id).is_none()
-                        {
-                            return Err(corrupt(at, "a request completed twice".into()));
-                        }
+                let mut input = Decode(payload);
+                let id = Option::<u64>::decode(&mut input).map_err(|e| corrupt(at, e))?;
+                let event = Event::decode(&mut input).map_err(|e| corrupt(at, e))?;
+                if !input.0.is_empty() {
+                    return Err(corrupt(at, "trailing event payload".into()));
+                }
+                if let Some(id) = id {
+                    let Some(record) = prepared.get(id as usize) else {
+                        return Err(corrupt(at, "an event of no Prepared request".into()));
+                    };
+                    if record.request != event.request {
+                        return Err(corrupt(at, "an event of another request".into()));
+                    }
+                    if !matches!(event.completion, Completion::Blocked { .. })
+                        && open.remove(&id).is_none()
+                    {
+                        return Err(corrupt(at, "a request completed twice".into()));
                     }
                 }
-                event_prepared.push(if id == "-" {
-                    None
-                } else {
-                    Some(canonical_number(id).map_err(|e| corrupt(at, e))?)
-                });
+                event_prepared.push(id);
                 recording.events.push(event);
             }
             Kind::Withdrawn => {
-                let id = canonical_number(text).map_err(|e| corrupt(at, e))?;
+                let id = decode(payload).map_err(|e| corrupt(at, e))?;
                 if open.remove(&id).is_none() {
                     return Err(corrupt(at, "a withdrawal of no open request".into()));
                 }
             }
             Kind::Trailer => {
-                let (count, rest) = text
-                    .split_once(' ')
-                    .ok_or_else(|| corrupt(at, "short trailer".into()))?;
-                if canonical_number(count).map_err(|e| corrupt(at, e))?
-                    != recording.events.len() as u64
-                {
+                let (count, end): (u64, RunOutcome) =
+                    decode(payload).map_err(|e| corrupt(at, e))?;
+                if count != recording.events.len() as u64 {
                     return Err(corrupt(at, "the trailer's event count disagrees".into()));
                 }
-                outcome = Some(parse_outcome(rest).map_err(|e| corrupt(at, e))?);
+                outcome = Some(end);
             }
         }
     }
@@ -844,14 +766,20 @@ impl Journaled {
     pub fn fail(&mut self, error: io::Error) {
         self.failed.get_or_insert(error);
     }
+    pub(crate) fn absent(&self) -> bool {
+        self.absent
+    }
     pub fn records(&self) -> bool {
         !self.absent && self.journal.records()
     }
     pub fn durable(&self) -> bool {
-        self.journal.durable()
+        !self.absent && self.journal.durable()
     }
     /// The spawn path of the task issuing the next request.
     pub fn issuer(&mut self, task: &[u32]) {
+        if !self.durable() {
+            return;
+        }
         task.clone_into(&mut self.issuer);
     }
     fn barrier(&mut self) -> io::Result<()> {
@@ -923,6 +851,9 @@ impl Journaled {
     /// A tape event of the current request (or a scheduling input). A durable journal makes a
     /// completion durable before it is delivered; the same barrier covers held records.
     pub fn record(&mut self, event: &Event) -> io::Result<()> {
+        if self.absent {
+            return Ok(());
+        }
         // A scheduling input (a ready wait, a seeded schedule choice) belongs to no request.
         let ready = matches!(
             event.request,
@@ -946,6 +877,9 @@ impl Journaled {
     }
     /// The task of the request parked under `token` parked.
     pub fn parked(&mut self, token: u64) {
+        if self.absent {
+            return;
+        }
         if let Some(ticket) = self.tickets.get_mut(&token) {
             ticket.parked = true;
         }
@@ -954,6 +888,9 @@ impl Journaled {
     /// each to be re-issued now. A batch whose first record is older than the batch window
     /// is made durable here.
     pub fn released(&mut self) -> io::Result<Vec<u64>> {
+        if self.absent {
+            return Ok(vec![]);
+        }
         if self
             .since
             .is_some_and(|since| since.elapsed() >= BATCH_WINDOW)
@@ -975,6 +912,9 @@ impl Journaled {
     /// The run would wait for the host: the open batch is made durable, and true when a
     /// parked held request is now due for release.
     pub fn idle(&mut self) -> io::Result<bool> {
+        if self.absent {
+            return Ok(false);
+        }
         if self.tickets.values().any(|t| !t.durable) {
             self.barrier()?;
         }
@@ -982,6 +922,9 @@ impl Journaled {
     }
     /// The wait `token` ended; a prepared request it never completed is withdrawn.
     pub fn finish(&mut self, token: u64) -> io::Result<()> {
+        if self.absent {
+            return Ok(());
+        }
         if let Some(ticket) = self.tickets.remove(&token)
             && !ticket.resolved
         {
@@ -994,6 +937,9 @@ impl Journaled {
     }
     /// The run ended: its trailer, durable.
     pub fn end(&mut self, outcome: &RunOutcome) -> io::Result<()> {
+        if self.absent {
+            return Ok(());
+        }
         self.journal.end(outcome)
     }
 }

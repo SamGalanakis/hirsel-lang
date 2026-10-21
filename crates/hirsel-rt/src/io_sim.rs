@@ -2,11 +2,66 @@
 use crate::handles::Handles;
 use crate::io::*;
 use crate::watch::WatchEvent;
+/// Binary replay keeps one shared buffer and only the current/previous decoded
+/// event. Advancing releases payload allocations instead of retaining a second
+/// owned copy of every event in the tape.
+#[derive(Clone, Debug)]
+enum ReplayTape {
+    Owned(Vec<Event>),
+    Binary {
+        tape: crate::tape_binary::Tape,
+        current: Option<(usize, Event)>,
+        previous: Option<(usize, Event)>,
+    },
+}
+impl ReplayTape {
+    fn len(&self) -> usize {
+        match self {
+            Self::Owned(events) => events.len(),
+            Self::Binary { tape, .. } => tape.len(),
+        }
+    }
+    fn get(&mut self, index: usize) -> Result<Option<&Event>, AdapterError> {
+        match self {
+            Self::Owned(events) => Ok(events.get(index)),
+            Self::Binary {
+                tape,
+                current,
+                previous,
+            } => {
+                if index >= tape.len() {
+                    return Ok(None);
+                }
+                if current.as_ref().is_none_or(|(at, _)| *at != index) {
+                    *previous = current.take();
+                    *current = Some((
+                        index,
+                        tape.event(index)
+                            .map_err(|_| AdapterError::InvalidCompletion)?,
+                    ));
+                }
+                Ok(current.as_ref().map(|(_, event)| event))
+            }
+        }
+    }
+    fn cached(&self, index: usize) -> Option<&Event> {
+        match self {
+            Self::Owned(events) => events.get(index),
+            Self::Binary {
+                current, previous, ..
+            } => current
+                .iter()
+                .chain(previous)
+                .find(|(at, _)| *at == index)
+                .map(|(_, event)| event),
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct SimIo {
     state: State,
     tree: Tree,
-    tape: Vec<Event>,
+    tape: ReplayTape,
     position: usize,
     roots: std::collections::BTreeMap<u64, String>,
     identities: FileIdentities,
@@ -56,13 +111,22 @@ impl SimIo {
             },
             identities: FileIdentities::new(&tree),
             tree,
-            tape,
+            tape: ReplayTape::Owned(tape),
             position: 0,
             roots: Default::default(),
             waits: Default::default(),
             runner_waits: Default::default(),
             instance: None,
         }
+    }
+    pub fn from_binary(tree: Tree, tape: crate::tape_binary::Tape) -> Self {
+        let mut io = Self::new(tree, vec![]);
+        io.tape = ReplayTape::Binary {
+            tape,
+            current: None,
+            previous: None,
+        };
+        io
     }
     /// The run instance the recording's header names, for a run that calls runners.
     pub fn instance(&self) -> Option<[u8; 16]> {
@@ -151,7 +215,9 @@ impl SimIo {
     }
     /// The last consumed event; its fault states a committed prefix.
     pub fn last_event(&self) -> Option<&Event> {
-        self.position.checked_sub(1).map(|index| &self.tape[index])
+        self.position
+            .checked_sub(1)
+            .and_then(|index| self.tape.cached(index))
     }
 }
 impl Adapter for SimIo {
@@ -194,7 +260,7 @@ impl Adapter for SimIo {
     /// The recorded choice among `count` runnable tasks: the next event is a `schedule` of
     /// as many candidates, whatever the policy chose (the trace is authoritative, DET-1).
     fn schedule(&mut self, count: u64, _choice: u64) -> Result<u64, AdapterError> {
-        match self.tape.get(self.position).map(|event| &event.request) {
+        match self.tape.get(self.position)?.map(|event| &event.request) {
             Some(Request::Schedule {
                 count: recorded,
                 choice,
@@ -218,7 +284,7 @@ impl Adapter for SimIo {
         self.waits.point();
         let mut tokens = Vec::new();
         while let Some(Request::Ready { wait, points }) =
-            self.tape.get(self.position).map(|event| &event.request)
+            self.tape.get(self.position)?.map(|event| &event.request)
         {
             let Some(token) = self
                 .waits
@@ -248,7 +314,7 @@ impl Adapter for SimIo {
             return Ok(false);
         }
         let Some(Request::Ready { wait, points }) =
-            self.tape.get(self.position).map(|event| &event.request)
+            self.tape.get(self.position)?.map(|event| &event.request)
         else {
             // The recording ended with only sent runner calls parked: their callees never
             // ended, so the replayed run blocks as the recorded one did (RUN-12).
@@ -280,7 +346,7 @@ impl Adapter for SimIo {
         }
         let event = self
             .tape
-            .get(self.position)
+            .get(self.position)?
             .ok_or(AdapterError::MissingInput(self.position))?;
         // The recorded run's place stopped it before this request: so does replay.
         if event.request == Request::Stopped && event.completion == Completion::Ready {

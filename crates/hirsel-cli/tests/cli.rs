@@ -2285,7 +2285,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
         assert!(output.stdout.is_empty());
         assert!(output.stderr.is_empty());
         // The server's accept parked before the client connected, and the tape says so.
-        let recorded = std::fs::read_to_string(&tape).unwrap();
+        let recorded = hirsel_rt::launch::read_recording_text(&tape).unwrap();
         assert!(
             recorded.contains(" -> blocked 0\n") && recorded.contains("\nready 0 "),
             "native={native}: {recorded}"
@@ -2749,7 +2749,7 @@ fn launch_admission_conditions_and_historical_replay() {
                 assert!(output.status.success(), "mode={mode}: {output:?}");
                 assert_eq!(output.stdout, b"entered\n");
                 assert!(output.stderr.is_empty(), "{output:?}");
-                let recorded = std::fs::read_to_string(&tape).unwrap();
+                let recorded = hirsel_rt::launch::read_recording_text(&tape).unwrap();
                 let field =
                     |name: &str| recorded.lines().find_map(|l| l.strip_prefix(name)).unwrap();
                 assert!(field("admitted_at ").parse::<i64>().unwrap() > 0);

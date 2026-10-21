@@ -666,7 +666,7 @@ pub fn runner_oracle_in(
 
 /// The events of the Io tape at `tape`.
 fn tape_events(tape: &Path) -> Result<Vec<hirsel_rt::io::Event>, NativeError> {
-    let text = std::fs::read_to_string(tape)
+    let text = hirsel_rt::launch::read_recording_text(tape)
         .map_err(|e| NativeError::new(StageName::Launch, format!("the Io tape: {e}")))?;
     hirsel_rt::launch::parse_recording(&text)
         .map(|record| record.events)
@@ -783,7 +783,7 @@ pub fn real_io_replay_in(
         if real != *reference {
             return Ok(real);
         }
-        let text = std::fs::read_to_string(&tape)
+        let text = hirsel_rt::launch::read_recording_text(&tape)
             .map_err(|e| NativeError::new(StageName::Launch, format!("the Io tape: {e}")))?;
         // A run a signal's default action ended leaves a recording with no trailer, as a
         // killed process does (determinism.md, The Signaled end): nothing to replay.

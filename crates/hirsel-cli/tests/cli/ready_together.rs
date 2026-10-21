@@ -139,7 +139,7 @@ impl Fixture {
             ),
             &format!("live native={native}"),
         );
-        let text = std::fs::read_to_string(&tape).unwrap();
+        let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
         (tape, text, live)
     }
     /// The tape replays its live output in both engines.

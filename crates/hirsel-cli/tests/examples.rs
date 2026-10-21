@@ -1934,7 +1934,7 @@ fn seeded_schedules_record_and_replay_across_engines() {
             .unwrap();
         assert!(live.status.success(), "{recorder:?}: {live:?}");
         assert_eq!(live.stdout, expected, "{recorder:?}");
-        let text = std::fs::read_to_string(&tape).unwrap();
+        let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
         assert!(
             text.lines().any(|line| line.starts_with("schedule 2 1 ")),
             "{recorder:?}: {text}"

@@ -284,6 +284,7 @@ impl RealIo {
     /// Record through `journal`, the recording level the run selected.
     pub fn journal_to(&mut self, journal: Box<dyn crate::journal::Journal>) {
         self.journal = crate::journal::Journaled::new(journal);
+        self.state.capture_views = self.journal.records() || self.retain_history;
     }
     /// The run ended with `outcome`: the recording's trailer.
     pub fn finish_recording(
@@ -295,11 +296,14 @@ impl RealIo {
     /// The native launcher streams events and needs no duplicate in-memory history.
     pub(crate) fn discard_history(&mut self) {
         self.retain_history = false;
+        self.state.capture_views = self.journal.records();
         self.tape.clear();
         self.state.stdout.clear();
     }
     fn record(&mut self, event: Event) -> Result<(), AdapterError> {
-        self.journal.record(&event).map_err(recording_failed)?;
+        if !self.journal.absent() {
+            self.journal.record(&event).map_err(recording_failed)?;
+        }
         if self.retain_history {
             self.tape.push(event);
         }
@@ -654,11 +658,12 @@ impl Adapter for RealIo {
         // A durable journal prepares the request first; one that may park waits for the
         // barrier that makes its record durable, parked as for the host (group commit).
         let token = parks.then(|| self.cooperative.as_ref().unwrap().1.current());
-        if self
-            .journal
-            .before(&request, token)
-            .map_err(recording_failed)?
-            == crate::journal::Gate::Hold
+        if !self.journal.absent()
+            && self
+                .journal
+                .before(&request, token)
+                .map_err(recording_failed)?
+                == crate::journal::Gate::Hold
         {
             let (_, log) = self.cooperative.as_mut().unwrap();
             log.park(false);
@@ -964,7 +969,9 @@ impl RealIo {
                 .get_or_insert_with(|| crate::readiness::Readiness::virtual_clock(0));
         }
         let fake = self.state.is_fake_request(&request);
-        self.state.capture_views = self.journal.records() || self.retain_history;
+        if !self.journal.absent() {
+            self.state.capture_views = self.journal.records() || self.retain_history;
+        }
         let mut fault = if self.state.preflight(&request)?.is_some()
             || self.state.denied_projection(&request)
             || crate::net::is_net_request(&request)
@@ -1246,11 +1253,13 @@ impl RealIo {
             }
             _ => {}
         }
-        self.record(Event {
-            request,
-            completion: completion.clone(),
-            fault,
-        })?;
+        if self.retain_history || !self.journal.absent() {
+            self.record(Event {
+                request,
+                completion: completion.clone(),
+                fault,
+            })?;
+        }
         Ok(completion)
     }
 }

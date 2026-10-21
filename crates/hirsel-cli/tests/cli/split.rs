@@ -130,7 +130,7 @@ fn round_trip(engines: &[Option<&str>]) {
             ],
         );
         assert_ok(&live, &format!("live {engine:?}"));
-        let text = std::fs::read_to_string(&tape).unwrap();
+        let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
         assert!(
             text.contains("net_split") && text.contains("net_join"),
             "{text}"

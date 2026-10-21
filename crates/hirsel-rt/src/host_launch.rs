@@ -162,10 +162,24 @@ fn timing_journal(
 /// re-deriving every grant decision from that record. It acquires no host resource.
 /// The caller checks the run against the program it launches.
 pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
-    let recording = read_recording(path)?;
+    let bytes = std::fs::read(path).map_err(|e| RunRefusal::Invalid {
+        field: "recording".into(),
+        detail: e.to_string(),
+    })?;
+    let (recording, binary) = if crate::journal::is_journal(&bytes) {
+        (read_recording(path)?, None)
+    } else {
+        crate::tape_binary::replay(bytes).map_err(|detail| RunRefusal::Invalid {
+            field: "recording".into(),
+            detail,
+        })?
+    };
     let run = recording.bound_run()?;
     let instance = recording.binding.as_ref().and_then(|b| b.instance);
-    let mut io = SimIo::new(recording.tree, recording.events);
+    let mut io = match binary {
+        Some(tape) => SimIo::from_binary(recording.tree, tape),
+        None => SimIo::new(recording.tree, recording.events),
+    };
     io.instance = instance;
     io.set_projections(run.io_projections());
     io.set_mounts(
@@ -211,9 +225,7 @@ pub fn read_recording(path: &Path) -> Result<Recording, RunRefusal> {
         }
         Ok(recovered.recording)
     } else {
-        String::from_utf8(bytes)
-            .map_err(|_| invalid("bad recording UTF-8".into()))
-            .and_then(|text| crate::launch::parse_recording(&text).map_err(invalid))
+        crate::launch::parse_recording_bytes(&bytes).map_err(invalid)
     }
 }
 

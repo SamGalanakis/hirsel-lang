@@ -159,9 +159,10 @@ fn campaign_in(include: fn(&str, bool) -> bool, matrix: Vec<Configuration>, scra
                     reference,
                     "{name} record"
                 );
-                let recording =
-                    hirsel_rt::launch::parse_recording(&std::fs::read_to_string(&tape).unwrap())
-                        .unwrap();
+                let recording = hirsel_rt::launch::parse_recording(
+                    &hirsel_rt::launch::read_recording_text(&tape).unwrap(),
+                )
+                .unwrap();
                 assert_eq!(recording.test_seed, 0);
                 if name == "LANG-9-native-property-run" {
                     // 100 passing cases read the seed once and report nothing.

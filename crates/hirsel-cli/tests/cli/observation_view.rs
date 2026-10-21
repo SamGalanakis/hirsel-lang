@@ -1,4 +1,27 @@
 use std::process::Command;
+fn fixture_header() -> hirsel_rt::launch::Recording {
+    hirsel_rt::launch::Recording {
+        arguments: vec![],
+        run_identity: [0; 32],
+        hash_seed: 2,
+        random_seed: 3,
+        test_seed: 5,
+        binding: None,
+        tree: hirsel_rt::io::Tree::new(Default::default()).unwrap(),
+        events: vec![],
+    }
+}
+fn fixture_bytes(events: &[hirsel_rt::io::Event]) -> Vec<u8> {
+    let mut bytes = vec![];
+    let mut writer =
+        hirsel_rt::launch::RecordingWriter::new(&mut bytes, &fixture_header()).unwrap();
+    for event in events {
+        writer.append(event).unwrap();
+    }
+    writer.finish().unwrap();
+    drop(writer);
+    bytes
+}
 
 #[test]
 fn offline_view_requires_capture_identity_and_writes_logical_perfetto() {
@@ -7,11 +30,23 @@ fn offline_view_requires_capture_identity_and_writes_logical_perfetto() {
     std::fs::create_dir_all(&root).unwrap();
     let tape = root.join("ordinary.tape");
     let out = root.join("view.json");
-    std::fs::write(
-        &tape,
-        include_bytes!("../../../hirsel-driver/tests/fixtures/observation-view/ordinary.tape"),
-    )
-    .unwrap();
+    use hirsel_rt::io::{Completion, Event, Request};
+    let events = [
+        Event {
+            request: Request::Stdout { io: 1 },
+            completion: Completion::Handle(Ok(2)),
+            fault: None,
+        },
+        Event {
+            request: Request::Print {
+                stdout: 2,
+                bytes: b"hello".to_vec(),
+            },
+            completion: Completion::Unit(Ok(())),
+            fault: None,
+        },
+    ];
+    std::fs::write(&tape, fixture_bytes(&events)).unwrap();
     let cli = env!("CARGO_BIN_EXE_hirsel");
     let refused = Command::new(cli)
         .args(["view"])
@@ -64,18 +99,16 @@ fn offline_view_redacts_recorded_secrets_in_json_and_perfetto() {
     std::fs::create_dir_all(&root).unwrap();
     let secret = "recorded-credential-DO-NOT-PRINT";
     let encoded = hirsel_run_schema::hex(secret.as_bytes());
-    let header =
-        include_str!("../../../hirsel-driver/tests/fixtures/observation-view/ordinary.tape")
-            .split_once("events\n")
-            .unwrap()
-            .0;
+    let header = hirsel_rt::launch::render_recording(&fixture_header()).unwrap();
+    let header = header.split_once("events\n").unwrap().0;
     let recording = format!(
         "{header}events\nrandom_bytes 1 {} -> random ok {encoded}\nenv_get 1 544f4b454e -> env some {encoded}\nread 1 736563726574 -> bytes ok {encoded}\nnet_read 1 2 100 -> net_bytes ok {encoded}\nprint 1 {encoded} -> unit ok \ncomplete 5\n",
         secret.len()
     );
     let tape = root.join("secrets.tape");
     let output = root.join("view.json");
-    std::fs::write(&tape, recording).unwrap();
+    let record = hirsel_rt::launch::parse_recording(&recording).unwrap();
+    std::fs::write(&tape, fixture_bytes(&record.events)).unwrap();
     for perfetto in [false, true] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
         command

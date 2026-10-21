@@ -490,6 +490,7 @@ dependencies = [
  "hirsel-engine",
  "hirsel-guard",
  "hirsel-intern",
+ "hirsel-rt",
  "hirsel-run-schema",
  "mimalloc",
  "rustls",

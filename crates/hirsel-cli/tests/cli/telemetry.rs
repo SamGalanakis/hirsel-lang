@@ -145,7 +145,7 @@ fn record(fixture: &Fixture, backend: Option<&str>, grants: &Path, tape: &Path) 
 
 /// The tape's lines after its `events` marker: what the run observed and decided.
 fn events(tape: &Path) -> Vec<String> {
-    std::fs::read_to_string(tape)
+    hirsel_rt::launch::read_recording_text(tape)
         .unwrap()
         .lines()
         .skip_while(|line| *line != "events")
@@ -216,7 +216,7 @@ fn a_changed_observation_refuses_replay() {
     for backend in [None, Some("llvm")] {
         let tape = fixture.0.join("run.tape");
         record(&fixture, backend, &grants, &tape);
-        let text = std::fs::read_to_string(&tape).unwrap();
+        let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
         // The event's attribute value is the payload's last field: change n from 1 to 4.
         let line = text
             .lines()
@@ -437,7 +437,7 @@ fn diagnostic_sidecar_cannot_alias_the_tape_or_a_program_mount() {
         assert!(output.status.success(), "{output:?}");
         assert_eq!(std::fs::read_to_string(&protected).unwrap(), "keep me");
         assert!(
-            std::fs::read_to_string(&tape)
+            hirsel_rt::launch::read_recording_text(&tape)
                 .unwrap()
                 .contains("complete ")
         );

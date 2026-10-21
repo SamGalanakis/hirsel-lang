@@ -5,6 +5,10 @@ the license named in its row; the license texts follow once each.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| rr | `src/TraceStream.cc:408-557` binary event/stream framing structure | ordinary and durable tape codec | rr-debugger/rr `50d54f2f541d79b508044fefdb2574fe2ec746f7` | MIT (structure reference) |
+| SQLite | `src/wal.c:47-68,990-1022` frame header/payload/checksum structure | shared tape envelope | sqlite/sqlite `049891534ddad2583a33750c05433fcce3648b9c` | Public domain (structure reference) |
+| crc32c | `src/lib.rs:49-70`, `src/sw.rs:42-70`, `src/hw_x86_64.rs:49-90` dispatch, slicing-by-8 and hardware CRC structure; published CRC vectors | `hirsel-run-schema/src/tape.rs` | zowens/crc32c `c92fcff3c76aed4f1083894f243981c0df278f7f` | MIT (license in `third-party/LICENSE.crc32c`) |
+| bincode | `src/ser/mod.rs:132-136,220-231`, `src/de/mod.rs:247-258,344-351` fixed integer, variant and byte-slice encoding structure | `hirsel-rt/src/tape_wire.rs` | bincode 1.3.3 `c44b5e364e7084cdbabf9f94b63a3c7f32b8fb68` | MIT (structure reference) |
 | Rust standard library | `library/core/src/str/pattern.rs:989-1017` early empty/equal/long needle containment checks | `stdlib/std@1/string.hir`, substring conformance | rust-lang/rust `a7c37f9f0ee5e93396106e9de20f4a86b4154e63` | MIT (Rust) |
 | Go standard library | `src/strings/replace.go:550-579` unchanged-run append structure; `src/encoding/json/encode.go:733-739,1180-1183` prequoted static field names | `stdlib/std@1/html.hir`, `stdlib/std@1/derive.hir`, HTML/direct-JSON conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | mimalloc | `src/theap.c:124-147` collection also reclaims retired pages; `src/prim/unix/prim.c:549-558` immediate RSS reduction with MADV_DONTNEED | worker collection in `crates/hirsel-rt/src/context.rs`, slab retirement in `alloc.rs` | microsoft/mimalloc `31d034d94cdb8e22f7d7ed55967f581a2d6e831d` | MIT (mimalloc) |

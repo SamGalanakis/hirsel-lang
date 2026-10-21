@@ -336,7 +336,7 @@ fn round_trip(engines: &[Engine]) {
         })
         .collect();
     // The deadlines are recorded as the timer waits they arm.
-    let text = std::fs::read_to_string(&tapes[0]).unwrap();
+    let text = hirsel_rt::launch::read_recording_text(&tapes[0]).unwrap();
     assert!(text.contains("sleep_until"), "{text}");
     // Replay spawns nothing: the granted program is gone.
     std::fs::remove_file(fixture.0.join("sleep")).unwrap();

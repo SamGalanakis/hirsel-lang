@@ -153,7 +153,7 @@ fn serve_and_replay(native: Option<&str>) {
     assert_eq!(response, RESPONSE, "{native:?}");
     assert_eq!(alpn, b"http/1.1", "{native:?}");
     // The tape names the chain by digest; the key's base64 never appears.
-    let recorded = std::fs::read_to_string(&tape).unwrap();
+    let recorded = hirsel_rt::launch::read_recording_text(&tape).unwrap();
     let body: String = String::from_utf8(KEY.to_vec())
         .unwrap()
         .lines()

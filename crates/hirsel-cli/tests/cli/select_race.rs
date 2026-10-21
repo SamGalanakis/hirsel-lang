@@ -137,7 +137,7 @@ fn record(fixture: &Fixture, engine: Engine, name: &str) -> (PathBuf, String) {
         &format!("live {engine:?}"),
     );
     assert!(WINNERS.contains(&live.as_str()), "live {engine:?}: {live}");
-    let text = std::fs::read_to_string(&tape).unwrap();
+    let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
     assert!(text.contains("sleep_until"), "{text}");
     (tape, live)
 }

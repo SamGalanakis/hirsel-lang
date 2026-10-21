@@ -165,8 +165,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
             observed,
             "{replayed:?}"
         );
-        let recording =
-            hirsel_rt::launch::parse_recording(&std::fs::read_to_string(tape).unwrap()).unwrap();
+        let recording = hirsel_rt::launch::parse_recording(
+            &hirsel_rt::launch::read_recording_text(tape).unwrap(),
+        )
+        .unwrap();
         assert!(recording.events.iter().any(|e| matches!(&e.request, hirsel_rt::io::Request::NetWriteAll { bytes, .. } if bytes.starts_with(b"GET /live HTTP/1.1\r\n"))));
     });
 }

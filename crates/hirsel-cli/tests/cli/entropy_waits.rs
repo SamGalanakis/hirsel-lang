@@ -174,7 +174,7 @@ fn system_entropy_and_real_sleeps_record_and_replay_without_either() {
     assert_ne!(token_lines(&first), token_lines(&second));
     let (replayed, _) = fixture.replay(false, "first.tape");
     assert_eq!(replayed, first);
-    let tape = std::fs::read_to_string(fixture.0.join("first.tape")).unwrap();
+    let tape = hirsel_rt::launch::read_recording_text(fixture.0.join("first.tape")).unwrap();
     assert!(tape.contains("random_bytes"), "{tape}");
     assert!(tape.contains("sleep_until"), "{tape}");
 }

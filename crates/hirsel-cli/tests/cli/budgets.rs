@@ -224,7 +224,7 @@ fn a_run_without_budgets_keeps_historical_identity_and_events_with_placement_pro
         .unwrap();
     assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
     assert_eq!(recorded.stdout, b"recorded on main\n");
-    let written = std::fs::read_to_string(&tape).unwrap();
+    let written = hirsel_rt::launch::read_recording_text(&tape).unwrap();
     let mut expected = normalized(MAIN_TAPE);
     // Exact default placement provenance; all historical semantic bytes and events match.
     expected.insert(

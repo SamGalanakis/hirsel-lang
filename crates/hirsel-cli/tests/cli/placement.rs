@@ -32,7 +32,7 @@ fn cores_shorthand_equals_record_placement_in_source_and_native_headers() {
             }
             let output = command.arg("--record").arg(&tape).output().unwrap();
             assert_eq!(output.status.code(), Some(0), "{backend:?}: {output:?}");
-            let text = std::fs::read_to_string(&tape).unwrap();
+            let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
             let field = |name: &str| {
                 text.lines()
                     .find_map(|line| line.strip_prefix(name))
@@ -110,7 +110,7 @@ fn cores_overrides_bound_record_and_works_without_explicit_grants() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let text = std::fs::read_to_string(&tape).unwrap();
+    let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
     let provenance = text
         .lines()
         .find_map(|line| line.strip_prefix("placement "))

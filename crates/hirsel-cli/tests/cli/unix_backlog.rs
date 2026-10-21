@@ -282,7 +282,7 @@ fn round_trip(engines: &[Engine]) {
             tape
         })
         .collect();
-    let text = std::fs::read_to_string(&tapes[0]).unwrap();
+    let text = hirsel_rt::launch::read_recording_text(&tapes[0]).unwrap();
     assert!(text.contains("unix_connect"), "{text}");
     for tape in &tapes {
         for engine in [Engine::Interpreted, Engine::Llvm] {

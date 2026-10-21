@@ -91,7 +91,9 @@ pub mod roots;
 pub mod shared;
 pub mod stop;
 mod sync;
+pub mod tape_binary;
 pub mod tape_links;
+mod tape_wire;
 pub mod tasks;
 
 pub use alloc::{

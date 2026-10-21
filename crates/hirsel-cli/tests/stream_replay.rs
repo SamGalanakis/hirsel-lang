@@ -62,7 +62,7 @@ impl Fixture {
     fn record(&self, backend: &str, expected: &[u8]) -> (PathBuf, String) {
         let tape = self.0.join(format!("{backend}.tape"));
         assert_output(&self.run(Some(backend), "--record", &tape), expected);
-        let text = std::fs::read_to_string(&tape).unwrap();
+        let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
         assert!(text.contains("\nevents\n"), "{text}");
         (tape, text)
     }
@@ -247,7 +247,7 @@ fn http_chunks_scoped_csv_clock_schedule_and_truncation_replay_without_server() 
         let _ = stop.send(());
         serving.join().unwrap();
         assert_output(&output, expected);
-        let text = std::fs::read_to_string(&tape).unwrap();
+        let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
         for request in [
             "net_read ",
             "net_write_all ",
@@ -336,7 +336,7 @@ fn net_chunks_and_partial_writer_suffixes_replay_without_peer() {
         let _ = stop.send(());
         serving.join().unwrap();
         assert_output(&output, expected);
-        let text = std::fs::read_to_string(&tape).unwrap();
+        let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
         let writes: Vec<_> = events(&text)
             .lines()
             .filter(|line| line.starts_with("net_write "))

@@ -69,7 +69,7 @@ fn returned_errors_report_payloads_without_stderr_grants_and_replay_them() {
                 // Replay across engines, with no grants file available. The report
                 // is recreated from the return value; it is not a stderr Io event.
                 std::fs::remove_file(&grants).unwrap();
-                let recorded = std::fs::read_to_string(&tape).unwrap();
+                let recorded = hirsel_rt::launch::read_recording_text(&tape).unwrap();
                 assert!(!recorded.contains("stderr"), "{recorded}");
                 let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
                     .arg("run")

@@ -112,8 +112,10 @@ fn process_runs_record_on_the_host_and_replay_without_spawning_in_smoke() {
             String::from_utf8_lossy(&observed.output),
             "echo ran\nbound held\n"
         );
-        let recording =
-            hirsel_rt::launch::parse_recording(&std::fs::read_to_string(&tape).unwrap()).unwrap();
+        let recording = hirsel_rt::launch::parse_recording(
+            &hirsel_rt::launch::read_recording_text(&tape).unwrap(),
+        )
+        .unwrap();
         let runs: Vec<_> = recording
             .events
             .iter()

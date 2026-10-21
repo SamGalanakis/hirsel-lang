@@ -198,7 +198,7 @@ fn interpreted_recording_replays_without_its_files_or_socket() {
     );
     assert_edited_refuses(&fixture, false, &tape);
     // A truncated recording is an unknown suffix: it never replays as complete input.
-    let text = std::fs::read_to_string(&tape).unwrap();
+    let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
     let truncated = fixture.tape("truncated");
     std::fs::write(&truncated, &text[..text.rfind("complete ").unwrap()]).unwrap();
     let output = replay_run(&fixture, false, &truncated);
@@ -312,7 +312,7 @@ fn process_recordings_replay_in_either_engine_without_spawning() {
         .unwrap();
         assert_eq!(output.stdout, b"echo ran\n", "native={native}: {output:?}");
         assert!(
-            std::fs::read_to_string(&tape)
+            hirsel_rt::launch::read_recording_text(&tape)
                 .unwrap()
                 .contains("process_run ")
         );
@@ -1235,7 +1235,7 @@ fn narrowed_handles_record_and_replay_across_backends() {
         let output = replay(command);
         assert_replayed(&output, b"narrowed\n", &format!("{backend:?} recorded"));
         assert_eq!(std::fs::read(root.join("data/note")).unwrap(), b"rw");
-        let text = std::fs::read_to_string(&tape).unwrap();
+        let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
         for request in ["read_only_dir ", "env_narrow ", "process_narrow "] {
             assert!(text.contains(request), "{backend:?} tape lacks {request}");
         }

@@ -111,7 +111,7 @@ impl Drop for Fixture {
     }
 }
 
-const MAGIC: &[u8] = b"hirsel-journal 1\n";
+const MAGIC: &[u8] = hirsel_rt::journal::MAGIC;
 
 /// Each record's end offset, from the frame lengths (len, crc, seq, kind, payload).
 fn boundaries(bytes: &[u8]) -> Vec<usize> {
@@ -214,7 +214,7 @@ fn the_recording_level_and_the_launch_destination_must_agree() {
             assert!(
                 std::fs::read(&tape)
                     .unwrap()
-                    .starts_with(b"hirsel-io-tape 7\n")
+                    .starts_with(hirsel_run_schema::tape::MAGIC)
             );
             assert_ran(&fixture.replay(native, &tape), "tape replay");
         }

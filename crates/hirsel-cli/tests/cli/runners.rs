@@ -235,7 +235,7 @@ fn a_callee_outcome_that_differs_refuses_the_set() {
     assert!(live.status.success(), "{}", stderr(&live));
     // Request 1 answered Ok(4); its callee's tape now says it returned Ok(5).
     let tape = fixture.tape(Some(1));
-    let text = std::fs::read_to_string(&tape).unwrap();
+    let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
     let line = text
         .lines()
         .find(|line| line.starts_with("call_return ok "))

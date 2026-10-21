@@ -53,9 +53,8 @@ impl TimingJournal {
                 .events
                 .len()
         } else {
-            let end = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |n| n + 1);
-            let text = std::str::from_utf8(&bytes[..end]).map_err(io::Error::other)?;
-            crate::launch::parse_recording_prefix(text)
+            let end = crate::tape_binary::confirmed_prefix(&bytes).map_err(io::Error::other)?;
+            crate::tape_binary::parse_prefix(&bytes[..end])
                 .map_err(io::Error::other)?
                 .0
                 .events
@@ -288,7 +287,10 @@ mod tests {
         timed
             .end(&RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
             .unwrap();
-        assert!(crate::launch::parse_recording(&std::fs::read_to_string(tape).unwrap()).is_ok());
+        assert!(
+            crate::launch::parse_recording(&crate::launch::read_recording_text(tape).unwrap())
+                .is_ok()
+        );
         drop(timed);
         std::fs::remove_dir_all(root).unwrap();
     }

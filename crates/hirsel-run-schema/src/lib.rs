@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::fmt;
 
 mod path;
+pub mod tape;
 pub use path::confined_relative;
 
 mod calls;
@@ -410,7 +411,13 @@ pub fn snapshot_env(
 }
 
 pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(bytes.len().saturating_mul(2));
+    for &byte in bytes {
+        text.push(DIGITS[(byte >> 4) as usize] as char);
+        text.push(DIGITS[(byte & 15) as usize] as char);
+    }
+    text
 }
 pub fn hash_parts<'a>(domain: &'a str, parts: impl IntoIterator<Item = &'a [u8]>) -> [u8; 32] {
     let mut hash = Sha256::new();

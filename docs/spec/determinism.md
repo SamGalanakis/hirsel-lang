@@ -449,7 +449,7 @@ identity, and lies outside every granted mount and output file.
 - `none` records nothing.
 - `record` writes the ordinary tape: its header before entry, then each completion flushed
   before delivery. It cannot be resumed and is labelled as having an unknown suffix until its
-  `complete` line.
+  terminal frame.
 - `durable` writes the durable journal below.
 
 Only capability requests reach the journal. A pure call, including every core operation
@@ -457,19 +457,52 @@ that issues no request, is never journaled.
 
 ### Durable journal
 
-A durable journal starts with the 17 bytes `hirsel-journal 1` and a newline, then a sequence
-of records. Each record is framed as a 32-bit little-endian payload length, a 32-bit
-little-endian CRC-32C (Castagnoli) of the sequence number, kind and payload, a 64-bit
-little-endian sequence number counting records from 0, a kind byte and the payload. Payloads
-are UTF-8 text that reuses the tape's request and event lines:
+An ordinary tape starts with `hirsel-io-tape 8` followed by NUL; a durable
+journal starts with `hirsel-journal 2` followed by newline. Both use the same
+binary frame envelope: a 32-bit little-endian payload length, 32-bit CRC32C,
+64-bit little-endian sequence number starting at zero, a kind byte, then the raw
+payload. CRC32C covers the encoded length, sequence, kind and payload (everything
+except the checksum slot). The reader validates lengths, CRCs and sequence before
+interpreting a payload. Checksums stream over existing spans without a second
+payload encoding or copy. Writes use reusable buffers and preserve every existing
+flush and synchronization point.
+
+Payloads use fixed-width little-endian integers, explicit 32-bit enum tags,
+64-bit collection/string lengths, one-byte booleans and option tags, and raw
+UTF-8 strings or byte spans. Field order and variant tags are pinned in
+`crates/hirsel-rt/src/tape_wire.rs`, independently of domain declaration order.
+Placement provenance retains its own versioned JSON encoding as a byte span.
+No event payload is rendered as text or hexadecimal on the recording path.
 
 | Kind | Payload |
 |---|---|
-| 1 Header | the tape header of an empty recording, `complete 0` included: format, run identity, seeds, the bound run record, admission evidence, arguments and the mounts' initial tree |
-| 2 Prepared | `id task issue request`: the run-local request ordinal from 0, the issuing task's spawn path (`-` for the root task, else ordinals joined by `.`), the task's issue ordinal (its k-th request from 0) and the tape's request text |
-| 3 Event | `id event`, or `- event` for a scheduling input: one tape event line, a completion, a `blocked` park, a `ready` event or a `schedule` choice |
-| 4 Withdrawn | `id`: a prepared request ended with no effect, as when its task was cancelled while it waited to be issued |
-| 5 Trailer | `count outcome`: the number of events and the run's outcome |
+| 1 Header | run identity, seeds, bound run record and admission evidence, arguments and initial tree; ordinary and durable use the same header payload |
+| 2 Prepared (durable) | request id, task spawn path (`Vec<u32>`, empty for root), issue ordinal, request |
+| 3 Event | request, completion, optional fault; durable prefixes this with an optional prepared id, absent for a scheduling input |
+| 4 Withdrawn (durable) | prepared id (`u64`) |
+| 5 Trailer | ordinary: event count (`u64`); durable: count and run outcome |
+
+Ordinary binary replay indexes validated frame ranges in a shared buffered tape
+and decodes only the current event. It retains at most the current and previous
+decoded events, releasing prior payload allocations. The adapter's owned
+completion boundary still materializes the consumed completion; no second owned
+event corpus is retained. Durable recovery retains the semantic preparation and
+event records needed to report in-doubt work.
+
+The text renderer is an inspection representation, retained for `tapes check`,
+`view` and fixture assertions. Legacy v6/v7 text can still be inspected and
+replayed, but old v1 durable journals require regeneration. Both engines write
+v8 tapes and v2 journals through the same runtime adapter.
+
+The structure follows rr `src/TraceStream.cc:408-557` (binary event frames over
+its buffered compressed stream) and SQLite `src/wal.c:47-68,990-1022` (frame
+header, payload and checksum). Deviations: no compression because ordinary tape
+completions must flush individually; no SQLite page numbers, salts or rolling
+checksum because these are ordered run events, not database pages. Sequence and
+CRC32C protect each frame. The CRC implementation follows crc32c's runtime SSE4.2
+dispatch and slicing-by-8 fallback; unaligned bounded loads replace its alignment
+prefix and parallel-lane tables. Fixed integer payload encoding follows bincode
+1.3.3, with explicit declarations to avoid JSON omission/rename attributes.
 
 The spawn path and issue ordinal identify a request to an operator and are the same in
 both engines, so an interpreted and a native journal of the same run agree. Replay checks

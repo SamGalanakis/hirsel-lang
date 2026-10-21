@@ -1,5 +1,5 @@
 //! Ordinary completion tapes survive process termination without claiming resumability.
-use hirsel_rt::io::{Adapter, AdapterError, Completion, Request, Tree};
+use hirsel_rt::io::{Adapter, AdapterError, Completion, Event, Request, Tree};
 use hirsel_rt::io_real::RealIo;
 use hirsel_rt::io_sim::SimIo;
 use hirsel_rt::launch::{Recording, RecordingWriter, parse_recording, parse_recording_prefix};
@@ -34,7 +34,7 @@ fn streamed_prefix_is_visible_before_delivery_and_complete_only_after_finish() {
     io.record_to(writer);
     let request = Request::Stdout { io: 1 };
     let completion = io.call(request.clone()).unwrap();
-    let text = std::fs::read_to_string(&tape).unwrap();
+    let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
     let (record, complete) = parse_recording_prefix(&text).unwrap();
     assert!(!complete);
     assert_eq!(record.events[0].request, request);
@@ -49,7 +49,7 @@ fn streamed_prefix_is_visible_before_delivery_and_complete_only_after_finish() {
         hirsel_run_schema::Returned::Ok,
     ))
     .unwrap();
-    let text = std::fs::read_to_string(&tape).unwrap();
+    let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
     assert_eq!(parse_recording(&text).unwrap().events.len(), 1);
     assert!(parse_recording(&text.replace("complete 1", "complete 2")).is_err());
     std::fs::remove_dir_all(root).unwrap();
@@ -203,7 +203,7 @@ fn launcher_passes_only_the_hash_seed_to_allocation() {
     let tape = root.with_extension("tape");
     let output = probe("seeds", &root, &tape, false);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
-    let record = parse_recording(&std::fs::read_to_string(&tape).unwrap()).unwrap();
+    let record = parse_recording(&hirsel_rt::launch::read_recording_text(&tape).unwrap()).unwrap();
     assert_eq!(
         (
             record.hash_seed,
@@ -248,7 +248,7 @@ fn abort_keeps_completed_events_and_replay_divergence_exits_three_with_stdout() 
     let output = probe("abort", &root, &tape, false);
     assert_eq!(output.status.signal(), Some(libc::SIGABRT));
     let (record, complete) =
-        parse_recording_prefix(&std::fs::read_to_string(&tape).unwrap()).unwrap();
+        parse_recording_prefix(&hirsel_rt::launch::read_recording_text(&tape).unwrap()).unwrap();
     assert!(!complete);
     assert_eq!(record.events.len(), 2);
     assert_eq!(probe("ok", &root, &tape, false).status.code(), Some(0));
@@ -260,7 +260,8 @@ fn abort_keeps_completed_events_and_replay_divergence_exits_three_with_stdout() 
     }
     for mode in ["ebadf", "epipe"] {
         assert_eq!(probe(mode, &root, &tape, false).status.code(), Some(0));
-        let record = parse_recording(&std::fs::read_to_string(&tape).unwrap()).unwrap();
+        let record =
+            parse_recording(&hirsel_rt::launch::read_recording_text(&tape).unwrap()).unwrap();
         assert!(matches!(
             record.events[1].completion,
             Completion::Unit(Err(_))
@@ -472,5 +473,55 @@ fn placement_header_is_diagnostic_validated_and_not_replayed() {
     for json in [r#"{"cores":0}"#, r#"{"unknown":1}"#, r#"{"cores":1.0}"#] {
         let hex: String = json.bytes().map(|b| format!("{b:02x}")).collect();
         assert!(parse_recording(&text.replace(line, &format!("placement {hex}"))).is_err());
+    }
+}
+
+#[test]
+fn binary_frames_preserve_arbitrary_bytes_and_reject_every_torn_event() {
+    use hirsel_rt::tape_binary::{Tape, Writer};
+    let mut bytes = vec![];
+    let events = vec![
+        Event {
+            request: Request::Stdout { io: 1 },
+            completion: Completion::Handle(Ok(2)),
+            fault: None,
+        },
+        Event {
+            request: Request::Print {
+                stdout: 2,
+                bytes: vec![0, 255, 128, b'\n'],
+            },
+            completion: Completion::Unit(Ok(())),
+            fault: None,
+        },
+    ];
+    {
+        let mut writer = Writer::new(&mut bytes, &header()).unwrap();
+        for event in &events {
+            writer.append(event).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+    let (record, tape) = Tape::read(bytes.clone().into()).unwrap();
+    assert_eq!(tape.events().unwrap(), events);
+    assert!(tape.complete);
+    assert_eq!(
+        hirsel_rt::launch::parse_recording_bytes(&bytes)
+            .unwrap()
+            .events,
+        events
+    );
+    let mut replay = SimIo::from_binary(record.tree, tape);
+    for event in events {
+        assert_eq!(replay.call(event.request).unwrap(), event.completion);
+    }
+    replay.finish().unwrap();
+    for end in 0..bytes.len() {
+        assert!(hirsel_rt::launch::parse_recording_bytes(&bytes[..end]).is_err());
+    }
+    for at in 0..bytes.len() {
+        let mut bad = bytes.clone();
+        bad[at] ^= 1;
+        assert!(hirsel_rt::launch::parse_recording_bytes(&bad).is_err());
     }
 }

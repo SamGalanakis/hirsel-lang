@@ -161,14 +161,15 @@ fn campaign(targets: Vec<TargetSpec>, opts: &'static [OptLevel], scratch_name: &
                     observed.exit_code,
                     Some(0),
                     "{recorded:?}\n{}",
-                    std::fs::read_to_string(&tape).unwrap_or_default()
+                    hirsel_rt::launch::read_recording_text(&tape).unwrap_or_default()
                 );
                 assert!(observed.failures.is_empty(), "{observed:?}");
                 assert_eq!(String::from_utf8_lossy(&observed.output), expected);
                 server.join().unwrap();
-                let recording =
-                    hirsel_rt::launch::parse_recording(&std::fs::read_to_string(&tape).unwrap())
-                        .unwrap();
+                let recording = hirsel_rt::launch::parse_recording(
+                    &hirsel_rt::launch::read_recording_text(&tape).unwrap(),
+                )
+                .unwrap();
                 assert_eq!(
                     recording
                         .events

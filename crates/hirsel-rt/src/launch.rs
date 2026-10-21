@@ -76,8 +76,8 @@ pub type Entry = unsafe extern "C" fn(
     args: *const u64,
 ) -> u8;
 
-/// The tape file's first line. Version 7 adds the cooperative scheduling inputs (`blocked`
-/// completions and `ready` events); a version 6 tape, which has none, reads as version 7.
+/// The legacy inspection syntax. On-disk writers use binary format 8; this renderer
+/// remains readable for humans and for v6/v7 text imports.
 pub(crate) const TAPE_HEADER: &str = "hirsel-io-tape 7";
 const TAPE_HEADER_6: &str = "hirsel-io-tape 6";
 fn tape_header(line: Option<&str>) -> bool {
@@ -1017,6 +1017,15 @@ pub fn render_recording(record: &Recording) -> Result<String, String> {
     let _ = writeln!(text, "complete {}", record.events.len());
     Ok(text)
 }
+/// Read either a binary v8 tape or the legacy inspection syntax.
+pub fn parse_recording_bytes(bytes: &[u8]) -> Result<Recording, String> {
+    crate::tape_binary::parse(bytes)
+}
+/// Render a stored tape for human inspection and text-based fixture assertions.
+/// Production replay consumes the binary buffer directly.
+pub fn read_recording_text(path: impl AsRef<std::path::Path>) -> std::io::Result<String> {
+    crate::tape_binary::text(&std::fs::read(path)?).map_err(std::io::Error::other)
+}
 pub fn parse_recording(text: &str) -> Result<Recording, String> {
     let (recording, complete) = parse_recording_prefix(text)?;
     if !complete {
@@ -1780,9 +1789,9 @@ pub(crate) unsafe fn execute(
     } else {
         match std::env::var_os("HIRSEL_RT_REPLAY") {
             Some(path) => {
-                let tape = match std::fs::read_to_string(&path)
+                let (tape, binary) = match std::fs::read(&path)
                     .map_err(|e| e.to_string())
-                    .and_then(|text| parse_recording(&text))
+                    .and_then(crate::tape_binary::replay)
                 {
                     Ok(recording) => recording,
                     Err(error) => return Err(format!("the replayed tape: {error}")),
@@ -1795,7 +1804,10 @@ pub(crate) unsafe fn execute(
                     return Err("recording configuration mismatch".into());
                 }
                 arguments = tape.arguments;
-                let mut io = SimIo::new(tape.tree, tape.events);
+                let mut io = match binary {
+                    Some(binary) => SimIo::from_binary(tape.tree, binary),
+                    None => SimIo::new(tape.tree, tape.events),
+                };
                 io.set_net_rules(net_rules.clone());
                 if let Some(env) = &env {
                     io.set_env(env.clone());
@@ -2490,49 +2502,7 @@ fn flush_stdout(sinks: &crate::host::Sinks) -> std::io::Result<()> {
 
 /// Ordinary flushed streaming tape, explicitly nonresumable after interruption.
 /// The header is flushed before entry; each completion is flushed before delivery.
-pub struct RecordingWriter<W: std::io::Write> {
-    writer: W,
-    count: usize,
-    finished: bool,
-}
-impl<W: std::io::Write> RecordingWriter<W> {
-    pub fn new(mut writer: W, record: &Recording) -> std::io::Result<Self> {
-        if !record.events.is_empty() {
-            return Err(std::io::Error::other("stream header contains events"));
-        }
-        let text = render_recording(record).map_err(std::io::Error::other)?;
-        let header = text
-            .strip_suffix("complete 0\n")
-            .expect("empty recording trailer");
-        writer.write_all(header.as_bytes())?;
-        writer.flush()?;
-        Ok(Self {
-            writer,
-            count: 0,
-            finished: false,
-        })
-    }
-    pub fn append(&mut self, event: &Event) -> std::io::Result<()> {
-        if self.finished {
-            return Err(std::io::Error::other("finished recording"));
-        }
-        let text = render_tape(std::slice::from_ref(event)).map_err(std::io::Error::other)?;
-        self.writer
-            .write_all(text.split_once('\n').unwrap().1.as_bytes())?;
-        self.writer.flush()?;
-        self.count += 1;
-        Ok(())
-    }
-    pub fn finish(&mut self) -> std::io::Result<()> {
-        if self.finished {
-            return Err(std::io::Error::other("finished recording"));
-        }
-        writeln!(self.writer, "complete {}", self.count)?;
-        self.writer.flush()?;
-        self.finished = true;
-        Ok(())
-    }
-}
+pub use crate::tape_binary::Writer as RecordingWriter;
 
 /// The process's standard output as an unbuffered OS boundary: unlike std::io::stdout,
 /// EBADF is never suppressed, so write errors reach the program as recorded outcomes.
