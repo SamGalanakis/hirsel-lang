@@ -109,16 +109,14 @@ unsafe fn canceled(
     crate::io_checks::cancel(binding.adapter.as_mut(), request, cause).map_err(Stop::refusal)
 }
 
-/// The name of a parked request for host test reporting.
+/// The name of a parked request for host test reporting after the run stopped.
+/// This reads only the run-owned wait table; the home bridge is already closed,
+/// and no adapter method or stop-aware entry may run during reporting.
 /// # Safety
-/// The context and its binding are live.
+/// The context and its binding are live, and every worker has gone idle.
 pub(crate) unsafe fn kind(ctx: *mut TaskCtx, token: u64) -> &'static str {
-    // SAFETY: caller contract.
-    unsafe { crate::stop::check(ctx, at_home(ctx, || kind_here(ctx, token))) }
-}
-
-unsafe fn kind_here(ctx: *mut TaskCtx, token: u64) -> &'static str {
-    let binding = unsafe { Binding::get(ctx) };
+    // SAFETY: admission reports only after quiescence, with exclusive access.
+    let binding = unsafe { Binding::raw(ctx) };
     match binding.waits.parked.get(&token).map(|p| &p.request) {
         Some(Request::SleepUntil { .. }) => "clock.sleep_until",
         Some(Request::ReadStdin { .. }) => "stdin.read",
