@@ -20,7 +20,7 @@ use crate::snapshot::Snapshot;
 use crate::violation::{Checked, Site, ViolationKind as V, err, fail};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::{
-    DropStep, LayoutId, LayoutKind, LayoutRecord, ScalarKind, SizeSpec, TagForm,
+    CopyRecipe, DropStep, LayoutId, LayoutKind, LayoutRecord, ScalarKind, SizeSpec, TagForm,
 };
 use hirsel_lir::runtime_abi::{self, FREE_POISON, UNINIT_POISON};
 use hirsel_lir::stage::Stage;
@@ -169,6 +169,8 @@ pub(crate) struct Frame {
     versions: Snapshot<Option<ValueId>>,
     /// Where each prepared address's preparation located its place.
     prepared: Snapshot<Option<Located>>,
+    /// Read-only inline SSA snapshots, one frame spill per static address.
+    spills: Snapshot<Option<Ptr>>,
     loans: Snapshot<Option<Ptr>>,
     failing: bool,
     admitted: u32,
@@ -492,6 +494,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             column_aliases: (0..u.slots.len()).map(|_| None).collect(),
             versions: (0..u.slots.len()).map(|_| None).collect(),
             prepared: (0..u.addresses.len()).map(|_| None).collect(),
+            spills: (0..u.addresses.len()).map(|_| None).collect(),
             loans: (0..u.tables.loans.len()).map(|_| None).collect(),
             failing: false,
             admitted: 0,
@@ -1013,6 +1016,64 @@ impl<'p, S: Stage> Machine<'p, S> {
             })
     }
 
+    /// Mirror the backends' frame spill without giving borrowed cells credits.
+    fn prepare_spill(&mut self, f: &mut Frame, mut address: AddressId) -> Checked<()> {
+        loop {
+            match self.unit(f.unit).addresses[address.index()].base {
+                AddressBase::Address(base) => address = base,
+                AddressBase::Slot(_) => return Ok(()),
+                AddressBase::Value(value) => {
+                    let ty = self.value_type(f.unit, value)?;
+                    let layout = ty.layout;
+                    if !matches!(
+                        ty.repr,
+                        ValueRepr::Aggregate
+                            | ValueRepr::Callable
+                            | ValueRepr::Scalar(_)
+                            | ValueRepr::Handle
+                    ) {
+                        return Ok(());
+                    }
+                    if !matches!(
+                        self.record(layout)?.copy,
+                        CopyRecipe::Bits | CopyRecipe::Dup | CopyRecipe::Fields
+                    ) {
+                        return fail(V::TypeConfusion, "a spill of a non-copyable value");
+                    }
+                    let val = self.read_use(f, value)?;
+                    let borrow = f.values[value.index()]
+                        .as_ref()
+                        .and_then(|held| held.borrow);
+                    let size = self.size(layout)?;
+                    let ptr = if let Some(ptr) = f.spills[address.index()] {
+                        self.ledger
+                            .get_mut(ptr.alloc)
+                            .extent
+                            .take(0, size, UNINIT_POISON, None);
+                        ptr
+                    } else {
+                        let align = self.record(layout)?.align;
+                        let ptr =
+                            self.ledger
+                                .alloc(Owner::Frame, Some(layout), size, size, align, None);
+                        f.spills[address.index()] = Some(ptr);
+                        ptr
+                    };
+                    self.write_value(
+                        ptr,
+                        layout,
+                        Moved {
+                            val,
+                            credited: false,
+                            borrow,
+                        },
+                    )?;
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     /// Resolve an address now, running its bounds and tag checks.
     fn resolve(&mut self, f: &Frame, address: AddressId) -> Checked<Result<Resolved, LangFailure>> {
         let u = self.unit(f.unit);
@@ -1044,16 +1105,40 @@ impl<'p, S: Stage> Machine<'p, S> {
             AddressBase::Value(v) => {
                 let ty = self.value_type(f.unit, v)?;
                 let val = self.read_use(f, v)?;
-                let Val::Ptr(p) = val else {
-                    return fail(
-                        V::TypeConfusion,
-                        format!("address base {v:?} is not a pointer"),
-                    );
-                };
-                let record = self.record(ty.layout)?;
-                let layout = match record.kind {
-                    LayoutKind::Block { payload } | LayoutKind::Box { payload } => payload,
-                    _ => ty.layout,
+                let (p, layout) = match self.record(ty.layout)?.kind {
+                    LayoutKind::Block { payload } | LayoutKind::Box { payload } => {
+                        let Val::Ptr(p) = val else {
+                            return fail(
+                                V::TypeConfusion,
+                                format!("address base {v:?} is not a pointer"),
+                            );
+                        };
+                        (p, payload)
+                    }
+                    _ if matches!(
+                        ty.repr,
+                        ValueRepr::Aggregate
+                            | ValueRepr::Callable
+                            | ValueRepr::Scalar(_)
+                            | ValueRepr::Handle
+                    ) =>
+                    {
+                        (
+                            f.spills[address.index()].ok_or_else(|| {
+                                err(V::Malformed, "inline value address not prepared")
+                            })?,
+                            ty.layout,
+                        )
+                    }
+                    _ => {
+                        let Val::Ptr(p) = val else {
+                            return fail(
+                                V::TypeConfusion,
+                                "a pointer address base is not a pointer",
+                            );
+                        };
+                        (p, ty.layout)
+                    }
                 };
                 if self.guarded_target(p) {
                     path.push(p.alloc);
@@ -3790,6 +3875,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             | Inst::BindFields { .. }
             | Inst::EndOrigin { .. } => {}
             Inst::Address { address, failure } => {
+                self.prepare_spill(f, address)?;
                 let checked = self.checked_steps(unit, address)?;
                 if checked && self.injection_site() {
                     return self.fail_at(f, failure, true);
@@ -8683,6 +8769,9 @@ impl<'p, S: Stage> Machine<'p, S> {
             if let SlotStore::Own(p) = slot {
                 self.end_slot(*p, SlotId(index as u32))?;
             }
+        }
+        for ptr in f.spills.iter().flatten() {
+            self.ledger.free(ptr.alloc)?;
         }
         if let Exit::Return(Some((held, _))) = &exit {
             self.check_val(&held.val)?;

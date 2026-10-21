@@ -285,7 +285,9 @@ impl<I> ProjectionStep<I> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum AddressBase {
     Slot(SlotId),
-    /// The payload of a block reference value.
+    /// The payload of a block reference value, or a read-only frame spill of
+    /// a fixed-size copyable inline value. Preparing the latter snapshots its bits without
+    /// transferring ownership; reads retain the source value as their backing.
     Value(ValueId),
     Address(AddressId),
 }

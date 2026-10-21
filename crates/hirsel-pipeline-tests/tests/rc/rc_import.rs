@@ -947,3 +947,17 @@ fn a_constant_table_read_in_place_is_a_constant_slot() {
     assert_eq!(constant("get"), (vec![table.clone()], vec![]));
     assert_eq!(constant("set"), (vec![table], vec![false]));
 }
+
+#[test]
+fn a_joined_string_view_can_be_copied_through_a_match_alias() {
+    lower_valid(
+        "fn pick(a: String, b: String, select: bool) -> String in {a, b} { match (if select { a } else { b }) { value => value } }",
+    );
+}
+
+#[test]
+fn a_joined_string_view_can_feed_a_scalars_iterator() {
+    lower_valid(
+        "fn count(a: String, b: String, select: bool) -> u64 { let mut n = 0u64; for _ in string.scalars(if select { a } else { b }) { n = n + 1; }; n }",
+    );
+}

@@ -158,6 +158,10 @@ impl Inline for Importer<'_, '_> {
         Ok(result)
     }
     fn place_address(&mut self, place: tir::PlaceId) -> R<(AddressId, ValueId)> {
+        if let Some(view) = self.whole_joined(place) {
+            let value = view?;
+            return Ok((self.view_address(value)?, value));
+        }
         let p = self.place(place)?;
         let address = self.address(&p)?;
         Ok((address, self.reaching(p.slot)?))

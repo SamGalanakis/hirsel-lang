@@ -1446,3 +1446,12 @@ fn float_bits_legalize_to_reinterpret_and_canonicalize_every_nan() {
         );
     }
 }
+
+#[test]
+fn joined_string_view_copies_keep_their_backing_alive() {
+    let source = "fn pick(a: String, b: String, select: bool) -> String in {a, b} { match (if select { a } else { b }) { chosen => chosen } }\nfn value() -> u64 { let a = \"aé\"; let b = \"羊bc\"; let left = pick(a, b, true); let right = pick(a, b, false); failure.check(left == a, TextInvariant()); failure.check(right == b, TextInvariant()); string.byte_len(left) + string.byte_len(right) }\n";
+    assert_eq!(
+        agree(&format!("{source}{}", entry("u64"))),
+        Outcome::Returned(8)
+    );
+}

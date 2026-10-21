@@ -38,21 +38,35 @@ impl FnEmitter<'_, '_, '_> {
             AddressBase::Value(value) => {
                 let ty = self.value_type(value)?;
                 let layout = ty.layout;
-                let pointer = self.get1(value)?;
+                let pointer = self.get(value)?;
                 if let LayoutKind::Block { payload } | LayoutKind::Box { payload } =
                     self.layout(layout)?.kind
                 {
+                    let pointer = self.get1(value)?;
                     // An uncounted value (region storage) points at its payload.
                     if ty.repr == ValueRepr::Uncounted {
                         self.uncounted_payload(pointer, payload)?
                     } else {
                         self.payload(pointer, layout)?
                     }
+                } else if matches!(
+                    ty.repr,
+                    ValueRepr::Aggregate
+                        | ValueRepr::Callable
+                        | ValueRepr::Scalar(_)
+                        | ValueRepr::Handle
+                ) {
+                    // A borrowed inline value needs an address for Copy, but no
+                    // owning slot: the source SSA value remains its backing.
+                    let place = self.stack(layout)?;
+                    let shape = self.shape(&ty)?;
+                    self.store(shape, pointer, place)?;
+                    place
                 } else {
-                    // A pointer to a value of its own layout (a `mut` capture's address).
+                    // Preserve pointer-based roots such as a Shared library view.
                     Place {
                         columns: None,
-                        ptr: pointer,
+                        ptr: self.get1(value)?,
                         layout,
                         align: self.layout(layout)?.align,
                         block: None,

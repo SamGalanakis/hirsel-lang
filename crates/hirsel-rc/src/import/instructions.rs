@@ -160,6 +160,7 @@ impl Importer<'_, '_> {
             }
             K::BindOrigin { source, place, .. } => match (joined(source), joined(place)) {
                 (_, Some(_)) => Ok(true),
+                (Some(_), None) if self.joined_local(*place).is_some() => Ok(true),
                 (Some(_), None) => unsupported("an origin bound from a joined view"),
                 (None, None) => Ok(false),
             },

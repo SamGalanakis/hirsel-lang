@@ -6581,3 +6581,4 @@ conformance/SEM/SEM-3-json-typed-serde-enum-run.hir
 conformance/SEM/SEM-3-format-utf8-invariant-fail.hir
 conformance/SEM/SEM-1-http-server-tls-alpn-run.hir
 conformance/SEM/SEM-1-http2-indexed-retirement-run.hir
+conformance/LANG/LANG-13-joined-view-consumers-run.hir

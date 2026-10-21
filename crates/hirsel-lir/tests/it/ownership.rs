@@ -2038,3 +2038,67 @@ fn a_call_hands_no_closure_capturing_its_mut_place() {
         |k| matches!(k, K::CallAlias(_)),
     );
 }
+
+/// An inline value spill is a read-only snapshot, not an owning slot.
+#[test]
+fn inline_value_addresses_allow_reads_and_reject_writes_and_moves() {
+    let build = |mode: u8| {
+        let mut t = Lir::<Value>::new(&[(Passing::Borrow, l::I64)], Some(l::I64));
+        let source = t.plain(l::I64);
+        t.param(source);
+        let address = t.address(AddressBase::Value(source), &[], l::I64);
+        t.prepare(ENTRY, address, &[]);
+        if mode == 1 {
+            let version = t.plain(l::I64);
+            t.builder.push(
+                ENTRY,
+                Inst::Store {
+                    address,
+                    value: source,
+                    version,
+                },
+            );
+        }
+        let result = t.read(
+            ENTRY,
+            address,
+            source,
+            if mode == 2 {
+                ReadMode::Take
+            } else {
+                ReadMode::Bits
+            },
+            None,
+        );
+        t.builder.ret(ENTRY, Some(result));
+        t.check()
+    };
+    assert!(build(0).is_empty());
+    for mode in [1, 2] {
+        let violations = build(mode);
+        assert!(
+            violations
+                .iter()
+                .any(|k| matches!(k, K::WriteThroughValue(_))),
+            "{violations:?}"
+        );
+    }
+}
+
+#[test]
+fn a_linear_resource_cannot_be_snapshotted_into_a_value_spill() {
+    pair(
+        |mutant| {
+            let mut t = Lir::<Value>::new(&[(Passing::Take, l::RES)], Some(l::RES));
+            let resource = t.owned_or_plain(l::RES);
+            t.param(resource);
+            if mutant {
+                let address = t.address(AddressBase::Value(resource), &[], l::RES);
+                t.prepare(ENTRY, address, &[]);
+            }
+            t.builder.ret(ENTRY, Some(resource));
+            t.check()
+        },
+        |k| matches!(k, K::AddressType(_)),
+    );
+}

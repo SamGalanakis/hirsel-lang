@@ -1,0 +1,39 @@
+// rule: LANG-13
+// expect: run
+// stdout: joined views ok
+// Whole joined views can be copied by a match binding and by string.scalars.
+fn pick(a: String, b: String, select: bool) -> String in {a, b} {
+  match if select {
+    a
+  } else {
+    b
+  } {
+    value => value,
+  }
+}
+
+fn count(a: String, b: String, select: bool) -> u64 {
+  let mut n = 0u64
+  for _ in string.scalars(
+    if select {
+      a
+    } else {
+      b
+    }
+  ) {
+    n = n + 1
+  }
+  n
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  // Allocate the backing strings so a missing copy or premature release is visible.
+  let a = string.concat("a", "é")
+  let b = string.concat("羊", "bc")
+  failure.check(pick(a, b, true) == a, TextInvariant())
+  failure.check(pick(a, b, false) == b, TextInvariant())
+  failure.check(count(a, b, true) == 2u64, TextInvariant())
+  failure.check(count(a, b, false) == 3u64, TextInvariant())
+  let _ = out.print(io.stdout(rt)?, "joined views ok\n")
+  Ok(())
+}

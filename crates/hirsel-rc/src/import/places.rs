@@ -538,6 +538,35 @@ impl Importer<'_, '_> {
         if let Some(view) = self.joined_view(op) {
             return view;
         }
+        if let Some(view) = self.whole_joined(op.place) {
+            let reaching = view?;
+            let address = self.view_address(reaching)?;
+            let ty = self.value_type(reaching);
+            let result = self.fresh(ty);
+            if self.bits(ty) {
+                self.push(Inst::Read {
+                    result,
+                    address,
+                    reaching,
+                    mode: ReadMode::Bits,
+                });
+            } else {
+                let failure = self.fail(None)?;
+                self.push(Inst::Copy {
+                    result,
+                    address,
+                    reaching,
+                    failure,
+                });
+                if !self.record(ty).drop.is_empty() {
+                    self.push(Inst::Share { value: result });
+                }
+                if self.holds(result) {
+                    self.failure.pending.push(result);
+                }
+            }
+            return Ok(result);
+        }
         let place = self.place(op.place)?;
         let address = match self.prepared(&place) {
             Some(address) => address,
@@ -605,21 +634,56 @@ impl Importer<'_, '_> {
         })
     }
 
-    /// A borrowed use of a whole joined view temporary, or its move into
-    /// another, is the view it holds.
-    pub(super) fn joined_view(&self, op: &tir::Operand) -> Option<R<ValueId>> {
-        let place = &self.body.places[op.place.0 as usize];
-        let l = place.root.0 as usize;
-        if !self.joined[l]
-            || !place.projection.is_empty()
-            || !matches!(op.usage, UseKind::Borrow | UseKind::Take)
-        {
-            return None;
+    /// Follow whole-place aliases to the joined SSA view they name.
+    pub(super) fn joined_local(&self, id: tir::PlaceId) -> Option<usize> {
+        let mut place = &self.body.places[id.0 as usize];
+        loop {
+            if !place.projection.is_empty() {
+                return None;
+            }
+            let local = place.root.0 as usize;
+            if self.joined[local] {
+                return Some(local);
+            }
+            place = &self.body.places[self.aliases[local]?.0 as usize];
         }
+    }
+
+    pub(super) fn whole_joined(&self, id: tir::PlaceId) -> Option<R<ValueId>> {
+        let l = self.joined_local(id)?;
         Some(match (self.state.views[l], self.views[l]) {
             (Tri::Yes, Some(v)) => Ok(v),
             _ => unsupported("a joined view not held on every path"),
         })
+    }
+
+    /// Borrowing a whole joined view keeps its existing SSA representation.
+    pub(super) fn joined_view(&self, op: &tir::Operand) -> Option<R<ValueId>> {
+        matches!(op.usage, UseKind::Borrow | UseKind::Take)
+            .then(|| self.whole_joined(op.place))
+            .flatten()
+    }
+
+    /// Address an inline SSA view without inventing an owning slot or credit.
+    pub(super) fn view_address(&mut self, value: ValueId) -> R<AddressId> {
+        let ty = self.value_type(value);
+        if matches!(
+            self.out.types[ty.index()].repr,
+            ValueRepr::Block | ValueRepr::Uncounted
+        ) {
+            return unsupported("a whole block joined-view copy");
+        }
+        let address = AddressId(self.out.addresses.len() as u32);
+        self.out.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
+            base: AddressBase::Value(value),
+            projection: PoolRange::EMPTY,
+            ty,
+        });
+        let failure = self.fail(None)?;
+        self.push(Inst::Address { address, failure });
+        Ok(address)
     }
 
     /// Whether the environment moves capture `ordinal` out under a live bit.

@@ -33,8 +33,21 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     } else {
                         self.payload(pointer, layout)?
                     }
+                } else if matches!(
+                    ty.repr,
+                    ValueRepr::Aggregate
+                        | ValueRepr::Callable
+                        | ValueRepr::Scalar(_)
+                        | ValueRepr::Handle
+                ) {
+                    // A borrowed inline value needs an address for Copy, but no
+                    // owning slot: the source SSA value remains its backing.
+                    let place = self.stack(layout)?;
+                    let shape = self.shape(&ty)?;
+                    self.store(shape, pointer, place);
+                    place
                 } else {
-                    // A pointer to a value of its own layout (a `mut` capture's address).
+                    // Preserve pointer-based roots such as a Shared library view.
                     Place {
                         columns: None,
                         ptr: pointer,

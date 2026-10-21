@@ -852,6 +852,18 @@ impl<S: Stage> Checker<'_, '_, S> {
         }
     }
 
+    /// An inline snapshot must fit frame storage and carry no linear resources.
+    fn inline_spill(&self, value: ValueId) -> bool {
+        matches!(
+            self.ty(value).repr,
+            ValueRepr::Aggregate | ValueRepr::Callable | ValueRepr::Scalar(_) | ValueRepr::Handle
+        ) && self.cx.layouts.fixed_size(self.layout_of(value)).is_some()
+            && matches!(
+                self.cx.layouts.copy(self.layout_of(value)),
+                Some(CopyRecipe::Bits | CopyRecipe::Dup | CopyRecipe::Fields)
+            )
+    }
+
     /// Flatten every address, checking its projection against the layouts.
     fn addresses(&mut self) -> Vec<Option<Addr>> {
         let unit = self.cx.unit;
@@ -900,6 +912,15 @@ impl<S: Stage> Checker<'_, '_, S> {
                                 },
                                 crossings: vec![0],
                                 layout: payload,
+                                flat_variable: false,
+                                sequential_element: false,
+                                frozen: false,
+                            },
+                            None if self.inline_spill(value) => Addr {
+                                root: Root::Value(value),
+                                path: Vec::new(),
+                                crossings: Vec::new(),
+                                layout: self.layout_of(value),
                                 flat_variable: false,
                                 sequential_element: false,
                                 frozen: false,
@@ -1561,6 +1582,7 @@ impl<S: Stage> Checker<'_, '_, S> {
             Inst::Address { address, failure } => {
                 let info = &unit.addresses[address.index()];
                 if let AddressBase::Value(v) = info.base
+                    && !self.inline_spill(v)
                     && (!matches!(self.ty(v).repr, ValueRepr::Block | ValueRepr::Uncounted)
                         || self.cx.layouts.payload(self.layout_of(v)).is_none())
                 {

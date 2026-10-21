@@ -433,9 +433,14 @@ fn place_of<S>(unit: &LirUnit<S>, lay: Lay<'_>, address: AddressId) -> Option<Pl
                 Place {
                     root: Root::Value(value),
                     path: Vec::new(),
-                    crossings: vec![0],
+                    crossings: if lay.payload(value_layout(unit, value)).is_some() {
+                        vec![0]
+                    } else {
+                        Vec::new()
+                    },
                 },
-                lay.payload(value_layout(unit, value))?,
+                lay.payload(value_layout(unit, value))
+                    .unwrap_or_else(|| value_layout(unit, value)),
             ),
             (AddressBase::Address(_), base) => base?,
         };
