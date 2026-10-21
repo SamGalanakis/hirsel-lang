@@ -19,6 +19,7 @@ struct Objects {
     polls: u64,
     wakes: Vec<TaskId>,
     deferred: bool,
+    calls: Vec<(TaskId, TaskId)>,
 }
 
 impl Backend<Command> for Objects {
@@ -52,6 +53,9 @@ impl Backend<Command> for Objects {
     }
     fn defer_poll(&self) -> bool {
         self.deferred
+    }
+    fn call(&mut self, caller: TaskId, child: TaskId) {
+        self.calls.push((caller, child));
     }
     fn poll(&mut self) -> Vec<TaskId> {
         self.polls += 1;
@@ -316,12 +320,20 @@ fn a_logged_detach_all_calls_holding_members_in_order_before_its_later_log() {
     f.apply_head(empty(), step("task.check_canceled", Next::Yield), &mut b)
         .unwrap();
     assert_eq!(f.absorb(&mut b).unwrap(), Progress::Called(3));
+    assert_eq!(b.calls, [(2, 3)]);
+    assert_eq!(f.offer(2, empty(), store(8, 2), &mut b).0, Offer::Logged);
+    assert_eq!(
+        f.state(2),
+        State::Parked,
+        "producing a log cannot end a call"
+    );
     let polls = b.polls;
     assert_eq!(
         f.apply_head(empty(), step("task.end", Next::End), &mut b)
             .unwrap(),
         Progress::Called(4)
     );
+    assert_eq!(b.calls, [(2, 3), (2, 4)]);
     assert_eq!(b.polls, polls);
     assert_eq!(
         f.apply_head(empty(), step("task.end", Next::End), &mut b)

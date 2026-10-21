@@ -20,6 +20,10 @@ use hirsel_rt_operations::descriptors::op_descriptor;
 /// Mutex wrappers remain owner-local allocations outside these cell effects.
 /// Drops and task/host effects still need retirement/credit adapters.
 pub(crate) enum Command {
+    TaskDetach {
+        scope: u64,
+        child: u64,
+    },
     TaskSpawn {
         reservation: RefCell<Option<lifecycle::Spawn>>,
     },
@@ -103,6 +107,7 @@ pub(crate) enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::TaskDetach { .. } => "task.detach",
             Self::TaskSpawn { .. } => "task.async",
             Self::RootRelease { .. } => "root.release",
             Self::ScopeEnter { .. } => "task.scope_enter",
@@ -224,6 +229,7 @@ impl Backend<Command> for Objects<'_> {
         let s = super::scheduler(self.ctx);
         match &op.payload {
             Command::Head { .. }
+            | Command::TaskDetach { .. }
             | Command::TaskSpawn { .. }
             | Command::ScopeEnter { .. }
             | Command::TaskCancel { .. }
@@ -345,6 +351,27 @@ impl Backend<Command> for Objects<'_> {
                     let child = s.task_handle(*child, scope);
                     s.cancel(child, super::CANCEL_REQUESTED);
                     (Outcome::image(0, Vec::new()), Next::Yield)
+                }
+                Command::TaskDetach { scope, child: word } => {
+                    assert!(!early, "detach only retires");
+                    let scope = s.scope_handle(*scope);
+                    let child = s.task_handle(*word, scope);
+                    let row = s.task(child);
+                    row.detached = true;
+                    let next = if row.state == super::State::Holding {
+                        Next::Call {
+                            members: vec![*word],
+                            then_yield: true,
+                        }
+                    } else {
+                        if row.state == super::State::Done && row.failure.is_none() {
+                            assert!(super::readiness::saved(s, child));
+                            s.scope(scope).children.retain(|&c| c != child);
+                            s.vacate_task(child);
+                        }
+                        Next::Yield
+                    };
+                    (Outcome::image(0, Vec::new()), next)
                 }
                 Command::SenderClose { sender } => {
                     assert!(!early, "a sender close only retires");
@@ -478,6 +505,10 @@ impl Backend<Command> for Objects<'_> {
         if let Some(pending) = result.pending.borrow_mut().take() {
             super::scheduler(self.ctx).channels.publish(pending);
         }
+    }
+
+    fn call(&mut self, caller: TaskId, child: TaskId) {
+        lifecycle::call_saved(super::scheduler(self.ctx), caller, child);
     }
 
     fn defer_poll(&self) -> bool {

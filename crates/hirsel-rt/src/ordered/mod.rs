@@ -109,6 +109,9 @@ pub trait Backend<P> {
     fn commit(&mut self, task: TaskId, op: &Operation<P>, early: bool) -> Receipt<Self::Result>;
     fn record(&mut self, task: TaskId, op: &Operation<P>, result: &Self::Result, retirement: u64);
     fn publish(&mut self, task: TaskId, op: &Operation<P>, result: &Self::Result);
+    /// Enter one holding rest selected by a retiring call, including later
+    /// members after a previous rest returns. No poll or user code may run.
+    fn call(&mut self, _caller: TaskId, _child: TaskId) {}
     /// Native polling can call a home adapter and release the scheduler role.
     /// Return true to request an owned polling continuation instead of calling
     /// poll while Frontier is borrowed. Complete it with Frontier::complete_poll.
@@ -432,7 +435,11 @@ impl<P, R> Frontier<P, R> {
         if ends {
             row.producing += 1;
         }
-        row.state = if offer == Offer::Pending {
+        row.state = if row.calls.is_some() {
+            // Its worker may still produce future log entries, but only the
+            // called child's return can release this logical continuation.
+            State::Parked
+        } else if offer == Offer::Pending {
             State::Pending
         } else {
             State::Ahead
@@ -592,6 +599,7 @@ impl<P, R> Frontier<P, R> {
             if self.tasks[&child].state != State::Holding {
                 continue;
             }
+            backend.call(task, child);
             self.tasks.get_mut(&task).unwrap().state = State::Parked;
             self.tasks.get_mut(&child).unwrap().state = State::Queued;
             self.held.get_mut(&child).unwrap().caller = Some(task);

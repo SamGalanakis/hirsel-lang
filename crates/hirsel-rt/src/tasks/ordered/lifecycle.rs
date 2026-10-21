@@ -258,6 +258,34 @@ pub(super) struct Call {
     pub(super) detached: bool,
 }
 
+/// Apply the native half of Frontier's call insertion without accessing a
+/// running context. Strict owner callbacks already prepared their result;
+/// logged detach calls discard it only when this saved rest is selected.
+pub(super) fn call_saved(s: &mut Scheduler, caller: u64, child: u64) {
+    let parent = caller as u32;
+    let index = child as u32;
+    assert_eq!(s.task(parent).generation, (caller >> 32) as u32);
+    assert_eq!(s.task(index).generation, (child >> 32) as u32);
+    assert!(readiness::saved(s, index));
+    if s.task(index).state == State::Ready {
+        assert_eq!(
+            s.task(index).handoff,
+            Some(parent),
+            "an owner-prepared call"
+        );
+        return;
+    }
+    assert_eq!(s.task(index).state, State::Holding);
+    assert!(
+        s.task(index).detached,
+        "only detached calls have no owner callback"
+    );
+    s.task(index).slot = None;
+    s.task(index).state = State::Ready;
+    s.task(index).handoff = Some(parent);
+    s.task(parent).state = State::Parked;
+}
+
 /// Execute a holding child's rest as a call, never as a FIFO enqueue.
 /// # Safety
 /// The child is holding a physically saved frame; the caller owns the role.
@@ -457,37 +485,19 @@ pub(crate) unsafe fn scope_exit(
 /// # Safety
 /// As for TaskDetach. A successful detached completion retires its row at idle.
 pub(crate) unsafe fn detach(ctx: *mut TaskCtx, scope: *const u64, task: *mut u64) -> Stopped<u8> {
-    engine::at_head(ctx)?;
-    let s = scheduler(ctx);
-    let scope = s.scope_handle(unsafe { scope.read() });
-    let child = s.task_handle(unsafe { task.read() }, scope);
-    if s.task(child).state == State::Holding {
-        unsafe {
-            call(
-                ctx,
-                child,
-                Call {
-                    begin: Some("task.detach"),
-                    then_yield: true,
-                    result: ResultAction::Discard,
-                    detached: true,
-                },
-            )
-        }?;
-    } else {
-        let (_, progress) = engine::head_effect(ctx, "task.detach", || {
-            let s = scheduler(ctx);
-            let row = s.task(child);
-            row.detached = true;
-            if row.state == State::Done && row.failure.is_none() {
-                assert!(readiness::saved(s, child));
-                s.scope(scope).children.retain(|&c| c != child);
-                s.vacate_task(child);
-            }
-            ((), Next::Yield)
-        })?;
-        engine::continue_at_head(ctx, progress)?;
-    }
+    let scope = unsafe { scope.read() };
+    let child = unsafe { task.read() };
+    engine::submit(
+        ctx,
+        super::Command::TaskDetach { scope, child }.operation(
+            crate::ordered::footprint::Footprint {
+                writes: std::collections::BTreeSet::from([crate::ordered::footprint::Item::Task(
+                    child,
+                )]),
+                ..Default::default()
+            },
+        ),
+    )?;
     Ok(STATUS_OK)
 }
 
@@ -619,7 +629,17 @@ pub(super) fn after_save(s: &mut Scheduler, task: u32, completed: bool) {
             }
         }
         if let Some(parent) = s.task(task).handoff.take() {
-            s.task(parent).state = State::Ready;
+            let parent_id = handle(parent, s.task(parent).generation);
+            let still_calling = match &s.logical {
+                Logical::Ordered(driver) => {
+                    driver.frontier.as_ref().unwrap().state(parent_id)
+                        == crate::ordered::State::Parked
+                }
+                _ => unreachable!(),
+            };
+            if !still_calling {
+                s.task(parent).state = State::Ready;
+            }
         }
     }
     if matches!(s.task(task).state, State::Holding | State::Done) {
@@ -644,6 +664,177 @@ mod tests {
     use crate::ordered::Policy;
 
     const NONE: [u64; 2] = [0, 0];
+
+    #[derive(Default)]
+    struct DetachOrder {
+        logged: std::sync::atomic::AtomicBool,
+        child: std::sync::atomic::AtomicU64,
+        rest_done: std::sync::atomic::AtomicBool,
+    }
+
+    unsafe extern "C" fn detach_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+        use std::sync::atomic::Ordering;
+        let [probe, mode, atomic] = unsafe { crate::alloc::payload(env).cast::<[u64; 3]>().read() };
+        let probe = unsafe { &*(probe as *const DetachOrder) };
+        if mode == 0 {
+            let mut result = [1u64, 17];
+            assert_eq!(
+                unsafe {
+                    hirsel_rt_v2_task_finish(
+                        ctx,
+                        result.as_mut_ptr().cast(),
+                        NONE.as_ptr().cast(),
+                        16,
+                    )
+                },
+                STATUS_OK
+            );
+            assert_eq!(result, [1, 17], "discard remains owned by this rest");
+            let mut canceled = 0;
+            assert_eq!(
+                unsafe { hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0) },
+                STATUS_OK
+            );
+            let mut value = u64::MAX;
+            assert_eq!(
+                unsafe { hirsel_rt_v2_atomic_load(ctx, &atomic, (&raw mut value).cast(), 8) },
+                STATUS_OK
+            );
+            assert_eq!(
+                value, 0,
+                "later caller logs cannot retire inside its child's rest"
+            );
+            probe.rest_done.store(true, Ordering::Release);
+        } else {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !probe.logged.load(Ordering::Acquire) {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "younger detach did not run ahead"
+                );
+                std::thread::yield_now();
+            }
+            let _role = unsafe { role::Guard::new(ctx) };
+            let child = probe.child.load(Ordering::Acquire) as u32;
+            let s = scheduler(ctx);
+            assert_eq!(s.task(child).state, State::Holding);
+            assert!(!s.task(child).detached, "detach mutates only at retirement");
+            assert!(s.task(child).slot.is_some());
+            assert!(!probe.rest_done.load(Ordering::Acquire));
+        }
+        STATUS_OK
+    }
+
+    #[test]
+    fn logged_native_detach_calls_a_saved_yielding_rest_before_later_caller_logs() {
+        use std::sync::{Arc, atomic::Ordering};
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 24,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&layout as *const crate::Layout];
+        for width in [2, 4, 8] {
+            let probe = Arc::new(DetachOrder::default());
+            let seen = probe.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+                move |ctx| unsafe {
+                    let mut atomic = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_atomic_create(
+                            ctx,
+                            std::ptr::null_mut(),
+                            &mut atomic,
+                            (&0u64 as *const u64).cast(),
+                            8
+                        ),
+                        STATUS_OK
+                    );
+                    let mut scope = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                        STATUS_OK
+                    );
+                    let mut held = 0;
+                    for mode in 0..2 {
+                        let env = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            24,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(env).cast::<[u64; 3]>().write([
+                            Arc::as_ptr(&seen) as u64,
+                            mode,
+                            atomic,
+                        ]);
+                        let mut child = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_spawn(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut child,
+                                &scope,
+                                detach_child,
+                                env
+                            ),
+                            STATUS_OK
+                        );
+                        if mode == 0 {
+                            held = child;
+                            seen.child.store(child, Ordering::Release);
+                            let _role = role::Guard::new(ctx);
+                            engine::at_head(ctx).unwrap();
+                            assert_eq!(scheduler(ctx).task(child as u32).state, State::Holding);
+                        }
+                    }
+                    assert_eq!(hirsel_rt_v2_task_detach(ctx, &scope, &mut held), STATUS_OK);
+                    let value = 7u64;
+                    assert_eq!(
+                        hirsel_rt_v2_atomic_store(ctx, &atomic, (&raw const value).cast(), 8),
+                        STATUS_OK
+                    );
+                    seen.logged.store(true, Ordering::Release);
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                        STATUS_OK
+                    );
+                    let mut loaded = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_atomic_load(ctx, &atomic, (&raw mut loaded).cast(), 8),
+                        STATUS_OK
+                    );
+                    assert_eq!(loaded, 7);
+                    let _role = role::Guard::new(ctx);
+                    engine::at_head(ctx).unwrap();
+                    let me = engine::current(ctx);
+                    engine::driver(ctx).finishing(me);
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            assert!(probe.rest_done.load(Ordering::Acquire));
+        }
+    }
 
     #[derive(Default)]
     struct SpawnOrder {
@@ -959,6 +1150,9 @@ mod tests {
                         }
                         if let Some(retired) = retired {
                             role::enter(ctx);
+                            // D detach returns at issuance. Observe the same
+                            // completed call boundary as the yielding join.
+                            engine::at_head(ctx).unwrap();
                             assert_eq!(
                                 engine::driver(ctx).frontier.as_ref().unwrap().retired() - retired,
                                 2,

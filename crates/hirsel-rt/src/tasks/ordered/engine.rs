@@ -463,6 +463,9 @@ impl<F: FnOnce() -> (T, Next), T> Backend<Command> for HeadEffect<'_, '_, F, T> 
     fn publish(&mut self, _: TaskId, _: &Operation<Command>, _: &Outcome) {
         unreachable!("strict head effect cannot have an early receipt")
     }
+    fn call(&mut self, caller: TaskId, child: TaskId) {
+        self.objects.call(caller, child);
+    }
     fn defer_poll(&self) -> bool {
         true
     }
