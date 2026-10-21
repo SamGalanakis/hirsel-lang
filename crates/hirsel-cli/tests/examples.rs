@@ -173,7 +173,7 @@ impl Fixture {
     fn migrated(&self, backend: &str, expected: &str) {
         let executable = self.0.join(format!("migrate-{backend}"));
         let built = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .args(["build", "--backend", backend])
+            .args(["build", "--release", "--backend", backend])
             .arg(self.0.join("hirsel.json"))
             .arg("-o")
             .arg(&executable)
@@ -182,9 +182,15 @@ impl Fixture {
         assert!(built.status.success(), "{backend}: {built:?}");
         let root = self.0.join(format!("migrate-root-{backend}"));
         std::fs::create_dir(&root).unwrap();
+        let grants = self.0.join(format!("migrate-grants-{backend}.json"));
+        std::fs::write(
+            &grants,
+            serde_json::json!({"io":{"stdout":"stdout.bytes@1","dirs":[{"path":"","host":root,"access":"read_write"}]},"args":[]}).to_string(),
+        ).unwrap();
         let ran = Command::new(executable)
+            .arg("--hirsel-grants")
+            .arg(grants)
             .env_clear()
-            .env("HIRSEL_RT_ROOT", root)
             .env("HIRSEL_RT_MIGRATE", "1")
             .output()
             .unwrap();
