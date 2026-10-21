@@ -45,11 +45,25 @@ impl QueryEngine {
         // An absent generated declaration is a miss; revalidation must not
         // materialize it ahead of an earlier input's operational boundary.
         self.items.get(path)?.first()?;
+        self.note_environment();
         let text = self.key_text(path, QueryKind::Summary).ok()?;
         if text != summary.text || !self.execution_valid(path, reads) {
             return None;
         }
         let entry = self.summaries.get(&id)?.clone();
+        // A Lower-only notification need not demand its unchanged P producer.
+        // Reuse only the exact immutable summary still published by a clean,
+        // consistent memo with the current owner key. Replacement or dirtiness
+        // follows normal demand; the complete earlier outcome reads held above.
+        if entry.consistent
+            && entry.memo.text == text
+            && !self.graph.is_dirty(&entry.memo.key)
+            && entry
+                .result()
+                .is_ok_and(|output| Arc::ptr_eq(&output.value, summary))
+        {
+            return Some(summary.clone());
+        }
         if !self.memo_valid(path, &entry, text) {
             return None;
         }
@@ -260,5 +274,81 @@ impl QueryEngine {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_front_summary_reuse_keeps_exact_producers_and_rejects_dirty_or_edited_inputs() {
+        let mut engine =
+            QueryEngine::new(default_environment(), crate::phases::engine_only_adapters());
+        let context = default_context();
+        let file = engine
+            .sources
+            .add("front.hir", "fn probe() { 1 }".into())
+            .unwrap();
+        let parsed = engine.parse_file(file, &context).unwrap();
+        let path = parsed.value.items[0].item.definition.clone();
+        let id = DefId::intern(&path);
+        let summary = Arc::new(PublishedSummary {
+            definition: id,
+            summary: DefinitionSummary {
+                owner: id,
+                frames: Box::default(),
+                calls: Box::default(),
+                staged: Box::default(),
+            },
+            growth: Default::default(),
+            checked: None,
+            reads: Arc::new(Reads::empty()),
+            text: engine.key_text(&path, QueryKind::Summary).unwrap(),
+        });
+        engine.record_summary(summary.clone(), Default::default(), false);
+        let before = engine.memo_stats().touched;
+        let reused = engine
+            .revalidate_front_summary(&summary, &summary.reads)
+            .unwrap();
+        assert!(Arc::ptr_eq(&reused, &summary));
+        assert_eq!(
+            engine.memo_stats().touched,
+            before,
+            "an unchanged immutable summary needs no memo query"
+        );
+
+        let replacement = Arc::new((*summary).clone());
+        engine.record_summary(replacement.clone(), Default::default(), false);
+        let before = engine.memo_stats().touched;
+        let reused = engine
+            .revalidate_front_summary(&summary, &summary.reads)
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&reused, &replacement),
+            "a replaced producer follows normal demand"
+        );
+        assert!(engine.memo_stats().touched > before);
+
+        let mut changed = crate::memo::ChangeSet::default();
+        changed.text(id, crate::memo::Durability::Low);
+        engine.graph.apply(&changed);
+        assert!(
+            engine
+                .revalidate_front_summary(&replacement, &replacement.reads)
+                .is_none()
+        );
+
+        engine.record_summary(replacement.clone(), Default::default(), false);
+        let file = engine
+            .sources
+            .add("front.hir", "fn probe() { 2 }".into())
+            .unwrap();
+        engine.parse_file(file, &context).unwrap();
+        assert!(
+            engine
+                .revalidate_front_summary(&replacement, &replacement.reads)
+                .is_none()
+        );
     }
 }
