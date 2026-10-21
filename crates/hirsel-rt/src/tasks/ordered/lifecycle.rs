@@ -14,13 +14,36 @@ use crate::ordered::{Next, Progress};
 /// # Safety
 /// As for TaskScopeEnter, with the ordered policy and role installed.
 pub(crate) unsafe fn scope_enter(ctx: *mut TaskCtx, out: *mut u64) -> Stopped<u8> {
-    let (word, progress) = engine::head_effect(ctx, "task.scope_enter", || {
-        let (index, generation) = open_scope(ctx, None);
-        (handle(index, generation), Next::Yield)
-    })?;
+    let owner = engine::current(ctx);
+    let (index, generation) = {
+        let s = scheduler(ctx);
+        let generation = s.fresh_generation();
+        let index = match s.vacant_scopes.pop() {
+            Some(index) => index,
+            None => {
+                s.scopes.push(None);
+                (s.scopes.len() - 1) as u32
+            }
+        };
+        (index, generation)
+    };
+    let word = handle(index, generation);
     engine::driver(ctx).objects.inert(Kind::Scope, word);
+    engine::submit(
+        ctx,
+        super::Command::ScopeEnter {
+            index,
+            generation,
+            owner,
+        }
+        .operation(crate::ordered::footprint::Footprint {
+            writes: std::collections::BTreeSet::from([crate::ordered::footprint::Item::Task(
+                owner,
+            )]),
+            ..Default::default()
+        }),
+    )?;
     unsafe { out.write(word) };
-    engine::continue_at_head(ctx, progress)?;
     Ok(STATUS_OK)
 }
 

@@ -20,6 +20,11 @@ use hirsel_rt_operations::descriptors::op_descriptor;
 /// Mutex wrappers remain owner-local allocations outside these cell effects.
 /// Drops and task/host effects still need retirement/credit adapters.
 pub(crate) enum Command {
+    ScopeEnter {
+        index: u32,
+        generation: u32,
+        owner: TaskId,
+    },
     TaskSetCreate {
         index: u32,
         generation: u32,
@@ -92,6 +97,7 @@ pub(crate) enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::ScopeEnter { .. } => "task.scope_enter",
             Self::TaskSetCreate { .. } => "task.set",
             Self::TaskSetAdd { .. } => "task.add",
             Self::TaskSetClose { .. } => "drop.trivial",
@@ -206,6 +212,7 @@ impl Backend<Command> for Objects<'_> {
         let s = super::scheduler(self.ctx);
         match &op.payload {
             Command::Head { .. }
+            | Command::ScopeEnter { .. }
             | Command::TaskCancel { .. }
             | Command::TaskSetCreate { .. }
             | Command::TaskSetAdd { .. }
@@ -235,6 +242,28 @@ impl Backend<Command> for Objects<'_> {
         let (result, next) = unsafe {
             match &op.payload {
                 Command::Head { .. } => panic!("strict head effect requires its owner callback"),
+                Command::ScopeEnter {
+                    index,
+                    generation,
+                    owner,
+                } => {
+                    assert!(!early, "scope entry only retires");
+                    let task = *owner as u32;
+                    assert_eq!(s.task(task).generation, (*owner >> 32) as u32);
+                    assert!(s.scopes[*index as usize].is_none(), "a reserved scope row");
+                    s.scopes[*index as usize] = Some(super::Scope {
+                        generation: *generation,
+                        owner: task,
+                        children: Vec::new(),
+                        canceled: Default::default(),
+                        deadline: None,
+                        completions: std::sync::atomic::AtomicU64::new(0),
+                    });
+                    s.task(task).scopes.push(*index);
+                    s.cancel_epoch.changed();
+                    let word = super::handle(*index, *generation);
+                    (Outcome::image(0, word.to_ne_bytes().to_vec()), Next::Yield)
+                }
                 Command::TaskSetCreate {
                     index,
                     generation,
@@ -518,6 +547,96 @@ mod tests {
             scan: std::ptr::null(),
             scan_words: 0,
         }
+    }
+
+    #[test]
+    fn logged_scope_entries_publish_the_owners_stack_in_retirement_order() {
+        let run = Run::new();
+        let anchor = unsafe { atomic(run.0, 0) };
+        let s = super::super::scheduler(run.0);
+        s.tasks.push(Some(super::super::Task::new(
+            3,
+            std::ptr::null_mut(),
+            None,
+            vec![0],
+            None,
+        )));
+        s.scopes.extend([None, None]);
+        let owner = super::super::handle(1, 3);
+        let mut events = Vec::new();
+        let mut record =
+            |task, name, _: &Outcome, retirement| events.push((task, name, retirement));
+        let mut poll = Vec::new;
+        let mut backend = unsafe { Objects::new(run.0, &mut record, &mut poll) };
+        let mut f = Frontier::new(
+            0,
+            policy(),
+            Settled {
+                level: 0,
+                limit: u64::MAX,
+                fuel: u64::MAX,
+            },
+        );
+        f.held.insert(0, Held::empty());
+        f.enqueue(2, Held::empty());
+        f.enqueue(owner, Held::empty());
+        for index in 0..2 {
+            let entry = Command::ScopeEnter {
+                index,
+                generation: index + 4,
+                owner,
+            }
+            .operation(Footprint {
+                writes: BTreeSet::from([Item::Task(owner)]),
+                ..Footprint::default()
+            });
+            assert!(!backend.can_commit_early(&entry));
+            assert_eq!(
+                f.offer(owner, empty(), entry, &mut backend).0,
+                Offer::Logged
+            );
+        }
+        assert!(
+            super::super::scheduler(run.0)
+                .scopes
+                .iter()
+                .all(Option::is_none)
+        );
+        assert!(super::super::scheduler(run.0).task(1).scopes.is_empty());
+        let load = || {
+            Command::AtomicLoad {
+                word: anchor,
+                bytes: 8,
+            }
+            .operation(footprint(0, false))
+        };
+        for index in 0..2 {
+            f.apply_head(empty(), load(), &mut backend).unwrap();
+            f.apply_head(empty(), load(), &mut backend).unwrap();
+            f.absorb(&mut backend).unwrap();
+            let s = super::super::scheduler(run.0);
+            assert_eq!(s.task(1).scopes, (0..=index).collect::<Vec<_>>());
+            assert_eq!(
+                s.scope(index).owner,
+                1,
+                "committer's current task is not the scope owner"
+            );
+            assert!(s.task(0).scopes.is_empty());
+            if index == 0 {
+                assert!(s.scopes[1].is_none());
+            }
+        }
+        assert_eq!(
+            events
+                .iter()
+                .filter(|(_, name, _)| *name == "task.scope_enter")
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![
+                (owner, "task.scope_enter", 2),
+                (owner, "task.scope_enter", 5)
+            ]
+        );
     }
 
     #[test]

@@ -106,7 +106,10 @@ MutexTake also scans its output before same-turn operations can use those
 handles. Mutex-root decrements use the same head gate as Shared roots, before
 any last-wrapper finalizer. Root increments remain immediate. These strict
 boundaries do not yet implement positional speculative root logs or credit
-settlement. Host and remaining boundaries still need native adapters. Strict-head adapters now cover scope entry, committed spawn,
+settlement. Host and remaining boundaries still need native adapters.
+Scope entry reserves a provisional identity and logs an owned command; only its
+retirement installs the scope and pushes it on the originating task's scope stack,
+even when a different worker/task commits the command. Strict-head adapters cover committed spawn,
 holding result publication, join, detach, nonempty scope exit, receive and
 physical completion.
 Spawn scans the unstarted environment with the linked capture program. Task
