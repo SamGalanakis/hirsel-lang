@@ -563,6 +563,23 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {
+        self.signature_query_id(DefId::intern(definition))
+    }
+
+    fn signature_query_id(
+        &mut self,
+        id: DefId,
+    ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {
+        // Indexing marks each changed header/candidate and its subscribers.
+        // An unmarked memo needs neither a text hash nor a path-based probe;
+        // the graph stamps its own verified-at revision when it is read.
+        if let Some(entry) = self.signatures.get(&id).cloned() {
+            self.note_environment();
+            if matches!(self.graph.check(&entry.memo), crate::memo::Verdict::Valid) {
+                return entry.result();
+            }
+        }
+        let definition = id.path();
         if let Some(constant) = self.staged_constants.get(definition) {
             return Ok(Arc::new(output(constant.signature.clone())));
         }
@@ -1692,7 +1709,7 @@ impl DefinitionQueries for QueryEngine {
 }
 impl SignatureProvider for QueryEngine {
     fn signature(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
-        self.signature_query(definition.path())
+        self.signature_query_id(definition)
             .map(|output| output.value.clone())
     }
     fn lookup(

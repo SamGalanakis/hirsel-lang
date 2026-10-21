@@ -880,3 +880,60 @@ fn partial_check_preserves_diagnostics_and_reports_the_missing_phase_on_compiler
             .is_some()
     );
 }
+
+#[test]
+fn signature_hits_track_later_duplicate_headers_and_positions() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (mut engine, _) = make_engine(None, false);
+        parse(&mut engine, "fn a () { 1 }\n");
+        let duplicate = engine
+            .sources
+            .add("other.hir", "fn a () { 2 }\n".into())
+            .unwrap();
+        engine.parse_file(duplicate, &default_context()).unwrap();
+        engine.adapters.signature = Some(Rc::new(ObserveDuplicates));
+        let diagnose = |engine: &mut QueryEngine| {
+            let Err(QueryError::Diagnostics(errors)) = engine.item_signature(&path("a")) else {
+                panic!("duplicate signature must reject");
+            };
+            assert_eq!(errors[0].rule.as_str(), "LANG-7");
+            errors[0].primary
+        };
+        let old = diagnose(&mut engine);
+        assert_eq!(diagnose(&mut engine), old);
+        assert_eq!(engine.recompute_count(&path("a"), QueryKind::Signature), 1);
+        assert!(
+            engine
+                .memo_reads(&path("a"), QueryKind::Signature)
+                .unwrap()
+                .iter()
+                .any(|(key, _)| *key
+                    == hirsel_engine::memo::ReadKey::DeclarationCandidates(DefId::intern(&path(
+                        "a"
+                    ))))
+        );
+        // The first candidate is byte-identical. Only the later candidate's
+        // header changes and its position moves behind an unrelated item.
+        let duplicate = engine
+            .sources
+            .add(
+                "other.hir",
+                "fn unrelated () { 3 }\nfn a (changed) { 2 }\n".into(),
+            )
+            .unwrap();
+        engine.parse_file(duplicate, &default_context()).unwrap();
+        let current = diagnose(&mut engine);
+        assert_ne!(current, old);
+        let expected = engine.definition_items(&path("a")).unwrap()[1]
+            .item
+            .origin
+            .span;
+        assert_eq!(current, expected);
+        assert_eq!(engine.sources.location(current).unwrap().line, 2);
+        assert_eq!(engine.recompute_count(&path("a"), QueryKind::Signature), 2);
+        assert_eq!(diagnose(&mut engine), current);
+        engine.environment.interface_version += 1;
+        assert_eq!(diagnose(&mut engine), current);
+        assert_eq!(engine.recompute_count(&path("a"), QueryKind::Signature), 3);
+    });
+}
