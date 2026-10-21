@@ -620,6 +620,14 @@ impl crate::queries::s1::DependencySource for EngineDependencies<'_> {
     }
 }
 impl QueryEngine {
+    /// Complete execution evidence of a retained constant materialization.
+    /// This includes lookup, citation, private-view and transitive body reads;
+    /// graph memo counters alone cannot establish that closure.
+    pub fn materialization_reads(&self, constant: &DefPath) -> Option<&crate::Reads> {
+        self.constant_values
+            .get(constant)
+            .map(|value| &value.executed)
+    }
     /// The views `constant`'s retained evaluation reflected or decoded
     /// (`Representation(d)`), each with the digest it saw.
     pub fn representation_reads(&self, constant: &DefPath) -> Option<Vec<(DefPath, ContentHash)>> {

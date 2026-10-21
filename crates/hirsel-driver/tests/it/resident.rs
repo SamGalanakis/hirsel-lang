@@ -2309,3 +2309,31 @@ fn first_failed_manifest_load_keeps_the_invalid_import_as_a_watched_input() {
         assert!(session.check().unwrap().diagnostics.is_empty());
     });
 }
+
+#[test]
+fn scalar_materialization_inherits_complete_mode_receipts_on_cold_and_warm_demands() {
+    with_compiler_stack(|| {
+        let text = "const BASE:u8=1u8\nconst A:u8=comptime BASE\n";
+        for warm in [false, true] {
+            let mut candidate = engine(Arc::new(store::NoneStore));
+            let file = candidate.sources.add("closure.hir", text.into()).unwrap();
+            candidate.parse_file(file, &default_context()).unwrap();
+            if warm {
+                candidate.mode_definition(&path("A")).unwrap();
+            }
+            candidate.materialize_value(&path("A")).unwrap();
+            let mode = candidate.memo_reads(&path("A"), QueryKind::Modes).unwrap();
+            assert!(
+                mode.iter()
+                    .any(|(read, _)| matches!(read, ReadKey::Lookup(_)))
+            );
+            let executed = candidate.materialization_reads(&path("A")).unwrap();
+            for expected in mode.iter() {
+                assert!(
+                    executed.iter().any(|actual| actual == expected),
+                    "warm={warm} omitted {expected:?}"
+                );
+            }
+        }
+    });
+}

@@ -96,6 +96,9 @@ impl QueryEngine {
                         .cloned(),
                 ))
             });
+            if self.front_products.invalidated.get(&definition) != Some(&generation) {
+                self.work.front_invalidations += 1;
+            }
             self.front_products.invalidate(definition, generation);
             if let Some((outcome, checked, dead_arms, lowering_inputs)) = previous {
                 if let Ok(published) = &outcome.result {
@@ -131,6 +134,7 @@ impl QueryEngine {
         &mut self,
         definition: DefId,
     ) -> Result<std::sync::Arc<PublishedSummary>, QueryError> {
+        self.work.front_summary_visits += 1;
         self.invalidate_front_products();
         let summary = match self.front_products.selection.get(&definition) {
             Some(summary) => summary.clone(),
@@ -302,6 +306,7 @@ impl QueryEngine {
         jobs: hirsel_intern::jobs::Jobs,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), QueryError> {
+        self.work.front_lower_visits += definitions.len() as u64;
         if definitions.is_empty() {
             return Ok(());
         }
@@ -345,6 +350,7 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Vec<Diagnostic>, QueryError> {
+        self.work.front_lower_visits += 1;
         let changes = self.invalidate_front_products();
         let id = DefId::intern(definition);
         if let Some(product) = self.front_products.lowered.get(&id).cloned() {
@@ -390,6 +396,7 @@ impl QueryEngine {
         definitions: Vec<DefPath>,
         jobs: hirsel_intern::jobs::Jobs,
     ) -> Vec<PublishedResult> {
+        self.work.front_outcome_visits += definitions.len() as u64;
         let changes = self.invalidate_front_products();
         // Preserve caller order, duplicate occurrences and generator boundaries.
         // Every miss is evaluated by the same fused P implementation.

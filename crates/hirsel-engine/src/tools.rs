@@ -219,6 +219,7 @@ pub(crate) fn association_diagnostics(
         return Ok(diagnostics);
     }
     for syntax in &parsed.value.items {
+        engine.work.association_visits += 1;
         let source = &syntax.item;
         for attribute in &source.attributes {
             let name = attribute.name.as_str();
@@ -419,6 +420,7 @@ pub(crate) fn check_files(
             continue;
         };
         for syntax in &parsed.items {
+            engine.work.planning_visits += 1;
             planned.push((
                 owner,
                 syntax.item.definition.clone(),

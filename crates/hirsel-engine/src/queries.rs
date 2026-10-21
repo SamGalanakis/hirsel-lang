@@ -1383,6 +1383,10 @@ impl QueryEngine {
         &mut self,
         entry: Arc<Entry<AnalyzedBody>>,
     ) -> Result<Arc<QueryOutput<AnalyzedBody>>, QueryError> {
+        // A materialization executes this checked body regardless of whether
+        // Modes was computed now, retained, or restored. Preserve its entire
+        // receipt (including negative lookups and diagnostic citations).
+        self.merge_execution(entry.reads());
         // Compile-time users also depend on private shapes used by a body,
         // including when its public signature and source text are unchanged.
         let representations: Vec<_> = entry
