@@ -3220,6 +3220,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_open(
         };
         return STATUS_OK;
     }
+    if free::enabled(ctx) {
+        unsafe { crate::stop::check(ctx, free::channel::open(ctx, out, none, descriptor)) };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller contract.
     let layout = unsafe { (*ctx).descriptor(descriptor) };
@@ -3256,6 +3260,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
     let _segment = profile::Operation::new(ctx, "sender_dup");
     if ordered::engine::on(ctx) {
         unsafe { crate::stop::check(ctx, ordered::engine::sender_dup(ctx, sender.read(), out)) };
+        return STATUS_OK;
+    }
+    if free::enabled(ctx) {
+        unsafe { crate::stop::check(ctx, free::channel::dup(ctx, sender.read(), out)) };
         return STATUS_OK;
     }
     crate::free::enter(ctx, Phase::Done);
@@ -3297,6 +3305,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
                 ordered::engine::channel_send(ctx, sender.read(), message, out),
             )
         };
+        return STATUS_OK;
+    }
+    if free::enabled(ctx) {
+        unsafe { crate::stop::check(ctx, free::channel::send(ctx, sender.read(), message, out)) };
         return STATUS_OK;
     }
     crate::free::enter(ctx, Phase::Done);

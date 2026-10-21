@@ -221,6 +221,13 @@ impl ChannelCell {
             .expect("channel version overflow")
     }
 
+    pub(crate) fn dup(&self, state: &mut ChannelState) {
+        state.senders = state
+            .senders
+            .checked_add(1)
+            .expect("channel sender count overflow");
+    }
+
     /// Reserve queue growth before opening a phase; the lock keeps capacity
     /// available until its action and publication finish.
     pub(crate) fn prepare_send(&self, state: &mut ChannelState) {
@@ -347,24 +354,37 @@ impl Channels {
         element: Element,
         layout: &Layout,
     ) {
+        self.initialize_open_cell(reservation, Self::prepare_open(element, layout));
+    }
+
+    /// All storage allocation precedes a native recording section.
+    pub(crate) fn prepare_open(element: Element, layout: &Layout) -> Arc<ChannelCell> {
+        Arc::new(ChannelCell {
+            state: Mutex::new(ChannelState {
+                queue: Ring::new(element.size, layout.align as usize),
+                senders: 1,
+                receivers: 1,
+                pending: BTreeSet::new(),
+                sent: 0,
+                received: 0,
+            }),
+            element,
+            object: Default::default(),
+            sequence: AtomicU64::new(1),
+        })
+    }
+
+    pub(crate) fn initialize_open_cell(
+        &mut self,
+        reservation: ReservedChannel,
+        payload: Arc<ChannelCell>,
+    ) {
         let channel = reservation.channel;
         if self.channels[channel as usize].is_some() {
             fault("a reserved channel initialized twice");
         }
         self.channels[channel as usize] = Some(Channel {
-            payload: Arc::new(ChannelCell {
-                state: Mutex::new(ChannelState {
-                    queue: Ring::new(element.size, layout.align as usize),
-                    senders: 1,
-                    receivers: 1,
-                    pending: BTreeSet::new(),
-                    sent: 0,
-                    received: 0,
-                }),
-                element,
-                object: Default::default(),
-                sequence: AtomicU64::new(1),
-            }),
+            payload,
             waiting: VecDeque::new(),
             touched: false,
         });
@@ -391,12 +411,14 @@ impl Channels {
         let cell = self.payload(channel);
         {
             let mut state = cell.lock();
-            state.senders = state
-                .senders
-                .checked_add(1)
-                .expect("channel sender count overflow");
+            cell.dup(&mut state);
             cell.next_event();
         }
+        self.initialize_dup_endpoint(reservation, channel);
+    }
+
+    /// The caller already committed the count under the retained cell lock.
+    pub(crate) fn initialize_dup_endpoint(&mut self, reservation: ReservedEndpoint, channel: u32) {
         self.initialize_endpoint(reservation, channel);
     }
 
@@ -556,7 +578,7 @@ impl Channels {
     }
 
     /// A parked receiver may be served: the next scheduling point wakes it.
-    fn touch(&mut self, channel: u32) {
+    pub(crate) fn touch(&mut self, channel: u32) {
         let row = self.row(channel);
         if !row.waiting.is_empty() && !row.touched {
             row.touched = true;
