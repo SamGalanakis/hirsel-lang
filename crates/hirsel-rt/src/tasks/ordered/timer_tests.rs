@@ -311,3 +311,131 @@ fn timer_wait_run(child: bool, advance: bool) {
         assert_eq!(outcome.pending, 0);
     }
 }
+
+#[test]
+fn an_unsaved_receiver_releases_the_home_poll_reservation_then_retries_after_save() {
+    for width in [2, 4, 8] {
+        let now = Arc::new(AtomicU64::new(0));
+        let mut run = crate::host::BodyRun::new(width, true);
+        run.adapter = Some(Box::new(Clock {
+            home: std::thread::current().id(),
+            now: now.clone(),
+            calls: Arc::new(AtomicU64::new(0)),
+            finishes: Arc::new(AtomicU64::new(0)),
+            advance: true,
+        }));
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 16,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&layout as *const crate::Layout];
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 1;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+            move |ctx| unsafe {
+                let _role = role::Guard::new(ctx);
+                let mut scope = 0;
+                assert_eq!(
+                    hirsel_rt_v2_task_scope_enter_until(
+                        ctx,
+                        std::ptr::null_mut(),
+                        &mut scope,
+                        &0,
+                        &[11, 100]
+                    ),
+                    STATUS_OK
+                );
+                let mut endpoints = [0; 2];
+                let mut image = [0u64; 2];
+                assert_eq!(
+                    hirsel_rt_v2_channel_open(
+                        ctx,
+                        std::ptr::null_mut(),
+                        endpoints.as_mut_ptr(),
+                        &0,
+                        image.as_ptr().cast(),
+                        2
+                    ),
+                    STATUS_OK
+                );
+                let task = engine::current(ctx);
+                let (_, progress) = engine::head_effect(ctx, "channel.receive", || {
+                    let s = scheduler(ctx);
+                    let channel = s.channels.channel(endpoints[1], false);
+                    s.park(Wait::Receive {
+                        channel,
+                        slot: image.as_mut_ptr().cast(),
+                    });
+                    ((), crate::ordered::Next::Park)
+                })
+                .unwrap();
+                engine::driver(ctx).defer_poll_until_saved(task);
+                engine::driver(ctx).host_poll = true;
+                assert!(!readiness::saved(scheduler(ctx), task as u32));
+                role::release(ctx);
+                let run_ptr = (*ctx).run_ptr();
+                let mut completed = true;
+                crate::pool::call_home(ctx, &mut || {
+                    completed = super::home::poll(run_ptr, true, false).unwrap();
+                })
+                .unwrap();
+                role::enter(ctx);
+                assert!(!completed, "unsaved frame must defer this poll");
+                assert!(
+                    !engine::driver(ctx).host_poll,
+                    "home reservation must be retryable"
+                );
+                assert!(
+                    engine::driver(ctx)
+                        .frontier
+                        .as_ref()
+                        .unwrap()
+                        .retiring_task()
+                        .is_some()
+                );
+                now.store(100, Ordering::Release);
+                engine::driver(ctx).suspending(task, false);
+                crate::pool::free::suspend_current(ctx, false);
+                engine::at_head(ctx).unwrap();
+                assert_eq!(
+                    scheduler(ctx).task(task as u32).status,
+                    crate::channels::CANCELED + CANCEL_DEADLINE
+                );
+                assert!(
+                    engine::driver(ctx)
+                        .frontier
+                        .as_ref()
+                        .unwrap()
+                        .retiring_task()
+                        .is_none()
+                );
+                assert_eq!(progress, crate::ordered::Progress::Poll);
+                let mut expired = 0;
+                assert_eq!(
+                    hirsel_rt_v2_task_scope_exit_until(ctx, 0, 0, &mut expired, &scope, 0),
+                    STATUS_OK
+                );
+                assert_eq!(expired, 1);
+                for endpoint in endpoints {
+                    crate::finalize::hirsel_rt_v2_close_handle(ctx, endpoint, 0, 0);
+                }
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+    }
+}

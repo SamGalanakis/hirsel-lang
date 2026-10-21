@@ -119,13 +119,27 @@ pub(super) unsafe fn poll_free(s: &mut Scheduler) {
 /// # Safety
 /// The role owns the table, and no other code accesses a saved frame's slots.
 pub(super) unsafe fn poll_ordered(s: &mut Scheduler) -> bool {
+    unsafe { poll_ordered_inner(s, false) }
+}
+
+/// The home continuation already completed all saved host readiness attempts.
+/// # Safety
+/// As for poll_ordered; no host request effect occurs under this role.
+pub(super) unsafe fn poll_ordered_after_hosts(s: &mut Scheduler) -> bool {
+    unsafe { poll_ordered_inner(s, true) }
+}
+
+unsafe fn poll_ordered_inner(s: &mut Scheduler, hosts_polled: bool) -> bool {
     s.wake_receivers();
     for &task in &s.woken {
         let Some(row) = s.tasks.get(task as usize).and_then(Option::as_ref) else {
             continue;
         };
         let Some(wait) = row.wait else { continue };
-        if !saved(s, task) || matches!(wait, Wait::Host { .. } | Wait::Pool) {
+        if !saved(s, task)
+            || matches!(wait, Wait::Pool)
+            || (!hosts_polled && matches!(wait, Wait::Host { .. }))
+        {
             return false;
         }
         if let Wait::Join { child, .. } = wait
@@ -146,6 +160,10 @@ pub(super) unsafe fn poll_ordered(s: &mut Scheduler) -> bool {
         };
         if row.wait.is_none() {
             row.woken = false;
+            continue;
+        }
+        if hosts_polled && matches!(s.task(task).wait, Some(Wait::Host { .. })) {
+            s.task(task).woken = false;
             continue;
         }
         // SAFETY: preflight checked every slot before the first poll effect.

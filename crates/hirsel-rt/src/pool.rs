@@ -1305,6 +1305,15 @@ pub(crate) fn wake(exec: &Exec) {
     exec.post(Post::Wake, None);
 }
 
+/// Notify home that a saved Ordered service continuation can be retried.
+/// # Safety
+/// The run retains its execs for this callback; no activity lock is held.
+pub(crate) unsafe fn wake_home(run: *mut RunShared) {
+    if let Some(execs) = unsafe { (*(*run).execs.get()).as_deref() } {
+        wake(&execs.home);
+    }
+}
+
 /// A pool slot for an interval: an idle pool thread, a new one, or `None` when all
 /// [`POOL_THREADS`] are busy.
 pub(crate) fn claim(ctx: *mut TaskCtx) -> Option<u16> {

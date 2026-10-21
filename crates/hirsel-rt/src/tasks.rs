@@ -1365,6 +1365,14 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
         // SAFETY: the idle guard owns the role and the policy retained rows.
         unsafe { crate::pool::free::schedule_saved(run, task, owner) };
     }
+    if unsafe {
+        (*run)
+            .ordered_mode
+            .load(std::sync::atomic::Ordering::Acquire)
+            && (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) != 0
+    } {
+        unsafe { crate::pool::wake_home(run) };
+    }
     unsafe { free::check_quiet(run) };
 }
 
@@ -1887,6 +1895,9 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
         metrics.op();
     }
+    if ordered::engine::on(ctx) {
+        return ordered::host::yield_now(ctx);
+    }
     if free::enabled(ctx) {
         return unsafe { free::try_yield(ctx) };
     }
@@ -2028,6 +2039,9 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
 /// # Safety
 /// `ctx` is live and no borrow of its Io adapter or scheduler is held.
 pub(crate) unsafe fn park_host(ctx: &mut TaskCtx, token: u64, yielded: bool) -> Stopped<()> {
+    if ordered::engine::on(ctx) {
+        return unsafe { ordered::host::park(ctx, token, yielded) };
+    }
     // SAFETY: the context is live; the request outlives the wait.
     unsafe { try_block(ctx, Wait::Host { token }, yielded, 0) }
 }

@@ -177,10 +177,17 @@ pub(crate) unsafe fn issue(
     ctx: *mut TaskCtx,
     request: Request,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
+    if crate::tasks::ordered::engine::on(ctx) {
+        crate::tasks::ordered::host::begin(ctx, matches!(request, Request::Close { .. }))?;
+    }
+    let close = matches!(request, Request::Close { .. });
     // SAFETY: caller contract.
     let issued = unsafe { issue_here(ctx, request) };
     // SAFETY: as above.
     unsafe { count(ctx) };
+    if close && issued.is_ok() && crate::tasks::ordered::engine::on(ctx) {
+        crate::tasks::ordered::host::finish(ctx, crate::ordered::Next::Keep)?;
+    }
     issued
 }
 
@@ -322,6 +329,11 @@ pub(crate) unsafe fn issue_net(
     stream: u64,
     buffer: &mut crate::io::NetBuffer<'_>,
 ) -> Stopped<Option<(Result<crate::io::NetResult, AdapterError>, bool)>> {
+    // Ordered host waits retain owned request/completion buffers. Borrowed
+    // socket storage remains on the owned fallback until its boundary audit.
+    if crate::tasks::ordered::engine::on(ctx) {
+        return Ok(None);
+    }
     // Pool callbacks use the owned protocol's bridge. Never touch the home
     // Binding on a blocking-pool thread; home-thread callbacks may borrow.
     if crate::pool::on_pool() {
@@ -478,39 +490,97 @@ fn expired_binding(binding: &mut Binding, ready: &Ready) -> Stopped<Vec<u32>> {
     Ok(due)
 }
 
-/// A context-free timer readiness step on the admission thread. The logical
-/// policy reserves its poll before calling this and holds no scheduler role.
-/// `idle` permits waiting only after every physical segment is saved.
+/// Compatibility entry for a timer-only logical policy.
 /// # Safety
-/// Home only; no other adapter/wait-table call may overlap this reservation.
+/// Home only, with a reserved poll and no parked host requests.
 pub(crate) unsafe fn timers_home(
     run: *mut crate::context::RunShared,
     idle: bool,
 ) -> Stopped<(Vec<u32>, bool)> {
-    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
-    assert!(
-        binding.waits.parked.is_empty(),
-        "parked host requests require their completion adapter"
-    );
     loop {
-        let ready = binding.adapter.ready().map_err(Stop::refusal)?;
-        let expired = expired_binding(binding, &ready)?;
-        unsafe {
-            (*run).host_waits.store(
-                binding.waits.armed.len() as u32,
-                std::sync::atomic::Ordering::Release,
-            )
-        };
+        let HomeReady { expired, hosts } = unsafe { ready_home(run) }?;
+        assert!(
+            hosts.is_empty(),
+            "timer-only policy has parked host requests"
+        );
         if !idle || !expired.is_empty() {
             return Ok((expired, true));
         }
-        if !binding.adapter.wait().map_err(Stop::refusal)? {
+        if !unsafe { wait_home(run) }? {
             return Ok((Vec::new(), false));
         }
-        if let Some(stop) = unsafe { (*run).control.stopped() } {
-            return Err(stop);
-        }
     }
+}
+
+pub(crate) struct HomeReady {
+    pub(crate) expired: Vec<u32>,
+    pub(crate) hosts: Vec<ReadyHost>,
+}
+
+pub(crate) struct ReadyHost {
+    pub(crate) task: u32,
+    pub(crate) token: u64,
+    pub(crate) deadline: Option<u64>,
+    pub(crate) ready: bool,
+}
+
+/// Context-free readiness for the home-loop's reserved retirement poll.
+/// # Safety
+/// Home only; the policy reserves all host effects and retains no role borrow.
+pub(crate) unsafe fn ready_home(run: *mut crate::context::RunShared) -> Stopped<HomeReady> {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    let ready = binding.adapter.ready().map_err(Stop::refusal)?;
+    let expired = expired_binding(binding, &ready)?;
+    let hosts = binding
+        .waits
+        .parked
+        .iter_unordered()
+        .filter_map(|(token, parked)| {
+            let task = parked.task?;
+            let deadline = if let Request::SleepUntil { deadline, .. } = &parked.request {
+                Some(*deadline)
+            } else {
+                None
+            };
+            let ready = ready.contains(token) || binding.adapter.injected_wait(&parked.request);
+            Some(ReadyHost {
+                task,
+                token,
+                deadline,
+                ready,
+            })
+        })
+        .collect();
+    unsafe {
+        (*run).host_waits.store(
+            (binding.waits.parked.len() + binding.waits.armed.len()) as u32,
+            std::sync::atomic::Ordering::Release,
+        )
+    };
+    Ok(HomeReady { expired, hosts })
+}
+
+/// # Safety
+/// As for ready_home; the saved request owns all completion storage.
+pub(crate) unsafe fn poll_home(
+    run: *mut crate::context::RunShared,
+    token: u64,
+    cause: Option<u32>,
+    ready: bool,
+) -> Stopped<bool> {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    unsafe { poll_binding(binding, token, cause, ready) }
+}
+
+/// # Safety
+/// Home only, after no running segment or runnable turn remains. No role is held.
+pub(crate) unsafe fn wait_home(run: *mut crate::context::RunShared) -> Stopped<bool> {
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    let waited = binding.adapter.wait().map_err(Stop::refusal)?;
+    if let Some(stop) = unsafe { (*run).control.stopped() } {
+        return Err(stop);
+    }
+    Ok(waited)
 }
 
 /// A scope exited before its deadline: remove its timer, recording nothing.
@@ -671,6 +741,15 @@ unsafe fn poll_here(
     ready: bool,
 ) -> Stopped<bool> {
     let binding = unsafe { Binding::get(ctx) };
+    unsafe { poll_binding(binding, token, cause, ready) }
+}
+
+unsafe fn poll_binding(
+    binding: &mut Binding,
+    token: u64,
+    cause: Option<u32>,
+    ready: bool,
+) -> Stopped<bool> {
     let request = match binding.waits.parked.get(&token) {
         Some(parked) => parked.request.clone(),
         None => crate::fault("a poll of an unknown host wait"),
@@ -687,7 +766,9 @@ unsafe fn poll_here(
         Some(cause) => {
             binding.adapter.finish(token);
             // SAFETY: no borrow of the Binding is held across this call.
-            match unsafe { canceled(ctx, &request, cause) }? {
+            match crate::io_checks::cancel(binding.adapter.as_mut(), &request, cause)
+                .map_err(Stop::refusal)?
+            {
                 Some(completion) => Ok(completion),
                 None => crate::fault("a parked request that is no cancellation point"),
             }
@@ -731,7 +812,6 @@ unsafe fn poll_here(
             }
         }
     };
-    let binding = unsafe { Binding::get(ctx) };
     if let Some(parked) = binding.waits.parked.get_mut(&token) {
         parked.completion = Some(completion);
     }

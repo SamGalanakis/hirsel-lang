@@ -2826,6 +2826,9 @@ unsafe fn native_print(
     #[cfg(feature = "measurement")]
     let _segment =
         crate::tasks::profile::Operation::new(ctx, if stderr { "PrintStderr" } else { "Print" });
+    if crate::tasks::ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, crate::tasks::ordered::host::begin(ctx, false)) };
+    }
     // Free mode: a host write on the `stdout` or `stderr` key, through the session's phases.
     let canceled = unsafe { crate::tasks::canceled(ctx) };
     let free = crate::free::print(

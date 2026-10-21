@@ -1,0 +1,365 @@
+//! Head-owned host operations. A parked request retains its original ordinal.
+use super::super::*;
+use super::engine;
+use crate::ordered::Next;
+
+pub(crate) fn begin(ctx: *mut TaskCtx, close: bool) -> Stopped<()> {
+    engine::at_head(ctx)?;
+    let task = engine::current(ctx);
+    if engine::driver(ctx).host_ops.contains_key(&task) {
+        return Ok(());
+    }
+    let name = if close {
+        "host.handle_drop"
+    } else {
+        "host.request"
+    };
+    engine::head_effect(ctx, name, || ((), Next::Keep))?;
+    assert!(engine::driver(ctx).host_ops.insert(task, name).is_none());
+    Ok(())
+}
+
+pub(crate) fn finish(ctx: *mut TaskCtx, next: Next) -> Stopped<()> {
+    engine::at_head(ctx)?;
+    let task = engine::current(ctx);
+    assert!(engine::driver(ctx).host_ops.remove(&task).is_some());
+    let (_, progress) = engine::head_continuation(ctx, || ((), next))?;
+    engine::continue_at_head(ctx, progress)
+}
+
+pub(crate) fn yield_now(ctx: *mut TaskCtx) -> Stopped<()> {
+    begin(ctx, false)?;
+    finish(ctx, Next::Yield)
+}
+
+/// # Safety
+/// This task exclusively owns the request and all of its completion buffers.
+pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, yielded: bool) -> Stopped<()> {
+    begin(ctx, false)?;
+    if yielded {
+        let (_, progress) = engine::head_continuation(ctx, || ((), Next::Yield))?;
+        engine::continue_at_head(ctx, progress)?;
+    }
+    let (_, progress) = engine::head_continuation(ctx, || {
+        let s = scheduler(ctx);
+        let me = s.current;
+        unpin(s.task(me));
+        s.park(Wait::Host { token });
+        ((), Next::Park)
+    })?;
+    let me = engine::current(ctx) as u32;
+    unsafe { crate::host_waits::park(ctx, token, me) };
+    engine::save_boundary(ctx, progress)?;
+    let task = engine::current(ctx);
+    assert!(engine::driver(ctx).host_ops.remove(&task).is_some());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::{Adapter, AdapterError, Completion, Ready, Request, UnitResult};
+    use crate::ordered::Policy;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    };
+
+    #[derive(Default)]
+    struct Probe {
+        now: AtomicU64,
+        attempted: AtomicBool,
+        caller: AtomicU64,
+        older: AtomicBool,
+        output: Mutex<Vec<u8>>,
+        completed: AtomicU64,
+    }
+    struct Host {
+        home: std::thread::ThreadId,
+        probe: Arc<Probe>,
+        cancellation: bool,
+    }
+    impl Adapter for Host {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            assert_eq!(std::thread::current().id(), self.home);
+            Ok(None)
+        }
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            assert_eq!(std::thread::current().id(), self.home);
+            match request {
+                Request::SleepUntil { deadline, .. }
+                    if deadline <= self.probe.now.load(Ordering::Acquire) =>
+                {
+                    Ok(Completion::Wait(Ok(())))
+                }
+                Request::SleepUntil { .. } => Err(AdapterError::Blocked),
+                request => panic!("unexpected {request:?}"),
+            }
+        }
+        fn print(&mut self, _: u64, _: bool, bytes: &[u8]) -> Result<Completion, AdapterError> {
+            assert_eq!(std::thread::current().id(), self.home);
+            assert!(
+                self.probe.older.load(Ordering::Acquire),
+                "output passed the older turn"
+            );
+            self.probe.output.lock().unwrap().extend_from_slice(bytes);
+            Ok(Completion::Unit(Ok(())))
+        }
+        fn ready(&mut self) -> Result<Ready, AdapterError> {
+            assert_eq!(std::thread::current().id(), self.home);
+            Ok(if self.probe.now.load(Ordering::Acquire) == 0 {
+                Ready::Tokens(Vec::new())
+            } else {
+                Ready::Every
+            })
+        }
+        fn wait(&mut self) -> Result<bool, AdapterError> {
+            assert_eq!(std::thread::current().id(), self.home);
+            self.probe
+                .now
+                .store(if self.cancellation { 50 } else { 100 }, Ordering::Release);
+            Ok(true)
+        }
+        fn finish(&mut self, _: u64) {
+            self.probe.completed.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    fn layout() -> crate::Layout {
+        crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 24,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        }
+    }
+
+    #[test]
+    fn owned_host_sleep_completes_from_idle_and_deadline_cancels_a_saved_request() {
+        for width in [2, 4, 8] {
+            for cancellation in [false, true] {
+                let probe = Arc::new(Probe::default());
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.adapter = Some(Box::new(Host {
+                    home: std::thread::current().id(),
+                    probe: probe.clone(),
+                    cancellation,
+                }));
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+                    move |ctx| unsafe {
+                        let mut scope = 0;
+                        if cancellation {
+                            assert_eq!(
+                                hirsel_rt_v2_task_scope_enter_until(
+                                    ctx,
+                                    std::ptr::null_mut(),
+                                    &mut scope,
+                                    &0,
+                                    &[11, 50]
+                                ),
+                                STATUS_OK
+                            );
+                        }
+                        let before = {
+                            let _role = role::Guard::new(ctx);
+                            let task = engine::current(ctx);
+                            *engine::driver(ctx).recorded.get(&task).unwrap_or(&0)
+                        };
+                        let mut result = std::mem::MaybeUninit::<UnitResult>::uninit();
+                        assert_eq!(
+                            crate::io::hirsel_rt_v2_clock_sleep_until(
+                                ctx,
+                                std::ptr::null_mut(),
+                                result.as_mut_ptr(),
+                                &11,
+                                &100
+                            ),
+                            STATUS_OK
+                        );
+                        let result = result.assume_init();
+                        assert_eq!(result.tag, u32::from(cancellation));
+                        if cancellation {
+                            assert_eq!(result.code, CANCEL_DEADLINE);
+                        }
+                        {
+                            let _role = role::Guard::new(ctx);
+                            let task = engine::current(ctx);
+                            assert_eq!(
+                                engine::driver(ctx).recorded[&task] - before,
+                                1,
+                                "waiting preserves one host ordinal"
+                            );
+                            assert!(engine::driver(ctx).host_ops.is_empty());
+                        }
+                        if cancellation {
+                            let mut expired = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_scope_exit_until(
+                                    ctx,
+                                    0,
+                                    0,
+                                    &mut expired,
+                                    &scope,
+                                    0
+                                ),
+                                STATUS_OK
+                            );
+                            assert_eq!(expired, 1);
+                        }
+                        assert_eq!((*ctx).run_ref().host_waits.load(Ordering::Acquire), 0);
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                assert_eq!(
+                    probe.completed.load(Ordering::Relaxed),
+                    if cancellation { 2 } else { 1 }
+                );
+            }
+        }
+    }
+
+    unsafe extern "C" fn older(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+        let [probe, atomic] = unsafe { crate::alloc::payload(env).cast::<[u64; 2]>().read() };
+        let probe = unsafe { &*(probe as *const Probe) };
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !probe.attempted.load(Ordering::Acquire) {
+            assert!(std::time::Instant::now() < until);
+            std::thread::yield_now();
+        }
+        loop {
+            let _role = unsafe { role::Guard::new(ctx) };
+            if engine::driver(ctx).head_paused(probe.caller.load(Ordering::Acquire)) {
+                break;
+            }
+            assert!(std::time::Instant::now() < until);
+            drop(_role);
+            std::thread::yield_now();
+        }
+        assert!(probe.output.lock().unwrap().is_empty());
+        probe.older.store(true, Ordering::Release);
+        assert_eq!(
+            unsafe { hirsel_rt_v2_atomic_store(ctx, &atomic, (&23u64 as *const u64).cast(), 8) },
+            STATUS_OK
+        );
+        STATUS_OK
+    }
+
+    #[test]
+    fn borrowed_output_waits_for_the_older_turn_before_its_home_side_effect() {
+        let layout = layout();
+        let layouts = [&layout as *const crate::Layout];
+        for width in [2, 4, 8] {
+            let probe = Arc::new(Probe::default());
+            let seen = probe.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            run.adapter = Some(Box::new(Host {
+                home: std::thread::current().id(),
+                probe: probe.clone(),
+                cancellation: false,
+            }));
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+                move |ctx| unsafe {
+                    let mut scope = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                        STATUS_OK
+                    );
+                    let mut atomic = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_atomic_create(
+                            ctx,
+                            std::ptr::null_mut(),
+                            &mut atomic,
+                            (&0u64 as *const u64).cast(),
+                            8
+                        ),
+                        STATUS_OK
+                    );
+                    let env = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        2,
+                        24,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    crate::alloc::payload(env)
+                        .cast::<[u64; 2]>()
+                        .write([Arc::as_ptr(&seen) as u64, atomic]);
+                    let mut child = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_spawn(
+                            ctx,
+                            0,
+                            0,
+                            std::ptr::null_mut(),
+                            &mut child,
+                            &scope,
+                            older,
+                            env,
+                            0
+                        ),
+                        STATUS_OK
+                    );
+                    let bytes = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        2,
+                        24,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    crate::alloc::payload(bytes).cast::<u64>().write(3);
+                    std::ptr::copy_nonoverlapping(
+                        b"one".as_ptr(),
+                        crate::alloc::payload(bytes).add(8),
+                        3,
+                    );
+                    {
+                        let _role = role::Guard::new(ctx);
+                        seen.caller.store(engine::current(ctx), Ordering::Release);
+                    }
+                    seen.attempted.store(true, Ordering::Release);
+                    let mut result = std::mem::MaybeUninit::<UnitResult>::uninit();
+                    assert_eq!(
+                        crate::io::hirsel_rt_v2_out_write(
+                            ctx,
+                            std::ptr::null_mut(),
+                            result.as_mut_ptr(),
+                            &9,
+                            bytes,
+                            0,
+                            3
+                        ),
+                        STATUS_OK
+                    );
+                    assert_eq!(result.assume_init().tag, 0);
+                    crate::release::hirsel_rt_v2_release(ctx, bytes, 2, std::ptr::null(), 0, 0);
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                        STATUS_OK
+                    );
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            assert_eq!(*probe.output.lock().unwrap(), b"one");
+        }
+    }
+}

@@ -6,6 +6,7 @@ pub(crate) mod driver;
 pub(crate) mod drops;
 pub(crate) mod engine;
 pub(crate) mod home;
+pub(crate) mod host;
 pub(crate) mod lifecycle;
 pub(crate) mod sets;
 #[cfg(test)]
