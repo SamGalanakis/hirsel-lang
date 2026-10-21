@@ -4,7 +4,7 @@
 //! Task mutation happens in a head callback, after its preceding stretch. A
 //! holding frame is read only after idle save; completion retires its physical
 //! token before publishing Done or returning to a caller. This test-only slice
-//! does not yet admit task sets, deadlines, root releases or host effects.
+//! does not yet admit deadlines, root releases or host effects.
 
 use super::super::*;
 use super::engine;
@@ -118,25 +118,25 @@ pub(crate) unsafe fn finish(
 }
 
 #[derive(Clone, Copy)]
-enum ResultAction {
+pub(super) enum ResultAction {
     Keep,
     Deliver(*mut u8, u64),
     Discard,
 }
 
 #[derive(Clone, Copy)]
-struct Call {
+pub(super) struct Call {
     /// None resumes the same op after its waiting phase or an earlier call.
-    begin: Option<&'static str>,
-    then_yield: bool,
-    result: ResultAction,
-    detached: bool,
+    pub(super) begin: Option<&'static str>,
+    pub(super) then_yield: bool,
+    pub(super) result: ResultAction,
+    pub(super) detached: bool,
 }
 
 /// Execute a holding child's rest as a call, never as a FIFO enqueue.
 /// # Safety
 /// The child is holding a physically saved frame; the caller owns the role.
-unsafe fn call(ctx: *mut TaskCtx, child: u32, call: Call) -> Stopped<()> {
+pub(super) unsafe fn call(ctx: *mut TaskCtx, child: u32, call: Call) -> Stopped<()> {
     let effect = || {
         let s = scheduler(ctx);
         let me = s.current;
@@ -208,7 +208,12 @@ pub(crate) unsafe fn join(
             engine::continue_at_head(ctx, progress)?;
         }
         State::Ready | State::Parked => {
-            let (_, progress) = engine::head_effect(ctx, "task.join", || {
+            // Cooperative block(yielded=true) first yields, then parks when
+            // the caller reaches the front again, even if the child finished
+            // during that first scheduling point.
+            let (_, progress) = engine::head_effect(ctx, "task.join", || ((), Next::Yield))?;
+            engine::continue_at_head(ctx, progress)?;
+            let (_, progress) = engine::head_continuation(ctx, || {
                 let s = scheduler(ctx);
                 let me = s.current;
                 s.task(me).wait_site = caller_site;
@@ -380,26 +385,23 @@ pub(crate) unsafe fn receive(
         let shield = unsafe { (*ctx).shield };
         // SAFETY: this head callback owns the receiving task and its output.
         let status = unsafe { receive_ready(s, me, shield, channel, message) };
-        if status.is_none() {
-            s.task(me).wait_site = caller_site;
-            s.park(Wait::Receive {
-                channel,
-                slot: message,
-            });
-        }
-        (
-            status,
-            if status.is_some() {
-                Next::Yield
-            } else {
-                Next::Park
-            },
-        )
+        (status, Next::Yield)
     })?;
     let status = if let Some(status) = status {
         engine::continue_at_head(ctx, progress)?;
         status
     } else {
+        engine::continue_at_head(ctx, progress)?;
+        let (_, progress) = engine::head_continuation(ctx, || {
+            let s = scheduler(ctx);
+            let channel = s.channels.channel(word, false);
+            s.task(me).wait_site = caller_site;
+            s.park(Wait::Receive {
+                channel,
+                slot: message,
+            });
+            ((), Next::Park)
+        })?;
         engine::save_boundary(ctx, progress)?;
         scheduler(ctx).task(me).status
     };

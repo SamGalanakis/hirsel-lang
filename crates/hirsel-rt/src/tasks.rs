@@ -2661,6 +2661,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_cancel");
+    if ordered::engine::on(ctx) {
+        return unsafe { crate::stop::check(ctx, ordered::sets::cancel(ctx, scope, task)) };
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -2745,6 +2748,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_set");
+    if ordered::engine::on(ctx) {
+        return unsafe { crate::stop::check(ctx, ordered::sets::create(ctx, scope, out)) };
+    }
     crate::free::enter(ctx, Phase::Done);
     let s = scheduler(ctx);
     // SAFETY: caller contract.
@@ -2791,6 +2797,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_add(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_add");
+    if ordered::engine::on(ctx) {
+        return unsafe { crate::stop::check(ctx, ordered::sets::add(ctx, scope, set, task)) };
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let (scope, set, word) = unsafe { (s.scope_handle(scope.read()), set.read(), task.read()) };
@@ -2832,6 +2841,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_await_any");
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::sets::await_any(ctx, scope, set, out, caller_site),
+            )
+        };
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -2932,6 +2949,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_has(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_set_has");
+    if ordered::engine::on(ctx) {
+        return unsafe { crate::stop::check(ctx, ordered::sets::has(ctx, scope, set, index, out)) };
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -2964,6 +2984,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_take(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_set_take");
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(ctx, ordered::sets::take(ctx, scope, set, index, out))
+        };
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -2996,6 +3021,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_cancel_all");
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::sets::release(ctx, scope, set, true, caller_site),
+            )
+        };
+    }
     crate::free::enter(ctx, Phase::Entered);
     // SAFETY: caller contract.
     let set = unsafe { release_members(ctx, scope, set, true) };
@@ -3027,6 +3060,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach_all(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_detach_all");
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(ctx, ordered::sets::release(ctx, scope, set, false, 0))
+        };
+    }
     crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller contract.
     let set = unsafe { release_members(ctx, scope, set, false) };
@@ -3090,6 +3128,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_canceled(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_canceled");
+    if ordered::engine::on(ctx) {
+        return unsafe { crate::stop::check(ctx, ordered::sets::canceled(ctx, out)) };
+    }
     crate::free::enter(ctx, Phase::Done);
     // SAFETY: the context is live.
     let cause = unsafe { observed_cancel(ctx) };

@@ -105,7 +105,15 @@ physical completion.
 Spawn scans the unstarted environment with the linked capture program. Task
 result types remain erased by the native spawn ABI, so captured Task handles
 are conservatively unknown, including the spawning parent's obtainable footprint.
-Receive outputs are scanned into their owner's next-turn held set. A join calls a saved holding child's rest; its
+Receive outputs are scanned into their owner's next-turn held set. Native task sets, add/has/take/await-any, member detach/cancel
+and cancel checks now have strict-head adapters too. TaskSetTake refreshes the
+same-turn obtainable closure, conservatively unknown for erased Task results.
+Await-any chooses by completion rank, independent of member add order.
+Detach-all calls holding rests in add order and yields once after its members;
+cancel-all cancels each member before detaching it, then drains the saved
+completions. Waiting join/receive/await-any/drain preserve cooperative
+block(yielded=true): first yield, then park when the caller reaches the front
+again, with both continuations retaining the original op ordinal. A join calls a saved holding child's rest; its
 completion returns to the caller without polling, and an already-holding join
 yields after that return. A waiting join's call/cleanup continuation consumes no
 new operation ordinal. The actual task effects execute inside Frontier's commit
@@ -144,8 +152,7 @@ stack, and recorded outcomes are delivered to the owner's continuation by
 ordinal. Bounded object commit temporarily removes the frontier from its driver
 slot, restoring it before host polling or suspension; during a home poll other
 boundaries wait. The test-only admission path accepts supported E and strict task boundaries,
-dropless closure environments, no budgets or root/host effects, and no task
-sets/deadlines. Endpoint cleanup is still explicit in the fixtures. Native controls at widths 2/4/8 cover both running and already
+dropless closure environments, no budgets or root/host effects, and no deadlines. Endpoint cleanup is still explicit in the fixtures. Native controls at widths 2/4/8 cover both running and already
 holding joins, yielding rests, scope exit, detach, receive, runtime Blocked,
 physical completion and repeated row/stack reuse.
 The remaining native boundaries, budget hooks and production admission still

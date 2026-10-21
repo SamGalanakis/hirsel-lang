@@ -5,6 +5,7 @@
 pub(crate) mod driver;
 pub(crate) mod engine;
 pub(crate) mod lifecycle;
+pub(crate) mod sets;
 
 use std::cell::RefCell;
 

@@ -38,7 +38,7 @@ pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
 /// The body uses only supported ordered boundaries and explicit dispatch end;
 /// no budgets, fuel, root release, host or terminal effects. Native task tests
 /// use supported task/receive boundaries and dropless closure environments;
-/// no task sets or deadlines are admitted.
+/// no deadlines or resource-bearing finalizers are admitted.
 /// No native object exists before this admission.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
     let mut objects = Registry::default();
