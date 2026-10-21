@@ -66,6 +66,13 @@ struct InstanceKey {
     roles: NominalRoles,
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ExpansionKey {
+    representation: TypeId,
+    arguments: SharedSlice<GenericArgument>,
+    role: u32,
+}
+
 /// Structural memos only: every entry is a pure function of its key, so the
 /// memo is shared session-wide by one checker. I and V each own one.
 pub struct TypeMemo {
@@ -269,10 +276,13 @@ pub struct ContextMemo<'q> {
     log: Vec<DefId>,
     /// Whole proofs and the interior sub-proofs that are facts.
     proofs: HashMap<ProofKey, ProofEntry>,
+    // A nominal's qualifiers can differ across property proofs while its
+    // representation, actuals and roles select the same pure expansion.
+    expansions: HashMap<ExpansionKey, Option<TypeId>>,
     compatible: HashMap<(TypeId, TypeId, TypeRelation, CompatPolicy), Recorded<bool>>,
     equality: HashMap<(TypeId, Bound), Recorded<bool>>,
     authorities: HashMap<(TypeId, u32), Recorded<AuthoritySummary>>,
-    authority_roles: HashMap<NominalRoles, u32>,
+    role_ids: HashMap<NominalRoles, u32>,
     view_policies: HashMap<TypeId, Recorded<CompatPolicy>>,
     payload_ids: HashMap<Vec<TypeId>, PayloadSetId>,
     payload_sets: Vec<StdHashSet<TypeId>>,
@@ -291,10 +301,11 @@ impl<'q> ContextMemo<'q> {
             lookup,
             log: vec![],
             proofs: HashMap::default(),
+            expansions: HashMap::default(),
             compatible: HashMap::default(),
             equality: HashMap::default(),
             authorities: HashMap::default(),
-            authority_roles: HashMap::default(),
+            role_ids: HashMap::default(),
             view_policies: HashMap::default(),
             payload_ids: HashMap::default(),
             payload_sets: vec![],
@@ -530,7 +541,7 @@ impl<'q> ContextMemo<'q> {
                         }
                         _ => walked.growth = true,
                     }
-                    match crate::properties::expansion(t, &signature, &arguments) {
+                    match self.expansion(&signature, &arguments) {
                         Some(representation) => children.push(representation),
                         None => walked.failed = true,
                     }
@@ -594,6 +605,34 @@ impl<'q> ContextMemo<'q> {
         }
         w.done.push(walked.clone());
         walked
+    }
+
+    /// One pure representation substitution, shared across this query's
+    /// property proofs. The signature was read by proof_step before this call;
+    /// a cache hit skips no contextual lookup, bound, or expansion-growth check.
+    ///
+    /// Borrowed from rustc15c1044 traits/project.rs:310-319,350-365: memoize
+    /// normalization at its exact inputs and retain the caller's obligations.
+    /// Hirsel's expansion has no contextual reads; its complete key is the
+    /// immutable representation, actual type/size arguments and nominal roles.
+    fn expansion(
+        &mut self,
+        signature: &Signature,
+        arguments: &SharedSlice<GenericArgument>,
+    ) -> Option<TypeId> {
+        let SignatureKind::Type(declaration) = &signature.kind else {
+            return None;
+        };
+        let representation = declaration.representation?;
+        let key = ExpansionKey {
+            representation,
+            arguments: arguments.clone(),
+            role: self.role_id(&signature.metadata.roles),
+        };
+        let t = self.t;
+        *self.expansions.entry(key).or_insert_with(|| {
+            crate::graph::expand(t, representation, arguments, &signature.metadata.roles).ok()
+        })
     }
 
     /// Whether `part` is Plain: the contextual half of `projected_type`.
@@ -835,6 +874,17 @@ impl<'q> ContextMemo<'q> {
         })
     }
 
+    fn role_id(&mut self, roles: &NominalRoles) -> u32 {
+        match self.role_ids.get(roles) {
+            Some(role) => *role,
+            None => {
+                let role = self.role_ids.len() as u32;
+                self.role_ids.insert(roles.clone(), role);
+                role
+            }
+        }
+    }
+
     /// Held authority under this query's exact declarations, roles and view.
     /// Hits retain the same observed-read replay as contextual property proofs.
     pub fn authority(
@@ -842,14 +892,7 @@ impl<'q> ContextMemo<'q> {
         ty: TypeId,
         roles: &NominalRoles,
     ) -> Result<AuthoritySummary, QueryError> {
-        let role = match self.authority_roles.get(roles) {
-            Some(role) => *role,
-            None => {
-                let role = self.authority_roles.len() as u32;
-                self.authority_roles.insert(roles.clone(), role);
-                role
-            }
-        };
+        let role = self.role_id(roles);
         let key = (ty, role);
         if let Some(entry) = self.authorities.get(&key).cloned() {
             self.replay(&entry.reads);
@@ -1082,4 +1125,102 @@ struct Frame {
 fn distinct(log: &[DefId]) -> Box<[DefId]> {
     let mut seen = HashSet::default();
     log.iter().copied().filter(|d| seen.insert(*d)).collect()
+}
+
+#[cfg(test)]
+mod expansion_tests {
+    use super::*;
+    use crate::declarations::tests::{def, nominal, path, row};
+    use hirsel_syntax::Visibility;
+    use std::sync::Arc;
+
+    #[test]
+    fn expansion_reuse_binds_representation_arguments_roles_and_preserves_reads() {
+        let t = TypeInterner::new(None);
+        let byte = t.intern(row(TypeKind::Primitive(Primitive::U8)));
+        let text = t.intern(row(TypeKind::Primitive(Primitive::String)));
+        let parameter = t.intern(row(TypeKind::Parameter(TypeParameterRef::bound(
+            TypeParamId(0),
+        ))));
+        let pair = t.intern(row(TypeKind::Tuple(vec![parameter, parameter].into())));
+        let boxed = t.intern(row(TypeKind::Box(parameter)));
+        let mut first = (*nominal(Some(pair), vec![])).clone();
+        first.definition = def("Private");
+        first.metadata.visibility = Visibility::Private;
+        let mut second = first.clone();
+        let SignatureKind::Type(declaration) = &mut second.kind else {
+            unreachable!()
+        };
+        declaration.representation = Some(boxed);
+        let generics = GenericDeclarations::default();
+        let mut lookup = |_| Ok(None);
+        let mut memo = ContextMemo::new(&t, &generics, &mut lookup);
+        for arguments in [
+            vec![],
+            vec![GenericArgument::Type(byte)],
+            vec![GenericArgument::Type(text)],
+        ] {
+            let arguments: SharedSlice<_> = arguments.into();
+            for view in [&first, &second] {
+                for _ in 0..2 {
+                    assert_eq!(
+                        memo.expansion(view, &arguments),
+                        crate::properties::expansion(&t, view, &arguments)
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            memo.expansions.len(),
+            6,
+            "failed actuals and private representations have distinct keys"
+        );
+        let result = t.intern(row(TypeKind::Named {
+            definition: def("Result"),
+            arguments: vec![GenericArgument::Type(byte), GenericArgument::Type(text)].into(),
+        }));
+        let function = t.intern(row(TypeKind::Function(FunctionType {
+            state_promises: Default::default(),
+            generics: vec![].into(),
+            parameters: vec![].into(),
+            result,
+            error: None,
+            allocation: Allocation::NoAlloc,
+            authority: AuthoritySummary::inert(),
+            uses: Uses::Unrestricted,
+            contracts: vec![].into(),
+            incomplete: false,
+            foreign: None,
+        })));
+        let mut unmarked = (*nominal(Some(function), vec![])).clone();
+        unmarked.metadata.roles.result_type = None;
+        let mut marked = unmarked.clone();
+        marked.metadata.roles.result_type = Some(path("Result"));
+        let plain = memo.expansion(&unmarked, &vec![].into()).unwrap();
+        let error = memo.expansion(&marked, &vec![].into()).unwrap();
+        assert_ne!(
+            plain, error,
+            "Result role controls the derived error channel"
+        );
+
+        // Repeated proofs with different flags still read the declaration before
+        // the pure expansion hit; caching representation work cannot hide reads.
+        let private = t.intern(row(TypeKind::Named {
+            definition: def("Private"),
+            arguments: vec![GenericArgument::Type(byte)].into(),
+        }));
+        let reads = std::cell::RefCell::new(vec![]);
+        let mut lookup = |d| {
+            reads.borrow_mut().push(d);
+            Ok(Some(Arc::new(first.clone())))
+        };
+        let mut memo = ContextMemo::new(&t, &generics, &mut lookup);
+        for bound in [Bound::Plain, Bound::Copyable, Bound::Sendable] {
+            memo.prove(private, bound, crate::properties::STRUCTURAL)
+                .unwrap();
+        }
+        assert_eq!(memo.expansions.len(), 1);
+        assert!(reads.borrow().len() >= 3);
+        assert!(reads.borrow().iter().all(|d| *d == def("Private")));
+    }
 }
