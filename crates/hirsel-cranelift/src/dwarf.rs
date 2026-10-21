@@ -356,6 +356,151 @@ mod tests {
     }
 
     #[test]
+    fn imported_function_ranges_and_lines_relocate_to_their_own_symbols() {
+        use gimli::Reader as _;
+        use object::ObjectSymbol as _;
+        use std::collections::BTreeMap;
+
+        // gimli's RelocateWriter writes zero plus a relocation for an imported
+        // address (src/write/relocate.rs). Read it with the corresponding
+        // RelocateReader, assigning distinct final addresses by symbol name.
+        #[derive(Clone, Debug)]
+        struct Relocations(HashMap<usize, u64>);
+        impl gimli::Relocate for Relocations {
+            fn relocate_address(&self, offset: usize, value: u64) -> gimli::Result<u64> {
+                assert_eq!(value, 0);
+                Ok(*self.0.get(&offset).expect("every address has a relocation"))
+            }
+            fn relocate_offset(&self, offset: usize, value: usize) -> gimli::Result<usize> {
+                Ok(self.0.get(&offset).map_or(value, |value| *value as usize))
+            }
+        }
+        for target in [
+            TargetSpec::x86_64_unknown_linux_gnu(),
+            TargetSpec::aarch64_unknown_linux_gnu(),
+        ] {
+            let empty = debug_object(&[], &resolve, &target).unwrap();
+            let empty = object::File::parse(&*empty).unwrap();
+            assert!(
+                empty
+                    .sections()
+                    .all(|s| !s.name().unwrap().starts_with(".debug"))
+            );
+            // Equal sizes are accepted by LLVM's identical-code-folding check;
+            // unequal sizes expose the false overlap of unresolved addresses.
+            for sizes in [(4, 4), (4, 8), (0, 0)] {
+                let f = DebugFunction::from_rows(
+                    "f".into(),
+                    sizes.0,
+                    vec![item("f")],
+                    0,
+                    [(0, sizes.0, 0, 10)],
+                );
+                let g = DebugFunction::from_rows(
+                    "g".into(),
+                    sizes.1,
+                    vec![item("g")],
+                    0,
+                    [(0, sizes.1, 0, 20)],
+                );
+                for functions in [[&f, &g], [&g, &f]] {
+                    let bytes = debug_object(&functions, &resolve, &target).unwrap();
+                    let file = object::File::parse(&*bytes).unwrap();
+                    let dwarf = gimli::Dwarf::load(|id| {
+                        let section = file.section_by_name(id.name());
+                        let data = section.as_ref().map_or(&[][..], |s| s.data().unwrap());
+                        let mut values = HashMap::new();
+                        if let Some(section) = section {
+                            for (offset, relocation) in section.relocations() {
+                                assert_eq!(relocation.kind(), object::RelocationKind::Absolute);
+                                let object::RelocationTarget::Symbol(index) = relocation.target()
+                                else {
+                                    panic!("not a symbol relocation")
+                                };
+                                let symbol = file.symbol_by_index(index).unwrap();
+                                let base = if symbol.is_undefined() {
+                                    assert_eq!(symbol.address(), 0);
+                                    assert_eq!(relocation.size(), 64);
+                                    assert_eq!(relocation.addend(), 0);
+                                    match symbol.name().unwrap() {
+                                        "f" => 0x1000,
+                                        "g" => 0x2000,
+                                        name => panic!("unexpected import {name}"),
+                                    }
+                                } else {
+                                    assert_eq!(symbol.kind(), object::SymbolKind::Section);
+                                    assert_eq!(relocation.size(), 32);
+                                    symbol.address()
+                                };
+                                assert!(
+                                    values
+                                        .insert(
+                                            offset as usize,
+                                            base.wrapping_add_signed(relocation.addend())
+                                        )
+                                        .is_none()
+                                );
+                            }
+                        }
+                        Ok::<_, gimli::Error>(gimli::RelocateReader::new(
+                            gimli::EndianSlice::new(data, LittleEndian),
+                            Relocations(values),
+                        ))
+                    })
+                    .unwrap();
+                    let unit = dwarf.unit(dwarf.units().next().unwrap().unwrap()).unwrap();
+                    let mut entries = unit.entries();
+                    let mut actual = BTreeMap::new();
+                    while let Some(entry) = entries.next_dfs().unwrap() {
+                        if entry.tag() != gimli::DW_TAG_subprogram {
+                            continue;
+                        }
+                        let name = dwarf
+                            .attr_string(
+                                &unit,
+                                entry.attr_value(gimli::DW_AT_linkage_name).unwrap(),
+                            )
+                            .unwrap()
+                            .to_string_lossy()
+                            .unwrap()
+                            .into_owned();
+                        let mut ranges = dwarf.die_ranges(&unit, entry).unwrap();
+                        let range = ranges.next().unwrap().unwrap();
+                        assert!(ranges.next().unwrap().is_none());
+                        actual.insert(name, (range.begin, range.end));
+                    }
+                    assert_eq!(
+                        actual,
+                        BTreeMap::from([
+                            ("f".into(), (0x1000, 0x1000 + sizes.0)),
+                            ("g".into(), (0x2000, 0x2000 + sizes.1))
+                        ])
+                    );
+                    let mut rows = unit.line_program.clone().unwrap().rows();
+                    let mut actual = BTreeMap::new();
+                    while let Some((_, row)) = rows.next_row().unwrap() {
+                        actual.insert(
+                            row.address(),
+                            (row.line().unwrap().get(), row.end_sequence()),
+                        );
+                    }
+                    let expected = if sizes.0 == 0 {
+                        BTreeMap::new()
+                    } else {
+                        BTreeMap::from([
+                            (0x1000, (2, false)),
+                            (0x1000 + sizes.0, (2, true)),
+                            (0x2000, (3, false)),
+                            (0x2000 + sizes.1, (3, true)),
+                        ])
+                    };
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_gap_ends_a_sequence_and_unresolved_code_is_a_gap() {
         let function = DebugFunction::from_rows(
             "hirsel_f".into(),

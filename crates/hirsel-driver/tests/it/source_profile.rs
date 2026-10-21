@@ -1,14 +1,26 @@
 //! Native source attribution against a hand-counted program, not compiler IR dumps.
 use hirsel_driver::native::{
-    self, OptLevel, Options, Partition, RuntimeBuild, TargetSpec, Toolchain,
+    self, Backend, OptLevel, Options, Partition, RuntimeBuild, TargetSpec, Toolchain,
 };
 use serde_json::Value;
 
 #[test]
 fn two_source_lines_have_three_and_five_count_pairs_and_dwarf() {
+    check_source_profile(Backend::Llvm);
+}
+
+#[test]
+fn cranelift_two_source_lines_have_three_and_five_count_pairs_and_dwarf() {
+    check_source_profile(Backend::Cranelift);
+}
+
+fn check_source_profile(backend: Backend) {
     hirsel_engine::with_compiler_stack(|| {
-        let dir =
-            std::env::temp_dir().join(format!("hirsel-source-profile-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "hirsel-source-profile-{}-{}",
+            std::process::id(),
+            backend.name()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let root = dir.join("root");
         std::fs::create_dir_all(&root).unwrap();
@@ -34,16 +46,20 @@ fn two_source_lines_have_three_and_five_count_pairs_and_dwarf() {
             },
         )
         .unwrap();
-        let exe = native::link_profile(
+        let objects = native::emit_backend_objects(
             &ready,
-            &loaded.entry,
-            OptLevel::Speed,
+            backend,
+            if backend == Backend::Llvm {
+                OptLevel::Speed
+            } else {
+                OptLevel::None
+            },
             Partition::Whole,
-            &tools,
-            &dir,
+            true,
             Some(&sources),
         )
         .unwrap();
+        let exe = native::link_objects(&ready, &loaded.entry, &objects, &tools, &dir).unwrap();
         let json = dir.join("profile.json");
         let result = std::process::Command::new(&exe)
             .env_clear()
@@ -67,17 +83,28 @@ fn two_source_lines_have_three_and_five_count_pairs_and_dwarf() {
                 .sum();
             assert_eq!(sum, total.as_u64().unwrap(), "{kind}");
         }
-        for (line, count) in [(1, 3), (2, 5)] {
-            for kind in ["count_increments", "count_decrements"] {
-                let sum: u64 = report["sites"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter(|s| s["line"] == line && s["file"] == "standalone@0/known.hir")
-                    .map(|s| s["counts"][kind].as_u64().unwrap_or(0))
-                    .sum();
-                assert_eq!(sum, count, "line {line} {kind}: {report}");
+        if backend == Backend::Llvm {
+            for (line, count) in [(1, 3), (2, 5)] {
+                for kind in ["count_increments", "count_decrements"] {
+                    let sum: u64 = report["sites"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|s| s["line"] == line && s["file"] == "standalone@0/known.hir")
+                        .map(|s| s["counts"][kind].as_u64().unwrap_or(0))
+                        .sum();
+                    assert_eq!(sum, count, "line {line} {kind}: {report}");
+                }
             }
+        } else {
+            // Cranelift currently emits aggregate runtime counters, without
+            // LLVM's ProfileEnter/ProfileLeave site instrumentation. Keep a
+            // native profile control here and verify source mapping via DWARF
+            // below; per-site counters require a separate backend feature.
+            assert_eq!(report["totals"]["count_increments"], 8);
+            assert_eq!(report["totals"]["count_decrements"], 30);
+            assert_eq!(report["sites"].as_array().unwrap().len(), 1);
+            assert_eq!(report["sites"][0]["id"], 0);
         }
         let dwarfdump = std::env::var_os("LLVM_SYS_211_PREFIX")
             .map(std::path::PathBuf::from)

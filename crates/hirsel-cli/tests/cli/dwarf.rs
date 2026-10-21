@@ -60,6 +60,201 @@ fn dump(exe: &Path, argument: &str) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+// Standalone link-time debug objects import their function symbols. Their zero
+// addresses are placeholders, so dwarfdump cannot check range overlap until a
+// link resolves them. Check the relocations first, then verify a minimal link
+// without the runtime's discarded debug ranges or any code folding/collection.
+fn object_details(path: &Path) -> serde_json::Value {
+    let result = output(
+        Command::new(tool("llvm-readobj"))
+            .args([
+                "--elf-output-style=JSON",
+                "--sections",
+                "--symbols",
+                "--relocations",
+            ])
+            .arg(path),
+    );
+    assert!(result.status.success(), "{result:?}");
+    let mut files: Vec<serde_json::Value> = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(files.len(), 1);
+    files.remove(0)
+}
+
+fn subprograms(path: &Path) -> BTreeMap<String, (String, u64, u64)> {
+    let info = dump(path, "--debug-info");
+    info.split("DW_TAG_subprogram")
+        .skip(1)
+        .map(|entry| {
+            let attribute = |name| {
+                entry
+                    .lines()
+                    .find(|line| line.contains(name))
+                    .unwrap_or_else(|| panic!("missing {name}: {entry}"))
+            };
+            let name = attribute("DW_AT_name")
+                .split('"')
+                .nth(1)
+                .unwrap()
+                .to_owned();
+            let symbol = attribute("DW_AT_linkage_name")
+                .split('"')
+                .nth(1)
+                .unwrap()
+                .to_owned();
+            let address = |name| {
+                let value = attribute(name)
+                    .split("(0x")
+                    .nth(1)
+                    .unwrap()
+                    .split(')')
+                    .next()
+                    .unwrap();
+                u64::from_str_radix(value, 16).unwrap()
+            };
+            (
+                symbol,
+                (name, address("DW_AT_low_pc"), address("DW_AT_high_pc")),
+            )
+        })
+        .collect()
+}
+
+fn verify_debug_objects(paths: &[std::path::PathBuf], linked: &Path) {
+    let details: Vec<_> = paths.iter().map(|path| object_details(path)).collect();
+    let definitions: BTreeMap<_, _> = details
+        .iter()
+        .flat_map(|file| {
+            file["Symbols"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| &s["Symbol"])
+                .filter(|s| s["Type"]["Name"] == "Function" && s["Section"]["Name"] != "Undefined")
+                .map(|s| {
+                    (
+                        s["Name"]["Name"].as_str().unwrap().to_owned(),
+                        s["Size"].as_u64().unwrap(),
+                    )
+                })
+        })
+        .collect();
+    let mut expected = BTreeMap::new();
+    for (path, file) in paths.iter().zip(&details) {
+        let functions = subprograms(path);
+        for (symbol, (_, low, high)) in &functions {
+            let imported = file["Symbols"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| &s["Symbol"])
+                .find(|s| s["Name"]["Name"] == symbol.as_str())
+                .unwrap();
+            assert_eq!(imported["Section"]["Name"], "Undefined");
+            // ELF permits STT_NOTYPE for an undefined function import. Its
+            // definition above must still be a function of the exact size.
+            assert!(matches!(
+                imported["Type"]["Name"].as_str(),
+                Some("Function" | "None")
+            ));
+            assert_eq!(*low, 0, "an imported function's unlinked address: {symbol}");
+            assert_eq!(
+                definitions.get(symbol),
+                Some(high),
+                "debug/code size: {symbol}"
+            );
+        }
+        let mut relocations = BTreeMap::<_, usize>::new();
+        for section in file["Relocations"].as_array().unwrap() {
+            let index = section["SectionIndex"].as_u64().unwrap();
+            let name = file["Sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| &s["Section"])
+                .find(|s| s["Index"] == index)
+                .unwrap()["Name"]["Name"]
+                .as_str()
+                .unwrap();
+            if !name.starts_with(".rela.debug_") {
+                continue;
+            }
+            for relocation in section["Relocs"].as_array().unwrap() {
+                let relocation = &relocation["Relocation"];
+                let symbol = relocation["Symbol"]["Name"].as_str().unwrap();
+                if functions.contains_key(symbol) {
+                    assert!(
+                        matches!(
+                            relocation["Type"]["Name"].as_str(),
+                            Some("R_X86_64_64" | "R_AARCH64_ABS64")
+                        ),
+                        "{relocation}"
+                    );
+                    assert_eq!(relocation["Addend"], 0, "{relocation}");
+                    *relocations.entry((name, symbol)).or_default() += 1;
+                }
+            }
+        }
+        for (symbol, (_, low, high)) in &functions {
+            for section in [".rela.debug_info", ".rela.debug_rnglists"] {
+                assert_eq!(
+                    relocations.get(&(section, symbol.as_str())),
+                    Some(&1),
+                    "{path:?}: {symbol} {section}"
+                );
+            }
+            if high > low {
+                assert!(
+                    relocations.contains_key(&(".rela.debug_line", symbol.as_str())),
+                    "no line relocation for {symbol}"
+                );
+            }
+        }
+        expected.extend(functions);
+    }
+    assert!(!expected.is_empty(), "no debug functions in {paths:?}");
+    // Only runtime calls may remain unresolved in this non-runnable artifact:
+    // every debug function was required to have a sized code definition above.
+    let result = output(
+        Command::new(tool("ld.lld"))
+            .args([
+                "--entry=0",
+                "--build-id=none",
+                "--no-gc-sections",
+                "--icf=none",
+                "--unresolved-symbols=ignore-all",
+            ])
+            .args(paths)
+            .arg("-o")
+            .arg(linked),
+    );
+    assert!(result.status.success(), "{result:?}");
+    let verified = dump(linked, "--verify");
+    assert!(verified.contains("No errors."), "{verified}");
+    let actual = subprograms(linked);
+    assert_eq!(actual.len(), expected.len());
+    let symbols = object_details(linked);
+    for (symbol, (name, _, size)) in expected {
+        let (actual_name, low, high) = actual.get(&symbol).unwrap();
+        let code = symbols["Symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| &s["Symbol"])
+            .find(|s| s["Name"]["Name"] == symbol)
+            .unwrap();
+        assert_eq!(actual_name, &name);
+        assert_eq!(
+            *low,
+            code["Value"].as_u64().unwrap(),
+            "range owner: {symbol}"
+        );
+        assert_eq!(*high - *low, size, "range size: {symbol}");
+        let lookup = dump(linked, &format!("--lookup={low:#x}"));
+        assert!(lookup.contains(&symbol), "{lookup}");
+    }
+}
+
 /// A `--debug` executable's split debug information: `<build-id>.debug` beside
 /// it, which its `.gnu_debuglink` names.
 pub(crate) fn debug_file(exe: &Path) -> std::path::PathBuf {
@@ -211,11 +406,18 @@ fn cranelift_debug_lines_match_llvm_per_function_on_both_targets() {
                     )
                     .unwrap();
                     assert!(!objects.is_empty());
-                    for object in objects {
-                        let path = source.with_extension("o");
-                        std::fs::write(&path, object.bytes).unwrap();
-                        let verified = dump(&path, "--verify");
-                        assert!(verified.contains("No errors."), "{verified}");
+                    let paths: Vec<_> = objects
+                        .iter()
+                        .enumerate()
+                        .map(|(index, object)| {
+                            let path = source.with_extension(format!("{index}.o"));
+                            std::fs::write(&path, &object.bytes).unwrap();
+                            path
+                        })
+                        .collect();
+                    let linked = source.with_extension("debug-link");
+                    verify_debug_objects(&paths, &linked);
+                    for path in paths.into_iter().chain([linked]) {
                         std::fs::remove_file(path).unwrap();
                     }
                     let exe = source.with_extension(format!("{backend}-{target}-exe"));
@@ -265,47 +467,61 @@ fn cranelift_debug_lines_match_llvm_per_function_on_both_targets() {
     });
 }
 
-/// A generated (`= comptime`) body's sites are offsets into its generated text, not into
-/// the declaring file: its line table names the generator's line for all of its code, as a
-/// macro's expansion is reported at its call, in both backends.
+/// Generated-body sites name their generated text. Keep the virtual filename,
+/// valid line coordinates and debugger ownership in both backends, independently
+/// of the declaration's location (the generator remains separate origin data).
 #[test]
-fn a_generated_body_is_reported_at_its_generator() {
-    let program = "@serializable\npub type Pair {\n  a: u64,\n  b: String,\n}\n\n\
+fn a_generated_body_is_reported_in_its_generated_source() {
+    hirsel_engine::with_compiler_stack(|| {
+        let program = "@serializable\npub type Pair {\n  a: u64,\n  b: String,\n}\n\n\
         @preserves_unique(out)\npub fn pair_json_into(value: Pair, mut out: List[u8], depth: u64) -> Result[\n  \
         (),\n  json.JsonError\n] uses {} = comptime derive.json_into(shape(Pair))\n\n\
         pub fn main() -> Result[(), ()] {\n  let mut out: List[u8] = []\n  \
         match pair_json_into(Pair(a: 1, b: \"x\"), mut out, 0) {\n    Ok(()) => Ok(()),\n    \
         Error(_) => Error(()),\n  }\n}\n";
-    let generator = program
-        .lines()
-        .position(|line| line.contains("= comptime"))
-        .unwrap() as u64
-        + 1;
-    let source = super::std_file(program);
-    for backend in ["llvm", "cranelift"] {
-        let exe = source.with_extension(format!("{backend}-exe"));
-        let built = output(
-            Command::new(env!("CARGO_BIN_EXE_hirsel"))
-                .args(["build", "--debug", "--backend", backend])
-                .arg(&source)
-                .arg("-o")
-                .arg(&exe),
-        );
-        assert!(built.status.success(), "{backend}: {built:?}");
-        let lines = function_lines(&exe, &source);
-        let generated = lines
-            .iter()
-            .find(|(name, _)| name.ends_with("/pair_json_into"))
-            .unwrap_or_else(|| panic!("{backend}: {lines:?}"));
+        let source = super::std_file(program);
+        let mut loaded = hirsel_driver::load_program(&source).unwrap();
+        loaded.check_for_execution().unwrap();
+        let generated = loaded
+            .engine
+            .generated_sources()
+            .find(|(definition, _)| definition.0.name == "pair_json_into")
+            .unwrap()
+            .1;
+        let generated = loaded.engine.sources.file(generated.file).unwrap();
         assert_eq!(
-            generated.1,
-            &BTreeSet::from([generator]),
-            "{backend}: {lines:?}"
+            generated.logical_path().to_str(),
+            Some("<generated:standalone@0/pair_json_into>")
         );
-        assert_eq!(output(&mut Command::new(&exe)).status.code(), Some(0));
-        std::fs::remove_file(debug_file(&exe)).unwrap();
-        std::fs::remove_file(exe).unwrap();
-    }
+        let generated_lines: Vec<_> = generated.text().lines().collect();
+        for backend in ["llvm", "cranelift"] {
+            let exe = source.with_extension(format!("{backend}-exe"));
+            let built = output(
+                Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                    .args(["build", "--debug", "--backend", backend])
+                    .arg(&source)
+                    .arg("-o")
+                    .arg(&exe),
+            );
+            assert!(built.status.success(), "{backend}: {built:?}");
+            let lines = function_lines(&exe, generated.logical_path());
+            assert_eq!(lines.len(), 1, "{backend}: {lines:?}");
+            let generated = lines
+                .iter()
+                .find(|(name, _)| name.ends_with("/pair_json_into"))
+                .unwrap_or_else(|| panic!("{backend}: {lines:?}"));
+            assert!(
+                generated.1.iter().all(|line| generated_lines
+                    .get(*line as usize - 1)
+                    .is_some_and(|text| !text.trim().is_empty())),
+                "{backend}: {lines:?}"
+            );
+            assert_eq!(output(&mut Command::new(&exe)).status.code(), Some(0));
+            std::fs::remove_file(debug_file(&exe)).unwrap();
+            std::fs::remove_file(exe).unwrap();
+        }
+        std::fs::remove_file(source).unwrap();
+    });
 }
 
 #[test]
@@ -357,7 +573,11 @@ pub fn value() -> u64 { failure.check(false, Arithmetic()); 0u64 }
                         // zero. Check our linked address-to-source lookup here;
                         // compiler-owned objects are verified separately below.
                         let lines = function_lines(&exe, &tree.join("dep/src/helper.hir"));
-                        assert!(lines.contains_key("helper@2/value"), "{lines:?}");
+                        assert_eq!(
+                            lines.get("helper@2/value"),
+                            Some(&BTreeSet::from([3])),
+                            "{lines:?}"
+                        );
                         let info = dump(&split, "--debug-info");
                         assert!(info.contains("helper@2"), "{info}");
                         files.push(std::fs::read(split).unwrap());
@@ -377,7 +597,7 @@ pub fn value() -> u64 { failure.check(false, Arithmetic()); 0u64 }
                     let run = output(&mut Command::new(&exe));
                     assert_eq!(run.status.code(), Some(2), "{run:?}");
                     let failure = String::from_utf8(run.stderr).unwrap();
-                    assert!(failure.contains("helper@2/src/helper.hir"), "{failure}");
+                    assert!(failure.contains("helper@2/src/helper.hir:3:"), "{failure}");
                     artifacts.push(files);
                 }
                 assert!(
@@ -387,65 +607,82 @@ pub fn value() -> u64 { failure.check(false, Arithmetic()); 0u64 }
             }
         }
         // Measurement emits ProfileSite.file in rodata as well as DWARF.
-        // Compare actual LLVM objects, including generated-body source ownership.
-        let mut measured = Vec::new();
-        for tree in &roots {
-            use hirsel_driver::native::{self, Backend, OptLevel, Options, Partition, TargetSpec};
-            // Hosts have independent compiler sessions; neither build may
-            // adopt source products from the other root's package cache.
-            // Lane pkgcache-comptime owns generated token sources on cache adoption.
-            let mut loaded = hirsel_driver::load_program_source_with_images(
-                &tree.join("app/hirsel.json"),
-                None,
-                &hirsel_engine::StdImages::none(),
-            )
-            .unwrap();
-            loaded.check_for_execution().unwrap();
-            let generated = loaded
-                .engine
-                .generated_sources()
-                .find(|(definition, _)| definition.0.name == "generated")
-                .unwrap()
-                .1;
-            let source = loaded.engine.sources.file(generated.file).unwrap();
-            assert_eq!(
-                source.logical_path().to_str(),
-                Some("<generated:helper@2/generated>")
-            );
-            let input = loaded.engine.export_native_input().unwrap();
-            let sources = native::profile_sources(&input);
-            let validated = loaded.engine.import_native_input(input).unwrap();
-            let ready = native::build(
-                &validated,
-                &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
-            )
-            .unwrap();
-            let objects = native::emit_backend_objects(
-                &ready,
-                Backend::Llvm,
-                OptLevel::None,
-                Partition::Whole,
-                true,
-                Some(&sources),
-            )
-            .unwrap();
-            let bytes: Vec<_> = objects.into_iter().map(|o| o.bytes).collect();
-            for (index, object) in bytes.iter().enumerate() {
-                let path = tree.join(format!("measured-{index}.o"));
-                std::fs::write(&path, object).unwrap();
-                let verified = dump(&path, "--verify");
-                assert!(verified.contains("No errors."), "{verified}");
+        // Compare both backends' actual objects, including generated-body source ownership.
+        use hirsel_driver::native::{self, Backend, OptLevel, Options, Partition, TargetSpec};
+        for backend in [Backend::Llvm, Backend::Cranelift] {
+            let mut measured = Vec::new();
+            for tree in &roots {
+                // Hosts have independent compiler sessions; neither build may
+                // adopt source products from the other root's package cache.
+                // Lane pkgcache-comptime owns generated token sources on cache adoption.
+                let mut loaded = hirsel_driver::load_program_source_with_images(
+                    &tree.join("app/hirsel.json"),
+                    None,
+                    &hirsel_engine::StdImages::none(),
+                )
+                .unwrap();
+                loaded.check_for_execution().unwrap();
+                let generated = loaded
+                    .engine
+                    .generated_sources()
+                    .find(|(definition, _)| definition.0.name == "generated")
+                    .unwrap()
+                    .1;
+                let source = loaded.engine.sources.file(generated.file).unwrap();
+                assert_eq!(
+                    source.logical_path().to_str(),
+                    Some("<generated:helper@2/generated>")
+                );
+                let input = loaded.engine.export_native_input().unwrap();
+                let sources = native::profile_sources(&input);
+                let validated = loaded.engine.import_native_input(input).unwrap();
+                let ready = native::build(
+                    &validated,
+                    &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+                )
+                .unwrap();
+                let objects = native::emit_backend_objects(
+                    &ready,
+                    backend,
+                    OptLevel::None,
+                    Partition::Whole,
+                    true,
+                    Some(&sources),
+                )
+                .unwrap();
+                let mut bytes: Vec<_> = objects.into_iter().map(|o| o.bytes).collect();
+                let mut paths: Vec<_> = bytes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, object)| {
+                        let path = tree.join(format!("measured-{index}.o"));
+                        std::fs::write(&path, object).unwrap();
+                        path
+                    })
+                    .collect();
+                for reversed in [false, true] {
+                    if reversed {
+                        paths.reverse();
+                    }
+                    let linked = tree.join(format!("measured-{reversed}"));
+                    verify_debug_objects(&paths, &linked);
+                    let info = dump(&linked, "--debug-info");
+                    assert!(info.contains("<generated:helper@2/generated>"), "{info}");
+                    assert!(info.contains("helper@2/value"), "{info}");
+                    bytes.push(std::fs::read(linked).unwrap());
+                }
+                assert!(bytes.iter().any(|b| {
+                    b.windows(b"helper@2/src/helper.hir".len())
+                        .any(|w| w == b"helper@2/src/helper.hir")
+                }));
+                measured.push(bytes);
             }
-            assert!(bytes.iter().any(|b| {
-                b.windows(b"helper@2/src/helper.hir".len())
-                    .any(|w| w == b"helper@2/src/helper.hir")
-            }));
-            measured.push(bytes);
+            assert!(
+                measured[0] == measured[1],
+                "{}: measurement object/link bytes differ across roots",
+                backend.name()
+            );
         }
-        assert!(
-            measured[0] == measured[1],
-            "measurement object bytes differ across roots"
-        );
         std::fs::remove_dir_all(root).unwrap();
     });
 }
