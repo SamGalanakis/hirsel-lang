@@ -235,8 +235,12 @@ struct ElementPlace {
     owner: Option<usize>,
 }
 
+// Rust alloc/src/rcs/rc.rs:2220-2225: branch snapshots retain payloads;
+// a transfer clones only the Value it edits. Keep ordered maps and joins.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Value {
+struct Value(std::rc::Rc<ValueData>);
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ValueData {
     /// Actual creation inputs; None is an unproved producer, never an empty environment.
     envelope: Option<BTreeSet<usize>>,
     modes: Modes,
@@ -278,9 +282,20 @@ struct Value {
     /// such a share until their statement releases them.
     parked: Arc<BTreeSet<ExprId>>,
 }
+impl std::ops::Deref for Value {
+    type Target = ValueData;
+    fn deref(&self) -> &ValueData {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Value {
+    fn deref_mut(&mut self) -> &mut ValueData {
+        std::rc::Rc::make_mut(&mut self.0)
+    }
+}
 impl Value {
     fn new(modes: Modes) -> Self {
-        Self {
+        Self(std::rc::Rc::new(ValueData {
             envelope: None,
             modes,
             usage: UseKind::Borrow,
@@ -299,8 +314,10 @@ impl Value {
             part_of: None,
             borrow_only: false,
             parked: Arc::default(),
-        }
+        }))
     }
+}
+impl ValueData {
     /// A related call result holds counted shares of this storage (MODE-2).
     fn borrow_share(&mut self) {
         self.borrow_only |= self.modes.uniqueness == Uniqueness::Unique;
@@ -470,7 +487,7 @@ impl Value {
         }
     }
     /// Reads every binding `part` reaches or its environment reads.
-    fn read_through(&mut self, part: &Value) {
+    fn read_through(&mut self, part: &ValueData) {
         let content = part.content.summary();
         for loan in content.iter() {
             if let On::Binding(_) = loan.on {
@@ -731,7 +748,7 @@ fn merge_part(parts: &mut Vec<(Vec<Projection>, LoanSet)>, path: Vec<Projection>
 fn append_parts(
     parts: &mut Vec<(Vec<Projection>, LoanSet)>,
     prefix: &[Projection],
-    value: &Value,
+    value: &ValueData,
     depth: usize,
 ) {
     if let Some(known) = &value.content.parts {
@@ -2397,7 +2414,7 @@ impl Checker<'_, '_> {
     ) -> Relation {
         let root = match projection.root {
             super::properties::ProjectionRoot::Value(root) => {
-                self.value(state, root).modes.relation
+                self.value(state, root).modes.relation.clone()
             }
             super::properties::ProjectionRoot::Binding(root) => {
                 state.slots[root].value.modes.relation.clone()
@@ -2476,7 +2493,7 @@ impl Checker<'_, '_> {
         match root {
             ProjectionRoot::Value(expression) => self
                 .tail_root_modes(state, expression)
-                .unwrap_or_else(|| self.value(state, expression).modes),
+                .unwrap_or_else(|| self.value(state, expression).modes.clone()),
             ProjectionRoot::Constant(root) => self.t.get(root).unwrap().modes.clone(),
             ProjectionRoot::Binding(index) => {
                 let binding = &self.body.bindings[index];
@@ -2686,7 +2703,7 @@ impl Checker<'_, '_> {
                 .and_modify(|m| {
                     let mut v = Value::new(m.clone());
                     v.join(value);
-                    *m = v.modes;
+                    *m = v.modes.clone();
                 })
                 .or_insert_with(|| value.modes.clone());
             if !value.shared_parts.is_empty() {
@@ -4058,7 +4075,7 @@ impl Checker<'_, '_> {
                         if value.environment_local() {
                             self.environment_bindings.insert(index);
                         }
-                        self.binding_modes.insert(index, value.modes);
+                        self.binding_modes.insert(index, value.modes.clone());
                     }
                 }
             }
@@ -4894,7 +4911,7 @@ impl Checker<'_, '_> {
                         ExprKind::Field { .. } | ExprKind::Index { .. } => {
                             if let Some(base) = children.first() {
                                 let part = self.value(state, *base);
-                                value.content = part.content;
+                                value.content = part.content.clone();
                             }
                             if let Some(checked) = self
                                 .body
@@ -5841,7 +5858,7 @@ impl Checker<'_, '_> {
                         // Replacement owns the stored value, but subsequent reads
                         // still have caller-bounded access (MODE-1/OWN-3).
                         value.set_alias(expected.alias());
-                        value.modes.relation = expected.modes.relation;
+                        value.modes.relation = expected.modes.relation.clone();
                     }
                     if self.once_storage(place.binding) {
                         value.modes.multiplicity = Multiplicity::Once;
@@ -7827,6 +7844,60 @@ fn annotation_modes(
 #[cfg(test)]
 mod loan_tests {
     use super::*;
+
+    #[test]
+    fn value_snapshots_isolate_loans_and_keep_compact_branch_entries() {
+        let mut value = Value::new(Modes::global());
+        value.modes.uniqueness = Uniqueness::Unique;
+        value.envelope = Some(BTreeSet::from([2, 5]));
+        value.part_of = Some((4, BTreeSet::from([1, 8])));
+        value.bound_by(3, Site::Frame);
+        value.read_within(6, &[1, 2], Site::Binding(9));
+        let base = BTreeMap::from([(1, value.clone()), (9, value)]);
+        let mut left = base.clone();
+        let mut right = base.clone();
+        let l = left.get_mut(&1).unwrap();
+        l.share();
+        l.part_of.as_mut().unwrap().1.insert(11);
+        l.envelope.as_mut().unwrap().insert(7);
+        let r = right.get_mut(&1).unwrap();
+        r.bound_by(3, Site::Binding(7));
+        r.read_within(6, &[1, 3], Site::Binding(8));
+        r.part_of.as_mut().unwrap().1.insert(12);
+
+        assert_eq!(base[&1].modes.uniqueness, Uniqueness::Unique);
+        assert_eq!(right[&1].modes.uniqueness, Uniqueness::Unique);
+        assert_eq!(base[&1].part_of, Some((4, BTreeSet::from([1, 8]))));
+        assert_eq!(base[&1].envelope, Some(BTreeSet::from([2, 5])));
+        assert_eq!(base[&9], left[&9]);
+        assert_eq!(base[&9], right[&9]);
+        let right_before = right.clone();
+        left.get_mut(&1).unwrap().join(&right[&1]);
+        let joined = &left[&1];
+        assert_eq!(joined.modes.uniqueness, Uniqueness::Aliased);
+        assert_eq!(joined.part_of, Some((4, BTreeSet::from([1, 8, 11, 12]))));
+        let content = joined.content.summary();
+        assert_eq!(
+            content.scopes().collect::<Vec<_>>(),
+            vec![(Kind::Bound, 3, Site::Binding(7))]
+        );
+        let read = content
+            .iter()
+            .find(|loan| loan.kind == Kind::Read && loan.on == On::Binding(6))
+            .unwrap();
+        assert_eq!(read.within, vec![1]);
+        assert_eq!(read.site, Site::Binding(8));
+        assert_eq!(right, right_before);
+        assert_eq!(
+            base[&1].content.summary().scopes().collect::<Vec<_>>(),
+            vec![(Kind::Bound, 3, Site::Frame)]
+        );
+        let fixed = left.clone();
+        left.get_mut(&1).unwrap().join(&right[&1]);
+        assert_eq!(left, fixed);
+        // Branch-map clones must retain only a payload handle per temporary.
+        assert!(std::mem::size_of::<Value>() <= 2 * std::mem::size_of::<usize>());
+    }
 
     #[test]
     fn slot_snapshots_isolate_branch_updates_and_join_the_same_flow_facts() {

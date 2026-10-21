@@ -128,8 +128,8 @@ impl Checker<'_, '_> {
             {
                 continue;
             }
-            let selected_inputs = self.value(state, selected).envelope;
-            let callback_inputs = self.value(state, callback).envelope;
+            let selected_inputs = self.value(state, selected).envelope.clone();
+            let callback_inputs = self.value(state, callback).envelope.clone();
             if !incoming.iter().any(|&(selected, callback, incoming_slot)| {
                 let (Some(selected), Some(callback)) = (binding(selected), binding(callback))
                 else {
@@ -270,7 +270,7 @@ impl Checker<'_, '_> {
             value: None,
             writes: vec![],
         };
-        let expression_value = |expression| self.value(state, expression).envelope;
+        let expression_value = |expression| self.value(state, expression).envelope.clone();
         let fresh = |expression| {
             self.ty(expression)
                 .filter(|ty| self.inert_creation_input(*ty))
@@ -501,6 +501,7 @@ impl Checker<'_, '_> {
         }
         if !value
             .envelope
+            .as_ref()
             .is_some_and(|inputs| inputs.is_subset(&allowed))
         {
             let site = self.span_of(value.site.unwrap_or(expression));
