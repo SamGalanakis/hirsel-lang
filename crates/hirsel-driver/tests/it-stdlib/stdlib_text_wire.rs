@@ -948,3 +948,19 @@ fn base64_stream_5_is_ordinary_source() {
         ],
     );
 }
+
+#[test]
+fn binary_endian_5_is_ordinary_source() {
+    source_codec(
+        "binary-endian-5-packet",
+        "binary",
+        &[
+            "read_u16",
+            "read_u32",
+            "read_u64",
+            "append_u16",
+            "append_u32",
+            "append_u64",
+        ],
+    );
+}

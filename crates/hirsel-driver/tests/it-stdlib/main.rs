@@ -4,6 +4,7 @@
 
 hirsel_guard::install!();
 
+mod binary_endian_5;
 mod numeric_native;
 mod package_s3;
 mod reference_vectors;

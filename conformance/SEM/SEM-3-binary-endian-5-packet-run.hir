@@ -1,0 +1,41 @@
+// rule: SEM-3
+// expect: run
+// Standalone packet header: big-endian kind, little-endian payload length.
+fn header(data: Bytes) -> Result[(u16, u32), binary.ReadError] {
+  let kind = binary.read_u16(data, 0, BigEndian())?
+  let length = binary.read_u32(data, 2, LittleEndian())?
+  Ok((kind, length))
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut out: unique List[u8] = [170u8]
+  binary.append_u16(258, BigEndian(), mut out)
+  binary.append_u32(67305985, LittleEndian(), mut out)
+  let packet = bytes.from_list(take out)
+  failure.check(packet == b"\xaa\x01\x02\x01\x02\x03\x04", TextInvariant())
+  failure.check(
+    header(bytes.slice(packet, 1, 7)) == Ok((258, 67305985)),
+    TextInvariant()
+  )
+  // Incomplete input is a typed data error, with no language bounds failure.
+  failure.check(
+    header(b"\x01\x02\x01") == Error(binary.ReadError(offset: 2)),
+    TextInvariant()
+  )
+  failure.check(
+    binary.read_u64(b"\x01\x02\x03\x04\x05\x06\x07\x08", 0, BigEndian()) == Ok(
+      72623859790382856
+    ),
+    TextInvariant()
+  )
+  // A shared builder snapshot keeps its prefix after copy-on-write.
+  let mut shared: List[u8] = [85u8]
+  let snapshot = copy shared
+  binary.append_u64(0, BigEndian(), mut shared)
+  failure.check(snapshot == [85u8], TextInvariant())
+  failure.check(
+    shared == [85u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8],
+    TextInvariant()
+  )
+  Ok(())
+}

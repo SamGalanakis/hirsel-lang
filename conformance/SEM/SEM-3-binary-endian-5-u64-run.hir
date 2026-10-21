@@ -1,0 +1,176 @@
+// rule: SEM-3
+// expect: run
+// Go binary_test.go:49-56,75-80,93-98 (ebe2feef); independent literal bytes.
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    binary.read_u64(b"\x00\x00\x00\x00\x00\x00\x00\x00", 0, LittleEndian()) == Ok(0u64),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [170u8, 85u8]
+    binary.append_u64(0u64, LittleEndian(), mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xaa\x55\x00\x00\x00\x00\x00\x00\x00\x00",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    binary.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff", 0, LittleEndian()) == Ok(
+      18446744073709551615u64
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [170u8, 85u8]
+    binary.append_u64(18446744073709551615u64, LittleEndian(), mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xaa\x55\xff\xff\xff\xff\xff\xff\xff\xff",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    binary.read_u64(b"\x1e\x1d\x1c\x1b\x1a\x19\x18\x17", 0, LittleEndian()) == Ok(
+      1664107662228069662u64
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [170u8, 85u8]
+    binary.append_u64(1664107662228069662u64, LittleEndian(), mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xaa\x55\x1e\x1d\x1c\x1b\x1a\x19\x18\x17",
+      TextInvariant()
+    )
+  }
+  {
+    let data = b"\x01\x02\x03\x04\x05\x06\x07\x08"
+    let mut offset = 0u64
+    while offset <= 9 {
+      let outcome = binary.read_u64(data, offset, LittleEndian())
+      if offset == 0 {
+        failure.check(outcome == Ok(578437695752307201u64), TextInvariant())
+      } else {
+        failure.check(
+          outcome == Error(binary.ReadError(offset: offset)),
+          TextInvariant()
+        )
+      }
+      offset += 1
+    }
+    let mut length = 0u64
+    while length < 8 {
+      failure.check(
+        binary.read_u64(bytes.slice(data, 0, length), 0, LittleEndian()) == Error(
+          binary.ReadError(offset: 0)
+        ),
+        TextInvariant()
+      )
+      length += 1
+    }
+    failure.check(
+      binary.read_u64(data, 18446744073709551615, LittleEndian()) == Error(
+        binary.ReadError(offset: 18446744073709551615)
+      ),
+      TextInvariant()
+    )
+    failure.check(
+      binary.read_u64(data, 18446744073709551614, LittleEndian()) == Error(
+        binary.ReadError(offset: 18446744073709551614)
+      ),
+      TextInvariant()
+    )
+  }
+  {
+    let data = b"\xff\x01\x02\x03\x04\x05\x06\x07\x08\xee"
+    failure.check(
+      binary.read_u64(data, 1, LittleEndian()) == Ok(578437695752307201u64),
+      TextInvariant()
+    )
+  }
+  failure.check(
+    binary.read_u64(b"\x00\x00\x00\x00\x00\x00\x00\x00", 0, BigEndian()) == Ok(0u64),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [170u8, 85u8]
+    binary.append_u64(0u64, BigEndian(), mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xaa\x55\x00\x00\x00\x00\x00\x00\x00\x00",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    binary.read_u64(b"\xff\xff\xff\xff\xff\xff\xff\xff", 0, BigEndian()) == Ok(
+      18446744073709551615u64
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [170u8, 85u8]
+    binary.append_u64(18446744073709551615u64, BigEndian(), mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xaa\x55\xff\xff\xff\xff\xff\xff\xff\xff",
+      TextInvariant()
+    )
+  }
+  failure.check(
+    binary.read_u64(b"\x17\x18\x19\x1a\x1b\x1c\x1d\x1e", 0, BigEndian()) == Ok(
+      1664107662228069662u64
+    ),
+    TextInvariant()
+  )
+  {
+    let mut out: unique List[u8] = [170u8, 85u8]
+    binary.append_u64(1664107662228069662u64, BigEndian(), mut out)
+    failure.check(
+      bytes.from_list(take out) == b"\xaa\x55\x17\x18\x19\x1a\x1b\x1c\x1d\x1e",
+      TextInvariant()
+    )
+  }
+  {
+    let data = b"\x01\x02\x03\x04\x05\x06\x07\x08"
+    let mut offset = 0u64
+    while offset <= 9 {
+      let outcome = binary.read_u64(data, offset, BigEndian())
+      if offset == 0 {
+        failure.check(outcome == Ok(72623859790382856u64), TextInvariant())
+      } else {
+        failure.check(
+          outcome == Error(binary.ReadError(offset: offset)),
+          TextInvariant()
+        )
+      }
+      offset += 1
+    }
+    let mut length = 0u64
+    while length < 8 {
+      failure.check(
+        binary.read_u64(bytes.slice(data, 0, length), 0, BigEndian()) == Error(
+          binary.ReadError(offset: 0)
+        ),
+        TextInvariant()
+      )
+      length += 1
+    }
+    failure.check(
+      binary.read_u64(data, 18446744073709551615, BigEndian()) == Error(
+        binary.ReadError(offset: 18446744073709551615)
+      ),
+      TextInvariant()
+    )
+    failure.check(
+      binary.read_u64(data, 18446744073709551614, BigEndian()) == Error(
+        binary.ReadError(offset: 18446744073709551614)
+      ),
+      TextInvariant()
+    )
+  }
+  {
+    let data = b"\xff\x01\x02\x03\x04\x05\x06\x07\x08\xee"
+    failure.check(
+      binary.read_u64(data, 1, BigEndian()) == Ok(72623859790382856u64),
+      TextInvariant()
+    )
+  }
+  Ok(())
+}

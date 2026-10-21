@@ -560,6 +560,62 @@ nesting bound, returning `Nesting(128)` at the attempted container depth. This i
 policy, independent of the depth limits of [MEM-3](memory.md#mem-3-freeing), with no
 reflection, automatic record conversion or authority.
 
+## Fixed-width binary integers
+
+`binary` reads and appends unsigned 16-, 32- and 64-bit integers with explicit
+`ByteOrder = LittleEndian | BigEndian`:
+
+```hirsel
+fn read_u16(data: Bytes, offset: u64, order: binary.ByteOrder) -> Result[u16, binary.ReadError] uses {}
+fn read_u32(data: Bytes, offset: u64, order: binary.ByteOrder) -> Result[u32, binary.ReadError] uses {}
+fn read_u64(data: Bytes, offset: u64, order: binary.ByteOrder) -> Result[u64, binary.ReadError] uses {}
+fn append_u16(value: u16, order: binary.ByteOrder, mut out: List[u8]) -> () uses {}
+fn append_u32(value: u32, order: binary.ByteOrder, mut out: List[u8]) -> () uses {}
+fn append_u64(value: u64, order: binary.ByteOrder, mut out: List[u8]) -> () uses {}
+```
+
+Reads accept unaligned byte offsets and require the complete width. They return
+`Error(binary.ReadError(offset: offset))` for empty or short input, an offset past
+the end, or an offset near `u64`'s maximum. The error always carries the requested
+offset. The checks establish `offset <= len` and then `width <= len - offset`
+before indexing; malformed input causes a data error, without a language bounds
+or arithmetic failure. Reads allocate nothing and return scalars independent of
+the input lifetime. Byte order never depends on the machine or its alignment.
+
+Appends add exactly 2, 4 or 8 bytes to the existing `List[u8]` prefix and preserve
+its uniqueness. They use ordinary list growth and copy-on-write: shared snapshots
+retain their original contents. Use `bytes.from_list(take out)` to finish an owned
+byte buffer. There are no signed, float, varint or cursor helpers in this API.
+`binary.DecodeError` and the MessagePack/CBOR codecs keep their existing contract.
+
+This standalone [packet-header example](../../conformance/SEM/SEM-3-binary-endian-5-packet-run.hir)
+encodes a big-endian kind followed by a little-endian payload length and handles a
+truncated field as `ReadError(offset: 2)`. Its decoder is ordinary source:
+
+```hirsel
+fn header(data: Bytes) -> Result[(u16, u32), binary.ReadError] {
+  let kind = binary.read_u16(data, 0, BigEndian())?
+  let length = binary.read_u32(data, 2, LittleEndian())?
+  Ok((kind, length))
+}
+```
+
+The scalar structure and unsigned literal vectors come from Go
+`src/encoding/binary/binary.go:69-229` and `binary_test.go:49-56,75-80,93-98`
+at `ebe2feefc400f813aefdc8a036e66d2619da6649`. The explicit endian selection also
+follows Zig `lib/std/mem.zig:1953-1985,2078-2120` (`readInt`/`writeInt` and tests)
+at `bff490a23889750de7096d9057c0a432efc929a8`; its unsigned 16-bit vectors are
+included. Deviations: bounded source loops
+replace unrolled loads; explicit offsets and typed errors replace slice panics;
+appends mutate a list builder instead of returning a slice. Checked narrowing
+masks each output byte, whereas Go's byte conversion truncates implicitly. An
+explicit enum replaces Go's interfaces; only the requested unsigned widths and
+append operations are exposed. Zig's fixed-array bit casts and byte swaps become
+checked byte shifts to use existing safe Hirsel operations. The
+Rust integration fixture generator independently checks `to_le_bytes`,
+`to_be_bytes`, `from_le_bytes` and `from_be_bytes`, including every offset in
+inputs of length 0 through 24.
+
 ## MessagePack and CBOR
 
 `msgpack` implements the MessagePack JSON domain; `cbor` implements the corresponding

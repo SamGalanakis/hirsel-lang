@@ -3,3 +3,90 @@
 pub type DecodeError = Truncated(u64) | Syntax(u64) | Unsupported(u64) | Utf8(u64) | DuplicateKey(
   u64
 ) | Nesting(u64) | Trailing(u64) | InvalidNumber
+
+// Scalar byte order follows Go encoding/binary/binary.go:69-229 at
+// ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause; see
+// third-party/NOTICES.md). Checked source loops replace unrolled indexing.
+/// Explicit wire order, independent of host endianness and alignment.
+pub type ByteOrder = LittleEndian | BigEndian
+
+/// Incomplete fixed-width read. The offset is exactly the requested byte offset,
+/// including when it is past the end of the input.
+pub type ReadError {
+  offset: u64,
+}
+
+@noalloc
+fn read_word(data: Bytes, offset: u64, order: ByteOrder, width: u64) -> Result[
+  u64,
+  ReadError
+] uses {} {
+  let length = core@1/bytes.len(data)
+  if offset > length {
+    return Error(ReadError(offset: offset))
+  }
+  if width > length - offset {
+    return Error(ReadError(offset: offset))
+  }
+  let mut value = 0u64
+  let mut i = 0u64
+  while i < width {
+    let shift = match order {
+      LittleEndian() => i * 8,
+      BigEndian() => (width - 1 - i) * 8,
+    }
+    let byte: u64 = core@1/int.widen(data[offset + i])
+    value = value | byte << shift
+    i = i + 1
+  }
+  Ok(value)
+}
+
+/// Read two bytes at any offset, or return the requested offset on truncation.
+@noalloc
+pub fn read_u16(data: Bytes, offset: u64, order: ByteOrder) -> Result[u16, ReadError] uses {} {
+  Ok(core@1/int.narrow(read_word(data, offset, order, 2)?))
+}
+
+/// Read four bytes at any offset, or return the requested offset on truncation.
+@noalloc
+pub fn read_u32(data: Bytes, offset: u64, order: ByteOrder) -> Result[u32, ReadError] uses {} {
+  Ok(core@1/int.narrow(read_word(data, offset, order, 4)?))
+}
+
+/// Read eight bytes at any offset, or return the requested offset on truncation.
+@noalloc
+pub fn read_u64(data: Bytes, offset: u64, order: ByteOrder) -> Result[u64, ReadError] uses {} {
+  read_word(data, offset, order, 8)
+}
+
+@preserves_unique(out)
+fn append_word(value: u64, order: ByteOrder, width: u64, mut out: List[u8]) -> () uses {} {
+  let mut i = 0u64
+  while i < width {
+    let shift = match order {
+      LittleEndian() => i * 8,
+      BigEndian() => (width - 1 - i) * 8,
+    }
+    core@1/list.push(mut out, core@1/int.narrow(value >> shift & 255))
+    i = i + 1
+  }
+}
+
+/// Append two bytes, preserving the destination prefix and uniqueness.
+@preserves_unique(out)
+pub fn append_u16(value: u16, order: ByteOrder, mut out: List[u8]) -> () uses {} {
+  append_word(core@1/int.widen(value), order, 2, mut out)
+}
+
+/// Append four bytes, preserving the destination prefix and uniqueness.
+@preserves_unique(out)
+pub fn append_u32(value: u32, order: ByteOrder, mut out: List[u8]) -> () uses {} {
+  append_word(core@1/int.widen(value), order, 4, mut out)
+}
+
+/// Append eight bytes, preserving the destination prefix and uniqueness.
+@preserves_unique(out)
+pub fn append_u64(value: u64, order: ByteOrder, mut out: List[u8]) -> () uses {} {
+  append_word(value, order, 8, mut out)
+}

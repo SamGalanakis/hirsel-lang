@@ -6669,3 +6669,7 @@ conformance/SEM/SEM-3-string-splitn-5-empty-0-fail.hir
 conformance/SEM/SEM-3-string-splitn-5-empty-1-fail.hir
 conformance/SEM/SEM-3-string-splitn-5-empty-2-fail.hir
 conformance/SEM/SEM-3-string-splitn-5-go-run.hir
+conformance/SEM/SEM-3-binary-endian-5-u16-run.hir
+conformance/SEM/SEM-3-binary-endian-5-u32-run.hir
+conformance/SEM/SEM-3-binary-endian-5-u64-run.hir
+conformance/SEM/SEM-3-binary-endian-5-packet-run.hir
