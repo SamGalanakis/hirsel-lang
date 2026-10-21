@@ -172,9 +172,17 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_enter(
         let slot = unsafe { crate::tasks::to_pool(&mut *ctx, site) };
         word |= POOLED | u64::from(slot) << 48;
     }
-    if !nested && crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::foreign::pin(ctx)
-    {
-        word |= COMPUTE_PINNED;
+    if !nested {
+        let pinned = if crate::tasks::ordered::engine::on(ctx) {
+            crate::tasks::ordered::foreign::pin(ctx)
+        } else if crate::tasks::free::enabled(ctx) {
+            crate::tasks::free::foreign::pin(ctx)
+        } else {
+            false
+        };
+        if pinned {
+            word |= COMPUTE_PINNED;
+        }
     }
     // C holds no compute permit. Nested calls reacquire on return so a callback's
     // Hirsel code is accounted even when it makes another synchronous extern call.
@@ -223,7 +231,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_leave(previous: *const c_void) {
         }
     }
     if interval.word & COMPUTE_PINNED != 0 {
-        crate::tasks::ordered::foreign::unpin_compute(ctx);
+        if crate::tasks::ordered::engine::on(ctx) {
+            crate::tasks::ordered::foreign::unpin_compute(ctx);
+        } else {
+            crate::tasks::free::foreign::unpin_compute(ctx);
+        }
     }
     // The call returned to a supported boundary. A host stop ends it here;
     // otherwise ordinary Hirsel code takes the process permit again.
