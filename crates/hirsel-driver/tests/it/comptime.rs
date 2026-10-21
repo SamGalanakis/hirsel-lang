@@ -2381,3 +2381,107 @@ fn frozen_lowering_root_work_distinguishes_worker_misses_from_hits_and_scalar_fa
         }
     });
 }
+
+#[test]
+fn frozen_lowering_physical_work_counts_helpers_retries_and_discarded_suffixes() {
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex},
+    };
+    struct CountLower {
+        inner: Arc<dyn LoweringPhase>,
+        calls: Mutex<BTreeMap<DefPath, u64>>,
+    }
+    impl LoweringPhase for CountLower {
+        fn lower(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            comptime: &Comptime,
+            signature: &hirsel_types::Signature,
+        ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+            *self
+                .calls
+                .lock()
+                .unwrap()
+                .entry(body.typed.syntax.item.definition.clone())
+                .or_default() += 1;
+            self.inner.lower(t, m, body, comptime, signature)
+        }
+        fn lower_evaluation(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
+            signature: &hirsel_types::Signature,
+            expression: hirsel_syntax::ExprId,
+            result: hirsel_types::TypeId,
+            constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
+        ) -> Result<hirsel_tir::Definition, QueryError> {
+            self.inner
+                .lower_evaluation(t, m, body, staged, signature, expression, result, constants)
+        }
+        fn entry_body(&self) -> hirsel_tir::BodyId {
+            self.inner.entry_body()
+        }
+    }
+    with_compiler_stack(|| {
+        let sources = [
+            "const BASE:u64=7\nfn helper()->u64{BASE}\nfn FIRST()->u64{comptime {helper()+helper()}}\nfn BAD()->u64{comptime {let zero=0u64;1u64/zero}}\nfn LATER()->u64{11u64}\n",
+            "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst FIRST:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nfn BAD()->u64{comptime {let zero=0u64;1u64/zero}}\nfn LATER()->u64{11u64}\n",
+        ];
+        for source in sources {
+            for jobs in [1, 2, 8] {
+                for budget in [0, 1 << 20] {
+                    let mut candidate = engine(source).with_config(CompileConfig {
+                        hold_bytes: budget,
+                        ..CompileConfig::for_memory_cap(None)
+                    });
+                    let counter = Arc::new(CountLower {
+                        inner: candidate.adapters.lowering.take().unwrap(),
+                        calls: Mutex::new(BTreeMap::new()),
+                    });
+                    candidate.adapters.lowering = Some(counter.clone());
+                    for warm in [false, true] {
+                        let outcomes = candidate.check_lower_definition_prefix(
+                            vec![path("FIRST"), path("BAD"), path("LATER")],
+                            hirsel_intern::jobs::Jobs::new(jobs),
+                        );
+                        assert_eq!(outcomes.len(), 2);
+                        assert!(outcomes[0].result.is_ok() && outcomes[1].result.is_err());
+                        for (path, calls) in counter.calls.lock().unwrap().iter() {
+                            assert_eq!(
+                                candidate.s1_lower_work(path).adapter_calls,
+                                *calls,
+                                "jobs={jobs} budget={budget} warm={warm} {path}: count actual adapter work before publication filtering"
+                            );
+                        }
+                        assert!(candidate.s1_lower_work(&path("BAD")).query_attempts > 0);
+                        assert_eq!(
+                            candidate.s1_lower_work(&path("BAD")).adapter_calls,
+                            0,
+                            "failed preparation is a query attempt without a Lower adapter call"
+                        );
+                        assert!(
+                            candidate.s1_lower_work(&path("LATER")).adapter_calls > 0,
+                            "discarded suffix work must still be counted"
+                        );
+                        if source.contains("fn scaled") {
+                            assert!(
+                                candidate.s1_lower_work(&path("FIRST")).query_attempts > 1,
+                                "the staged registration fixture must actually retry"
+                            );
+                        } else {
+                            assert!(
+                                candidate.s1_lower_work(&path("helper")).adapter_calls > 0,
+                                "helper work must be included"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    });
+}

@@ -6,7 +6,7 @@ pub use frontier::FrontChanges;
 mod parallel;
 pub(crate) mod s1;
 pub use parallel::{ModeResult, PublishedDefinition, PublishedResult};
-pub use s1::LoweringResult;
+pub use s1::{LoweringResult, S1LowerWork};
 /// One S1 root's captured outcome. Phase, tooling limit and complete execution
 /// reads belong to this root, including when another root finished afterward.
 #[derive(Clone, Debug)]
@@ -232,6 +232,7 @@ pub struct QueryEngine {
     pub(crate) memo: Arc<hirsel_types::TypeMemo>,
     signature_stack: Vec<DefPath>,
     recomputes: BTreeMap<(DefPath, QueryKind), usize>,
+    s1_lower_work: hirsel_syntax::DefMap<S1LowerWork>,
     /// The std image whose package's checked products this engine reads.
     image: Option<image::AdoptedImage>,
     pub unavailable: Option<QueryKind>,
@@ -308,6 +309,7 @@ impl Drop for QueryEngine {
         released("engine: staged values", take(&mut self.staged_values));
         released("engine: generated", take(&mut self.generated));
         released("engine: recomputes", take(&mut self.recomputes));
+        released("engine: S1 lower work", take(&mut self.s1_lower_work));
         released("engine: image", take(&mut self.image));
         released("engine: constant values", take(&mut self.constant_values));
         released("engine: sources", take(&mut self.sources));
@@ -503,6 +505,7 @@ impl QueryEngine {
             memo: Arc::new(hirsel_types::TypeMemo::new()),
             signature_stack: vec![],
             recomputes: BTreeMap::new(),
+            s1_lower_work: Default::default(),
             image: None,
             unavailable: None,
             last_phase: None,

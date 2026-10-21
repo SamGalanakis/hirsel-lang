@@ -153,6 +153,7 @@ pub(crate) struct TaskShared {
     generators: Mutex<BTreeMap<DefPath, GeneratorProduct>>,
     /// Aggregate counters; peak is the sum of per-worker insertion peaks.
     lower_holds: Mutex<HoldStats>,
+    lower_work: Mutex<hirsel_syntax::DefMap<S1LowerWork>>,
 }
 impl TaskShared {
     pub(crate) fn new(coordinator: Arc<S1Coordinator<DefPath>>) -> Self {
@@ -161,7 +162,15 @@ impl TaskShared {
             constants: Mutex::new(BTreeMap::new()),
             generators: Mutex::new(BTreeMap::new()),
             lower_holds: Mutex::new(HoldStats::default()),
+            lower_work: Mutex::new(Default::default()),
         }
+    }
+    pub(super) fn take_lower_work(&mut self) -> hirsel_syntax::DefMap<S1LowerWork> {
+        std::mem::take(
+            self.lower_work
+                .get_mut()
+                .unwrap_or_else(|error| error.into_inner()),
+        )
     }
     pub(super) fn take_generators(&mut self) -> Vec<GeneratedText> {
         std::mem::take(
@@ -224,6 +233,7 @@ pub(crate) struct TaskWorker<'a, S: TirSource + ?Sized> {
     runtime: Arc<RuntimeTypes>,
     reads: Vec<ReadsBuilder>,
     lowered: Holds<Arc<Lowered>>,
+    lower_work: hirsel_syntax::DefMap<S1LowerWork>,
     pub(crate) registrations: Vec<StagedRegistration>,
     pub(crate) limit: Option<hirsel_tir::ToolingLimit>,
     pub(super) phase: Option<QueryKind>,
@@ -232,6 +242,17 @@ pub(crate) struct TaskWorker<'a, S: TirSource + ?Sized> {
 }
 impl<S: TirSource + ?Sized> Drop for TaskWorker<'_, S> {
     fn drop(&mut self) {
+        let mut total_work = self
+            .shared
+            .lower_work
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for (id, work) in std::mem::take(&mut self.lower_work) {
+            timings::count_by(Count::S1LowerQueryAttempts, work.query_attempts);
+            timings::count_by(Count::S1LowerAdapterCalls, work.adapter_calls);
+            total_work.entry(id).or_default().merge(work);
+        }
+        drop(total_work);
         let stats = self.lowered.stats();
         timings::count_by(Count::S1LowerHoldEvictions, stats.evictions);
         timings::count_by(Count::S1LowerHoldRecomputes, stats.recomputes);
@@ -257,6 +278,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             runtime: Arc::new((*source.inputs().runtime).clone()),
             reads: vec![],
             lowered: Holds::new(source.inputs().lower_budget),
+            lower_work: Default::default(),
             registrations: vec![],
             limit: None,
             phase: Some(QueryKind::Lower),
@@ -952,6 +974,10 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             });
         }
         self.lowered.demand_evicted(&key);
+        self.lower_work
+            .entry(DefId::intern(path))
+            .or_default()
+            .query_attempts += 1;
         self.selections
             .push(SelectionEvent::LowerComputed(DefId::intern(path)));
         self.stack.begin_requests();
@@ -979,6 +1005,11 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 prepare_values(&types, &body.analyzed.value, &staged, &signature, worker)?
             };
             let inputs = worker.source.inputs();
+            worker
+                .lower_work
+                .entry(DefId::intern(path))
+                .or_default()
+                .adapter_calls += 1;
             let output = inputs.lowering.lower(
                 &types,
                 &inputs.memo,

@@ -206,11 +206,15 @@ pub enum Count {
     S1LowerHoldRecomputes,
     /// Sum of each worker's insertion-before-eviction peak retained bytes.
     S1LowerHoldPeakBytes,
+    /// Physical worker Lower misses, including helpers and discarded attempts.
+    S1LowerQueryAttempts,
+    /// Actual worker LoweringPhase::lower calls, including discarded work.
+    S1LowerAdapterCalls,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 37] = [
+    pub const ALL: [Count; 39] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -248,6 +252,8 @@ impl Count {
         Count::S1LowerHoldEvictions,
         Count::S1LowerHoldRecomputes,
         Count::S1LowerHoldPeakBytes,
+        Count::S1LowerQueryAttempts,
+        Count::S1LowerAdapterCalls,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -289,6 +295,8 @@ impl Count {
             Count::S1LowerHoldEvictions => "S1 lower hold evictions",
             Count::S1LowerHoldRecomputes => "S1 lower hold recomputes",
             Count::S1LowerHoldPeakBytes => "S1 lower hold peak bytes sum",
+            Count::S1LowerQueryAttempts => "S1 lower query attempts",
+            Count::S1LowerAdapterCalls => "S1 lower adapter calls",
         }
     }
 }

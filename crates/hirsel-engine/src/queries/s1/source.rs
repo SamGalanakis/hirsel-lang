@@ -7,6 +7,21 @@ use crate::memo::{DepthEvidence, MemoGraph};
 use crate::snapshot::SourceContext;
 use std::sync::Mutex;
 
+/// Physical S1 worker lowering work, including helpers and work discarded by
+/// registration retries or an earlier rejected input. Never a cache-validity
+/// fact or a count of published logical misses.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct S1LowerWork {
+    pub query_attempts: u64,
+    pub adapter_calls: u64,
+}
+impl S1LowerWork {
+    pub(super) fn merge(&mut self, work: Self) {
+        self.query_attempts += work.query_attempts;
+        self.adapter_calls += work.adapter_calls;
+    }
+}
+
 /// One lowering root with its captured operational provenance and complete
 /// execution reads. Publication of its TIR remains the caller's policy.
 #[derive(Clone, Debug)]
@@ -632,6 +647,15 @@ impl TirSource for FrozenSource<'_> {
 }
 
 impl QueryEngine {
+    /// Cumulative physical worker work for this definition. Scalar queries
+    /// retain their existing counters; speculative work is included here.
+    pub fn s1_lower_work(&self, definition: &DefPath) -> S1LowerWork {
+        self.s1_lower_work
+            .get(&DefId::intern(definition))
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// Freeze only handles and borrowed immutable tables. Demanded ordinary
     /// bodies use the same P worker after hold eviction; no body-table clone.
     pub(crate) fn frozen_s1_source(
@@ -973,6 +997,16 @@ impl QueryEngine {
                 )
             },
         );
+        // End the frozen source borrow before updating engine-owned counters.
+        let bodies = source
+            .completed
+            .into_inner()
+            .unwrap_or_else(|e| e.into_inner());
+        // Worker states have dropped after map joins. Drain physical work
+        // before filtering suffixes or returning for a registration retry.
+        for (id, work) in shared.take_lower_work() {
+            self.s1_lower_work.entry(id).or_default().merge(work);
+        }
         // A worker result is tentative until its input position settles.
         // Only the earliest incomplete/rejected root may drive registration;
         // later work cannot publish source or memo products across that barrier.
@@ -1011,10 +1045,6 @@ impl QueryEngine {
                 _ => None,
             })
             .collect();
-        let bodies = source
-            .completed
-            .into_inner()
-            .unwrap_or_else(|e| e.into_inner());
         let mut bodies = bodies;
         bodies.sort_by(|(left, _, _), (right, _, _)| left.definition().cmp(right.definition()));
         for (body, text, reads) in bodies {
