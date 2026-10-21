@@ -55,6 +55,53 @@ impl Parser<'_> {
                 otherwise: None,
             },
         )];
+        // Reserve the literal lower bound before evaluating any holes. Capacity
+        // is unobservable; hole evaluation and append order remain left to right.
+        let capacity = pieces.iter().map(|(_, s)| literal_lower_bound(s)).sum();
+        if capacity != 0 {
+            let place = self.synthetic_expr(
+                whole,
+                ExprKind::Path(Path {
+                    package: None,
+                    segments: vec![builder],
+                }),
+            );
+            let place = self.synthetic_expr(
+                whole,
+                ExprKind::Unary {
+                    op: UnaryOp::Mut,
+                    value: place,
+                },
+            );
+            let count = self.constant(whole, capacity);
+            let callee = self.synthetic_expr(
+                whole,
+                ExprKind::Path(Path {
+                    package: Some(PackageId {
+                        name: "core".into(),
+                        version: "1".into(),
+                    }),
+                    segments: vec![Symbol::intern("list"), Symbol::intern("reserve")],
+                }),
+            );
+            let call = self.synthetic_expr(
+                whole,
+                ExprKind::Call {
+                    callee,
+                    arguments: vec![
+                        Argument {
+                            label: None,
+                            value: place,
+                        },
+                        Argument {
+                            label: None,
+                            value: count,
+                        },
+                    ],
+                },
+            );
+            statements.push(self.synthetic_stmt(whole, StmtKind::Expr(call)));
+        }
         for (i, (position, spelling)) in pieces.iter().enumerate() {
             let text = format_text(spelling);
             if !text.is_empty() {
@@ -527,4 +574,56 @@ fn parse_spec(spelling: &str) -> Result<WrittenSpec, String> {
         written.spec.kind = kind as u64;
     }
     Ok(written)
+}
+
+/// UTF-8 bytes known before evaluating holes. An escaped scalar contributes at
+/// least one byte; ordinary Unicode contributes its encoded length.
+fn literal_lower_bound(piece: &str) -> u64 {
+    let spelling = format_text(piece);
+    let mut chars = spelling
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or("")
+        .chars();
+    let mut count = 0;
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('u') => {
+                    for c in chars.by_ref() {
+                        if c == '}' {
+                            break;
+                        }
+                    }
+                }
+                Some('x') => {
+                    chars.next();
+                    chars.next();
+                }
+                _ => {}
+            }
+            count += 1;
+        } else {
+            count += c.len_utf8() as u64;
+        }
+    }
+    count
+}
+
+#[cfg(test)]
+mod text_build_tests {
+    use super::literal_lower_bound;
+
+    #[test]
+    fn literal_capacity_counts_utf8_escapes_and_braces() {
+        for (piece, bytes) in [
+            (r#"f"line {"#, 5),
+            (r#"}\n""#, 1),
+            (r#"f"é😀{{}}""#, 8),
+            (r#"f"\u{1f600}\x41\\\"""#, 4),
+            (r#"f"""#, 0),
+        ] {
+            assert_eq!(literal_lower_bound(piece), bytes, "{piece}");
+        }
+    }
 }

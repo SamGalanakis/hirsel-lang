@@ -1,0 +1,2602 @@
+{
+  "session": "2026-10-21T01:28:31Z",
+  "seed": 20261021,
+  "rounds": 10,
+  "samples": [
+    {
+      "counts": {
+        "task-clock": 1236.5,
+        "cycles": 5170845061.0,
+        "instructions": 4063376753.0,
+        "cycles:u": 775165408.0,
+        "instructions:u": 1100613368.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560574815,
+          "idle": 365640363
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560574936,
+          "idle": 365640463
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.17355371900826447
+      },
+      "workload": "print",
+      "name": "after",
+      "round": 0
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 0,
+      "first_ms": 72.084802,
+      "idle_rss": 16510976,
+      "binary_bytes": 7078488,
+      "sibling_before": {
+        "busy": 194934476,
+        "total": 560574970
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.00183467,
+      "requests_per_s": 15.970699037596692,
+      "p50_us": 39263,
+      "p99_us": 54783,
+      "p999_us": 54783,
+      "max_us": 54783,
+      "perf": {
+        "task-clock": 376.16,
+        "cycles": 1476264126.0,
+        "instructions": 2770581536.0,
+        "cycles:u": 963821972.0,
+        "instructions:u": 2539658717.0
+      },
+      "load_rss": 54865920,
+      "instructions_per_request": 173161346.0,
+      "cpu_s_per_request": 0.023510000000000003,
+      "sibling_after": {
+        "busy": 194934497,
+        "total": 560575071
+      },
+      "sibling_busy_share": 0.2079207920792079,
+      "counts": {
+        "task-clock": 23.51,
+        "cycles": 92266507.875,
+        "instructions": 173161346.0,
+        "cycles:u": 60238873.25,
+        "instructions:u": 158728669.8125
+      },
+      "workload": "list",
+      "name": "after"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 0,
+      "first_ms": 39.107798,
+      "idle_rss": 16707584,
+      "binary_bytes": 7073936,
+      "sibling_before": {
+        "busy": 194934502,
+        "total": 560575100
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.094002636,
+      "requests_per_s": 14.625193279698827,
+      "p50_us": 153855,
+      "p99_us": 196351,
+      "p999_us": 196351,
+      "max_us": 196351,
+      "perf": {
+        "task-clock": 1098.88,
+        "cycles": 4479058649.0,
+        "instructions": 8097071500.0,
+        "cycles:u": 2717019676.0,
+        "instructions:u": 6953146859.0
+      },
+      "load_rss": 30834688,
+      "instructions_per_request": 506066968.75,
+      "cpu_s_per_request": 0.06868,
+      "sibling_after": {
+        "busy": 194934512,
+        "total": 560575211
+      },
+      "sibling_busy_share": 0.09009009009009009,
+      "counts": {
+        "task-clock": 68.68,
+        "cycles": 279941165.5625,
+        "instructions": 506066968.75,
+        "cycles:u": 169813729.75,
+        "instructions:u": 434571678.6875
+      },
+      "workload": "list",
+      "name": "before"
+    },
+    {
+      "kind": "rust-one-worker",
+      "operation": "list",
+      "rate": 16,
+      "round": 0,
+      "first_ms": 11.765865,
+      "idle_rss": 7626752,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 194934515,
+        "total": 560575240
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.00091657,
+      "requests_per_s": 15.985348309300145,
+      "p50_us": 28319,
+      "p99_us": 59391,
+      "p999_us": 59391,
+      "max_us": 59391,
+      "perf": {
+        "task-clock": 455.86,
+        "cycles": 1870608190.0,
+        "instructions": 3687626553.0,
+        "cycles:u": 1319414299.0,
+        "instructions:u": 3424974625.0
+      },
+      "load_rss": 41381888,
+      "instructions_per_request": 230476659.5625,
+      "cpu_s_per_request": 0.02849125,
+      "sibling_after": {
+        "busy": 194934528,
+        "total": 560575340
+      },
+      "sibling_busy_share": 0.13,
+      "counts": {
+        "task-clock": 28.49125,
+        "cycles": 116913011.875,
+        "instructions": 230476659.5625,
+        "cycles:u": 82463393.6875,
+        "instructions:u": 214060914.0625
+      },
+      "workload": "list",
+      "name": "rust"
+    },
+    {
+      "counts": {
+        "task-clock": 1185.77,
+        "cycles": 4883791603.0,
+        "instructions": 3869526612.0,
+        "cycles:u": 666457752.0,
+        "instructions:u": 907998420.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560575357,
+          "idle": 365640828
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560575472,
+          "idle": 365640938
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.043478260869565216
+      },
+      "workload": "print",
+      "name": "rust",
+      "round": 0
+    },
+    {
+      "counts": {
+        "task-clock": 1285.27,
+        "cycles": 5395118713.0,
+        "instructions": 4623767325.0,
+        "cycles:u": 991985126.0,
+        "instructions:u": 1659198609.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560575487,
+          "idle": 365640950
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560575614,
+          "idle": 365641071
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.047244094488188976
+      },
+      "workload": "print",
+      "name": "before",
+      "round": 0
+    },
+    {
+      "kind": "rust-one-worker",
+      "operation": "list",
+      "rate": 16,
+      "round": 1,
+      "first_ms": 10.727198,
+      "idle_rss": 7532544,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 194934546,
+        "total": 560575640
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001323335,
+      "requests_per_s": 15.978854622418243,
+      "p50_us": 27359,
+      "p99_us": 60287,
+      "p999_us": 60287,
+      "max_us": 60287,
+      "perf": {
+        "task-clock": 413.71,
+        "cycles": 1738609667.0,
+        "instructions": 3678433070.0,
+        "cycles:u": 1217340418.0,
+        "instructions:u": 3425030070.0
+      },
+      "load_rss": 41287680,
+      "instructions_per_request": 229902066.875,
+      "cpu_s_per_request": 0.025856874999999998,
+      "sibling_after": {
+        "busy": 194934552,
+        "total": 560575742
+      },
+      "sibling_busy_share": 0.058823529411764705,
+      "counts": {
+        "task-clock": 25.856875,
+        "cycles": 108663104.1875,
+        "instructions": 229902066.875,
+        "cycles:u": 76083776.125,
+        "instructions:u": 214064379.375
+      },
+      "workload": "list",
+      "name": "rust"
+    },
+    {
+      "counts": {
+        "task-clock": 1190.91,
+        "cycles": 5061070271.0,
+        "instructions": 4063927374.0,
+        "cycles:u": 756552751.0,
+        "instructions:u": 1100613375.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560575759,
+          "idle": 365641206
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560575878,
+          "idle": 365641316
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.07563025210084033
+      },
+      "workload": "print",
+      "name": "after",
+      "round": 1
+    },
+    {
+      "counts": {
+        "task-clock": 1305.4,
+        "cycles": 5417878526.0,
+        "instructions": 4622365465.0,
+        "cycles:u": 1005986190.0,
+        "instructions:u": 1659198531.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560575897,
+          "idle": 365641329
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560576027,
+          "idle": 365641446
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.1
+      },
+      "workload": "print",
+      "name": "before",
+      "round": 1
+    },
+    {
+      "counts": {
+        "task-clock": 1180.72,
+        "cycles": 4923675346.0,
+        "instructions": 3868273375.0,
+        "cycles:u": 664144791.0,
+        "instructions:u": 907998800.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560576045,
+          "idle": 365641463
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560576162,
+          "idle": 365641569
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.09401709401709402
+      },
+      "workload": "print",
+      "name": "rust",
+      "round": 1
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 1,
+      "first_ms": 39.981623,
+      "idle_rss": 16793600,
+      "binary_bytes": 7073936,
+      "sibling_before": {
+        "busy": 194934599,
+        "total": 560576195
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.047659001,
+      "requests_per_s": 15.272144834080416,
+      "p50_us": 111999,
+      "p99_us": 177023,
+      "p999_us": 177023,
+      "max_us": 177023,
+      "perf": {
+        "task-clock": 1054.06,
+        "cycles": 4336893781.0,
+        "instructions": 7949935658.0,
+        "cycles:u": 2725646323.0,
+        "instructions:u": 6953119410.0
+      },
+      "load_rss": 31109120,
+      "instructions_per_request": 496870978.625,
+      "cpu_s_per_request": 0.06587875,
+      "sibling_after": {
+        "busy": 194934614,
+        "total": 560576302
+      },
+      "sibling_busy_share": 0.14018691588785046,
+      "counts": {
+        "task-clock": 65.87875,
+        "cycles": 271055861.3125,
+        "instructions": 496870978.625,
+        "cycles:u": 170352895.1875,
+        "instructions:u": 434569963.125
+      },
+      "workload": "list",
+      "name": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 1,
+      "first_ms": 37.783604,
+      "idle_rss": 16678912,
+      "binary_bytes": 7078488,
+      "sibling_before": {
+        "busy": 194934620,
+        "total": 560576334
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001245927,
+      "requests_per_s": 15.980089974438417,
+      "p50_us": 39583,
+      "p99_us": 54687,
+      "p999_us": 54687,
+      "max_us": 54687,
+      "perf": {
+        "task-clock": 381.35,
+        "cycles": 1410949316.0,
+        "instructions": 2763395909.0,
+        "cycles:u": 915508602.0,
+        "instructions:u": 2539622689.0
+      },
+      "load_rss": 55107584,
+      "instructions_per_request": 172712244.3125,
+      "cpu_s_per_request": 0.023834375,
+      "sibling_after": {
+        "busy": 194934632,
+        "total": 560576435
+      },
+      "sibling_busy_share": 0.1188118811881188,
+      "counts": {
+        "task-clock": 23.834375,
+        "cycles": 88184332.25,
+        "instructions": 172712244.3125,
+        "cycles:u": 57219287.625,
+        "instructions:u": 158726418.0625
+      },
+      "workload": "list",
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 1300.61,
+        "cycles": 5327524498.0,
+        "instructions": 4622852462.0,
+        "cycles:u": 1005672973.0,
+        "instructions:u": 1659198483.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560576457,
+          "idle": 365641821
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560576586,
+          "idle": 365641940
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.07751937984496124
+      },
+      "workload": "print",
+      "name": "before",
+      "round": 2
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 2,
+      "first_ms": 37.932144,
+      "idle_rss": 16633856,
+      "binary_bytes": 7078488,
+      "sibling_before": {
+        "busy": 194934646,
+        "total": 560576612
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001017206,
+      "requests_per_s": 15.983741242505676,
+      "p50_us": 27439,
+      "p99_us": 61791,
+      "p999_us": 61791,
+      "max_us": 61791,
+      "perf": {
+        "task-clock": 381.23,
+        "cycles": 1413386047.0,
+        "instructions": 2777141566.0,
+        "cycles:u": 903174787.0,
+        "instructions:u": 2539625927.0
+      },
+      "load_rss": 55201792,
+      "instructions_per_request": 173571347.875,
+      "cpu_s_per_request": 0.023826875,
+      "sibling_after": {
+        "busy": 194934658,
+        "total": 560576715
+      },
+      "sibling_busy_share": 0.11650485436893204,
+      "counts": {
+        "task-clock": 23.826875,
+        "cycles": 88336627.9375,
+        "instructions": 173571347.875,
+        "cycles:u": 56448424.1875,
+        "instructions:u": 158726620.4375
+      },
+      "workload": "list",
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 1223.38,
+        "cycles": 4889340425.0,
+        "instructions": 3869255458.0,
+        "cycles:u": 659060627.0,
+        "instructions:u": 907998440.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560576732,
+          "idle": 365642072
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560576853,
+          "idle": 365642182
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.09090909090909091
+      },
+      "workload": "print",
+      "name": "rust",
+      "round": 2
+    },
+    {
+      "counts": {
+        "task-clock": 1244.43,
+        "cycles": 4961132553.0,
+        "instructions": 4063360682.0,
+        "cycles:u": 749247327.0,
+        "instructions:u": 1100613361.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560576868,
+          "idle": 365642197
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560576991,
+          "idle": 365642312
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.06504065040650407
+      },
+      "workload": "print",
+      "name": "after",
+      "round": 2
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 2,
+      "first_ms": 39.641343,
+      "idle_rss": 16834560,
+      "binary_bytes": 7073936,
+      "sibling_before": {
+        "busy": 194934681,
+        "total": 560577024
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.080537285,
+      "requests_per_s": 14.807448314937139,
+      "p50_us": 147071,
+      "p99_us": 272895,
+      "p999_us": 272895,
+      "max_us": 272895,
+      "perf": {
+        "task-clock": 1081.29,
+        "cycles": 4356468263.0,
+        "instructions": 8000620759.0,
+        "cycles:u": 2738228291.0,
+        "instructions:u": 6953163833.0
+      },
+      "load_rss": 33894400,
+      "instructions_per_request": 500038797.4375,
+      "cpu_s_per_request": 0.06758062499999999,
+      "sibling_after": {
+        "busy": 194934689,
+        "total": 560577134
+      },
+      "sibling_busy_share": 0.07272727272727272,
+      "counts": {
+        "task-clock": 67.580625,
+        "cycles": 272279266.4375,
+        "instructions": 500038797.4375,
+        "cycles:u": 171139268.1875,
+        "instructions:u": 434572739.5625
+      },
+      "workload": "list",
+      "name": "before"
+    },
+    {
+      "kind": "rust-one-worker",
+      "operation": "list",
+      "rate": 16,
+      "round": 2,
+      "first_ms": 10.034855,
+      "idle_rss": 7561216,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 194934692,
+        "total": 560577165
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.00085555,
+      "requests_per_s": 15.986322901441671,
+      "p50_us": 28879,
+      "p99_us": 65791,
+      "p999_us": 65791,
+      "max_us": 65791,
+      "perf": {
+        "task-clock": 431.46,
+        "cycles": 1742548016.0,
+        "instructions": 3679674465.0,
+        "cycles:u": 1242560570.0,
+        "instructions:u": 3425086066.0
+      },
+      "load_rss": 41316352,
+      "instructions_per_request": 229979654.0625,
+      "cpu_s_per_request": 0.026966249999999997,
+      "sibling_after": {
+        "busy": 194934696,
+        "total": 560577265
+      },
+      "sibling_busy_share": 0.04,
+      "counts": {
+        "task-clock": 26.96625,
+        "cycles": 108909251.0,
+        "instructions": 229979654.0625,
+        "cycles:u": 77660035.625,
+        "instructions:u": 214067879.125
+      },
+      "workload": "list",
+      "name": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 3,
+      "first_ms": 37.182502,
+      "idle_rss": 16805888,
+      "binary_bytes": 7073936,
+      "sibling_before": {
+        "busy": 194934698,
+        "total": 560577300
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.076717753,
+      "requests_per_s": 14.859976029391241,
+      "p50_us": 102079,
+      "p99_us": 179711,
+      "p999_us": 179711,
+      "max_us": 179711,
+      "perf": {
+        "task-clock": 1077.63,
+        "cycles": 4432629262.0,
+        "instructions": 8092683710.0,
+        "cycles:u": 2746596958.0,
+        "instructions:u": 6953119361.0
+      },
+      "load_rss": 30900224,
+      "instructions_per_request": 505792731.875,
+      "cpu_s_per_request": 0.067351875,
+      "sibling_after": {
+        "busy": 194934708,
+        "total": 560577410
+      },
+      "sibling_busy_share": 0.09090909090909091,
+      "counts": {
+        "task-clock": 67.351875,
+        "cycles": 277039328.875,
+        "instructions": 505792731.875,
+        "cycles:u": 171662309.875,
+        "instructions:u": 434569960.0625
+      },
+      "workload": "list",
+      "name": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 3,
+      "first_ms": 38.150675,
+      "idle_rss": 16502784,
+      "binary_bytes": 7078488,
+      "sibling_before": {
+        "busy": 194934711,
+        "total": 560577441
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001750635,
+      "requests_per_s": 15.97203878987309,
+      "p50_us": 25615,
+      "p99_us": 56319,
+      "p999_us": 56319,
+      "max_us": 56319,
+      "perf": {
+        "task-clock": 370.19,
+        "cycles": 1483087610.0,
+        "instructions": 2784992858.0,
+        "cycles:u": 943591050.0,
+        "instructions:u": 2539592365.0
+      },
+      "load_rss": 54865920,
+      "instructions_per_request": 174062053.625,
+      "cpu_s_per_request": 0.023136875,
+      "sibling_after": {
+        "busy": 194934726,
+        "total": 560577542
+      },
+      "sibling_busy_share": 0.1485148514851485,
+      "counts": {
+        "task-clock": 23.136875,
+        "cycles": 92692975.625,
+        "instructions": 174062053.625,
+        "cycles:u": 58974440.625,
+        "instructions:u": 158724522.8125
+      },
+      "workload": "list",
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 1184.3,
+        "cycles": 4924372799.0,
+        "instructions": 4063280604.0,
+        "cycles:u": 744414043.0,
+        "instructions:u": 1100613359.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560577559,
+          "idle": 365642833
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560577676,
+          "idle": 365642946
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.03418803418803419
+      },
+      "workload": "print",
+      "name": "after",
+      "round": 3
+    },
+    {
+      "counts": {
+        "task-clock": 1348.44,
+        "cycles": 5563702524.0,
+        "instructions": 4623161699.0,
+        "cycles:u": 1048435912.0,
+        "instructions:u": 1659198620.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560577690,
+          "idle": 365642959
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560577823,
+          "idle": 365643076
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.12030075187969924
+      },
+      "workload": "print",
+      "name": "before",
+      "round": 3
+    },
+    {
+      "counts": {
+        "task-clock": 1175.81,
+        "cycles": 4886314332.0,
+        "instructions": 3868427518.0,
+        "cycles:u": 651680214.0,
+        "instructions:u": 907998545.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560577836,
+          "idle": 365643089
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560577955,
+          "idle": 365643199
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.07563025210084033
+      },
+      "workload": "print",
+      "name": "rust",
+      "round": 3
+    },
+    {
+      "kind": "rust-one-worker",
+      "operation": "list",
+      "rate": 16,
+      "round": 3,
+      "first_ms": 10.245431,
+      "idle_rss": 7540736,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 194934756,
+        "total": 560577981
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001137147,
+      "requests_per_s": 15.981826314152343,
+      "p50_us": 27727,
+      "p99_us": 66303,
+      "p999_us": 66303,
+      "max_us": 66303,
+      "perf": {
+        "task-clock": 421.64,
+        "cycles": 1729986555.0,
+        "instructions": 3671949839.0,
+        "cycles:u": 1218119897.0,
+        "instructions:u": 3425067413.0
+      },
+      "load_rss": 41295872,
+      "instructions_per_request": 229496864.9375,
+      "cpu_s_per_request": 0.026352499999999997,
+      "sibling_after": {
+        "busy": 194934762,
+        "total": 560578084
+      },
+      "sibling_busy_share": 0.05825242718446602,
+      "counts": {
+        "task-clock": 26.3525,
+        "cycles": 108124159.6875,
+        "instructions": 229496864.9375,
+        "cycles:u": 76132493.5625,
+        "instructions:u": 214066713.3125
+      },
+      "workload": "list",
+      "name": "rust"
+    },
+    {
+      "counts": {
+        "task-clock": 1190.09,
+        "cycles": 4933134495.0,
+        "instructions": 3868827644.0,
+        "cycles:u": 665458704.0,
+        "instructions:u": 907998683.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560578100,
+          "idle": 365643337
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560578217,
+          "idle": 365643446
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.06837606837606838
+      },
+      "workload": "print",
+      "name": "rust",
+      "round": 4
+    },
+    {
+      "counts": {
+        "task-clock": 1300.56,
+        "cycles": 5366895847.0,
+        "instructions": 4622287767.0,
+        "cycles:u": 997017983.0,
+        "instructions:u": 1659198453.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560578231,
+          "idle": 365643460
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560578360,
+          "idle": 365643579
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.07751937984496124
+      },
+      "workload": "print",
+      "name": "before",
+      "round": 4
+    },
+    {
+      "kind": "rust-one-worker",
+      "operation": "list",
+      "rate": 16,
+      "round": 4,
+      "first_ms": 10.042169,
+      "idle_rss": 7548928,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 194934782,
+        "total": 560578386
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001788382,
+      "requests_per_s": 15.971436969609416,
+      "p50_us": 28287,
+      "p99_us": 61183,
+      "p999_us": 61183,
+      "max_us": 61183,
+      "perf": {
+        "task-clock": 428.84,
+        "cycles": 1767864961.0,
+        "instructions": 3679019256.0,
+        "cycles:u": 1223890474.0,
+        "instructions:u": 3425123811.0
+      },
+      "load_rss": 41304064,
+      "instructions_per_request": 229938703.5,
+      "cpu_s_per_request": 0.0268025,
+      "sibling_after": {
+        "busy": 194934791,
+        "total": 560578492
+      },
+      "sibling_busy_share": 0.08490566037735849,
+      "counts": {
+        "task-clock": 26.8025,
+        "cycles": 110491560.0625,
+        "instructions": 229938703.5,
+        "cycles:u": 76493154.625,
+        "instructions:u": 214070238.1875
+      },
+      "workload": "list",
+      "name": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 4,
+      "first_ms": 50.991193,
+      "idle_rss": 16752640,
+      "binary_bytes": 7073936,
+      "sibling_before": {
+        "busy": 194934804,
+        "total": 560578527
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.074250503,
+      "requests_per_s": 14.894105197361029,
+      "p50_us": 188543,
+      "p99_us": 265727,
+      "p999_us": 265727,
+      "max_us": 265727,
+      "perf": {
+        "task-clock": 1074.9,
+        "cycles": 4371387547.0,
+        "instructions": 7951835021.0,
+        "cycles:u": 2773134638.0,
+        "instructions:u": 6953179632.0
+      },
+      "load_rss": 30871552,
+      "instructions_per_request": 496989688.8125,
+      "cpu_s_per_request": 0.06718125000000001,
+      "sibling_after": {
+        "busy": 194934821,
+        "total": 560578638
+      },
+      "sibling_busy_share": 0.15315315315315314,
+      "counts": {
+        "task-clock": 67.18125,
+        "cycles": 273211721.6875,
+        "instructions": 496989688.8125,
+        "cycles:u": 173320914.875,
+        "instructions:u": 434573727.0
+      },
+      "workload": "list",
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 1362.13,
+        "cycles": 5366455067.0,
+        "instructions": 4065103663.0,
+        "cycles:u": 782510859.0,
+        "instructions:u": 1100613549.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560578655,
+          "idle": 365643834
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560578790,
+          "idle": 365643953
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.11851851851851852
+      },
+      "workload": "print",
+      "name": "after",
+      "round": 4
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 4,
+      "first_ms": 39.215771,
+      "idle_rss": 16707584,
+      "binary_bytes": 7078488,
+      "sibling_before": {
+        "busy": 194934840,
+        "total": 560578825
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001327193,
+      "requests_per_s": 15.978793057705364,
+      "p50_us": 35135,
+      "p99_us": 60639,
+      "p999_us": 60639,
+      "max_us": 60639,
+      "perf": {
+        "task-clock": 409.2,
+        "cycles": 1620505749.0,
+        "instructions": 2788256360.0,
+        "cycles:u": 1063445144.0,
+        "instructions:u": 2539607485.0
+      },
+      "load_rss": 55275520,
+      "instructions_per_request": 174266022.5,
+      "cpu_s_per_request": 0.025575,
+      "sibling_after": {
+        "busy": 194934875,
+        "total": 560578925
+      },
+      "sibling_busy_share": 0.35,
+      "counts": {
+        "task-clock": 25.575,
+        "cycles": 101281609.3125,
+        "instructions": 174266022.5,
+        "cycles:u": 66465321.5,
+        "instructions:u": 158725467.8125
+      },
+      "workload": "list",
+      "name": "after"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 5,
+      "first_ms": 48.070283,
+      "idle_rss": 16707584,
+      "binary_bytes": 7073936,
+      "sibling_before": {
+        "busy": 194934881,
+        "total": 560578959
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.050378572,
+      "requests_per_s": 15.232603202800293,
+      "p50_us": 100799,
+      "p99_us": 163455,
+      "p999_us": 163455,
+      "max_us": 163455,
+      "perf": {
+        "task-clock": 1051.81,
+        "cycles": 4332972053.0,
+        "instructions": 8069291693.0,
+        "cycles:u": 2708929731.0,
+        "instructions:u": 6953058724.0
+      },
+      "load_rss": 31002624,
+      "instructions_per_request": 504330730.8125,
+      "cpu_s_per_request": 0.065738125,
+      "sibling_after": {
+        "busy": 194934887,
+        "total": 560579061
+      },
+      "sibling_busy_share": 0.058823529411764705,
+      "counts": {
+        "task-clock": 65.738125,
+        "cycles": 270810753.3125,
+        "instructions": 504330730.8125,
+        "cycles:u": 169308108.1875,
+        "instructions:u": 434566170.25
+      },
+      "workload": "list",
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 1169.72,
+        "cycles": 4850831141.0,
+        "instructions": 3870196442.0,
+        "cycles:u": 653690289.0,
+        "instructions:u": 907998626.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560579079,
+          "idle": 365644190
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560579194,
+          "idle": 365644299
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.05217391304347826
+      },
+      "workload": "print",
+      "name": "rust",
+      "round": 5
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 5,
+      "first_ms": 39.914166,
+      "idle_rss": 16764928,
+      "binary_bytes": 7078488,
+      "sibling_before": {
+        "busy": 194934900,
+        "total": 560579225
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.000512007,
+      "requests_per_s": 15.991812080272217,
+      "p50_us": 28463,
+      "p99_us": 59807,
+      "p999_us": 59807,
+      "max_us": 59807,
+      "perf": {
+        "task-clock": 372.36,
+        "cycles": 1429249479.0,
+        "instructions": 2794069154.0,
+        "cycles:u": 918274589.0,
+        "instructions:u": 2539643635.0
+      },
+      "load_rss": 55070720,
+      "instructions_per_request": 174629322.125,
+      "cpu_s_per_request": 0.0232725,
+      "sibling_after": {
+        "busy": 194934910,
+        "total": 560579327
+      },
+      "sibling_busy_share": 0.09803921568627451,
+      "counts": {
+        "task-clock": 23.2725,
+        "cycles": 89328092.4375,
+        "instructions": 174629322.125,
+        "cycles:u": 57392161.8125,
+        "instructions:u": 158727727.1875
+      },
+      "workload": "list",
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 1322.74,
+        "cycles": 5369207106.0,
+        "instructions": 4624895103.0,
+        "cycles:u": 1021399572.0,
+        "instructions:u": 1659198634.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560579347,
+          "idle": 365644435
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560579477,
+          "idle": 365644552
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.1
+      },
+      "workload": "print",
+      "name": "before",
+      "round": 5
+    },
+    {
+      "counts": {
+        "task-clock": 1228.55,
+        "cycles": 5068257662.0,
+        "instructions": 4062334058.0,
+        "cycles:u": 765454296.0,
+        "instructions:u": 1100613528.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560579494,
+          "idle": 365644567
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560579615,
+          "idle": 365644677
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.09090909090909091
+      },
+      "workload": "print",
+      "name": "after",
+      "round": 5
+    },
+    {
+      "kind": "rust-one-worker",
+      "operation": "list",
+      "rate": 16,
+      "round": 5,
+      "first_ms": 10.190418,
+      "idle_rss": 7512064,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 194934939,
+        "total": 560579641
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001206073,
+      "requests_per_s": 15.98072607775722,
+      "p50_us": 28639,
+      "p99_us": 63231,
+      "p999_us": 63231,
+      "max_us": 63231,
+      "perf": {
+        "task-clock": 431.02,
+        "cycles": 1771312061.0,
+        "instructions": 3682722678.0,
+        "cycles:u": 1227931589.0,
+        "instructions:u": 3425080727.0
+      },
+      "load_rss": 41267200,
+      "instructions_per_request": 230170167.375,
+      "cpu_s_per_request": 0.026938749999999997,
+      "sibling_after": {
+        "busy": 194934947,
+        "total": 560579742
+      },
+      "sibling_busy_share": 0.07920792079207921,
+      "counts": {
+        "task-clock": 26.93875,
+        "cycles": 110707003.8125,
+        "instructions": 230170167.375,
+        "cycles:u": 76745724.3125,
+        "instructions:u": 214067545.4375
+      },
+      "workload": "list",
+      "name": "rust"
+    },
+    {
+      "counts": {
+        "task-clock": 1301.38,
+        "cycles": 5398695149.0,
+        "instructions": 4621922115.0,
+        "cycles:u": 1000186063.0,
+        "instructions:u": 1659198449.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560579760,
+          "idle": 365644812
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560579887,
+          "idle": 365644931
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.06299212598425197
+      },
+      "workload": "print",
+      "name": "before",
+      "round": 6
+    },
+    {
+      "kind": "rust-one-worker",
+      "operation": "list",
+      "rate": 16,
+      "round": 6,
+      "first_ms": 10.583047,
+      "idle_rss": 7536640,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 194934959,
+        "total": 560579916
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001077389,
+      "requests_per_s": 15.982780328284889,
+      "p50_us": 27887,
+      "p99_us": 62847,
+      "p999_us": 62847,
+      "max_us": 62847,
+      "perf": {
+        "task-clock": 415.23,
+        "cycles": 1727374328.0,
+        "instructions": 3678623603.0,
+        "cycles:u": 1208050559.0,
+        "instructions:u": 3425005858.0
+      },
+      "load_rss": 41291776,
+      "instructions_per_request": 229913975.1875,
+      "cpu_s_per_request": 0.025951875000000003,
+      "sibling_after": {
+        "busy": 194934966,
+        "total": 560580017
+      },
+      "sibling_busy_share": 0.06930693069306931,
+      "counts": {
+        "task-clock": 25.951875,
+        "cycles": 107960895.5,
+        "instructions": 229913975.1875,
+        "cycles:u": 75503159.9375,
+        "instructions:u": 214062866.125
+      },
+      "workload": "list",
+      "name": "rust"
+    },
+    {
+      "counts": {
+        "task-clock": 1149.88,
+        "cycles": 4805964798.0,
+        "instructions": 3867752456.0,
+        "cycles:u": 663551919.0,
+        "instructions:u": 907998921.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560580035,
+          "idle": 365645068
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560580148,
+          "idle": 365645175
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.05309734513274336
+      },
+      "workload": "print",
+      "name": "rust",
+      "round": 6
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 6,
+      "first_ms": 49.963638,
+      "idle_rss": 16736256,
+      "binary_bytes": 7073936,
+      "sibling_before": {
+        "busy": 194934991,
+        "total": 560580176
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.108661702,
+      "requests_per_s": 14.43181447608082,
+      "p50_us": 168063,
+      "p99_us": 234623,
+      "p999_us": 234623,
+      "max_us": 234623,
+      "perf": {
+        "task-clock": 1111.95,
+        "cycles": 4603242221.0,
+        "instructions": 8059635407.0,
+        "cycles:u": 2814194467.0,
+        "instructions:u": 6953188262.0
+      },
+      "load_rss": 33976320,
+      "instructions_per_request": 503727212.9375,
+      "cpu_s_per_request": 0.069496875,
+      "sibling_after": {
+        "busy": 194935010,
+        "total": 560580292
+      },
+      "sibling_busy_share": 0.16379310344827586,
+      "counts": {
+        "task-clock": 69.496875,
+        "cycles": 287702638.8125,
+        "instructions": 503727212.9375,
+        "cycles:u": 175887154.1875,
+        "instructions:u": 434574266.375
+      },
+      "workload": "list",
+      "name": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 6,
+      "first_ms": 47.2719,
+      "idle_rss": 16633856,
+      "binary_bytes": 7078488,
+      "sibling_before": {
+        "busy": 194935028,
+        "total": 560580326
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001045087,
+      "requests_per_s": 15.983296065065248,
+      "p50_us": 37663,
+      "p99_us": 67839,
+      "p999_us": 67839,
+      "max_us": 67839,
+      "perf": {
+        "task-clock": 418.81,
+        "cycles": 1580024175.0,
+        "instructions": 2790577745.0,
+        "cycles:u": 1008992585.0,
+        "instructions:u": 2539620257.0
+      },
+      "load_rss": 54988800,
+      "instructions_per_request": 174411109.0625,
+      "cpu_s_per_request": 0.026175625,
+      "sibling_after": {
+        "busy": 194935050,
+        "total": 560580431
+      },
+      "sibling_busy_share": 0.20952380952380953,
+      "counts": {
+        "task-clock": 26.175625,
+        "cycles": 98751510.9375,
+        "instructions": 174411109.0625,
+        "cycles:u": 63062036.5625,
+        "instructions:u": 158726266.0625
+      },
+      "workload": "list",
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 1246.38,
+        "cycles": 5076015923.0,
+        "instructions": 4063520225.0,
+        "cycles:u": 775493060.0,
+        "instructions:u": 1100613423.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560580456,
+          "idle": 365645404
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560580579,
+          "idle": 365645512
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.12195121951219512
+      },
+      "workload": "print",
+      "name": "after",
+      "round": 6
+    },
+    {
+      "counts": {
+        "task-clock": 1171.67,
+        "cycles": 4926978881.0,
+        "instructions": 3869135212.0,
+        "cycles:u": 655905843.0,
+        "instructions:u": 907998316.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560580593,
+          "idle": 365645524
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560580709,
+          "idle": 365645628
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.10344827586206896
+      },
+      "workload": "print",
+      "name": "rust",
+      "round": 7
+    },
+    {
+      "kind": "rust-one-worker",
+      "operation": "list",
+      "rate": 16,
+      "round": 7,
+      "first_ms": 12.011778,
+      "idle_rss": 7524352,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 194935084,
+        "total": 560580737
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001320275,
+      "requests_per_s": 15.978903453243268,
+      "p50_us": 28719,
+      "p99_us": 63775,
+      "p999_us": 63775,
+      "max_us": 63775,
+      "perf": {
+        "task-clock": 468.49,
+        "cycles": 1928238286.0,
+        "instructions": 3677139813.0,
+        "cycles:u": 1353400729.0,
+        "instructions:u": 3425016148.0
+      },
+      "load_rss": 41279488,
+      "instructions_per_request": 229821238.3125,
+      "cpu_s_per_request": 0.029280625,
+      "sibling_after": {
+        "busy": 194935111,
+        "total": 560580842
+      },
+      "sibling_busy_share": 0.2571428571428571,
+      "counts": {
+        "task-clock": 29.280625,
+        "cycles": 120514892.875,
+        "instructions": 229821238.3125,
+        "cycles:u": 84587545.5625,
+        "instructions:u": 214063509.25
+      },
+      "workload": "list",
+      "name": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 7,
+      "first_ms": 39.203117,
+      "idle_rss": 16703488,
+      "binary_bytes": 7073936,
+      "sibling_before": {
+        "busy": 194935114,
+        "total": 560580874
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.115587411,
+      "requests_per_s": 14.34221993026775,
+      "p50_us": 177279,
+      "p99_us": 283135,
+      "p999_us": 283135,
+      "max_us": 283135,
+      "perf": {
+        "task-clock": 1115.9,
+        "cycles": 4624500613.0,
+        "instructions": 8030914300.0,
+        "cycles:u": 2839395676.0,
+        "instructions:u": 6953209004.0
+      },
+      "load_rss": 33697792,
+      "instructions_per_request": 501932143.75,
+      "cpu_s_per_request": 0.06974375000000001,
+      "sibling_after": {
+        "busy": 194935128,
+        "total": 560580989
+      },
+      "sibling_busy_share": 0.12173913043478261,
+      "counts": {
+        "task-clock": 69.74375,
+        "cycles": 289031288.3125,
+        "instructions": 501932143.75,
+        "cycles:u": 177462229.75,
+        "instructions:u": 434575562.75
+      },
+      "workload": "list",
+      "name": "before"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 7,
+      "first_ms": 37.801477,
+      "idle_rss": 16674816,
+      "binary_bytes": 7078488,
+      "sibling_before": {
+        "busy": 194935130,
+        "total": 560581016
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001546169,
+      "requests_per_s": 15.975299487167225,
+      "p50_us": 27967,
+      "p99_us": 54335,
+      "p999_us": 54335,
+      "max_us": 54335,
+      "perf": {
+        "task-clock": 364.87,
+        "cycles": 1480056845.0,
+        "instructions": 2777491481.0,
+        "cycles:u": 941651166.0,
+        "instructions:u": 2539606978.0
+      },
+      "load_rss": 55029760,
+      "instructions_per_request": 173593217.5625,
+      "cpu_s_per_request": 0.022804375,
+      "sibling_after": {
+        "busy": 194935139,
+        "total": 560581118
+      },
+      "sibling_busy_share": 0.08823529411764706,
+      "counts": {
+        "task-clock": 22.804375,
+        "cycles": 92503552.8125,
+        "instructions": 173593217.5625,
+        "cycles:u": 58853197.875,
+        "instructions:u": 158725436.125
+      },
+      "workload": "list",
+      "name": "after"
+    },
+    {
+      "counts": {
+        "task-clock": 1219.83,
+        "cycles": 5054486782.0,
+        "instructions": 4064650592.0,
+        "cycles:u": 758389657.0,
+        "instructions:u": 1100613362.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560581140,
+          "idle": 365646000
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560581262,
+          "idle": 365646109
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.10655737704918032
+      },
+      "workload": "print",
+      "name": "after",
+      "round": 7
+    },
+    {
+      "counts": {
+        "task-clock": 1325.86,
+        "cycles": 5429377190.0,
+        "instructions": 4622300763.0,
+        "cycles:u": 1026321000.0,
+        "instructions:u": 1659198500.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560581279,
+          "idle": 365646122
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560581410,
+          "idle": 365646242
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.08396946564885496
+      },
+      "workload": "print",
+      "name": "before",
+      "round": 7
+    },
+    {
+      "counts": {
+        "task-clock": 1176.75,
+        "cycles": 4844981158.0,
+        "instructions": 3869083577.0,
+        "cycles:u": 647801236.0,
+        "instructions:u": 907998311.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560581426,
+          "idle": 365646258
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560581543,
+          "idle": 365646370
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.042735042735042736
+      },
+      "workload": "print",
+      "name": "rust",
+      "round": 8
+    },
+    {
+      "counts": {
+        "task-clock": 1286.33,
+        "cycles": 5277501692.0,
+        "instructions": 4622536684.0,
+        "cycles:u": 1003935548.0,
+        "instructions:u": 1659198509.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560581563,
+          "idle": 365646387
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560581690,
+          "idle": 365646506
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.06299212598425197
+      },
+      "workload": "print",
+      "name": "before",
+      "round": 8
+    },
+    {
+      "counts": {
+        "task-clock": 1260.17,
+        "cycles": 5163400988.0,
+        "instructions": 4064208903.0,
+        "cycles:u": 788281759.0,
+        "instructions:u": 1100613379.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560581710,
+          "idle": 365646524
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560581833,
+          "idle": 365646635
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.0975609756097561
+      },
+      "workload": "print",
+      "name": "after",
+      "round": 8
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 8,
+      "first_ms": 39.442778,
+      "idle_rss": 16769024,
+      "binary_bytes": 7078488,
+      "sibling_before": {
+        "busy": 194935212,
+        "total": 560581878
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001726506,
+      "requests_per_s": 15.972423514966868,
+      "p50_us": 25903,
+      "p99_us": 66047,
+      "p999_us": 66047,
+      "max_us": 66047,
+      "perf": {
+        "task-clock": 391.78,
+        "cycles": 1580987713.0,
+        "instructions": 2799481932.0,
+        "cycles:u": 1020146320.0,
+        "instructions:u": 2539563888.0
+      },
+      "load_rss": 55123968,
+      "instructions_per_request": 174967620.75,
+      "cpu_s_per_request": 0.024486249999999998,
+      "sibling_after": {
+        "busy": 194935233,
+        "total": 560581984
+      },
+      "sibling_busy_share": 0.19811320754716982,
+      "counts": {
+        "task-clock": 24.48625,
+        "cycles": 98811732.0625,
+        "instructions": 174967620.75,
+        "cycles:u": 63759145.0,
+        "instructions:u": 158722743.0
+      },
+      "workload": "list",
+      "name": "after"
+    },
+    {
+      "kind": "rust-one-worker",
+      "operation": "list",
+      "rate": 16,
+      "round": 8,
+      "first_ms": 11.979326,
+      "idle_rss": 7565312,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 194935238,
+        "total": 560582019
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001095908,
+      "requests_per_s": 15.982484667193347,
+      "p50_us": 31727,
+      "p99_us": 76287,
+      "p999_us": 76287,
+      "max_us": 76287,
+      "perf": {
+        "task-clock": 502.89,
+        "cycles": 2029451446.0,
+        "instructions": 3670074171.0,
+        "cycles:u": 1429982901.0,
+        "instructions:u": 3425004808.0
+      },
+      "load_rss": 41320448,
+      "instructions_per_request": 229379635.6875,
+      "cpu_s_per_request": 0.031430625,
+      "sibling_after": {
+        "busy": 194935260,
+        "total": 560582119
+      },
+      "sibling_busy_share": 0.22,
+      "counts": {
+        "task-clock": 31.430625,
+        "cycles": 126840715.375,
+        "instructions": 229379635.6875,
+        "cycles:u": 89373931.3125,
+        "instructions:u": 214062800.5
+      },
+      "workload": "list",
+      "name": "rust"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 8,
+      "first_ms": 40.785146,
+      "idle_rss": 16797696,
+      "binary_bytes": 7073936,
+      "sibling_before": {
+        "busy": 194935268,
+        "total": 560582153
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.102336306,
+      "requests_per_s": 14.514626718644973,
+      "p50_us": 146943,
+      "p99_us": 239999,
+      "p999_us": 239999,
+      "max_us": 239999,
+      "perf": {
+        "task-clock": 1105.09,
+        "cycles": 4465388315.0,
+        "instructions": 7968218263.0,
+        "cycles:u": 2800711519.0,
+        "instructions:u": 6953139885.0
+      },
+      "load_rss": 31051776,
+      "instructions_per_request": 498013641.4375,
+      "cpu_s_per_request": 0.069068125,
+      "sibling_after": {
+        "busy": 194935283,
+        "total": 560582270
+      },
+      "sibling_busy_share": 0.1282051282051282,
+      "counts": {
+        "task-clock": 69.068125,
+        "cycles": 279086769.6875,
+        "instructions": 498013641.4375,
+        "cycles:u": 175044469.9375,
+        "instructions:u": 434571242.8125
+      },
+      "workload": "list",
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 1257.89,
+        "cycles": 5048945488.0,
+        "instructions": 4063141629.0,
+        "cycles:u": 765827164.0,
+        "instructions:u": 1100613418.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560582287,
+          "idle": 365647003
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560582410,
+          "idle": 365647117
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.07317073170731707
+      },
+      "workload": "print",
+      "name": "after",
+      "round": 9
+    },
+    {
+      "counts": {
+        "task-clock": 1194.3,
+        "cycles": 4836803058.0,
+        "instructions": 3869401694.0,
+        "cycles:u": 659770272.0,
+        "instructions:u": 907998930.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560582428,
+          "idle": 365647133
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560582544,
+          "idle": 365647241
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.06896551724137931
+      },
+      "workload": "print",
+      "name": "rust",
+      "round": 9
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 9,
+      "first_ms": 39.83675,
+      "idle_rss": 16646144,
+      "binary_bytes": 7078488,
+      "sibling_before": {
+        "busy": 194935308,
+        "total": 560582577
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001100746,
+      "requests_per_s": 15.98240742895221,
+      "p50_us": 28175,
+      "p99_us": 58783,
+      "p999_us": 58783,
+      "max_us": 58783,
+      "perf": {
+        "task-clock": 388.94,
+        "cycles": 1504341847.0,
+        "instructions": 2778258734.0,
+        "cycles:u": 943475450.0,
+        "instructions:u": 2539603777.0
+      },
+      "load_rss": 55001088,
+      "instructions_per_request": 173641170.875,
+      "cpu_s_per_request": 0.02430875,
+      "sibling_after": {
+        "busy": 194935317,
+        "total": 560582676
+      },
+      "sibling_busy_share": 0.09090909090909091,
+      "counts": {
+        "task-clock": 24.30875,
+        "cycles": 94021365.4375,
+        "instructions": 173641170.875,
+        "cycles:u": 58967215.625,
+        "instructions:u": 158725236.0625
+      },
+      "workload": "list",
+      "name": "after"
+    },
+    {
+      "kind": "hirsel",
+      "operation": "list",
+      "rate": 16,
+      "round": 9,
+      "first_ms": 40.996904,
+      "idle_rss": 16896000,
+      "binary_bytes": 7073936,
+      "sibling_before": {
+        "busy": 194935322,
+        "total": 560582709
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.1219387140000001,
+      "requests_per_s": 14.261028521741517,
+      "p50_us": 153087,
+      "p99_us": 222463,
+      "p999_us": 222463,
+      "max_us": 222463,
+      "perf": {
+        "task-clock": 1121.4,
+        "cycles": 4528554196.0,
+        "instructions": 8095977613.0,
+        "cycles:u": 2753490648.0,
+        "instructions:u": 6953181327.0
+      },
+      "load_rss": 34082816,
+      "instructions_per_request": 505998600.8125,
+      "cpu_s_per_request": 0.07008750000000001,
+      "sibling_after": {
+        "busy": 194935329,
+        "total": 560582824
+      },
+      "sibling_busy_share": 0.06086956521739131,
+      "counts": {
+        "task-clock": 70.0875,
+        "cycles": 283034637.25,
+        "instructions": 505998600.8125,
+        "cycles:u": 172093165.5,
+        "instructions:u": 434573832.9375
+      },
+      "workload": "list",
+      "name": "before"
+    },
+    {
+      "counts": {
+        "task-clock": 1294.48,
+        "cycles": 5377477387.0,
+        "instructions": 4622249940.0,
+        "cycles:u": 1011513246.0,
+        "instructions:u": 1659198504.0
+      },
+      "running_percent": {
+        "task-clock": 100.0,
+        "cycles": 100.0,
+        "instructions": 100.0,
+        "cycles:u": 100.0,
+        "instructions:u": 100.0
+      },
+      "stdout_sha256": "74b12c8925ad6a1f4b0e5bb42fd0bc27a51cf40f60d70cf1f00a378c8e5e3c58",
+      "sibling_before": {
+        "cpu15": {
+          "total": 560582835,
+          "idle": 365647506
+        }
+      },
+      "sibling_after": {
+        "cpu15": {
+          "total": 560582962,
+          "idle": 365647624
+        }
+      },
+      "sibling_busy_share": {
+        "cpu15": 0.07086614173228346
+      },
+      "workload": "print",
+      "name": "before",
+      "round": 9
+    },
+    {
+      "kind": "rust-one-worker",
+      "operation": "list",
+      "rate": 16,
+      "round": 9,
+      "first_ms": 10.650715,
+      "idle_rss": 7680000,
+      "binary_bytes": 8660536,
+      "sibling_before": {
+        "busy": 194935345,
+        "total": 560582994
+      },
+      "completed": 16,
+      "errors": 0,
+      "elapsed_s": 1.001658394,
+      "requests_per_s": 15.973509627474854,
+      "p50_us": 29759,
+      "p99_us": 66751,
+      "p999_us": 66751,
+      "max_us": 66751,
+      "perf": {
+        "task-clock": 448.2,
+        "cycles": 1812687504.0,
+        "instructions": 3681158777.0,
+        "cycles:u": 1268913800.0,
+        "instructions:u": 3424992083.0
+      },
+      "load_rss": 41435136,
+      "instructions_per_request": 230072423.5625,
+      "cpu_s_per_request": 0.0280125,
+      "sibling_after": {
+        "busy": 194935359,
+        "total": 560583096
+      },
+      "sibling_busy_share": 0.13725490196078433,
+      "counts": {
+        "task-clock": 28.0125,
+        "cycles": 113292969.0,
+        "instructions": 230072423.5625,
+        "cycles:u": 79307112.5,
+        "instructions:u": 214062005.1875
+      },
+      "workload": "list",
+      "name": "rust"
+    }
+  ],
+  "participants": {
+    "print/rust": {
+      "name": "rust",
+      "command": [
+        "/tmp/text-build-after/rust",
+        "print",
+        "1000000"
+      ],
+      "binary_sha256": "141d2df31c65e3340abe79d097e841e4f796e263a7cbb4259d689c647b4c03c5"
+    },
+    "print/before": {
+      "name": "before",
+      "command": [
+        "/tmp/text-build-before/print",
+        "--hirsel-grants",
+        "/tmp/text-build-before/grants.json",
+        "1000000"
+      ],
+      "binary_sha256": "17ebfb4ad30f51404965ba099181245ab2bcdb741221701eec7a9e19b5a10e62"
+    },
+    "print/after": {
+      "name": "after",
+      "command": [
+        "/tmp/text-build-after/print",
+        "--hirsel-grants",
+        "/tmp/text-build-after/grants.json",
+        "1000000"
+      ],
+      "binary_sha256": "bc080fa0649b886067a3b5cf30cb4aad7584302c6ca96c3d6c9b83ba94ea4ccf"
+    }
+  },
+  "status": "ok",
+  "task_binaries": {
+    "before": "d5232cae5ecd5d1f6ce98b27bfd2e4a3b184e1afe61893db9fdebd08f6af5b24",
+    "after": "fa3be8877cd4d708a4ede65f33376e55bd6af4758c4a12af64277121377653ba",
+    "rust": "29191e20de685e422a9ac783bc38e60e37443b858c8d965f79531da4158c26c8"
+  },
+  "comparisons": [
+    {
+      "workload": "list",
+      "name": "before",
+      "instructions": {
+        "ratio": 2.1869163827811717,
+        "ci95": [
+          2.1660868637122155,
+          2.199493171281554
+        ]
+      },
+      "instructions:u": {
+        "ratio": 2.0301046517698107,
+        "ci95": [
+          2.0300678927104086,
+          2.030122462640179
+        ]
+      },
+      "cycles": {
+        "ratio": 2.5141487757432666,
+        "ci95": [
+          2.3871318103231443,
+          2.5800691973683985
+        ]
+      },
+      "cycles:u": {
+        "ratio": 2.2263125126559045,
+        "ci95": [
+          2.084291344336871,
+          2.276918518292268
+        ]
+      },
+      "task-clock": {
+        "ratio": 2.527791948798813,
+        "ci95": [
+          2.4105646470407582,
+          2.5929251002704974
+        ]
+      }
+    },
+    {
+      "workload": "list",
+      "name": "after",
+      "instructions": {
+        "ratio": 0.756118732400137,
+        "ci95": [
+          0.7540878135374093,
+          0.7588641656112073
+        ]
+      },
+      "instructions:u": {
+        "ratio": 0.7414880980880413,
+        "ci95": [
+          0.7414752011479857,
+          0.7414946387179829
+        ]
+      },
+      "cycles": {
+        "ratio": 0.8372410977412816,
+        "ci95": [
+          0.7902031507196597,
+          0.8937470959921355
+        ]
+      },
+      "cycles:u": {
+        "ratio": 0.7638423352713017,
+        "ci95": [
+          0.7188789121794932,
+          0.8230553107637975
+        ]
+      },
+      "task-clock": {
+        "ratio": 0.8841712271588906,
+        "ci95": [
+          0.8251656210239986,
+          0.9305801697602836
+        ]
+      }
+    },
+    {
+      "workload": "print",
+      "name": "before",
+      "instructions": {
+        "ratio": 1.194706740799546,
+        "ci95": [
+          1.1946171016942877,
+          1.1949517546593125
+        ]
+      },
+      "instructions:u": {
+        "ratio": 1.8273139771317408,
+        "ci95": [
+          1.8273135289385845,
+          1.8273143974713135
+        ]
+      },
+      "cycles": {
+        "ratio": 1.1026079114872975,
+        "ci95": [
+          1.0939850691169413,
+          1.1129422962942095
+        ]
+      },
+      "cycles:u": {
+        "ratio": 1.52533517718256,
+        "ci95": [
+          1.5062317175993885,
+          1.5625129961200939
+        ]
+      },
+      "task-clock": {
+        "ratio": 1.1037213623078976,
+        "ci95": [
+          1.0902704837449269,
+          1.127614155348228
+        ]
+      }
+    },
+    {
+      "workload": "print",
+      "name": "after",
+      "instructions": {
+        "ratio": 1.0502283793723322,
+        "ci95": [
+          1.050100122016435,
+          1.0504846686647937
+        ]
+      },
+      "instructions:u": {
+        "ratio": 1.2121311581052017,
+        "ci95": [
+          1.2121308695562152,
+          1.2121314185871817
+        ]
+      },
+      "cycles": {
+        "ratio": 1.0367674619282417,
+        "ci95": [
+          1.0245618734941588,
+          1.0579025527261672
+        ]
+      },
+      "cycles:u": {
+        "ratio": 1.1610900693645334,
+        "ci95": [
+          1.1429022482539728,
+          1.1819963595141207
+        ]
+      },
+      "task-clock": {
+        "ratio": 1.0523697014171973,
+        "ci95": [
+          1.0267045189324984,
+          1.065011895254153
+        ]
+      }
+    }
+  ]
+}

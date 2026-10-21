@@ -7,6 +7,7 @@ mod loops;
 pub mod review;
 #[cfg(test)]
 mod tests;
+mod text;
 use hirsel_syntax::{ContentHash, DefPath, FileContext, Path};
 use hirsel_types::*;
 use std::{

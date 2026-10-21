@@ -11,7 +11,8 @@ pub fn finish(take builder: List[u8]) -> Result[String, Bytes] uses {} {
 
 // The text that appends through the formatting protocol left in an empty
 // builder: `format_into` and `append` only add valid UTF-8, so every
-// `to_string` and every f-string finishes here; invalid bytes fail TextInvariant.
+// `to_string` and custom-format f-strings finish here; invalid bytes fail TextInvariant.
+// Primitive-only f-strings use a compiler-private freeze after proving this invariant.
 @preserves_unique(builder)
 @track_caller
 pub fn finish_valid(take builder: List[u8]) -> String uses {} {

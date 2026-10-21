@@ -362,7 +362,10 @@ expected type, then its type selects `std@1/text.append` for `String` or
 `std@1/<scalar>.format_into` for `bool`, integers and floats, or the function a
 nominal type's `@format` association names, with the written
 `(value, mut builder)` mapped to declared ordinals; `Finish` is
-`std@1/text.finish_valid`. The callee is then typed and recorded in the body's
+`std@1/text.finish_valid` for custom formatters. Compiler-created builders whose
+holes are all primitive text formatters finish through the private
+`core@1/$intrinsic.TextFinish` operation, reusing byte-freeze instructions without
+rescanning UTF-8. The callee is then typed and recorded in the body's
 resolution as a named reference to that operation, so modes and lowering see an
 ordinary call. Another value type, or a program without std@1, is SEM-3; for a
 nominal type the message names `@format`.

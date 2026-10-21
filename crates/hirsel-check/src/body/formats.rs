@@ -100,15 +100,25 @@ impl Checker<'_, '_> {
                     0,
                 )
             }
-            ast::FormatStep::Finish => self.format_call(
-                id,
-                callee,
-                std_operation("text", "finish_valid"),
-                vec![0],
-                expected,
-                frame,
-                0,
-            ),
+            ast::FormatStep::Finish => {
+                // Only the compiler-created builder can reach this intrinsic.
+                // User @format functions receive arbitrary bytes and therefore
+                // retain finish_valid's checked UTF-8 invariant.
+                let trusted = self.format_holes.get(&id).is_some_and(|holes| {
+                    holes.iter().all(|hole| match self.kind(self.value(*hole)) {
+                        TypeKind::Primitive(p) => append_operation(p).is_some(),
+                        _ => false,
+                    })
+                });
+                let checked = std_operation("text", "finish_valid");
+                // Even an empty f-string still requires the std dependency.
+                let operation = if trusted && self.snapshot(&checked).is_ok() {
+                    ast::DefPath::core("$intrinsic.TextFinish")
+                } else {
+                    checked
+                };
+                self.format_call(id, callee, operation, vec![0], expected, frame, 0)
+            }
         }
     }
     /// The function a nominal type's `@format` association names, if any.

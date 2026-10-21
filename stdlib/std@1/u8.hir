@@ -12,7 +12,7 @@ pub fn format_inline[n: size](value: u8, mut buffer: Inline[u8, n]) -> Result[
 // built from the same digits in a list reserved to its exact length.
 @preserves_unique(out)
 pub fn format_into(value: u8, mut out: List[u8]) -> () uses {} {
-  internal.decimal.append(mut out, core@1/int.widen(value), false)
+  internal.decimal.append_u64(mut out, core@1/int.widen(value), false)
 }
 
 pub fn to_string(value: u8) -> unique String uses {} {

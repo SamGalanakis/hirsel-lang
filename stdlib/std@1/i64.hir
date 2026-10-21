@@ -18,14 +18,13 @@ pub fn format_inline[n: size](value: i64, mut buffer: Inline[u8, n]) -> Result[
 // built from the same digits in a list reserved to its exact length.
 @preserves_unique(out)
 pub fn format_into(value: i64, mut out: List[u8]) -> () uses {} {
-  let wide: i128 = core@1/int.widen(value)
-  let raw: u128 = core@1/int.truncate(wide)
+  let raw: u64 = core@1/int.truncate(value)
   let magnitude = if value < 0 {
     core@1/int.wrapping_add(~raw, 1)
   } else {
     raw
   }
-  internal.decimal.append(mut out, magnitude, value < 0)
+  internal.decimal.append_u64(mut out, magnitude, value < 0)
 }
 
 pub fn to_string(value: i64) -> unique String uses {} {

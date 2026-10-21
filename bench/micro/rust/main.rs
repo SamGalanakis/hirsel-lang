@@ -76,6 +76,28 @@ fn map_str(n: u64, salt: u64) -> u64 {
     sum
 }
 
+fn html_row(n: u64, salt: u64) -> u64 {
+    let mut out = String::with_capacity(n as usize * 64);
+    for i in 0..n {
+        write!(out, "<li id=\"task-{}\"><span>", i + salt).unwrap();
+        // Go html's five replacement spellings, writing into the caller buffer.
+        for c in "é<&\"'😀".chars() {
+            match c {
+                '&' => out.push_str("&amp;"),
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                '"' => out.push_str("&#34;"),
+                '\'' => out.push_str("&#39;"),
+                _ => out.push(c),
+            }
+        }
+        out.push_str("</span></li>\n");
+    }
+    out.bytes().fold(14695981039346656037u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(1099511628211)
+    })
+}
+
 fn strbuild(n: u64, salt: u64) -> u64 {
     let mut out = String::new();
     for i in 0..n {
@@ -261,6 +283,7 @@ fn main() {
             "map_u64" => map_u64(n, r),
             "map_str" | "map_str_upsert" => map_str(n, r),
             "strbuild" => strbuild(n, r),
+            "html_row" => html_row(n, r),
             "sha" => sha(n, r),
             "sort" => sort(n, r),
             "map_remove" => map_remove(n, r),

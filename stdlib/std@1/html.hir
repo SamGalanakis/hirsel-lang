@@ -14,6 +14,7 @@ pub fn esc(value: String) -> Escaped in value uses {} {
   Escaped(text: value)
 }
 
+@preserves_unique(out)
 fn escaped_format(value: Escaped, mut out: List[u8]) -> () uses {} {
   escape_into(mut out, value.text)
 }

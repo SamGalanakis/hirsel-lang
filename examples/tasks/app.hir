@@ -457,13 +457,17 @@ pub fn simple_change(
 }
 
 fn html_reply(status: u16, take document: String) -> httpd.Reply uses {} {
+  html_reply_bytes(status, unique string.as_bytes(document))
+}
+
+fn html_reply_bytes(status: u16, take document: Bytes) -> httpd.Reply uses {} {
   httpd.Reply(
     status: status,
     headers: [
       http.Header(name: "Content-Type", value: "text/html; charset=utf-8"),
       http.Header(name: "Cache-Control", value: "no-cache")
     ],
-    body: unique string.as_bytes(document)
+    body: take document
   )
 }
 
@@ -477,16 +481,16 @@ pub fn page(svc: Services, query: model.Query, selected: u64) -> httpd.Reply {
   let document = mutex.with(
     svc.tasks,
     svc.state,
-    fn(mut board: unique model.Board) -> unique Option[String] uses {} {
+    fn(mut board: unique model.Board) -> unique Option[Bytes] uses {} {
       if screen.selected != 0 && option.is_none(model.find(board, screen.selected)) {
         None()
       } else {
-        Some(view.page(board, screen))
+        Some(view.page_bytes(board, screen))
       }
     }
   )
   match take document {
-    Some(text) => html_reply(200, take text),
+    Some(text) => html_reply_bytes(200, take text),
     None() => html_reply(404, view.not_found_page()),
   }
 }

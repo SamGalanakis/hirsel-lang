@@ -83,3 +83,8 @@ Repeat literals retain their written operands in `SyntaxTree.repeats`. Their
 ordinary block binds a discarded `u64 = comptime N` and yields a one-element
 sequence containing `copy e`. H supplies the element context and checks copying;
 O checks the count and target, and K repeats the prepared value's operands.
+
+F-string desugaring reserves the UTF-8 literal lower bound once before evaluating
+holes, using an ordinary `core@1/list.reserve` call. Escapes contribute at least
+one byte; literal Unicode contributes its encoded length. Hole evaluation stays
+left to right. No TIR or LIR construct is introduced.

@@ -90,7 +90,7 @@ fn discover(program: &Program, def: &Definition, fuser: &mut Fuser) -> Vec<Plan>
         else {
             continue;
         };
-        if !text_call(path, "finish_valid") {
+        if !(text_call(path, "finish_valid") || path.is_core("$intrinsic.TextFinish")) {
             continue;
         }
         let Some(builder) = argument(arguments, 0) else {
@@ -197,7 +197,8 @@ fn discover(program: &Program, def: &Definition, fuser: &mut Fuser) -> Vec<Plan>
                             continue;
                         };
                         if !((*parameter == 1 && primitive_formatter(path))
-                            || (*parameter == 0 && text_call(path, "append")))
+                            || (*parameter == 0
+                                && (text_call(path, "append") || path.is_core("list.reserve"))))
                         {
                             okay = false;
                         }

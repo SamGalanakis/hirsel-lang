@@ -614,6 +614,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         .into_iter()
         .chain(super::loops::signatures())
         .chain(super::heap::signatures())
+        .chain(super::text::signatures())
     {
         publish(signature, &mut out);
     }

@@ -2103,7 +2103,7 @@ primary_operations! { self, call, context, name, a, value;
         }
         Value::Unit
     },
-    Primitive: "bytes.from_list" => {
+    Primitive: "bytes.from_list" | "$intrinsic.TextFinish" => {
         let values = collection::elements(arg(a, 0)?, BuiltinType::List)?;
         let mut result = Vec::with_capacity(values.len());
         for v in values {
@@ -2111,7 +2111,9 @@ primary_operations! { self, call, context, name, a, value;
             if i.kind() != Primitive::U8 { return Err(invalid("byte list element kind")); }
             result.push(i.bits() as u8);
         }
-        return Ok(Some(OperationResult::Complete { value: Value::Bytes(result), arguments: vec![], consumed: vec![0], released: vec![] }));
+        return Ok(Some(OperationResult::Complete { value: if call.path.is_core("$intrinsic.TextFinish") {
+            Value::String(String::from_utf8(result).map_err(|_| invalid("compiler text invariant"))?)
+        } else { Value::Bytes(result) }, arguments: vec![], consumed: vec![0], released: vec![] }));
     },
     Primitive: "bytes.slice" => {
         let src = bytes(arg(a, 0)?)?;

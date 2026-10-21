@@ -1,6 +1,6 @@
 // Server-rendered HTML. Every element the event stream replaces has an id, so one
 // `datastar-patch-elements` event morphs them all in place. Text from tasks is
-// always written through `html.esc`.
+// always written through `html.escape_into`.
 /// What a browser is looking at, as the event stream renders it.
 pub type Screen {
   query: model.Query,
@@ -52,12 +52,63 @@ fn overdue(item: model.Item, today: Option[time.Date]) -> bool uses {} {
 // ---- attributes ----
 /// A JavaScript string literal for `value`, safe inside a double-quoted HTML attribute
 /// once escaped: JSON's escaping, with `<` written as `\u003c`.
-fn js_string(value: String) -> unique String uses {} {
-  let quoted = match json.stringify(Text(unique value)) {
-    Ok(s) => take s,
-    Error(_) => "\"\"",
+// Go html/template/js.go:254-263,336-354 replacement-table structure,
+// combined with json.write_text_into's JSON spellings. Preserve this app's
+// existing JSON-then-HTML bytes (including its narrower < escaping policy).
+@preserves_unique(out)
+fn js_string_into(mut out: List[u8], value: String) -> () uses {} {
+  text.append(mut out, "&#34;")
+  let data = string.as_bytes(value)
+  let hex = b"0123456789abcdef"
+  let mut start: u64 = 0
+  let mut at: u64 = 0
+  while at < bytes.len(data) {
+    let c = data[at]
+    let replacement = if c == 34 {
+      "\\&#34;"
+    } else if c == 92 {
+      "\\\\"
+    } else if c == 60 {
+      "\\u003c"
+    } else if c == 62 {
+      "&gt;"
+    } else if c == 38 {
+      "&amp;"
+    } else if c == 39 {
+      "&#39;"
+    } else if c == 8 {
+      "\\b"
+    } else if c == 9 {
+      "\\t"
+    } else if c == 10 {
+      "\\n"
+    } else if c == 12 {
+      "\\f"
+    } else if c == 13 {
+      "\\r"
+    } else if c < 32 {
+      ""
+    } else {
+      at += 1
+      continue
+    }
+    if start < at {
+      bytes.append(mut out, bytes.slice(data, start, at))
+    }
+    if c < 32 && string.byte_len(replacement) == 0 {
+      text.append(mut out, "\\u00")
+      list.push(mut out, hex[int.widen(c >> 4)])
+      list.push(mut out, hex[int.widen(c & 15)])
+    } else {
+      text.append(mut out, replacement)
+    }
+    at += 1
+    start = at
   }
-  string.replace(quoted, "<", "\\u003c")
+  if start < at {
+    bytes.append(mut out, bytes.slice(data, start, at))
+  }
+  text.append(mut out, "&#34;")
 }
 
 /// ` selected` when `on`, for an `<option>`.
@@ -75,21 +126,24 @@ fn tags_html(mut out: List[u8], tags: List[String]) -> () uses {} {
   for tag in tags {
     text.append(
       mut out,
-      f"<button class=\"tag\" type=\"button\" data-on:click=\"$filter.tag = {html.esc(
-        js_string(tag)
-      )}\">#{html.esc(tag)}</button>"
+      "<button class=\"tag\" type=\"button\" data-on:click=\"$filter.tag = "
     )
+    js_string_into(mut out, tag)
+    text.append(mut out, "\">#")
+    html.escape_into(mut out, tag)
+    text.append(mut out, "</button>")
   }
 }
 
 @preserves_unique(out)
 fn option_html(mut out: List[u8], value: String, label: String, current: String) -> () uses {} {
-  text.append(
-    mut out,
-    f"<option value=\"{html.esc(value)}\"{selected_attr(value == current)}>{html.esc(
-      label
-    )}</option>"
-  )
+  text.append(mut out, "<option value=\"")
+  html.escape_into(mut out, value)
+  text.append(mut out, "\"")
+  text.append(mut out, selected_attr(value == current))
+  text.append(mut out, ">")
+  html.escape_into(mut out, label)
+  text.append(mut out, "</option>")
 }
 
 @preserves_unique(out)
@@ -104,36 +158,44 @@ fn priority_options(mut out: List[u8], current: String) -> () uses {} {
 fn edit_form(mut out: List[u8], item: model.Item) -> () uses {} {
   let id = item.id
   let due = match item.due {
-    Some(d) => unique d,
+    Some(d) => d,
     None() => "",
   }
-  let tags = string.join(item.tags, ", ")
+  text.append(mut out, "<form class=\"edit\" data-show=\"$editing == ")
+  u64.format_into(id, mut out)
+  text.append(mut out, "\" data-on:submit__prevent=\"@post('/tasks/")
+  u64.format_into(id, mut out)
+  text.append(mut out, "', {contentType: 'form'})\">")
+  text.append(mut out, "<input name=\"title\" required maxlength=\"")
+  u64.format_into(model.MAX_TITLE, mut out)
+  text.append(mut out, "\" value=\"")
+  html.escape_into(mut out, item.title)
+  text.append(mut out, "\" aria-label=\"Title\">")
   text.append(
     mut out,
-    f"<form class=\"edit\" data-show=\"$editing == {id}\" data-on:submit__prevent=\"@post('/tasks/{id}', {{contentType: 'form'}})\">"
+    "<textarea name=\"description\" rows=\"3\" aria-label=\"Description\">"
   )
-  text.append(
-    mut out,
-    f"<input name=\"title\" required maxlength=\"{model.MAX_TITLE}\" value=\"{html.esc(
-      item.title
-    )}\" aria-label=\"Title\">"
-  )
-  text.append(
-    mut out,
-    f"<textarea name=\"description\" rows=\"3\" aria-label=\"Description\">{html.esc(
-      item.description
-    )}</textarea>"
-  )
+  html.escape_into(mut out, item.description)
+  text.append(mut out, "</textarea>")
   text.append(
     mut out,
     "<div class=\"fields\"><select name=\"priority\" aria-label=\"Priority\">"
   )
   priority_options(mut out, model.priority_text(item.priority))
+  text.append(mut out, "</select><input name=\"due\" type=\"date\" value=\"")
+  html.escape_into(mut out, due)
+  text.append(mut out, "\" aria-label=\"Due date\"><input name=\"tags\" value=\"")
+  let mut first = true
+  for tag in item.tags {
+    if !first {
+      text.append(mut out, ", ")
+    }
+    html.escape_into(mut out, tag)
+    first = false
+  }
   text.append(
     mut out,
-    f"</select><input name=\"due\" type=\"date\" value=\"{html.esc(due)}\" aria-label=\"Due date\"><input name=\"tags\" value=\"{html.esc(
-      tags
-    )}\" placeholder=\"tags, comma separated\" aria-label=\"Tags\"></div>"
+    "\" placeholder=\"tags, comma separated\" aria-label=\"Tags\"></div>"
   )
   text.append(
     mut out,
@@ -152,42 +214,69 @@ pub fn row(mut out: List[u8], item: model.Item, today: Option[time.Date], select
   } else {
     ""
   }
-  text.append(
-    mut out,
-    f"<li id=\"task-{id}\" class=\"task status-{status} priority-{priority}{chosen}\">"
-  )
+  text.append(mut out, "<li id=\"task-")
+  u64.format_into(id, mut out)
+  text.append(mut out, "\" class=\"task status-")
+  text.append(mut out, status)
+  text.append(mut out, " priority-")
+  text.append(mut out, priority)
+  text.append(mut out, chosen)
+  text.append(mut out, "\">")
   text.append(mut out, "<div class=\"line\">")
   text.append(
     mut out,
-    f"<button class=\"status\" title=\"Advance status\" data-on:click=\"@post('/tasks/{id}/advance')\">{html.esc(
-      model.status_label(item.status)
-    )}</button>"
+    "<button class=\"status\" title=\"Advance status\" data-on:click=\"@post('/tasks/"
   )
-  text.append(
-    mut out,
-    f"<a class=\"title\" href=\"/tasks/{id}\" data-on:click__prevent=\"$selected = {id}\">{html.esc(
-      item.title
-    )}</a>"
-  )
-  text.append(mut out, f"<span class=\"priority\">{priority}</span>")
+  u64.format_into(id, mut out)
+  text.append(mut out, "/advance')\">")
+  html.escape_into(mut out, model.status_label(item.status))
+  text.append(mut out, "</button>")
+  text.append(mut out, "<a class=\"title\" href=\"/tasks/")
+  u64.format_into(id, mut out)
+  text.append(mut out, "\" data-on:click__prevent=\"$selected = ")
+  u64.format_into(id, mut out)
+  text.append(mut out, "\">")
+  html.escape_into(mut out, item.title)
+  text.append(mut out, "</a>")
+  text.append(mut out, "<span class=\"priority\">")
+  text.append(mut out, priority)
+  text.append(mut out, "</span>")
   if let Some(due) = item.due {
     let late = if overdue(item, today) {
       " overdue"
     } else {
       ""
     }
-    text.append(
-      mut out,
-      f"<time class=\"due{late}\" datetime=\"{html.esc(due)}\">{html.esc(
-        due_text(due, today)
-      )}</time>"
-    )
+    text.append(mut out, "<time class=\"due")
+    text.append(mut out, late)
+    text.append(mut out, "\" datetime=\"")
+    html.escape_into(mut out, due)
+    text.append(mut out, "\">")
+    html.escape_into(mut out, due_text(due, today))
+    text.append(mut out, "</time>")
   }
   tags_html(mut out, item.tags)
   text.append(
     mut out,
-    f"<span class=\"actions\"><button title=\"Move up\" data-on:click=\"@post('/tasks/{id}/move?dir=up')\">&uarr;</button><button title=\"Move down\" data-on:click=\"@post('/tasks/{id}/move?dir=down')\">&darr;</button><button data-on:click=\"$editing = {id}\">Edit</button><button class=\"danger\" data-on:click=\"confirm('Delete this task?') &amp;&amp; @delete('/tasks/{id}')\">Delete</button></span>"
+    "<span class=\"actions\"><button title=\"Move up\" data-on:click=\"@post('/tasks/"
   )
+  u64.format_into(id, mut out)
+  text.append(
+    mut out,
+    "/move?dir=up')\">&uarr;</button><button title=\"Move down\" data-on:click=\"@post('/tasks/"
+  )
+  u64.format_into(id, mut out)
+  text.append(
+    mut out,
+    "/move?dir=down')\">&darr;</button><button data-on:click=\"$editing = "
+  )
+  u64.format_into(id, mut out)
+  text.append(
+    mut out,
+    "\">Edit</button><button class=\"danger\" data-on:click=\"confirm('Delete this task?') &amp;&amp; @delete('/tasks/"
+  )
+  u64.format_into(id, mut out)
+  text.append(mut out, "')\">Delete</button></span>")
   text.append(mut out, "</div>")
   edit_form(mut out, item)
   text.append(mut out, "</li>")
@@ -197,6 +286,9 @@ pub fn row(mut out: List[u8], item: model.Item, today: Option[time.Date], select
 @preserves_unique(out)
 pub fn task_list(mut out: List[u8], board: model.Board, screen: Screen) -> () uses {} {
   let shown = model.select(board, screen.query)
+  // Each visible row writes at least this much fixed markup. Reserve before
+  // rendering the list, then let variable task text grow the same buffer.
+  list.reserve(mut out, list.len(out) + list.len(shown) * 1536)
   text.append(mut out, "<ul id=\"list\">")
   if list.len(shown) == 0 {
     let message = if list.len(board.tasks) == 0 {
@@ -204,7 +296,9 @@ pub fn task_list(mut out: List[u8], board: model.Board, screen: Screen) -> () us
     } else {
       "No tasks match."
     }
-    text.append(mut out, f"<li class=\"empty\">{message}</li>")
+    text.append(mut out, "<li class=\"empty\">")
+    text.append(mut out, message)
+    text.append(mut out, "</li>")
   }
   for item in shown {
     row(mut out, item, screen.today, screen.selected)
@@ -221,24 +315,25 @@ pub fn detail(mut out: List[u8], board: model.Board, screen: Screen) -> () uses 
   }
   let id = item.id
   text.append(mut out, "<aside id=\"detail\">")
+  text.append(mut out, "<header><h2>")
+  html.escape_into(mut out, item.title)
   text.append(
     mut out,
-    f"<header><h2>{html.esc(item.title)}</h2><button title=\"Close\" data-on:click=\"$selected = 0\">&times;</button></header>"
+    "</h2><button title=\"Close\" data-on:click=\"$selected = 0\">&times;</button></header>"
   )
   text.append(mut out, "<dl>")
-  text.append(
-    mut out,
-    f"<dt>Status</dt><dd>{html.esc(model.status_label(item.status))}</dd>"
-  )
-  text.append(
-    mut out,
-    f"<dt>Priority</dt><dd>{model.priority_text(item.priority)}</dd>"
-  )
+  text.append(mut out, "<dt>Status</dt><dd>")
+  html.escape_into(mut out, model.status_label(item.status))
+  text.append(mut out, "</dd>")
+  text.append(mut out, "<dt>Priority</dt><dd>")
+  text.append(mut out, model.priority_text(item.priority))
+  text.append(mut out, "</dd>")
   if let Some(due) = item.due {
-    text.append(
-      mut out,
-      f"<dt>Due</dt><dd>{html.esc(due)} ({html.esc(due_text(due, screen.today))})</dd>"
-    )
+    text.append(mut out, "<dt>Due</dt><dd>")
+    html.escape_into(mut out, due)
+    text.append(mut out, " (")
+    html.escape_into(mut out, due_text(due, screen.today))
+    text.append(mut out, ")</dd>")
   }
   if list.len(item.tags) > 0 {
     text.append(mut out, "<dt>Tags</dt><dd>")
@@ -247,21 +342,27 @@ pub fn detail(mut out: List[u8], board: model.Board, screen: Screen) -> () uses 
   }
   text.append(mut out, "</dl>")
   if string.byte_len(item.description) > 0 {
-    text.append(mut out, f"<p class=\"description\">{html.esc(item.description)}</p>")
+    text.append(mut out, "<p class=\"description\">")
+    html.escape_into(mut out, item.description)
+    text.append(mut out, "</p>")
   }
-  text.append(
-    mut out,
-    f"<p class=\"links\"><a href=\"/tasks/{id}\">Link to this task</a> <button data-on:click=\"$editing = {id}\">Edit</button></p></aside>"
-  )
+  text.append(mut out, "<p class=\"links\"><a href=\"/tasks/")
+  u64.format_into(id, mut out)
+  text.append(mut out, "\">Link to this task</a> <button data-on:click=\"$editing = ")
+  u64.format_into(id, mut out)
+  text.append(mut out, "\">Edit</button></p></aside>")
 }
 
 @preserves_unique(out)
 pub fn stats(mut out: List[u8], board: model.Board) -> () uses {} {
   let (waiting, active, finished) = model.counts(board)
-  text.append(
-    mut out,
-    f"<p id=\"stats\">{waiting} to do &middot; {active} doing &middot; {finished} done</p>"
-  )
+  text.append(mut out, "<p id=\"stats\">")
+  u64.format_into(waiting, mut out)
+  text.append(mut out, " to do &middot; ")
+  u64.format_into(active, mut out)
+  text.append(mut out, " doing &middot; ")
+  u64.format_into(finished, mut out)
+  text.append(mut out, " done</p>")
 }
 
 @preserves_unique(out)
@@ -319,11 +420,27 @@ fn signals_json(screen: Screen) -> unique String uses {} {
 /// event stream opens.
 pub fn page(board: model.Board, screen: Screen) -> unique String uses {} {
   let mut out: List[u8] = []
+  page_into(mut out, board, screen)
+  text.finish_valid(take out)
+}
+
+/// Render an owned HTTP body by consuming the page builder without a copy.
+pub fn page_bytes(board: model.Board, screen: Screen) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  page_into(mut out, board, screen)
+  bytes.from_list(take out)
+}
+
+/// Append the complete page to a caller-owned UTF-8 builder.
+@preserves_unique(out)
+pub fn page_into(mut out: List[u8], board: model.Board, screen: Screen) -> () uses {} {
   text.append(
     mut out,
     "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Tasks</title>\n<link rel=\"stylesheet\" href=\"/static/app.css\">\n<script type=\"module\" src=\"/static/datastar.js\"></script>\n</head>\n"
   )
-  text.append(mut out, f"<body data-signals=\"{html.esc(signals_json(screen))}\">\n")
+  text.append(mut out, "<body data-signals=\"")
+  html.escape_into(mut out, signals_json(screen))
+  text.append(mut out, "\">\n")
   // Reading the filter and selection subscribes this effect to them, so a change
   // reopens the stream with the new values; Datastar cancels the previous request.
   text.append(
@@ -365,7 +482,6 @@ pub fn page(board: model.Board, screen: Screen) -> unique String uses {} {
   text.append(mut out, "\n")
   detail(mut out, board, screen)
   text.append(mut out, "\n</main>\n</body>\n</html>\n")
-  text.finish_valid(take out)
 }
 
 pub fn not_found_page() -> String uses {} {

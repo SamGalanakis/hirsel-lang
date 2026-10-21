@@ -63,6 +63,20 @@ fn task_text_is_escaped_everywhere_it_is_shown(t: Test) {
       "<time class=\"due overdue\" datetime=\"2026-03-01\">3 days overdue</time>"
     )
   )
+  // Streaming the nested JSON/HTML context must preserve the old composition,
+  // including all short/control escapes, punctuation and multi-byte scalars.
+  let cases: List[String] = ["", "\"\\/<>&'\t\n\r\x08\x0cé😀", "\0\x01\x1f", "plain"]
+  for value in cases {
+    let quoted = match json.stringify(Text(unique value)) {
+      Ok(q) => take q,
+      Error(_) => "invalid",
+    }
+    let expected = html.escape(string.replace(quoted, "<", "\\u003c"))
+    let mut out: List[u8] = []
+    text.append(mut out, "prefix")
+    js_string_into(mut out, value)
+    test.check(t, text.finish_valid(take out) == f"prefix{expected}")
+  }
 }
 
 @test

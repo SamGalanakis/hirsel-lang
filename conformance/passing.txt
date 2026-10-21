@@ -6576,3 +6576,4 @@ conformance/SEM/SEM-3-json-reader-import-035-run.hir
 conformance/SEM/SEM-3-json-reader-import-036-run.hir
 conformance/SEM/SEM-3-json-reader-import-037-run.hir
 conformance/SEM/SEM-3-json-typed-serde-enum-run.hir
+conformance/SEM/SEM-3-format-utf8-invariant-fail.hir

@@ -64,6 +64,20 @@ fn check_inner(
         body: input,
         protocols,
     } = input;
+    let format_holes = input
+        .syntax
+        .tree
+        .formats
+        .iter()
+        .filter_map(|format| {
+            match &input.syntax.tree.expressions[format.expression.0 as usize].kind {
+                ast::ExprKind::Block {
+                    tail: Some(tail), ..
+                } => Some((*tail, format.holes.clone())),
+                _ => None,
+            }
+        })
+        .collect();
     let mut c = Checker {
         body: CheckedBody {
             lexical: input.syntax.owner(),
@@ -94,6 +108,7 @@ fn check_inner(
         representations: BTreeMap::new(),
         plans: Plans::default(),
         calls: vec![],
+        format_holes,
         formatters: BTreeMap::new(),
         ranges: BTreeMap::new(),
         range_sources: BTreeSet::new(),
@@ -324,6 +339,8 @@ struct Checker<'a, 'p> {
     /// F-string callees (SEM-3) with their selected operation and the declared
     /// ordinals of their written arguments.
     formatters: BTreeMap<ast::ExprId, (ast::DefPath, Vec<usize>)>,
+    /// Compiler-created f-string finishes indexed once per body.
+    format_holes: BTreeMap<ast::ExprId, Vec<ast::ExprId>>,
     ranges: BTreeMap<ast::ExprId, TypeId>,
     range_sources: BTreeSet<ast::ExprId>,
     expected_sites: BTreeMap<ast::ExprId, (Span, RuleId)>,

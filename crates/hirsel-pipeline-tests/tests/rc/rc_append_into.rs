@@ -335,6 +335,7 @@ fn decimal_digit_emitters_need_no_reference_count_or_release_work() {
         "fn main() -> u64 {
   let mut out: List[u8] = []
   std@1/u64.format_into(18446744073709551615u64, mut out)
+  std@1/u128.format_into(340282366920938463463374607431768211455u128, mut out)
   list.len(out)
 }
 ",
@@ -354,7 +355,7 @@ fn decimal_digit_emitters_need_no_reference_count_or_release_work() {
                 && path.modules.last().is_some_and(|name| name == "decimal")
                 && matches!(
                     path.name.as_str(),
-                    "append" | "leading_digits" | "sixteen_digits"
+                    "append" | "append_u64" | "leading_digits" | "sixteen_digits"
                 )
             {
                 emitters += 1;
@@ -371,7 +372,7 @@ fn decimal_digit_emitters_need_no_reference_count_or_release_work() {
                 assert!(count_work.is_empty(), "{}: {count_work:#?}", path.name);
             }
         }
-        assert_eq!(emitters, 3);
+        assert_eq!(emitters, 4);
     }
 }
 
@@ -445,4 +446,35 @@ fn string_byte_borrows_need_no_runtime_bridge_or_holder_operations() {
             assert_eq!(checked, 2);
         }
     });
+}
+
+#[test]
+fn compiler_owned_primitive_text_finishes_without_a_utf8_scan() {
+    let input = source(
+        r#"
+@format(custom_text)
+type Custom { text: String }
+fn custom_text(item: Custom, mut out: List[u8]) { std@1/text.append(mut out, item.text) }
+fn primitive() -> String { f"prefix é😀{42u64} {'é'} {true} {"text"} suffix" }
+fn custom() -> String { f"{Custom(text: "safe")}" }
+fn value() -> u64 { string.byte_len(primitive()) + string.byte_len(custom()) }
+"#,
+    );
+    let program = compile(&input);
+    assert!(
+        calls(&program, "primitive")
+            .iter()
+            .any(|c| c == "$intrinsic.TextFinish")
+    );
+    assert!(
+        !calls(&program, "primitive")
+            .iter()
+            .any(|c| c == "text.finish_valid")
+    );
+    assert!(
+        calls(&program, "custom")
+            .iter()
+            .any(|c| c == "text.finish_valid")
+    );
+    agree(&input, "primitive-trusted-text");
 }

@@ -11,6 +11,13 @@ pub static FROM_LIST: InlineLowering = InlineLowering {
     lower: from_list,
 };
 
+// Same owned sequence/slice representation as bytes.from_list. The checker
+// selects this only for compiler-created primitive-only f-strings.
+pub static TEXT_FINISH: InlineLowering = InlineLowering {
+    path: || hirsel_syntax::DefPath::core("$intrinsic.TextFinish"),
+    lower: from_list,
+};
+
 fn from_list(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
     let [argument] = call.arguments else {
         return Ok(false);

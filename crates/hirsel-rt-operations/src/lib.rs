@@ -555,6 +555,7 @@ pub(crate) const MAP_BODIES: &[&str] = &[
 ];
 
 pub const INLINE_OPERATIONS: &[&str] = &[
+    "$intrinsic.TextFinish",
     "$intrinsic.heap",
     "codec.encode",
     "codec.decode",
@@ -2249,6 +2250,7 @@ pub fn manifest(rows: impl IntoIterator<Item = OperationRow>) -> Result<Manifest
 
 /// Explicit identities: additions to the registry fail coverage until reviewed here.
 pub const NATIVE_PATHS: &[&str] = &[
+    "$intrinsic.TextFinish",
     "codec.encode",
     "codec.decode",
     "net.narrow",
