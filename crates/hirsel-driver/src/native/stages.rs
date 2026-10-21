@@ -335,6 +335,14 @@ pub(crate) fn seal<S: Stage>(
     })
 }
 
+/// Validate the immutable program table once, including builds with no units.
+fn preflight(context: &hirsel_lir::validate::ValidationContext<'_>) -> Result<(), NativeError> {
+    timed(Phase::LirValidate, || context.preflight()).map_err(|errors| NativeError {
+        validator: true,
+        ..NativeError::new(StageName::Import, format!("layout table: {errors:?}"))
+    })
+}
+
 /// An intermediate stage stays raw in production. Only the Ready validator
 /// manufactures the seal emission requires; harnesses retain the full ladder.
 pub(crate) fn checkpoint<S: Stage>(
@@ -410,7 +418,6 @@ pub fn build_program(
         layouts: table,
         manifest: &manifest,
     };
-    let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
     let instances = &lowered.instances;
     let statics = std::mem::take(&mut lowered.statics);
     if let Some(objects) = &options.objects {
@@ -427,6 +434,8 @@ pub fn build_program(
         )
         .map(|built| built.finish(program, manifest, operations, options, lowered));
     }
+    let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
+    preflight(&validation)?;
     let mut rc = Vec::with_capacity(lowered.units.len());
     for (index, unit) in value_units.into_iter().enumerate() {
         let id = lowered.unit_origins[index];
@@ -614,6 +623,7 @@ fn build_units(
         manifest,
     };
     let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
+    preflight(&validation)?;
     let headers: Vec<(DefPath, ContentHash)> = units
         .iter()
         .map(|u| (u.header.definition.clone(), u.header.instance))

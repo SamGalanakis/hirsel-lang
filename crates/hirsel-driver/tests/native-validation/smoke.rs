@@ -1,6 +1,6 @@
 //! Pass-fault differential over the shipped native smoke selection. Control units
 //! must be accepted; each surviving fault the stage ladder rejects must also be
-//! rejected at Ready. A normalized-away fault must yield the identical final unit.
+//! rejected at Ready. A normalized-away fault must yield the identical final unit after packing live operand ranges.
 use super::*;
 use hirsel_lir::ir::{Inst, LirUnit};
 use hirsel_lir::stage::{Stage, StageKind};
@@ -46,6 +46,35 @@ fn mutants<S: Stage>(unit: &LirUnit<S>) -> Vec<(Fault, LirUnit<S>)> {
     out
 }
 
+// Editor::finish prunes dead cleanup blocks but intentionally retains the
+// append-only values pool. Compare every live operand exactly, independent of
+// abandoned pool entries and their offsets. These are the only ValueId ranges
+// in the IR (Block.parameters, Edge.arguments and FailureEdge.dispose).
+fn pack_values<S: Stage>(mut unit: LirUnit<S>) -> LirUnit<S> {
+    use hirsel_lir::ir::PoolRange;
+    let old = std::mem::take(&mut unit.pools.values);
+    let mut pack = |range: &mut PoolRange<hirsel_lir::ir::ValueId>| {
+        *range = PoolRange::push(
+            &mut unit.pools.values,
+            range
+                .get(&old)
+                .expect("validated operand range")
+                .iter()
+                .copied(),
+        );
+    };
+    for block in &mut unit.blocks {
+        pack(&mut block.parameters);
+    }
+    for edge in &mut unit.tables.edges {
+        pack(&mut edge.arguments);
+    }
+    for failure in &mut unit.tables.failures {
+        pack(&mut failure.dispose);
+    }
+    unit
+}
+
 fn judge<S: Stage>(
     unit: &LirUnit<S>,
     inputs: &Inputs<'_>,
@@ -73,16 +102,17 @@ fn judge<S: Stage>(
                 if errors.is_empty() {
                     // Cleanup can erase an intermediate defect with its entire
                     // path. Acceptance is allowed only when the full final unit
-                    // is identical to the clean control, not merely well-formed.
+                    // has identical live operands and all other fields to the clean
+                    // control, not merely valid or behaviorally equivalent.
                     let clean = finish(unit.clone()).expect("the clean continuation");
-                    assert_eq!(
-                        clean, ready,
+                    assert!(
+                        pack_values(clean) == pack_values(ready),
                         "Ready accepted surviving {}/{fault:?} fault: {ladder:?}",
                         unit.header.definition
                     );
                     count[2] += 1;
                     eprintln!(
-                        "normalized {:?}/{fault:?} in {} to the identical Ready unit",
+                        "normalized {:?}/{fault:?} in {} to identical live Ready fields",
                         S::KIND,
                         unit.header.definition
                     );
@@ -202,7 +232,7 @@ fn ready_only_rejects_smoke_pass_faults() {
             );
         }
         eprintln!(
-            "{programs} smoke programs; mutants [pass rejected, Ready rejected, identical normalization]: {counts:?}"
+            "{programs} smoke programs; mutants [pass rejected, Ready rejected, identical live-unit normalization]: {counts:?}"
         );
     });
 }
