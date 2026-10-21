@@ -2146,6 +2146,7 @@ UnexpectedValue(u64) | InvalidSpec`; indices identify arguments, starting at zer
 ```text
 fn cli.parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, ParseError] uses {}
 fn cli.usage(program: String, specs: List[Flag]) -> String uses {}
+fn cli.error_message(args: List[String], specs: List[Flag], error: ParseError) -> unique String uses {}
 ```
 
 Specs require nonempty long names without a leading dash, `=`, ASCII control,
@@ -2153,15 +2154,31 @@ DEL or space, and unique names/short options. A short option is one printable
 ASCII byte other than dash or `=`. `parse` rejects invalid specs before input.
 Long flags accept `--name=value` or `--name value`; shorts accept `-x`,
 `-x=value` or `-x value`, without bundling. A value flag consumes its next token
-even if that token starts with a dash or is `--`. Switches reject explicit values
-and store an empty-string occurrence. Repeats retain occurrence order. Unknown
-flags fail; a lone dash is positional. Positionals may intermix with flags;
+even if that token starts with a dash or is `--`. Switches accept the boolean
+spellings `true`, `false`, `1`, `0`, `t`, `f`, `T`, `F`, `TRUE`, `FALSE`, `True`,
+`False`, and store `true` when no explicit value is supplied. Repeats retain
+occurrence order. Unknown flags fail; a lone dash is positional. The first positional
+argument ends option parsing;
 a standalone `--` ends option parsing and is omitted from the result.
 
 `usage` requires valid specs (otherwise SEM-3 failure), emits a Usage line and
 one line per spec in declaration order, and appends LF. Applications collect
 Args through arg.len/text once, parse typed values separately, and choose how
 to print help or errors. There is no registration, ambient Args access or exit.
+
+`error_message` borrows the original argument snapshot and specs and returns a
+single line without LF. It includes the zero-based index, a double-quoted token,
+and a reason. Missing values name the canonical flag and `<value>` usage;
+invalid switch values list all accepted spellings. Quotes and backslashes are
+escaped; bytes outside printable ASCII use lowercase `\xhh`, including each
+UTF-8 byte of non-ASCII text. No argument bytes can become terminal controls.
+The renderer checks the error against the supplied snapshot using `parse` on
+a copy, preserving positional stopping, `--`, aliases and consumed values.
+Stale or forged errors return `parse error context unavailable` with the index,
+reason and token when present. Out-of-range indices are never dereferenced.
+`InvalidSpec` returns fixed text without selecting an ambiguous spec. The helper
+does no I/O, requests no grant, adds no suggestions and does not print usage.
+See [CLI error example](../cli-errors.md) for explicit error and usage printing.
 
 ## Explicit-sink structured logging
 

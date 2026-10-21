@@ -1,0 +1,19 @@
+// rule: OWN-2
+// expect: run
+pub fn main() -> Result[(), ()] uses {} {
+  let args: List[String] = ["--bad"]
+  let error = match std@1/cli.parse(copy args, []) {
+    Error(error) => error,
+    Ok(_) => {
+      failure.check(false, TextInvariant())
+      UnknownFlag(0)
+    },
+  }
+  let message: unique String = std@1/cli.error_message(args, [], error)
+  failure.check(args == ["--bad"], TextInvariant())
+  failure.check(
+    message == "argument 0: unexpected argument \"--bad\" found",
+    TextInvariant()
+  )
+  Ok(())
+}

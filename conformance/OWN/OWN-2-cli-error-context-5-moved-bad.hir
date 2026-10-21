@@ -1,0 +1,8 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 7
+// twin: OWN/OWN-2-cli-error-context-5-moved-ok.hir
+pub fn main() -> () {
+  let args: List[String] = ["--bad"]
+  let _ = std@1/cli.parse(take args, [])
+  let _ = std@1/cli.error_message(args, [], UnknownFlag(0))
+}

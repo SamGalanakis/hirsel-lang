@@ -1,0 +1,129 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef src/flag/flag.go:1138-1176 and flag_test.go:652-674.
+// Independent exact messages add Hirsel indices, aliases and safe byte quoting.
+fn specs() -> List[std@1/cli.Flag] {
+  [
+    std@1/cli.Flag(
+      name: "verbose",
+      short: Some(b'v'),
+      kind: Switch(),
+      help: "verbose output"
+    ),
+    std@1/cli.Flag(
+      name: "output",
+      short: Some(b'o'),
+      kind: Value(),
+      help: "output path"
+    )
+  ]
+}
+
+type Row {
+  args: List[String],
+  error: std@1/cli.ParseError,
+  message: String,
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let rows: List[Row] = [
+    Row(
+      args: ["--missing"],
+      error: UnknownFlag(0),
+      message: "argument 0: unexpected argument \"--missing\" found"
+    ),
+    Row(
+      args: ["-missing=x"],
+      error: UnknownFlag(0),
+      message: "argument 0: unexpected argument \"-missing=x\" found"
+    ),
+    Row(
+      args: ["---bad"],
+      error: UnknownFlag(0),
+      message: "argument 0: unexpected argument \"---bad\" found"
+    ),
+    Row(
+      args: ["-=x"],
+      error: UnknownFlag(0),
+      message: "argument 0: unexpected argument \"-=x\" found"
+    ),
+    Row(
+      args: ["--output"],
+      error: MissingValue(0),
+      message: "argument 0 \"--output\": a value is required for \"--output <value>\" but none was supplied"
+    ),
+    Row(
+      args: ["-o"],
+      error: MissingValue(0),
+      message: "argument 0 \"-o\": a value is required for \"--output <value>\" but none was supplied"
+    ),
+    Row(
+      args: ["--o"],
+      error: MissingValue(0),
+      message: "argument 0 \"--o\": a value is required for \"--output <value>\" but none was supplied"
+    ),
+    Row(
+      args: ["-v", "--output"],
+      error: MissingValue(1),
+      message: "argument 1 \"--output\": a value is required for \"--output <value>\" but none was supplied"
+    ),
+    Row(
+      args: ["--verbose=x"],
+      error: UnexpectedValue(0),
+      message: "argument 0 \"--verbose=x\": invalid value \"x\" for \"--verbose\" [possible values: true, false, 1, 0, t, f, T, F, TRUE, FALSE, True, False]"
+    ),
+    Row(
+      args: ["-v="],
+      error: UnexpectedValue(0),
+      message: "argument 0 \"-v=\": invalid value \"\" for \"--verbose\" [possible values: true, false, 1, 0, t, f, T, F, TRUE, FALSE, True, False]"
+    ),
+    Row(
+      args: ["--v=TRUE=false"],
+      error: UnexpectedValue(0),
+      message: "argument 0 \"--v=TRUE=false\": invalid value \"TRUE=false\" for \"--verbose\" [possible values: true, false, 1, 0, t, f, T, F, TRUE, FALSE, True, False]"
+    ),
+    Row(
+      args: ["--output=a", "-o", "b", "--bad"],
+      error: UnknownFlag(3),
+      message: "argument 3: unexpected argument \"--bad\" found"
+    ),
+    Row(
+      args: ["--é"],
+      error: UnknownFlag(0),
+      message: "argument 0: unexpected argument \"--\\xc3\\xa9\" found"
+    ),
+    Row(
+      args: ["--😀"],
+      error: UnknownFlag(0),
+      message: "argument 0: unexpected argument \"--\\xf0\\x9f\\x98\\x80\" found"
+    ),
+    Row(
+      args: ["--a\"b\\c"],
+      error: UnknownFlag(0),
+      message: "argument 0: unexpected argument \"--a\\\"b\\\\c\" found"
+    ),
+    Row(
+      args: ["-bool=x"],
+      error: UnknownFlag(0),
+      message: "argument 0: unexpected argument \"-bool=x\" found"
+    ),
+    Row(
+      args: ["--bad\x00\n\r\t\x1b[31m\x07\x7f"],
+      error: UnknownFlag(0),
+      message: "argument 0: unexpected argument \"--bad\\x00\\x0a\\x0d\\x09\\x1b[31m\\x07\\x7f\" found"
+    )
+  ]
+  for row in rows {
+    match std@1/cli.parse(unique row.args, specs()) {
+      Error(actual) => failure.check(actual == row.error, TextInvariant()),
+      Ok(_) => failure.check(false, TextInvariant()),
+    }
+    let message: unique String = std@1/cli.error_message(row.args, specs(), row.error)
+    failure.check(message == row.message, TextInvariant())
+    let data = string.as_bytes(message)
+    for byte in data {
+      failure.check(byte >= 32 && byte < 127, TextInvariant())
+    }
+  }
+  Ok(())
+}

@@ -9,6 +9,7 @@ bundle’s `notices/` directory; see `tools/toolchain-dist/README.md`.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| clap | `clap_builder/src/error/{kind.rs:4-35,context.rs:8-15,mod.rs:434-480,720-747,format.rs:207-233,351-365}` kind/context split and diagnostic wording; `tests/builder/error.rs:84-206,313-346` vectors | `stdlib/std@1/cli.hir`, CLI error context fixtures; adaptations in `docs/cli-errors.md` | clap-rs/clap `ccc89b83875474399e9d9d70841163f6319d1a41` | MIT (Copyright (c) Individual contributors) |
 | Goose | `stdlib/json.goose:906–1104` dense pool, child/sibling traversal and iterative parser frame structure; `test/stdlib/stdlib_json.goose:145–218` vectors read alongside Hirsel semantic oracles | `stdlib/std@1/json_document.hir`, scoped JSON conformance | aardappel/goose `8511ae34bdc9aabf77baaab80b4d659ea87835e2` | Apache-2.0 (structure reference) |
 | rr | `src/TraceStream.cc:408-557` binary event/stream framing structure | ordinary and durable tape codec | rr-debugger/rr `50d54f2f541d79b508044fefdb2574fe2ec746f7` | MIT (structure reference) |
 | SQLite | `src/wal.c:47-68,990-1022` frame header/payload/checksum structure | shared tape envelope | sqlite/sqlite `049891534ddad2583a33750c05433fcce3648b9c` | Public domain (structure reference) |

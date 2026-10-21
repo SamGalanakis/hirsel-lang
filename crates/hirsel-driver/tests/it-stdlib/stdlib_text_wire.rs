@@ -507,6 +507,40 @@ fn cli_is_ordinary_source() {
 }
 
 #[test]
+fn cli_error_context_5_is_ordinary_source() {
+    source_codec("cli-error-context-5-render", "cli", &["error_message"]);
+}
+
+#[test]
+fn cli_error_context_5_example_prints_explicitly() {
+    with_compiler_stack(|| {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../conformance/SEM/SEM-3-cli-error-context-5-example-run.hir");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let outcome = run_path_with_step_budget(
+            &path,
+            SimulationConfig::default(),
+            None,
+            Verify::On,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+        ));
+        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "argument 0 \"-o\": a value is required for \"--output <value>\" but none was supplied\n\
+             Usage: example [options] [--] [arguments]\n  -o, --output <value>\toutput path\n"
+        );
+    });
+}
+
+#[test]
 fn log_is_ordinary_source() {
     source_codec("log", "log", &["to_string", "write"]);
 }

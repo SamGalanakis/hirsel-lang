@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// clap ccc89b83 tests/builder/error.rs:119-139,183-206,142-166,313-346.
+// Preserve --foo / --ignored and the diagnostic clause; omit suggestions/help.
+// Go ebe2feef src/flag/flag_test.go:652-674: registered -bool=x.
+pub fn main() -> Result[(), ()] uses {} {
+  let tokens: List[String] = ["--foo", "--ignored"]
+  let messages: List[String] = [
+    "argument 0: unexpected argument \"--foo\" found",
+    "argument 0: unexpected argument \"--ignored\" found"
+  ]
+  let mut i: u64 = 0
+  while i < list.len(tokens) {
+    let args: List[String] = [copy tokens[i]]
+    match std@1/cli.parse(copy args, []) {
+      Error(UnknownFlag(0)) => (),
+      _ => failure.check(false, TextInvariant()),
+    }
+    failure.check(
+      std@1/cli.error_message(args, [], UnknownFlag(0)) == messages[i],
+      TextInvariant()
+    )
+    i += 1
+  }
+  // clap error.rs:102-117 rejects a positional. Hirsel stops option parsing.
+  match std@1/cli.parse(["unused"], []) {
+    Ok(p) => failure.check(p.positional == ["unused"], TextInvariant()),
+    _ => failure.check(false, TextInvariant()),
+  }
+  failure.check(
+    std@1/cli.error_message(["unused"], [], UnknownFlag(0)) == "argument 0 \"unused\": parse error context unavailable (unexpected argument found)",
+    TextInvariant()
+  )
+  let specs: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(name: "bool", short: None(), kind: Switch(), help: "")
+  ]
+  match std@1/cli.parse(["-bool=x"], specs) {
+    Error(UnexpectedValue(0)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  failure.check(
+    std@1/cli.error_message(["-bool=x"], specs, UnexpectedValue(0)) == "argument 0 \"-bool=x\": invalid value \"x\" for \"--bool\" [possible values: true, false, 1, 0, t, f, T, F, TRUE, FALSE, True, False]",
+    TextInvariant()
+  )
+  Ok(())
+}

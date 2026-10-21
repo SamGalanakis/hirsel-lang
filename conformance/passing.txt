@@ -6650,3 +6650,10 @@ conformance/SEM/SEM-3-pattern-local-mut-payload-run.hir
 conformance/PROV/PROV-1-loop-local-brand-run.hir
 conformance/PROV/PROV-1-nested-loop-owner-ok.hir
 conformance/PROV/PROV-1-loop-buffered-files-run.hir
+conformance/SEM/SEM-3-cli-error-context-5-render-run.hir
+conformance/SEM/SEM-3-cli-error-context-5-stale-run.hir
+conformance/SEM/SEM-3-cli-error-context-5-example-run.hir
+conformance/SEM/SEM-3-cli-error-context-5-controls-run.hir
+conformance/OWN/OWN-2-cli-error-context-5-moved-ok.hir
+conformance/OWN/OWN-2-cli-error-context-5-moved-bad.hir
+conformance/SEM/SEM-3-cli-error-context-5-reference-run.hir

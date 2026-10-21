@@ -1,0 +1,25 @@
+// rule: SEM-3
+// expect: run
+// The self-contained example in docs/cli-errors.md.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let specs: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(
+      name: "output",
+      short: Some(b'o'),
+      kind: Value(),
+      help: "output path"
+    )
+  ]
+  // Keep a snapshot: parse consumes its copy, the renderer borrows the original.
+  let args: List[String] = ["-o"]
+  match std@1/cli.parse(copy args, specs) {
+    Ok(_) => (),
+    Error(error) => {
+      let sink = io.stderr(rt)?
+      let _ = err.print(sink, std@1/cli.error_message(args, specs, error))
+      let _ = err.print(sink, "\n")
+      let _ = err.print(sink, std@1/cli.usage("example", specs))
+    },
+  }
+  Ok(())
+}

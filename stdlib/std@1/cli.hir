@@ -202,3 +202,229 @@ pub fn usage(program: String, specs: List[Flag]) -> String uses {} {
     },
   }
 }
+
+// Go ebe2feef, src/flag/flag.go:1136-1160: unknown / missing / invalid
+// value diagnostics. Explicit input and typed errors replace FlagSet state.
+// Byte quoting additionally makes arbitrary argument text safe for terminals.
+@preserves_unique(out)
+fn quote_argument(token: String, mut out: List[u8]) -> () uses {} {
+  let data = core@1/string.as_bytes(token)
+  let digits = core@1/string.as_bytes("0123456789abcdef")
+  text.append(mut out, "\"")
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    let byte = data[i]
+    if byte == b'"' || byte == b'\\' {
+      core@1/list.push(mut out, b'\\')
+      core@1/list.push(mut out, byte)
+    } else if byte < 32 || byte >= 127 {
+      text.append(mut out, "\\x")
+      core@1/list.push(mut out, digits[core@1/int.widen(byte / 16u8)])
+      core@1/list.push(mut out, digits[core@1/int.widen(byte % 16u8)])
+    } else {
+      core@1/list.push(mut out, byte)
+    }
+    i += 1
+  }
+  text.append(mut out, "\"")
+}
+
+// Only called after parse has confirmed this exact error for these inputs.
+fn error_flag(token: String, specs: List[Flag]) -> Option[u64] uses {} {
+  let data = core@1/string.as_bytes(token)
+  let len = core@1/bytes.len(data)
+  if len < 2 || data[0] != b'-' {
+    return None()
+  }
+  let start: u64 = if data[1] == b'-' {
+    2
+  } else {
+    1
+  }
+  let mut end = start
+  while end < len && data[end] != b'=' {
+    end += 1
+  }
+  let mut j: u64 = 0
+  while j < core@1/list.len(specs) {
+    let name = core@1/string.as_bytes(specs[j].name)
+    let mut same = core@1/bytes.len(name) == end - start
+    let mut k: u64 = 0
+    while same && k < end - start {
+      if data[start + k] != name[k] {
+        same = false
+      }
+      k += 1
+    }
+    if same || end - start == 1 && specs[j].short == Some(data[start]) {
+      return Some(j)
+    }
+    j += 1
+  }
+  None()
+}
+
+// clap ccc89b83: error/kind.rs:4-35; context.rs:8-15;
+// error/mod.rs:434-480,720-747; error/format.rs:207-233,351-365.
+// Keep kind separate from InvalidArg, InvalidValue and ValidValue context.
+// MissingValue maps to InvalidValue without a supplied value. UnexpectedValue
+// carries Some("") for an explicit empty switch value, retaining its typed kind.
+// See docs/cli-errors.md for adaptations, source pins and exact vector mapping.
+// The existing ParseError is the kind; no second public error taxonomy is needed.
+type ErrorContext {
+  invalid_arg: String,
+  invalid_value: Option[String],
+  valid_value: List[String],
+}
+
+fn error_context(args: List[String], specs: List[Flag], error: ParseError, index: u64) -> Option[
+  ErrorContext
+] uses {} {
+  // Revalidate positional stopping, consumed values, earlier errors and specs.
+  // A borrowed caller-local snapshot needs a deep global copy for parse's take.
+  let current = match parse(unique args, specs) {
+    Error(actual) => actual == error,
+    Ok(_) => false,
+  }
+  if !current {
+    return None()
+  }
+  if error == UnknownFlag(index) {
+    return Some(
+      ErrorContext(
+        invalid_arg: unique args[index],
+        invalid_value: None(),
+        valid_value: []
+      )
+    )
+  }
+  let Some(which) = error_flag(args[index], specs) else {
+    return None()
+  }
+  let mut name: List[u8] = []
+  text.append(mut name, "--")
+  text.append(mut name, specs[which].name)
+  if error == MissingValue(index) {
+    text.append(mut name, " <value>")
+    return Some(
+      ErrorContext(
+        invalid_arg: text.finish_valid(take name),
+        invalid_value: None(),
+        valid_value: []
+      )
+    )
+  }
+  let data = core@1/string.as_bytes(args[index])
+  let mut at: u64 = 0
+  while at < core@1/bytes.len(data) && data[at] != b'=' {
+    at += 1
+  }
+  let mut value: List[u8] = []
+  if at < core@1/bytes.len(data) {
+    at += 1
+    while at < core@1/bytes.len(data) {
+      core@1/list.push(mut value, data[at])
+      at += 1
+    }
+  }
+  Some(
+    ErrorContext(
+      invalid_arg: text.finish_valid(take name),
+      invalid_value: Some(text.finish_valid(take value)),
+      valid_value: [
+        "true",
+        "false",
+        "1",
+        "0",
+        "t",
+        "f",
+        "T",
+        "F",
+        "TRUE",
+        "FALSE",
+        "True",
+        "False"
+      ]
+    )
+  )
+}
+
+@preserves_unique(out)
+fn render_context(error: ParseError, context: ErrorContext, mut out: List[u8]) -> () uses {} {
+  match error {
+    UnknownFlag(_) => {
+      text.append(mut out, "unexpected argument ")
+      quote_argument(context.invalid_arg, mut out)
+      text.append(mut out, " found")
+    },
+    _ => {
+      if let Some(value) = context.invalid_value {
+        text.append(mut out, "invalid value ")
+        quote_argument(value, mut out)
+        text.append(mut out, " for ")
+        quote_argument(context.invalid_arg, mut out)
+      } else {
+        text.append(mut out, "a value is required for ")
+        quote_argument(context.invalid_arg, mut out)
+        text.append(mut out, " but none was supplied")
+      }
+      if core@1/list.len(context.valid_value) > 0 {
+        text.append(mut out, " [possible values: ")
+        let mut i: u64 = 0
+        while i < core@1/list.len(context.valid_value) {
+          if i > 0 {
+            text.append(mut out, ", ")
+          }
+          text.append(mut out, context.valid_value[i])
+          i += 1
+        }
+        text.append(mut out, "]")
+      }
+    },
+  }
+}
+
+/// Render an error against the original argument snapshot, without I/O or LF.
+/// Stale or forged errors get bounded fallback text instead of invented context.
+pub fn error_message(args: List[String], specs: List[Flag], error: ParseError) -> unique String uses {} {
+  let index = match error {
+    UnknownFlag(i) => i,
+    MissingValue(i) => i,
+    UnexpectedValue(i) => i,
+    InvalidSpec() => {
+      return "invalid flag specification (names and aliases must be valid and unique)"
+    },
+  }
+  // KindFormatter-style fallback when no rich context can be trusted.
+  let reason = match error {
+    UnknownFlag(_) => "unexpected argument found",
+    MissingValue(_) => "a value is required",
+    UnexpectedValue(_) => "invalid value for an argument",
+    InvalidSpec() => "invalid flag specification",
+  }
+  let mut out: List[u8] = []
+  text.append(mut out, "argument ")
+  std@1/u64.format_into(index, mut out)
+  if index >= core@1/list.len(args) {
+    text.append(mut out, ": parse error context unavailable (")
+    text.append(mut out, reason)
+    text.append(mut out, "; index out of range)")
+    return text.finish_valid(take out)
+  }
+  if let Some(context) = error_context(args, specs, error, index) {
+    // UnknownArgument already contains the exact token in its rich message.
+    if error != UnknownFlag(index) {
+      text.append(mut out, " ")
+      quote_argument(args[index], mut out)
+    }
+    text.append(mut out, ": ")
+    render_context(error, context, mut out)
+  } else {
+    text.append(mut out, " ")
+    quote_argument(args[index], mut out)
+    text.append(mut out, ": parse error context unavailable (")
+    text.append(mut out, reason)
+    text.append(mut out, ")")
+  }
+  text.finish_valid(take out)
+}

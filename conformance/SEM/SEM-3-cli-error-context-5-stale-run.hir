@@ -1,0 +1,119 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef src/flag/flag.go:1138-1176 and flag_test.go:652-674.
+// Independent exact messages add Hirsel indices, aliases and safe byte quoting.
+fn specs() -> List[std@1/cli.Flag] {
+  [
+    std@1/cli.Flag(
+      name: "verbose",
+      short: Some(b'v'),
+      kind: Switch(),
+      help: "verbose output"
+    ),
+    std@1/cli.Flag(
+      name: "output",
+      short: Some(b'o'),
+      kind: Value(),
+      help: "output path"
+    )
+  ]
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  failure.check(
+    std@1/cli.error_message([], specs(), UnknownFlag(0)) == "argument 0: parse error context unavailable (unexpected argument found; index out of range)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message([""], specs(), MissingValue(0)) == "argument 0 \"\": parse error context unavailable (a value is required)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["plain"], specs(), UnknownFlag(0)) == "argument 0 \"plain\": parse error context unavailable (unexpected argument found)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["--"], specs(), UnknownFlag(0)) == "argument 0 \"--\": parse error context unavailable (unexpected argument found)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["--", "--output"], specs(), MissingValue(1)) == "argument 1 \"--output\": parse error context unavailable (a value is required)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["pos", "--verbose=x"], specs(), UnexpectedValue(1)) == "argument 1 \"--verbose=x\": parse error context unavailable (invalid value for an argument)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["--output", "--verbose=x"], specs(), UnexpectedValue(1)) == "argument 1 \"--verbose=x\": parse error context unavailable (invalid value for an argument)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["--output=ok"], specs(), MissingValue(0)) == "argument 0 \"--output=ok\": parse error context unavailable (a value is required)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["--verbose"], specs(), MissingValue(0)) == "argument 0 \"--verbose\": parse error context unavailable (a value is required)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["--verbose=true"], specs(), UnexpectedValue(0)) == "argument 0 \"--verbose=true\": parse error context unavailable (invalid value for an argument)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["--output=x"], specs(), UnexpectedValue(0)) == "argument 0 \"--output=x\": parse error context unavailable (invalid value for an argument)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["--verbose=x"], specs(), UnknownFlag(0)) == "argument 0 \"--verbose=x\": parse error context unavailable (unexpected argument found)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["--bad", "--output"], specs(), MissingValue(1)) == "argument 1 \"--output\": parse error context unavailable (a value is required)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["--missing"], specs(), UnknownFlag(1)) == "argument 1: parse error context unavailable (unexpected argument found; index out of range)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(
+      ["--missing"],
+      specs(),
+      MissingValue(18446744073709551615u64)
+    ) == "argument 18446744073709551615: parse error context unavailable (a value is required; index out of range)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message(["é\u{202e}"], specs(), UnknownFlag(0)) == "argument 0 \"\\xc3\\xa9\\xe2\\x80\\xae\": parse error context unavailable (unexpected argument found)",
+    TextInvariant()
+  )
+  let ambiguous: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(name: "first", short: Some(b'x'), kind: Switch(), help: ""),
+    std@1/cli.Flag(name: "second", short: Some(b'x'), kind: Value(), help: "")
+  ]
+  match std@1/cli.parse(["-x"], ambiguous) {
+    Error(InvalidSpec()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  failure.check(
+    std@1/cli.error_message(["-x"], ambiguous, MissingValue(0)) == "argument 0 \"-x\": parse error context unavailable (a value is required)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message([], ambiguous, InvalidSpec()) == "invalid flag specification (names and aliases must be valid and unique)",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/cli.error_message([], specs(), InvalidSpec()) == "invalid flag specification (names and aliases must be valid and unique)",
+    TextInvariant()
+  )
+  // Arbitrary u64 indices, including all three arms at the boundary.
+  let indices: List[u64] = [0, 1, 2, 100, 18446744073709551615u64]
+  for i in indices {
+    let _ = std@1/cli.error_message([], specs(), UnknownFlag(i))
+    let _ = std@1/cli.error_message([], specs(), MissingValue(i))
+    let _ = std@1/cli.error_message([], specs(), UnexpectedValue(i))
+  }
+  Ok(())
+}

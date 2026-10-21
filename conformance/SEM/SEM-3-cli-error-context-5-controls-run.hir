@@ -1,0 +1,30 @@
+// rule: SEM-3
+// expect: run
+// All ASCII bytes, including ESC, C0, quote, backslash and DEL.
+pub fn main() -> Result[(), ()] uses {} {
+  let mut byte: u8 = 0
+  while byte < 128 {
+    let mut token: List[u8] = [b'-', b'-', b'x', byte]
+    let args: List[String] = [text.finish_valid(take token)]
+    let message: unique String = std@1/cli.error_message(args, [], UnknownFlag(0))
+    let data = string.as_bytes(message)
+    failure.check(bytes.len(data) > 20, TextInvariant())
+    for encoded in data {
+      failure.check(encoded >= 32 && encoded < 127, TextInvariant())
+    }
+    byte += 1
+  }
+  // A name with Unicode control, quote and backslash is also safely rendered.
+  let specs: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(name: "é\u{202e}\"\\", short: Some(b'x'), kind: Value(), help: "")
+  ]
+  match std@1/cli.parse(["-x"], specs) {
+    Error(MissingValue(0)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  failure.check(
+    std@1/cli.error_message(["-x"], specs, MissingValue(0)) == "argument 0 \"-x\": a value is required for \"--\\xc3\\xa9\\xe2\\x80\\xae\\\"\\\\ <value>\" but none was supplied",
+    TextInvariant()
+  )
+  Ok(())
+}
