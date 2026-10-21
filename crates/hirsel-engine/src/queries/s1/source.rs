@@ -905,7 +905,7 @@ impl QueryEngine {
         }
         let mut shared = worker::TaskShared::new(self.s1.coordinator().clone());
         let workers = jobs.get().min(tasks.len()).max(1);
-        let lower_budget = self.hold_bytes / workers as u64;
+        let lower_budget = self.available_hold_bytes() / workers as u64;
         let source = match self.frozen_s1_source(lower_budget) {
             Ok(source) => source,
             Err(_) => {
