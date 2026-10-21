@@ -76,9 +76,10 @@ impl Compiler {
         engine.set_retention(self.retention);
         engine.configured_jobs = self.jobs;
         engine.configured_lowering = self.lowering;
-        engine.hold_bytes = self
-            .hold_bytes
-            .unwrap_or_else(crate::config::configured_hold_bytes);
+        engine.set_hold_bytes(
+            self.hold_bytes
+                .unwrap_or_else(crate::config::configured_hold_bytes),
+        );
         engine.verify_store = self.verify_store;
         engine.comptime_limits = self.comptime_limits();
         engine.session = true;

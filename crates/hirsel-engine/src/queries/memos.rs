@@ -836,6 +836,8 @@ impl QueryEngine {
             }
             QueryKind::Lower => {
                 self.lowered.remove(&key.def);
+                self.lower_receipts.remove(&key.def);
+                self.lower_holds.forget(key);
                 self.lower_verdicts.remove(&key.def);
             }
             _ => {}

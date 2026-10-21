@@ -526,7 +526,11 @@ impl QueryEngine {
     /// Select whether completed program fronts retain intermediate bodies.
     /// Explicit body-returning queries still fulfill their ordinary contract.
     pub fn set_retention(&mut self, retention: crate::memo::Retention) {
+        let changed = self.retention != retention;
         self.retention = retention;
+        if changed {
+            self.rebuild_lower_holds();
+        }
     }
 
     /// Serial S1 demands also publish compact facts before retiring body

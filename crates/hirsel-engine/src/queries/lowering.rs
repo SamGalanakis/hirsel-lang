@@ -111,6 +111,9 @@ impl QueryEngine {
                     || self
                         .lowered
                         .contains_key(&hirsel_syntax::DefId::intern(&item.definition))
+                    || self
+                        .lower_receipts
+                        .contains_key(&hirsel_syntax::DefId::intern(&item.definition))
                     || !self.lowers_at_check(&item.definition, policy)
             })
         })

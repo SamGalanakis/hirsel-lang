@@ -63,6 +63,16 @@ impl<T> Holds<T> {
     pub fn budget(&self) -> u64 {
         self.budget
     }
+    /// Change a host allowance, evicting in the existing LRU order.
+    pub fn set_budget(&mut self, budget: u64) -> Vec<MemoKey> {
+        self.budget = budget;
+        self.evict()
+    }
+    /// Retire an invalidated key, including any old eviction marker.
+    pub fn forget(&mut self, key: &MemoKey) {
+        self.take(key);
+        self.evicted.remove(key);
+    }
     /// Holds `value` of `bytes`, then evicts least recently used holds until
     /// within budget, including evicting this value if it alone exceeds the
     /// budget. Active callers own their in-flight values separately. Returns
@@ -75,6 +85,9 @@ impl<T> Holds<T> {
         self.stats.held += 1;
         self.stats.bytes += bytes;
         self.stats.peak_bytes = self.stats.peak_bytes.max(self.stats.bytes);
+        self.evict()
+    }
+    fn evict(&mut self) -> Vec<MemoKey> {
         let mut evicted = vec![];
         while self.stats.bytes > self.budget {
             let (&tick, &victim) = self.by_use.iter().next().unwrap();
@@ -192,6 +205,27 @@ mod tests {
         }
         assert_eq!(default_hold_bytes(None), 256 << 20);
         assert_eq!(default_hold_bytes(Some(1 << 30)), (1 << 30) / 10);
+    }
+
+    #[test]
+    fn shrinking_budget_keeps_lru_order_and_forgetting_retires_markers() {
+        let mut holds = Holds::new(300);
+        for i in 0..3 {
+            holds.hold(key(i), i, 100);
+        }
+        holds.get(&key(0));
+        assert_eq!(holds.set_budget(100), vec![key(1), key(2)]);
+        assert_eq!(holds.stats().bytes, 100);
+        holds.forget(&key(1));
+        assert!(!holds.demand_evicted(&key(1)));
+        assert!(holds.demand_evicted(&key(2)));
+        assert_eq!(holds.set_budget(0), vec![key(0)]);
+        holds.forget(&key(0));
+        assert_eq!(holds.stats().bytes, 0);
+        assert!(!holds.demand_evicted(&key(0)));
+        assert_eq!(holds.stats().evictions, 3);
+        assert_eq!(holds.stats().recomputes, 1);
+        assert_eq!(holds.stats().peak_bytes, 300);
     }
 
     #[test]

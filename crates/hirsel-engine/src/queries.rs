@@ -33,6 +33,7 @@ pub(crate) use program_revision::SemanticProgram;
 mod image;
 pub(crate) use image::ImageBuild;
 mod persistent;
+mod retention;
 mod safety;
 mod summaries;
 pub use safety::{Escape, UnsafeReach};
@@ -173,6 +174,8 @@ pub struct QueryEngine {
     checked: Table<TypedBody>,
     modes: Table<AnalyzedBody>,
     lowered: Table<hirsel_tir::DefinitionRef>,
+    lower_receipts: hirsel_syntax::DefMap<Arc<retention::LowerReceipt>>,
+    lower_holds: crate::memo::Holds<()>,
     pub(crate) summaries: Table<Arc<PublishedSummary>>,
     pub(crate) checked_summaries: Table<Arc<CheckedSummary>>,
     /// The memo records, the reverse subscriber index and the dirty marks.
@@ -261,6 +264,15 @@ impl Drop for QueryEngine {
         let _timing = timings::interval(Interval::Merge);
         released("engine: lower verdicts", take(&mut self.lower_verdicts));
         released("engine: lowered", take(&mut self.lowered));
+        released("engine: lower receipts", take(&mut self.lower_receipts));
+        let holds = self.lower_holds.stats();
+        timings::count_by(Count::S1LowerHoldEvictions, holds.evictions);
+        timings::count_by(Count::S1LowerHoldRecomputes, holds.recomputes);
+        timings::count_by(Count::S1LowerHoldPeakBytes, holds.peak_bytes);
+        released(
+            "engine: lower holds",
+            std::mem::replace(&mut self.lower_holds, crate::memo::Holds::new(0)),
+        );
         released("engine: modes", take(&mut self.modes));
         released("engine: checked", take(&mut self.checked));
         released("engine: summaries", take(&mut self.summaries));
@@ -406,6 +418,8 @@ impl QueryEngine {
             self.constant_values.clear();
             self.staged_values.clear();
             self.lowered.clear();
+            self.lower_receipts.clear();
+            self.lower_holds.clear();
             self.lower_verdicts.clear();
             self.materialization_environment = Some(now);
         }
@@ -461,6 +475,8 @@ impl QueryEngine {
             checked: Default::default(),
             modes: Default::default(),
             lowered: Default::default(),
+            lower_receipts: Default::default(),
+            lower_holds: crate::memo::Holds::new(crate::config::configured_hold_bytes()),
             summaries: Default::default(),
             checked_summaries: Default::default(),
             graph: MemoGraph::default(),
@@ -529,7 +545,11 @@ impl QueryEngine {
             QueryKind::Resolve => self.resolutions.get(&id).map(|e| &e.detail),
             QueryKind::Check => self.checked.get(&id).map(|e| &e.detail),
             QueryKind::Modes => self.modes.get(&id).map(|e| &e.detail),
-            QueryKind::Lower => self.lowered.get(&id).map(|e| &e.detail),
+            QueryKind::Lower => self
+                .lowered
+                .get(&id)
+                .map(|e| &e.detail)
+                .or_else(|| self.lower_receipts.get(&id).map(|e| &e.detail)),
             QueryKind::Summary => self.summaries.get(&id).map(|e| &e.detail),
             QueryKind::CheckedSummary => self.checked_summaries.get(&id).map(|e| &e.detail),
             _ => None,
@@ -543,7 +563,11 @@ impl QueryEngine {
             QueryKind::Resolve => self.resolutions.get(&id).map(|e| e.reads()),
             QueryKind::Check => self.checked.get(&id).map(|e| e.reads()),
             QueryKind::Modes => self.modes.get(&id).map(|e| e.reads()),
-            QueryKind::Lower => self.lowered.get(&id).map(|e| e.reads()),
+            QueryKind::Lower => self
+                .lowered
+                .get(&id)
+                .map(|e| e.reads())
+                .or_else(|| self.lower_receipts.get(&id).map(|e| e.reads())),
             QueryKind::Summary => self.summaries.get(&id).map(|e| e.reads()),
             QueryKind::CheckedSummary => self.checked_summaries.get(&id).map(|e| e.reads()),
             _ => None,
@@ -557,7 +581,11 @@ impl QueryEngine {
             QueryKind::Resolve => self.resolutions.get(&id).map(|e| e.memo.reads.clone()),
             QueryKind::Check => self.checked.get(&id).map(|e| e.memo.reads.clone()),
             QueryKind::Modes => self.modes.get(&id).map(|e| e.memo.reads.clone()),
-            QueryKind::Lower => self.lowered.get(&id).map(|e| e.memo.reads.clone()),
+            QueryKind::Lower => self
+                .lowered
+                .get(&id)
+                .map(|e| e.memo.reads.clone())
+                .or_else(|| self.lower_receipts.get(&id).map(|e| e.memo.reads.clone())),
             QueryKind::Summary => self.summaries.get(&id).map(|e| e.memo.reads.clone()),
             QueryKind::CheckedSummary => self
                 .checked_summaries
@@ -1792,11 +1820,14 @@ impl QueryEngine {
             self.merge_execution(entry.reads());
             return entry.output();
         }
+        self.lower_holds
+            .demand_evicted(&MemoKey::new(QueryKind::Lower, id));
         if let Some(entry) = self.load_lower(definition) {
             self.merge_execution(entry.reads());
             self.lowered.insert(id, entry.clone());
             return entry.output();
         }
+        self.lower_receipts.remove(&id);
         timings::count(Count::Lowered);
         self.start(definition, QueryKind::Lower)?;
         let previous = self.modes.get(&id).cloned();
@@ -1862,6 +1893,10 @@ impl QueryEngine {
             entry.clone(),
             self.s1.failure_is_own(),
         );
+        if !self.lowered.contains_key(&id) {
+            self.lower_holds.forget(&key);
+            self.lower_verdicts.remove(&id);
+        }
         // Execution closure by union: whoever executes this body reads all it read.
         self.merge_execution(entry.reads());
         entry.output()
@@ -1929,6 +1964,7 @@ impl DefinitionQueries for QueryEngine {
     ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
         let result = self.lower_query(definition);
         let released = self.release_batch_front(definition);
+        self.retain_lowering(DefId::intern(definition));
         result.and_then(|output| released.map(|()| output))
     }
 }

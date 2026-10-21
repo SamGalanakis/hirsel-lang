@@ -1,3 +1,5 @@
+#[path = "../support/canonical_tir.rs"]
+mod canonical_tir;
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_types::Signature;
@@ -1738,6 +1740,235 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
                     "workers must release payload buffers before their next task"
                 );
             }
+        }
+    });
+}
+
+#[test]
+fn batch_scalar_lowerings_release_evicted_tir_but_keep_complete_receipts() {
+    with_compiler_stack(|| {
+        let source: String = (0..64)
+            .map(|i| format!("fn h{i}()->u64{{{i}u64}}\n"))
+            .collect();
+        let mut candidate = engine(Arc::new(store::NoneStore)).with_config(CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::ONE,
+            hold_bytes: 0,
+            ..CompileConfig::for_memory_cap(None)
+        });
+        let file = candidate
+            .sources
+            .add("lower-holds.hir", source.clone())
+            .unwrap();
+        candidate.parse_file(file, &default_context()).unwrap();
+        let mut reference = engine(Arc::new(store::NoneStore));
+        let file = reference.sources.add("lower-holds.hir", source).unwrap();
+        reference.parse_file(file, &default_context()).unwrap();
+        for i in 0..64 {
+            let root = path(&format!("h{i}"));
+            let actual = candidate.lower_to_tir(&root).unwrap();
+            let expected = reference.lower_to_tir(&root).unwrap();
+            assert_eq!(
+                canonical_tir::definition(candidate.types(), &actual.value),
+                canonical_tir::definition(reference.types(), &expected.value)
+            );
+            assert_eq!(actual.diagnostics, expected.diagnostics);
+            assert_eq!(
+                candidate.memo_reads(&root, QueryKind::Lower),
+                reference.memo_reads(&root, QueryKind::Lower)
+            );
+            let reads = candidate
+                .memo_reads(&root, QueryKind::Lower)
+                .unwrap()
+                .clone();
+            let weak = Arc::downgrade(&actual.value);
+            drop(actual);
+            assert_eq!(
+                weak.strong_count(),
+                0,
+                "root {i} retained lowered TIR at zero budget"
+            );
+            assert_eq!(candidate.memo_reads(&root, QueryKind::Lower), Some(&reads));
+            let before = candidate.recompute_count(&root, QueryKind::Lower);
+            let repeated = candidate.lower_to_tir(&root).unwrap();
+            assert_eq!(
+                canonical_tir::definition(candidate.types(), &repeated.value),
+                canonical_tir::definition(reference.types(), &expected.value)
+            );
+            assert_eq!(
+                candidate.recompute_count(&root, QueryKind::Lower),
+                before + 1
+            );
+            drop(repeated);
+        }
+    });
+}
+
+#[test]
+fn scalar_lower_holds_refresh_lru_and_apply_policy_changes() {
+    with_compiler_stack(|| {
+        let source =
+            "fn h0()->u64{0u64}\nfn h1()->u64{1u64}\nfn h2()->u64{2u64}\nfn h3()->u64{3u64}\n";
+        let config = |hold_bytes, retention| CompileConfig {
+            hold_bytes,
+            retention,
+            jobs: hirsel_intern::jobs::Jobs::ONE,
+            ..CompileConfig::for_memory_cap(None)
+        };
+        let mut candidate = engine(Arc::new(store::NoneStore))
+            .with_config(config(u64::MAX, memo::Retention::Batch));
+        let file = candidate
+            .sources
+            .add("lower-lru.hir", source.into())
+            .unwrap();
+        candidate.parse_file(file, &default_context()).unwrap();
+        let a = candidate.lower_to_tir(&path("h0")).unwrap().value;
+        let weak_a = Arc::downgrade(&a);
+        drop(a);
+        let b = candidate.lower_to_tir(&path("h1")).unwrap().value;
+        let weak_b = Arc::downgrade(&b);
+        drop(b);
+        let budget = candidate.lower_hold_stats().bytes;
+        candidate = candidate.with_config(config(budget, memo::Retention::Batch));
+        let before = candidate.recompute_count(&path("h0"), QueryKind::Lower);
+        drop(candidate.lower_to_tir(&path("h0")).unwrap());
+        assert_eq!(
+            candidate.recompute_count(&path("h0"), QueryKind::Lower),
+            before
+        );
+        let c = candidate.lower_to_tir(&path("h2")).unwrap().value;
+        let weak_c = Arc::downgrade(&c);
+        drop(c);
+        assert!(weak_a.strong_count() > 0);
+        assert_eq!(weak_b.strong_count(), 0, "the unrefreshed body is LRU");
+        assert!(weak_c.strong_count() > 0);
+        assert!(candidate.lower_hold_stats().bytes <= budget);
+        assert_eq!(candidate.lower_hold_stats().evictions, 1);
+        assert_eq!(
+            candidate.available_hold_bytes() + candidate.lower_hold_stats().bytes,
+            budget
+        );
+        assert!(
+            candidate
+                .memo_reads(&path("h1"), QueryKind::Lower)
+                .is_some()
+        );
+        let before = candidate.recompute_count(&path("h1"), QueryKind::Lower);
+        drop(candidate.lower_to_tir(&path("h1")).unwrap());
+        assert_eq!(
+            candidate.recompute_count(&path("h1"), QueryKind::Lower),
+            before + 1
+        );
+        assert_eq!(candidate.lower_hold_stats().recomputes, 1);
+        candidate.set_retention(memo::Retention::Resident);
+        let d = candidate.lower_to_tir(&path("h3")).unwrap().value;
+        let weak_d = Arc::downgrade(&d);
+        drop(d);
+        assert!(weak_d.strong_count() > 0);
+        candidate = candidate.with_config(config(0, memo::Retention::Batch));
+        assert_eq!(candidate.lower_hold_stats().bytes, 0);
+        for weak in [weak_a, weak_b, weak_c, weak_d] {
+            assert_eq!(weak.strong_count(), 0);
+        }
+        let before = candidate.recompute_count(&path("h3"), QueryKind::Lower);
+        let held_by_caller = candidate.lower_to_tir(&path("h3")).unwrap().value;
+        assert_eq!(
+            candidate.recompute_count(&path("h3"), QueryKind::Lower),
+            before + 1
+        );
+        assert_eq!(candidate.lower_hold_stats().bytes, 0);
+        assert_eq!(
+            Arc::strong_count(&held_by_caller),
+            1,
+            "only in-flight ownership survives"
+        );
+    });
+}
+
+#[test]
+fn evicted_lower_receipts_preserve_program_reuse_and_edit_invalidation() {
+    with_compiler_stack(|| {
+        let f = crate::image_fixture::Fixture::new();
+        let source = f.0.join("main.hir");
+        let initial = "fn helper()->u64{1u64}\nconst N:u64=comptime helper()\nfn main()->u64{N}\n";
+        std::fs::write(&source, initial).unwrap();
+        let config = CompileConfig {
+            hold_bytes: 0,
+            jobs: hirsel_intern::jobs::Jobs::ONE,
+            ..CompileConfig::for_memory_cap(None)
+        };
+        let mut program = COMPILER
+            .clone()
+            .with_config(config.clone())
+            .load_program_source_with_images(&source, None, &StdImages::none())
+            .unwrap();
+        let first = program.check(LoweringPolicy::Reachable).unwrap();
+        assert!(first.diagnostics.is_empty());
+        let before = program.engine.memo_stats().recomputed.clone();
+        let again = program.check(LoweringPolicy::Reachable).unwrap();
+        assert_eq!(diagnostics(&first), diagnostics(&again));
+        assert_eq!(
+            program.engine.memo_stats().recomputed,
+            before,
+            "compact lower receipts retain unchanged program results"
+        );
+        assert_eq!(program.engine.lower_hold_stats().bytes, 0);
+        for edited in [
+            initial.replace("1u64", "2u64"),
+            initial
+                .replace("fn helper()->u64", "fn helper()->u32")
+                .replace("1u64", "1u32"),
+            initial.into(),
+        ] {
+            assert!(program.replace_source(&source, edited.clone()).unwrap());
+            let actual = program.check(LoweringPolicy::Reachable).unwrap();
+            let mut cold = COMPILER
+                .clone()
+                .with_config(config.clone())
+                .load_program_source_with_images(&source, Some(&edited), &StdImages::none())
+                .unwrap();
+            let expected = cold.check(LoweringPolicy::Reachable).unwrap();
+            assert_eq!(diagnostics(&actual), diagnostics(&expected));
+            assert_eq!(actual.completion, expected.completion);
+            if actual.diagnostics.is_empty() {
+                assert_eq!(
+                    program.engine.export_tir(&path("main")).unwrap(),
+                    cold.engine.export_tir(&path("main")).unwrap()
+                );
+            }
+            assert_eq!(program.engine.lower_hold_stats().bytes, 0);
+        }
+    });
+}
+
+#[test]
+fn evicted_generated_lowerings_preserve_cold_semantic_content() {
+    with_compiler_stack(|| {
+        let source = r#"type Point { x:u64 }
+fn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String] { Ok(codegen.body("fn(p:standalone@0/Point)->u64 uses {} { p.x + 12u64 }")) }
+fn sum(p:Point)->u64 uses {} = comptime gen(shape(Point))
+"#;
+        let mut candidate = engine(Arc::new(store::NoneStore)).with_config(CompileConfig {
+            hold_bytes: 0,
+            jobs: hirsel_intern::jobs::Jobs::ONE,
+            ..CompileConfig::for_memory_cap(None)
+        });
+        let file = candidate
+            .sources
+            .add("generated-held.hir", source.into())
+            .unwrap();
+        candidate.parse_file(file, &default_context()).unwrap();
+        let mut reference = engine(Arc::new(store::NoneStore));
+        let file = reference
+            .sources
+            .add("generated-held.hir", source.into())
+            .unwrap();
+        reference.parse_file(file, &default_context()).unwrap();
+        let root = path("sum");
+        let cold = reference.semantic_program_revision(&root).unwrap();
+        drop(candidate.lower_to_tir(&root).unwrap());
+        for _ in 0..2 {
+            assert_eq!(candidate.semantic_program_revision(&root).unwrap(), cold);
+            assert_eq!(candidate.lower_hold_stats().bytes, 0);
         }
     });
 }

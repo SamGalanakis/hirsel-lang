@@ -957,3 +957,15 @@ writer as scalar queries before accepting another task. Only the write verdict
 joins canonical memo publication. Completed payload buffers therefore do not
 accumulate across the frontier; provider-owned caches remain the selected store's
 policy. VerifyStore still compares exact canonical payload bytes and reads.
+
+Batch scalar lowering also keeps TIR under the configured hold allowance. Its
+LRU weight includes artifact, memo/output wrappers, dependency/depth buffers and
+validator reads. Eviction releases both TIR cache owners, retaining compact
+Lower receipts and reverse subscriptions. Explicit TIR demands use the ordinary
+miss path; semantic traversal can consume valid receipts without bodies, after
+checking their exact validator reads. Generated declarations still use analyzed
+syntax for semantic content. `lower_hold_stats` reports occupancy, evictions and
+recomputes; `available_hold_bytes` exposes the remaining worker allowance.
+Changing retention or the configured allowance updates existing scalar holds.
+Compact read/diagnostic/depth receipts and table/interner storage remain session
+metadata outside the body allowance; caller-owned output Arcs remain in flight.

@@ -43,6 +43,23 @@ pub struct Memo<T> {
     verified_at: AtomicU64,
 }
 impl<T> Memo<T> {
+    /// Project a retained value without changing its graph identity or logical
+    /// verification stamps. Eviction keeps the original read subscriptions.
+    pub(crate) fn map_value<U>(&self, map: impl FnOnce(&T) -> U) -> Memo<U> {
+        Memo {
+            key: self.key,
+            text: self.text,
+            value: self
+                .value
+                .as_ref()
+                .map(|value| Arc::new(map(value)))
+                .map_err(Clone::clone),
+            reads: self.reads.clone(),
+            durability: self.durability,
+            changed_at: self.changed_at,
+            verified_at: AtomicU64::new(self.verified_at()),
+        }
+    }
     pub fn verified_at(&self) -> u64 {
         self.verified_at.load(Relaxed)
     }
@@ -475,6 +492,35 @@ mod tests {
     }
     fn reads(list: &[(ReadKey, &str)]) -> Arc<Reads> {
         Arc::new(Reads::from_vec(list.iter().map(|(k, v)| (*k, h(v))).collect()).unwrap())
+    }
+
+    #[test]
+    fn projecting_a_value_preserves_stamps_and_subscriptions_without_touching_graph() {
+        let mut graph = MemoGraph::default();
+        let a = def("a");
+        let b = def("b");
+        let memo = graph.insert(
+            MemoKey::new(QueryKind::Lower, a),
+            h("body"),
+            Ok(Arc::new(vec![1, 2, 3])),
+            reads(&[(ReadKey::Signature(b), "signature")]),
+            Durability::Low,
+            false,
+        );
+        let before = graph.stats().clone();
+        let receipt = memo.map_value(Vec::len);
+        assert_eq!(receipt.value.as_ref().unwrap().as_ref(), &3);
+        assert_eq!(receipt.verified_at(), memo.verified_at());
+        assert_eq!(receipt.changed_at, memo.changed_at);
+        assert!(Arc::ptr_eq(&receipt.reads, &memo.reads));
+        assert_eq!(graph.stats(), &before);
+        let mut changed = ChangeSet::default();
+        changed.read(ReadKey::Signature(b), Durability::Low);
+        graph.apply(&changed);
+        assert_eq!(
+            graph.check(&receipt),
+            Verdict::Dirty(Invalidation::Read(ReadKind::Signature))
+        );
     }
 
     /// A memo both reading a changed candidate list and owning a replaced item

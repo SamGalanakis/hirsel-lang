@@ -147,16 +147,24 @@ impl QueryEngine {
         ];
         self.materialize(path)?;
         if self.items.contains_key(path) {
-            let analyzed = self.mode_query(path)?;
-            if has_errors(&analyzed.diagnostics) {
-                return Err(QueryError::Diagnostics(analyzed.diagnostics.clone()));
-            }
-            let syntax = &analyzed.value.typed.syntax;
-            content.extend(self.semantic_tokens(syntax)?);
-            if generation::executable(syntax) {
-                let lowered = self.lower_to_tir(path)?;
-                if has_errors(&lowered.diagnostics) {
-                    return Err(QueryError::Diagnostics(lowered.diagnostics));
+            if self.semantic_lower_ready(path)? {
+                let syntax = self.items[path]
+                    .first()
+                    .expect("indexed source item")
+                    .clone();
+                content.extend(self.semantic_tokens(&syntax)?);
+            } else {
+                let analyzed = self.mode_query(path)?;
+                if has_errors(&analyzed.diagnostics) {
+                    return Err(QueryError::Diagnostics(analyzed.diagnostics.clone()));
+                }
+                let syntax = &analyzed.value.typed.syntax;
+                content.extend(self.semantic_tokens(syntax)?);
+                if generation::executable(syntax) {
+                    let lowered = self.lower_to_tir(path)?;
+                    if has_errors(&lowered.diagnostics) {
+                        return Err(QueryError::Diagnostics(lowered.diagnostics));
+                    }
                 }
             }
             for kind in [
@@ -195,7 +203,7 @@ impl QueryEngine {
             let reads = [
                 self.checked.get(&id).map(|e| e.memo.reads.clone()),
                 self.modes.get(&id).map(|e| e.memo.reads.clone()),
-                self.lowered.get(&id).map(|e| e.memo.reads.clone()),
+                self.shared_memo_reads(path, QueryKind::Lower),
             ];
             for reads in reads.into_iter().flatten() {
                 dependencies.extend(executed_definitions(&reads));

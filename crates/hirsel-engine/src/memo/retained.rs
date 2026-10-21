@@ -74,33 +74,56 @@ pub(crate) fn retained_lowering_output_bytes(
     weight.vec(dependencies, |w, dependency| {
         w.def_path(&dependency.definition)
     });
-    weight.vec(diagnostics, |w, diagnostic| {
-        let hirsel_diag::Diagnostic {
-            rule,
-            severity: _,
-            message,
-            primary: _,
-            secondary,
-            notes,
-            fix,
-            obligations,
-            root_cause: _,
-        } = diagnostic;
-        w.add(rule.retained_bytes());
-        w.add(message.capacity());
-        w.vec(secondary, |w, label| w.add(label.message.capacity()));
-        w.vec(notes, |w, note| w.add(note.capacity()));
-        if let Some(fix) = fix {
-            w.add(fix.replacement.capacity());
-            w.add(fix.message.capacity());
+    weight.vec(diagnostics, Weight::diagnostic);
+    weight.bytes
+}
+
+/// One scalar Lower cache entry and its exact-artifact V evidence. Compact
+/// receipts outlive eviction independently; table buckets/session interners
+/// belong to the session, as with worker holds.
+pub(crate) fn retained_lower_entry_bytes(
+    entry: &crate::queries::Entry<hirsel_tir::DefinitionRef>,
+    verdict: Option<&Vec<hirsel_validate::VRead>>,
+) -> u64 {
+    let mut weight = Weight::default();
+    weight.add(arc_bytes(entry));
+    weight.add(arc_bytes(&*entry.memo.reads));
+    weight.add(
+        entry
+            .reads()
+            .len()
+            .saturating_mul(size_of::<(super::ReadKey, hirsel_syntax::ContentHash)>()),
+    );
+    weight.detail(&entry.detail);
+    weight.vec(&entry.covered, |w, d| w.def_path(&d.definition));
+    if let Some(depth) = &entry.depth {
+        weight.add(size_of_val(&*depth.first));
+    }
+    // Lowering has no phase-products sink: these are the empty local products,
+    // never a resolver syntax snapshot or an owner representation.
+    debug_assert!(entry.products.resolution.is_none() && entry.products.representation.is_none());
+    weight.add(arc_bytes(&*entry.products));
+    weight.vec(
+        &entry.products.mode_diagnostics,
+        |w, (diagnostic, phase)| {
+            w.diagnostic(diagnostic);
+            w.add(phase.capacity());
+        },
+    );
+    match &entry.memo.value {
+        Ok(output) => {
+            weight.add(arc_bytes(&**output));
+            weight.bytes = weight
+                .bytes
+                .saturating_add(retained_tir_bytes(&output.value));
+            weight.vec(&output.diagnostics, Weight::diagnostic);
+            weight.vec(&output.dependencies, |w, d| w.def_path(&d.definition));
         }
-        w.vec(obligations, |w, obligation| match obligation {
-            hirsel_diag::Obligation::GenericBound { arguments } => w.flat_vec(arguments),
-            hirsel_diag::Obligation::Multiplicity
-            | hirsel_diag::Obligation::CopyProof
-            | hirsel_diag::Obligation::ParameterMode { .. } => (),
-        });
-    });
+        Err(error) => weight.error(error),
+    }
+    if let Some(reads) = verdict {
+        weight.flat_vec(reads);
+    }
     weight.bytes
 }
 
@@ -119,6 +142,133 @@ struct Weight {
     shared: HashSet<usize>,
 }
 impl Weight {
+    fn diagnostic(&mut self, diagnostic: &hirsel_diag::Diagnostic) {
+        let hirsel_diag::Diagnostic {
+            rule,
+            severity: _,
+            message,
+            primary: _,
+            secondary,
+            notes,
+            fix,
+            obligations,
+            root_cause: _,
+        } = diagnostic;
+        self.add(rule.retained_bytes());
+        self.add(message.capacity());
+        self.vec(secondary, |w, label| w.add(label.message.capacity()));
+        self.vec(notes, |w, note| w.add(note.capacity()));
+        if let Some(fix) = fix {
+            self.add(fix.replacement.capacity());
+            self.add(fix.message.capacity());
+        }
+        self.vec(obligations, |w, obligation| match obligation {
+            hirsel_diag::Obligation::GenericBound { arguments } => w.flat_vec(arguments),
+            hirsel_diag::Obligation::Multiplicity
+            | hirsel_diag::Obligation::CopyProof
+            | hirsel_diag::Obligation::ParameterMode { .. } => (),
+        });
+    }
+    fn package(&mut self, package: &hirsel_syntax::PackageId) {
+        self.add(package.name.capacity());
+        self.add(package.version.capacity());
+    }
+    fn context(&mut self, context: &hirsel_syntax::FileContext) {
+        self.package(&context.package);
+        self.vec(&context.modules, |w, part| w.add(part.capacity()));
+    }
+    fn error(&mut self, error: &hirsel_types::QueryError) {
+        match error {
+            hirsel_types::QueryError::Operational(failure) => self.failure(failure),
+            hirsel_types::QueryError::Diagnostics(diagnostics) => {
+                self.vec(diagnostics, Weight::diagnostic)
+            }
+            hirsel_types::QueryError::NotImplemented => (),
+        }
+    }
+    fn failure(&mut self, failure: &hirsel_types::OperationalFailure) {
+        self.add(failure.operation.capacity());
+        self.add(failure.message.capacity());
+    }
+    fn dependency(&mut self, read: &hirsel_types::DependencyRead) {
+        use hirsel_types::{DependencyRead, LookupError};
+        match read {
+            DependencyRead::ProviderLookup {
+                context,
+                package,
+                segments,
+                output,
+            } => {
+                self.context(context);
+                if let Some(package) = package {
+                    self.package(package);
+                }
+                self.vec(segments, |w, segment| w.add(segment.capacity()));
+                match &output.result {
+                    Ok(path) => self.def_path(path),
+                    Err(error) => self.error(error),
+                }
+            }
+            DependencyRead::Lookup {
+                context,
+                package,
+                segments,
+                result,
+                manifest: _,
+            } => {
+                self.context(context);
+                if let Some(package) = package {
+                    self.package(package);
+                }
+                self.vec(segments, |w, segment| w.add(segment.capacity()));
+                match result {
+                    Ok(path) | Err(LookupError::Invisible(path)) => self.def_path(path),
+                    Err(LookupError::MissingMember(paths) | LookupError::Ambiguous(paths)) => {
+                        self.vec(paths, Weight::def_path)
+                    }
+                    Err(LookupError::Provider(diagnostics)) => {
+                        self.vec(diagnostics, Weight::diagnostic)
+                    }
+                    Err(LookupError::Missing) => (),
+                }
+            }
+            DependencyRead::ModuleHead {
+                context,
+                head,
+                manifest: _,
+                exposed: _,
+            } => {
+                self.context(context);
+                self.add(head.capacity());
+            }
+            DependencyRead::Signature {
+                definition,
+                fingerprint: _,
+            } => self.def_path(definition),
+        }
+    }
+    fn detail(&mut self, detail: &crate::DependencyReads) {
+        let crate::DependencyReads {
+            operational_failure,
+            signatures,
+            failed_signatures,
+            failed_signature_keys,
+            lookups,
+            manifest_lookups,
+            resolver,
+            citations,
+        } = detail;
+        if let Some(failure) = operational_failure {
+            self.failure(failure);
+        }
+        self.vec(signatures, |w, d| w.def_path(&d.definition));
+        self.vec(failed_signatures, Weight::def_path);
+        self.vec(failed_signature_keys, |w, (path, _)| w.def_path(path));
+        self.vec(lookups, |w, (path, _)| w.def_path(path));
+        self.vec(manifest_lookups, Weight::dependency);
+        self.vec(resolver, Weight::dependency);
+        self.vec(citations, |w, (path, _)| w.def_path(path));
+    }
     fn add(&mut self, bytes: usize) {
         self.bytes = self.bytes.saturating_add(bytes as u64);
     }
@@ -582,6 +732,66 @@ mod tests {
         );
         definition.bodies[0].rvalues.shrink_to_fit();
         assert!(retained_tir_bytes(&definition) < empty);
+    }
+
+    #[test]
+    fn lower_entry_weight_includes_lookup_failures_and_spare_receipt_buffers() {
+        use std::sync::Arc;
+        let mut graph = crate::memo::MemoGraph::default();
+        let output = crate::QueryOutput {
+            value: Arc::new(definition()),
+            diagnostics: vec![],
+            dependencies: vec![],
+        };
+        let key = crate::memo::MemoKey::new(crate::QueryKind::Lower, output.value.path);
+        let mut entry = crate::queries::Entry {
+            memo: graph.insert(
+                key,
+                Default::default(),
+                Ok(Arc::new(output)),
+                Arc::new(Reads::empty()),
+                super::super::Durability::Low,
+                false,
+            ),
+            detail: Default::default(),
+            products: Default::default(),
+            covered: vec![],
+            depth: None,
+            consistent: true,
+        };
+        let base = retained_lower_entry_bytes(&entry, None);
+        entry
+            .detail
+            .manifest_lookups
+            .push(hirsel_types::DependencyRead::ProviderLookup {
+                context: crate::default_context(),
+                package: None,
+                segments: vec!["missing".repeat(4096)],
+                output: hirsel_types::LookupOutput {
+                    manifest: Default::default(),
+                    result: Err(hirsel_types::QueryError::Operational(
+                        hirsel_types::OperationalFailure {
+                            operation: "lookup".into(),
+                            message: "failure".repeat(4096),
+                        },
+                    )),
+                },
+            });
+        let failed = retained_lower_entry_bytes(&entry, None);
+        assert!(
+            failed > base + 50_000,
+            "negative lookup owns both request and failure text"
+        );
+        entry.detail.resolver.reserve(256);
+        assert!(retained_lower_entry_bytes(&entry, None) > failed);
+        let no_depth = retained_lower_entry_bytes(&entry, None);
+        entry.depth = Some(DepthEvidence::leaf(32));
+        assert!(retained_lower_entry_bytes(&entry, None) > no_depth);
+        let verdict = Vec::with_capacity(512);
+        assert!(
+            retained_lower_entry_bytes(&entry, Some(&verdict))
+                > retained_lower_entry_bytes(&entry, None)
+        );
     }
 
     #[test]

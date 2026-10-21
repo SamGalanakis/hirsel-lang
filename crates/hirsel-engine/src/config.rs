@@ -58,7 +58,7 @@ impl QueryEngine {
         self.set_retention(config.retention);
         self.configured_jobs = Some(config.jobs);
         self.configured_lowering = config.lowering;
-        self.hold_bytes = config.hold_bytes;
+        self.set_hold_bytes(config.hold_bytes);
         self.verify_store = config.verify_store;
         self.with_result_store(config.store)
     }

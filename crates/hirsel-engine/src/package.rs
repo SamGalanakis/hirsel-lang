@@ -293,7 +293,7 @@ impl LoadedProgram {
         let portable = self.engine.portable_products;
         let retention = self.engine.retention;
         self.engine.portable_products = true;
-        self.engine.retention = crate::memo::Retention::Resident;
+        self.engine.set_retention(crate::memo::Retention::Resident);
         let checked = self.check_with(LoweringPolicy::Comptime, |engine, file| match &mut build {
             Some(build) if build.has_file(file) => {
                 let paths = engine.file_definitions(file);
@@ -309,7 +309,7 @@ impl LoadedProgram {
             _ => Ok(()),
         });
         self.engine.portable_products = portable;
-        self.engine.retention = retention;
+        self.engine.set_retention(retention);
         let output = checked.map_err(|error| self.error(error))?;
         if !output.diagnostics.is_empty() {
             return Err(self.error(QueryError::Diagnostics(output.diagnostics)));
