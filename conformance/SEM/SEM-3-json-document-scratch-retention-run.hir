@@ -1,0 +1,47 @@
+// rule: SEM-3
+// expect: run
+type Marker {
+  a: u8,
+  pad: Inline[u8, 42],
+}
+
+type BeforeMarker {
+  pad: Inline[u8, 41],
+}
+
+pub fn main() -> Result[(), u64] {
+  let mut held: String = ""
+  for _ in 0u64..4u64 {
+    let mut builder: List[u8] = []
+    text.append(
+      mut builder,
+      "{\"a\":0,\"b\":0,\"c\":0,\"d\":0,\"e\":0,\"f\":0,\"g\":0,\"h\":0,\"i\":0,\"padding\":\""
+    )
+    for _ in 0u64..2u64 {
+      text.append(mut builder, "\\u0061")
+    }
+    text.append(mut builder, "\",\"x\":\"\\u0078\"}")
+    let input = text.finish_valid(take builder)
+    let selected = json_document.with_document(
+      take input,
+      fn(doc: json_document.Document) -> Option[String] {
+        let padding: Inline[u8, 41] = [0u8; 41]
+        let boundary = box BeforeMarker(pad: padding)
+        failure.check(boundary.pad[0] == 0, TextInvariant())
+        let Some(at) = json_document.member(doc, 0, "x") else {
+          return None
+        }
+        json_document.text_owned(doc, at)
+      }
+    )
+    let Ok(Some(extracted)) = take selected else {
+      return Error(1)
+    }
+    held = take extracted
+    let padding: Inline[u8, 42] = [0u8; 42]
+    let marker = box Marker(a: 1, pad: padding)
+    failure.check(held == "x" && marker.a == 1, TextInvariant())
+  }
+  failure.check(held == "x", TextInvariant())
+  Ok(())
+}

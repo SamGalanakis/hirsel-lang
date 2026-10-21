@@ -118,3 +118,75 @@ fn parsed_short_tokens_copy_only_their_own_storage_when_made_unique() {
         std::fs::remove_dir_all(dir).unwrap();
     });
 }
+
+// Match the existing collection-vector harness: large vectors run natively,
+// without changing the interpreter's one-million-step guard.
+fn execute_native_source(name: &str, source: &str) {
+    with_compiler_stack(|| {
+        let dir = std::env::temp_dir().join(format!("hirsel-json-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("main.hir");
+        std::fs::write(&path, source).unwrap();
+        let manifest = serde_json::json!({
+            "schema": 1,
+            "package": {"name": "json_vectors", "version": "1"},
+            "entry": {"module": [], "name": "main"},
+            "sources": [{"path": "main.hir", "module": []}],
+            "dependencies": [{
+                "manifest": root().join("stdlib/std@1/hirsel.json").canonicalize().unwrap(),
+                "package": {"name": "std", "version": "1"}, "expose": []
+            }]
+        });
+        std::fs::write(path.with_extension("hir.json"), manifest.to_string()).unwrap();
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let executable = dir.join(backend.name());
+            native::build_path_native_backend_with_validation(
+                &path,
+                &executable,
+                native::TargetSpec::x86_64_unknown_linux_gnu(),
+                native::BuildProfile::Debug,
+                backend,
+                None,
+                false,
+                hirsel_engine::Verify::On,
+                native::Validation::EveryStage,
+            )
+            .unwrap()
+            .unwrap();
+            let output = Command::new(&executable).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{name}/{backend:?}: {:?}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                output.stdout.is_empty(),
+                "{name}/{backend:?}: {:?}",
+                output.stdout
+            );
+            assert!(
+                output.stderr.is_empty(),
+                "{name}/{backend:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    });
+}
+
+#[test]
+fn scoped_wide_objects_and_nested_key_reuse() {
+    execute_native_source(
+        "wide",
+        include_str!("../fixtures/stdlib_json/scoped_wide.hir"),
+    );
+}
+
+#[test]
+fn scoped_wide_duplicate_error_offsets_and_precedence() {
+    execute_native_source(
+        "duplicates",
+        include_str!("../fixtures/stdlib_json/scoped_duplicates.hir"),
+    );
+}

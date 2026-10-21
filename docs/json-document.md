@@ -43,11 +43,23 @@ or memory use. Duplicate keys are rejected before checking the
 colon or parsing their values. The existing UTF-8, surrogate and 128-container rules and
 `JsonError` byte positions apply.
 
-Duplicate detection scans previous sibling keys: parsing an object with k members takes
-O(k²) key comparisons. Member lookup takes O(k). There is no width limit. This first API
-therefore suits reusable documents with modest object widths; it makes no general performance
-claim for wide objects. During the callback a small input slice can retain its whole backing
-allocation. Explicit extraction is the way to keep a small result independently.
+Duplicate detection scans the first eight sibling keys. On the ninth key it creates a
+private `Map[Bytes, bool]`, copying the preceding decoded keys into independently owned
+byte buffers. Later keys use the existing run-keyed hash and exact byte equality, including
+embedded NUL. Hash collisions do not establish equality. This removes the growing sibling
+scan for wider objects at the cost of temporary key copies and map storage. Eight is a
+bounded small-object fallback, not a width limit or a claimed optimal crossover.
+
+Each promoted object owns one scratch map on a separate parser stack. Nested objects have
+independent maps; closing an object drops its map and every copied key. Parser errors and
+language failures use ordinary owner cleanup. Scratch storage is gone before the callback;
+the document still publishes only its input, plain node list and decoded buffer. Duplicate
+errors still point at the second key's opening quote, before colon or value parsing.
+
+Member lookup takes O(k), and there is no width limit. The API remains opt-in: node capacity
+and primary-workload cycle costs still require separate evaluation. During the callback a
+small input slice can retain its whole backing allocation. Explicit extraction keeps a small
+result independently.
 
 The existing `json.Value`, parser, reader and writer APIs keep their behavior. Use the reader
 for one-pass consumption and an owned value when mutation or retained subtrees are needed.

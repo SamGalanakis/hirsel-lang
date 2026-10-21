@@ -1,0 +1,68 @@
+// rule: SEM-3
+// expect: run
+fn wide(n: u64) -> String {
+  let mut out: List[u8] = []
+  text.append(mut out, "{")
+  for i in 0u64..n {
+    if i != 0 {
+      text.append(mut out, ",")
+    }
+    text.append(mut out, f"\"equal-prefix-member-{i}\":{i}")
+  }
+  text.append(mut out, "}")
+  text.finish_valid(take out)
+}
+
+fn check(take input: String) -> () {
+  let Ok(value) = json.parse(copy input) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  let Ok(expected) = json.stringify(value) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  let observed = json_document.with_document(
+    copy input,
+    fn(doc: json_document.Document) -> Result[String, json.JsonError] {
+      json_document.stringify(doc)
+    }
+  )
+  failure.check(expected == input, TextInvariant())
+  failure.check(observed == Ok(Ok(expected)), TextInvariant())
+}
+
+pub fn main() -> Result[(), u64] {
+  let widths: List[u64] = [0u64, 1u64, 8u64, 9u64, 16u64, 64u64]
+  for n in take widths {
+    let input = wide(n)
+    check(take input)
+  }
+  let inner = wide(9)
+  let mut out: List[u8] = []
+  text.append(mut out, "{")
+  for i in 0u64..9u64 {
+    if i != 0 {
+      text.append(mut out, ",")
+    }
+    text.append(mut out, f"\"equal-prefix-member-{i}\":{i}")
+  }
+  text.append(mut out, ",\"nested\":[")
+  text.append(mut out, inner)
+  text.append(mut out, ",")
+  text.append(mut out, inner)
+  text.append(mut out, "],\"last\":")
+  text.append(mut out, inner)
+  text.append(mut out, "}")
+  check(text.finish_valid(take out))
+  let small: List[String] = [
+    "{}",
+    "[]",
+    "[{},[1,true,null],{\"x\":1}]",
+    "{\"x\":1,\"child\":{\"x\":2}}"
+  ]
+  for input in take small {
+    check(take input)
+  }
+  Ok(())
+}

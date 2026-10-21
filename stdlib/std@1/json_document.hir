@@ -1,6 +1,6 @@
 // Dense scoped JSON, following Goose 8511ae34 stdlib/json.goose:906–1104.
 // Tokens, error precedence and writing follow json.hir's lossless UTF-8 policy.
-// Object duplicate checks scan siblings (quadratic in member count).
+// Small objects scan siblings; wider objects use object-local keyed maps.
 pub type Kind = Null | Bool | Number | Text | Array | Object
 
 // Ten inline u64 fields. Links and spans never own storage.
@@ -27,6 +27,13 @@ type Frame {
   node: u64,
   last: u64,
   state: u64,
+}
+
+// Only promoted objects occupy this stack. Nested objects own independent maps;
+// popping at close releases every copied key before Document publication.
+type ObjectKeys {
+  node: u64,
+  keys: Map[Bytes, bool],
 }
 
 pub opaque type Document: copyable + inert + noalloc_drop uses {} {
@@ -271,12 +278,41 @@ fn span_equal(data: Bytes, decoded: List[u8], a: Span, b: Span) -> bool uses {} 
   true
 }
 
+// The same owning-key membership pattern as json.hir's json_node. Bytes keys
+// compare decoded bytes exactly, including NUL, using the existing keyed hash.
+fn scratch_key(data: Bytes, decoded: List[u8], key: Span) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  if key.source == 1 {
+    core@1/bytes.append(
+      mut out,
+      core@1/bytes.slice(data, key.start, key.start + key.length)
+    )
+  } else {
+    for i in 0u64..key.length {
+      core@1/list.push(mut out, decoded[key.start + i])
+    }
+  }
+  core@1/bytes.from_list(take out)
+}
+
+// A bounded fallback protects the common six-member record workload. Eight is
+// an experimental crossover, not an object width limit or a claimed optimum.
+const SMALL_OBJECT: u64 = 8
+
+fn close_keys(mut scratch: unique List[ObjectKeys], node: u64) -> () uses {} {
+  let active = core@1/list.len(scratch)
+  if active != 0 && scratch[active - 1].node == node {
+    let _ = core@1/list.pop(mut scratch)
+  }
+}
+
 fn parse_nodes(data: Bytes, mut decoded: List[u8], mut nodes: List[Node]) -> Result[
   (),
   json.JsonError
 ] uses {} {
   let mut pos: u64 = 0
   let mut frames: List[Frame] = []
+  let mut scratch: unique List[ObjectKeys] = []
   while true {
     json_whitespace(data, mut pos)
     let mut key = Span(source: 0, start: 0, length: 0)
@@ -293,6 +329,7 @@ fn parse_nodes(data: Bytes, mut decoded: List[u8], mut nodes: List[Node]) -> Res
       if frame.state == 1 {
         if json_peek(data, pos) == close {
           pos += 1
+          close_keys(mut scratch, frame.node)
           let _ = core@1/list.pop(mut frames)
           continue
         }
@@ -303,26 +340,51 @@ fn parse_nodes(data: Bytes, mut decoded: List[u8], mut nodes: List[Node]) -> Res
         json_whitespace(data, mut pos)
       } else if json_peek(data, pos) == close {
         pos += 1
+        close_keys(mut scratch, frame.node)
         let _ = core@1/list.pop(mut frames)
         continue
       }
       if parent.kind == 5 {
         let key_at = pos
         key = quoted(data, mut pos, mut decoded)?
-        let mut sibling = parent.first
-        let mut seen: u64 = 0
-        while seen < parent.count {
-          let prior = nodes[sibling]
-          let prior_key = Span(
-            source: prior.key_source,
-            start: prior.key_start,
-            length: prior.key_length
-          )
-          if span_equal(data, decoded, prior_key, key) {
+        if parent.count < SMALL_OBJECT {
+          let mut sibling = parent.first
+          let mut seen: u64 = 0
+          while seen < parent.count {
+            let prior = nodes[sibling]
+            let prior_key = Span(
+              source: prior.key_source,
+              start: prior.key_start,
+              length: prior.key_length
+            )
+            if span_equal(data, decoded, prior_key, key) {
+              return Error(DuplicateKey(key_at))
+            }
+            sibling = prior.next
+            seen += 1
+          }
+        } else {
+          if parent.count == SMALL_OBJECT {
+            let mut keys: Map[Bytes, bool] = core@1/map.empty()
+            let mut sibling = parent.first
+            for _ in 0u64..parent.count {
+              let prior = nodes[sibling]
+              let prior_key = Span(
+                source: prior.key_source,
+                start: prior.key_start,
+                length: prior.key_length
+              )
+              core@1/map.insert(mut keys, scratch_key(data, decoded, prior_key), true)
+              sibling = prior.next
+            }
+            core@1/list.push(mut scratch, ObjectKeys(node: frame.node, keys: take keys))
+          }
+          let top_keys = core@1/list.len(scratch) - 1
+          let owned_key = scratch_key(data, decoded, key)
+          if core@1/map.contains(scratch[top_keys].keys, owned_key) {
             return Error(DuplicateKey(key_at))
           }
-          sibling = prior.next
-          seen += 1
+          core@1/map.insert(mut scratch[top_keys].keys, take owned_key, true)
         }
         json_whitespace(data, mut pos)
         if json_peek(data, pos) != 58 {

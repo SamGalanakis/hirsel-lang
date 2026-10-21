@@ -1,0 +1,66 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), u64] {
+  let cases: List[(String, json.JsonError)] = [
+    (
+      "{\"k0\":0,\"k1\":0,\"k2\":0,\"k3\":0,\"k4\":0,\"k5\":0,\"k6\":0,\"k7\":0,\"k8\":0,\"k0\":null}",
+      DuplicateKey(64)
+    ),
+    (
+      "{\"k0\":0,\"k1\":0,\"k2\":0,\"k3\":0,\"k4\":0,\"k5\":0,\"k6\":0,\"k7\":0,\"k8\":0,\"k0\" ?}",
+      DuplicateKey(64)
+    ),
+    (
+      "{\"k0\":0,\"k1\":0,\"k2\":0,\"k3\":0,\"k4\":0,\"k5\":0,\"k6\":0,\"k7\":0,\"k8\":0,\"k0\":invalid}",
+      DuplicateKey(64)
+    ),
+    (
+      "{\"k0\":0,\"k1\":0,\"k2\":0,\"k3\":0,\"k4\":0,\"k5\":0,\"k6\":0,\"k7\":0,\"k8\":0,\"k8\":null}",
+      DuplicateKey(64)
+    ),
+    (
+      "{\"k0\":0,\"k1\":0,\"k2\":0,\"k3\":0,\"k4\":0,\"k5\":0,\"k6\":0,\"k7\":0,\"k8\":0,\"k8\" ?}",
+      DuplicateKey(64)
+    ),
+    (
+      "{\"k0\":0,\"k1\":0,\"k2\":0,\"k3\":0,\"k4\":0,\"k5\":0,\"k6\":0,\"k7\":0,\"k8\":0,\"k8\":invalid}",
+      DuplicateKey(64)
+    ),
+    (
+      "{\"k0\":0,\"k1\":0,\"k2\":0,\"k3\":0,\"k4\":0,\"k5\":0,\"k6\":0,\"k7\":0,\"k8\":0,\"x\":1,\"\\u0078\" ?}",
+      DuplicateKey(70)
+    ),
+    (
+      "{\"k0\":0,\"k1\":0,\"k2\":0,\"k3\":0,\"k4\":0,\"k5\":0,\"k6\":0,\"k7\":0,\"k8\":0,\"\\u0000\":1,\"\\u0000\" ?}",
+      DuplicateKey(75)
+    ),
+    (
+      "{\"k0\":0,\"k1\":0,\"k2\":0,\"k3\":0,\"k4\":0,\"k5\":0,\"k6\":0,\"k7\":0,\"k8\":0,\"é\":1,\"\\u00e9\" ?}",
+      DuplicateKey(71)
+    ),
+    (
+      "{\"k0\":0,\"k1\":0,\"k2\":0,\"k3\":0,\"k4\":0,\"k5\":0,\"k6\":0,\"k7\":0,\"k8\":0,\"𝄞\":1,\"\\uD834\\uDD1E\" ?}",
+      DuplicateKey(73)
+    ),
+    (
+      "{\"k0\":0,\"k1\":0,\"k2\":0,\"k3\":0,\"k4\":0,\"k5\":0,\"k6\":0,\"k7\":0,\"k8\":0,\"\\u00G0\":0}",
+      Syntax(69)
+    )
+  ]
+  for (input, expected) in cases {
+    failure.check(
+      json_document.with_document(
+        copy input,
+        fn(doc: json_document.Document) -> u64 {
+          0
+        }
+      ) == Error(expected),
+      TextInvariant()
+    )
+    match json.parse(copy input) {
+      Error(e) => failure.check(e == expected, TextInvariant()),
+      Ok(_) => failure.check(false, TextInvariant()),
+    }
+  }
+  Ok(())
+}

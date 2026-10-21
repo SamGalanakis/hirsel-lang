@@ -5320,6 +5320,7 @@ conformance/SEM/SEM-3-json-document-access-run.hir
 conformance/SEM/SEM-3-json-document-backing-run.hir
 conformance/SEM/SEM-3-json-document-callback-failure-run.hir
 conformance/SEM/SEM-3-json-document-corpus-run.hir
+conformance/SEM/SEM-3-json-document-duplicates-run.hir
 conformance/SEM/SEM-3-json-document-effects-run.hir
 conformance/SEM/SEM-3-json-document-invalid-run.hir
 conformance/SEM/SEM-3-json-document-nesting-run.hir
@@ -5327,6 +5328,8 @@ conformance/SEM/SEM-3-json-document-retention-run.hir
 conformance/SEM/SEM-3-json-document-reuse-run.hir
 conformance/SEM/SEM-3-json-document-run.hir
 conformance/SEM/SEM-3-json-document-scope-gate-run.hir
+conformance/SEM/SEM-3-json-document-scratch-retention-run.hir
+conformance/SEM/SEM-3-json-document-wide-run.hir
 conformance/SEM/SEM-3-json-empty-run.hir
 conformance/SEM/SEM-3-json-import-001-run.hir
 conformance/SEM/SEM-3-json-import-002-run.hir

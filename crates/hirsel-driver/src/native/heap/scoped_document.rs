@@ -9,15 +9,29 @@ use std::path::Path;
 
 #[test]
 fn dense_nodes_and_detached_text_drain_in_both_audit_modes() {
+    check_detached_retention("retention");
+}
+
+#[test]
+fn scratch_keys_retire_before_callback_and_detached_text_drains() {
+    check_detached_retention("scratch-retention");
+}
+
+fn check_detached_retention(fixture: &str) {
     with_compiler_stack(|| {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../conformance/SEM/SEM-3-json-document-retention-run.hir");
-        // Keep four parses, all three document owners and exact ID checks;
-        // full per-step recount uses a compact escaped token to bound audit work.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../conformance/SEM/SEM-3-json-document-{fixture}-run.hir"
+        ));
+        // The scratch audit has more counted owners per parser step. Two
+        // successive parses retain the exact-ID/detachment check while bounding
+        // the ordinary unit action; the plain-node control keeps four parses.
+        let parses = if fixture == "scratch-retention" { 2 } else { 4 };
         let source = std::fs::read_to_string(&path)
             .unwrap()
-            .replace("0u64..96u64", "0u64..2u64");
-        let mut loaded = crate::load_program_source(&path, Some(&source)).unwrap();
+            .replace("0u64..96u64", "0u64..2u64")
+            .replace("0u64..4u64", &format!("0u64..{parses}u64"));
+        let mut loaded =
+            crate::load_program_source(&path, Some(&source)).unwrap_or_else(|e| panic!("{e}"));
         loaded
             .check_for_execution()
             .unwrap_or_else(|e| panic!("{e}"));
@@ -155,7 +169,7 @@ fn dense_nodes_and_detached_text_drain_in_both_audit_modes() {
                     _ => (),
                 }
             }
-            assert_eq!(markers, 4);
+            assert_eq!(markers, parses);
             assert!(live.is_empty());
             if let Some(previous) = &previous {
                 assert_eq!(previous, &clean);
@@ -176,7 +190,8 @@ fn construction_and_extraction_failures_drain_in_both_audit_modes() {
             .unwrap()
             .replace("0u64..4u64", "0u64..1u64")
             .replace("0u64..96u64", "0u64..2u64");
-        let mut loaded = crate::load_program_source(&path, Some(&source)).unwrap();
+        let mut loaded =
+            crate::load_program_source(&path, Some(&source)).unwrap_or_else(|e| panic!("{e}"));
         loaded
             .check_for_execution()
             .unwrap_or_else(|e| panic!("{e}"));
@@ -342,6 +357,136 @@ fn a_small_input_slice_keeps_its_ordinary_backing_during_the_callback() {
             assert!(backing.is_some());
             eprintln!(
                 "three-byte input retains {backing:?} capacity bytes during callback; audit full_recount={full_recount_every_step}"
+            );
+        }
+    });
+}
+
+// Exercise promotion, map growth, decoded growth, close and extraction on the
+// actual parser. Streaming campaigns retain only a failing perturbation.
+#[test]
+fn scratch_construction_and_extraction_failures_drain_in_both_audit_modes() {
+    with_compiler_stack(|| {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../conformance/SEM/SEM-3-json-document-scratch-retention-run.hir");
+        // Static input removes unrelated formatting/builder failure sites. Nine
+        // keys still promote and grow scratch; 17 decoded bytes grow the shared
+        // decoded buffer before close and independent text extraction.
+        let source = r#"pub fn main() -> Result[(), u64] {
+  let input = "{\"a\":0,\"b\":0,\"c\":0,\"d\":0,\"e\":0,\"f\":0,\"g\":0,\"h\":0,\"i\":\"\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\\u0061\"}"
+  let observed = json_document.with_document(copy input, fn(doc: json_document.Document) -> Option[String] {
+    let Some(at) = json_document.member(doc, 0, "i") else { return None }
+    json_document.text_owned(doc, at)
+  })
+  failure.check(observed == Ok(Some("aaaaaaaaaaaaaaaaa")), TextInvariant())
+  Ok(())
+}"#;
+        let mut loaded =
+            crate::load_program_source(&path, Some(source)).unwrap_or_else(|e| panic!("{e}"));
+        loaded
+            .check_for_execution()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let snapshot = loaded.engine.export_native_input().unwrap();
+        let input = loaded.engine.import_native_input(snapshot).unwrap();
+        let ready = crate::native::build(
+            &input,
+            &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+        )
+        .unwrap();
+        let program = heap_program(&ready);
+        for full_recount_every_step in [false, true] {
+            let campaign = hirsel_heapcheck::audit_campaign_ready(
+                &program,
+                &loaded.entry,
+                &[],
+                &mut || Box::new(Io::new()),
+                &Config {
+                    full_recount_every_step,
+                    ..Config::default()
+                },
+            );
+            assert!(
+                campaign.first_violation().is_none(),
+                "{:?}",
+                campaign.first_violation()
+            );
+            assert!(campaign.injected > 0);
+            eprintln!(
+                "scratch audit full_recount={full_recount_every_step}: {} injected failures, counters={:?}",
+                campaign.injected, campaign.clean.counters
+            );
+        }
+    });
+}
+
+#[test]
+fn scratch_full_hash_collisions_preserve_exact_key_comparison() {
+    with_compiler_stack(|| {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../conformance/SEM/SEM-3-json-document-duplicates-run.hir");
+        // Two independent outcomes bound the full recount: all distinct keys
+        // survive a full-hash collision, and an earlier decoded key still fails
+        // before a malformed value. Full Unicode/error vectors run natively.
+        let source = r#"pub fn main() -> Result[(), u64] {
+  let valid = "{\"a\":0,\"b\":0,\"c\":0,\"d\":0,\"e\":0,\"f\":0,\"g\":0,\"h\":0,\"i\":0}"
+  let encoded = json_document.with_document(copy valid, fn(doc: json_document.Document) -> Result[String, json.JsonError] { json_document.stringify(doc) })
+  failure.check(encoded == Ok(Ok(valid)), TextInvariant())
+  let duplicate = "{\"a\":0,\"b\":0,\"c\":0,\"d\":0,\"e\":0,\"f\":0,\"g\":0,\"h\":0,\"i\":0,\"a\":invalid}"
+  let observed = json_document.with_document(copy duplicate, fn(doc: json_document.Document) -> u64 { 0 })
+  failure.check(observed == Error(DuplicateKey(55)), TextInvariant())
+  Ok(())
+}"#;
+        let mut loaded = crate::load_program_source(&path, Some(source)).unwrap();
+        loaded
+            .check_for_execution()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let snapshot = loaded.engine.export_native_input().unwrap();
+        let input = loaded.engine.import_native_input(snapshot).unwrap();
+        let ready = crate::native::build(
+            &input,
+            &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+        )
+        .unwrap();
+        let mut program = heap_program(&ready);
+        // Reuse rc_maps.rs's adversarial full-hash-collision control; equality
+        // and the production map probing code remain unchanged.
+        use hirsel_lir::ir::{ConstantData, ConstantId, ConstantValue, Inst};
+        let mut replaced = 0;
+        for unit in &mut program.units {
+            for instruction in &mut unit.instructions {
+                if let Inst::Hash { result, .. } = *instruction {
+                    let constant = ConstantId(unit.tables.constants.len() as u32);
+                    unit.tables.constants.push(ConstantData {
+                        ty: unit.values[result.index()].ty,
+                        value: ConstantValue::Integer(1 << 32),
+                    });
+                    *instruction = Inst::Const { result, constant };
+                    replaced += 1;
+                }
+            }
+        }
+        assert!(replaced > 0);
+        for full_recount_every_step in [false, true] {
+            let clean = hirsel_heapcheck::run_ready(
+                &program,
+                &loaded.entry,
+                &[],
+                &mut Io::new(),
+                &Config {
+                    full_recount_every_step,
+                    ..Config::default()
+                },
+            );
+            let audit = clean.result.unwrap();
+            assert!(
+                audit.observation.failures.is_empty(),
+                "{:?}",
+                audit.observation
+            );
+            assert_eq!(clean.counters.allocations, clean.counters.frees);
+            eprintln!(
+                "scratch collisions full_recount={full_recount_every_step}: replaced={replaced}, sites={}, counters={:?}",
+                clean.sites, clean.counters
             );
         }
     });
