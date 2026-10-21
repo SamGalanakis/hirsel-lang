@@ -61,8 +61,9 @@ pub fn main(t: Test) -> Result[(), ()] {
     check_decoded(t, appointment_from_json(encoded), value)
     let mut out: List[u8] = []
     test.check(t, results.is_ok(appointment_json_into(value, mut out, 0)))
-    test.check(t, text.finish_valid(unique out) == f"{{\"due\":\"{spelling}\"}}")
-    check_decoded(t, appointment_from_json_bytes(bytes.from_list(take out)), value)
+    let encoded_text = text.finish_valid(take out)
+    test.check(t, encoded_text == f"{{\"due\":\"{spelling}\"}}")
+    check_decoded(t, appointment_from_json_bytes(string.as_bytes(encoded_text)), value)
   }
   let invalid: List[String] = [
     "",
