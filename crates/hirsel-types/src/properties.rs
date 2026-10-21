@@ -560,6 +560,24 @@ pub(crate) fn prove(
     prove_flags(source, root, bound, generics, flags, lookup)
 }
 
+#[cfg(test)]
+thread_local! { static DIRECT_PROOF_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) fn direct_proof_walks() -> usize {
+    DIRECT_PROOF_WALKS.with(std::cell::Cell::get)
+}
+#[cfg(test)]
+pub(crate) fn prove_full(
+    store: &TypeInterner,
+    root: TypeId,
+    bound: Bound,
+    generics: &GenericDeclarations,
+    flags: ProofFlags,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<Sendability, QueryError> {
+    prove_flags_walk(store, root, bound, generics, flags, lookup)
+}
+
 /// Main's worklist proof: one walk with a proof-wide visited set.
 fn prove_flags(
     store: &TypeInterner,
@@ -569,6 +587,61 @@ fn prove_flags(
     flags: ProofFlags,
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Sendability, QueryError> {
+    // Rustc15c10447 type_ir/fast_reject.rs:94-104,130-145 settles
+    // leaf kinds locally. Reuse the exact proof step as ContextMemo does;
+    // these kinds never produce graph children or nominal expansions.
+    if store.get(root).is_some_and(|row| {
+        matches!(
+            row.kind,
+            TypeKind::Primitive(_)
+                | TypeKind::Parameter(_)
+                | TypeKind::Function(_)
+                | TypeKind::Error
+        )
+    }) {
+        let mut context = Direct {
+            t: store,
+            generics,
+            lookup,
+        };
+        let mut dependencies = BTreeSet::new();
+        let (step, _) = proof_step(
+            store,
+            root,
+            root,
+            false,
+            &mut false,
+            bound,
+            generics,
+            flags,
+            &mut dependencies,
+            &mut context,
+        )?;
+        match step {
+            ProofStep::Fail => return Ok(Sendability::NotSendable),
+            ProofStep::Parts(parts) => {
+                assert!(parts.is_empty(), "a leaf has no proof children");
+                return Ok(if dependencies.is_empty() {
+                    Sendability::Sendable
+                } else {
+                    Sendability::DependsOn(dependencies.into_iter().collect())
+                });
+            }
+            ProofStep::Expand { .. } => unreachable!("a leaf cannot expand a declaration"),
+        }
+    }
+    prove_flags_walk(store, root, bound, generics, flags, lookup)
+}
+fn prove_flags_walk(
+    store: &TypeInterner,
+    root: TypeId,
+    bound: Bound,
+    generics: &GenericDeclarations,
+    flags: ProofFlags,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<Sendability, QueryError> {
+    #[cfg(test)]
+    DIRECT_PROOF_WALKS.with(|n| n.set(n.get() + 1));
     let mut context = Direct {
         t: store,
         generics,

@@ -425,12 +425,22 @@ fn leaf_proofs_use_local_rules_without_allocating_walk_frames() {
         }
     }
     let before = crate::memo::proof_walk_rows();
+    let mut direct_walks = 0;
     let mut lookup = |_| panic!("a leaf proof makes no signature lookup");
     let mut memo = ContextMemo::new(&t, &declarations, &mut lookup);
     for root in roots {
         for bound in [Bound::Plain, Bound::Copyable, Bound::Sendable, Bound::Flat] {
             for flags in every_flag() {
-                let expected = prove(
+                let expected = crate::properties::prove_full(
+                    &t,
+                    root,
+                    bound,
+                    &declarations,
+                    flags,
+                    &mut |_| panic!("a leaf has no declaration"),
+                );
+                let walks_before = crate::properties::direct_proof_walks();
+                let direct = prove(
                     &t,
                     root,
                     bound,
@@ -441,6 +451,8 @@ fn leaf_proofs_use_local_rules_without_allocating_walk_frames() {
                     flags.handles,
                     &mut |_| panic!("a leaf has no declaration"),
                 );
+                direct_walks += crate::properties::direct_proof_walks() - walks_before;
+                assert_eq!(direct, expected);
                 assert_eq!(memo.prove(root, bound, flags), expected);
                 assert_eq!(memo.prove(root, bound, flags), expected);
             }
@@ -452,4 +464,8 @@ fn leaf_proofs_use_local_rules_without_allocating_walk_frames() {
         "local leaf judgments do not need a graph walk frame"
     );
     assert!(memo.hits() > 0, "leaf answers retain memo hits");
+    assert_eq!(
+        direct_walks, 0,
+        "direct leaf proofs need no worklist either"
+    );
 }
