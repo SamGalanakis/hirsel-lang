@@ -224,7 +224,7 @@ pub(crate) struct GeneratedText {
     pub(crate) definition: DefPath,
     pub(crate) syntax: Arc<ItemSyntax>,
     pub(crate) body: ExprId,
-    pub(crate) text: String,
+    pub(crate) text: Result<String, QueryError>,
     pub(crate) reads: Reads,
     pub(crate) detail: DependencyReads,
     pub(crate) depth: crate::memo::DepthEvidence<Span>,
@@ -234,7 +234,7 @@ pub(crate) struct PreparedGenerator {
     pub(crate) syntax: Arc<ItemSyntax>,
     pub(crate) body: ExprId,
     pub(crate) input: GeneratorInput,
-    pub(crate) checked: GeneratorBody,
+    pub(crate) checked: Result<GeneratorBody, QueryError>,
     pub(crate) detail: DependencyReads,
     pub(crate) products: Arc<PhaseProducts>,
 }

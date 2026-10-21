@@ -1,7 +1,7 @@
 //! Immutable session views for S1 body demands. Tables are borrowed, never
 //! cloned into workers. Ordinary misses use the existing frozen P task, and
 //! complete products return for deterministic serial publication.
-use super::worker::{Requirement, TaskBody, TaskInputs, TaskWorker, TirSource};
+use super::worker::{Requirement, SelectionEvent, TaskBody, TaskInputs, TaskWorker, TirSource};
 use super::*;
 use crate::memo::{DepthEvidence, MemoGraph};
 use crate::snapshot::SourceContext;
@@ -169,7 +169,7 @@ impl TirSource for FrozenSource<'_> {
                     snapshot: &self.inputs.snapshot,
                     detail: &mut detail,
                 },
-            )?;
+            );
             Ok(generation::task::PreparedGenerator {
                 syntax,
                 body,
@@ -500,16 +500,50 @@ impl TirSource for FrozenSource<'_> {
         path: &DefPath,
         arguments: &[hirsel_types::GenericArgument],
     ) -> DependencyProduct<Option<DefPath>> {
+        if self
+            .instance_bodies
+            .declarations
+            .contains(&DefId::intern(path))
+            || self
+                .items
+                .get(path)
+                .and_then(|items| items.first())
+                .is_some_and(|syntax| generation::instance_bodied(syntax))
+        {
+            worker.implementation(path);
+        }
         match self.instance_bodies.resolve(
             DefId::intern(path),
             self.inputs.snapshot.types(),
             arguments,
         ) {
-            Ok(body) => DependencyProduct {
-                result: Ok(body.map(|definition| definition.path().clone())),
-                reads: Reads::empty(),
-            },
-            Err(_) => {
+            Ok(Some(body)) => {
+                // Scalar selection checks an instance before returning its
+                // executable identity. Keep that order and return its full
+                // reads, while deferring first-selection labels to input order.
+                let product = self.body(worker, body.path());
+                worker.selections.push(SelectionEvent::Checked(
+                    body.path().clone(),
+                    matches!(product.result, Err(QueryError::Diagnostics(_))),
+                ));
+                DependencyProduct {
+                    result: product.result.map(|_| Some(body.path().clone())),
+                    reads: product.reads,
+                }
+            }
+            Ok(None)
+                if !self
+                    .items
+                    .get(path)
+                    .and_then(|items| items.first())
+                    .is_some_and(|syntax| generation::instance_bodied(syntax)) =>
+            {
+                DependencyProduct {
+                    result: Ok(None),
+                    reads: Reads::empty(),
+                }
+            }
+            _ => {
                 worker
                     .pending
                     .push(Requirement::Instance(path.clone(), arguments.to_vec()));
@@ -599,8 +633,11 @@ impl QueryEngine {
         definitions: Vec<DefPath>,
         jobs: hirsel_intern::jobs::Jobs,
     ) -> Vec<MaterializationResult> {
+        let mut selections = BTreeMap::new();
         loop {
-            if let Some(results) = self.materialize_values_round(&definitions, jobs) {
+            if let Some(results) =
+                self.materialize_values_round(&definitions, jobs, &mut selections)
+            {
                 if let Some(last) = results.last() {
                     self.last_phase = last.phase;
                     self.last_comptime_limit = last.limit.clone();
@@ -648,6 +685,7 @@ impl QueryEngine {
         &mut self,
         definitions: &[DefPath],
         jobs: hirsel_intern::jobs::Jobs,
+        selections: &mut BTreeMap<DefPath, hirsel_diag::Label>,
     ) -> Option<Vec<MaterializationResult>> {
         if definitions.is_empty() {
             return Some(vec![]);
@@ -707,6 +745,7 @@ impl QueryEngine {
                     worker.phase,
                     std::mem::take(&mut worker.registrations),
                     std::mem::take(&mut worker.pending),
+                    std::mem::take(&mut worker.selections),
                 )
             },
         );
@@ -727,7 +766,7 @@ impl QueryEngine {
         // registrations whose complete producer reads still hold, then begin
         // another worker round under the new signature universe.
         let mut declarations = BTreeMap::new();
-        for (_, path, product, _, _, registrations, pending) in &completed {
+        for (_, path, product, _, _, registrations, pending, _) in &completed {
             if pending
                 .iter()
                 .any(|requirement| matches!(requirement, Requirement::Staged(_)))
@@ -751,6 +790,51 @@ impl QueryEngine {
             for registration in declarations.into_values() {
                 self.install_staged(registration);
             }
+            return None;
+        }
+        let mut instances = BTreeMap::new();
+        for (_, path, product, _, _, _, pending, _) in &completed {
+            if !self.execution_valid(path, &product.reads) {
+                continue;
+            }
+            for requirement in pending {
+                if let Requirement::Instance(declaration, arguments) = requirement
+                    && let Some(key) = hirsel_tir::InstanceBodies::key(&self.types, arguments)
+                {
+                    instances
+                        .entry((declaration.clone(), key))
+                        .or_insert_with(|| arguments.clone());
+                }
+            }
+        }
+        let mut registered = false;
+        for ((declaration, _), arguments) in instances {
+            let Ok(syntax) = self.snapshot(&declaration) else {
+                break;
+            };
+            let actuals = hirsel_types::Actuals { arguments };
+            match self.register_generated_instance(&declaration, &actuals, syntax.item.name_span) {
+                Ok((instance, fresh)) => {
+                    if fresh {
+                        let key = hirsel_tir::InstanceBodies::key(&self.types, &actuals.arguments)
+                            .expect("registered closed actuals");
+                        selections.insert(
+                            instance,
+                            hirsel_diag::Label {
+                                span: syntax.item.name_span,
+                                message: format!(
+                                    "selects instance {}",
+                                    key.instance_name(&declaration)
+                                ),
+                            },
+                        );
+                    }
+                    registered |= fresh;
+                }
+                Err(_) => break,
+            }
+        }
+        if registered {
             return None;
         }
         let mut generated = shared.take_generators();
@@ -790,13 +874,24 @@ impl QueryEngine {
         let mut completed: BTreeMap<_, _> = completed
             .into_iter()
             .map(
-                |(index, path, product, limit, phase, registrations, pending)| {
-                    (index, (path, product, limit, phase, registrations, pending))
+                |(index, path, product, limit, phase, registrations, pending, selected)| {
+                    (
+                        index,
+                        (
+                            path,
+                            product,
+                            limit,
+                            phase,
+                            registrations,
+                            pending,
+                            selected,
+                        ),
+                    )
                 },
             )
             .collect();
         for (index, path) in definitions.iter().enumerate() {
-            let Some((_, product, limit, phase, mut registrations, pending)) =
+            let Some((_, product, limit, phase, mut registrations, pending, selected)) =
                 completed.remove(&index)
             else {
                 // A prior root may have changed registrations since preflight.
@@ -822,6 +917,52 @@ impl QueryEngine {
                 // No suspended failure becomes a cached language verdict. A
                 // whole-root retry preserves the requester's original stack.
                 results[index] = Some(self.scalar_materialization_outcome(path));
+            }
+            // A registration's first scalar check owns its selecting label;
+            // later hits return the underlying cached diagnostics. Worker
+            // completion order must not decide which root receives the label.
+            let mut error = results[index]
+                .as_ref()
+                .unwrap()
+                .result
+                .as_ref()
+                .err()
+                .cloned();
+            for event in selected {
+                match event {
+                    SelectionEvent::Failed(mut product) => {
+                        let definition = product.definition.clone();
+                        let cached = self.checked.get(&DefId::intern(&definition)).cloned();
+                        let cached = cached.filter(|entry| {
+                            self.key_text(&definition, QueryKind::Check)
+                                .ok()
+                                .is_some_and(|text| self.memo_valid(&definition, entry, text))
+                        });
+                        if let Some(cached) = cached {
+                            error = cached.result().err();
+                        } else if self.execution_valid(&definition, &product.reads) {
+                            // Nested first-selection labels are part of the
+                            // enclosing rejected check, not its child's memo.
+                            if let Some(error) = &error {
+                                product.text = Err(error.clone());
+                            }
+                            let _ = self.merge_generated_text(product);
+                        }
+                    }
+                    SelectionEvent::Checked(instance, failed) => {
+                        if let Some(label) = selections.remove(&instance)
+                            && failed
+                            && let Some(QueryError::Diagnostics(diagnostics)) = &mut error
+                        {
+                            for diagnostic in diagnostics {
+                                diagnostic.secondary.push(label.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(error) = error {
+                results[index].as_mut().unwrap().result = Err(error);
             }
         }
         Some(results.into_iter().map(Option::unwrap).collect())

@@ -340,13 +340,14 @@ impl QueryEngine {
                     site: Some(site),
                 })
             })
-            .and_then(|_| {
+            .and_then(|_| product.text)
+            .and_then(|generated| {
                 self.publish_generated_body(
                     definition,
                     &product.syntax,
                     product.body,
                     &signature.value,
-                    product.text,
+                    generated,
                     &mut reads,
                 )
             });
@@ -803,6 +804,42 @@ impl QueryEngine {
         actuals: &hirsel_types::Actuals,
         site: Span,
     ) -> Result<DefPath, QueryError> {
+        let (instance, fresh) = self.register_generated_instance(declaration, actuals, site)?;
+        if !fresh {
+            return Ok(instance);
+        }
+        let key = hirsel_tir::InstanceBodies::key(&self.types, &actuals.arguments)
+            .expect("registered instance has closed arguments");
+        let instance_name = key.instance_name(declaration);
+        // The instance's diagnostics also cite the call that selected it.
+        let checked = self.mode_query(&instance).and_then(|analyzed| {
+            if has_errors(&analyzed.diagnostics) {
+                Err(QueryError::Diagnostics(analyzed.diagnostics.clone()))
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(QueryError::Diagnostics(mut diagnostics)) = checked {
+            for d in &mut diagnostics {
+                d.secondary.push(hirsel_diag::Label {
+                    span: site,
+                    message: format!("selects instance {instance_name}"),
+                });
+            }
+            return Err(QueryError::Diagnostics(diagnostics));
+        }
+        checked?;
+        Ok(instance)
+    }
+
+    /// Install only the instance syntax/identity. Generator execution and
+    /// checking are separate work, so a frozen worker can resume next epoch.
+    pub(crate) fn register_generated_instance(
+        &mut self,
+        declaration: &DefPath,
+        actuals: &hirsel_types::Actuals,
+        site: Span,
+    ) -> Result<(DefPath, bool), QueryError> {
         let key =
             hirsel_tir::InstanceBodies::key(&self.types, &actuals.arguments).ok_or_else(|| {
                 QueryError::Operational(hirsel_types::OperationalFailure {
@@ -817,7 +854,7 @@ impl QueryEngine {
             .get(&declaration_id)
             .and_then(|instances| instances.get(&key))
         {
-            return Ok(instance.definition.path().clone());
+            return Ok((instance.definition.path().clone(), false));
         }
         self.materialize(declaration)?;
         let snapshot = self.snapshot(declaration)?;
@@ -979,25 +1016,7 @@ impl QueryEngine {
                     definition: DefId::intern(&instance),
                 },
             );
-        // The instance's diagnostics also cite the call that selected it.
-        let checked = self.mode_query(&instance).and_then(|analyzed| {
-            if has_errors(&analyzed.diagnostics) {
-                Err(QueryError::Diagnostics(analyzed.diagnostics.clone()))
-            } else {
-                Ok(())
-            }
-        });
-        if let Err(QueryError::Diagnostics(mut diagnostics)) = checked {
-            for d in &mut diagnostics {
-                d.secondary.push(hirsel_diag::Label {
-                    span: site,
-                    message: format!("selects instance {instance_name}"),
-                });
-            }
-            return Err(QueryError::Diagnostics(diagnostics));
-        }
-        checked?;
-        Ok(instance)
+        Ok((instance, true))
     }
 
     /// Select the instances of generic generated declarations that `roots`

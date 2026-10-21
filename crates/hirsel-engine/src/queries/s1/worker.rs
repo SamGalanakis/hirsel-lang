@@ -26,6 +26,11 @@ pub(crate) enum Requirement {
     Instance(DefPath, Vec<GenericArgument>),
 }
 
+pub(super) enum SelectionEvent {
+    Failed(GeneratedText),
+    Checked(DefPath, bool),
+}
+
 pub(crate) struct TaskInputs {
     pub(crate) snapshot: Arc<SignatureSnapshot>,
     pub(crate) memo: Arc<hirsel_types::TypeMemo>,
@@ -191,6 +196,7 @@ pub(crate) struct TaskWorker<'a, S: TirSource + ?Sized> {
     pub(crate) limit: Option<hirsel_tir::ToolingLimit>,
     pub(super) phase: Option<QueryKind>,
     pub(super) pending: Vec<Requirement>,
+    pub(super) selections: Vec<SelectionEvent>,
 }
 impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
     pub(crate) fn new(source: &'a S, shared: &'a TaskShared) -> Self {
@@ -205,6 +211,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             limit: None,
             phase: Some(QueryKind::Lower),
             pending: vec![],
+            selections: vec![],
         }
     }
     pub(super) fn capture<T>(
@@ -248,7 +255,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         self.merge(&product.reads);
         product.result
     }
-    fn implementation(&mut self, path: &DefPath) {
+    pub(super) fn implementation(&mut self, path: &DefPath) {
         if let Some(hash) = self.source.implementation(path) {
             self.record(
                 ReadKey::ExecutedBody(DefId::intern(path)),
@@ -667,58 +674,75 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             }
         }
         let pending_start = self.pending.len();
+        let mut metadata = None;
         let product = self.capture(|worker| {
             worker.implementation(path);
             worker.signature(path)?;
             let prepared = worker.source.prepare_generator(path);
             let prepared = worker.merge_product(prepared)?;
-            worker.register_staged(&prepared.checked.analyzed)?;
+            metadata = Some((
+                prepared.syntax.clone(),
+                prepared.body,
+                prepared.products.clone(),
+                prepared.detail.clone(),
+            ));
+            let checked = prepared.checked.as_ref().map_err(Clone::clone)?;
+            worker.register_staged(&checked.analyzed)?;
             let inputs = worker.source.inputs();
             let constants = prepare_values(
                 inputs.snapshot.types(),
-                &prepared.checked.analyzed,
+                &checked.analyzed,
                 &[],
-                &prepared.checked.signature,
+                &checked.signature,
                 worker,
             )?;
             let value = prepared.input.value;
             let (result, _) = worker.run_evaluation(EvaluationInput {
-                analyzed: &prepared.checked.analyzed,
+                analyzed: &checked.analyzed,
                 staged: &[],
-                signature: &prepared.checked.signature,
+                signature: &checked.signature,
                 expression: value,
                 child: value,
-                ty: prepared.checked.ty,
+                ty: checked.ty,
                 constants: &constants,
                 sizes: &[],
             })?;
-            let text = prepared.input.decode(result)?;
-            Ok((prepared, text))
+            prepared.input.decode(result)
         });
         let depth = self.stack.composed(self.depth_limit(), false);
         self.merge(&product.reads);
-        let result = product.result.map(|(prepared, text)| GeneratedText {
-            definition: path.clone(),
-            syntax: prepared.syntax,
-            body: prepared.body,
-            text,
-            reads: product.reads,
-            depth: depth.clone(),
-            products: prepared.products,
-            detail: prepared.detail,
-        });
+        let result = product.result;
         if self.pending.len() == pending_start
-            && let Ok(product) = result.as_ref()
+            && let Some((syntax, body, products, detail)) = metadata
         {
-            self.shared
-                .generators
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .insert(path.clone(), product.clone());
+            let completed = GeneratedText {
+                definition: path.clone(),
+                syntax,
+                body,
+                text: result.clone(),
+                reads: product.reads,
+                depth: depth.clone(),
+                products,
+                detail,
+            };
+            if result.is_ok() {
+                self.shared
+                    .generators
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .insert(path.clone(), completed);
+            } else if result.as_ref().is_err_and(|error| error.cacheable())
+                && self.stack.failure_is_own()
+            {
+                self.selections.push(SelectionEvent::Failed(completed));
+            }
         }
+        let completed_request = result.is_ok()
+            || (result.as_ref().is_err_and(|error| error.cacheable())
+                && self.stack.failure_is_own());
         self.stack.leave();
         self.phase = Some(QueryKind::Check);
-        if result.is_ok() {
+        if completed_request {
             self.stack.requested(&depth, site);
         }
         result.map(|_| ())

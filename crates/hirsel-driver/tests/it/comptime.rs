@@ -924,7 +924,8 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
     with_compiler_stack(|| {
         let staged = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime {let xs:Inline[u8,4]=[1,2,3,4];scaled(xs)}\n";
         let generated = "type Seed {x:u32}\nfn body_text()->String{\"fn()->u32 uses {}{11u32}\"}\nfn make(s:TypeShape[Seed])->Result[Body[fn()->u32 uses {}],String]{Ok(codegen.body(body_text()))}\nfn chosen()->u32 uses {}=comptime make(shape(Seed))\nconst A:u32=comptime chosen()\nconst B:u32=comptime chosen()\n";
-        for source in [staged, generated] {
+        let generic = "type Point {x:u64}\nfn make[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String]{Ok(codegen.body(\"fn(p:standalone@0/Point)->u64 uses {}{12u64}\"))}\nfn width[T](p:T)->u64 uses {}=comptime make(shape(T))\nconst A:u64=comptime width(Point(x:1))\nconst B:u64=comptime width(Point(x:2))\n";
+        for source in [staged, generated, generic] {
             for jobs in [1, 2, 8] {
                 let paths = vec![path("B"), path("A"), path("B")];
                 let mut control = engine(source);
@@ -1082,29 +1083,47 @@ fn frozen_frontier_generator_failures_keep_scalar_cycle_and_literal_sites() {
 fn frozen_frontier_generator_depth_branches_match_scalar_with_partial_hits() {
     with_compiler_stack(|| {
         let source = "type Seed {x:u32}\nconst LEAF:u32=1u32\nconst LEFT:u32=comptime LEAF\nconst RIGHT:u32=comptime LEFT\nfn make(s:TypeShape[Seed])->Result[Body[fn()->u32 uses {}],String]{let _=LEFT;let _=RIGHT;Ok(codegen.body(\"fn()->u32 uses {}{11u32}\"))}\nfn chosen()->u32 uses {}=comptime make(shape(Seed))\nconst INNER:u32=comptime chosen()\nconst OUTER:u32=comptime INNER\nconst GOOD:u32=comptime 7u32\n";
+        let generic = source
+            .replace("fn make(s:TypeShape[Seed])", "fn make[T](s:TypeShape[T])")
+            .replace("Body[fn()->u32", "Body[fn(T)->u32")
+            .replace(
+                "fn()->u32 uses {}{11u32}",
+                "fn(p:standalone@0/Seed)->u32 uses {}{11u32}",
+            )
+            .replace(
+                "fn chosen()->u32 uses {}=comptime make(shape(Seed))",
+                "fn chosen[T](p:T)->u32 uses {}=comptime make(shape(T))",
+            )
+            .replace("comptime chosen()", "comptime chosen(Seed(x:1))");
         let paths = vec![path("OUTER"), path("INNER"), path("GOOD"), path("OUTER")];
-        for limit in [2, 3, 4, 5, 8] {
-            let mut control = engine(source);
-            control.comptime_limits.call_depth = limit;
-            let expected: Vec<_> = paths
-                .iter()
-                .map(|p| {
-                    let result = control.materialize_value(p);
-                    outcome_text(&control, result)
-                })
-                .collect();
-            for jobs in [1, 2, 8] {
-                for warm in [0, 1, 2] {
-                    let mut candidate = engine(source);
-                    candidate.comptime_limits.call_depth = limit;
-                    if warm >= 1 {
-                        let _ = candidate.materialize_value(&path("RIGHT"));
+        for source in [source, generic.as_str()] {
+            for limit in [2, 3, 4, 5, 8] {
+                let mut control = engine(source);
+                control.comptime_limits.call_depth = limit;
+                let expected: Vec<_> = paths
+                    .iter()
+                    .map(|p| {
+                        let result = control.materialize_value(p);
+                        outcome_text(&control, result)
+                    })
+                    .collect();
+                for jobs in [1, 2, 8] {
+                    for warm in [0, 1, 2] {
+                        let mut candidate = engine(source);
+                        candidate.comptime_limits.call_depth = limit;
+                        if warm >= 1 {
+                            let _ = candidate.materialize_value(&path("RIGHT"));
+                        }
+                        if warm >= 2 {
+                            if source == generic {
+                                let _ = candidate.materialize_value(&path("INNER"));
+                            } else {
+                                let _ = candidate.check_definition(&path("chosen"));
+                            }
+                        }
+                        let actual = frontier_text(&mut candidate, paths.clone(), jobs);
+                        assert_eq!(actual, expected, "jobs={jobs} limit={limit} warm={warm}");
                     }
-                    if warm >= 2 {
-                        let _ = candidate.check_definition(&path("chosen"));
-                    }
-                    let actual = frontier_text(&mut candidate, paths.clone(), jobs);
-                    assert_eq!(actual, expected, "jobs={jobs} limit={limit} warm={warm}");
                 }
             }
         }
@@ -1157,6 +1176,69 @@ fn frozen_frontier_generator_helper_edits_refresh_text_and_execution_reads() {
                         "jobs={jobs} revision={revision}\nworker={reads:?}\nscalar={:?}",
                         control.memo_reads(&path("chosen"), QueryKind::Check)
                     );
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_generic_generator_failures_keep_selecting_site_labels() {
+    with_compiler_stack(|| {
+        for (rule, body, nested) in [
+            ("CT-1", "Error(\"generic generator failed\")", false),
+            ("CT-4", "let _=A;Error(\"unreachable\")", false),
+            (
+                "CT-1",
+                "let _=inner(Point(x:0));Error(\"unreachable\")",
+                true,
+            ),
+            (
+                "LANG-7",
+                "Ok(codegen.body(\"fn(p:standalone@0/Point)->u32 uses {}{12u32}\"))",
+                false,
+            ),
+        ] {
+            let source = format!(
+                "type Point {{x:u64}}\nfn make[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {{}}],String]{{{body}}}\nfn width[T](p:T)->u64 uses {{}}=comptime make(shape(T))\nconst A:u64=comptime width(Point(x:1))\nconst B:u64=comptime width(Point(x:2))\n"
+            );
+            let source = if nested {
+                source
+                    + "fn inner_make[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String]{Error(\"inner failed\")}\nfn inner[T](p:T)->u64 uses {}=comptime inner_make(shape(T))\n"
+            } else {
+                source
+            };
+            for jobs in [1, 2, 8] {
+                for warm in [false, true] {
+                    let paths = vec![path("B"), path("A"), path("B")];
+                    let mut control = engine(&source);
+                    let mut candidate = engine(&source);
+                    if warm {
+                        assert!(control.materialize_value(&path("A")).is_err());
+                        assert!(candidate.materialize_value(&path("A")).is_err());
+                    }
+                    let expected: Vec<_> = paths
+                        .iter()
+                        .map(|p| {
+                            let result = control.materialize_value(p);
+                            outcome_text(&control, result)
+                        })
+                        .collect();
+                    assert!(
+                        expected
+                            .iter()
+                            .all(|result| result.as_ref().is_err_and(|error| error.contains(rule)))
+                    );
+                    if !warm {
+                        assert!(
+                            expected[0]
+                                .as_ref()
+                                .unwrap_err()
+                                .contains("selects instance")
+                        );
+                    }
+                    let actual = frontier_text(&mut candidate, paths, jobs);
+                    assert_eq!(actual, expected, "jobs={jobs} warm={warm} rule={rule}");
                 }
             }
         }
