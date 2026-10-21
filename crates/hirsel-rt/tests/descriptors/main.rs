@@ -268,7 +268,61 @@ fn every_inline_effect_is_classified() {
 
 /// Task-local code can invoke an unobservable concurrent service: copying a value
 /// adds a Shared root. Each service is checked independently, so this does not permit
-/// a path to the scheduler, Io binding or an observable op.
+/// a path to the scheduler, Io binding or an observable op. Ordered budget
+/// services may physically save a segment until head and retire existing logs;
+/// they cannot create an operation or a scheduling point for the allocation or
+/// refill itself. Their semantic-entry and whole-Run safety checks stay separate.
+const PHYSICAL_BUDGET_SERVICES: &[&str] = &[
+    "tasks::ordered::engine::reserve_allocation",
+    "tasks::ordered::engine::fuel_refill",
+];
+
+fn budget_service_violations(graph: &graph::Graph) -> Vec<String> {
+    PHYSICAL_BUDGET_SERVICES
+        .iter()
+        .filter_map(|service| {
+            graph
+                .reaches(service, |key| {
+                    matches!(
+                        key,
+                        "tasks::ordered::engine::accepted"
+                            | "tasks::ordered::engine::submit"
+                            | "Frontier::offer"
+                            | "Frontier::apply_head"
+                            | "Frontier::continue_head"
+                    )
+                })
+                .map(|path| path.join(" -> "))
+        })
+        .collect()
+}
+
+#[test]
+fn ordered_budget_services_are_guarded_and_do_not_create_semantic_operations() {
+    let graph = source();
+    for (caller, service) in [
+        ("alloc::ordered_reserve", PHYSICAL_BUDGET_SERVICES[0]),
+        (
+            "budget::hirsel_rt_v2_fuel_refill",
+            PHYSICAL_BUDGET_SERVICES[1],
+        ),
+    ] {
+        assert!(
+            graph.directly_calls(caller, service),
+            "missing service: {caller}"
+        );
+        assert!(
+            graph.directly_calls(caller, "Guard::new"),
+            "unguarded service: {caller}"
+        );
+    }
+    let violations = budget_service_violations(graph);
+    assert!(
+        violations.is_empty(),
+        "physical budget boundary creates an operation: {violations:?}"
+    );
+}
+
 fn locality_violations(graph: &graph::Graph) -> Vec<String> {
     let mut violations = Vec::new();
     for (symbol, start) in graph.entries() {
@@ -281,22 +335,26 @@ fn locality_violations(graph: &graph::Graph) -> Vec<String> {
         ) {
             continue;
         }
-        if let Some(path) = graph.reaches(start, |key| {
-            if graph::FORBIDDEN.contains(&key) {
-                return true;
-            }
-            graph
-                .entry_symbol(key)
-                .and_then(entry_descriptor)
-                .is_some_and(|other| {
-                    other.symbol != symbol
-                        && other.locality != entry.locality
-                        && !matches!(
-                            (entry.locality, other.locality),
-                            (Locality::Local, Locality::Concurrent)
-                        )
-                })
-        }) {
+        if let Some(path) = graph.reaches_until(
+            start,
+            |key| {
+                if graph::FORBIDDEN.contains(&key) {
+                    return true;
+                }
+                graph
+                    .entry_symbol(key)
+                    .and_then(entry_descriptor)
+                    .is_some_and(|other| {
+                        other.symbol != symbol
+                            && other.locality != entry.locality
+                            && !matches!(
+                                (entry.locality, other.locality),
+                                (Locality::Local, Locality::Concurrent)
+                            )
+                    })
+            },
+            |key| entry.locality == Locality::Local && PHYSICAL_BUDGET_SERVICES.contains(&key),
+        ) {
             violations.push(format!(
                 "{symbol} ({:?}): {}",
                 entry.locality,
@@ -351,6 +409,95 @@ fn concurrent_services_remain_checked_when_called_from_local_entries() {
         } else {
             assert!(violations.is_empty(), "{violations:?}");
         }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn lexical_bindings_do_not_become_calls_to_same_named_functions() {
+    let root =
+        std::env::temp_dir().join(format!("hirsel-descriptor-bindings-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for (body, reaches) in [
+        ("let saved = 1; consume(saved);", false),
+        ("if let Some(saved) = Some(1) { consume(saved); }", false),
+        ("let cb = |saved: u64| consume(saved);", false),
+        ("for saved in [1] { consume(saved); }", false),
+        ("let saved = saved(); consume(saved);", true),
+        ("let saved = saved; consume(saved);", true),
+        ("{ let saved = 1; consume(saved); } saved();", true),
+        ("let cb = |saved: u64| consume(saved); saved();", true),
+        ("for saved in [saved()] { consume(saved); }", true),
+        ("if let Some(saved) = Some(1) {} else { saved(); }", true),
+        (
+            "match Some(1) { Some(saved) => consume(saved), None => saved() }",
+            true,
+        ),
+        ("let saved = 1; worker::saved();", true),
+    ] {
+        std::fs::write(
+            root.join("lib.rs"),
+            format!(
+                "#[no_mangle] pub fn hirsel_rt_v2_unique_copy() {{ worker::enqueue(); }}
+             mod worker {{ pub fn enqueue() {{ {body} }}
+               fn consume(_: u64) {{}} pub fn saved() {{ crate::tasks::scheduler(); }} }}
+             mod tasks {{ pub fn scheduler() {{}} }}"
+            ),
+        )
+        .unwrap();
+        let graph = graph::Graph::parse(&root);
+        assert_eq!(
+            graph
+                .reaches("hirsel_rt_v2_unique_copy", |target| target
+                    == "tasks::scheduler")
+                .is_some(),
+            reaches,
+            "{body}"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn physical_budget_boundaries_preserve_the_other_audits() {
+    let root =
+        std::env::temp_dir().join(format!("hirsel-descriptor-budgets-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for (local, service, locality_red, semantic_red, run_red) in [
+        ("", "crate::tasks::scheduler();", false, false, false),
+        ("crate::tasks::scheduler();", "", true, false, false),
+        ("crate::Binding::get();", "", true, false, false),
+        ("", "submit();", false, true, false),
+        ("", "crate::Frontier::offer();", false, true, false),
+        ("", "crate::TaskCtx::run();", false, false, true),
+    ] {
+        std::fs::write(root.join("lib.rs"), format!(
+            "#[no_mangle] pub fn hirsel_rt_v2_alloc() {{ tasks::ordered::engine::reserve_allocation(); {local} }}
+             mod tasks {{ pub fn scheduler() {{}} pub mod ordered {{ pub mod engine {{
+               pub fn reserve_allocation() {{ {service} }} fn submit() {{}}
+             }} }} }}
+             struct Binding; impl Binding {{ fn get() {{}} }}
+             struct Frontier; impl Frontier {{ fn offer() {{}} }}
+             struct TaskCtx; impl TaskCtx {{ fn run() {{}} }}"
+        )).unwrap();
+        let graph = graph::Graph::parse(&root);
+        assert_eq!(
+            !locality_violations(&graph).is_empty(),
+            locality_red,
+            "{local}/{service}"
+        );
+        assert_eq!(
+            !budget_service_violations(&graph).is_empty(),
+            semantic_red,
+            "{local}/{service}"
+        );
+        assert_eq!(
+            graph
+                .reaches("hirsel_rt_v2_alloc", |key| key == "TaskCtx::run")
+                .is_some(),
+            run_red,
+            "{local}/{service}"
+        );
     }
     std::fs::remove_dir_all(root).unwrap();
 }

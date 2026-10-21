@@ -25,7 +25,9 @@ pub enum Locality {
     /// Task-local: the task's own blocks, text, copy and codec work, the regions it owns, its
     /// failure chain and isolate scratch, its freeze/thaw stack, its fuel. Runs on any worker
     /// in parallel with every other task; may use unobservable concurrent services
-    /// (for example, copying a value adds a `Shared` root).
+    /// (for example, copying a value adds a `Shared` root). Ordered allocation
+    /// and fuel preflight may physically save until head for exact budgets;
+    /// this does not create an op or a scheduling point for the local entry.
     Local,
     /// Reads only immutable run data: layouts, the failure table, program tables, seeds,
     /// launch arguments.

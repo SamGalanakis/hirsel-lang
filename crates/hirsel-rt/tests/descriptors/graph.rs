@@ -101,6 +101,7 @@ struct Refs {
     paths: Vec<Vec<String>>,
     methods: Vec<String>,
     types: BTreeSet<String>,
+    locals: BTreeSet<String>,
 }
 
 fn uppercase(s: &str) -> bool {
@@ -108,6 +109,60 @@ fn uppercase(s: &str) -> bool {
 }
 
 impl<'a> Visit<'a> for Refs {
+    fn visit_pat_ident(&mut self, p: &'a syn::PatIdent) {
+        self.locals.insert(p.ident.to_string());
+        syn::visit::visit_pat_ident(self, p);
+    }
+    fn visit_block(&mut self, block: &'a syn::Block) {
+        let outer = self.locals.clone();
+        syn::visit::visit_block(self, block);
+        self.locals = outer;
+    }
+    fn visit_local(&mut self, local: &'a syn::Local) {
+        // A let binding is not in scope in its initializer or its else arm.
+        if let Some(init) = &local.init {
+            self.visit_expr(&init.expr);
+            if let Some((_, diverge)) = &init.diverge {
+                self.visit_expr(diverge);
+            }
+        }
+        self.visit_pat(&local.pat);
+    }
+    fn visit_expr_let(&mut self, e: &'a syn::ExprLet) {
+        self.visit_expr(&e.expr);
+        self.visit_pat(&e.pat);
+    }
+    fn visit_expr_if(&mut self, e: &'a syn::ExprIf) {
+        let outer = self.locals.clone();
+        self.visit_expr(&e.cond);
+        self.visit_block(&e.then_branch);
+        self.locals = outer;
+        if let Some((_, branch)) = &e.else_branch {
+            self.visit_expr(branch);
+        }
+    }
+    fn visit_expr_while(&mut self, e: &'a syn::ExprWhile) {
+        let outer = self.locals.clone();
+        syn::visit::visit_expr_while(self, e);
+        self.locals = outer;
+    }
+    fn visit_expr_for_loop(&mut self, e: &'a syn::ExprForLoop) {
+        self.visit_expr(&e.expr);
+        let outer = self.locals.clone();
+        self.visit_pat(&e.pat);
+        self.visit_block(&e.body);
+        self.locals = outer;
+    }
+    fn visit_expr_closure(&mut self, e: &'a syn::ExprClosure) {
+        let outer = self.locals.clone();
+        syn::visit::visit_expr_closure(self, e);
+        self.locals = outer;
+    }
+    fn visit_arm(&mut self, arm: &'a syn::Arm) {
+        let outer = self.locals.clone();
+        syn::visit::visit_arm(self, arm);
+        self.locals = outer;
+    }
     fn visit_path(&mut self, p: &'a syn::Path) {
         for segment in &p.segments {
             let name = segment.ident.to_string();
@@ -118,6 +173,10 @@ impl<'a> Visit<'a> for Refs {
         syn::visit::visit_path(self, p);
     }
     fn visit_expr_path(&mut self, e: &'a syn::ExprPath) {
+        if e.path.segments.len() == 1 && self.locals.contains(&e.path.segments[0].ident.to_string())
+        {
+            return;
+        }
         self.paths.push(
             e.path
                 .segments
@@ -477,6 +536,17 @@ impl Graph {
     /// The shortest call path from `start` to a function `bad` holds for. An exported entry
     /// other than `start` is checked on its own and not followed.
     pub fn reaches(&self, start: &str, bad: impl Fn(&str) -> bool) -> Option<Vec<String>> {
+        self.reaches_until(start, bad, |_| false)
+    }
+
+    /// A caller-specific boundary does not alter other audits: in particular,
+    /// physical budget services remain traversed by the whole-Run borrow check.
+    pub fn reaches_until(
+        &self,
+        start: &str,
+        bad: impl Fn(&str) -> bool,
+        boundary: impl Fn(&str) -> bool,
+    ) -> Option<Vec<String>> {
         let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
         let mut queue = VecDeque::from([start]);
         while let Some(key) = queue.pop_front() {
@@ -499,7 +569,10 @@ impl Graph {
                     path.reverse();
                     return Some(path);
                 }
-                if !BOUNDARIES.contains(&next) && !self.symbols.contains_key(next) {
+                if !BOUNDARIES.contains(&next)
+                    && !boundary(next)
+                    && !self.symbols.contains_key(next)
+                {
                     queue.push_back(next);
                 }
             }
