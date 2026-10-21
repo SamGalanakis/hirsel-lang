@@ -148,7 +148,13 @@ pub fn build_path_native_backend_with_validation(
                 options.discharge = proofs.discharge.clone();
             }
             if profile != BuildProfile::ReleaseLto {
-                options.objects = super::units::selected(&target, backend, profile.opt(), sources.is_some(), fuel)?;
+                options.objects = super::units::selected(
+                    &target,
+                    backend,
+                    profile.opt(),
+                    sources.is_some(),
+                    fuel,
+                )?;
             }
             let mut program = super::build(&validated, &options)?;
             // Fuel checks let the executable accept a fuel budget (`budgets.limits@1`).
