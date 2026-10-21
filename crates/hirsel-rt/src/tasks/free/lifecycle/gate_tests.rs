@@ -1,7 +1,103 @@
 use super::*;
 use crate::foreign::*;
+use crate::tasks::free::replay::Replay;
 use hirsel_free::{phase::Progress, projection::Projection, session::Session};
 use std::sync::Arc;
+
+#[test]
+fn native_gate_replay_preserves_nested_depth_and_stops_before_foreign_cut_suffixes() {
+    for durable in [false, true] {
+        let recording = super::super::record::Recording::new(b"native gate replay", durable);
+        let install = recording.clone();
+        let cutter = recording.clone();
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                install.root(ctx);
+            },
+            move |ctx| unsafe {
+                let dispatch = FOREIGN_THREADS_SERIAL | (7 << FOREIGN_PACKAGE_SHIFT);
+                let mut outer = [0u64; 5];
+                hirsel_rt_v2_foreign_enter(ctx, 0, outer.as_mut_ptr().cast(), dispatch);
+                cutter.recorder.flush().unwrap().unwrap();
+                assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                let mut nested = [0u64; 5];
+                hirsel_rt_v2_foreign_enter(ctx, 0, nested.as_mut_ptr().cast(), dispatch);
+                assert_eq!(crate::foreign::gate_version(ctx, 7), 1);
+                hirsel_rt_v2_foreign_leave(nested.as_ptr().cast());
+                hirsel_rt_v2_callback_leave(ctx);
+                hirsel_rt_v2_foreign_leave(outer.as_ptr().cast());
+                assert_eq!(crate::foreign::gate_version(ctx, 7), 2);
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        recording.recorder.stop("returned", None).unwrap().unwrap();
+        let trace = recording.trace();
+        let bytes = Arc::try_unwrap(recording)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink()
+            .bytes;
+        let flush = (1..bytes.len())
+            .find(|&end| {
+                hirsel_free::tape::parse(&bytes[..end]).is_ok_and(|tape| {
+                    tape.cut.get(&Vec::new()) == Some(&Progress::new(1, Phase::Done))
+                })
+            })
+            .unwrap();
+        for end in [bytes.len(), flush, flush + 1] {
+            let parsed = hirsel_free::tape::parse(&bytes[..end]).unwrap();
+            let full = end == bytes.len();
+            let expected = Projection::new(
+                if full { "returned" } else { "truncated" },
+                &parsed.cut,
+                &trace,
+            );
+            for width in [2, 8] {
+                let replay = Replay::new(&bytes[..end]).unwrap();
+                let install = replay.clone();
+                let stage = Arc::new(std::sync::atomic::AtomicU8::new(0));
+                let observed = stage.clone();
+                let mut run = crate::host::BodyRun::new(width, false);
+                run.free = true;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe { install.root(ctx) },
+                    move |ctx| unsafe {
+                        let dispatch = FOREIGN_THREADS_SERIAL | (7 << FOREIGN_PACKAGE_SHIFT);
+                        let mut outer = [0u64; 5];
+                        hirsel_rt_v2_foreign_enter(ctx, 0, outer.as_mut_ptr().cast(), dispatch);
+                        observed.store(1, std::sync::atomic::Ordering::Release);
+                        assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                        let mut nested = [0u64; 5];
+                        hirsel_rt_v2_foreign_enter(ctx, 0, nested.as_mut_ptr().cast(), dispatch);
+                        assert_eq!(crate::foreign::gate_version(ctx, 7), 1);
+                        hirsel_rt_v2_foreign_leave(nested.as_ptr().cast());
+                        assert_eq!(crate::foreign::gate_version(ctx, 7), 1);
+                        hirsel_rt_v2_callback_leave(ctx);
+                        hirsel_rt_v2_foreign_leave(outer.as_ptr().cast());
+                        observed.store(2, std::sync::atomic::Ordering::Release);
+                        STATUS_OK
+                    },
+                );
+                assert!(
+                    matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
+                    "{outcome:?}"
+                );
+                assert_eq!(
+                    stage.load(std::sync::atomic::Ordering::Acquire),
+                    u8::from(full)
+                );
+                assert_eq!(replay.finish().unwrap(), expected);
+            }
+        }
+    }
+}
 
 #[test]
 fn native_serial_gate_outer_phases_record_while_nested_callbacks_keep_depth_only() {
@@ -97,6 +193,171 @@ unsafe extern "C" fn gate_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: 
         hirsel_rt_v2_foreign_leave(interval.as_ptr().cast());
     }
     STATUS_OK
+}
+
+unsafe fn gapped_callbacks_body(
+    ctx: *mut TaskCtx,
+    flag: &std::sync::atomic::AtomicBool,
+    replay: bool,
+    checked: &std::sync::atomic::AtomicBool,
+) {
+    use std::sync::atomic::Ordering;
+    unsafe {
+        let mut scope = 0;
+        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
+        let env = crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+        crate::alloc::payload(env)
+            .cast::<*const std::sync::atomic::AtomicBool>()
+            .write(flag);
+        let mut child = 0;
+        hirsel_rt_v2_task_spawn(
+            ctx,
+            0,
+            0,
+            std::ptr::null_mut(),
+            &mut child,
+            &scope,
+            gate_child,
+            env,
+            0,
+        );
+        let parks = {
+            let _role = role::Guard::new(ctx);
+            if !replay {
+                let scope = scheduler(ctx).scope_handle(scope);
+                try_block(&mut *ctx, Wait::Exit { scope }, false, 0).unwrap();
+                assert!(flag.load(Ordering::Acquire));
+                assert_eq!(crate::foreign::gate_version(ctx, 7), 2);
+            } else {
+                assert!(!flag.load(Ordering::Acquire));
+                assert_eq!(
+                    crate::foreign::gate_version(ctx, 7),
+                    0,
+                    "the physical gate is free but its recorded predecessors have not run"
+                );
+            }
+            scheduler(ctx).parks
+        };
+        let mut outer = [0u64; 5];
+        hirsel_rt_v2_foreign_enter(
+            ctx,
+            0,
+            outer.as_mut_ptr().cast(),
+            FOREIGN_THREADS_SERIAL | (7 << FOREIGN_PACKAGE_SHIFT),
+        );
+        assert!(flag.load(Ordering::Acquire));
+        assert_eq!(crate::foreign::gate_version(ctx, 7), 3);
+        assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+        if replay {
+            let _role = role::Guard::new(ctx);
+            assert!(
+                scheduler(ctx).parks > parks,
+                "replay released its sole permit waiting for the gate's gap"
+            );
+        }
+        hirsel_rt_v2_callback_leave(ctx);
+        hirsel_rt_v2_foreign_leave(outer.as_ptr().cast());
+        checked.store(true, Ordering::Release);
+        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
+    }
+}
+
+#[test]
+fn two_native_serial_callbacks_replay_gaps_with_one_compute_permit() {
+    const CHILD: &str = "HIRSEL_F1_GATE_REPLAY_ONE_PERMIT";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tasks::free::lifecycle::gate_tests::two_native_serial_callbacks_replay_gaps_with_one_compute_permit", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        return;
+    }
+    crate::pool::set_compute_grant(1);
+    let layout = crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size: 8,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 0,
+        flags: 0,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: 0,
+    };
+    let layouts = [&raw const layout];
+    for durable in [false, true] {
+        let recording = super::super::record::Recording::new(b"native gapped gate replay", durable);
+        let install = recording.clone();
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = flag.clone();
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 1;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                install.root(ctx);
+            },
+            move |ctx| unsafe {
+                gapped_callbacks_body(
+                    ctx,
+                    &seen,
+                    false,
+                    &std::sync::atomic::AtomicBool::new(false),
+                );
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        let cut = recording
+            .recorder
+            .stop("returned", None)
+            .unwrap()
+            .unwrap()
+            .0;
+        let trace = recording.trace();
+        let bytes = Arc::try_unwrap(recording)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink()
+            .bytes;
+        for width in [2, 8] {
+            let replay = Replay::new(&bytes).unwrap();
+            let install = replay.clone();
+            let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let seen = flag.clone();
+            let checked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let observed = checked.clone();
+            let mut run = crate::host::BodyRun::new(width, false);
+            run.free = true;
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe { install.root(ctx) },
+                move |ctx| unsafe {
+                    gapped_callbacks_body(ctx, &seen, true, &observed);
+                    panic!("gate replay passed scope exit cut");
+                },
+            );
+            assert!(
+                matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
+                "{outcome:?}"
+            );
+            assert!(checked.load(std::sync::atomic::Ordering::Acquire));
+            assert_eq!(
+                replay.finish().unwrap(),
+                Projection::new("returned", &cut.progress, &trace)
+            );
+        }
+    }
 }
 
 #[test]

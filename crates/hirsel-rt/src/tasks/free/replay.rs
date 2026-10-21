@@ -29,8 +29,9 @@ impl Replay {
     /// Admission only, before any task runs. This initial replay slice admits
     /// scalar atomics, administrative task-tree operations, pending Shared
     /// root tails, thaw outcomes, explicit task.canceled checks and deadline
-    /// scopes with settled children and task-set selection only; no host
-    /// requests, versioned objects or cancellation-ended waits yet.
+    /// scopes with settled children, task-set selection and serial gates
+    /// only; no host requests, mutex/channel replay or cancellation-ended
+    /// waits yet.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
@@ -306,6 +307,29 @@ impl Token {
             .map_err(|error| Stop::Diverged(error.0))?;
         assert_eq!(selected, Some(index), "the recorded member was ready");
         Ok(())
+    }
+
+    pub(super) fn gate_ready(&self, ctx: *mut TaskCtx, gate: u32) -> Stopped<bool> {
+        self.entry(ctx, Phase::Done)?;
+        if !self
+            .shared
+            .with(|session| session.admits(&self.path, Phase::Done))
+        {
+            self.publish(ctx, Phase::Entered, || ())?;
+            return Err(Stop::Requested);
+        }
+        self.shared
+            .with(|session| {
+                session.gate((3, u64::from(gate)), &format!("package:{gate}"));
+                session.enabled(&self.path, 0, (3, u64::from(gate)))
+            })
+            .map_err(|error| Stop::Diverged(error.0))
+    }
+
+    pub(super) fn gate_touch(&self, gate: u32, outcome: &str) -> Stopped<()> {
+        self.shared
+            .with(|session| session.touch(&self.path, 0, (3, u64::from(gate)), outcome))
+            .map_err(|error| Stop::Diverged(error.0))
     }
 }
 

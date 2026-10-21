@@ -198,6 +198,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_enter(
             started,
         })
     };
+    crate::tasks::free::replay::start(ctx);
 }
 
 /// Restore the enclosing extern's site and context after a call returns, return the task to
@@ -255,6 +256,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_leave(previous: *const c_void) {
             now_ns().saturating_sub(interval.started),
         ));
     }
+    crate::tasks::free::replay::start(ctx);
 }
 
 /// A null crossed a non-null C boundary. Invalid foreign storage cannot be

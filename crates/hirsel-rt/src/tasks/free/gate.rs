@@ -25,7 +25,13 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<b
     loop {
         let s = scheduler(ctx) as *mut Scheduler;
         unsafe { (*s).task(me).retried = false };
-        if unsafe { (*s).gate(gate).owner.is_none() } {
+        let replay = super::replay::token(ctx);
+        let enabled = replay
+            .as_ref()
+            .map(|token| token.gate_ready(ctx, gate))
+            .transpose()?
+            .unwrap_or(true);
+        if enabled && unsafe { (*s).gate(gate).owner.is_none() } {
             let object = super::record::on(ctx).then(|| ObjectId::Gate(format!("package:{gate}")));
             let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
                 let row = (*s).gate(gate);
@@ -45,10 +51,14 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<b
                         0,
                         "gate enter",
                     );
+                } else if let Some(replay) = &replay {
+                    replay.gate_touch(gate, "gate enter")?;
                 }
+                Ok(())
             });
             drop(object);
-            publication?;
+            drop(replay);
+            publication??;
             if let (Some(started), Some(metrics)) =
                 (started, &unsafe { (*ctx).run_ref() }.extern_metrics)
             {
@@ -56,6 +66,8 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<b
             }
             return Ok(true);
         }
+        let replaying = replay.is_some();
+        drop(replay);
         let row = unsafe { (*s).gate(gate) };
         if !row.waiters.contains(&me) {
             row.waiters.reserve(1);
@@ -64,6 +76,12 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<b
         if !entered {
             super::record::publish(ctx, Phase::Entered, |_| ())?;
             entered = true;
+        }
+        if replaying {
+            let s = scheduler(ctx);
+            if !s.retrying.contains(&me) {
+                s.retrying.push(me);
+            }
         }
         unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, site) }?;
     }
@@ -85,6 +103,14 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) -> Sto
     let waiters = row.waiters.len();
     unsafe { (*s).woken.reserve(waiters) };
     super::record::begin(ctx);
+    let replay = super::replay::token(ctx);
+    if let Some(replay) = &replay
+        && !replay.gate_ready(ctx, gate)?
+    {
+        return Err(crate::stop::Stop::Diverged(
+            "a held gate's leave is not enabled".into(),
+        ));
+    }
     let object = super::record::on(ctx).then(|| ObjectId::Gate(format!("package:{gate}")));
     let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
         let row = (*s).gate(gate);
@@ -101,11 +127,14 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) -> Sto
                 0,
                 "gate leave",
             );
+        } else if let Some(replay) = &replay {
+            replay.gate_touch(gate, "gate leave")?;
         }
-        std::mem::take(&mut row.waiters)
+        Ok(std::mem::take(&mut row.waiters))
     });
     drop(object);
-    let waiters = publication?;
+    drop(replay);
+    let waiters = publication??;
     for task in waiters {
         unsafe {
             (*s).task(task).retried = true;
