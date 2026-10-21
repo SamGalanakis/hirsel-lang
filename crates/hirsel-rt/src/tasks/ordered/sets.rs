@@ -101,16 +101,22 @@ pub(crate) unsafe fn has(
     index: u64,
     out: *mut u8,
 ) -> Stopped<u8> {
-    let (has, progress) = engine::head_effect(ctx, "task.set_has", || {
-        let s = scheduler(ctx);
-        let scope = s.scope_handle(unsafe { scope.read() });
-        let set = s.set_handle(unsafe { set.read() }, scope);
-        let has = usize::try_from(index)
-            .ok()
-            .and_then(|i| s.set(set).members.get(i))
-            .is_some_and(Option::is_some);
-        (has, Next::Keep)
-    })?;
+    let set_word = unsafe { set.read() };
+    let (has, progress) = engine::head_observed(
+        ctx,
+        "task.set_has",
+        || {
+            let s = scheduler(ctx);
+            let scope = s.scope_handle(unsafe { scope.read() });
+            let set = s.set_handle(set_word, scope);
+            let has = usize::try_from(index)
+                .ok()
+                .and_then(|i| s.set(set).members.get(i))
+                .is_some_and(Option::is_some);
+            (has, Next::Keep)
+        },
+        |has| [set_word.to_ne_bytes().as_slice(), &[u8::from(*has)]].concat(),
+    )?;
     assert!(matches!(progress, Progress::Absorbed(_)));
     unsafe { out.write(u8::from(has)) };
     Ok(STATUS_OK)
@@ -125,17 +131,23 @@ pub(crate) unsafe fn take(
     index: u64,
     out: *mut u64,
 ) -> Stopped<u8> {
-    let (word, progress) = engine::head_effect(ctx, "task.set_take", || {
-        let s = scheduler(ctx);
-        let scope = s.scope_handle(unsafe { scope.read() });
-        let set = s.set_handle(unsafe { set.read() }, scope);
-        let word = usize::try_from(index)
-            .ok()
-            .and_then(|i| s.set(set).members.get_mut(i))
-            .and_then(Option::take)
-            .unwrap_or_else(|| fault("a task set member taken twice"));
-        (word, Next::Keep)
-    })?;
+    let set_word = unsafe { set.read() };
+    let (word, progress) = engine::head_observed(
+        ctx,
+        "task.set_take",
+        || {
+            let s = scheduler(ctx);
+            let scope = s.scope_handle(unsafe { scope.read() });
+            let set = s.set_handle(set_word, scope);
+            let word = usize::try_from(index)
+                .ok()
+                .and_then(|i| s.set(set).members.get_mut(i))
+                .and_then(Option::take)
+                .unwrap_or_else(|| fault("a task set member taken twice"));
+            (word, Next::Keep)
+        },
+        |word| [set_word.to_ne_bytes(), word.to_ne_bytes()].concat(),
+    )?;
     assert!(matches!(progress, Progress::Absorbed(_)));
     let task = engine::current(ctx);
     let driver = engine::driver(ctx);

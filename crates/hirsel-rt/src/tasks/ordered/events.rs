@@ -42,6 +42,7 @@ pub(super) struct Boundary {
 pub(super) enum CanonicalItem {
     Object(ObjectId),
     Cancellation(Vec<u32>),
+    Task(Vec<u32>),
 }
 
 /// The actual completion returned by an owned host request. It is retained
@@ -98,6 +99,7 @@ pub(super) struct CanonicalEvent {
 pub(super) enum CanonicalOutcome {
     Created(ObjectId),
     Alias(ObjectId),
+    Task(Vec<u32>),
     Scalar(Vec<u8>),
     Unit,
 }
@@ -155,6 +157,9 @@ pub(super) struct Log {
     pub owner_completions: Vec<OwnerCompletion>,
     pub boundaries: Vec<Boundary>,
     versions: BTreeMap<CanonicalItem, u64>,
+    /// Generation-qualified native words are lookup keys only. Keep bindings
+    /// after close so delayed evidence cannot be confused with a reused row.
+    sets: BTreeMap<u64, ObjectId>,
     canonical: Vec<CanonicalEvent>,
     unsupported: Vec<Unsupported>,
 }
@@ -329,6 +334,76 @@ pub(super) fn record(
                 CanonicalOutcome::Scalar(result.image.clone()),
             )]);
         }
+        let Logical::Ordered(driver) = &s.logical else {
+            unreachable!()
+        };
+        let log = driver.events.as_ref().unwrap();
+        match &op.payload {
+            Command::TaskSetCreate { .. } => {
+                let object = ObjectId {
+                    creator: path.clone(),
+                    ordinal: log.ordinals.get(&path).copied().unwrap_or(0),
+                };
+                return Some(vec![(
+                    CanonicalItem::Object(object.clone()),
+                    CanonicalOutcome::Created(object),
+                )]);
+            }
+            Command::TaskSetAdd { set, child, .. } => {
+                let object = log.sets.get(set)?.clone();
+                let row = s.task(*child as u32);
+                assert_eq!(row.generation, (*child >> 32) as u32);
+                return Some(vec![
+                    (CanonicalItem::Object(object), CanonicalOutcome::Unit),
+                    (
+                        CanonicalItem::Task(row.path.clone()),
+                        CanonicalOutcome::Unit,
+                    ),
+                ]);
+            }
+            Command::TaskSetClose { set } => {
+                return Some(vec![(
+                    CanonicalItem::Object(log.sets.get(set)?.clone()),
+                    CanonicalOutcome::Unit,
+                )]);
+            }
+            Command::Head {
+                name: "task.set_has",
+            } => {
+                assert_eq!(result.image.len(), 9, "set_has captures its set and bool");
+                let set = u64::from_ne_bytes(result.image[..8].try_into().unwrap());
+                return Some(vec![(
+                    CanonicalItem::Object(log.sets.get(&set)?.clone()),
+                    CanonicalOutcome::Scalar(vec![result.image[8]]),
+                )]);
+            }
+            Command::Head {
+                name: "task.set_take",
+            } => {
+                assert_eq!(
+                    result.image.len(),
+                    16,
+                    "set_take captures its set and returned task"
+                );
+                let set = u64::from_ne_bytes(result.image[..8].try_into().unwrap());
+                let child = u64::from_ne_bytes(result.image[8..].try_into().unwrap());
+                let object = log.sets.get(&set)?.clone();
+                let row = s.task(child as u32);
+                assert_eq!(row.generation, (child >> 32) as u32);
+                let child = row.path.clone();
+                return Some(vec![
+                    (
+                        CanonicalItem::Object(object),
+                        CanonicalOutcome::Task(child.clone()),
+                    ),
+                    (
+                        CanonicalItem::Task(child.clone()),
+                        CanonicalOutcome::Task(child),
+                    ),
+                ]);
+            }
+            _ => {}
+        }
         let items: std::collections::BTreeSet<_> = op
             .footprint
             .reads
@@ -365,6 +440,32 @@ pub(super) fn record(
         next.checked_sub(1)
             .expect("a continuation follows an operation")
     };
+    if let Some((
+        Operation {
+            payload: Command::TaskSetCreate {
+                index, generation, ..
+            },
+            ..
+        },
+        _,
+    )) = operation
+    {
+        let word = crate::channels::ENDPOINT
+            | super::super::TASK_SET
+            | super::super::handle(*index, *generation);
+        assert!(
+            log.sets
+                .insert(
+                    word,
+                    ObjectId {
+                        creator: path.clone(),
+                        ordinal
+                    }
+                )
+                .is_none(),
+            "one identity per task-set generation"
+        );
+    }
     if let (Some(events), Some((op, _))) = (canonical, operation) {
         for (subevent, (item, outcome)) in events.into_iter().enumerate() {
             let version = log.versions.entry(item.clone()).or_default();
@@ -413,6 +514,198 @@ pub(super) fn record(
 mod tests {
     use super::*;
     use crate::ordered::Policy;
+
+    unsafe extern "C" fn held_set_member(
+        ctx: *mut TaskCtx,
+        _: *mut crate::Header,
+        _: u64,
+        _: u64,
+    ) -> u8 {
+        let mut result = [1u64, 42];
+        unsafe {
+            crate::tasks::hirsel_rt_v2_task_finish(
+                ctx,
+                result.as_mut_ptr().cast(),
+                [0u64; 2].as_ptr().cast(),
+                16,
+            )
+        }
+    }
+
+    #[test]
+    fn native_set_subevents_keep_presence_and_returned_spawn_paths_across_widths() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let environment = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&environment as *const crate::Layout];
+        let mut reference = None;
+        for width in [2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let output = Arc::new(Mutex::new(Vec::new()));
+                let seen = output.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 1;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        super::super::engine::enable(ctx, policy);
+                        enable(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let mut scope = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_enter(
+                                ctx,
+                                std::ptr::null_mut(),
+                                &mut scope,
+                                &0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        {
+                            let _guard = role::Guard::new(ctx);
+                            scheduler(ctx).sets.resize_with(width as usize, || None);
+                        }
+                        let mut set = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_set(ctx, std::ptr::null_mut(), &mut set, &scope),
+                            crate::STATUS_OK
+                        );
+                        let env = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            8,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(env).cast::<u64>().write(0);
+                        let mut child = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_spawn(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut child,
+                                &scope,
+                                held_set_member,
+                                env,
+                                0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        let mut has = 99;
+                        assert_eq!(
+                            hirsel_rt_v2_task_set_has(ctx, &mut has, &scope, &set, 0),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!(has, 0);
+                        assert_eq!(
+                            hirsel_rt_v2_task_add(ctx, &scope, &mut set, &mut child),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!(
+                            hirsel_rt_v2_task_set_has(ctx, &mut has, &scope, &set, 0),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!(has, 1);
+                        let mut taken = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_set_take(
+                                ctx,
+                                std::ptr::null_mut(),
+                                &mut taken,
+                                &scope,
+                                &mut set,
+                                0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!(taken, child);
+                        assert_eq!(
+                            hirsel_rt_v2_task_set_has(ctx, &mut has, &scope, &set, 0),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!(has, 0);
+                        assert_eq!(
+                            crate::finalize::hirsel_rt_v2_close_handle(ctx, set, 0, 0),
+                            crate::STATUS_OK
+                        );
+                        let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                        assert!(
+                            log.canonical().is_err(),
+                            "unclassified task lifecycle still rejects the complete trace"
+                        );
+                        let events = &log.canonical;
+                        assert_eq!(events.len(), 9);
+                        let set_id = CanonicalItem::Object(ObjectId {
+                            creator: vec![],
+                            ordinal: 1,
+                        });
+                        let set_rows: Vec<_> =
+                            events.iter().filter(|row| row.item == set_id).collect();
+                        assert_eq!(set_rows.len(), 7);
+                        assert_eq!(
+                            set_rows.iter().map(|row| row.version).collect::<Vec<_>>(),
+                            [1, 2, 3, 4, 5, 6, 7]
+                        );
+                        assert_eq!(set_rows[1].outcome, CanonicalOutcome::Scalar(vec![0]));
+                        assert_eq!(set_rows[3].outcome, CanonicalOutcome::Scalar(vec![1]));
+                        assert_eq!(set_rows[4].outcome, CanonicalOutcome::Task(vec![0]));
+                        assert_eq!(set_rows[5].outcome, CanonicalOutcome::Scalar(vec![0]));
+                        let member_rows: Vec<_> = events
+                            .iter()
+                            .filter(|row| row.item == CanonicalItem::Task(vec![0]))
+                            .collect();
+                        assert_eq!(member_rows.len(), 2);
+                        assert_eq!(
+                            member_rows
+                                .iter()
+                                .map(|row| (row.version, row.subevent))
+                                .collect::<Vec<_>>(),
+                            [(1, 1), (2, 1)]
+                        );
+                        assert_eq!(member_rows[1].outcome, CanonicalOutcome::Task(vec![0]));
+                        *seen.lock().unwrap() = events.clone();
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                            crate::STATUS_OK
+                        );
+                        crate::STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                let events = output.lock().unwrap().clone();
+                if let Some(reference) = &reference {
+                    assert_eq!(&events, reference);
+                } else {
+                    reference = Some(events);
+                }
+            }
+        }
+    }
 
     #[test]
     fn native_creations_and_sender_aliases_normalize_perturbed_handle_allocations() {
