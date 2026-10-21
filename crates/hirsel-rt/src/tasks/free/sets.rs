@@ -113,38 +113,58 @@ pub(crate) unsafe fn await_any(
     super::record::begin(ctx);
     let set = set(ctx, scope, word);
     let waiting = scheduler(ctx).set(set).members.iter().any(Option::is_some);
+    let member = if waiting {
+        super::replay::token(ctx)
+            .map(|token| token.await_member(ctx))
+            .transpose()?
+    } else {
+        None
+    };
+    if let Some(index) = member
+        && usize::try_from(index)
+            .ok()
+            .and_then(|index| scheduler(ctx).set(set).members.get(index))
+            .is_none_or(Option::is_none)
+    {
+        return Err(crate::stop::Stop::Diverged(
+            "a recorded await_any member is absent from its set".into(),
+        ));
+    }
     let index = if waiting {
         let mut entered = false;
         loop {
-            if let Some(index) = scheduler(ctx).first_completed(set) {
+            let completed = match member {
+                Some(index) => scheduler(ctx).member_completed(set, index).then_some(index),
+                None => scheduler(ctx).first_completed(set),
+            };
+            if let Some(index) = completed {
                 break Some(index);
             }
             if !entered {
                 super::record::publish(ctx, Phase::Entered, |_| ())?;
                 entered = true;
             }
-            unsafe {
-                try_block(
-                    &mut *ctx,
-                    Wait::Any { set, member: None },
-                    false,
-                    caller_site,
-                )
-            }?;
+            unsafe { try_block(&mut *ctx, Wait::Any { set, member }, false, caller_site) }?;
         }
     } else {
         None
     };
-    super::record::publish(ctx, Phase::Done, |writer| unsafe {
+    let replay = super::replay::token(ctx);
+    let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
         if let (Some(writer), Some(index)) = (writer, index) {
             writer.await_any(index);
+        } else if let (Some(replay), Some(index)) = (&replay, index) {
+            replay.await_any(index)?;
         }
         out.write(IndexOption {
             tag: u32::from(index.is_some()),
             padding: 0,
             index: index.unwrap_or(0),
         });
-    })?;
+        Ok(())
+    });
+    drop(replay);
+    publication??;
     unsafe { try_yield(&mut *ctx) }
 }
 

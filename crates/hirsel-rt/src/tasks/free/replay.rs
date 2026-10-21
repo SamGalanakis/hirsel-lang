@@ -29,8 +29,8 @@ impl Replay {
     /// Admission only, before any task runs. This initial replay slice admits
     /// scalar atomics, administrative task-tree operations, pending Shared
     /// root tails, thaw outcomes, explicit task.canceled checks and deadline
-    /// scopes with settled children only; no host requests, versioned objects
-    /// or cancellation-ended waits yet.
+    /// scopes with settled children and task-set selection only; no host
+    /// requests, versioned objects or cancellation-ended waits yet.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
@@ -278,6 +278,34 @@ impl Token {
         self.shared
             .with(|session| session.expired(&self.path, live))
             .map_err(|error| Stop::Diverged(error.0))
+    }
+
+    pub(super) fn await_member(&self, ctx: *mut TaskCtx) -> Stopped<u64> {
+        if !self
+            .shared
+            .with(|session| session.admits(&self.path, Phase::Done))
+        {
+            // Entered-only cuts carry no selected member yet. Replay applies
+            // entry (including its root tail) and parks before inspecting it.
+            self.publish(ctx, Phase::Entered, || ())?;
+            return Err(Stop::Requested);
+        }
+        self.shared
+            .with(|session| session.await_any_member(&self.path))
+            .ok_or_else(|| {
+                Stop::Diverged("a nonempty native await_any has no recorded member".into())
+            })
+    }
+
+    pub(super) fn await_any(&self, index: u64) -> Stopped<()> {
+        let selected = self
+            .shared
+            .with(|session| {
+                session.await_any(&self.path, Some(index), |candidate| candidate == index)
+            })
+            .map_err(|error| Stop::Diverged(error.0))?;
+        assert_eq!(selected, Some(index), "the recorded member was ready");
+        Ok(())
     }
 }
 
