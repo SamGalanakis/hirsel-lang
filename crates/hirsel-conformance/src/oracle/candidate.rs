@@ -8,6 +8,27 @@ use hirsel_driver::candidate::{
 use hirsel_engine::{CheckCompletion, CompileConfig, LoweringPolicy, Verify};
 use std::path::Path;
 
+/// Materialize the bounded fixture's explicit no-dependency package. Ordinary
+/// standalone files select the toolchain std; these no-image controls instead
+/// name their small scope. This fixture manifest is independent of FrozenInputs.
+pub fn bounded_package(entry: &Path) -> Result<(), String> {
+    if entry.extension().is_some_and(|e| e == "json") {
+        return Ok(());
+    }
+    let mut sidecar = entry.as_os_str().to_os_string();
+    sidecar.push(".json");
+    let sidecar = std::path::PathBuf::from(sidecar);
+    if sidecar.try_exists().map_err(|e| e.to_string())? {
+        return Ok(());
+    }
+    let manifest = serde_json::json!({
+        "schema":1,"package":{"name":"standalone","version":"0"},
+        "sources":[{"path":entry.file_name().unwrap().to_str().unwrap(),"module":[]}],
+        "dependencies":[],"entry":{"module":[],"name":"main"}
+    });
+    std::fs::write(sidecar, manifest.to_string()).map_err(|e| e.to_string())
+}
+
 /// Produce ordinary Comptime check artifacts through the disk loader, without
 /// any FrozenInputs adapter or eligible result reuse. The caller independently
 /// materializes this tree (Scenario::write), not from a candidate input map.
@@ -260,6 +281,8 @@ pub fn matrix_cell(root: &Path, config: &Config, work: &Path, exe: &Path) -> Res
         let artifact_dir = work.join(name).join("oracle");
         scenario.write(&before, root, false)?;
         scenario.write(&after, root, true)?;
+        bounded_package(&scenario.entry(&before))?;
+        bounded_package(&scenario.entry(&after))?;
         let workspace = workspace(config)?;
         let base = workspace
             .capture(&scenario.entry(&before))
@@ -321,6 +344,7 @@ fn eight_candidates(
     let scenario = Scenario::read(&root.join(SCENARIOS).join("o2/body-edit.edit"), root)?;
     let before = work.join("eight/base");
     scenario.write(&before, root, false)?;
+    bounded_package(&scenario.entry(&before))?;
     let original = format!(
         "{}\ntype Secret {{ level:u64 }}\nfn view(x:Secret)->u64{{x.level}}\n\
         fn missing_user()->u64{{formerly_missing()}}\n\
@@ -366,6 +390,7 @@ fn eight_candidates(
         let actual = result(&w, &leases[index], &scenario.entry(&before))?;
         let after = work.join(format!("eight/cold-{index}"));
         scenario.write(&after, root, false)?;
+        bounded_package(&scenario.entry(&after))?;
         std::fs::write(after.join("main.hir"), &variants[index]).map_err(|e| e.to_string())?;
         let artifacts = work.join(format!("eight/oracle-{index}"));
         let child = std::process::Command::new(exe)

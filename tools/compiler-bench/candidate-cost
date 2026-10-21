@@ -35,6 +35,7 @@ def prepare(work, image):
                 base.mkdir(parents=True, exist_ok=True)
                 entry = source = base / 'main.hir'
                 source.write_text('fn helper(x:u64)->u64{x + 1}\npub fn main()->u64{helper(4)}\n')
+                dump(base / 'main.hir.json', {'schema': 1, 'package': {'name': 'standalone', 'version': '0'}, 'sources': [{'path': 'main.hir', 'module': []}], 'dependencies': [], 'entry': {'module': [], 'name': 'main'}})
             else:
                 entry, _ = copy_fixture(ROOT / 'examples/tasks/hirsel.json', base)
                 source = base / 'main.hir'
@@ -62,6 +63,7 @@ def prepare(work, image):
                         tree.mkdir(exist_ok=True)
                         cold = tree / 'main.hir'
                         cold.write_text(text)
+                        shutil.copyfile(base / 'main.hir.json', tree / 'main.hir.json')
                     else:
                         cold, _ = copy_fixture(ROOT / 'examples/tasks/hirsel.json', tree)
                         (tree / 'main.hir').write_text(text)

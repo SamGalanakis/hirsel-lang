@@ -560,6 +560,8 @@ fn candidate_transactions_match_independent_cold_trees() {
         let after = work.join(name).join("cold");
         scenario.write(&before, &root, false).unwrap();
         scenario.write(&after, &root, true).unwrap();
+        candidate::bounded_package(&scenario.entry(&before)).unwrap();
+        candidate::bounded_package(&scenario.entry(&after)).unwrap();
         let config = oracle::Config::default();
         let workspace = candidate::workspace(&config).unwrap();
         let base = workspace.capture(&scenario.entry(&before)).unwrap();
@@ -636,6 +638,7 @@ fn candidate_opposing_siblings_and_swapped_artifacts_are_detected() {
         std::fs::create_dir_all(&dir).unwrap();
         let entry = dir.join("main.hir");
         std::fs::write(&entry, good).unwrap();
+        candidate::bounded_package(&entry).unwrap();
         let config = oracle::Config::default();
         let w = candidate::workspace(&config).unwrap();
         let base = w.capture(&entry).unwrap();
@@ -661,6 +664,7 @@ fn candidate_opposing_siblings_and_swapped_artifacts_are_detected() {
             std::fs::create_dir(&tree).unwrap();
             let path = tree.join("main.hir");
             std::fs::write(&path, text).unwrap();
+            candidate::bounded_package(&path).unwrap();
             expected.push(candidate::cold(&path, &config).unwrap());
         }
         assert_eq!(expected[0]["state"], b"pass");

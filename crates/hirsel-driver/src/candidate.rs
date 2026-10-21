@@ -1435,6 +1435,8 @@ mod tests {
             ));
             std::fs::create_dir(&path).unwrap();
             std::fs::write(path.join("main.hir"), "pub fn main()->u64{1}\n").unwrap();
+            // Explicit small package: standalone source entries otherwise select std.
+            std::fs::write(path.join("main.hir.json"), r#"{"schema":1,"package":{"name":"standalone","version":"0"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
             Self(path)
         }
     }
@@ -1547,6 +1549,51 @@ mod tests {
             2,
             "missing-phase outcome was cached"
         );
+    }
+    #[test]
+    fn candidate_standalone_capture_freezes_toolchain_and_absent_sidecar() {
+        let f = Fixture::new();
+        let entry = f.0.join("main.hir");
+        let sidecar = f.0.join("main.hir.json");
+        std::fs::remove_file(&sidecar).unwrap();
+        let w = workspace();
+        let base = w.capture(&entry).unwrap();
+        assert!(
+            base.inputs
+                .scope
+                .packages
+                .iter()
+                .any(|p| p.package_is("std", "1"))
+        );
+        let manifest = hirsel_engine::toolchain_std_manifest().unwrap();
+        assert_eq!(base.inputs.frozen.known_path(&manifest), Some(manifest));
+        // A later sidecar cannot redirect an already captured standalone graph.
+        std::fs::write(&sidecar, "{}").unwrap();
+        assert!(!base.inputs.frozen.changed_on_disk().is_empty());
+        hirsel_engine::with_compiler_stack(|| {
+            let frozen = w
+                .inner
+                .compiler
+                .load_program_inputs(&entry, &base.inputs.frozen, &w.inner.images, false)
+                .unwrap();
+            assert_eq!(scope(&frozen), base.inputs.scope);
+            for (file, _) in &frozen.files {
+                let source = frozen.engine.sources.file(*file).unwrap();
+                assert!(
+                    base.inputs
+                        .sources
+                        .values()
+                        .any(|captured| captured.physical == source.path
+                            && captured.text.as_ref() == source.text())
+                );
+            }
+            assert!(
+                w.inner
+                    .compiler
+                    .load_program_source_with_images(&entry, None, &w.inner.images,)
+                    .is_err()
+            );
+        });
     }
     #[test]
     fn candidate_capture_and_promotion_have_one_serial_head_order() {

@@ -17,6 +17,8 @@ impl Fixture {
         ));
         std::fs::create_dir(&path).unwrap();
         std::fs::write(path.join("main.hir"), text).unwrap();
+        // Explicit small package: standalone source entries otherwise select std.
+        std::fs::write(path.join("main.hir.json"), r#"{"schema":1,"package":{"name":"standalone","version":"0"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         Self(path)
     }
     fn entry(&self) -> PathBuf {
