@@ -406,4 +406,141 @@ mod tests {
         assert_eq!(ping.trace, [7, 1, 3]);
         assert_eq!(ping.depth, 10_000);
     }
+
+    /// A saved native stack is the free scheduler's image: it must cross the
+    /// ownership CAS after the assembly switch wrote its stack pointer. Eight
+    /// independent fibers run together, then rotate to the next OS thread at
+    /// every save. This tests actual started stacks, not task identifiers.
+    #[test]
+    fn exclusive_saved_images_migrate_eight_started_native_stacks() {
+        use hirsel_free::frame;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier, mpsc};
+        use std::time::Duration;
+        const WIDTH: usize = 8;
+        const SAVES: usize = 32;
+        struct Body {
+            id: usize,
+            worker: usize,
+            return_slot: *mut *mut u8,
+            sp: *mut u8,
+            saves: usize,
+            sum: u64,
+            visits: Vec<usize>,
+            gate: Arc<Barrier>,
+            freed: Arc<AtomicUsize>,
+        }
+        impl Drop for Body {
+            fn drop(&mut self) {
+                self.freed.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        struct Image {
+            _stack: Stack,
+            body: *mut Body,
+        }
+        impl Drop for Image {
+            fn drop(&mut self) {
+                // SAFETY: dropping execution ownership happens only on the
+                // idle stack, after the native fiber's last save.
+                unsafe { drop(Box::from_raw(self.body)) };
+            }
+        }
+        // SAFETY: only Running owns the image and its native stack. A queue
+        // token is produced after switch saved sp; its next owner overwrites
+        // return_slot before resuming. No pointer is used by a notifier.
+        unsafe impl Send for Image {}
+
+        unsafe extern "C" fn moving(body: *mut u8, _: *mut u8) -> ! {
+            let body = body.cast::<Body>();
+            // SAFETY: this fiber runs only while its worker holds Running.
+            unsafe {
+                let id = (*body).id;
+                let mut kept = std::hint::black_box([id as u64; 32]);
+                // All eight fibers must enter before any can save its first
+                // frame. The test carries no serial runtime run token.
+                (*body).gate.wait();
+                for step in 1..=SAVES {
+                    (*body).visits.push((*body).worker);
+                    for value in &mut kept {
+                        *value += 1;
+                    }
+                    (*body).sum = kept.iter().sum();
+                    (*body).saves = step;
+                    switch(&raw mut (*body).sp, *(*body).return_slot);
+                    assert_eq!(std::hint::black_box(kept), [id as u64 + step as u64; 32]);
+                }
+            }
+            unreachable!("a completed native image was resumed")
+        }
+
+        let gate = Arc::new(Barrier::new(WIDTH));
+        let freed = Arc::new(AtomicUsize::new(0));
+        let mut senders = Vec::new();
+        let mut receivers = Vec::new();
+        let mut notifications = Vec::new();
+        for id in 0..WIDTH {
+            let (send, receive) = mpsc::channel();
+            let stack = Stack::new();
+            let body = Box::into_raw(Box::new(Body {
+                id,
+                worker: id,
+                return_slot: std::ptr::null_mut(),
+                sp: std::ptr::null_mut(),
+                saves: 0,
+                sum: 0,
+                visits: Vec::new(),
+                gate: gate.clone(),
+                freed: freed.clone(),
+            }));
+            // SAFETY: admission owns the image, before any worker can start it.
+            unsafe { (*body).sp = stack.prepare(moving, body.cast(), std::ptr::null_mut()) };
+            let (wake, queued) = frame::prepared(Image {
+                _stack: stack,
+                body,
+            });
+            notifications.push(wake);
+            assert!(send.send(queued).is_ok());
+            senders.push(send);
+            receivers.push(receive);
+        }
+        std::thread::scope(|threads| {
+            for (index, receive) in receivers.into_iter().enumerate() {
+                let send = senders[(index + 1) % WIDTH].clone();
+                threads.spawn(move || {
+                    let mut idle = std::ptr::null_mut();
+                    for step in 1..=SAVES {
+                        let queued = receive.recv_timeout(Duration::from_secs(10)).unwrap();
+                        let mut running = queued.start();
+                        let body = running.value().body;
+                        // SAFETY: Running owns this saved stack, and no image
+                        // borrow survives switching into its native frames.
+                        unsafe {
+                            (*body).worker = index;
+                            (*body).return_slot = &raw mut idle;
+                            let sp = (*body).sp;
+                            switch(&raw mut idle, sp);
+                            assert_eq!((*body).saves, step);
+                        }
+                        if step == SAVES {
+                            // SAFETY: switch returned to idle and saved this image.
+                            let body = unsafe { &*running.value().body };
+                            assert_eq!(body.sum, 32 * (body.id + SAVES) as u64);
+                            assert_eq!(
+                                body.visits,
+                                (0..SAVES)
+                                    .map(|n| (body.id + n) % WIDTH)
+                                    .collect::<Vec<_>>()
+                            );
+                            drop(running);
+                        } else {
+                            assert!(send.send(running.save(true).unwrap()).is_ok());
+                        }
+                    }
+                });
+            }
+        });
+        assert_eq!(freed.load(Ordering::Relaxed), WIDTH);
+        assert!(notifications.iter().all(|wake| wake.notify().is_none()));
+    }
 }
