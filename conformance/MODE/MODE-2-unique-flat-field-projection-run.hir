@@ -1,0 +1,25 @@
+// rule: MODE-2
+// expect: run
+// stdout: abc
+flat type TextFields {
+  title: String,
+}
+
+type Row {
+  text: TextFields,
+}
+
+fn detached(row: Row) -> unique String {
+  unique row.text.title
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let title = {
+    let row = Row(text: TextFields(title: "abc"))
+    detached(row)
+  }
+  let stdout = io.stdout(rt)?
+  let _ = out.print(stdout, title)
+  let _ = out.print(stdout, "\n")
+  Ok(())
+}

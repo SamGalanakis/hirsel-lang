@@ -242,3 +242,40 @@ fn stable_owned_flat_walks_keep_their_version_through_conditional_reads() {
     );
     audited(&source, 23);
 }
+
+/// Materializing `unique` from a flat encoding owns independent storage:
+/// the borrowed source is still readable, then dies before the result is used.
+#[test]
+fn unique_flat_field_materialization_survives_its_carrier() {
+    for (field, ty, value, measure, expected) in [
+        ("title", "String", "\"abc\"", "string.byte_len(owned)", 3),
+        ("data", "Bytes", "b\"abcd\"", "bytes.len(owned)", 4),
+        (
+            "words",
+            "List[String]",
+            "[\"abc\", \"d\"]",
+            "string.byte_len(owned[0]) + string.byte_len(owned[1])",
+            4,
+        ),
+        (
+            "nested",
+            "List[List[u64]]",
+            "[[2u64, 3u64], [], [7u64]]",
+            "owned[0][0] + owned[0][1] + owned[2][0]",
+            12,
+        ),
+    ] {
+        for copy in ["", "copy "] {
+            audited(
+                &format!(
+                    "flat type Item {{ text: String, n: u64 }}\nflat type Fields {{ {field}: {ty} }}\ntype Row {{ fields: Fields }}\nfn detach(row: Row) -> unique {ty} {{ let owned = unique {copy}row.fields.{field}\n let _ = row.fields.{field}\n take owned }}\nfn main() -> u64 {{ let owned = {{ let row = Row(fields: Fields({field}: {value}))\n detach(row) }}\n {measure} }}"
+                ),
+                expected,
+            );
+        }
+    }
+    audited(
+        "flat type Item { text: String, n: u64 }\nflat type Fields { part: Item }\ntype Row { fields: Fields }\nfn detach(row: Row) -> unique Item { unique row.fields.part }\nfn main() -> u64 { let owned = { let row = Row(fields: Fields(part: Item(text: \"abc\", n: 7)))\n detach(row) }\n string.byte_len(owned.text) + owned.n }",
+        10,
+    );
+}

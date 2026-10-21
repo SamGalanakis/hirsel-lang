@@ -3168,6 +3168,7 @@ conformance/MODE/MODE-2-error-mapper-occurrence-bad.hir
 conformance/MODE/MODE-2-error-mapper-occurrence-ok.hir
 conformance/MODE/MODE-2-flat-capture-preserves-unique-ok.hir
 conformance/MODE/MODE-2-flat-copy-preserves-unique-ok.hir
+conformance/MODE/MODE-2-flat-field-read-projection-run.hir
 conformance/MODE/MODE-2-fresh-aggregate-run.hir
 conformance/MODE/MODE-2-fresh-counted-element-write-unique-ok.hir
 conformance/MODE/MODE-2-fresh-counted-record-field-write-unique-ok.hir
@@ -3408,6 +3409,8 @@ conformance/MODE/MODE-2-unique-destructure-bad.hir
 conformance/MODE/MODE-2-unique-destructure-ok.hir
 conformance/MODE/MODE-2-unique-field-push-pop-aliased-bad.hir
 conformance/MODE/MODE-2-unique-field-push-pop-ok.hir
+conformance/MODE/MODE-2-unique-flat-field-copy-projection-run.hir
+conformance/MODE/MODE-2-unique-flat-field-projection-run.hir
 conformance/MODE/MODE-2-unique-mut-handback-lost-bad.hir
 conformance/MODE/MODE-2-unique-mut-handback-restored-ok.hir
 conformance/MODE/MODE-2-unique-part-mut-ok.hir

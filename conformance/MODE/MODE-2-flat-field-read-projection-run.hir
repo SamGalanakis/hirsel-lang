@@ -1,0 +1,30 @@
+// rule: MODE-2
+// expect: run
+// stdout: abc
+flat type TextFields {
+  title: String,
+}
+
+type Row {
+  text: TextFields,
+}
+
+fn title_length(row: Row) -> u64 {
+  string.byte_len(row.text.title)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let length = {
+    let row = Row(text: TextFields(title: "abc"))
+    title_length(row)
+  }
+  let _ = out.print(
+    io.stdout(rt)?,
+    if length == 3 {
+      "abc\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

@@ -970,7 +970,10 @@ impl Importer<'_> {
     pub(super) fn unique(&mut self, value: &tir::Operand, ty: LirTypeId) -> R<ValueId> {
         let p = self.place(value.place)?;
         let address = self.address(&p)?;
-        if self.bits(p.ty) {
+        // A variable flat field is an encoding, not an ordinary value with
+        // a holder to borrow. Decoding it already creates an independent
+        // owned graph, just as copying or taking that field does.
+        if p.source.is_some() || self.bits(p.ty) {
             return self.operand_at(UseKind::Copy, &p, address, None);
         }
         let reaching = self.reaching(p.slot)?;

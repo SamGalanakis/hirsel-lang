@@ -1008,3 +1008,61 @@ fn a_joined_string_view_can_feed_a_scalars_iterator() {
         "fn count(a: String, b: String, select: bool) -> u64 { let mut n = 0u64; for _ in string.scalars(if select { a } else { b }) { n = n + 1; }; n }",
     );
 }
+
+/// `unique` must decode a flat field into a fresh ordinary value, rather
+/// than lend the field's uncounted encoding to the ordinary deep copier.
+#[test]
+fn unique_flat_field_projections_are_owned() {
+    for source in [
+        include_str!("../../../../conformance/MODE/MODE-2-unique-flat-field-projection-run.hir"),
+        include_str!(
+            "../../../../conformance/MODE/MODE-2-unique-flat-field-copy-projection-run.hir"
+        ),
+    ] {
+        let (_, lowered) = lower_valid(source);
+        let detached = unit_named(&lowered, "detached");
+        assert!(
+            detached
+                .instructions
+                .iter()
+                .any(|i| matches!(i, hirsel_lir::ir::Inst::FlatCopy { .. })),
+            "{}",
+            dump(detached)
+        );
+    }
+}
+
+/// A view of a flat field still belongs to its carrier: labelling that
+/// view owned cannot manufacture the independent storage `unique` needs.
+#[test]
+fn a_flat_field_view_cannot_claim_ownership() {
+    use hirsel_lir::ir::{Holding, Inst};
+    use hirsel_lir::validate::ViolationKind;
+    let (program, mut lowered) = lower_valid(
+        "flat type TextFields { title: String }\ntype Row { text: TextFields }\nfn title(row: Row) -> u64 { string.byte_len(row.text.title) }\nfn main() -> u64 { title(Row(text: TextFields(title: \"abc\"))) }",
+    );
+    let unit = lowered
+        .units
+        .iter_mut()
+        .find(|u| u.header.definition.0.name.as_str() == "title")
+        .unwrap();
+    let result = unit
+        .instructions
+        .iter()
+        .find_map(|i| match i {
+            Inst::FlatView { result, .. } => Some(*result),
+            _ => None,
+        })
+        .expect("a borrowed flat-field view");
+    assert!(matches!(
+        unit.values[result.index()].holding,
+        Holding::Borrowed(_)
+    ));
+    unit.values[result.index()].holding = Holding::Owned;
+    assert!(
+        violations(&program, &lowered)
+            .iter()
+            .flat_map(|(_, v)| v)
+            .any(|v| v.kind == ViolationKind::Holding(result))
+    );
+}
