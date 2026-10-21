@@ -2765,6 +2765,73 @@ reporting trailing garbage. Unlike Go, CR/LF are rejected rather than skipped.
 Error kinds distinguish invalid bytes, length, padding and unused bits; no partial
 output is returned.
 
+
+The incremental API borrows byte chunks and returns independently owned output:
+
+```text
+fn base64.encoder(alphabet: Alphabet, padding: Padding) -> Encoder uses {}
+fn base64.encode_feed(mut state: Encoder, data: Bytes) -> Result[unique String, StreamError] uses {}
+fn base64.encode_finish(mut state: Encoder) -> Result[unique String, StreamError] uses {}
+fn base64.decoder(alphabet: Alphabet, padding: Padding) -> Decoder uses {}
+fn base64.decode_feed(mut state: Decoder, data: Bytes) -> Result[unique Bytes, StreamError] uses {}
+fn base64.decode_finish(mut state: Decoder) -> Result[unique Bytes, StreamError] uses {}
+```
+
+`Encoder` and `Decoder` are opaque `copyable + inert + noalloc_drop` states.
+They retain no references to input or returned output. The encoder carries at
+most two raw bytes packed in a scalar; the decoder carries one incomplete
+four-character quantum as a packed value, count, padding flags and absolute
+byte offset. Neither state has a heap buffer. Output storage is proportional
+to the current call's input; caller-retained output is outside the carry bound.
+Copying a state forks its current position and lifecycle.
+
+`StreamError = Closed | Decode(DecodeError)`. Call the corresponding finish
+function exactly once after all chunks, including for an empty stream. Empty
+feeds before finish succeed with empty output and do not finalize. After a
+successful finish every feed or finish returns `Closed()`. After a decoding
+error every feed or finish returns the same `Decode(error)`; recovery requires
+a new decoder. Each failed call returns no output, including valid complete
+quanta decoded earlier in that call. Chunks from previous successful calls are
+committed streaming output. Callers requiring atomic whole-stream acceptance
+must retain those chunks privately and discard them if any feed or finish fails.
+The existing `decode` remains all-or-nothing for the entire input.
+
+Offsets count all supplied bytes from zero, across chunk boundaries, including
+CR/LF and arbitrary invalid UTF-8. The error class, offset and precedence match
+`decode` on concatenated valid UTF-8 input. An incomplete quantum is checked
+at finish; a missing second `=` reports EOF, whereas an incorrect second `=`
+reports the first `=`. A padded terminal quantum emits nothing until finish.
+If later input arrives, its held tail bits are checked first, then trailing
+input is rejected at the byte immediately after that quantum. Thus `Zh==x`
+reports `NonCanonical(2)` even when every character is a separate feed, while
+`Zg==x` reports `InvalidPadding(4)`. `decode_feed` accepts arbitrary Bytes and
+rejects non-ASCII bytes directly, without UTF-8 conversion. Offset overflow
+raises `TextInvariant`, as whole-buffer encode does for size overflow.
+
+```hirsel
+let mut decoder = std@1/base64.decoder(Standard(), Required())
+let Ok(prefix) = std@1/base64.decode_feed(mut decoder, b"Zm9vY") else { return Error(()) }
+let Ok(middle) = std@1/base64.decode_feed(mut decoder, b"g==") else { return Error(()) }
+let Ok(tail) = std@1/base64.decode_finish(mut decoder) else { return Error(()) }
+// prefix == b"foo", middle == b"", tail == b"b"; only now accept the stream.
+```
+
+Streaming structure is ported from Go `golang/go` commit
+`ebe2feefc400f813aefdc8a036e66d2619da6649`,
+`src/encoding/base64/base64.go:217-286` (encoder fringe, full quanta, Close),
+`:467-540` (decoder carry, terminal padding, absolute errors), and `:677-680`
+(NewDecoder). Tests draw from `base64_test.go:31-38,125-158,200-228,248-279`
+and RFC4648 section 10. Semantic deviations: explicit pure feed/finish replaces
+Reader/Writer I/O; CR/LF are rejected; typed errors preserve Hirsel's existing
+strict decoder precedence; a padded terminal quantum is held until EOF; a
+failing call returns no partial chunk; successful finish closes the state and
+repeated failure preserves its original error. Fixed scalar carry replaces
+Go's I/O buffers, and there are no assembly fast paths. Zig `ziglang/zig` commit
+`bff490a23889750de7096d9057c0a432efc929a8`, `lib/std/base64.zig:261-280`,
+supplies the scalar sextet accumulator and unused-bit check structure; Hirsel
+widens the accumulator to one full quantum and keeps existing Go-compatible
+error precedence instead of Zig's up-front whole-buffer length checks.
+
 ## Hexadecimal codec
 
 `hex.encode(data: Bytes) -> unique String` emits lowercase hexadecimal.

@@ -1,7 +1,7 @@
 // Go encoding/base64 @ ebe2feef, base64.go:328-408 decodeQuantum (BSD-3-Clause).
 // Quantum scan/padding/error precedence and byte offsets follow Go Strict().
 // Deviations: CR/LF rejected (strict RFC4648), typed error kinds, no partial output.
-// Encoder uses the same 24-bit packing; no streaming/assembly fast paths.
+// Encoder uses the same 24-bit packing; no assembly fast paths.
 @serializable
 pub type Alphabet = Standard | UrlSafe
 
@@ -177,4 +177,257 @@ pub fn decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[
     }
   }
   Ok(core@1/bytes.from_list(take out))
+}
+
+// Go @ ebe2feef base64.go:217-286 encoder.Write/Close/NewEncoder,
+// :467-540 decoder.Read and :677-680 NewDecoder. Fixed carry and explicit EOF;
+// no io.Reader/Writer, whitespace skipping, or output from a failing call.
+// Zig bff490a lib/std/base64.zig:261-280 scalar sextet accumulator/unused-bit
+// check, widened to hold a full quantum until Hirsel can commit its output.
+@serializable
+pub type StreamError = Closed | Decode(DecodeError)
+
+pub opaque type Encoder: copyable + inert + noalloc_drop uses {} {
+  alphabet: Alphabet,
+  padding: Padding,
+  value: u32,
+  used: u64,
+  ended: bool,
+}
+
+pub opaque type Decoder: copyable + inert + noalloc_drop uses {} {
+  alphabet: Alphabet,
+  padding: Padding,
+  value: u32,
+  used: u64,
+  offset: u64,
+  second_pad: bool,
+  padded: bool,
+  ended: bool,
+  failed: Option[DecodeError],
+}
+
+@noalloc
+pub fn encoder(alphabet: Alphabet, padding: Padding) -> Encoder uses {} {
+  Encoder(alphabet: alphabet, padding: padding, value: 0, used: 0, ended: false)
+}
+
+@noalloc
+pub fn decoder(alphabet: Alphabet, padding: Padding) -> Decoder uses {} {
+  Decoder(
+    alphabet: alphabet,
+    padding: padding,
+    value: 0,
+    used: 0,
+    offset: 0,
+    second_pad: false,
+    padded: false,
+    ended: false,
+    failed: None()
+  )
+}
+
+// Go encoder.Write's leading fringe, interior full quanta, trailing fringe.
+pub fn encode_feed(mut state: Encoder, data: Bytes) -> Result[
+  unique String,
+  StreamError
+] uses {} {
+  if state.ended {
+    return Error(Closed())
+  }
+  let len = core@1/bytes.len(data)
+  let groups = len / 3 + if len % 3 + state.used >= 3 {
+    1
+  } else {
+    0
+  }
+  core@1/failure.check(groups <= 18446744073709551615u64 / 4, TextInvariant())
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  // Leading fringe: finish the quantum carried by the previous feed.
+  if state.used != 0 {
+    while i < len && state.used < 3 {
+      let byte: u32 = core@1/int.widen(data[i])
+      state.value = state.value * 256u32 + byte
+      state.used += 1
+      i += 1
+    }
+    if state.used == 3 {
+      let raw = core@1/bytes.from_list(
+        [
+          core@1/int.narrow(state.value / 65536u32),
+          core@1/int.narrow(state.value / 256u32 % 256u32),
+          core@1/int.narrow(state.value % 256u32)
+        ]
+      )
+      text.append(mut out, encode(raw, state.alphabet, Omitted()))
+      state.value = 0
+      state.used = 0
+    }
+  }
+  // Interior: reuse the established whole-buffer 24-bit packing kernel.
+  let end = i + (len - i) / 3 * 3
+  if end != i {
+    text.append(
+      mut out,
+      encode(core@1/bytes.slice(data, i, end), state.alphabet, Omitted())
+    )
+    i = end
+  }
+  // Trailing fringe: retain only the remaining zero, one or two raw bytes.
+  while i < len {
+    let byte: u32 = core@1/int.widen(data[i])
+    state.value = state.value * 256u32 + byte
+    state.used += 1
+    i += 1
+  }
+  Ok(text.finish_valid(take out))
+}
+
+pub fn encode_finish(mut state: Encoder) -> Result[unique String, StreamError] uses {} {
+  if state.ended {
+    return Error(Closed())
+  }
+  state.ended = true
+  let mut tail: List[u8] = []
+  if state.used == 2 {
+    core@1/list.push(mut tail, core@1/int.narrow(state.value / 256u32))
+  }
+  if state.used != 0 {
+    core@1/list.push(mut tail, core@1/int.narrow(state.value % 256u32))
+  }
+  state.value = 0
+  state.used = 0
+  Ok(encode(core@1/bytes.from_list(take tail), state.alphabet, state.padding))
+}
+
+@noalloc
+fn stream_tail(state: Decoder) -> Result[(), DecodeError] uses {} {
+  if state.used == 2 && state.value % 16u32 != 0 {
+    return Error(NonCanonical(state.offset - 2))
+  }
+  if state.used == 3 && state.value % 4u32 != 0 {
+    return Error(NonCanonical(state.offset - 1))
+  }
+  Ok(())
+}
+
+@preserves_unique(out)
+fn stream_emit(state: Decoder, mut out: List[u8]) -> () uses {} {
+  let packed = if state.used == 2 {
+    state.value * 4096u32
+  } else if state.used == 3 {
+    state.value * 64u32
+  } else {
+    state.value
+  }
+  core@1/list.push(mut out, core@1/int.narrow(packed / 65536u32))
+  if state.used >= 3 {
+    core@1/list.push(mut out, core@1/int.narrow(packed / 256u32 % 256u32))
+  }
+  if state.used == 4 {
+    core@1/list.push(mut out, core@1/int.narrow(packed % 256u32))
+  }
+}
+
+fn stream_feed(mut state: Decoder, data: Bytes) -> Result[unique Bytes, DecodeError] uses {} {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    // Keep a terminal padded quantum until EOF, including its original offset.
+    if state.padded {
+      stream_tail(state)?
+      return Error(InvalidPadding(state.offset))
+    }
+    let byte = data[i]
+    if state.second_pad {
+      if byte != b'=' {
+        return Error(InvalidPadding(state.offset - 1))
+      }
+      state.offset += 1
+      state.second_pad = false
+      state.padded = true
+    } else {
+      let at = state.offset
+      state.offset += 1
+      let digit = sextet(byte, state.alphabet)
+      if digit != 64 {
+        state.value = state.value * 64u32 + digit
+        state.used += 1
+        if state.used == 4 {
+          stream_emit(state, mut out)
+          state.value = 0
+          state.used = 0
+        }
+      } else if byte != b'=' {
+        return Error(InvalidByte(at))
+      } else if state.padding == Omitted() || state.used < 2 {
+        return Error(InvalidPadding(at))
+      } else if state.used == 2 {
+        state.second_pad = true
+      } else {
+        state.padded = true
+      }
+    }
+    i += 1
+  }
+  Ok(core@1/bytes.from_list(take out))
+}
+
+pub fn decode_feed(mut state: Decoder, data: Bytes) -> Result[unique Bytes, StreamError] uses {} {
+  if let Some(error) = state.failed {
+    return Error(Decode(error))
+  }
+  if state.ended {
+    return Error(Closed())
+  }
+  core@1/failure.check(
+    core@1/bytes.len(data) <= 18446744073709551615u64 - state.offset,
+    TextInvariant()
+  )
+  match stream_feed(mut state, data) {
+    Ok(chunk) => Ok(take chunk),
+    Error(error) => {
+      state.failed = Some(error)
+      state.value = 0
+      state.used = 0
+      Error(Decode(error))
+    },
+  }
+}
+
+fn stream_finish(mut state: Decoder) -> Result[unique Bytes, DecodeError] uses {} {
+  if state.second_pad {
+    return Error(InvalidPadding(state.offset))
+  }
+  if !state.padded && state.used != 0 && (state.used == 1 || state.padding == Required()) {
+    return Error(InvalidLength(state.offset - state.used))
+  }
+  stream_tail(state)?
+  let mut out: List[u8] = []
+  if state.used != 0 {
+    stream_emit(state, mut out)
+  }
+  state.value = 0
+  state.used = 0
+  Ok(core@1/bytes.from_list(take out))
+}
+
+pub fn decode_finish(mut state: Decoder) -> Result[unique Bytes, StreamError] uses {} {
+  if let Some(error) = state.failed {
+    return Error(Decode(error))
+  }
+  if state.ended {
+    return Error(Closed())
+  }
+  state.ended = true
+  match stream_finish(mut state) {
+    Ok(chunk) => Ok(take chunk),
+    Error(error) => {
+      state.failed = Some(error)
+      state.value = 0
+      state.used = 0
+      Error(Decode(error))
+    },
+  }
 }

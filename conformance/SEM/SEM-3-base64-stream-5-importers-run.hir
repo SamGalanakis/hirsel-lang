@@ -1,0 +1,10 @@
+// rule: SEM-3
+// expect: run
+// RFC6455 section 1.3: pure acceptance-key importer, without any HTTP path.
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/websocket.accept_key("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+    TextInvariant()
+  )
+  Ok(())
+}

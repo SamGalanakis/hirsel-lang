@@ -1,0 +1,379 @@
+// Every partition is represented by a bit mask over the interior byte boundaries.
+fn partitions(length: u64) -> u64 {
+  if length == 0 {
+    1
+  } else {
+    1u64 << length - 1
+  }
+}
+
+fn encoded(
+  data: Bytes,
+  alphabet: std@1/base64.Alphabet,
+  padding: std@1/base64.Padding,
+  mask: u64
+) -> String {
+  let mut enc = std@1/base64.encoder(alphabet, padding)
+  let mut out = ""
+  let mut start: u64 = 0
+  for end in 1u64..bytes.len(data) + 1 {
+    if end == bytes.len(data) || (mask >> end - 1) % 2 == 1 {
+      let Ok(chunk) = std@1/base64.encode_feed(mut enc, bytes.slice(data, start, end)) else {
+        failure.check(false, TextInvariant())
+        return ""
+      }
+      out = string.concat(out, chunk)
+      failure.check(std@1/base64.encode_feed(mut enc, b"") == Ok(""), TextInvariant())
+      start = end
+    }
+  }
+  let Ok(tail) = std@1/base64.encode_finish(mut enc) else {
+    failure.check(false, TextInvariant())
+    return ""
+  }
+  string.concat(out, tail)
+}
+
+fn decoded(
+  data: Bytes,
+  alphabet: std@1/base64.Alphabet,
+  padding: std@1/base64.Padding,
+  mask: u64
+) -> Result[Bytes, std@1/base64.DecodeError] {
+  let mut dec = std@1/base64.decoder(alphabet, padding)
+  let mut out: List[u8] = []
+  let mut start: u64 = 0
+  for end in 1u64..bytes.len(data) + 1 {
+    if end == bytes.len(data) || (mask >> end - 1) % 2 == 1 {
+      match std@1/base64.decode_feed(mut dec, bytes.slice(data, start, end)) {
+        Ok(chunk) => {
+          for byte in chunk {
+            list.push(mut out, byte)
+          }
+        },
+        Error(Decode(error)) => {
+          failure.check(
+            std@1/base64.decode_finish(mut dec) == Error(Decode(error)),
+            TextInvariant()
+          )
+          failure.check(
+            std@1/base64.decode_feed(mut dec, b"") == Error(Decode(error)),
+            TextInvariant()
+          )
+          return Error(error)
+        },
+        Error(Closed()) => {
+          failure.check(false, TextInvariant())
+          return Ok(b"")
+        },
+      }
+      failure.check(std@1/base64.decode_feed(mut dec, b"") == Ok(b""), TextInvariant())
+      start = end
+    }
+  }
+  match std@1/base64.decode_finish(mut dec) {
+    Ok(chunk) => {
+      for byte in chunk {
+        list.push(mut out, byte)
+      }
+    },
+    Error(Decode(error)) => {
+      failure.check(
+        std@1/base64.decode_finish(mut dec) == Error(Decode(error)),
+        TextInvariant()
+      )
+      return Error(error)
+    },
+    Error(Closed()) => {
+      failure.check(false, TextInvariant())
+      return Ok(b"")
+    },
+  }
+  failure.check(std@1/base64.decode_finish(mut dec) == Error(Closed()), TextInvariant())
+  Ok(bytes.from_list(take out))
+}
+
+fn vector(data: Bytes, padded: String, raw: String) -> () {
+  let alphabets: List[std@1/base64.Alphabet] = [Standard(), UrlSafe()]
+  for alphabet in alphabets {
+    let paddings: List[std@1/base64.Padding] = [Required(), Omitted()]
+    for padding in paddings {
+      let expected = if padding == Required() {
+        padded
+      } else {
+        raw
+      }
+      failure.check(
+        std@1/base64.encode(data, alphabet, padding) == expected,
+        TextInvariant()
+      )
+      for mask in 0u64..partitions(bytes.len(data)) {
+        failure.check(
+          encoded(data, alphabet, padding, mask) == expected,
+          TextInvariant()
+        )
+      }
+      for mask in 0u64..partitions(bytes.len(string.as_bytes(expected))) {
+        failure.check(
+          decoded(string.as_bytes(expected), alphabet, padding, mask) == Ok(data),
+          TextInvariant()
+        )
+      }
+    }
+  }
+}
+
+fn go_pair(data: Bytes, padded: String, raw: String) -> () {
+  let wanted: Result[Bytes, std@1/base64.DecodeError] = Ok(data)
+  let alphabets: List[std@1/base64.Alphabet] = [Standard(), UrlSafe()]
+  for alphabet in alphabets {
+    let paddings: List[std@1/base64.Padding] = [Required(), Omitted()]
+    for padding in paddings {
+      let standard = if padding == Required() {
+        padded
+      } else {
+        raw
+      }
+      let expected = if alphabet == UrlSafe() {
+        std@1/string.replace(std@1/string.replace(standard, "+", "-"), "/", "_")
+      } else {
+        copy standard
+      }
+      for split in 0u64..bytes.len(data) + 1 {
+        let mask: u64 = if split == 0 {
+          0
+        } else {
+          1u64 << split - 1
+        }
+        failure.check(
+          encoded(data, alphabet, padding, mask) == expected,
+          TextInvariant()
+        )
+      }
+      let text = string.as_bytes(expected)
+      for split in 0u64..bytes.len(text) + 1 {
+        let mask: u64 = if split == 0 {
+          0
+        } else {
+          1u64 << split - 1
+        }
+        failure.check(decoded(text, alphabet, padding, mask) == wanted, TextInvariant())
+      }
+    }
+  }
+}
+
+// Go TestEncoderBuffering/TestDecoderBuffering: the independent bigtest pair,
+// each fixed refill width 1..12 (base64_test.go:102-105,135-158,230-246).
+fn buffering(alphabet: std@1/base64.Alphabet, padding: std@1/base64.Padding) -> () {
+  let data = b"Twas brillig, and the slithy toves"
+  let expected = if padding == Required() {
+    "VHdhcyBicmlsbGlnLCBhbmQgdGhlIHNsaXRoeSB0b3Zlcw=="
+  } else {
+    "VHdhcyBicmlsbGlnLCBhbmQgdGhlIHNsaXRoeSB0b3Zlcw"
+  }
+  for width in 1u64..13 {
+    let mut enc = std@1/base64.encoder(alphabet, padding)
+    let mut out = ""
+    let mut at: u64 = 0
+    while at < bytes.len(data) {
+      let end = if bytes.len(data) - at < width {
+        bytes.len(data)
+      } else {
+        at + width
+      }
+      let Ok(chunk) = std@1/base64.encode_feed(mut enc, bytes.slice(data, at, end)) else {
+        failure.check(false, TextInvariant())
+        return
+      }
+      out = string.concat(out, chunk)
+      at = end
+    }
+    let Ok(tail) = std@1/base64.encode_finish(mut enc) else {
+      failure.check(false, TextInvariant())
+      return
+    }
+    failure.check(string.concat(out, tail) == expected, TextInvariant())
+    let mut dec = std@1/base64.decoder(alphabet, padding)
+    let mut raw: List[u8] = []
+    let text = string.as_bytes(expected)
+    at = 0
+    while at < bytes.len(text) {
+      let end = if bytes.len(text) - at < width {
+        bytes.len(text)
+      } else {
+        at + width
+      }
+      let Ok(chunk) = std@1/base64.decode_feed(mut dec, bytes.slice(text, at, end)) else {
+        failure.check(false, TextInvariant())
+        return
+      }
+      for byte in chunk {
+        list.push(mut raw, byte)
+      }
+      at = end
+    }
+    let Ok(last) = std@1/base64.decode_finish(mut dec) else {
+      failure.check(false, TextInvariant())
+      return
+    }
+    for byte in last {
+      list.push(mut raw, byte)
+    }
+    failure.check(bytes.from_list(take raw) == data, TextInvariant())
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  // RFC4648 section 10 / Go base64_test.go:31-38, independently specified text.
+  vector(b"", "", "")
+  vector(b"f", "Zg==", "Zg")
+  vector(b"fo", "Zm8=", "Zm8")
+  vector(b"foo", "Zm9v", "Zm9v")
+  vector(b"foob", "Zm9vYg==", "Zm9vYg")
+  vector(b"fooba", "Zm9vYmE=", "Zm9vYmE")
+  vector(b"foobar", "Zm9vYmFy", "Zm9vYmFy")
+  // Remaining Go pairs (including its repeated sure. row), every two-way split.
+  go_pair(b"\x14\xfb\x9c\x03\xd9\x7e", "FPucA9l+", "FPucA9l+")
+  go_pair(b"\x14\xfb\x9c\x03\xd9", "FPucA9k=", "FPucA9k")
+  go_pair(b"\x14\xfb\x9c\x03", "FPucAw==", "FPucAw")
+  go_pair(b"sure.", "c3VyZS4=", "c3VyZS4")
+  go_pair(b"sure", "c3VyZQ==", "c3VyZQ")
+  go_pair(b"sur", "c3Vy", "c3Vy")
+  go_pair(b"su", "c3U=", "c3U")
+  go_pair(b"leasure.", "bGVhc3VyZS4=", "bGVhc3VyZS4")
+  go_pair(b"easure.", "ZWFzdXJlLg==", "ZWFzdXJlLg")
+  go_pair(b"asure.", "YXN1cmUu", "YXN1cmUu")
+  go_pair(b"sure.", "c3VyZS4=", "c3VyZS4")
+  let alphabets: List[std@1/base64.Alphabet] = [Standard(), UrlSafe()]
+  for alphabet in alphabets {
+    let paddings: List[std@1/base64.Padding] = [Required(), Omitted()]
+    for padding in paddings {
+      buffering(alphabet, padding)
+      let binary = b"\xfb\xff\xfe\x00\x80"
+      let expected = std@1/base64.encode(binary, alphabet, padding)
+      for mask in 0u64..partitions(bytes.len(binary)) {
+        failure.check(
+          encoded(binary, alphabet, padding, mask) == expected,
+          TextInvariant()
+        )
+      }
+      for mask in 0u64..partitions(bytes.len(string.as_bytes(expected))) {
+        failure.check(
+          decoded(string.as_bytes(expected), alphabet, padding, mask) == Ok(copy binary),
+          TextInvariant()
+        )
+      }
+      // Go TestDecodeCorrupt rows plus strict tail/alphabet/UTF-8 precedence controls.
+      let corrupt: List[String] = [
+        "",
+        "\n",
+        "AAA=\n",
+        "AAAA\n",
+        "!!!!",
+        "====",
+        "x===",
+        "=AAA",
+        "A=AA",
+        "AA=A",
+        "AA==A",
+        "AAA=AAAA",
+        "AAAAA",
+        "AAAAAA",
+        "A=",
+        "A==",
+        "AA=",
+        "AA==",
+        "AAA=",
+        "AAAA",
+        "AAAAAA=",
+        "YWJjZA=====",
+        "A!\n",
+        "A=\n",
+        "Zh==x",
+        "Zh==",
+        "Zm9=",
+        "AAAAZh",
+        "Zh",
+        "Zm9",
+        "Zg\r==",
+        "Zg==\r",
+        "é",
+        "+w==",
+        "-w==",
+        "/w",
+        "_w",
+        "AAA=!"
+      ]
+      for text in corrupt {
+        let oracle = std@1/base64.decode(text, alphabet, padding)
+        for mask in 0u64..partitions(bytes.len(string.as_bytes(text))) {
+          failure.check(
+            decoded(string.as_bytes(text), alphabet, padding, mask) == oracle,
+            TextInvariant()
+          )
+        }
+      }
+      // All eight Go TestDecoderChunking rows, every two-way split, including empty sides.
+      let chunking: List[String] = [
+        "Rw==bw==",
+        "AAAA####",
+        "Rw==x",
+        "Rw====",
+        "AAAABBBBCCCC",
+        "AAAABB==",
+        "AAAABB",
+        "AAAA#B"
+      ]
+      for text in chunking {
+        let data = string.as_bytes(text)
+        let oracle = std@1/base64.decode(text, alphabet, padding)
+        for split in 0u64..bytes.len(data) + 1 {
+          let mask: u64 = if split == 0 || split == bytes.len(data) {
+            0
+          } else {
+            1u64 << split - 1
+          }
+          failure.check(
+            decoded(data, alphabet, padding, mask) == oracle,
+            TextInvariant()
+          )
+        }
+      }
+      let invalid: List[Bytes] = [
+        b"\xff",
+        b"A\x80",
+        b"AAAA\xc0",
+        b"AA=\xff",
+        b"AA==\xff"
+      ]
+      for data in invalid {
+        let expected_error: std@1/base64.DecodeError = if bytes.len(data) == 1 {
+          InvalidByte(0)
+        } else if bytes.len(data) == 2 {
+          InvalidByte(1)
+        } else if bytes.len(data) == 4 {
+          InvalidPadding(2)
+        } else if data[2] == b'=' {
+          InvalidPadding(4)
+        } else {
+          InvalidByte(4)
+        }
+        // Omitted padding rejects the first '=' before seeing the arbitrary byte.
+        let error: std@1/base64.DecodeError = if padding == Omitted() && bytes.len(data) >= 4 && data[2] == b'=' {
+          InvalidPadding(2)
+        } else {
+          expected_error
+        }
+        let wanted_error: Result[Bytes, std@1/base64.DecodeError] = Error(error)
+        for mask in 0u64..partitions(bytes.len(data)) {
+          failure.check(
+            decoded(data, alphabet, padding, mask) == wanted_error,
+            TextInvariant()
+          )
+        }
+      }
+    }
+  }
+  Ok(())
+}

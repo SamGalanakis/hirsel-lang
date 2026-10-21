@@ -932,3 +932,19 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 fn utf8_stream_5_is_ordinary_source() {
     super::utf8_stream_5::source_origin();
 }
+
+#[test]
+fn base64_stream_5_is_ordinary_source() {
+    source_codec(
+        "base64-stream-5",
+        "base64",
+        &[
+            "encoder",
+            "decoder",
+            "encode_feed",
+            "encode_finish",
+            "decode_feed",
+            "decode_finish",
+        ],
+    );
+}

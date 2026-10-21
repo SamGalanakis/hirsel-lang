@@ -1,0 +1,95 @@
+// rule: SEM-3
+// expect: run
+// Go @ ebe2feef base64_test.go:125-158,200-228; RFC4648 section 10.
+pub fn main() -> Result[(), ()] {
+  let alphabets: List[std@1/base64.Alphabet] = [Standard(), UrlSafe()]
+  for alphabet in alphabets {
+    let paddings: List[std@1/base64.Padding] = [Required(), Omitted()]
+    for padding in paddings {
+      let mut enc = std@1/base64.encoder(alphabet, padding)
+      failure.check(std@1/base64.encode_feed(mut enc, b"") == Ok(""), TextInvariant())
+      failure.check(std@1/base64.encode_feed(mut enc, b"f") == Ok(""), TextInvariant())
+      let tail = if padding == Required() {
+        "Zg=="
+      } else {
+        "Zg"
+      }
+      failure.check(std@1/base64.encode_finish(mut enc) == Ok(tail), TextInvariant())
+      failure.check(
+        std@1/base64.encode_finish(mut enc) == Error(Closed()),
+        TextInvariant()
+      )
+      failure.check(
+        std@1/base64.encode_feed(mut enc, b"") == Error(Closed()),
+        TextInvariant()
+      )
+      let mut dec = std@1/base64.decoder(alphabet, padding)
+      failure.check(std@1/base64.decode_feed(mut dec, b"Z") == Ok(b""), TextInvariant())
+      failure.check(std@1/base64.decode_feed(mut dec, b"g") == Ok(b""), TextInvariant())
+      if padding == Required() {
+        failure.check(
+          std@1/base64.decode_feed(mut dec, b"=") == Ok(b""),
+          TextInvariant()
+        )
+        failure.check(
+          std@1/base64.decode_feed(mut dec, b"=") == Ok(b""),
+          TextInvariant()
+        )
+      }
+      let Ok(chunk) = std@1/base64.decode_finish(mut dec) else {
+        failure.check(false, TextInvariant())
+        return Ok(())
+      }
+      // Output owns its storage and survives further state operations.
+      failure.check(
+        std@1/base64.decode_finish(mut dec) == Error(Closed()),
+        TextInvariant()
+      )
+      failure.check(
+        std@1/base64.decode_feed(mut dec, b"") == Error(Closed()),
+        TextInvariant()
+      )
+      failure.check(chunk == b"f", TextInvariant())
+    }
+  }
+  let mut dec = std@1/base64.decoder(Standard(), Required())
+  let Ok(prior) = std@1/base64.decode_feed(mut dec, b"Zm9v") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(std@1/base64.decode_feed(mut dec, b"Zh==") == Ok(b""), TextInvariant())
+  failure.check(
+    std@1/base64.decode_finish(mut dec) == Error(Decode(NonCanonical(6))),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode_feed(mut dec, b"!") == Error(Decode(NonCanonical(6))),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode_finish(mut dec) == Error(Decode(NonCanonical(6))),
+    TextInvariant()
+  )
+  failure.check(prior == b"foo", TextInvariant())
+  let mut bad = std@1/base64.decoder(Standard(), Required())
+  failure.check(
+    std@1/base64.decode_feed(mut bad, b"Zm9v!") == Error(Decode(InvalidByte(4))),
+    TextInvariant()
+  )
+  let mut padded = std@1/base64.decoder(Standard(), Required())
+  failure.check(
+    std@1/base64.decode_feed(mut padded, b"Zg==") == Ok(b""),
+    TextInvariant()
+  )
+  failure.check(std@1/base64.decode_feed(mut padded, b"") == Ok(b""), TextInvariant())
+  failure.check(
+    std@1/base64.decode_feed(mut padded, b"\xff") == Error(Decode(InvalidPadding(4))),
+    TextInvariant()
+  )
+  let mut raw = std@1/base64.decoder(UrlSafe(), Omitted())
+  failure.check(
+    std@1/base64.decode_feed(mut raw, b"AAAA\xff") == Error(Decode(InvalidByte(4))),
+    TextInvariant()
+  )
+  Ok(())
+}

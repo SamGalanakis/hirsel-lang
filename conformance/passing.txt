@@ -6661,3 +6661,5 @@ conformance/OWN/OWN-2-cli-error-context-5-moved-ok.hir
 conformance/OWN/OWN-2-cli-error-context-5-moved-bad.hir
 conformance/SEM/SEM-3-cli-error-context-5-reference-run.hir
 conformance/SEM/SEM-3-utf8-stream-5-run.hir
+conformance/SEM/SEM-3-base64-stream-5-run.hir
+conformance/SEM/SEM-3-base64-stream-5-importers-run.hir

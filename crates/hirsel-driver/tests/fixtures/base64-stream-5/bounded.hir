@@ -1,0 +1,51 @@
+// Fixed 6 KiB input supplied in single-byte chunks. Output is checked then released.
+// Stream types contain only scalar fields (no Bytes/String/List or heap references).
+fn state_control[T: copyable + inert + noalloc_drop](state: T) -> () {
+  let other = copy state
+}
+
+pub fn main() -> Result[(), ()] {
+  let alphabets: List[std@1/base64.Alphabet] = [Standard(), UrlSafe()]
+  for alphabet in alphabets {
+    let paddings: List[std@1/base64.Padding] = [Required(), Omitted()]
+    for padding in paddings {
+      let mut enc = std@1/base64.encoder(alphabet, padding)
+      let mut dec = std@1/base64.decoder(alphabet, padding)
+      state_control(enc)
+      state_control(dec)
+      for i in 0u64..2048 {
+        failure.check(
+          std@1/base64.encode_feed(mut enc, b"f") == Ok(""),
+          TextInvariant()
+        )
+        failure.check(
+          std@1/base64.encode_feed(mut enc, b"o") == Ok(""),
+          TextInvariant()
+        )
+        failure.check(
+          std@1/base64.encode_feed(mut enc, b"o") == Ok("Zm9v"),
+          TextInvariant()
+        )
+        failure.check(
+          std@1/base64.decode_feed(mut dec, b"Z") == Ok(b""),
+          TextInvariant()
+        )
+        failure.check(
+          std@1/base64.decode_feed(mut dec, b"m") == Ok(b""),
+          TextInvariant()
+        )
+        failure.check(
+          std@1/base64.decode_feed(mut dec, b"9") == Ok(b""),
+          TextInvariant()
+        )
+        failure.check(
+          std@1/base64.decode_feed(mut dec, b"v") == Ok(b"foo"),
+          TextInvariant()
+        )
+      }
+      failure.check(std@1/base64.encode_finish(mut enc) == Ok(""), TextInvariant())
+      failure.check(std@1/base64.decode_finish(mut dec) == Ok(b""), TextInvariant())
+    }
+  }
+  Ok(())
+}
