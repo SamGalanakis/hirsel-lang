@@ -16,7 +16,7 @@ pub fn fact_owner(path: &DefPath) -> Option<DefPath> {
 /// fingerprint covers the fact's code hash.
 pub fn fact_dependencies(owner: &Signature) -> Vec<SignatureDependency> {
     vec![SignatureDependency {
-        definition: owner.definition.path().clone(),
+        definition: owner.definition,
         fingerprint: owner.fingerprint,
     }]
 }

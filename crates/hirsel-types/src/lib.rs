@@ -1126,8 +1126,24 @@ pub struct QueryOutput<T> {
 /// A used signature, even for a rejected body; sorted by DefPath in cache keys (LANG-6).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct SignatureDependency {
-    pub definition: DefPath,
+    // Keep the historical path encoding even inside a numbered std image.
+    #[serde(with = "signature_dependency_path")]
+    pub definition: DefId,
     pub fingerprint: ContentHash,
+}
+
+mod signature_dependency_path {
+    use super::{DefId, DefPath};
+    use serde::{Deserialize, Serialize};
+
+    pub fn serialize<S: serde::Serializer>(id: &DefId, serializer: S) -> Result<S::Ok, S::Error> {
+        id.path().serialize(serializer)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<DefId, D::Error> {
+        DefPath::deserialize(deserializer).map(|path| DefId::intern(&path))
+    }
 }
 
 /// One lookup records a manifest dependency even when resolution failed.

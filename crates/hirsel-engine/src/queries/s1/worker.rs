@@ -354,7 +354,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         let body = self.merge_product(product)?;
         self.merge(&body.reads);
         for dependency in &body.dependencies {
-            let id = DefId::intern(&dependency.definition);
+            let id = dependency.definition;
             if let Some(signature) = self.source.inputs().snapshot.signature(id) {
                 let fingerprint = signature.ok().map(|signature| signature.fingerprint);
                 self.record(
@@ -945,7 +945,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             dependencies.extend(body.dependencies.iter().cloned());
             for dependency in &output.dependencies {
                 worker.record(
-                    ReadKey::Signature(DefId::intern(&dependency.definition)),
+                    ReadKey::Signature(dependency.definition),
                     dependency.fingerprint,
                 );
             }

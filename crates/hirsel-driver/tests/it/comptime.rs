@@ -998,7 +998,7 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
                         scalar
                             .dependencies
                             .iter()
-                            .any(|d| d.definition == path("make"))
+                            .any(|d| *d.definition.path() == path("make"))
                     );
                     assert_eq!(
                         worker.signatures, scalar.dependencies,

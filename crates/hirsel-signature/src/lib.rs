@@ -776,7 +776,7 @@ impl Normalizer<'_, '_> {
     fn ordered_dependencies(&self) -> Vec<SignatureDependency> {
         self.ordered_dependency_rows()
             .map(|(definition, fingerprint)| SignatureDependency {
-                definition: definition.path().clone(),
+                definition,
                 fingerprint,
             })
             .collect()

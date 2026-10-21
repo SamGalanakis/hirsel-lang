@@ -276,7 +276,7 @@ pub fn refine_cursor_plan(
     Ok(dependencies
         .values()
         .map(|s| SignatureDependency {
-            definition: s.definition.path().clone(),
+            definition: s.definition,
             fingerprint: s.fingerprint,
         })
         .collect())

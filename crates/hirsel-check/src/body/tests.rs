@@ -127,7 +127,7 @@ fn iterator_plan_uses_provider_option_tags_without_assuming_order() {
             .checked
             .dependencies
             .iter()
-            .any(|d| d.definition == support::core("Option")
+            .any(|d| *d.definition.path() == support::core("Option")
                 && d.fingerprint
                     == ast::ContentHash::of_bytes(b"manufactured reversed Option tags"))
     );

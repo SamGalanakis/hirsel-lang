@@ -231,7 +231,7 @@ fn registry_fallback_records_reads_and_respects_program_definitions_on_compiler_
             .unwrap()
             .signatures
             .iter()
-            .any(|d| d.definition == hirsel_syntax::DefPath::core("io.stdout"))
+            .any(|d| *d.definition.path() == hirsel_syntax::DefPath::core("io.stdout"))
     );
     edit(
         &mut engine,

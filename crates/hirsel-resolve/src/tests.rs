@@ -600,7 +600,7 @@ fn successful_and_failed_signature_reads_and_failed_name_reads_survive_rejection
     assert_eq!(
         output.query.dependencies,
         vec![ty::SignatureDependency {
-            definition: own("good"),
+            definition: hirsel_syntax::DefId::intern(&own("good")),
             fingerprint: signature.fingerprint
         }]
     );

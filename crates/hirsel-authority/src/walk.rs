@@ -578,9 +578,7 @@ impl<'a> Checker<'a> {
         self.out.result_types.sort_by(|(a, _), (b, _)| a.cmp(b));
         self.out.captures = self.captures.into_sorted();
         self.out.body.closures = self.closures.into_sorted();
-        self.out
-            .dependencies
-            .sort_by(|a, b| a.definition.cmp(&b.definition));
+        self.out.dependencies.sort_by_key(|a| a.definition);
         self.out.dependencies.dedup();
         self.out.body.resolution.reads = self.out.reads.clone();
         let reads = std::mem::take(&mut self.ended_reads);
@@ -676,7 +674,7 @@ impl<'a> Checker<'a> {
             });
             match result {
                 Ok(s) => self.out.dependencies.push(SignatureDependency {
-                    definition: d.path().clone(),
+                    definition: d,
                     fingerprint: s.fingerprint,
                 }),
                 Err(QueryError::Diagnostics(ds)) => {

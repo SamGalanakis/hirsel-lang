@@ -275,18 +275,18 @@ fn encode_signature(
         }
     }
     let mut deps = dependencies.to_vec();
-    deps.sort_by(|a, b| a.definition.cmp(&b.definition));
+    deps.sort_by_key(|a| a.definition);
     for pair in deps.windows(2) {
         if pair[0].definition == pair[1].definition && pair[0].fingerprint != pair[1].fingerprint {
             return Err(EncodingError::ConflictingDependency(
-                pair[0].definition.clone(),
+                pair[0].definition.path().clone(),
             ));
         }
     }
     deps.dedup();
     e.number(deps.len() as u64);
     for d in deps {
-        e.path(&d.definition);
+        e.path(d.definition.path());
         e.atom(&d.fingerprint.0);
     }
     Ok(())

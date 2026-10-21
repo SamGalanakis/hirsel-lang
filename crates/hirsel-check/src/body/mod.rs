@@ -242,7 +242,7 @@ fn check_inner(
                 .dependencies
                 .into_iter()
                 .map(|(definition, fingerprint)| SignatureDependency {
-                    definition: definition.path().clone(),
+                    definition,
                     fingerprint,
                 })
                 .collect(),

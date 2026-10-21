@@ -82,7 +82,7 @@ impl<'q> Signatures<'q> {
             .signatures()
             .into_iter()
             .map(|s| SignatureDependency {
-                definition: s.definition.path().clone(),
+                definition: s.definition,
                 fingerprint: s.fingerprint,
             })
             .collect()

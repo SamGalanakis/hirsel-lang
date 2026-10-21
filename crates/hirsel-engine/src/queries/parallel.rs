@@ -266,7 +266,7 @@ impl Worker<'_> {
             initial.signatures.extend(resolution.dependencies.clone());
             initial.signatures.extend(signature.dependencies.clone());
             initial.signatures.push(SignatureDependency {
-                definition: task.definition.clone(),
+                definition: hirsel_syntax::DefId::intern(&task.definition),
                 fingerprint: signature.value.fingerprint,
             });
             let _timing = timings::phase(Phase::Check);
@@ -394,7 +394,7 @@ impl SignatureProvider for WorkerRecorder<'_> {
         }
         match &result {
             Ok(signature) => self.detail.signatures.push(SignatureDependency {
-                definition: definition.path().clone(),
+                definition,
                 fingerprint: signature.fingerprint,
             }),
             Err(_) => {

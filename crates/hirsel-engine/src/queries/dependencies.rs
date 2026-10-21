@@ -77,17 +77,14 @@ impl QueryEngine {
         // An evaluation's own private artifact names no definition.
         let named: Vec<_> = reads
             .iter()
-            .filter(|d| self.names_definition(&d.definition))
+            .filter(|d| self.names_definition(d.definition.path()))
             .collect();
         let observed: Vec<_> = named
             .into_iter()
             .map(|d| {
-                let fingerprint = self
-                    .signature(DefId::intern(&d.definition))
-                    .ok()
-                    .map(|s| s.fingerprint);
+                let fingerprint = self.signature(d.definition).ok().map(|s| s.fingerprint);
                 (
-                    ReadKey::ExecutedSignature(DefId::intern(&d.definition)),
+                    ReadKey::ExecutedSignature(d.definition),
                     memos::signature_value(fingerprint),
                 )
             })

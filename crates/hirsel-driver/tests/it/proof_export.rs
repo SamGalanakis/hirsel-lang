@@ -212,7 +212,7 @@ fn a_fingerprint_forged_at_every_use_is_refused_by_re_derivation() {
                 signature.public.fingerprint = forged_hash;
             }
             for dependency in &mut signature.dependencies {
-                if dependency.definition == add {
+                if dependency.definition.path() == &add {
                     dependency.fingerprint = forged_hash;
                 }
             }
@@ -249,7 +249,7 @@ fn a_fact_helper_and_an_owner_view_re_derive() {
         assert_eq!(
             helper.dependencies,
             [hirsel_types::SignatureDependency {
-                definition: owner.path.clone(),
+                definition: hirsel_syntax::DefId::intern(&owner.path),
                 fingerprint: owner.public.fingerprint,
             }]
         );

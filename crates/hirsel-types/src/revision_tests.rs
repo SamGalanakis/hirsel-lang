@@ -1997,3 +1997,22 @@ fn substitution_pruning_matches_full_transport_for_binders_roles_and_errors() {
         }
     }
 }
+
+#[test]
+fn signature_dependencies_clone_only_compact_identity_and_hash() {
+    // A dependency owns no path buffers; the session owns the interned path.
+    assert_eq!(std::mem::size_of::<SignatureDependency>(), 36);
+    let dependencies: Vec<_> = (0u32..128)
+        .map(|i| SignatureDependency {
+            definition: DefId::intern(&path(&format!("{i}-{}", "long".repeat(1024)))),
+            fingerprint: ContentHash::of_bytes(&i.to_le_bytes()),
+        })
+        .collect();
+    for _ in 0..16 {
+        let cloned = dependencies.clone();
+        assert_eq!(cloned, dependencies);
+        for (a, b) in cloned.iter().zip(&dependencies) {
+            assert!(std::ptr::eq(a.definition.path(), b.definition.path()));
+        }
+    }
+}

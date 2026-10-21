@@ -631,7 +631,7 @@ fn failed_provider_reads_survive_rejection_and_manifest_changes_invalidate_on_co
         .dependency_reads(&path("a"), QueryKind::Resolve)
         .unwrap();
     assert_eq!(reads.lookups, vec![(path("missing"), true)]);
-    assert_eq!(reads.signatures[0].definition, path("missing"));
+    assert_eq!(*reads.signatures[0].definition.path(), path("missing"));
 }
 #[test]
 fn missing_stages_remain_unavailable_and_diagnostic_sources_survive_edits() {
@@ -761,7 +761,7 @@ fn contract_signature_reads_invalidate_the_owner_and_its_users_on_compiler_threa
     let reads = engine
         .dependency_reads(&path("a"), QueryKind::Signature)
         .unwrap();
-    assert_eq!(reads.signatures[0].definition, path("contract"));
+    assert_eq!(*reads.signatures[0].definition.path(), path("contract"));
     let previous = engine.item_signature(&path("a")).unwrap().value.fingerprint;
     parse(
         &mut engine,

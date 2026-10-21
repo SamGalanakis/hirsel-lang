@@ -693,7 +693,7 @@ fn contract_dependencies_are_resolved_and_hashed() {
     });
     let a = f.run().unwrap();
     assert_eq!(a.dependencies.len(), 1);
-    assert_eq!(a.dependencies[0].definition, d);
+    assert_eq!(*a.dependencies[0].definition.path(), d);
     let hash = function(&a.value).contracts[0].code_hash;
     f.provider.signatures.get_mut(&d).unwrap().fingerprint =
         ast::ContentHash::of_bytes(b"different");
@@ -755,11 +755,11 @@ fn hash_sorts_and_deduplicates_sets_and_dependencies() {
         ast::GenericKind::Type(vec![Bound::Copyable, Bound::Data, Bound::Data]);
     assert_eq!(a.fingerprint, f.sig().fingerprint);
     let a_ = SignatureDependency {
-        definition: def("a"),
+        definition: hirsel_syntax::DefId::intern(&def("a")),
         fingerprint: ast::ContentHash::of_bytes(b"a"),
     };
     let b = SignatureDependency {
-        definition: def("b"),
+        definition: hirsel_syntax::DefId::intern(&def("b")),
         fingerprint: ast::ContentHash::of_bytes(b"b"),
     };
     assert_eq!(
@@ -809,7 +809,7 @@ fn hash_rejects_invalid_graphs_and_conflicting_dependencies() {
     );
     let s = Fixture::new().sig();
     let d = SignatureDependency {
-        definition: def("a"),
+        definition: hirsel_syntax::DefId::intern(&def("a")),
         fingerprint: ast::ContentHash::of_bytes(b"a"),
     };
     let mut e = d.clone();
@@ -1371,7 +1371,12 @@ fn native_constructor_authority_comes_from_the_resolver_selected_declaration() {
         AuthoritySummary::Known(vec![AuthorityTerm::Capability(tasks)].into())
     );
     assert!(!typedef(&output.value).bounds.contains(&Bound::Inert));
-    assert!(output.dependencies.iter().any(|d| d.definition == native));
+    assert!(
+        output
+            .dependencies
+            .iter()
+            .any(|d| d.definition.path() == &native)
+    );
 }
 
 #[test]
@@ -1454,7 +1459,11 @@ fn taken_resource_property_proofs_read_transitive_nominal_declarations() {
             .unwrap();
         assert_eq!(row.modes.relation, Relation::global());
         assert_eq!(row.modes.sendability, Sendability::Sendable);
-        assert!(out.dependencies.iter().any(|d| d.definition == payload));
+        assert!(
+            out.dependencies
+                .iter()
+                .any(|d| d.definition.path() == &payload)
+        );
         assert!(f.provider.reads.contains(&payload));
     }
 }

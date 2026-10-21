@@ -1371,7 +1371,7 @@ impl QueryEngine {
         initial.signatures.extend(resolution.dependencies.clone());
         initial.signatures.extend(signature.dependencies.clone());
         initial.signatures.push(SignatureDependency {
-            definition: definition.clone(),
+            definition: DefId::intern(definition),
             fingerprint: signature.value.fingerprint,
         });
         self.start(definition, QueryKind::Check)?;
@@ -2133,7 +2133,7 @@ impl SignatureProvider for Recorder<'_> {
         }
         match &result {
             Ok(signature) => self.reads.signatures.push(SignatureDependency {
-                definition: definition.clone(),
+                definition: DefId::intern(definition),
                 fingerprint: signature.fingerprint,
             }),
             // A group member's published signature may be the one being

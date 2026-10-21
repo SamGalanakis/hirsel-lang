@@ -194,7 +194,7 @@ pub(crate) fn complete_reads(
     let def = DefId::intern;
     for s in &detail.signatures {
         reads.record(
-            ReadKey::Signature(def(&s.definition)),
+            ReadKey::Signature(s.definition),
             signature_value(Some(s.fingerprint)),
         );
     }

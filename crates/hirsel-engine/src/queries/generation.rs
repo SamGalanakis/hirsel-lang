@@ -181,7 +181,7 @@ impl QueryEngine {
             .signatures
             .extend(signature.dependencies.clone());
         reads.reads.signatures.push(SignatureDependency {
-            definition: definition.clone(),
+            definition: DefId::intern(definition),
             fingerprint: signature.value.fingerprint,
         });
         if self.s1.enter(definition.clone(), site) == Entered::Settled {
@@ -324,7 +324,7 @@ impl QueryEngine {
         reads.observed.products = product.products;
         let mut signatures = signature.dependencies.clone();
         signatures.push(SignatureDependency {
-            definition: definition.clone(),
+            definition: DefId::intern(definition),
             fingerprint: signature.value.fingerprint,
         });
         signatures.append(&mut reads.reads.signatures);
@@ -762,7 +762,7 @@ impl QueryEngine {
             .signatures
             .extend(signature.dependencies.clone());
         reads.reads.signatures.push(SignatureDependency {
-            definition: definition.clone(),
+            definition: DefId::intern(definition),
             fingerprint: signature.value.fingerprint,
         });
         self.start(definition, QueryKind::Check)?;

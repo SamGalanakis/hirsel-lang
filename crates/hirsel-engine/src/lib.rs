@@ -182,7 +182,7 @@ impl DefinitionKey {
     /// Reject conflicting observations of a dependency; duplicate equal reads are harmless.
     pub fn fingerprint(&self) -> Result<ContentHash, &'static str> {
         let mut deps = self.dependencies.clone();
-        deps.sort_by(|a, b| a.definition.cmp(&b.definition));
+        deps.sort_by_key(|a| a.definition);
         if deps
             .windows(2)
             .any(|p| p[0].definition == p[1].definition && p[0].fingerprint != p[1].fingerprint)
@@ -382,13 +382,76 @@ mod tests {
         })
     }
     #[test]
+    fn signature_dependency_wire_stays_path_based_inside_image_scopes() {
+        use hirsel_intern::persist::{Numbering, Source};
+        use hirsel_syntax::{DefId, with_def_numbering, with_def_source};
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct LegacyDependency {
+            definition: DefPath,
+            fingerprint: ContentHash,
+        }
+        struct NoDefinitions;
+        impl Source<DefId> for NoDefinitions {
+            fn id(&self, _: u32) -> Option<DefId> {
+                panic!("a signature dependency must decode its path directly")
+            }
+        }
+        let paths = [path("z"), path("a"), DefPath::core("nested")];
+        // Intern in reverse canonical order; neither wire encoding may expose it.
+        for path in &paths {
+            DefId::intern(path);
+        }
+        for path in paths {
+            let fingerprint = ContentHash::of_bytes(path.to_string().as_bytes());
+            let legacy = LegacyDependency {
+                definition: path.clone(),
+                fingerprint,
+            };
+            let dependency = SignatureDependency {
+                definition: DefId::intern(&path),
+                fingerprint,
+            };
+            let old_json = serde_json::to_vec(&legacy).unwrap();
+            let old_binary = bincode::serialize(&legacy).unwrap();
+            assert_eq!(serde_json::to_vec(&dependency).unwrap(), old_json);
+            assert_eq!(bincode::serialize(&dependency).unwrap(), old_binary);
+            let mut numbering = Numbering::default();
+            with_def_numbering(&mut numbering, || {
+                assert_eq!(serde_json::to_vec(&dependency).unwrap(), old_json);
+                assert_eq!(bincode::serialize(&dependency).unwrap(), old_binary);
+            });
+            assert!(
+                numbering.ids().is_empty(),
+                "dependency paths never use the image id table"
+            );
+            with_def_source(std::sync::Arc::new(NoDefinitions), || {
+                assert_eq!(
+                    serde_json::from_slice::<SignatureDependency>(&old_json).unwrap(),
+                    dependency
+                );
+                assert_eq!(
+                    bincode::deserialize::<SignatureDependency>(&old_binary).unwrap(),
+                    dependency
+                );
+            });
+            assert_eq!(
+                serde_json::from_slice::<SignatureDependency>(&old_json).unwrap(),
+                dependency
+            );
+            assert_eq!(
+                bincode::deserialize::<SignatureDependency>(&old_binary).unwrap(),
+                dependency
+            );
+        }
+    }
+    #[test]
     fn dependency_order_is_irrelevant_but_text_and_signature_edits_invalidate() {
         let a = SignatureDependency {
-            definition: path("a"),
+            definition: hirsel_syntax::DefId::intern(&path("a")),
             fingerprint: ContentHash::of_bytes(b"a"),
         };
         let b = SignatureDependency {
-            definition: path("b"),
+            definition: hirsel_syntax::DefId::intern(&path("b")),
             fingerprint: ContentHash::of_bytes(b"b"),
         };
         let mut key = DefinitionKey {

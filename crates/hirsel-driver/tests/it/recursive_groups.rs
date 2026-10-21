@@ -53,7 +53,7 @@ fn recursive_type_groups_normalize_alike_in_any_order_and_move_together() {
             let covered = engine
                 .signature_coverage(signature.definition.path())
                 .unwrap();
-            assert!(covered.iter().all(|d| d.definition != path(other)));
+            assert!(covered.iter().all(|d| *d.definition.path() != path(other)));
         }
         // Editing one member moves both, also through a session's caches.
         let edited = GROUP.replace("key: u64", "key: u32");

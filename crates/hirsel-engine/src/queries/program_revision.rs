@@ -135,7 +135,7 @@ impl QueryEngine {
         let mut dependencies: BTreeSet<_> = signature
             .dependencies
             .iter()
-            .map(|d| d.definition.clone())
+            .map(|d| d.definition.path().clone())
             .collect();
         let mut content = vec![
             hirsel_types::encoding::canonical_encoding(
@@ -175,7 +175,8 @@ impl QueryEngine {
                 QueryKind::Lower,
             ] {
                 if let Some(reads) = self.dependency_reads(path, kind) {
-                    dependencies.extend(reads.signatures.iter().map(|d| d.definition.clone()));
+                    dependencies
+                        .extend(reads.signatures.iter().map(|d| d.definition.path().clone()));
                     for read in reads.resolver.iter().chain(&reads.manifest_lookups) {
                         match read {
                             DependencyRead::Signature { definition, .. } => {

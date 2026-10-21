@@ -370,7 +370,7 @@ fn digest_definition(
             signatures
                 .get(path)
                 .map(|s| SignatureDependency {
-                    definition: path.clone(),
+                    definition: hirsel_syntax::DefId::intern(path),
                     fingerprint: s.public.fingerprint,
                 })
                 .ok_or_else(|| format!("names {path} without an exported signature"))
@@ -747,7 +747,7 @@ fn verify_signatures(export: &Export) -> Result<(), ImportError> {
             ));
         }
         for dependency in &section.dependencies {
-            if let Some(exported) = fingerprints.get(&dependency.definition)
+            if let Some(exported) = fingerprints.get(dependency.definition.path())
                 && *exported != dependency.fingerprint
             {
                 return Err(refuse(

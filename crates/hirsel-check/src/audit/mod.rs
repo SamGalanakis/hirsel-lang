@@ -102,7 +102,7 @@ pub fn check(
             .snapshots
             .into_values()
             .map(|s| SignatureDependency {
-                definition: s.definition.path().clone(),
+                definition: s.definition,
                 fingerprint: s.fingerprint,
             })
             .collect(),

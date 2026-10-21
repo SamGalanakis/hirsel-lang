@@ -71,9 +71,7 @@ pub(crate) fn retained_lowering_output_bytes(
     dependencies: &Vec<crate::SignatureDependency>,
 ) -> u64 {
     let mut weight = Weight::default();
-    weight.vec(dependencies, |w, dependency| {
-        w.def_path(&dependency.definition)
-    });
+    weight.flat_vec(dependencies);
     weight.vec(diagnostics, Weight::diagnostic);
     weight.bytes
 }
@@ -95,7 +93,7 @@ pub(crate) fn retained_lower_entry_bytes(
             .saturating_mul(size_of::<(super::ReadKey, hirsel_syntax::ContentHash)>()),
     );
     weight.detail(&entry.detail);
-    weight.vec(&entry.covered, |w, d| w.def_path(&d.definition));
+    weight.flat_vec(&entry.covered);
     if let Some(depth) = &entry.depth {
         weight.add(size_of_val(&*depth.first));
     }
@@ -117,7 +115,7 @@ pub(crate) fn retained_lower_entry_bytes(
                 .bytes
                 .saturating_add(retained_tir_bytes(&output.value));
             weight.vec(&output.diagnostics, Weight::diagnostic);
-            weight.vec(&output.dependencies, |w, d| w.def_path(&d.definition));
+            weight.flat_vec(&output.dependencies);
         }
         Err(error) => weight.error(error),
     }
@@ -261,7 +259,7 @@ impl Weight {
         if let Some(failure) = operational_failure {
             self.failure(failure);
         }
-        self.vec(signatures, |w, d| w.def_path(&d.definition));
+        self.flat_vec(signatures);
         self.vec(failed_signatures, Weight::def_path);
         self.vec(failed_signature_keys, |w, (path, _)| w.def_path(path));
         self.vec(lookups, |w, (path, _)| w.def_path(path));
@@ -847,10 +845,15 @@ mod tests {
         let warned = retained_lowering_output_bytes(&diagnostics, &dependencies);
         assert!(warned > base + 10_000);
         dependencies.push(crate::SignatureDependency {
-            definition: DefPath::core(&"helper".repeat(1000)),
+            definition: hirsel_syntax::DefId::intern(&DefPath::core(&"helper".repeat(1000))),
             fingerprint: Default::default(),
         });
-        assert!(retained_lowering_output_bytes(&diagnostics, &dependencies) >= warned + 6000);
+        // Interned paths belong to the session. The already reserved vector
+        // owns the same bytes regardless of a dependency's path length.
+        assert_eq!(
+            retained_lowering_output_bytes(&diagnostics, &dependencies),
+            warned
+        );
     }
 
     #[test]

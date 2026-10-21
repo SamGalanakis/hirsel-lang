@@ -99,7 +99,7 @@ impl SignatureProvider for GeneratorRecorder<'_> {
         }
         match self.snapshot.signature(definition) {
             Some(Ok(signature)) => self.detail.signatures.push(SignatureDependency {
-                definition: definition.path().clone(),
+                definition,
                 fingerprint: signature.fingerprint,
             }),
             _ => {

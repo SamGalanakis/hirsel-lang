@@ -206,7 +206,7 @@ pub fn resolve_view(
         .output
         .query
         .dependencies
-        .sort_by(|a, b| a.definition.cmp(&b.definition));
+        .sort_by_key(|a| a.definition);
     resolver.output
 }
 
@@ -410,7 +410,7 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                     .query
                     .dependencies
                     .push(ty::SignatureDependency {
-                        definition: definition.clone(),
+                        definition: DefId::intern(definition),
                         fingerprint: signature.fingerprint,
                     });
                 Some(signature)

@@ -57,7 +57,12 @@ fn real_adapters_track_sibling_signatures_across_body_and_signature_edits_on_com
     let reads = engine
         .dependency_reads(&path("b"), QueryKind::Resolve)
         .unwrap();
-    assert!(reads.signatures.iter().any(|r| r.definition == path("a")));
+    assert!(
+        reads
+            .signatures
+            .iter()
+            .any(|r| *r.definition.path() == path("a"))
+    );
     parse(
         &mut engine,
         "fn a() -> u32 { 123 }\nfn b() -> u32 { a() }\n",
@@ -391,7 +396,7 @@ fn header_views_retain_the_original_syntax_and_exclude_execution_reads_on_compil
                     .output
                     .dependencies
                     .iter()
-                    .any(|d| d.definition == path("predicate"))
+                    .any(|d| *d.definition.path() == path("predicate"))
             );
         }
     }
