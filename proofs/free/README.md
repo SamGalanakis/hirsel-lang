@@ -45,6 +45,14 @@ expected result; the gate runs it when these models or the kernel source they co
   bound **2**: a returned payload remains reserved for the oldest waiter, and
   competing acquirers cannot both take it. Native runtime controls also cover
   seven parked waiters, FIFO reacquisition and wakeup of all waiters on death.
+- `loom/tests/channel.rs` compiles runtime `channels.rs` against the same
+  synchronization shim at preemption bound **2**. It checks that concurrent
+  send versions match FIFO images, receiver close leaves exactly one owner of
+  a racing send's image, and last-Sender close cannot overtake a queued image.
+  The fixture supplies only immutable descriptor metadata. It does not model
+  finalizer execution, scheduler readiness, native recorder phases or cuts;
+  separate runtime tests cover those boundaries. The full recorder-gate
+  bound-2 limitation above remains open.
 
 GenMC is built once by `check.sh`, pinned by commit, into
 `${XDG_CACHE_HOME:-~/.cache}/genmc-<commit>`; it needs cmake, clang and LLVM 19-22 with their

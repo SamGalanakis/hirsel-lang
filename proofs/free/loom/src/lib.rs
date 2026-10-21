@@ -27,3 +27,35 @@ pub mod frame;
 
 #[path = "../../../../crates/hirsel-free/src/queue.rs"]
 pub mod queue;
+
+// The runtime channel module uses the same primitive facade as the kernel.
+// Normal library builds expose the model fixture; excluding it from the
+// library unit harness avoids compiling unrelated runtime descriptor tests.
+#[cfg(not(test))]
+extern crate self as hirsel_free;
+#[cfg(not(test))]
+pub mod channel_models;
+#[cfg(not(test))]
+#[path = "../../../../crates/hirsel-rt/src/channels.rs"]
+#[allow(dead_code)]
+mod channels;
+#[cfg(not(test))]
+#[path = "../../../../crates/hirsel-free/src/record.rs"]
+pub mod record;
+#[cfg(not(test))]
+fn fault(message: &str) -> ! {
+    panic!("{message}");
+}
+// Channel storage reads only this immutable metadata. This fixture neither
+// models nor substitutes the runtime ABI or descriptor/finalizer execution.
+#[cfg(not(test))]
+mod release {
+    pub const LAYOUT_DYNAMIC: u32 = 2;
+    pub struct Layout {
+        pub size: u64,
+        pub align: u32,
+        pub flags: u32,
+        pub finalizer: Option<()>,
+        pub step_count: u64,
+    }
+}

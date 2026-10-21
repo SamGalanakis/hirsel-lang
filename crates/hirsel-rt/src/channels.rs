@@ -13,11 +13,10 @@
 //! a generation; dropping one closes it through [`close`], reached from the handle close of
 //! `finalize.rs` instead of the Io adapter.
 
+use hirsel_free::sync::{Arc, AtomicU64, Mutex, MutexGuard, Ordering};
 use std::alloc::{Layout as Allocation, alloc, dealloc, handle_alloc_error};
 use std::collections::{BTreeSet, VecDeque};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::fault;
 use crate::release::{LAYOUT_DYNAMIC, Layout};

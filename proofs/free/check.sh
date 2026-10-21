@@ -81,6 +81,7 @@ loom_runs=(
   "loom-cancel-bound2|--test cancel|2|pass"
   "loom-atomic-bound2|--test atomic|2|pass"
   "loom-mutex-bound2|--test mutex|2|pass"
+  "loom-channel-bound2|--test channel|2|pass"
   "mutation-loom-weak-handshake|--features weak|1|fail"
 )
 for row in "${loom_runs[@]}"; do
