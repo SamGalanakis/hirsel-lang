@@ -47,7 +47,9 @@ checks the one-worker scheduler; `--kind hirsel` checks the benchmarked Hirsel
 binary. The original fixture controls clocks and reads persisted revisions.
 
 `./bench/apps/tasks/verify` adds byte-for-byte differential HTML/Unicode checks,
-corrupt-snapshot recovery, save failure and SIGTERM with stdin open.
+corrupt-snapshot recovery, save failure and SIGTERM with stdin open for both servers.
+`./bench/apps/tasks/signal-replay` records an interpreted server receiving SIGTERM
+and replays its exact output after removing the data directory.
 `./bench/apps/tasks/bench --report-only` regenerates the Markdown from raw samples.
 `--heap-only` appends heap evidence to an earlier session without new timings.
 CPU and heap profiles are separate diagnostic runs, not comparison samples.

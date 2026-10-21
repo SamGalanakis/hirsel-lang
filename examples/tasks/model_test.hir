@@ -36,7 +36,10 @@ fn validation_normalizes_and_rejects(t: Test) {
     test.fail(t)
   }
   test.check(t, item.title == "Shear the sheep" && item.priority == High())
-  test.check(t, item.due == Some("2026-02-03") && item.tags == ["farm", "wool"])
+  test.check(
+    t,
+    item.due == results.ok(date.parse("2026-02-03")) && item.tags == ["farm", "wool"]
+  )
   test.check(
     t,
     validate(make_draft("   ", "", "", "")) == Error(Title("a task needs a title"))
@@ -149,7 +152,19 @@ fn select_filters_searches_and_sorts_stably(t: Test) {
 @test
 fn boards_round_trip_through_json(t: Test) {
   let mut board = board_of(["one", "two"])
+  let Some(item) = find(board, 1) else {
+    test.fail(t)
+  }
+  let mut dated = unique item
+  dated.due = date.new(2028, 2, 29)
+  test.check(t, update(mut board, 1, take dated))
   let _ = set_status(mut board, 2, Done())
+  let mut encoded: List[u8] = []
+  test.check(t, results.is_ok(board_json_into(board, mut encoded, 0)))
+  let Ok(decoded) = board_from_json_bytes(bytes.from_list(take encoded)) else {
+    test.fail(t)
+  }
+  test.check(t, decoded == board)
   let Ok(back) = board_from_json(board_to_json(board)) else {
     test.fail(t)
   }

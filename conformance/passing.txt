@@ -5003,6 +5003,7 @@ conformance/SEM/SEM-2-wave2-oracle-018.hir
 conformance/SEM/SEM-2-wave2-oracle-019.hir
 conformance/SEM/SEM-2-wave2-oracle-020.hir
 conformance/SEM/SEM-2-wave2-oracle-021.hir
+conformance/SEM/SEM-3-date-json-run.hir
 conformance/SEM/SEM-3-adler32-golden-run.hir
 conformance/SEM/SEM-3-adler32-window-run.hir
 conformance/SEM/SEM-3-aes-gcm-key-size-fail.hir

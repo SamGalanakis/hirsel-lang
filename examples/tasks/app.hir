@@ -698,7 +698,7 @@ fn serve_requests(
       ],
       svc.wall
     )
-    if results.is_error(httpd.send(mut responding, response, request.method == "HEAD")) || !request.keep_alive {
+    if results.is_error(httpd.send(mut responding, response)) || !request.keep_alive {
       return None()
     }
   }
@@ -785,8 +785,8 @@ pub fn accept_loop(
   )
 }
 
-// GAP: no way to observe SIGINT/SIGTERM; a granted stdin ending, or a `quit` line,
-// asks the server to stop instead.
+// The CLI e2e tests and benchmark helpers close stdin to stop a server after
+// checking open event streams. Keep that deterministic test control alongside signals.
 fn wait_for_quit(input: Stdin) -> () {
   while let Ok(Some(line)) = input.read_line(input) {
     if string.trim(line) == "quit" {
@@ -798,7 +798,8 @@ fn wait_for_quit(input: Stdin) -> () {
 fn close_sender[T](take sender: Sender[T]) -> () {}
 
 /// Serves connections from `listener` until it fails or, with `stop`, until that
-/// input ends or reads `quit`. Then it stops accepting, ends every event stream,
+/// input ends or reads `quit`, or a granted SIGINT/SIGTERM arrives. It stops
+/// accepting, ends every event stream,
 /// waits for the writer to save what it was given and returns.
 pub fn serve(
   n: Net,
@@ -806,7 +807,8 @@ pub fn serve(
   take listener: Listener of n,
   data: Dir,
   mode: Durability,
-  stop: Option[Stdin]
+  stop: Option[Stdin],
+  signals: Option[Signals]
 ) -> () {
   task.scope(
     svc.tasks,
@@ -847,6 +849,18 @@ pub fn serve(
               }
             )
           )
+          if let Some(observed) = signals {
+            task.add(
+              inner,
+              mut set,
+              task.async(
+                inner,
+                fn() -> () {
+                  let _ = signal.wait(observed, [Interrupt(), Terminate()])
+                }
+              )
+            )
+          }
           if let Some(input) = stop {
             task.add(
               inner,

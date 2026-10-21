@@ -1,3 +1,10 @@
+fn parsed_day(t: Test, spelling: String) -> time.Date {
+  let Ok(value) = date.parse(spelling) else {
+    test.fail(t)
+  }
+  value
+}
+
 // Built directly rather than validated, as a snapshot on disk might hold it: the
 // view escapes whatever a task holds, not only what validation lets through.
 fn hostile_board() -> unique model.Board uses {} {
@@ -8,7 +15,7 @@ fn hostile_board() -> unique model.Board uses {} {
     description: "a & b",
     status: Todo(),
     priority: High(),
-    due: Some("2026-03-01"),
+    due: date.new(2026, 3, 1),
     tags: ["x'y"]
   )
   let _ = model.create(mut board, unique item)
@@ -26,12 +33,12 @@ fn screen_on(selected: u64) -> Screen uses {} {
 @test
 fn due_dates_read_relative_to_today(t: Test) {
   let today = results.ok(date.parse("2026-03-04"))
-  test.check(t, due_text("2026-03-04", today) == "due today")
-  test.check(t, due_text("2026-03-05", today) == "due tomorrow")
-  test.check(t, due_text("2026-03-14", today) == "due in 10 days")
-  test.check(t, due_text("2026-03-03", today) == "due yesterday")
-  test.check(t, due_text("2026-02-26", today) == "6 days overdue")
-  test.check(t, due_text("2026-03-04", None()) == "due 2026-03-04")
+  test.check(t, due_text(parsed_day(t, "2026-03-04"), today) == "due today")
+  test.check(t, due_text(parsed_day(t, "2026-03-05"), today) == "due tomorrow")
+  test.check(t, due_text(parsed_day(t, "2026-03-14"), today) == "due in 10 days")
+  test.check(t, due_text(parsed_day(t, "2026-03-03"), today) == "due yesterday")
+  test.check(t, due_text(parsed_day(t, "2026-02-26"), today) == "6 days overdue")
+  test.check(t, due_text(parsed_day(t, "2026-03-04"), None()) == "due 2026-03-04")
 }
 
 @test

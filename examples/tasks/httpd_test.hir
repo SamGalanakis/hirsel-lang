@@ -77,10 +77,11 @@ fn limits_take_browser_sized_heads_and_reject_larger_requests(t: Test) {
   )
 }
 
-// A HEAD request and a 204 get the head alone; another reply its body and length.
+// HEAD retains the representation length; 204/304 omit payload and length.
+// A normal GET still sends its body on the same keep-alive connection.
 @test
 fn send_frames_each_reply(t: Test) {
-  let requests = "HEAD / HTTP/1.1\r\nHost: a\r\n\r\nDELETE /x HTTP/1.1\r\nHost: a\r\n\r\nGET /y HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n"
+  let requests = "HEAD / HTTP/1.1\r\nHost: a\r\n\r\nDELETE /x HTTP/1.1\r\nHost: a\r\n\r\nGET /cached HTTP/1.1\r\nHost: a\r\n\r\nGET /y HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n"
   let n = test.net(
     t,
     [],
@@ -95,9 +96,10 @@ fn send_frames_each_reply(t: Test) {
             steps: [
               Send(string.as_bytes(requests)),
               Expect(
-                b"HTTP/1.1 200 \r\nContent-Type: text/plain; charset=utf-8\r\nConnection: keep-alive\r\n\r\n"
+                b"HTTP/1.1 200 \r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\n"
               ),
               Expect(b"HTTP/1.1 204 \r\nConnection: keep-alive\r\n\r\n"),
+              Expect(b"HTTP/1.1 304 \r\nConnection: keep-alive\r\n\r\n"),
               Expect(
                 b"HTTP/1.1 200 \r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi"
               )
@@ -123,19 +125,18 @@ fn send_frames_each_reply(t: Test) {
     take stream,
     config(small(), false)
   )
-  for _ in 0u64..3 {
+  for _ in 0u64..4 {
     let Ok(Some((exchange, request))) = http.next_stream(mut connection, None()) else {
       test.fail(t)
     }
     let mut responding = take exchange
     let response = if request.method == "DELETE" {
       empty(204)
+    } else if request.target == "/cached" {
+      Reply(status: 304, headers: [], body: b"suppressed")
     } else {
       text_reply(200, "hi")
     }
-    test.check(
-      t,
-      results.is_ok(send(mut responding, response, request.method == "HEAD"))
-    )
+    test.check(t, results.is_ok(send(mut responding, response)))
   }
 }

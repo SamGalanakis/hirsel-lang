@@ -1,0 +1,110 @@
+// rule: SEM-3
+// expect: run
+// Chrono NaiveDate serde vectors, src/naive/date/mod.rs:2620-2692 at
+// 6adaa5240c26fecb7bd9077334a91f8f67f4f3fe. Hirsel retains strict padding
+// and its expanded negative years to match date.parse/date.to_string.
+@serializable
+type Appointment {
+  due: Option[time.Date],
+}
+
+fn appointment_to_json(value: Appointment) -> json.Value uses {} = comptime derive.json_value(
+  shape(Appointment)
+)
+
+fn appointment_from_json(value: json.Value) -> Result[unique Appointment, String] uses {} = comptime derive.from_json(
+  shape(Appointment)
+)
+
+@preserves_unique(out)
+fn appointment_json_into(value: Appointment, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Appointment))
+
+fn appointment_from_json_reader(mut cursor: json.Reader) -> Result[
+  unique Appointment,
+  String
+] uses {} = comptime derive.from_json_reader(shape(Appointment))
+
+fn appointment_from_json_bytes(data: Bytes) -> Result[unique Appointment, String] uses {} = comptime derive.from_json_bytes(
+  shape(Appointment)
+)
+
+fn check_decoded(
+  t: Test,
+  actual: Result[unique Appointment, String],
+  expected: Appointment
+) -> () {
+  let Ok(decoded) = actual else {
+    test.fail(t)
+  }
+  test.check(t, decoded == expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let valid: List[String] = [
+    "2014-07-24",
+    "2016-07-08",
+    "0000-01-01",
+    "2000-02-29",
+    "9999-12-31",
+    "-000001-12-31",
+    "-009999-01-01"
+  ]
+  for spelling in valid {
+    let Ok(day) = date.parse(spelling) else {
+      return Error(())
+    }
+    let value = Appointment(due: Some(day))
+    let encoded = appointment_to_json(value)
+    check_decoded(t, appointment_from_json(encoded), value)
+    let mut out: List[u8] = []
+    test.check(t, results.is_ok(appointment_json_into(value, mut out, 0)))
+    test.check(t, text.finish_valid(unique out) == f"{{\"due\":\"{spelling}\"}}")
+    check_decoded(t, appointment_from_json_bytes(bytes.from_list(take out)), value)
+  }
+  let invalid: List[String] = [
+    "",
+    "20001231",
+    "2000-00-00",
+    "2000-02-30",
+    "2001-02-29",
+    "2002-002-28",
+    "yyyy-mm-dd",
+    "2016-7-8",
+    "2016-07-08x",
+    "+010000-01-01"
+  ]
+  for spelling in invalid {
+    test.check(t, results.is_error(date.from_json(Text(unique spelling))))
+    let encoded = f"{{\"due\":\"{spelling}\"}}"
+    test.check(
+      t,
+      results.is_error(appointment_from_json_bytes(string.as_bytes(encoded)))
+    )
+  }
+  let non_strings: List[String] = ["0", "20.01", "{}", "[]", "true", "null"]
+  for source in non_strings {
+    let Ok(value) = json.parse(unique source) else {
+      return Error(())
+    }
+    test.check(t, results.is_error(date.from_json(value)))
+  }
+  test.check(
+    t,
+    appointment_from_json_bytes(b"{\"due\":null}") == Ok(Appointment(due: None()))
+  )
+  test.check(t, appointment_from_json_bytes(b"{}") == Ok(Appointment(due: None())))
+  test.check(
+    t,
+    results.is_error(appointment_from_json_bytes(b"{\"due\":\"2014-07-24\"} 0"))
+  )
+  test.check(
+    t,
+    appointment_from_json_bytes(b"{\"due\":\"2014-07-2\\u0034\"}") == Ok(
+      Appointment(due: date.new(2014, 7, 24))
+    )
+  )
+  Ok(())
+}

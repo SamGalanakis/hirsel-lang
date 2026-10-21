@@ -30,8 +30,9 @@ examples/tasks/run 8080 --native   # compiled with LLVM first
 `hirsel run hirsel.json --grants data/grants.json`. The grants bind the port, the
 `data` directory (read-write, the snapshots) and `static` (read-only). With the
 monotonic clock granted, a request must arrive within 30 s; an idle keep-alive
-connection closes after 120 s either way. Type `quit`
-or press Ctrl-D to stop the server. It stops accepting and closes its
+connection closes after 120 s either way. Press Ctrl-C or send SIGTERM to stop
+the server gracefully. `quit` and Ctrl-D remain available for the end-to-end
+tests and scripted launches. It stops accepting and closes its
 connections, which ends every event stream. Then it waits for the writer to save
 every snapshot it was given, and exits.
 

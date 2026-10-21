@@ -15,14 +15,11 @@ pub fn default_query() -> model.Query uses {} {
 // ---- dates for people ----
 /// How a due date reads next to today: `due today`, `due tomorrow`, `due in 3 days`,
 /// `due yesterday`, `2 days overdue`; the date itself when today is unknown.
-pub fn due_text(due: String, today: Option[time.Date]) -> unique String uses {} {
+pub fn due_text(due: time.Date, today: Option[time.Date]) -> unique String uses {} {
   let Some(day) = today else {
     return f"due {due}"
   }
-  let Ok(when) = date.parse(due) else {
-    return f"due {due}"
-  }
-  let days = date.days_between(day, when)
+  let days = date.days_between(day, due)
   if days == 0 {
     "due today"
   } else if days == 1 {
@@ -43,10 +40,7 @@ fn overdue(item: model.Item, today: Option[time.Date]) -> bool uses {} {
   let Some(due) = item.due else {
     return false
   }
-  let Ok(when) = date.parse(due) else {
-    return false
-  }
-  item.status != Done() && date.compare(when, day) < 0
+  item.status != Done() && date.compare(due, day) < 0
 }
 
 // ---- attributes ----
@@ -158,7 +152,7 @@ fn priority_options(mut out: List[u8], current: String) -> () uses {} {
 fn edit_form(mut out: List[u8], item: model.Item) -> () uses {} {
   let id = item.id
   let due = match item.due {
-    Some(d) => d,
+    Some(d) => date.to_string(d),
     None() => "",
   }
   text.append(mut out, "<form class=\"edit\" data-show=\"$editing == ")
@@ -250,7 +244,7 @@ pub fn row(mut out: List[u8], item: model.Item, today: Option[time.Date], select
     text.append(mut out, "<time class=\"due")
     text.append(mut out, late)
     text.append(mut out, "\" datetime=\"")
-    html.escape_into(mut out, due)
+    html.escape_into(mut out, date.to_string(due))
     text.append(mut out, "\">")
     html.escape_into(mut out, due_text(due, today))
     text.append(mut out, "</time>")
@@ -330,7 +324,7 @@ pub fn detail(mut out: List[u8], board: model.Board, screen: Screen) -> () uses 
   text.append(mut out, "</dd>")
   if let Some(due) = item.due {
     text.append(mut out, "<dt>Due</dt><dd>")
-    html.escape_into(mut out, due)
+    html.escape_into(mut out, date.to_string(due))
     text.append(mut out, " (")
     html.escape_into(mut out, due_text(due, screen.today))
     text.append(mut out, ")</dd>")

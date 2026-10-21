@@ -401,6 +401,13 @@ render the same text. Any other text is `Invalid`.
 and decoding admits exactly the fields `date.new` and `time_of_day.new` admit, otherwise
 `DecodeError.Invalid`. So `DateTime`, `BrokenDownTime` and `toml.Moment` are serializable.
 
+JSON derive uses `time.Date`'s nominal hooks: `date.to_json`/`from_json` and
+`date.json_into`/`from_json_reader` encode a JSON string in canonical `YYYY-MM-DD`
+form (RFC 3339 full-date for years 0000–9999), not a calendar-field object.
+Negative years retain `date.to_string`'s expanded ISO spelling, so every Date
+round-trips. Decoding uses `date.parse`: invalid dates, non-string values and
+non-padded dates fail. The binary serializable schema above is unchanged.
+
 A fixed offset is `i32` seconds east of UTC, valid strictly inside ±26 hours (jiff's
 ±25:59:59); any other offset is `TimeError.OutOfRange`. `date_time.from_timestamp(ts, offset)`
 is the civil datetime of `ts` at `offset`, `OutOfRange` when that lies outside the date

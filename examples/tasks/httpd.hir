@@ -64,14 +64,10 @@ pub fn rejection(error: http.HttpError) -> Option[u16] uses {} {
 
 /// Sends `response` to the request `connection` last received. A HEAD request, a
 /// 204 and a 304 get the head alone.
-pub fn send(mut connection: http.ServerStream, response: Reply, head: bool) -> Result[
+pub fn send(mut connection: http.ServerStream, response: Reply) -> Result[
   (),
   http.HttpError
 ] {
-  if head || response.status == 204 || response.status == 304 {
-    http.respond_head(mut connection, response.status, response.headers)?
-    return http.end_response_body(mut connection)
-  }
   http.respond(mut connection, response.status, response.headers, response.body, false)
 }
 

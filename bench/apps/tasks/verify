@@ -54,13 +54,16 @@ with tempfile.TemporaryDirectory(prefix='tasks-verify-') as scratch:
             server.stop()
     for n, (hirsel, rust) in enumerate(zip(answers['hirsel'], answers['rust'])):
         assert hirsel == rust, (n, hirsel, rust)
-    data = root / 'signal'
-    data.mkdir()
-    server = Server('rust', data, free_port(), APP / 'build/tasks-hirsel', root / 'signal.log')
-    pid = json.loads(server.marker.read_text())['pid']
-    os.kill(pid, signal.SIGTERM)
-    assert server.process.wait(10) == 0, 'SIGTERM must exit while stdin stays open'
-    server.stop()
+    for kind in ('hirsel', 'rust'):
+        data = root / f'{kind}-signal'
+        data.mkdir()
+        server = Server(kind, data, free_port(), APP / 'build/tasks-hirsel', root / f'{kind}-signal.log')
+        try:
+            pid = json.loads(server.marker.read_text())['pid']
+            os.kill(pid, signal.SIGTERM)
+            assert server.process.wait(10) == 0, 'SIGTERM must exit while stdin stays open'
+        finally:
+            server.stop()
     for mode, extra in [('memory', {'TASKS_STORE': 'memory'}), ('durable', {'TASKS_DURABILITY': 'durable'})]:
         data = root / mode
         data.mkdir()
@@ -71,4 +74,4 @@ with tempfile.TemporaryDirectory(prefix='tasks-verify-') as scratch:
         finally:
             server.stop()
         assert bool(list(data.glob('board-*.json'))) == (mode == 'durable')
-    print('ok: 11 differential HTTP/HTML checks, 4 corrupt/save-failure checks, 1 SIGTERM check, 6 storage-provider checks')
+    print('ok: 11 differential HTTP/HTML checks, 4 corrupt/save-failure checks, 2 SIGTERM checks, 6 storage-provider checks')

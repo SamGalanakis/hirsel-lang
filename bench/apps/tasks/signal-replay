@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""Record a tasks server receiving SIGTERM, then replay without host resources."""
+import argparse
+import json
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import tempfile
+from support import ROOT, free_port, grants, line, toolchain
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--hirsel', type=Path)
+args = parser.parse_args()
+hirsel = args.hirsel or toolchain()
+with tempfile.TemporaryDirectory(prefix='tasks-signal-replay-') as scratch:
+    root = Path(scratch)
+    data = root / 'data'
+    data.mkdir()
+    port = free_port()
+    config = grants(data, port)
+    config['io'].pop('stdin')
+    config['io'].pop('monotonic_clock')
+    manifest = ROOT / 'examples/tasks/hirsel.json'
+    tape = root / 'signal.tape'
+    recorded = subprocess.Popen([str(hirsel), 'run', str(manifest), '--grants',
+        json.dumps(config), '--record', str(tape), '--', '--port', str(port)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    try:
+        ready = line(recorded, 180)
+        assert ready == f'listening on http://127.0.0.1:{port}/', ready
+        recorded.send_signal(signal.SIGTERM)
+        output, errors = recorded.communicate(timeout=60)
+        assert recorded.returncode == 0, (recorded.returncode, output, errors)
+        expected = ready.encode() + b'\n' + output
+        assert b'"msg":"stopped"' in errors, errors
+    finally:
+        if recorded.poll() is None:
+            recorded.kill()
+            recorded.wait()
+    shutil.rmtree(data)
+    replayed = subprocess.run([str(hirsel), 'run', str(manifest), '--replay', str(tape)],
+        capture_output=True, timeout=180)
+    assert replayed.returncode == 0, (replayed.stdout, replayed.stderr)
+    assert replayed.stdout == expected, (replayed.stdout, expected)
+    assert replayed.stderr == errors, (replayed.stderr, errors)
+    print('ok: SIGTERM graceful shutdown recorded and replayed exactly without stdin or data directory')

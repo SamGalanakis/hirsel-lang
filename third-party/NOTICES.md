@@ -155,6 +155,7 @@ the license named in its row; the license texts follow once each.
 | jiff | `crates/jiff/src/civil/{date,time,datetime}.rs` validation, month arithmetic with day clamping, ISO week dates and the expanded six-digit year form; `crates/jiff/src/fmt/temporal/parser.rs:524-623,768-838` RFC3339 date/clock parsing and leap-second clamping; `crates/jiff/src/fmt/strtime/{printer,parse}.rs` directive semantics (%Y sign padding, %f trimming, %z seconds, case-insensitive names, leap second 60 read as 59) and their test vectors | `stdlib/std@1/time_civil.hir`, `date.hir`, `time_of_day.hir`, `date_time.hir`, `time_format.hir`, civil and strftime conformance | BurntSushi/jiff `fff640d47f72ca6d3a122678315bbd76488306fe` | MIT |
 | jiff (time zones) | `crates/jiff-core/src/tz/tzif/{parser,query}.rs` TZif validation, transition clamping and civil gap/fold ranges; `crates/jiff-core/src/tz/posix.rs` POSIX TZ parsing, DST windows, clamping and the permanent-DST case; `crates/jiff/src/tz/timezone.rs` disambiguation and its ambiguity and to-datetime test vectors; TZif test files `crates/jiff/src/tz/testdata/{america-new-york,america-sitka,america-st-johns,antarctica-troll,australia-tasmania,europe-dublin,pacific-honolulu,utc}.tzif` (tz database data, public domain) | `stdlib/std@1/tzif.hir`, `time_zone.hir`, `packages/fixtures/tzif@1`, `conformance/SEM/SEM-1-time-zone-*` | BurntSushi/jiff `fff640d47f72ca6d3a122678315bbd76488306fe` | MIT |
 | Go standard library (time zones) | `src/time/zoneinfo_test.go` TestLoadLocationFromTZDataSlim and TestTzset vectors; slim TZif files `src/time/testdata/{2020b_Europe_Berlin,2021a_America_Nuuk,2021a_Asia_Gaza,2021a_Europe_Dublin}` (tz database data, public domain) | `packages/fixtures/tzif@1/zones.hir`, `conformance/SEM/SEM-1-time-zone-slim-*`, `SEM-1-time-zone-posix-rules-run.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
+| Chrono | NaiveDate serde string adapter and JSON test vectors, `src/naive/date/mod.rs:2568-2692` at `6adaa5240c26fecb7bd9077334a91f8f67f4f3fe` | `stdlib/std@1/date.hir`, `conformance/SEM/SEM-3-date-json-run.hir` | github.com/chronotope/chrono | MIT OR Apache-2.0 |
 | Howard Hinnant date algorithms | `days_from_civil` and `civil_from_days` from "chrono-Compatible Low-Level Date Algorithms" | `stdlib/std@1/time_civil.hir` | howardhinnant.github.io/date_algorithms.html | Public domain (author's dedication) |
 | Go standard library | `src/time/time_test.go` isoWeekTests, yearDayTests and the January 4 week-1 invariant | `conformance/SEM/SEM-1-time-date-calendar-run.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Zig standard library | `lib/std/mem.zig` eqlBytes bounded overlapping loads and eql unequal-byte vectors | `crates/hirsel-llvm/src/compare.rs`, `conformance/SEM/SEM-5-short-byte-equality-run.hir` | same | MIT |
@@ -1492,3 +1493,24 @@ DEALINGS IN THE SOFTWARE.
 The Autobahn testsuite is used under the Apache License, Version 2.0, whose terms
 are reproduced in the Cranelift section above through "END OF TERMS AND
 CONDITIONS"; the LLVM exceptions there do not apply to it.
+
+## Chrono date JSON adapter
+
+Adapted from Chrono (MIT OR Apache-2.0), copyright 2014, Kang Seonghoon.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

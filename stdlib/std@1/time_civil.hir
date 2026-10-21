@@ -393,3 +393,24 @@ fn write_fraction_digits(mut out: List[u8], nanosecond: u32) -> () uses {} {
     divisor /= 10
   }
 }
+
+// JSON derive resolves nominal hooks in the type's declaring module.
+pub fn date_to_json(value: Date) -> json.Value uses {} {
+  date.to_json(value)
+}
+
+pub fn date_from_json(value: json.Value) -> Result[Date, String] uses {} {
+  date.from_json(value)
+}
+
+@preserves_unique(out)
+pub fn date_json_into(value: Date, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} {
+  date.json_into(value, mut out, depth)
+}
+
+pub fn date_from_json_reader(mut cursor: json.Reader) -> Result[Date, String] uses {} {
+  date.from_json_reader(mut cursor)
+}

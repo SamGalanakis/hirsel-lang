@@ -7,7 +7,6 @@ pub type Status = Todo | Doing | Done
 @serializable
 pub type Priority = Low | Medium | High
 
-// GAP: time.Date has no serialized form, so `due` is canonical date text.
 /// A task as stored and shown. `due` is an ISO 8601 date (`YYYY-MM-DD`); `tags` are
 /// lowercase, unique and in the order given.
 @serializable
@@ -17,7 +16,7 @@ pub type Item {
   description: String,
   status: Status,
   priority: Priority,
-  due: Option[String],
+  due: Option[time.Date],
   tags: List[String],
 }
 
@@ -176,13 +175,13 @@ pub fn parse_tags(text: String) -> Result[List[String], Invalid] uses {} {
 }
 
 /// A valid due date in canonical form, or `None()` for empty text.
-pub fn parse_due(text: String) -> Result[Option[String], Invalid] uses {} {
+pub fn parse_due(text: String) -> Result[Option[time.Date], Invalid] uses {} {
   let trimmed = string.trim(text)
   if string.byte_len(trimmed) == 0 {
     return Ok(None())
   }
   match date.parse(trimmed) {
-    Ok(day) => Ok(Some(date.to_string(day))),
+    Ok(day) => Ok(Some(day)),
     Error(_) => Error(Due("the due date is YYYY-MM-DD")),
   }
 }
@@ -345,11 +344,11 @@ fn by_priority(a: Item, b: Item) -> i32 uses {} {
   priority_rank(a.priority) - priority_rank(b.priority)
 }
 
-// Tasks without a due date come last; ISO dates order as text.
+// Tasks without a due date come last; dates order chronologically.
 @noalloc
 fn by_due(a: Item, b: Item) -> i32 uses {} {
   match (a.due, b.due) {
-    (Some(x), Some(y)) => string.compare(x, y),
+    (Some(x), Some(y)) => date.compare(x, y),
     (Some(_), None()) => -1,
     (None(), Some(_)) => 1,
     (None(), None()) => 0,
