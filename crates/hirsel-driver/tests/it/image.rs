@@ -907,7 +907,19 @@ fn image_releases_unrecorded_files_after_parallel_constant_publication() {
 
 #[test]
 fn frozen_lowering_frontier_replays_imaged_helper_output_and_receipts() {
+    let Some(outputs) = hirsel_intern::under_salts(
+        "image::frozen_lowering_frontier_replays_imaged_helper_output_and_receipts",
+        &[1, 2, 3],
+        imaged_frontier_replay_budget_matrix,
+    ) else {
+        return;
+    };
+    assert!(outputs.iter().all(|output| output == &outputs[0]));
+}
+
+fn imaged_frontier_replay_budget_matrix() -> String {
     with_compiler_stack(|| {
+        let mut transcript = String::new();
         let f = Fixture::new();
         let image = library_image(
             &f,
@@ -920,11 +932,16 @@ fn frozen_lowering_frontier_replays_imaged_helper_output_and_receipts() {
             modules: vec!["lib".into()],
             name: "value".into(),
         });
-        for (jobs, fallback) in [1, 2, 8]
-            .into_iter()
-            .flat_map(|jobs| [false, true].map(|fallback| (jobs, fallback)))
-        {
+        for (budget, jobs, fallback) in [0, 1, 1 << 20].into_iter().flat_map(|budget| {
+            [1, 2, 8]
+                .into_iter()
+                .flat_map(move |jobs| [false, true].map(move |fallback| (budget, jobs, fallback)))
+        }) {
             let mut cached = load(&client, &StdImages::of(vec![image.clone()]));
+            cached.engine = cached.engine.with_config(CompileConfig {
+                hold_bytes: budget,
+                ..CompileConfig::for_memory_cap(None)
+            });
             let mut fresh = load(&client, &StdImages::none());
             assert!(cached.engine.imaged(&package("lib")));
             let expected = fresh.engine.lower_to_tir(&path).unwrap();
@@ -992,6 +1009,10 @@ fn frozen_lowering_frontier_replays_imaged_helper_output_and_receipts() {
                     || serde_json::to_vec(actual.value.as_ref()).unwrap(),
                     format!("{:?}", actual.value),
                 );
+                transcript.push_str(
+                    &placed(&cached.engine.sources, actual_text.clone())
+                        .replace(&f.0.display().to_string(), "<fixture>"),
+                );
                 let expected_text = canonical_ids(
                     fresh.engine.types(),
                     || serde_json::to_vec(expected.value.as_ref()).unwrap(),
@@ -1024,5 +1045,6 @@ fn frozen_lowering_frontier_replays_imaged_helper_output_and_receipts() {
                 );
             }
         }
-    });
+        transcript
+    })
 }
