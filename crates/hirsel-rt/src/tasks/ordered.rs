@@ -20,6 +20,19 @@ use hirsel_rt_operations::descriptors::op_descriptor;
 /// Mutex wrappers remain owner-local allocations outside these cell effects.
 /// Drops and task/host effects still need retirement/credit adapters.
 pub(crate) enum Command {
+    TaskSetCreate {
+        index: u32,
+        generation: u32,
+        scope: u64,
+    },
+    TaskSetAdd {
+        scope: u64,
+        set: u64,
+        child: u64,
+    },
+    TaskSetClose {
+        set: u64,
+    },
     TaskCancel {
         scope: u64,
         child: u64,
@@ -79,6 +92,9 @@ pub(crate) enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::TaskSetCreate { .. } => "task.set",
+            Self::TaskSetAdd { .. } => "task.add",
+            Self::TaskSetClose { .. } => "drop.trivial",
             Self::TaskCancel { .. } => "task.cancel",
             Self::SenderClose { .. } => "drop.trivial",
             Self::Head { name } => name,
@@ -189,9 +205,12 @@ impl Backend<Command> for Objects<'_> {
     fn can_commit_early(&mut self, op: &Operation<Command>) -> bool {
         let s = super::scheduler(self.ctx);
         match &op.payload {
-            Command::Head { .. } | Command::TaskCancel { .. } | Command::SenderClose { .. } => {
-                false
-            }
+            Command::Head { .. }
+            | Command::TaskCancel { .. }
+            | Command::TaskSetCreate { .. }
+            | Command::TaskSetAdd { .. }
+            | Command::TaskSetClose { .. }
+            | Command::SenderClose { .. } => false,
             Command::AtomicLoad { word, .. }
             | Command::AtomicStore { word, .. }
             | Command::MutexPut { word, .. } => s.sync.initialized(*word),
@@ -216,6 +235,42 @@ impl Backend<Command> for Objects<'_> {
         let (result, next) = unsafe {
             match &op.payload {
                 Command::Head { .. } => panic!("strict head effect requires its owner callback"),
+                Command::TaskSetCreate {
+                    index,
+                    generation,
+                    scope,
+                } => {
+                    assert!(!early, "task-set creation only retires");
+                    let scope = s.scope_handle(*scope);
+                    assert!(s.sets[*index as usize].is_none(), "a reserved set row");
+                    s.sets[*index as usize] = Some(super::TaskSet {
+                        generation: *generation,
+                        scope,
+                        members: Vec::new(),
+                    });
+                    let word = crate::channels::ENDPOINT
+                        | super::TASK_SET
+                        | super::handle(*index, *generation);
+                    (Outcome::image(0, word.to_ne_bytes().to_vec()), Next::Yield)
+                }
+                Command::TaskSetAdd { scope, set, child } => {
+                    assert!(!early, "task-set insertion only retires");
+                    let scope = s.scope_handle(*scope);
+                    s.task_handle(*child, scope);
+                    let set = s.set_handle(*set, scope);
+                    s.set(set).members.push(Some(*child));
+                    (Outcome::image(0, Vec::new()), Next::Yield)
+                }
+                Command::TaskSetClose { set } => {
+                    assert!(!early, "task-set close only retires");
+                    let index = *set as u32;
+                    assert_eq!(
+                        s.set(index).generation,
+                        ((set & !(crate::channels::ENDPOINT | super::TASK_SET)) >> 32) as u32
+                    );
+                    s.close_set(index);
+                    (Outcome::image(0, Vec::new()), Next::Keep)
+                }
                 Command::TaskCancel { scope, child } => {
                     assert!(!early, "cancellation only retires");
                     let scope = s.scope_handle(*scope);
@@ -463,6 +518,117 @@ mod tests {
             scan: std::ptr::null(),
             scan_words: 0,
         }
+    }
+
+    #[test]
+    fn a_provisional_task_set_creates_adds_and_closes_only_in_its_retiring_turns() {
+        let run = Run::new();
+        let anchor = unsafe { atomic(run.0, 0) };
+        let (scope, generation) = super::super::open_scope(run.0, None);
+        let scope_word = super::super::handle(scope, generation);
+        let child = super::super::Task::new(3, std::ptr::null_mut(), Some(scope), vec![0], None);
+        let s = super::super::scheduler(run.0);
+        s.tasks.push(Some(child));
+        let child = super::super::handle(1, 3);
+        s.sets.push(None);
+        let set = crate::channels::ENDPOINT | super::super::TASK_SET | super::super::handle(0, 4);
+        let mut events = Vec::new();
+        let mut record =
+            |task, name, _: &Outcome, retirement| events.push((task, name, retirement));
+        let mut polls = 0;
+        let mut poll = || {
+            polls += 1;
+            Vec::new()
+        };
+        let mut backend = unsafe { Objects::new(run.0, &mut record, &mut poll) };
+        let mut f = Frontier::new(
+            0,
+            policy(),
+            Settled {
+                level: 0,
+                limit: u64::MAX,
+                fuel: u64::MAX,
+            },
+        );
+        f.held.insert(0, Held::empty());
+        f.enqueue(1, Held::empty());
+        f.enqueue(2, Held::empty());
+        let load = || {
+            Command::AtomicLoad {
+                word: anchor,
+                bytes: 8,
+            }
+            .operation(footprint(0, false))
+        };
+        f.apply_head(empty(), load(), &mut backend).unwrap();
+        let create = Command::TaskSetCreate {
+            index: 0,
+            generation: 4,
+            scope: scope_word,
+        }
+        .operation(Footprint {
+            writes: BTreeSet::from([Item::Task(set)]),
+            ..Footprint::default()
+        });
+        let add = Command::TaskSetAdd {
+            scope: scope_word,
+            set,
+            child,
+        }
+        .operation(Footprint {
+            writes: BTreeSet::from([Item::Task(set), Item::Task(child)]),
+            ..Footprint::default()
+        });
+        let close = Command::TaskSetClose { set }.operation(Footprint {
+            writes: BTreeSet::from([Item::Task(set)]),
+            ..Footprint::default()
+        });
+        assert!(!backend.can_commit_early(&create));
+        assert!(!backend.can_commit_early(&add));
+        assert!(!backend.can_commit_early(&close));
+        assert_eq!(f.offer(2, empty(), create, &mut backend).0, Offer::Logged);
+        assert_eq!(f.offer(2, empty(), add, &mut backend).0, Offer::Logged);
+        assert_eq!(f.offer(2, empty(), close, &mut backend).0, Offer::Logged);
+        assert!(super::super::scheduler(run.0).sets[0].is_none());
+        f.apply_head(empty(), load(), &mut backend).unwrap();
+        f.absorb(&mut backend).unwrap();
+        assert!(super::super::scheduler(run.0).set(0).members.is_empty());
+        // A provisional handle is usable by the owner's later logged commands,
+        // but neither the child membership nor row reuse can become visible early.
+        f.apply_head(empty(), load(), &mut backend).unwrap();
+        f.apply_head(empty(), load(), &mut backend).unwrap();
+        f.absorb(&mut backend).unwrap();
+        assert_eq!(
+            super::super::scheduler(run.0).set(0).members,
+            vec![Some(child)]
+        );
+        assert!(super::super::scheduler(run.0).vacant_sets.is_empty());
+        // Add yields: the following close waits through both older queued turns.
+        f.apply_head(empty(), load(), &mut backend).unwrap();
+        f.apply_head(empty(), load(), &mut backend).unwrap();
+        assert!(super::super::scheduler(run.0).sets[0].is_some());
+        f.absorb(&mut backend).unwrap();
+        assert!(super::super::scheduler(run.0).sets[0].is_none());
+        assert_eq!(super::super::scheduler(run.0).vacant_sets, vec![0]);
+        assert_eq!(super::super::scheduler(run.0).task_handle(child, scope), 1);
+        assert_eq!(
+            polls, 8,
+            "closing a set keeps the turn and leaves its children live"
+        );
+        assert_eq!(
+            events,
+            vec![
+                (0, "atomic.load", 0),
+                (1, "atomic.load", 1),
+                (2, "task.set", 2),
+                (0, "atomic.load", 3),
+                (1, "atomic.load", 4),
+                (2, "task.add", 5),
+                (0, "atomic.load", 6),
+                (1, "atomic.load", 7),
+                (2, "drop.trivial", 8)
+            ]
+        );
     }
 
     #[test]

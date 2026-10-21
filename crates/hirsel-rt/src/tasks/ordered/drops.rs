@@ -19,17 +19,7 @@ pub(crate) unsafe fn endpoint(
     operation_site: u64,
 ) -> Stopped<u8> {
     if word & TASK_SET != 0 {
-        let (_, progress) = engine::head_effect(ctx, "drop.trivial", || {
-            let s = scheduler(ctx);
-            let index = word as u32;
-            assert_eq!(
-                s.set(index).generation,
-                ((word & !(crate::channels::ENDPOINT | TASK_SET)) >> 32) as u32
-            );
-            s.close_set(index);
-            ((), Next::Keep)
-        })?;
-        assert!(matches!(progress, Progress::Absorbed(_)));
+        super::sets::close(ctx, word)?;
         return Ok(STATUS_OK);
     }
     // A sender is statically drop.trivial, including a provisional duplicate

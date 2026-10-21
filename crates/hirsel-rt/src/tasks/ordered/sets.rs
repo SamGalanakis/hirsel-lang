@@ -5,34 +5,36 @@
 use super::super::*;
 use super::engine;
 use super::lifecycle::{self, Call, ResultAction};
+use crate::ordered::footprint::{Footprint, Item};
 use crate::ordered::objects::Kind;
 use crate::ordered::{Next, Progress};
+
+fn writes(items: impl IntoIterator<Item = Item>) -> Footprint {
+    Footprint {
+        writes: items.into_iter().collect(),
+        ..Footprint::default()
+    }
+}
 
 /// # Safety
 /// As for TaskSet, with the scheduler role and test-only ordered policy.
 pub(crate) unsafe fn create(ctx: *mut TaskCtx, scope: *const u64, out: *mut u64) -> Stopped<u8> {
-    let (word, progress) = engine::head_effect(ctx, "task.set", || {
+    let scope = unsafe { scope.read() };
+    let (index, generation) = {
         let s = scheduler(ctx);
-        let scope = s.scope_handle(unsafe { scope.read() });
         let generation = s.fresh_generation() & 0x3fff_ffff;
-        let row = TaskSet {
-            generation,
-            scope,
-            members: Vec::new(),
-        };
+        // Remove a vacant row from reuse, without publishing a native TaskSet.
+        // The owning create command installs it only at retirement.
         let index = match s.vacant_sets.pop() {
-            Some(index) => {
-                s.sets[index as usize] = Some(row);
-                index
-            }
+            Some(index) => index,
             None => {
-                s.sets.push(Some(row));
+                s.sets.push(None);
                 (s.sets.len() - 1) as u32
             }
         };
-        let word = crate::channels::ENDPOINT | TASK_SET | handle(index, generation);
-        (word, Next::Yield)
-    })?;
+        (index, generation)
+    };
+    let word = crate::channels::ENDPOINT | TASK_SET | handle(index, generation);
     let task = engine::current(ctx);
     let driver = engine::driver(ctx);
     // TaskSet's result type is erased too: it can later expose any member's
@@ -49,30 +51,45 @@ pub(crate) unsafe fn create(ctx: *mut TaskCtx, scope: *const u64, out: *mut u64)
         Kind::TaskSet,
         word,
     );
+    engine::submit(
+        ctx,
+        super::Command::TaskSetCreate {
+            index,
+            generation,
+            scope,
+        }
+        .operation(writes([Item::Task(word)])),
+    )?;
     unsafe { out.write(word) };
-    engine::continue_at_head(ctx, progress)?;
     Ok(STATUS_OK)
 }
 
 /// # Safety
-/// scope/set/task satisfy TaskAdd's ABI and remain owner-local across the gate.
+/// scope/set/task satisfy TaskAdd's ABI. All handles are copied before logging.
 pub(crate) unsafe fn add(
     ctx: *mut TaskCtx,
     scope: *const u64,
     set: *mut u64,
     task: *mut u64,
 ) -> Stopped<u8> {
-    let (_, progress) = engine::head_effect(ctx, "task.add", || {
-        let s = scheduler(ctx);
-        let scope = s.scope_handle(unsafe { scope.read() });
-        let word = unsafe { task.read() };
-        s.task_handle(word, scope);
-        let set = s.set_handle(unsafe { set.read() }, scope);
-        s.set(set).members.push(Some(word));
-        ((), Next::Yield)
-    })?;
-    engine::continue_at_head(ctx, progress)?;
+    let scope = unsafe { scope.read() };
+    let set = unsafe { set.read() };
+    let child = unsafe { task.read() };
+    engine::submit(
+        ctx,
+        super::Command::TaskSetAdd { scope, set, child }
+            .operation(writes([Item::Task(set), Item::Task(child)])),
+    )?;
     Ok(STATUS_OK)
+}
+
+/// Closing the set releases its table row; the members remain scope children.
+pub(super) fn close(ctx: *mut TaskCtx, set: u64) -> Stopped<()> {
+    engine::submit(
+        ctx,
+        super::Command::TaskSetClose { set }.operation(writes([Item::Task(set)])),
+    )?;
+    Ok(())
 }
 
 /// # Safety
@@ -188,15 +205,8 @@ pub(crate) unsafe fn cancel(ctx: *mut TaskCtx, scope: *const u64, task: *const u
     let child = unsafe { task.read() };
     engine::submit(
         ctx,
-        super::Command::TaskCancel { scope, child }.operation(
-            crate::ordered::footprint::Footprint {
-                writes: std::collections::BTreeSet::from([
-                    crate::ordered::footprint::Item::Cancel(child),
-                    crate::ordered::footprint::Item::Task(child),
-                ]),
-                ..Default::default()
-            },
-        ),
+        super::Command::TaskCancel { scope, child }
+            .operation(writes([Item::Cancel(child), Item::Task(child)])),
     )?;
     Ok(STATUS_OK)
 }

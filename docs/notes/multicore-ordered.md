@@ -113,7 +113,11 @@ Spawn scans the unstarted environment with the linked capture program. Task
 result types remain erased by the native spawn ABI, so captured Task handles
 are conservatively unknown, including the spawning parent's obtainable footprint.
 Receive outputs are scanned into their owner's next-turn held set. Native task sets, add/has/take/await-any, member detach/cancel
-and cancel checks now have adapters too. Cancellation and sender close use owned
+and cancel checks now have adapters too. Task-set creation reserves an unpublished
+row, returns its provisional handle and logs initialization. Insertion and close
+also log owned words; the set's membership and reusable row change only at their
+respective retirements. Closing a set leaves its members as live scope children.
+Cancellation and sender close use owned
 D commands: later tasks may log them, but older polls see neither effect.
 Sender close keeps the turn and blocks a conflicting early channel operation;
 an independent E operation can still pass it. Provisional sender duplicates use
