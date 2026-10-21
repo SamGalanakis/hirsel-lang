@@ -75,10 +75,10 @@ Proto2 syntax, groups, extensions and `required` are rejected. Options other tha
   - `message_types()` lists the registry entries of every generated message. Pass it,
     with `protobuf.wkt.message_types()`, to `protobuf.registry` for `Any`.
 - **Helpers.** `writepart_M_K`, `tojsonpart_M_K`, `readpart_M_K` and `jsonpart_M_K`
-  encode and decode chunk `K` of `M`'s fields, four fields (or oneofs) per chunk, and
+  encode and decode field `K` (or one oneof) of `M`, and
   `jsonnumber_M` maps a JSON member name to its field number. They are generated
-  private helpers. Chunking keeps the check time and memory of large messages near
-  linear (`// GAP:` in `protoc/gen_emit.hir`).
+  private helpers. Each field has its own helper; large messages no longer need
+  four-field batching to fit the compiler's memory budget.
 
 ## Semantics
 

@@ -54,6 +54,8 @@ STRESS = {
     'arms': (200,),               # an N-variant enum and an N-arm match
     'nested-match': (16, 32),     # matches nested N deep
     'table': (2000,),             # an N-row literal table
+    'inline-constant': (1024, 2048, 4096),  # scalar constant facts, not List iteration
+    'record-flow': (4, 8, 16),    # match arms per mut helper over a fixed wide record
     'derive': (64,),              # N record types with derived JSON encoders
     'closures': (200,),           # N closures, each called once
 }
@@ -273,6 +275,50 @@ def stress_table(n):
     return h, r
 
 
+def stress_inline_constant(n):
+    h = (f'const TABLE: Inline[u64, {n}] = [\n'
+         + ''.join(f'  {k * 31 % 9973}u64,\n' for k in range(n)) + ']\n\n'
+         'pub fn main() {\n  let _ = TABLE[7]\n}\n')
+    r = (f'const TABLE: [u64; {n}] = [\n'
+         + ''.join(f'    {k * 31 % 9973},\n' for k in range(n)) + '];\n\n'
+         'fn main() {\n    std::hint::black_box(TABLE[7]);\n}\n')
+    return h, r
+
+
+def stress_record_flow(n):
+    # Keep record width and helper count fixed: only the size of each function
+    # changes. Each helper has the protobuf decoder's match/conditional writes
+    # through a mutable whole-message parameter, including non-scalar fields.
+    width = 165
+    h = ['type Message {\n' + ''.join(f'  f{k}: List[u64],\n' for k in range(width)) + '}\n']
+    r = ['struct Message {\n' + ''.join(f'    f{k}: Vec<u64>,\n' for k in range(width)) + '}\n']
+    h.append('fn read(wire: u64) -> Result[List[u64], ()] {\n'
+             '  if wire == 0 { Ok([7u64]) } else { Error(()) }\n}\n')
+    r.append('fn read(wire: u64) -> Result<Vec<u64>, ()> {\n'
+             '    if wire == 0 { Ok(vec![7]) } else { Err(()) }\n}\n')
+    for helper in range(4):
+        h.append(f'fn update{helper}(mut m: Message, field: u64, wire: u64) -> Result[bool, ()] {{\n'
+                 '  let found = match field {\n'
+                 + ''.join(f'    {k} => {{ m.f{k} = read(wire)?; true }},\n'
+                           for k in range(n)) + '    _ => false,\n  }\n  Ok(found)\n}\n')
+        r.append(f'fn update{helper}(m: &mut Message, field: u64, wire: u64) -> Result<bool, ()> {{\n'
+                 '    let found = match field {\n'
+                 + ''.join(f'        {k} => {{ m.f{k} = read(wire)?; true }},\n'
+                           for k in range(n)) + '        _ => false,\n    };\n    Ok(found)\n}\n')
+    # A check-only command lowers compile-time callees. Force V to inspect the
+    # helpers as well as modes; a run-time-only main would measure modes alone.
+    h.append('fn exercise() -> Result[bool, ()] {\n  let mut m = Message(\n'
+             + ''.join(f'    f{k}: [],\n' for k in range(width)) + '  )\n'
+             + ''.join(f'  let _ = update{helper}(mut m, 0, 0)?\n' for helper in range(4))
+             + '  Ok(true)\n}\nconst CHECKED: Result[bool, ()] = exercise()\n'
+             + 'pub fn main() {\n  let _ = CHECKED\n}\n')
+    r.append('fn main() {\n    let mut m = Message {\n'
+             + ''.join(f'        f{k}: Vec::new(),\n' for k in range(width)) + '    };\n'
+             + ''.join(f'    std::hint::black_box(update{helper}(&mut m, 0, 0));\n' for helper in range(4))
+             + '    std::hint::black_box(m);\n}\n')
+    return '\n'.join(h), '\n'.join(r)
+
+
 def stress_derive(n):
     h, r = [], ['use serde::Serialize;\n']
     for k in range(n):
@@ -300,6 +346,7 @@ def stress_closures(n):
 GENERATORS = {
     'nest': stress_nest, 'instances': stress_instances, 'wide': stress_wide, 'long': stress_long,
     'arms': stress_arms, 'nested-match': stress_nested_match, 'table': stress_table,
+    'inline-constant': stress_inline_constant, 'record-flow': stress_record_flow,
     'derive': stress_derive, 'closures': stress_closures,
 }
 # Stress programs that use std (and so need a manifest sidecar).

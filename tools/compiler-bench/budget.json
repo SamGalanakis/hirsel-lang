@@ -26,12 +26,17 @@
       "lir validate",
       "codegen",
       "store lookup",
-      "debug object"
+      "debug object",
+      "lex",
+      "declarations",
+      "signature normalize"
     ]
   },
   "intervals": {
     "names": [
       "image open",
+      "front prepare",
+      "GEN-5",
       "S0",
       "parallel",
       "S1",

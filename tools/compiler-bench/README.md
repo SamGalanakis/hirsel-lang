@@ -71,6 +71,17 @@ tour and conformance have no paired Rust port; their ratios are unavailable.
 Tour/conformance programs without an executable entry run check only; std has no
 native entry, so it runs image only. `image` accepts no timing flag.
 
+The stress group includes `inline-constant-{1024,2048,4096}` (a homogeneous
+`Inline[u64, N]` constant indexed once) and `record-flow-{4,8,16}` (that many
+match arms per mutable helper over a fixed 165-field message). The record
+helpers assign a field through `?`; a compile-time caller forces independent V
+validation during `check`, including the failure edges. Record width and helper
+count stay fixed across the series. Select both with
+`--groups stress --select 'stress/(inline-constant|record-flow)-' --modes check`.
+Compare instruction counts across each doubling and retain failed/capped cells;
+the older List table and long-statement cases exercise different shapes.
+[SCALING.md](SCALING.md) records the post-cutover measurements and their limits.
+
 Native wall time is measured by `startup.py` inside the counted command, from
 launch to the first stdout byte. Tasks stops at its listening announcement and
 gets `quit` on stdin. Hello-web prints no stdout: the endpoint is its first

@@ -528,26 +528,21 @@ fn emit_write(mut out: List[u8], model: Model, j: u64) -> () uses {} {
   let m = model.messages[j]
   let mut fields = unique m.fields
   list.sort(mut fields, by_number)
-  // GAP: see emit_read; each chunk of fields is written by its own function.
   let units = field_units(fields)
   let mut calls: List[String] = []
   let mut start: u64 = 0
   while start < list.len(units) {
-    let part = f"writepart_{m.hirsel}_{start / CHUNK}"
+    let part = f"writepart_{m.hirsel}_{start}"
     emit_line(mut out, "@preserves_unique(out)")
     emit_line(
       mut out,
       f"fn {part}(m: {m.hirsel}, mut out: List[u8]) -> () uses {{}} {{"
     )
-    let mut i = start
-    while i < list.len(units) && i < start + CHUNK {
-      emit_write_part(mut out, model, m, fields[units[i]])
-      i += 1
-    }
+    emit_write_part(mut out, model, m, fields[units[start]])
     emit_line(mut out, "}")
     emit_line(mut out, "")
     list.push(mut calls, f"  {part}(m, mut out)")
-    start += CHUNK
+    start += 1
   }
   emit_line(mut out, f"/// Appends the binary encoding of a `{m.hirsel}`.")
   emit_line(mut out, "@preserves_unique(out)")
@@ -572,9 +567,6 @@ fn emit_write(mut out: List[u8], model: Model, j: u64) -> () uses {} {
   emit_line(mut out, "}")
   emit_line(mut out, "")
 }
-
-// Fields per generated helper function; see emit_read.
-const CHUNK: u64 = 4
 
 // The indexes of `fields` with each oneof represented once, by its first member.
 fn field_units(fields: List[Fld]) -> List[u64] uses {} {
@@ -644,33 +636,25 @@ fn emit_read(mut out: List[u8], model: Model, j: u64) -> () uses {} {
   emit_line(mut out, f"  read_{m.hirsel}(data, 0)")
   emit_line(mut out, "}")
   emit_line(mut out, "")
-  // GAP: V checks a function in time and memory superlinear in its size (a match
-  // whose arms assign fields through `?` most of all), and each function taking a
-  // large message adds check memory in proportion to the message (reported). So
-  // fields decode in chunks of CHUNK, one function per chunk: for the conformance
-  // messages, one function per field exceeds 4 GiB and chunks of 16 take 820 s.
+  // One helper per field keeps the generated interfaces local to a field.
   let mut start: u64 = 0
   while start < list.len(m.fields) {
     emit_line(
       mut out,
-      f"fn readpart_{m.hirsel}_{start / CHUNK}(mut m: {m.hirsel}, data: Bytes, mut pos: u64, field: u64, wire: u64, depth: u64) -> Result[bool, protobuf.DecodeError] uses {{}} {{"
+      f"fn readpart_{m.hirsel}_{start}(mut m: {m.hirsel}, data: Bytes, mut pos: u64, field: u64, wire: u64, depth: u64) -> Result[bool, protobuf.DecodeError] uses {{}} {{"
     )
     emit_line(mut out, "  let found = match field {")
-    let mut i = start
-    while i < list.len(m.fields) && i < start + CHUNK {
-      emit_line(mut out, f"    {m.fields[i].decl.number} => {{")
-      emit_read_arm(mut out, model, m, m.fields[i], "      ", "        ")
-      emit_line(mut out, "      known")
-      emit_line(mut out, "    },")
-      i += 1
-    }
+    emit_line(mut out, f"    {m.fields[start].decl.number} => {{")
+    emit_read_arm(mut out, model, m, m.fields[start], "      ", "        ")
+    emit_line(mut out, "      known")
+    emit_line(mut out, "    },")
     emit_line(mut out, "    _ => false,")
     emit_line(mut out, "  }")
     emit_line(mut out, "  let _ = depth")
     emit_line(mut out, "  Ok(found)")
     emit_line(mut out, "}")
     emit_line(mut out, "")
-    start += CHUNK
+    start += 1
   }
   emit_line(mut out, f"/// Decodes a `{m.hirsel}` nested `depth` messages deep.")
   emit_line(
@@ -689,9 +673,9 @@ fn emit_read(mut out: List[u8], model: Model, j: u64) -> () uses {} {
   while first < list.len(m.fields) {
     emit_line(
       mut out,
-      f"      {chunk_numbers(m.fields, first)} => readpart_{m.hirsel}_{first / CHUNK}(mut m, data, mut pos, field, wire, depth)?,"
+      f"      {m.fields[first].decl.number} => readpart_{m.hirsel}_{first}(mut m, data, mut pos, field, wire, depth)?,"
     )
-    first += CHUNK
+    first += 1
   }
   emit_line(mut out, "      _ => false,")
   emit_line(mut out, "    }")
@@ -709,17 +693,6 @@ fn emit_read(mut out: List[u8], model: Model, j: u64) -> () uses {} {
       emit_entry(mut out, model, m, f, k)
     }
   }
-}
-
-// The field numbers of the chunk of `fields` starting at `start`, as a pattern.
-fn chunk_numbers(fields: List[Fld], start: u64) -> unique String uses {} {
-  let mut numbers: List[String] = []
-  let mut i = start
-  while i < list.len(fields) && i < start + CHUNK {
-    list.push(mut numbers, f"{fields[i].decl.number}")
-    i += 1
-  }
-  string.join(numbers, " | ")
 }
 
 fn emit_read_arm(
@@ -1021,28 +994,23 @@ fn emit_to_json_part(mut out: List[u8], model: Model, m: Msg, f: Fld) -> () uses
 
 fn emit_to_json(mut out: List[u8], model: Model, j: u64) -> () uses {} {
   let m = model.messages[j]
-  // GAP: see emit_read; each chunk of fields is added by its own function.
   let mut calls: List[String] = []
   if !is_special(m.full) {
     let units = field_units(m.fields)
     let mut start: u64 = 0
     while start < list.len(units) {
-      let part = f"tojsonpart_{m.hirsel}_{start / CHUNK}"
+      let part = f"tojsonpart_{m.hirsel}_{start}"
       emit_line(
         mut out,
         f"fn {part}(m: {m.hirsel}, mut o: Map[String, json.Value], r: protobuf.Registry) -> Result[(), protobuf.JsonError] uses {{}} {{"
       )
       emit_line(mut out, "  let _ = r")
-      let mut i = start
-      while i < list.len(units) && i < start + CHUNK {
-        emit_to_json_part(mut out, model, m, m.fields[units[i]])
-        i += 1
-      }
+      emit_to_json_part(mut out, model, m, m.fields[units[start]])
       emit_line(mut out, "  Ok(())")
       emit_line(mut out, "}")
       emit_line(mut out, "")
       list.push(mut calls, f"  {part}(m, mut o, r)?")
-      start += CHUNK
+      start += 1
     }
   }
   emit_line(
@@ -1104,25 +1072,21 @@ fn parse_element(
   }
 }
 
-// Closes one field's arm of a JSON chunk function, and the function after its last.
-fn emit_json_close(mut out: List[u8], last: bool) -> () uses {} {
+// Closes the single field arm and its JSON helper.
+fn emit_json_close(mut out: List[u8]) -> () uses {} {
   emit_line(mut out, "    },")
-  if last {
-    emit_line(mut out, "    _ => (),")
-    emit_line(mut out, "  }")
-    emit_line(mut out, "  let _ = seen")
-    emit_line(mut out, "  let _ = o")
-    emit_line(mut out, "  Ok(())")
-    emit_line(mut out, "}")
-    emit_line(mut out, "")
-  }
+  emit_line(mut out, "    _ => (),")
+  emit_line(mut out, "  }")
+  emit_line(mut out, "  let _ = seen")
+  emit_line(mut out, "  let _ = o")
+  emit_line(mut out, "  Ok(())")
+  emit_line(mut out, "}")
+  emit_line(mut out, "")
 }
 
 fn emit_from_json(mut out: List[u8], model: Model, j: u64) -> () uses {} {
   let m = model.messages[j]
-  // GAP: see emit_read; fields parse in chunks of CHUNK. A chain of key
-  // tests around those calls is also superlinear, so a separate function maps
-  // each key to its field number.
+  // Map accepted JSON names to field numbers before dispatching.
   if !is_special(m.full) && list.len(m.fields) > 0 {
     emit_line(mut out, f"fn jsonnumber_{m.hirsel}(key: String) -> u64 uses {{}} {{")
     emit_line(mut out, "  match key {")
@@ -1142,14 +1106,11 @@ fn emit_from_json(mut out: List[u8], model: Model, j: u64) -> () uses {} {
   if !is_special(m.full) {
     let mut index_of: u64 = 0
     for f in m.fields {
-      if index_of % CHUNK == 0 {
-        emit_line(
-          mut out,
-          f"fn jsonpart_{m.hirsel}_{index_of / CHUNK}(mut m: {m.hirsel}, mut seen: Set[u64], number: u64, key: String, value: json.Value, o: protobuf.JsonOptions) -> Result[(), protobuf.JsonError] uses {{}} {{"
-        )
-        emit_line(mut out, "  match number {")
-      }
-      let last = index_of % CHUNK == CHUNK - 1 || index_of + 1 == list.len(m.fields)
+      emit_line(
+        mut out,
+        f"fn jsonpart_{m.hirsel}_{index_of}(mut m: {m.hirsel}, mut seen: Set[u64], number: u64, key: String, value: json.Value, o: protobuf.JsonOptions) -> Result[(), protobuf.JsonError] uses {{}} {{"
+      )
+      emit_line(mut out, "  match number {")
       index_of += 1
       emit_line(mut out, f"    {f.decl.number} => {{")
       let place = f"m.{f.name}"
@@ -1176,7 +1137,7 @@ fn emit_from_json(mut out: List[u8], model: Model, j: u64) -> () uses {} {
           "    "
         )
         emit_line(mut out, f"  }}")
-        emit_json_close(mut out, last)
+        emit_json_close(mut out)
         continue
       }
       emit_line(mut out, f"  protobuf.first_member(mut seen, {f.decl.number}, key)?")
@@ -1207,7 +1168,7 @@ fn emit_from_json(mut out: List[u8], model: Model, j: u64) -> () uses {} {
         )
         emit_line(mut out, f"    }}")
         emit_line(mut out, f"  }}")
-        emit_json_close(mut out, last)
+        emit_json_close(mut out)
         continue
       }
       if f.decl.label == Repeated() {
@@ -1236,7 +1197,7 @@ fn emit_from_json(mut out: List[u8], model: Model, j: u64) -> () uses {} {
         )
         emit_line(mut out, f"    }}")
         emit_line(mut out, f"  }}")
-        emit_json_close(mut out, last)
+        emit_json_close(mut out)
         continue
       }
       if null_value {
@@ -1263,7 +1224,7 @@ fn emit_from_json(mut out: List[u8], model: Model, j: u64) -> () uses {} {
         parse_element(mut out, model, f.ty, false, "value", f"{place} = ", "", "    ")
       }
       emit_line(mut out, f"  }}")
-      emit_json_close(mut out, last)
+      emit_json_close(mut out)
     }
   }
   emit_line(mut out, f"/// Parses the proto3 JSON of a `{m.hirsel}`.")
@@ -1294,9 +1255,9 @@ fn emit_from_json(mut out: List[u8], model: Model, j: u64) -> () uses {} {
     while start < list.len(m.fields) {
       emit_line(
         mut out,
-        f"      {chunk_numbers(m.fields, start)} => jsonpart_{m.hirsel}_{start / CHUNK}(mut m, mut seen, number, key, value, o)?,"
+        f"      {m.fields[start].decl.number} => jsonpart_{m.hirsel}_{start}(mut m, mut seen, number, key, value, o)?,"
       )
-      start += CHUNK
+      start += 1
     }
     emit_line(mut out, "      _ => protobuf.unknown_field(o, key)?,")
     emit_line(mut out, "    }")

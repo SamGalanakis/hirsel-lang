@@ -34,12 +34,12 @@ def scoreboard(data, cells):
     print('Instructions are user-mode instructions including children. Wall seconds and peak RSS MiB '
           'come from GNU time; native wall stops at first stdout byte or listening. Native counters/RSS '
           'include bounded shutdown. Warm retains the preceding cold run’s artifacts. Cold removes '
-          'program/native caches, retaining the shipped std precheck and prebuilt Rust dependencies; '
+          'program/native caches, retaining the shipped std image and prebuilt Rust dependencies; '
           'neither run flushes the host page cache. Rust runs offline at one job. Wall ratios require an uninterrupted ten-round session; round-scoped or resumed measurements retain descriptive wall values and instruction ratios.\n')
     print('A ratio above 1 means Hirsel costs more. Native compares startup (compile + launch) with '
           '`cargo build --release` (compile only). Times are session-local; instructions are the verdict. '
           '— means no paired port or unavailable telemetry. Tasks reuses its existing app benchmark Rust port. No Rust ports exist for hello-web, '
-          'the tour, conformance or std; existing pairs are retained. Std is measured by `precheck` '
+          'the tour, conformance or std; existing pairs are retained. Std is measured by `image` '
           '(whole std from source), which has no native entry and accepts no timings flag. '
           'Tour/conformance fixtures without an executable entry remain check-only.\n')
     modes = list(dict.fromkeys(['check', 'debug', 'release', 'native', *[c['mode'] for c in cells if c['language'] == 'hirsel']]))
