@@ -1392,17 +1392,37 @@ impl Operations for Library {
         self.tasks.holds_result(id)
     }
     fn take_rests(&mut self, parent: u64) -> Vec<crate::TaskRest> {
-        self.tasks.take_rests(parent)
+        let rests = self.tasks.take_rests(parent);
+        rests
+            .into_iter()
+            .filter(|rest| {
+                let path = self.path_of(rest.child);
+                self.free
+                    .as_ref()
+                    .is_none_or(|free| !free.session.at_cut(&path))
+            })
+            .collect()
     }
     fn rest_finished(
         &mut self,
         child: u64,
         failures: Vec<crate::observation::FailureRecord>,
     ) -> Result<(), Error> {
+        // Result readiness and a returned rest's actual completion are
+        // separate Free ops in both engines, even for a dropless rest.
+        self.free_end(child)?;
         self.tasks.rest_finished(child, failures)
     }
     fn rests_returned(&mut self, parent: u64, result: &mut OperationResult) {
         self.tasks.rests_returned(parent, result)
+    }
+    fn rests_completed(
+        &mut self,
+        parent: u64,
+        result: &mut OperationResult,
+        context: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        self.free_rests_completed(parent, result, context)
     }
     fn task_finished(
         &mut self,

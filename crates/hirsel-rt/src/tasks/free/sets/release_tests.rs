@@ -172,9 +172,11 @@ fn run(width: u32, durable: bool, cancel: bool) {
             assert!(replay.start(&[]));
             for id in 0..3 {
                 assert!(replay.start(&[id]));
-                replay.begin(&[id]);
-                replay.publish(&[id], Phase::Entered).unwrap();
-                replay.publish(&[id], Phase::Done).unwrap();
+                for _ in 0..tape.cut[&vec![id]].op {
+                    replay.begin(&[id]);
+                    replay.publish(&[id], Phase::Entered).unwrap();
+                    replay.publish(&[id], Phase::Done).unwrap();
+                }
             }
             for op in 1..=tape.cut[&Vec::new()].op {
                 replay.begin(&[]);

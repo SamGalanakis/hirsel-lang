@@ -963,13 +963,6 @@ pub(crate) fn wake_retrying(ctx: *mut TaskCtx) {
     wake_all(ctx, &retrying);
 }
 
-/// Whether the running task's end op has run (a holding child's later drops follow it).
-pub(crate) fn current_ended(ctx: *mut TaskCtx) -> bool {
-    let s = scheduler(ctx);
-    let current = s.current;
-    s.task(current).ended
-}
-
 /// The running task's spawn path.
 pub(crate) fn current_path(ctx: *mut TaskCtx) -> Vec<u32> {
     let s = scheduler(ctx);
@@ -2126,9 +2119,8 @@ unsafe fn completed(ctx: &mut TaskCtx, index: u32, status: u8) -> Stopped<u32> {
     std::mem::forget(profile::Operation::new(ctx, "task.complete"));
     let s = scheduler(ctx);
     let path = s.task(index).path.clone();
-    if !std::mem::replace(&mut s.task(index).ended, true) {
-        crate::free::end(ctx, &path);
-    }
+    s.task(index).ended = true;
+    crate::free::end(ctx, &path);
     let chain = ctx.failure.take_chain(&path);
     let failed = status != STATUS_OK;
     if failed != !chain.is_empty() {
@@ -2395,7 +2387,7 @@ unsafe fn exit_scope(
     error: u8,
     caller_site: u64,
 ) -> (u8, bool) {
-    let free = crate::free::enter(ctx, Phase::Entered);
+    let free = crate::free::enter_call(ctx);
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let index = s.scope_handle(unsafe { scope.read() });
@@ -2634,8 +2626,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     if row.detached {
         return STATUS_OK;
     }
-    // Free mode: a child that holds its result has no op left, so its end op runs now; the
-    // rest of its frame only drops what it holds, once a join or its scope's exit resumes it.
+    // Publish result readiness now. Once a join or scope exit resumes its cleanup,
+    // completed publishes a separate actual-completion op, including deferred roots.
     row.ended = true;
     let path = row.path.clone();
     crate::free::end(ctx, &path);
@@ -2647,6 +2639,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     s.settle(current);
     // SAFETY: the context is live; a join or a discard hands control back here.
     unsafe { crate::stop::check(ctx, run_next(&mut *ctx)) };
+    crate::free::resume_rest(ctx);
     STATUS_OK
 }
 
@@ -2691,7 +2684,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
     let child = s.task_handle(unsafe { task.read() }, scope);
-    crate::free::enter(ctx, Phase::Entered);
+    crate::free::enter_call(ctx);
     // SAFETY: caller contract.
     unsafe { join(&mut *ctx, scope, child, slot, size, caller_site) }
 }
@@ -2815,7 +2808,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
     let child = s.task_handle(unsafe { task.read() }, scope);
-    crate::free::enter(ctx, Phase::Done);
+    crate::free::enter_call(ctx);
     // SAFETY: the context is live.
     unsafe {
         detach(&mut *ctx, scope, child);
@@ -3195,7 +3188,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
         };
         return STATUS_OK;
     }
-    crate::free::enter(ctx, Phase::Entered);
+    crate::free::enter_call(ctx);
     // SAFETY: caller contract.
     let set = unsafe { release_members(ctx, scope, set, true) };
     let s = scheduler(ctx);
@@ -3240,7 +3233,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach_all(
         };
         return STATUS_OK;
     }
-    crate::free::enter(ctx, Phase::Done);
+    crate::free::enter_call(ctx);
     // SAFETY: caller contract.
     let set = unsafe { release_members(ctx, scope, set, false) };
     scheduler(ctx).close_set(set);

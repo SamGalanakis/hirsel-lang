@@ -63,6 +63,8 @@ pub(super) struct Free {
     retries: BTreeMap<u64, Retry>,
     /// Replay: endpoint closes waiting for their version, in program order.
     closes: Vec<Close>,
+    /// Calling ops publish Done only after their admitted child rests return.
+    after_rests: BTreeSet<u64>,
 }
 
 /// An op that waits replay-pending, with what its action needs.
@@ -157,6 +159,7 @@ impl Free {
             waits: BTreeSet::new(),
             retries: BTreeMap::new(),
             closes: Vec::new(),
+            after_rests: BTreeSet::new(),
         }
     }
 }
@@ -182,6 +185,7 @@ impl Library {
             seed,
         );
         self.tasks.root_priority = self.tasks.schedule.admit();
+        self.tasks.free_rests = true;
         self.free = Some(Free::new(session));
     }
 
@@ -204,7 +208,7 @@ impl Library {
         self.free.take().map(|free| free.session)
     }
 
-    fn path_of(&self, task: u64) -> Vec<u32> {
+    pub(super) fn path_of(&self, task: u64) -> Vec<u32> {
         if task == self.tasks.current {
             self.tasks.path()
         } else {
@@ -264,6 +268,22 @@ impl Library {
         first: Phase,
         context: &OperationContext<'_>,
     ) -> Result<Enter, Error> {
+        self.free_enter_phase(first, false, context)
+    }
+
+    pub(super) fn free_enter_call(
+        &mut self,
+        context: &OperationContext<'_>,
+    ) -> Result<Enter, Error> {
+        self.free_enter_phase(Phase::Entered, true, context)
+    }
+
+    fn free_enter_phase(
+        &mut self,
+        first: Phase,
+        calls: bool,
+        context: &OperationContext<'_>,
+    ) -> Result<Enter, Error> {
         if self.free.is_none() {
             return Ok(Enter::Off);
         }
@@ -276,7 +296,9 @@ impl Library {
             return Ok(Enter::Park(self.free_final(context)));
         }
         self.free_apply_pending(self.tasks.current)?;
-        if first == Phase::Entered && !self.free_admits(Phase::Done) {
+        if calls {
+            self.free_publish(Phase::Entered)?;
+        } else if first == Phase::Entered && !self.free_admits(Phase::Done) {
             // At (k, entered) it runs op k's entry and then waits in op k for good.
             self.free_publish(Phase::Entered)?;
             return Ok(Enter::Park(self.free_final(context)));
@@ -328,12 +350,42 @@ impl Library {
         if self.free.is_none() {
             return Ok(result);
         }
+        if self.tasks.has_rests(self.tasks.current) {
+            self.free_publish(Phase::Entered)?;
+            self.free
+                .as_mut()
+                .unwrap()
+                .after_rests
+                .insert(self.tasks.current);
+            return Ok(result);
+        }
+        if !self.free_admits(Phase::Done) {
+            return Ok(self.free_final(context));
+        }
         self.free_publish(Phase::Done)?;
         let path = self.tasks.path();
         if self.free.as_ref().unwrap().session.at_cut(&path) {
             return Ok(self.free_final(context));
         }
         Ok(result)
+    }
+
+    pub(super) fn free_rests_completed(
+        &mut self,
+        parent: u64,
+        result: &mut OperationResult,
+        context: &OperationContext<'_>,
+    ) -> Result<(), Error> {
+        if self
+            .free
+            .as_mut()
+            .is_some_and(|free| free.after_rests.remove(&parent))
+        {
+            self.tasks.rests_returned(parent, result);
+            let completed = std::mem::replace(result, OperationResult::returned(Value::Unit));
+            *result = self.free_done(completed, context)?;
+        }
+        Ok(())
     }
 
     /// A waiting op's result: a park publishes (k, entered) and registers its poll; a

@@ -561,6 +561,21 @@ pub(crate) fn execute_frames(
                 operations.enter_task(task, false);
                 continue;
             }
+            let root_anchor = anchor(frames.last().unwrap(), site_of(frames.last().unwrap())?);
+            if let Some(operation) = &mut frames.last_mut().unwrap().operation {
+                operations.rests_completed(
+                    task,
+                    &mut operation.0,
+                    &mut OperationContext {
+                        configuration,
+                        sources,
+                        stdout: &mut execution.stdout,
+                        trace: &mut execution.trace,
+                        trace_mode: runtime.trace_mode,
+                        anchor: Some(&root_anchor),
+                    },
+                )?;
+            }
         }
         let depth = frames.len();
         // Test before taking: moving the large empty slot on every step costs.
@@ -1442,8 +1457,22 @@ pub(crate) fn execute_frames(
                 task = hand_off.parent;
                 frames = hand_off.frames;
                 execution.failures = hand_off.failures;
+                operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
+                let root_anchor = anchor(frames.last().unwrap(), site_of(frames.last().unwrap())?);
                 if let Some(operation) = &mut frames.last_mut().unwrap().operation {
                     operations.rests_returned(task, &mut operation.0);
+                    operations.rests_completed(
+                        task,
+                        &mut operation.0,
+                        &mut OperationContext {
+                            configuration,
+                            sources,
+                            stdout: &mut execution.stdout,
+                            trace: &mut execution.trace,
+                            trace_mode: runtime.trace_mode,
+                            anchor: Some(&root_anchor),
+                        },
+                    )?;
                 }
             }
             operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
@@ -1665,10 +1694,7 @@ pub(crate) fn execute_frames(
                             released: vec![],
                         }
                     };
-                    let holds = matches!(
-                        &result,
-                        OperationResult::Complete { value, .. } if *value != Value::Unit
-                    );
+                    let holds = matches!(&result, OperationResult::Complete { .. });
                     operations.task_finished(
                         task,
                         result,

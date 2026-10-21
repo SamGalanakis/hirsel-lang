@@ -202,15 +202,15 @@ unsafe fn take(ctx: &mut TaskCtx, block: *mut Header) -> bool {
 }
 
 /// Whether releases of the running task wait for its next entered phase: free mode, outside
-/// a phase, and before the task's end op (a holding child's later drops follow its end).
+/// a phase, including cleanup after a Holding child's result-ready op.
 fn defers(ctx: *mut TaskCtx) -> bool {
     // SAFETY: the context is live.
     if unsafe { (*ctx).roots.in_phase } || !crate::free::on(ctx) {
         return false;
     }
-    // SAFETY: the context is live.
-    let tasks = unsafe { (*ctx).run_ref().tasks.is_some() };
-    !tasks || !crate::tasks::current_ended(ctx)
+    // A returned Holding rest has a distinct actual-completion op in Free
+    // mode; releases stay pending until its entry, just as before TaskFinish.
+    true
 }
 
 /// Consume one root of `block` by the run's mode: whether it died now, so the caller walks it.

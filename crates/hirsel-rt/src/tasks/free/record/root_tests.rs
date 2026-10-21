@@ -349,9 +349,12 @@ fn recorded_child_end_finishes_its_nested_root_tail_before_exposing_the_result()
             let mut replay = hirsel_free::session::Session::replay(&marked.bytes).unwrap();
             assert!(replay.start(&[]));
             assert!(replay.start(&[0]));
-            replay.begin(&[0]);
-            replay.publish(&[0], Phase::Entered).unwrap();
-            replay.publish(&[0], Phase::Done).unwrap();
+            assert_eq!(cut.progress[&vec![0]], Progress::new(2, Phase::Done));
+            for _ in 0..2 {
+                replay.begin(&[0]);
+                replay.publish(&[0], Phase::Entered).unwrap();
+                replay.publish(&[0], Phase::Done).unwrap();
+            }
             for op in 1..=5 {
                 replay.begin(&[]);
                 if op == 3 {

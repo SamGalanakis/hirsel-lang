@@ -108,6 +108,16 @@ fn path(ctx: *mut TaskCtx) -> Vec<u32> {
 /// not admit parks the task for good here; a waiting op whose done phase it does not admit
 /// runs its entry and then waits for good.
 pub(crate) fn enter(ctx: *mut TaskCtx, first: Phase) -> bool {
+    enter_phase(ctx, first, false)
+}
+
+/// A calling op can drive an admitted child's rest while its own cut is Entered.
+/// Its Done is admitted separately, after that rest returns.
+pub(crate) fn enter_call(ctx: *mut TaskCtx) -> bool {
+    enter_phase(ctx, Phase::Entered, true)
+}
+
+fn enter_phase(ctx: *mut TaskCtx, first: Phase, calls: bool) -> bool {
     let Some(free) = free(ctx) else {
         if on(ctx) {
             crate::roots::apply_pending(ctx);
@@ -121,7 +131,9 @@ pub(crate) fn enter(ctx: *mut TaskCtx, first: Phase) -> bool {
         crate::tasks::park_final(ctx);
     }
     crate::roots::apply_pending(ctx);
-    if first == Phase::Entered && !free.session.admits(&path, Phase::Done) {
+    if calls {
+        publish(ctx, Phase::Entered);
+    } else if first == Phase::Entered && !free.session.admits(&path, Phase::Done) {
         publish(ctx, Phase::Entered);
         crate::tasks::park_final(ctx);
     }
@@ -149,7 +161,17 @@ pub(crate) fn done(ctx: *mut TaskCtx) {
     if !on(ctx) {
         return;
     }
+    if free(ctx).is_some_and(|free| !free.session.admits(&path(ctx), Phase::Done)) {
+        crate::tasks::park_final(ctx);
+    }
     publish(ctx, Phase::Done);
+    if free(ctx).is_some_and(|free| free.session.at_cut(&path(ctx))) {
+        crate::tasks::park_final(ctx);
+    }
+}
+
+/// A held frame resumes only when the cut admits a segment after result readiness.
+pub(crate) fn resume_rest(ctx: *mut TaskCtx) {
     if free(ctx).is_some_and(|free| free.session.at_cut(&path(ctx))) {
         crate::tasks::park_final(ctx);
     }

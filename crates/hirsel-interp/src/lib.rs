@@ -428,6 +428,15 @@ operation_boundary! {
     }
     /// The rests of `parent`'s pending operation returned; `result` is still pending.
     fn rests_returned(&mut self, _parent: u64, _result: &mut OperationResult) {}
+    /// Finish a calling operation after all of its child cleanup frames returned.
+    fn rests_completed(
+        &mut self,
+        _parent: u64,
+        _result: &mut OperationResult,
+        _context: &mut OperationContext<'_>
+    ) -> Result<(), Error> {
+        Ok(())
+    }
     /// The task of the operation that returned `Park { token }` parked: polled from the
     /// next scheduling point on.
     fn parked(&mut self, _token: u64) {}

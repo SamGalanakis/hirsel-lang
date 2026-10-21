@@ -230,6 +230,12 @@ fn replayed(engine: &[&str], program: &Path, grants: &str, tape: &Path, seed: u6
     );
     let text = std::fs::read_to_string(&report)
         .unwrap_or_else(|e| panic!("replay {engine:?} {tape:?}, seed {seed}: {e}: {output:?}"));
+    if text.starts_with("replayed Projection { outcome: \"returned\"") {
+        assert!(
+            output.status.success(),
+            "returned replay {engine:?} {tape:?}: {output:?}"
+        );
+    }
     text.trim_end().to_owned()
 }
 
@@ -271,6 +277,12 @@ fn record(engine: &[&str], name: &str, grants: &str, seed: u64, durable: bool) -
         })
         .collect::<Vec<_>>();
     assert!(!cuts.is_empty(), "{what}: no cut");
+    if cuts.last().unwrap().1.contains("outcome: \"returned\"") {
+        assert!(
+            output.status.success(),
+            "returned recording {what}: {output:?}"
+        );
+    }
     Recorded {
         scratch,
         what,
@@ -391,4 +403,52 @@ fn coalesced_root_releases_reach_the_joiners_thaw_on_every_engine() {
             });
         }
     });
+}
+
+/// Result readiness and the cleanup after a moved result have identical ordinals,
+/// including rests with no remaining value to drop, across all three engines.
+#[test]
+fn native_returned_rest_completion_replays_across_engines() {
+    for durable in [false, true] {
+        let recorded = record(ENGINES[1], "mutex_cycle", GRANTS, 0, durable);
+        let (_, live) = recorded.cuts.last().unwrap();
+        assert!(
+            live.contains("outcome: \"returned\""),
+            "{}: {live}",
+            recorded.what
+        );
+        let program = recorded.scratch.path("main.hir");
+        let tape = recorded.scratch.path("tape");
+        for engine in ENGINES {
+            assert_eq!(
+                replayed(engine, &program, GRANTS, &tape, REPLAY_SEED),
+                format!("replayed {live}"),
+                "{} replayed on {engine:?}",
+                recorded.what
+            );
+        }
+        // The join is admitted only through entry, but its child's returned
+        // cleanup may already have completed. Both sides must reach that cut.
+        let bytes = std::fs::read(&tape).unwrap();
+        let prefix = recorded.scratch.path("prefix");
+        let calls: Vec<_> = recorded
+            .cuts
+            .iter()
+            .filter(|(_, projection)| projection.contains("[]: Progress { op: 5, phase: Entered }"))
+            .collect();
+        assert!(!calls.is_empty(), "{}: no calling cut", recorded.what);
+        for (offset, projection) in calls {
+            for extra in [0, TORN] {
+                std::fs::write(&prefix, &bytes[..(offset + extra).min(bytes.len())]).unwrap();
+                for engine in ENGINES {
+                    assert_eq!(
+                        replayed(engine, &program, GRANTS, &prefix, 3),
+                        format!("replayed {projection}"),
+                        "{} calling cut {offset} (+{extra}) on {engine:?}",
+                        recorded.what
+                    );
+                }
+            }
+        }
+    }
 }

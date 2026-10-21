@@ -308,22 +308,8 @@ pub(super) unsafe fn completion(ctx: *mut TaskCtx, index: u32, status: u8) -> St
     let s = scheduler(ctx) as *mut Scheduler;
     let path = unsafe { (*s).task(index).path.clone() };
     let first_end = !unsafe { (*s).task(index).ended };
-    if !first_end {
-        if super::record::on(ctx) {
-            assert!(
-                !unsafe { (*ctx).roots.has_pending() },
-                "recorded rest root cleanup is not admitted"
-            );
-        } else {
-            crate::roots::apply_pending(ctx);
-        }
-    }
     let chain = unsafe { (*ctx).failure.take_chain(&path) };
     let failed = status != STATUS_OK;
-    assert!(
-        first_end || !failed || !super::record::on(ctx),
-        "a recorded failing rest is not admitted"
-    );
     assert_eq!(
         failed,
         !chain.is_empty(),
@@ -361,13 +347,10 @@ pub(super) unsafe fn completion(ctx: *mut TaskCtx, index: u32, status: u8) -> St
             }
         }
     };
-    if first_end {
-        super::record::end(ctx, effect)?;
-    } else {
-        // A holding child already published its end. Its returned rest
-        // relinquishes the physical frame here, without repeating that op.
-        effect();
-    }
+    // TaskFinish published result readiness; actual frame completion is a
+    // distinct op even when its rest released no roots. This keeps ordinals
+    // independent of count races and admits cleanup/failures before the join.
+    super::record::end(ctx, effect)?;
     drop(cancellations);
     drop(path);
     if let Some(metrics) = &unsafe { (*ctx).run_ref() }.worker_metrics {
@@ -635,7 +618,7 @@ mod tests {
             for id in 0..8 {
                 assert_eq!(
                     cut.progress[&vec![id]],
-                    hirsel_free::phase::Progress::new(1, Phase::Done)
+                    hirsel_free::phase::Progress::new(2, Phase::Done)
                 );
             }
         }
@@ -827,7 +810,7 @@ mod tests {
             .0;
         assert_eq!(
             cut.progress[&vec![0]],
-            hirsel_free::phase::Progress::new(1, Phase::Done)
+            hirsel_free::phase::Progress::new(2, Phase::Done)
         );
         let trace = recording.trace();
         let marked = std::sync::Arc::try_unwrap(recording)
@@ -856,9 +839,11 @@ mod tests {
                 replay.begin(&[]);
                 replay.publish(&[], Phase::Done).unwrap();
             }
-            replay.begin(&[0]);
-            replay.publish(&[0], Phase::Entered).unwrap();
-            replay.publish(&[0], Phase::Done).unwrap();
+            for _ in 0..tape.cut[&vec![0]].op {
+                replay.begin(&[0]);
+                replay.publish(&[0], Phase::Entered).unwrap();
+                replay.publish(&[0], Phase::Done).unwrap();
+            }
             if tape.cut[&Vec::new()].op >= 3 {
                 replay.begin(&[]);
                 replay.publish(&[], Phase::Entered).unwrap();
@@ -953,3 +938,6 @@ mod tests {
         assert_eq!(outcome.pending, 0);
     }
 }
+
+#[cfg(test)]
+mod rest_tests;

@@ -13,6 +13,8 @@ pub(super) struct Tasks {
     pub current: u64,
     pub yield_now: bool,
     pub shielded: bool,
+    /// Free mode gives every returned frame a distinct completion op.
+    pub free_rests: bool,
     spawn_counts: BTreeMap<u64, u32>,
     active_scopes: BTreeMap<u64, Vec<u64>>,
     scope_canceled: BTreeMap<u64, u32>,
@@ -209,7 +211,10 @@ impl Tasks {
     }
     /// The spawn path of live child `task`.
     pub(super) fn child_path(&self, task: u64) -> Option<Vec<u32>> {
-        self.tasks.get(&task).map(|t| t.path.clone())
+        self.tasks
+            .get(&task)
+            .map(|t| t.path.clone())
+            .or_else(|| self.resting.get(&task).map(|r| r.path.clone()))
     }
     /// Whether each member of task set `set`, in add order, has finished (an awaited
     /// member has not).
@@ -253,8 +258,11 @@ impl Tasks {
         child.detached = true;
         if child.finished {
             let (scope, path, canceled) = (child.scope, child.path.clone(), child.canceled);
+            let holds = matches!(child.result, Some(OperationResult::Complete { .. }));
             let values = self.retire(task)?;
-            self.rest(task, scope, path, canceled, values, false);
+            if holds {
+                self.rest(task, scope, path, canceled, values, false);
+            }
         }
         Ok(())
     }
@@ -269,7 +277,7 @@ impl Tasks {
         values: Vec<Value>,
         exit: bool,
     ) {
-        if values.is_empty() {
+        if values.is_empty() && !self.free_rests {
             return;
         }
         self.resting.insert(
@@ -351,10 +359,24 @@ impl Tasks {
     }
     /// Whether finished child `task` holds a result nobody took yet.
     pub fn holds_result(&self, task: u64) -> bool {
-        self.tasks
-            .get(&task)
-            .is_some_and(|child| child.finished && child.result.is_some())
+        self.tasks.get(&task).is_some_and(|child| {
+            child.finished
+                && child.result.as_ref().is_some_and(|result| {
+                    self.free_rests
+                        || !matches!(
+                            result,
+                            OperationResult::Complete {
+                                value: Value::Unit,
+                                ..
+                            }
+                        )
+                })
+        })
     }
+    pub(super) fn has_rests(&self, parent: u64) -> bool {
+        self.rests.iter().any(|(owner, _)| *owner == parent)
+    }
+
     /// The rests the operation of `parent` queued, in hand-off order.
     pub fn take_rests(&mut self, parent: u64) -> Vec<TaskRest> {
         if self.rests.is_empty() {
@@ -538,14 +560,23 @@ impl Library {
             name,
             "task.await" | "task.await_at" | "task.await_any" | "task.cancel_all"
         );
-        let free = match self.free_enter(
-            if waiting {
-                hirsel_free::phase::Phase::Entered
-            } else {
-                hirsel_free::phase::Phase::Done
-            },
-            context,
-        )? {
+        let calls = matches!(
+            name,
+            "task.await" | "task.await_at" | "task.detach" | "task.detach_all" | "task.cancel_all"
+        );
+        let entry = if calls {
+            self.free_enter_call(context)?
+        } else {
+            self.free_enter(
+                if waiting {
+                    hirsel_free::phase::Phase::Entered
+                } else {
+                    hirsel_free::phase::Phase::Done
+                },
+                context,
+            )?
+        };
+        let free = match entry {
             super::free::Enter::Off => false,
             super::free::Enter::Park(park) => return Ok(park),
             super::free::Enter::Run => true,
@@ -871,7 +902,7 @@ impl Library {
                 result: is_result,
             } => {
                 // Free mode: a scope exit is a waiting op.
-                let free = match self.free_enter(hirsel_free::phase::Phase::Entered, context)? {
+                let free = match self.free_enter_call(context)? {
                     super::free::Enter::Off => false,
                     super::free::Enter::Park(park) => return Ok(park),
                     super::free::Enter::Run => true,
@@ -978,7 +1009,7 @@ impl Library {
         for (path, id, child) in completed {
             match child {
                 OperationResult::Complete { value, .. } => match id {
-                    Some((id, canceled)) if value != Value::Unit => {
+                    Some((id, canceled)) if value != Value::Unit || self.free.is_some() => {
                         rests.push((id, path, canceled, value))
                     }
                     _ => released.push(value),
@@ -1023,6 +1054,14 @@ impl Library {
             }
             _ => return Err(invalid("unfinished joined task")),
         };
+        if self.free.is_some() && matches!(result, OperationResult::Complete { .. }) {
+            let child = &self.tasks.tasks[&task];
+            let (scope, path, canceled) = (child.scope, child.path.clone(), child.canceled);
+            // A moved result still has an empty native cleanup rest. Its actual
+            // completion is a separate Free op, just as for a discarded result.
+            self.tasks.rest(task, scope, path, canceled, vec![], false);
+            self.tasks.defer_yield();
+        }
         self.simulation.record(
             "Tasks",
             "task.await.complete",

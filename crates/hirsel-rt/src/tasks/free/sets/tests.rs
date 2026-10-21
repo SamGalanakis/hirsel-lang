@@ -209,9 +209,12 @@ fn late_set_creation_and_reverse_insertion_preserve_scope_completion_ranks() {
         assert!(replay.start(&[]));
         for path in [&[0][..], &[1][..]] {
             assert!(replay.start(path));
-            replay.begin(path);
-            replay.publish(path, Phase::Entered).unwrap();
-            replay.publish(path, Phase::Done).unwrap();
+            assert_eq!(cut.progress[path], Progress::new(2, Phase::Done));
+            for _ in 0..2 {
+                replay.begin(path);
+                replay.publish(path, Phase::Entered).unwrap();
+                replay.publish(path, Phase::Done).unwrap();
+            }
         }
         for op in 1..=17 {
             replay.begin(&[]);
