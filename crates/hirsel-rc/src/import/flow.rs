@@ -498,6 +498,10 @@ impl Importer<'_, '_> {
                 .unwrap_or_else(|| PVec::filled(self.body.locals.len(), None));
             self.facts = self.entry_facts[t.0 as usize].clone().unwrap_or_default();
         }
+        // An earlier block may have created cached disposal slots after this
+        // block's incoming state was recorded. Reusing one here needs the
+        // same dead storage and absent versions as restoring an emission point.
+        self.pad();
         for (j, instruction) in block.instructions.iter().enumerate() {
             self.statement = (t.0, j as u32);
             self.span = instruction.span;
