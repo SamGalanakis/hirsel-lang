@@ -20,6 +20,9 @@ use hirsel_rt_operations::descriptors::op_descriptor;
 /// Mutex wrappers remain owner-local allocations outside these cell effects.
 /// Drops and task/host effects still need retirement/credit adapters.
 pub(crate) enum Command {
+    TaskSpawn {
+        reservation: RefCell<Option<lifecycle::Spawn>>,
+    },
     RootRelease {
         block: *mut crate::alloc::Header,
     },
@@ -100,6 +103,7 @@ pub(crate) enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::TaskSpawn { .. } => "task.async",
             Self::RootRelease { .. } => "root.release",
             Self::ScopeEnter { .. } => "task.scope_enter",
             Self::TaskSetCreate { .. } => "task.set",
@@ -174,6 +178,8 @@ pub(crate) struct Objects<'a> {
     ctx: *mut TaskCtx,
     record: &'a mut dyn FnMut(TaskId, &'static str, &Outcome, u64),
     poll: Option<&'a mut dyn FnMut() -> Vec<TaskId>>,
+    /// Applied after restoring Frontier and before this retirement's poll.
+    spawned: Vec<(TaskId, crate::ordered::footprint::Held)>,
 }
 
 impl<'a> Objects<'a> {
@@ -190,6 +196,7 @@ impl<'a> Objects<'a> {
             ctx,
             record,
             poll: Some(poll),
+            spawned: Vec::new(),
         }
     }
 
@@ -205,6 +212,7 @@ impl<'a> Objects<'a> {
             ctx,
             record,
             poll: None,
+            spawned: Vec::new(),
         }
     }
 }
@@ -216,6 +224,7 @@ impl Backend<Command> for Objects<'_> {
         let s = super::scheduler(self.ctx);
         match &op.payload {
             Command::Head { .. }
+            | Command::TaskSpawn { .. }
             | Command::ScopeEnter { .. }
             | Command::TaskCancel { .. }
             | Command::TaskSetCreate { .. }
@@ -260,6 +269,16 @@ impl Backend<Command> for Objects<'_> {
         // validity. All byte storage below is owned, including output images.
         let (result, next) = unsafe {
             match &op.payload {
+                Command::TaskSpawn { reservation } => {
+                    assert!(!early, "a child cannot start before spawn retirement");
+                    let spawn = reservation
+                        .borrow_mut()
+                        .take()
+                        .expect("spawn committed once");
+                    let (word, held) = spawn.install(s);
+                    self.spawned.push((word, held));
+                    (Outcome::image(0, word.to_ne_bytes().to_vec()), Next::Yield)
+                }
                 Command::RootRelease { .. } => unreachable!("handled without a scheduler borrow"),
                 Command::Head { .. } => panic!("strict head effect requires its owner callback"),
                 Command::ScopeEnter {

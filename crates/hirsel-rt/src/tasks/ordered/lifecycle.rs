@@ -1,15 +1,64 @@
-//! Strict-head native task effects over the saved-frame dispatcher.
+//! Native task effects over the saved-frame dispatcher.
 //!
 //! Follows the cooperative task tree and Frontier's checked call transitions.
-//! Task mutation happens in a head callback, after its preceding stretch. A
+//! Task mutations retire after their preceding stretches. Scope/spawn commands
+//! own unpublished rows while their issuing task runs ahead. A
 //! holding frame is read only after idle save; completion retires its physical
 //! token before publishing Done or returning to a caller. This test-only slice
-//! does not yet admit deadlines, root releases or host effects.
+//! does not yet admit deadlines or host effects.
 
 use super::super::*;
 use super::engine;
 use crate::ordered::objects::Kind;
 use crate::ordered::{Next, Progress};
+
+/// An unpublished native frame. Owning the reserved row removes it from the
+/// free list, but neither the task tree nor the logical queue can see it yet.
+pub(crate) struct Spawn {
+    index: u32,
+    owner: u64,
+    scope: u64,
+    shield: u32,
+    task: Task,
+    held: crate::ordered::footprint::Held,
+    started: Option<std::time::Instant>,
+    run: *mut crate::context::RunShared,
+}
+
+impl Spawn {
+    pub(super) fn install(mut self, s: &mut Scheduler) -> (u64, crate::ordered::footprint::Held) {
+        let parent = self.owner as u32;
+        assert_eq!(s.task(parent).generation, (self.owner >> 32) as u32);
+        let scope = s.scope_handle(self.scope);
+        assert_eq!(self.task.scope, Some(scope));
+        let ordinal = self.task.path.last().copied().expect("a child path");
+        assert_eq!(
+            s.task(parent).spawned,
+            ordinal,
+            "retire spawns in owner order"
+        );
+        s.task(parent).spawned = ordinal.checked_add(1).expect("spawn path ordinal overflow");
+        self.task.canceled = s
+            .canceled_task(parent, self.shield)
+            .map(|_| CANCEL_PARENT)
+            .into();
+        self.task.priority = s.schedule.admit();
+        let word = handle(self.index, self.task.generation);
+        assert!(
+            s.tasks[self.index as usize].is_none(),
+            "a reserved task row"
+        );
+        s.tasks[self.index as usize] = Some(self.task);
+        s.scope(scope).children.push(self.index);
+        s.link_child(parent, self.index);
+        if let (Some(started), Some(metrics)) =
+            (self.started, unsafe { &*self.run }.worker_metrics.as_ref())
+        {
+            metrics.spawn(started.elapsed());
+        }
+        (word, self.held)
+    }
+}
 
 /// # Safety
 /// As for TaskScopeEnter, with the ordered policy and role installed.
@@ -57,11 +106,42 @@ pub(crate) unsafe fn spawn(
     environment: *mut Header,
     operation_site: u64,
 ) -> Stopped<u8> {
-    let ((index, generation, _), progress) = engine::head_effect(ctx, "task.async", || {
-        // SAFETY: the callback runs immediately at this spawn's head commit.
-        let child = unsafe { spawn_child(ctx, scope, code, environment, operation_site) };
-        (child, Next::Yield)
-    })?;
+    let parent = engine::current(ctx);
+    let scope = unsafe { scope.read() };
+    let ordinal = {
+        let committed = scheduler(ctx).task(parent as u32).spawned;
+        let next = engine::driver(ctx)
+            .spawn_ordinals
+            .entry(parent)
+            .or_insert(committed);
+        let ordinal = *next;
+        *next = next.checked_add(1).expect("spawn path ordinal overflow");
+        ordinal
+    };
+    let (index, generation, path) = {
+        let s = scheduler(ctx);
+        let mut path = s.task(parent as u32).path.clone();
+        path.push(ordinal);
+        let generation = s.fresh_generation();
+        let index = s.vacant_tasks.pop().unwrap_or_else(|| {
+            s.tasks.push(None);
+            (s.tasks.len() - 1) as u32
+        });
+        (index, generation, path)
+    };
+    let stack = unsafe { (*ctx).worker() }
+        .idle_stacks
+        .pop()
+        .unwrap_or_else(Stack::new);
+    let child = stack.context();
+    unsafe {
+        child.write(TaskCtx::new((*ctx).worker_ptr(), (*ctx).run_ptr()));
+        (*child).task_id = index;
+        (*child).task_sp = stack.prepare(task_entry, child.cast(), index as usize as *mut u8);
+    }
+    let mut task = Task::new(generation, child, Some(scope as u32), path, None);
+    task.code = Some((code, environment, operation_site));
+    task.stack = Some(stack);
     // SAFETY: no notification has published this owned environment yet.
     let captures = unsafe {
         crate::ordered::capture::scan(
@@ -71,7 +151,6 @@ pub(crate) unsafe fn spawn(
         )
     };
     let word = handle(index, generation);
-    let parent = engine::current(ctx);
     let driver = engine::driver(ctx);
     let held = driver.objects.captured(&captures);
     // Task result types are erased by TaskSpawn's current native ABI. An
@@ -88,9 +167,32 @@ pub(crate) unsafe fn spawn(
         Kind::Task,
         word,
     );
-    driver.enqueue(word, held);
+    let spawn = Spawn {
+        index,
+        owner: parent,
+        scope,
+        shield: unsafe { (*ctx).shield },
+        task,
+        held,
+        started: unsafe { (*ctx).run_ref() }
+            .worker_metrics
+            .as_ref()
+            .map(|_| std::time::Instant::now()),
+        run: unsafe { (*ctx).run_ptr() },
+    };
+    engine::submit(
+        ctx,
+        super::Command::TaskSpawn {
+            reservation: std::cell::RefCell::new(Some(spawn)),
+        }
+        .operation(crate::ordered::footprint::Footprint {
+            writes: std::collections::BTreeSet::from([crate::ordered::footprint::Item::Task(
+                parent,
+            )]),
+            ..Default::default()
+        }),
+    )?;
     unsafe { out.write(word) };
-    engine::continue_at_head(ctx, progress)?;
     Ok(STATUS_OK)
 }
 
@@ -542,6 +644,157 @@ mod tests {
     use crate::ordered::Policy;
 
     const NONE: [u64; 2] = [0, 0];
+
+    #[derive(Default)]
+    struct SpawnOrder {
+        issued: std::sync::atomic::AtomicBool,
+        observed: std::sync::atomic::AtomicBool,
+        children: [std::sync::atomic::AtomicU64; 2],
+        paths: std::sync::Mutex<Vec<Vec<u32>>>,
+    }
+
+    unsafe extern "C" fn spawning_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+        use std::sync::atomic::Ordering;
+        let [probe, ordinal, scope] =
+            unsafe { crate::alloc::payload(env).cast::<[u64; 3]>().read() };
+        let probe = unsafe { &*(probe as *const SpawnOrder) };
+        if ordinal == 0 {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !probe.issued.load(Ordering::Acquire) {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "younger spawner could not run ahead"
+                );
+                std::thread::yield_now();
+            }
+            let _role = unsafe { role::Guard::new(ctx) };
+            let s = scheduler(ctx);
+            for child in &probe.children {
+                let child = child.load(Ordering::Acquire);
+                assert!(
+                    s.tasks[child as u32 as usize].is_none(),
+                    "spawn has not retired"
+                );
+            }
+            assert_eq!(s.task(0).spawned, 1);
+            let scope = s.scope_handle(scope);
+            assert_eq!(s.scope(scope).children.len(), 1);
+            assert!(
+                probe.paths.lock().unwrap().is_empty(),
+                "unpublished children never start"
+            );
+            probe.observed.store(true, Ordering::Release);
+        } else {
+            let _role = unsafe { role::Guard::new(ctx) };
+            let s = scheduler(ctx);
+            let me = s.current;
+            let path = s.task(me).path.clone();
+            assert_eq!(path, vec![ordinal as u32]);
+            assert_eq!(
+                s.task(me).parent.unwrap().0,
+                0,
+                "publication uses the originating parent"
+            );
+            probe.paths.lock().unwrap().push(path);
+        }
+        STATUS_OK
+    }
+
+    #[test]
+    fn native_logged_spawns_remain_unpublished_behind_a_running_head_and_keep_owner_paths() {
+        use std::sync::{Arc, atomic::Ordering};
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 24,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&layout as *const crate::Layout];
+        for width in [2, 4, 8] {
+            let probe = Arc::new(SpawnOrder::default());
+            let seen = probe.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+                move |ctx| unsafe {
+                    let mut scope = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                        STATUS_OK
+                    );
+                    for ordinal in 0..3 {
+                        let env = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            24,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(env).cast::<[u64; 3]>().write([
+                            Arc::as_ptr(&seen) as u64,
+                            ordinal,
+                            scope,
+                        ]);
+                        let mut child = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_spawn(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut child,
+                                &scope,
+                                spawning_child,
+                                env
+                            ),
+                            STATUS_OK
+                        );
+                        if ordinal != 0 {
+                            seen.children[ordinal as usize - 1].store(child, Ordering::Release);
+                            let _role = role::Guard::new(ctx);
+                            assert!(scheduler(ctx).tasks[child as u32 as usize].is_none());
+                            assert!(
+                                !engine::driver(ctx)
+                                    .frontier
+                                    .as_ref()
+                                    .unwrap()
+                                    .queue()
+                                    .any(|id| id == child)
+                            );
+                        }
+                    }
+                    seen.issued.store(true, Ordering::Release);
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                        STATUS_OK
+                    );
+                    let _role = role::Guard::new(ctx);
+                    engine::at_head(ctx).unwrap();
+                    let me = engine::current(ctx);
+                    engine::driver(ctx).finishing(me);
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            assert!(probe.observed.load(Ordering::Acquire));
+            let mut paths = probe.paths.lock().unwrap().clone();
+            paths.sort();
+            assert_eq!(paths, [vec![1], vec![2]]);
+        }
+    }
 
     unsafe extern "C" fn child(ctx: *mut TaskCtx, environment: *mut Header, _: u64, _: u64) -> u8 {
         let [identity, atomic] =

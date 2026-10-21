@@ -39,8 +39,8 @@ pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
 /// no host or terminal effects. Native task tests
 /// use supported task/receive boundaries and dropless closure environments;
 /// no deadlines or host-bearing finalizers are admitted. Resource finalizers
-/// use only installed task/E/drop boundaries. Root releases are strict-head;
-/// positional speculative release/credit logs are not installed.
+/// use only installed task/E/drop boundaries. Shared-root releases log owned
+/// credits; mutex roots and yielding resource drops remain strict-head.
 /// No native object exists before this admission.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
     unsafe {
@@ -327,8 +327,13 @@ fn with_frontier<T>(
     let mut record = |task, _, outcome: &Outcome, _| records.push((task, outcome.returned()));
     let mut backend = unsafe { Objects::deferred(ctx, &mut record) };
     let result = action(&mut frontier, &mut backend);
+    let spawned = std::mem::take(&mut backend.spawned);
+    drop(backend);
     let driver = driver(ctx);
     assert!(driver.frontier.replace(frontier).is_none());
+    for (task, held) in spawned {
+        driver.enqueue(task, held);
+    }
     for (task, returned) in records {
         let ordinal = driver.recorded.entry(task).or_default();
         if driver.waiting.get(&task) == Some(ordinal) {
@@ -1436,6 +1441,14 @@ mod tests {
                             0
                         );
                         last_child = child;
+                        if matches!(mode, 0 | 10) {
+                            // Spawn now returns at issuance. Setup must regain
+                            // the head before publishing the second child's
+                            // diagnostic start flag, so the older child cannot
+                            // hold retirement ahead of that child's spawn.
+                            let _role = role::Guard::new(ctx);
+                            at_head(ctx).unwrap();
+                        }
                     }
                     let mut result = [0u64; 2];
                     assert_eq!(

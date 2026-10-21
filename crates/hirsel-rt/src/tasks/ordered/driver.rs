@@ -39,6 +39,7 @@ pub(crate) struct Driver {
     pub(super) fuel_initialized: bool,
     pub(super) fuel_grants: BTreeMap<TaskId, u64>,
     pub(super) stretches: BTreeMap<TaskId, crate::budget::stretch::Stretch>,
+    pub(super) spawn_ordinals: BTreeMap<TaskId, u32>,
     pub(super) memory: bool,
     pub(super) budgets: crate::budget::stretch::Budgets,
     /// A park/holding/end boundary cannot poll slots before its physical save.
@@ -63,6 +64,7 @@ impl Driver {
             fuel_initialized: false,
             fuel_grants: BTreeMap::new(),
             stretches: BTreeMap::new(),
+            spawn_ordinals: BTreeMap::new(),
             memory: false,
             budgets: crate::budget::stretch::Budgets {
                 fuel: false,
