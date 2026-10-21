@@ -297,10 +297,75 @@ fn mem_usage_reports_peak_rss_and_the_tables_held() {
             .unwrap_or_else(|| panic!("no {name:?} in {memory}"))
     };
     assert!(
-        held("std image") > 0 && held("package cache") > 0,
+        held("std image") > 0 && held("engine: signature snapshot") > 0,
         "{memory}"
     );
     assert!(held("engine: signatures") > 0, "{memory}");
+}
+
+#[test]
+fn native_memory_separates_phase_rss_structural_bytes_and_stack_reservations() {
+    let source = std_file(HELLO);
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args([
+            "build",
+            "--debug",
+            "--backend",
+            "cranelift",
+            "--mem-usage",
+            "--timings=json",
+        ])
+        .env("HIRSEL_JOBS", "2")
+        .arg(&source)
+        .arg("-o")
+        .arg(source.with_extension("exe"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report = report(&output.stderr);
+    let points = report["memory"]["checkpoints"].as_array().unwrap();
+    assert_eq!(
+        points
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "front complete",
+            "global Value complete",
+            "native workers complete",
+            "link complete"
+        ]
+    );
+    for point in points {
+        assert!(point["heap_request_delta_bytes"].is_i64(), "{point}");
+        assert!(point["rss_bytes"].as_u64().unwrap() > 0, "{point}");
+        assert!(point["peak_rss_bytes"].as_u64().unwrap() > 0, "{point}");
+    }
+    let counts = &report["counts"];
+    assert!(
+        counts["native Value structural bytes peak"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        counts["native active estimated bytes peak"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let workers = counts["native effective workers peak"].as_u64().unwrap();
+    assert!((1..=2).contains(&workers));
+    assert_eq!(
+        counts["native worker stack reservation bytes peak"]
+            .as_u64()
+            .unwrap(),
+        if workers > 1 {
+            workers * hirsel_intern::jobs::COMPILER_STACK_BYTES as u64
+        } else {
+            0
+        }
+    );
 }
 
 #[test]
