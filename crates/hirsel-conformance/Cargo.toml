@@ -7,6 +7,8 @@ rust-version.workspace = true
 default-run = "hirsel-conformance"
 
 [dependencies]
+hirsel-intern = { path = "../hirsel-intern", features = ["id-salt"] }
+hirsel-interp = { path = "../hirsel-interp" }
 hirsel-guard = { path = "../hirsel-guard" }
 hirsel-run-config = { path = "../hirsel-run-config" }
 hirsel-run-schema = { path = "../hirsel-run-schema" }

@@ -520,3 +520,180 @@ fn o5_fails_when_the_twin_differs_in_meaning() {
     }
     let _ = std::fs::remove_dir_all(&work);
 }
+
+#[test]
+fn candidate_transactions_match_independent_cold_trees() {
+    use hirsel_conformance::oracle::candidate;
+    // Fixture parsing/materialization is independent of the frozen adapter.
+    let root = root();
+    let work = work("candidate-txn");
+    let names = [
+        "body-edit",
+        "signature-private",
+        "signature-public",
+        "definition-add",
+        "definition-remove",
+        "generator-helper-body",
+        "reflected-helper-lookup",
+        "secondary-diagnostic-site",
+        "duplicate-insert-file",
+        "duplicate-remove-file",
+        "edit-above-item",
+        "opaque-representation",
+    ];
+    let mut completed = 0;
+    for name in names {
+        let scenario = Scenario::read(
+            &root.join(SCENARIOS).join("o2").join(format!("{name}.edit")),
+            &root,
+        )
+        .unwrap();
+        let before = work.join(name).join("base");
+        let after = work.join(name).join("cold");
+        scenario.write(&before, &root, false).unwrap();
+        scenario.write(&after, &root, true).unwrap();
+        let config = oracle::Config::default();
+        let workspace = candidate::workspace(&config).unwrap();
+        let base = workspace.capture(&scenario.entry(&before)).unwrap();
+        let lease = candidate::submit(&workspace, &base, 1, &scenario.after).unwrap();
+        let actual = candidate::result(&workspace, &lease, &scenario.entry(&before)).unwrap();
+        let expected = candidate::cold(&scenario.entry(&after), &config).unwrap();
+        assert_eq!(
+            oracle::difference(&expected, &actual),
+            None,
+            "{name}: {:?}",
+            oracle::difference(&expected, &actual)
+        );
+        completed += 1;
+    }
+    assert_eq!(completed, names.len());
+    std::fs::remove_dir_all(work).unwrap();
+}
+
+#[test]
+fn candidate_transactions_jobs_salts_in_separate_processes() {
+    let work = work("candidate-matrix");
+    let mut cells = 0;
+    for jobs in [1, 2, 8] {
+        for salt in [0, 1, 7] {
+            let cell = work.join(format!("jobs{jobs}-salt{salt}"));
+            let output = Command::new(env!("CARGO_BIN_EXE_oracle"))
+                .args([
+                    "candidate-cell",
+                    "--jobs",
+                    &jobs.to_string(),
+                    "--salt",
+                    &salt.to_string(),
+                    "--out",
+                ])
+                .arg(&cell)
+                .arg(root())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "jobs{jobs}/salt{salt}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let counts = std::fs::read_to_string(cell.join("counts.txt")).unwrap();
+            assert!(counts.starts_with("completed=19 "), "{counts}");
+            cells += 1;
+        }
+    }
+    assert_eq!(cells, 9);
+    std::fs::remove_dir_all(work).unwrap();
+}
+/// Opposing ownership/capability verdicts and moved source maps are compared
+/// through real independent disk checks. Swap each sibling artifact that
+/// differs and require the ordinary comparison to reject it.
+#[test]
+fn candidate_opposing_siblings_and_swapped_artifacts_are_detected() {
+    use hirsel_conformance::oracle::candidate;
+    use std::collections::BTreeMap;
+    let work = work("candidate-sibling-faults");
+    let pairs = [
+        (
+            "ownership",
+            "fn identity[T](take x:T)->T{x}\n",
+            "fn identity[T](x:T)->T{x}\n",
+        ),
+        (
+            "capability",
+            "@noalloc\nfn inert_only[T:inert](x:T)->(){()}\nfn check(value:u32)->(){inert_only(value)}\n",
+            "@noalloc\nfn inert_only[T:inert](x:T)->(){()}\nfn check(value:Dir)->(){inert_only(value)}\n",
+        ),
+    ];
+    for (name, good, bad) in pairs {
+        let dir = work.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let entry = dir.join("main.hir");
+        std::fs::write(&entry, good).unwrap();
+        let config = oracle::Config::default();
+        let w = candidate::workspace(&config).unwrap();
+        let base = w.capture(&entry).unwrap();
+        let a = candidate::submit(
+            &w,
+            &base,
+            1,
+            &BTreeMap::from([("main.hir".into(), good.into())]),
+        )
+        .unwrap();
+        let b = candidate::submit(
+            &w,
+            &base,
+            2,
+            &BTreeMap::from([("main.hir".into(), bad.into())]),
+        )
+        .unwrap();
+        let actual_a = candidate::result(&w, &a, &entry).unwrap();
+        let actual_b = candidate::result(&w, &b, &entry).unwrap();
+        let mut expected = vec![];
+        for (i, text) in [good, bad].iter().enumerate() {
+            let tree = dir.join(format!("cold-{i}"));
+            std::fs::create_dir(&tree).unwrap();
+            let path = tree.join("main.hir");
+            std::fs::write(&path, text).unwrap();
+            expected.push(candidate::cold(&path, &config).unwrap());
+        }
+        assert_eq!(expected[0]["state"], b"pass");
+        assert_eq!(expected[1]["state"], b"reject");
+        assert_eq!(oracle::difference(&expected[0], &actual_a), None);
+        assert_eq!(oracle::difference(&expected[1], &actual_b), None);
+        let mut swaps = 0;
+        for (key, value) in &actual_b {
+            if actual_a.get(key) == Some(value) {
+                continue;
+            }
+            let mut swapped = actual_a.clone();
+            swapped.insert(key.clone(), value.clone());
+            assert!(
+                oracle::difference(&expected[0], &swapped).is_some(),
+                "{name}/{key}"
+            );
+            swaps += 1;
+        }
+        assert!(
+            swaps >= 3,
+            "opposing verdict/diagnostics/products swaps not exercised"
+        );
+        // Keep the old diagnostics, move text in a third isolated candidate.
+        let shifted = format!("// moved anchor\n\n{bad}");
+        let c = candidate::submit(
+            &w,
+            &base,
+            3,
+            &BTreeMap::from([("main.hir".into(), shifted.clone())]),
+        )
+        .unwrap();
+        let actual_c = candidate::result(&w, &c, &entry).unwrap();
+        assert_ne!(actual_b["diagnostics/json"], actual_c["diagnostics/json"]);
+        let mut swapped = actual_c.clone();
+        swapped.insert(
+            "diagnostics/json".into(),
+            actual_b["diagnostics/json"].clone(),
+        );
+        assert!(oracle::difference(&actual_c, &swapped).is_some());
+        assert_eq!(std::fs::read_to_string(&entry).unwrap(), good);
+    }
+    std::fs::remove_dir_all(work).unwrap();
+}

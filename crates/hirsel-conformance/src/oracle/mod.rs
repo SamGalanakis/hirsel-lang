@@ -3,6 +3,7 @@
 //! O4 the verified result store; and O5, analysis annotation invariance (PS-19). Each runs against today's compiler where it can;
 //! a check that needs a switch the compiler lacks reports `Verdict::Todo` naming
 //! the switch and its lane (`switches`), never a pass.
+pub mod candidate;
 pub mod edits;
 pub mod o1;
 pub mod o2;

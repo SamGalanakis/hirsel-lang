@@ -60,6 +60,7 @@ fn main() -> ExitCode {
     let options = parse_or_exit(parse(&command, &mut args));
     match command.as_str() {
         "produce" => produce(options),
+        "cold-check" | "candidate-cell" => candidate_command(&command, options),
         "o1" | "o2" | "o3" | "o4" | "o5" => match campaign(&command, &options) {
             Ok(report) => {
                 if options.json {
@@ -85,6 +86,11 @@ fn main() -> ExitCode {
 }
 
 fn parse(command: &str, args: &mut Parser) -> Result<Options, hirsel_cli_args::lexopt::Error> {
+    let command = if matches!(command, "cold-check" | "candidate-cell") {
+        "produce"
+    } else {
+        command
+    };
     let mut o = Options::default();
     let list = |text: String| -> Vec<String> { text.split(',').map(str::to_string).collect() };
     while let Some(arg) = args.next()? {
@@ -263,5 +269,32 @@ fn scenarios(root: &Path, oracle: &str, options: &Options) -> Result<Vec<Scenari
             dir.display()
         )),
         None => Ok(scenarios),
+    }
+}
+
+fn candidate_command(command: &str, options: Options) -> ExitCode {
+    let (Some(out), Some(program)) = (options.out, options.program) else {
+        return ExitCode::from(2);
+    };
+    if let Some(salt) = options.config.salt {
+        hirsel_intern::salt_ids(salt);
+    }
+    let result = if command == "cold-check" {
+        oracle::candidate::cold(&program, &options.config)
+            .and_then(|artifacts| write_artifacts(&out, &artifacts).map_err(|e| e.to_string()))
+    } else {
+        oracle::candidate::matrix_cell(
+            &program,
+            &options.config,
+            &out,
+            &env::current_exe().unwrap(),
+        )
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{command}: {error}");
+            ExitCode::FAILURE
+        }
     }
 }

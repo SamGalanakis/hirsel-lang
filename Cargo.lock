@@ -540,6 +540,7 @@ dependencies = [
  "hirsel-engine",
  "hirsel-guard",
  "hirsel-intern",
+ "hirsel-interp",
  "hirsel-proof-export",
  "hirsel-run-config",
  "hirsel-run-schema",
