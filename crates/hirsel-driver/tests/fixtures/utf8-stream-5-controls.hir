@@ -1,0 +1,90 @@
+// In-memory example: output survives both input and decoder scopes.
+fn owned() -> String {
+  let mut d = std@1/utf8.decoder(Strict())
+  let input = bytes.from_list([65u8, 226u8])
+  let Ok(first) = std@1/utf8.feed(mut d, input, false) else {
+    return "bad"
+  }
+  let Ok(last) = std@1/utf8.feed(mut d, bytes.from_list([130u8, 172u8]), true) else {
+    return "bad"
+  }
+  let mut out: List[u8] = []
+  std@1/text.append(mut out, first)
+  std@1/text.append(mut out, last)
+  std@1/text.finish_valid(take out)
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(owned() == "A€", TextInvariant())
+  let mut d = std@1/utf8.decoder(Strict())
+  failure.check(std@1/utf8.feed(mut d, b"", false) == Ok(""), TextInvariant())
+  failure.check(std@1/utf8.offset(d) == 0, TextInvariant())
+  failure.check(std@1/utf8.feed(mut d, b"", true) == Ok(""), TextInvariant())
+  failure.check(std@1/utf8.status(d) == Finished(), TextInvariant())
+  failure.check(
+    std@1/utf8.feed(mut d, b"x", false) == Error(AlreadyFinished()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.feed(mut d, b"", true) == Error(AlreadyFinished()),
+    TextInvariant()
+  )
+  failure.check(std@1/utf8.offset(d) == 0, TextInvariant())
+  let mut broken = std@1/utf8.decoder(Strict())
+  let Ok(earlier) = std@1/utf8.feed(mut broken, b"earlier", false) else {
+    return Error(())
+  }
+  failure.check(
+    std@1/utf8.feed(mut broken, bytes.from_list([120u8, 225u8, 128u8]), false) == Ok(
+      "x"
+    ),
+    TextInvariant()
+  )
+  failure.check(std@1/utf8.pending_bytes(broken) == 2, TextInvariant())
+  // Reject the continuation; the failing Result carries no String.
+  failure.check(
+    std@1/utf8.feed(mut broken, b"discarded", false) == Error(InvalidSequence(8)),
+    TextInvariant()
+  )
+  failure.check(std@1/utf8.status(broken) == Failed(), TextInvariant())
+  failure.check(std@1/utf8.pending_bytes(broken) == 0, TextInvariant())
+  failure.check(
+    std@1/utf8.feed(mut broken, b"", true) == Error(DecoderFailed()),
+    TextInvariant()
+  )
+  failure.check(earlier == "earlier", TextInvariant())
+  let mut unfinished = std@1/utf8.decoder(Strict())
+  failure.check(
+    std@1/utf8.feed(mut unfinished, bytes.from_list([65u8, 241u8, 128u8, 128u8]), false) == Ok(
+      "A"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.feed(mut unfinished, b"", true) == Error(IncompleteSequence(1)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.feed(mut unfinished, b"", true) == Error(DecoderFailed()),
+    TextInvariant()
+  )
+  let mut atomic = std@1/utf8.decoder(Strict())
+  failure.check(
+    std@1/utf8.feed(mut atomic, bytes.from_list([65u8, 255u8]), true) == Error(
+      InvalidSequence(1)
+    ),
+    TextInvariant()
+  )
+  let mut lossy = std@1/utf8.decoder(Lossy())
+  failure.check(
+    std@1/utf8.feed(mut lossy, bytes.from_list([241u8, 128u8, 128u8]), false) == Ok(""),
+    TextInvariant()
+  )
+  failure.check(std@1/utf8.feed(mut lossy, b"", false) == Ok(""), TextInvariant())
+  failure.check(std@1/utf8.feed(mut lossy, b"", true) == Ok("�"), TextInvariant())
+  failure.check(
+    std@1/utf8.feed(mut lossy, b"", true) == Error(AlreadyFinished()),
+    TextInvariant()
+  )
+  Ok(())
+}

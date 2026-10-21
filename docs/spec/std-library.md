@@ -4830,3 +4830,13 @@ logical input work and parser retention, not process RSS.
 The check sequence and limits are program semantics for record/replay; they
 cannot be changed by an optimizer or provider setting. Children obtain their
 own Scope through a nested `task.scope` using captured global Tasks.
+
+### Streaming UTF-8 (`std@1/utf8`)
+
+`utf8.decoder(Strict() | Lossy())` creates an opaque incremental decoder.
+`utf8.feed(mut decoder, chunk: Bytes, eof: bool) -> Result[String, StreamError]`
+returns owned complete UTF-8, retaining at most three prefix bytes between calls.
+Strict errors identify the absolute invalid sequence start, discard this call's
+output, and poison the decoder. Lossy concatenated output equals `decode_lossy`
+on the concatenated input, including at EOF. Successful EOF finishes exactly
+once. See [the full contract and in-memory example](utf8-streaming.md).

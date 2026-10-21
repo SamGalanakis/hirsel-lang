@@ -927,3 +927,8 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         }
     });
 }
+
+#[test]
+fn utf8_stream_5_is_ordinary_source() {
+    super::utf8_stream_5::source_origin();
+}

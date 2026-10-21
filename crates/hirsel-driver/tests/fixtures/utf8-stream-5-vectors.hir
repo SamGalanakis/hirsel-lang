@@ -1,0 +1,133 @@
+// Rust a7c37f9f0ee5e93396106e9de20f4a86b4154e63:
+// library/alloctests/tests/string.rs:63-114; RFC 3629 scalar edges.
+// The bounded Rust harness also supplies random vectors to these same helpers.
+fn partition(
+  data: Bytes,
+  expected: String,
+  error: Option[std@1/utf8.StreamError],
+  mask: u64
+) -> () {
+  let mut lossy = std@1/utf8.decoder(Lossy())
+  let mut strict = std@1/utf8.decoder(Strict())
+  let mut out: List[u8] = []
+  let mut valid: List[u8] = []
+  let mut actual: Option[std@1/utf8.StreamError] = None()
+  let n = bytes.len(data)
+  let mut start: u64 = 0
+  let mut end: u64 = 0
+  failure.check(std@1/utf8.feed(mut lossy, b"", false) == Ok(""), TextInvariant())
+  while end <= n {
+    if end == n || mask & 1u64 << end != 0 {
+      let chunk = bytes.slice(data, start, end)
+      let Ok(piece) = std@1/utf8.feed(mut lossy, chunk, end == n) else {
+        failure.check(false, TextInvariant())
+        return
+      }
+      std@1/text.append(mut out, piece)
+      failure.check(std@1/utf8.pending_bytes(lossy) <= 3, TextInvariant())
+      failure.check(std@1/utf8.offset(lossy) == end, TextInvariant())
+      if actual == None() {
+        match std@1/utf8.feed(mut strict, chunk, end == n) {
+          Ok(text) => std@1/text.append(mut valid, text),
+          Error(e) => {
+            actual = Some(e)
+          },
+        }
+      }
+      if end != n {
+        failure.check(std@1/utf8.feed(mut lossy, b"", false) == Ok(""), TextInvariant())
+      }
+      start = end
+    }
+    end += 1
+  }
+  failure.check(std@1/text.finish_valid(take out) == expected, TextInvariant())
+  failure.check(actual == error, TextInvariant())
+  if actual == None() {
+    failure.check(std@1/text.finish_valid(take valid) == expected, TextInvariant())
+    failure.check(string.from_bytes(unique data) == Ok(expected), TextInvariant())
+    failure.check(std@1/utf8.status(strict) == Finished(), TextInvariant())
+  } else {
+    failure.check(std@1/utf8.status(strict) == Failed(), TextInvariant())
+    failure.check(
+      std@1/utf8.feed(mut strict, b"", true) == Error(DecoderFailed()),
+      TextInvariant()
+    )
+  }
+}
+
+fn check(data: Bytes, expected: String, error: Option[std@1/utf8.StreamError]) -> () {
+  failure.check(std@1/utf8.decode_lossy(data) == expected, TextInvariant())
+  let n = bytes.len(data)
+  if n <= 4 {
+    // Every partition, including empty first and empty nonfinal chunks.
+    for mask in 0u64..1u64 << n {
+      partition(data, expected, error, mask)
+    }
+  } else {
+    partition(data, expected, error, 0)
+    // Every two-chunk split and the one-byte-at-a-time partition.
+    for split in 0u64..n {
+      partition(data, expected, error, 1u64 << split)
+    }
+    partition(data, expected, error, 18446744073709551615u64)
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  check(b"", "", None())
+  check(b"\x00\x7f", "\u{0}\u{7f}", None())
+  check(b"\xc2\x80", "\u{80}", None())
+  check(b"\xdf\xbf", "\u{7ff}", None())
+  check(b"\xe0\xa0\x80", "\u{800}", None())
+  check(b"\xed\x9f\xbf", "\u{d7ff}", None())
+  check(b"\xee\x80\x80", "\u{e000}", None())
+  check(b"\xef\xbf\xbf", "\u{ffff}", None())
+  check(b"\xf0\x90\x80\x80", "\u{10000}", None())
+  check(b"\xf4\x8f\xbf\xbf", "\u{10ffff}", None())
+  check(b"\xc0\x80", "��", Some(InvalidSequence(0)))
+  check(b"\xe0\x9f\xbf", "���", Some(InvalidSequence(0)))
+  check(b"\xed\xa0\x80", "���", Some(InvalidSequence(0)))
+  check(b"\xf0\x8f\xbf\xbf", "����", Some(InvalidSequence(0)))
+  check(b"\xf4\x90\x80\x80", "����", Some(InvalidSequence(0)))
+  check(b"\xf5\x80\x80\x80", "����", Some(InvalidSequence(0)))
+  check(b"\x80", "�", Some(InvalidSequence(0)))
+  check(b"\xff", "�", Some(InvalidSequence(0)))
+  check(b"\xc2A", "�A", Some(InvalidSequence(0)))
+  check(b"\xe1\x80A", "�A", Some(InvalidSequence(0)))
+  check(b"\xf1\x80\x80A", "�A", Some(InvalidSequence(0)))
+  check(b"A\xe1\x80", "A�", Some(IncompleteSequence(1)))
+  check(b"\xc2", "�", Some(IncompleteSequence(0)))
+  check(b"\xe0", "�", Some(IncompleteSequence(0)))
+  check(b"\xe0\xa0", "�", Some(IncompleteSequence(0)))
+  check(b"\xed\x9f", "�", Some(IncompleteSequence(0)))
+  check(b"\xf0", "�", Some(IncompleteSequence(0)))
+  check(b"\xf0\x90", "�", Some(IncompleteSequence(0)))
+  check(b"\xf0\x90\x80", "�", Some(IncompleteSequence(0)))
+  check(b"\xf4\x8f\xbf", "�", Some(IncompleteSequence(0)))
+  check(b"\xe0\x80", "��", Some(InvalidSequence(0)))
+  check(b"\xf4\x90", "��", Some(InvalidSequence(0)))
+  check(b"\xe1\xc2\x80", "�\u{80}", Some(InvalidSequence(0)))
+  check(b"hello", "hello", None())
+  check(string.as_bytes("ศไทย中华Việt Nam"), "ศไทย中华Việt Nam", None())
+  check(
+    b"Hello\xc2 There\xff Goodbye",
+    "Hello� There� Goodbye",
+    Some(InvalidSequence(5))
+  )
+  check(
+    b"Hello\xc0\x80 There\xe6\x83 Goodbye",
+    "Hello�� There� Goodbye",
+    Some(InvalidSequence(5))
+  )
+  check(b"\xf5foo\xf5\x80bar", "�foo��bar", Some(InvalidSequence(0)))
+  check(b"\xf1foo\xf1\x80bar\xf1\x80\x80baz", "�foo�bar�baz", Some(InvalidSequence(0)))
+  check(b"\xf4foo\xf4\x80bar\xf4\xbfbaz", "�foo�bar��baz", Some(InvalidSequence(0)))
+  check(
+    b"\xf0\x80\x80\x80foo\xf0\x90\x80\x80bar",
+    "����foo𐀀bar",
+    Some(InvalidSequence(0))
+  )
+  check(b"\xed\xa0\x80foo\xed\xbf\xbfbar", "���foo���bar", Some(InvalidSequence(0)))
+  Ok(())
+}

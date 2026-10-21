@@ -65,3 +65,207 @@ pub fn decode_lossy(data: Bytes) -> unique String uses {} {
     },
   }
 }
+
+@serializable
+pub type Policy = Strict | Lossy
+
+@serializable
+pub type StreamError = InvalidSequence(u64) | IncompleteSequence(u64) | OffsetOverflow | AlreadyFinished | DecoderFailed
+
+@serializable
+pub type StreamStatus = Active | Finished | Failed
+
+// Rust f6c1107f8be13e48465e12c0fd26e6a39fe18e4f:
+// library/core/src/str/lossy.rs:201-286 (Utf8Chunks::next).
+// Go ebe2feefc400f813aefdc8a036e66d2619da6649:
+// src/unicode/utf8/utf8.go:110-127 (FullRune), :171-208 (DecodeRune).
+// Retain only FullRune's otherwise valid incomplete prefix. Rust's invalid
+// span excludes the rejected continuation, which is retried as a new lead.
+pub opaque type Decoder: copyable + inert + noalloc_drop uses {} {
+  policy: Policy,
+  pending: Inline[u8, 3],
+  count: u64,
+  offset: u64,
+  status: StreamStatus,
+}
+
+@noalloc
+pub fn decoder(policy: Policy) -> Decoder uses {} {
+  Decoder(policy: policy, pending: [0, 0, 0], count: 0, offset: 0, status: Active())
+}
+
+// Total bytes consumed, including a retained prefix; errors name its start.
+@noalloc
+pub fn offset(d: Decoder) -> u64 uses {} {
+  d.offset
+}
+
+@noalloc
+pub fn pending_bytes(d: Decoder) -> u64 uses {} {
+  d.count
+}
+
+@noalloc
+pub fn status(d: Decoder) -> StreamStatus uses {} {
+  d.status
+}
+
+@noalloc
+fn poison(mut d: Decoder) -> () uses {} {
+  d.pending = [0, 0, 0]
+  d.count = 0
+  d.status = Failed()
+}
+
+fn replacement(mut out: List[u8]) -> () uses {} {
+  core@1/list.push(mut out, 239u8)
+  core@1/list.push(mut out, 191u8)
+  core@1/list.push(mut out, 189u8)
+}
+
+// Utf8Chunks' width-by-width scanner with FullRune's early-invalid test.
+// Unlike a standalone DecodeRune, Invalid spans use Rust's maximal prefix
+// rather than Go's width-1 error, preserving the existing lossy contract.
+type Scalar = Complete(u64) | Invalid(u64) | Incomplete(u64)
+
+@noalloc
+fn source_byte(d: Decoder, chunk: Bytes, index: u64) -> u8 uses {} {
+  if index < d.count {
+    d.pending[index]
+  } else {
+    chunk[index - d.count]
+  }
+}
+
+@noalloc
+fn scalar(d: Decoder, chunk: Bytes, start: u64, len: u64) -> Scalar uses {} {
+  let first = source_byte(d, chunk, start)
+  if first < 128 {
+    return Complete(1)
+  }
+  let width: u64 = if first >= 194 && first <= 223 {
+    2
+  } else if first >= 224 && first <= 239 {
+    3
+  } else if first >= 240 && first <= 244 {
+    4
+  } else {
+    return Invalid(1)
+  }
+  let available = len - start
+  if available < 2 {
+    return Incomplete(1)
+  }
+  // Go's acceptRanges: ordinary, E0, ED, F0 and F4 second-byte bounds.
+  let low: u8 = if first == 224 {
+    160
+  } else if first == 240 {
+    144
+  } else {
+    128
+  }
+  let high: u8 = if first == 237 {
+    159
+  } else if first == 244 {
+    143
+  } else {
+    191
+  }
+  let second = source_byte(d, chunk, start + 1)
+  if second < low || second > high {
+    return Invalid(1)
+  }
+  if width == 2 {
+    return Complete(2)
+  }
+  if available < 3 {
+    return Incomplete(2)
+  }
+  if source_byte(d, chunk, start + 2) & 192 != 128 {
+    return Invalid(2)
+  }
+  if width == 3 {
+    return Complete(3)
+  }
+  if available < 4 {
+    return Incomplete(3)
+  }
+  if source_byte(d, chunk, start + 3) & 192 != 128 {
+    return Invalid(3)
+  }
+  Complete(4)
+}
+
+// Output owns its storage and contains only complete scalars. A strict error
+// discards this call's builder and poisons d. Successful eof finishes once.
+pub fn feed(mut d: Decoder, chunk: Bytes, eof: bool) -> Result[String, StreamError] uses {} {
+  if d.status == Finished() {
+    return Error(AlreadyFinished())
+  }
+  if d.status == Failed() {
+    return Error(DecoderFailed())
+  }
+  let len = core@1/bytes.len(chunk)
+  if len > 18446744073709551615u64 - d.offset {
+    poison(mut d)
+    return Error(OffsetOverflow())
+  }
+  let end_offset = d.offset + len
+  let base = d.offset - d.count
+  // count <= offset, so the offset guard also proves this sum fits.
+  let source_len = d.count + len
+  let mut out: List[u8] = []
+  let mut carry: Inline[u8, 3] = [0, 0, 0]
+  let mut carry_count: u64 = 0
+  let mut i: u64 = 0
+  while i < source_len {
+    match scalar(d, chunk, i, source_len) {
+      Complete(width) => {
+        let mut j: u64 = 0
+        while j < width {
+          core@1/list.push(mut out, source_byte(d, chunk, i + j))
+          j += 1
+        }
+        i += width
+      },
+      Invalid(span) => {
+        if d.policy == Strict() {
+          let start = base + i
+          d.offset = start + span
+          poison(mut d)
+          return Error(InvalidSequence(start))
+        }
+        replacement(mut out)
+        // Utf8Chunks resumes after the invalid span, retrying its rejected byte.
+        i += span
+      },
+      Incomplete(count) => {
+        if !eof {
+          // FullRune is false: retain at most three bytes, without input views.
+          let mut j: u64 = 0
+          while j < count {
+            carry[j] = source_byte(d, chunk, i + j)
+            j += 1
+          }
+          carry_count = count
+          break
+        }
+        if d.policy == Strict() {
+          let start = base + i
+          d.offset = end_offset
+          poison(mut d)
+          return Error(IncompleteSequence(start))
+        }
+        replacement(mut out)
+        i += count
+      },
+    }
+  }
+  d.pending = carry
+  d.count = carry_count
+  d.offset = end_offset
+  if eof {
+    d.status = Finished()
+  }
+  Ok(text.finish_valid(take out))
+}

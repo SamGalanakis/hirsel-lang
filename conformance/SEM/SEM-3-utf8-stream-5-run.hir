@@ -1,0 +1,24 @@
+// rule: SEM-3
+// expect: run
+// In-memory streaming example: the euro scalar straddles two chunks.
+fn collect() -> String {
+  let mut decoder = std@1/utf8.decoder(Strict())
+  let mut out: List[u8] = []
+  let Ok(a) = std@1/utf8.feed(mut decoder, b"price: \xe2", false) else {
+    return "bad input"
+  }
+  std@1/text.append(mut out, a)
+  let Ok(b) = std@1/utf8.feed(mut decoder, b"\x82\xac10", true) else {
+    return "bad input"
+  }
+  std@1/text.append(mut out, b)
+  failure.check(std@1/utf8.offset(decoder) == 12, TextInvariant())
+  failure.check(std@1/utf8.pending_bytes(decoder) == 0, TextInvariant())
+  failure.check(std@1/utf8.status(decoder) == Finished(), TextInvariant())
+  std@1/text.finish_valid(take out)
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(collect() == "price: €10", TextInvariant())
+  Ok(())
+}
