@@ -214,10 +214,15 @@ pub(crate) unsafe fn cancel(ctx: *mut TaskCtx, scope: *const u64, task: *const u
 /// # Safety
 /// As for TaskCanceled. The cause is fixed before this check's yield.
 pub(crate) unsafe fn canceled(ctx: *mut TaskCtx, out: *mut u32) -> Stopped<u8> {
-    let (cause, progress) = engine::head_effect(ctx, "task.check_canceled", || {
-        let cause = scheduler(ctx).canceled(unsafe { (*ctx).shield });
-        (cause.map_or(0, |cause| cause + 1), Next::Yield)
-    })?;
+    let (cause, progress) = engine::head_observed(
+        ctx,
+        "task.check_canceled",
+        || {
+            let cause = scheduler(ctx).canceled(unsafe { (*ctx).shield });
+            (cause.map_or(0, |cause| cause + 1), Next::Yield)
+        },
+        |cause| cause.to_le_bytes().to_vec(),
+    )?;
     unsafe { out.write(cause) };
     engine::continue_at_head(ctx, progress)?;
     Ok(STATUS_OK)

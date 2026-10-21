@@ -38,6 +38,12 @@ pub(super) struct Boundary {
     pub native_outcome: Option<(u32, Vec<u8>)>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(super) enum CanonicalItem {
+    Object(ObjectId),
+    Cancellation(Vec<u32>),
+}
+
 /// Canonical scalar event: no native handle word or physical worker enters it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CanonicalEvent {
@@ -46,7 +52,7 @@ pub(super) struct CanonicalEvent {
     pub subevent: u32,
     pub op: &'static str,
     pub transition: Transition,
-    pub item: ObjectId,
+    pub item: CanonicalItem,
     pub version: u64,
     pub outcome: CanonicalOutcome,
     pub retirement: u64,
@@ -72,7 +78,7 @@ pub(super) struct Unsupported {
 pub(super) struct Log {
     ordinals: BTreeMap<Vec<u32>, u64>,
     pub boundaries: Vec<Boundary>,
-    versions: BTreeMap<ObjectId, u64>,
+    versions: BTreeMap<CanonicalItem, u64>,
     canonical: Vec<CanonicalEvent>,
     unsupported: Vec<Unsupported>,
 }
@@ -141,6 +147,22 @@ pub(super) fn record(
         },
     };
     let canonical = operation.and_then(|(op, result)| {
+        if matches!(
+            op.payload,
+            Command::Head {
+                name: "task.check_canceled"
+            }
+        ) {
+            assert_eq!(
+                result.image.len(),
+                4,
+                "cancellation has a captured u32 result"
+            );
+            return Some((
+                CanonicalItem::Cancellation(path.clone()),
+                CanonicalOutcome::Scalar(result.image.clone()),
+            ));
+        }
         let items: std::collections::BTreeSet<_> = op
             .footprint
             .reads
@@ -157,7 +179,7 @@ pub(super) fn record(
             _ => return None,
         };
         assert_eq!(result.status, 0);
-        Some((item.clone(), outcome))
+        Some((CanonicalItem::Object(item.clone()), outcome))
     });
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
@@ -378,7 +400,8 @@ mod tests {
                         assert!(
                             events
                                 .iter()
-                                .all(|event| event.item == item && event.subevent == 0)
+                                .all(|event| event.item == CanonicalItem::Object(item.clone())
+                                    && event.subevent == 0)
                         );
                         assert_eq!(events[0].outcome, CanonicalOutcome::Created(item));
                         assert_eq!(
@@ -581,5 +604,78 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn cancellation_trace_captures_the_observed_cause_before_the_check_yields() {
+        use crate::tasks::*;
+        for width in [2, 4, 8] {
+            for cause in [None, Some(0), Some(2)] {
+                let mut run = crate::host::BodyRun::new(width, true);
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
+                        enable(ctx);
+                    },
+                    move |ctx| unsafe {
+                        if let Some(cause) = cause {
+                            let _guard = role::Guard::new(ctx);
+                            scheduler(ctx).cancel(0, cause);
+                        }
+                        let mut observed = u32::MAX;
+                        assert_eq!(
+                            hirsel_rt_v2_task_canceled(ctx, &mut observed, &0),
+                            crate::STATUS_OK
+                        );
+                        let expected = cause.map_or(0, |cause| cause + 1);
+                        assert_eq!(observed, expected);
+                        // Later cancellation must not rewrite the recorded answer.
+                        {
+                            let _guard = role::Guard::new(ctx);
+                            scheduler(ctx).cancel(0, 3);
+                        }
+                        let driver = super::super::engine::driver(ctx);
+                        let log = driver.events.as_ref().unwrap();
+                        let rows = log.canonical().unwrap();
+                        assert_eq!(rows.len(), 1);
+                        assert_eq!(rows[0].item, CanonicalItem::Cancellation(Vec::new()));
+                        assert_eq!(
+                            rows[0].outcome,
+                            CanonicalOutcome::Scalar(expected.to_le_bytes().to_vec())
+                        );
+                        assert_eq!(rows[0].transition, Transition::Yield);
+                        assert_eq!(rows[0].version, 1);
+                        assert_eq!(
+                            log.boundaries[0].native_outcome,
+                            Some((0, expected.to_le_bytes().to_vec()))
+                        );
+                        crate::STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+            }
+        }
+    }
+    #[test]
+    fn disabled_head_evidence_never_calls_the_encoder() {
+        let mut run = crate::host::BodyRun::new(2, true);
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe {
+                super::super::engine::enable(ctx, Policy::admit(&Default::default(), None))
+            },
+            |ctx| {
+                let (value, _) = super::super::engine::head_observed(
+                    ctx,
+                    "task.check_canceled",
+                    || (7u32, Next::Keep),
+                    |_| panic!("disabled evidence must not allocate or encode"),
+                )
+                .unwrap();
+                assert_eq!(value, 7);
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
     }
 }

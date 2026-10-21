@@ -509,16 +509,16 @@ struct HeadEffect<'a, 'b, F, T> {
     result: &'a mut Option<T>,
 }
 
-impl<F: FnOnce() -> (T, Next), T> Backend<Command> for HeadEffect<'_, '_, F, T> {
+impl<F: FnOnce() -> (T, Outcome, Next), T> Backend<Command> for HeadEffect<'_, '_, F, T> {
     type Result = Outcome;
 
     fn commit(&mut self, _: TaskId, op: &Operation<Command>, early: bool) -> Receipt<Outcome> {
         assert!(!early, "a native task effect runs only at the head");
         assert!(matches!(op.payload, Command::Head { .. }));
-        let (result, next) = self.effect.take().expect("head callback committed once")();
+        let (result, outcome, next) = self.effect.take().expect("head callback committed once")();
         *self.result = Some(result);
         Receipt {
-            result: Outcome::image(0, Vec::new()),
+            result: outcome,
             next,
             credit: 0,
         }
@@ -567,15 +567,35 @@ pub(super) fn head_effect<T>(
     name: &'static str,
     effect: impl FnOnce() -> (T, Next),
 ) -> Stopped<(T, Progress)> {
+    head_observed(ctx, name, effect, |_| Vec::new())
+}
+
+/// Capture the result fixed by this head effect before it can yield. The
+/// evidence owns encoded bytes, not a pointer into the owner's output slot.
+pub(super) fn head_observed<T>(
+    ctx: *mut TaskCtx,
+    name: &'static str,
+    effect: impl FnOnce() -> (T, Next),
+    outcome: impl FnOnce(&T) -> Vec<u8>,
+) -> Stopped<(T, Progress)> {
     at_head(ctx)?;
     let task = current(ctx);
     accepted(ctx, task, false);
     let before = stretch(ctx);
+    let observing = driver(ctx).events.is_some();
     let mut result = None;
     let progress = with_frontier(ctx, |frontier, objects| {
         let mut backend = HeadEffect {
             objects,
-            effect: Some(effect),
+            effect: Some(|| {
+                let (value, next) = effect();
+                let encoded = if observing {
+                    outcome(&value)
+                } else {
+                    Vec::new()
+                };
+                (value, Outcome::image(0, encoded), next)
+            }),
             result: &mut result,
         };
         frontier.apply_head(
