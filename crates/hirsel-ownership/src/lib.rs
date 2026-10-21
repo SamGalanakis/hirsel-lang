@@ -189,6 +189,10 @@ pub fn check_ownership_with_clauses(
     let result_sharing = properties::result_sharing(t, body, &graphs, &mut signatures, &rows)?;
     let mut mutation_sites = Vec::new();
     let mut facts = OwnershipFacts {
+        physical_patterns: pattern_declarations
+            .iter()
+            .map(|(&p, &ty)| (p, ty))
+            .collect(),
         captures: captures.to_vec(),
         call_arguments: cfg::call_arguments(body, &properties, &rows),
         ..OwnershipFacts::default()
@@ -417,6 +421,9 @@ pub fn check_ownership_with_clauses(
         published.note(t, ty);
     }
     for &(_, ty) in facts.physical_projections.iter().chain(&facts.field_loans) {
+        published.note(t, ty);
+    }
+    for &(_, ty) in &facts.physical_patterns {
         published.note(t, ty);
     }
     for (_, _, _, parts) in &facts.identity_fields {

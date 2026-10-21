@@ -883,6 +883,9 @@ pub struct OwnershipFacts {
     pub identity_fields: Vec<(NameSite, NameSite, Origin, Vec<(FieldId, TypeId)>)>,
     /// Declaration-owned physical projections, separate from expression receipt modes.
     pub physical_projections: Vec<(ExprId, TypeId)>,
+    /// Declaration-owned pattern payloads before receipt locality is inferred.
+    /// Lowering adds the physical owner's bounds at each projection step.
+    pub physical_patterns: Vec<(hirsel_syntax::PatternId, TypeId)>,
     pub unique: Vec<UniqueDecision>,
     pub guarded_patterns: Vec<GuardedPatternUse>,
     /// Assignment sites that detach receiver storage into allocation.

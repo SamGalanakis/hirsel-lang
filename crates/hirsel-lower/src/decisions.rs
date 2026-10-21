@@ -54,6 +54,7 @@ pub(super) struct Decisions<'a> {
     pub shapes: Table<'a, TypeExprId, (TypeExprId, TypeId)>,
     pub propagation: Table<'a, ExprId, (ExprId, super::TryPlan)>,
     pub physical_projections: Table<'a, ExprId, (ExprId, TypeId)>,
+    pub physical_patterns: Table<'a, PatternId, (PatternId, TypeId)>,
     pub unique: Table<'a, ExprId, UniqueDecision>,
     pub replacements: Table<'a, ExprId, (ExprId, TypeId, Option<bool>)>,
     pub captures: Table<'a, (ExprId, u32), CaptureMode>,
@@ -94,6 +95,7 @@ impl<'a> Decisions<'a> {
             shapes: Table::new(&input.plans.shapes, |row| row.0),
             propagation: Table::new(&input.plans.propagation, |row| row.0),
             physical_projections: Table::new(&input.ownership.physical_projections, |row| row.0),
+            physical_patterns: Table::new(&input.ownership.physical_patterns, |row| row.0),
             unique: Table::new(&input.ownership.unique, |row| row.expression),
             replacements: Table::new(&input.ownership.replacements, |row| row.0),
             captures: Table::new(&input.ownership.captures, |row| {

@@ -1228,3 +1228,32 @@ fn main() {}
         assert_eq!(kinds(&probe, &signatures), []);
     });
 }
+
+#[test]
+fn pattern_payload_places_keep_declaration_locality_beside_local_mut_content() {
+    with_compiler_stack(|| {
+        let source = r#"
+type Item { name: String }
+type Err = Archive(Reason) | Other
+type Reason = Truncated | Header(String)
+type State { text: String }
+fn next(mut s: State) -> Result[Option[Item], Err] { Ok(None) }
+fn error_kind(e: Err) -> u64 {
+  match e { Archive(Truncated) => 1, Archive(Header(_)) => 2, _ => 3 }
+}
+fn scan(data: String) {
+  let mut s = State(text: data)
+  while true {
+    match next(mut s) {
+      Ok(None) => return,
+      Error(e) => { error_kind(e); return },
+      Ok(Some(_)) => {},
+    }
+  }
+}
+fn main() {}
+"#;
+        let (scan, signatures) = lowered(source, "scan");
+        assert_eq!(kinds(&scan, &signatures), []);
+    });
+}

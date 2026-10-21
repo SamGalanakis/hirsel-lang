@@ -1,0 +1,41 @@
+// rule: SEM-3
+// expect: run
+type Item {
+  name: String,
+}
+
+type Err = Archive(Reason) | Other
+
+type Reason = Truncated | Header(String)
+
+type State {
+  text: String,
+}
+
+fn next(mut s: State) -> Result[Option[Item], Err] {
+  Ok(None)
+}
+
+fn error_kind(e: Err) -> u64 {
+  match e {
+    Archive(Truncated) => 1,
+    Archive(Header(_)) => 2,
+    _ => 3,
+  }
+}
+
+fn scan(data: String) -> u64 {
+  let mut s = State(text: data)
+  while true {
+    match next(mut s) {
+      Ok(None) => return 7,
+      Error(e) => return error_kind(e),
+      Ok(Some(_)) => {},
+    }
+  }
+  0
+}
+
+pub fn main(t: Test) {
+  test.check(t, scan("input") == 7)
+}

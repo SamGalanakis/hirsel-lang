@@ -43,6 +43,7 @@ impl Builder<'_, '_> {
         &mut self,
         base: PlaceId,
         projection: Projection,
+        pattern: PatternId,
         binding: TypeId,
     ) -> PlaceId {
         let owner = self.body.places[base.0 as usize].ty;
@@ -50,7 +51,19 @@ impl Builder<'_, '_> {
             (hirsel_types::TypeKind::Tuple(parts), Projection::Field(field)) => {
                 parts.get(*field as usize).copied().unwrap_or(binding)
             }
-            _ => binding,
+            _ => {
+                if let Some((_, declared)) = self.decisions.physical_patterns.get(&pattern).first()
+                {
+                    // J has already substituted sibling identities and other
+                    // field evidence. Only receipt locality belongs to the
+                    // bound value rather than this physical projection.
+                    let mut row = self.types.get(binding).unwrap().clone();
+                    row.modes.relation = self.types.get(*declared).unwrap().modes.relation.clone();
+                    self.types.intern(row)
+                } else {
+                    binding
+                }
+            }
         };
         let physical = self.part_type(owner, physical);
         self.project(base, projection, physical)
@@ -287,7 +300,7 @@ impl Builder<'_, '_> {
                         },
                         _ => Projection::Field(field.0),
                     };
-                    let projected = self.pattern_project(place, projection, child_row.ty);
+                    let projected = self.pattern_project(place, projection, child, child_row.ty);
                     if staging {
                         if let PatternDecisionKind::Binding(local) = child_row.kind {
                             let origin = Self::binding_origin(
@@ -429,7 +442,7 @@ impl Builder<'_, '_> {
                 _ => Projection::Field(field.0),
             };
             let child_row = self.pattern(*child)?;
-            let child_place = self.pattern_project(place, projection, child_row.ty);
+            let child_place = self.pattern_project(place, projection, *child, child_row.ty);
             let node = self.table_pattern(*child, child_place, choice, patterns, guarded)?;
             fields.push((field.0, node));
         }
