@@ -163,7 +163,7 @@ fn switching_verification_on_checks_memory_and_disk_lowerings_without_evidence()
     with_compiler_stack(|| {
         let store = Arc::new(store::MemStore::default());
         let mut adapters = compiler_adapters();
-        adapters.lowering = Some(std::rc::Rc::new(ForgedLowering));
+        adapters.lowering = Some(Arc::new(ForgedLowering));
         let mut first =
             QueryEngine::new(default_environment(), adapters).with_result_store(store.clone());
         let source = "fn main() -> u8 { 1u8 }\n";

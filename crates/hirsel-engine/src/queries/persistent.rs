@@ -60,7 +60,8 @@ impl Body {
                 plans: self.plans,
                 unit: self.unit,
                 boolean: self.boolean,
-            },
+            }
+            .into(),
             ownership: self.ownership,
             results: self.results,
             call_allocations: self.calls,
@@ -263,6 +264,7 @@ impl QueryEngine {
             covered: vec![],
             depth: None,
             consistent: true,
+            products: Default::default(),
         })
     }
     pub(super) fn load_mode(&mut self, path: &DefPath) -> Option<Arc<Entry<AnalyzedBody>>> {
