@@ -44,9 +44,21 @@ pub(crate) fn frees_sessions() -> bool {
 }
 
 static PERSISTENT_RESULTS: AtomicBool = AtomicBool::new(false);
+static VERIFY_RESULTS: AtomicBool = AtomicBool::new(false);
 /// Enable the CLI's disk result store for compiler-created sessions.
 pub fn persistent_results(enabled: bool) {
     PERSISTENT_RESULTS.store(enabled, Ordering::Relaxed);
+}
+/// Select independent recomputation for sessions using the CLI's default
+/// result provider. An explicit CompileConfig retains its own store policy.
+pub fn verify_cached_results(verify: crate::store::VerifyStore) {
+    VERIFY_RESULTS.store(
+        verify == crate::store::VerifyStore::Recompute,
+        Ordering::Relaxed,
+    );
+}
+pub(crate) fn verifies_cached_results() -> bool {
+    VERIFY_RESULTS.load(Ordering::Relaxed)
 }
 pub(crate) fn uses_persistent_results() -> bool {
     PERSISTENT_RESULTS.load(Ordering::Relaxed)

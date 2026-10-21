@@ -88,7 +88,9 @@ impl Compiler {
             engine = engine.with_result_store(store.clone());
         } else if crate::policy::uses_persistent_results() {
             let name = std::env::var("HIRSEL_RESULTS").unwrap_or_else(|_| "dir@1".into());
-            if std::env::var_os("HIRSEL_VERIFY_CACHE").is_some_and(|v| v != "0") {
+            if crate::policy::verifies_cached_results()
+                || std::env::var_os("HIRSEL_VERIFY_CACHE").is_some_and(|v| v != "0")
+            {
                 engine.verify_store = crate::store::VerifyStore::Recompute;
             }
             if let Ok(store) = crate::store::store_by_name(
