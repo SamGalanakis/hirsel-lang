@@ -1,0 +1,18 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 14
+// twin: OWN/OWN-3-nested-joined-loop-run.hir
+fn escape(a: String, b: String, select: bool) -> String {
+  match if select {
+    if select {
+      a
+    } else {
+      b
+    }
+  } else {
+    b
+  } {
+    value => value,
+  }
+}
+
+pub fn main() {}

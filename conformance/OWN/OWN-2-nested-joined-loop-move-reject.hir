@@ -1,0 +1,22 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 10
+// twin: OWN/OWN-3-nested-joined-loop-run.hir
+fn consume(take s: String) {}
+
+fn probe(take a: String, take b: String, select: bool) {
+  consume(take a)
+  let chosen = match if select {
+    if select {
+      a
+    } else {
+      b
+    }
+  } else {
+    b
+  } {
+    value => value,
+  }
+  consume(chosen)
+}
+
+pub fn main() {}

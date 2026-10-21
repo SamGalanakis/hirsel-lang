@@ -1207,3 +1207,24 @@ fn a_written_take_keeps_a_records_sibling_relation_but_ends_copies_outside_it() 
         );
     });
 }
+
+#[test]
+fn nested_joined_global_views_keep_their_access_loans_across_block_extraction() {
+    with_compiler_stack(|| {
+        let source = r#"
+fn touch(s: String) {}
+fn probe() {
+  let a = "a"
+  let b = "b"
+  let choices: List[bool] = [true, false]
+  for select in choices {
+    let chosen = match (if select { if select { a } else { b } } else { b }) { value => value }
+    touch(chosen)
+  }
+}
+fn main() {}
+"#;
+        let (probe, signatures) = lowered(source, "probe");
+        assert_eq!(kinds(&probe, &signatures), []);
+    });
+}

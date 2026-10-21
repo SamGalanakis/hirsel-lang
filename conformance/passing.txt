@@ -6629,3 +6629,4 @@ conformance/SEM/SEM-3-x25519-low-order-run.hir
 conformance/SEM/SEM-3-x25519-rfc7748-run.hir
 conformance/SEM/SEM-3-x25519-secret-size-fail.hir
 conformance/SEM/SEM-3-x25519-secret-size-run.hir
+conformance/OWN/OWN-3-nested-joined-loop-run.hir

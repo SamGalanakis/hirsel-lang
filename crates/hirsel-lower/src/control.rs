@@ -307,17 +307,9 @@ impl Builder<'_, '_> {
         } else {
             self.transport(value, Storage::Temporary, span)
         };
-        if !self
-            .lifetime(
-                &self
-                    .types
-                    .get(self.ty(result.place))
-                    .unwrap()
-                    .modes
-                    .relation,
-            )
-            .is_global()
         {
+            // A view of global content still holds access permissions. Its
+            // type's empty locality does not make those permissions disposable.
             // Only the extracted content keeps permissions. Dead sibling
             // holders must release theirs in this scope, before their source
             // temporaries are destroyed by its cleanup.

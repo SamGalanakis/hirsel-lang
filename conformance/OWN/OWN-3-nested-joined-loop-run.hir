@@ -1,0 +1,30 @@
+// rule: OWN-3
+// expect: run
+// A joined view of global content still needs its source access loans.
+pub fn main(t: Test) -> Result[(), ()] {
+  let a = "a"
+  let b = "b"
+  let choices: List[bool] = [true, false]
+  for select in choices {
+    let chosen = match if select {
+      if select {
+        a
+      } else {
+        b
+      }
+    } else {
+      b
+    } {
+      value => value,
+    }
+    test.check(
+      t,
+      chosen == if select {
+        "a"
+      } else {
+        "b"
+      }
+    )
+  }
+  Ok(())
+}
