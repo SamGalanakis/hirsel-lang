@@ -1177,7 +1177,9 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
         {
             break;
         }
-        if unsafe { crate::tasks::ordered::home::service(run) } {
+        if unsafe { crate::tasks::ordered::home::service(run) }
+            || unsafe { crate::tasks::free::home::service(run) }
+        {
             continue;
         }
         match home.take().0 {

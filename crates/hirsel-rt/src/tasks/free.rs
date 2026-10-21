@@ -9,6 +9,7 @@ use super::*;
 
 pub(crate) mod cancellation;
 pub(crate) mod channel;
+pub(crate) mod home;
 pub(crate) mod lifecycle;
 pub(crate) mod mutex;
 pub(crate) mod record;

@@ -270,3 +270,203 @@ fn native_scope_exit_keeps_its_timer_until_the_saved_child_rest_returns() {
         }
     }
 }
+
+struct ParkedClock {
+    home: std::thread::ThreadId,
+    now: bool,
+    advance: bool,
+    run: Arc<std::sync::atomic::AtomicPtr<crate::context::RunShared>>,
+}
+impl Adapter for ParkedClock {
+    fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+        Ok(None)
+    }
+    fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        assert_eq!(std::thread::current().id(), self.home);
+        assert!(matches!(
+            request,
+            Request::SleepUntil {
+                clock: 11,
+                deadline: 100
+            }
+        ));
+        if self.now {
+            Ok(Completion::Wait(Ok(())))
+        } else {
+            Err(AdapterError::Blocked)
+        }
+    }
+    fn ready(&mut self) -> Result<crate::io::Ready, AdapterError> {
+        assert_eq!(std::thread::current().id(), self.home);
+        let run = self.run.load(Ordering::Acquire);
+        assert!(!run.is_null());
+        let guard = unsafe { role::IdleGuard::try_new(run) };
+        assert!(guard.is_some(), "readiness probes hold no scheduler role");
+        drop(guard);
+        Ok(if self.now {
+            crate::io::Ready::Every
+        } else {
+            crate::io::Ready::Tokens(vec![])
+        })
+    }
+    fn wait(&mut self) -> Result<bool, AdapterError> {
+        assert_eq!(std::thread::current().id(), self.home);
+        self.now = self.advance;
+        Ok(self.advance)
+    }
+}
+
+unsafe extern "C" fn receiving_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+    let mut receiver = unsafe { crate::alloc::payload(env).cast::<u64>().read() };
+    let mut image = [0u64; 2];
+    let mut status = 99;
+    unsafe {
+        hirsel_rt_v2_channel_receive(
+            ctx,
+            0,
+            0,
+            &mut status,
+            &mut receiver,
+            image.as_mut_ptr().cast(),
+        )
+    };
+    assert_eq!(status, crate::channels::CANCELED + CANCEL_DEADLINE);
+    unsafe { crate::finalize::hirsel_rt_v2_close_handle(ctx, receiver, 0, 0) };
+    STATUS_OK
+}
+
+fn parked_deadline(child: bool, advance: bool) {
+    for width in [2, 8] {
+        for durable in [false, true] {
+            let recording =
+                super::super::record::Recording::new(b"native parked deadline", durable);
+            let install = recording.clone();
+            let run_ptr = Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()));
+            let install_run = run_ptr.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.free = true;
+            run.adapter = Some(Box::new(ParkedClock {
+                home: std::thread::current().id(),
+                now: false,
+                advance,
+                run: run_ptr,
+            }));
+            let layout = crate::Layout {
+                magic: crate::LAYOUT_MAGIC,
+                version: crate::LAYOUT_VERSION,
+                size: 16,
+                align: 8,
+                finalizer: None,
+                steps: std::ptr::null(),
+                step_count: 0,
+                field_count: 0,
+                flags: 0,
+                logical: 0,
+                logical_count: std::ptr::null(),
+                scan: std::ptr::null(),
+                scan_words: 0,
+            };
+            let layouts = [&raw const layout];
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe {
+                    super::super::enable(ctx);
+                    install_run.store((*ctx).run_ptr(), Ordering::Release);
+                    install.root(ctx);
+                },
+                move |ctx| unsafe {
+                    let mut scope = 0;
+                    hirsel_rt_v2_task_scope_enter_until(
+                        ctx,
+                        std::ptr::null_mut(),
+                        &mut scope,
+                        &0,
+                        &[11, 100],
+                    );
+                    let mut endpoints = [0u64; 2];
+                    let mut image = [0u64; 2];
+                    hirsel_rt_v2_channel_open(
+                        ctx,
+                        std::ptr::null_mut(),
+                        endpoints.as_mut_ptr(),
+                        &0,
+                        image.as_ptr().cast(),
+                        2,
+                    );
+                    if child {
+                        let env = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            16,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(env).cast::<u64>().write(endpoints[1]);
+                        let mut task = 0;
+                        hirsel_rt_v2_task_spawn(
+                            ctx,
+                            0,
+                            0,
+                            std::ptr::null_mut(),
+                            &mut task,
+                            &scope,
+                            receiving_child,
+                            env,
+                            0,
+                        );
+                    } else {
+                        let mut status = 99;
+                        hirsel_rt_v2_channel_receive(
+                            ctx,
+                            0,
+                            0,
+                            &mut status,
+                            &mut endpoints[1],
+                            image.as_mut_ptr().cast(),
+                        );
+                        assert_eq!(status, crate::channels::CANCELED + CANCEL_DEADLINE);
+                    }
+                    let mut expired = 99;
+                    hirsel_rt_v2_task_scope_exit_until(ctx, 0, 0, &mut expired, &scope, 0);
+                    assert_eq!(expired, 1);
+                    for endpoint in if child {
+                        vec![endpoints[0]]
+                    } else {
+                        endpoints.to_vec()
+                    } {
+                        crate::finalize::hirsel_rt_v2_close_handle(ctx, endpoint, 0, 0);
+                    }
+                    STATUS_OK
+                },
+            );
+            if advance {
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+            } else {
+                let Err(crate::stop::Stop::Blocked(waits)) = outcome.ended else {
+                    panic!("expected Blocked")
+                };
+                assert_eq!(waits.len(), 1);
+                assert_eq!(waits[0].kind, "channel.receive");
+            }
+            assert_eq!(outcome.pending, 0);
+        }
+    }
+}
+
+#[test]
+fn a_deadline_wakes_the_last_saved_free_receiver() {
+    parked_deadline(false, true);
+}
+
+#[test]
+fn a_deadline_wakes_scope_exit_waiting_for_a_saved_free_child() {
+    parked_deadline(true, true);
+}
+
+#[test]
+fn an_armed_free_deadline_without_a_source_reports_blocked() {
+    parked_deadline(false, false);
+}
