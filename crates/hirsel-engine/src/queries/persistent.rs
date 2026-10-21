@@ -254,6 +254,9 @@ impl EncodedWriter {
 }
 
 impl QueryEngine {
+    pub fn store_adoptions(&self) -> u64 {
+        self.store_adoptions
+    }
     /// Select a persistent result store. Library engines default to no store;
     /// CLI engines use dir@1. Injected stores keep integration tests isolated.
     pub fn with_result_store(mut self, store: Arc<dyn crate::store::ResultStore>) -> Self {
@@ -439,6 +442,7 @@ impl QueryEngine {
             self.checked.insert(DefId::intern(path), entry);
         }
         timings::count(Count::StoreHits);
+        self.store_adoptions += 1;
         let mut entry = self.adopted(path, QueryKind::Modes, variant, output, record.detail);
         Arc::get_mut(&mut entry)
             .expect("restored mode entry is not yet shared")
@@ -565,6 +569,7 @@ impl QueryEngine {
             }
         }
         timings::count(Count::StoreHits);
+        self.store_adoptions += 1;
         Some(self.adopted(
             path,
             QueryKind::Lower,

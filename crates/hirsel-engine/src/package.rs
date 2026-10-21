@@ -499,8 +499,42 @@ pub(crate) fn load_program_source_with_images(
     images: &StdImages,
     package_only: bool,
 ) -> Result<LoadedProgram, ToolError> {
+    load_program_inputs(
+        compiler,
+        path,
+        &crate::loader_inputs::DiskInputs,
+        Loading {
+            replacement,
+            images,
+            package_only,
+            parse_sources: true,
+            rebuild_images: true,
+        },
+    )
+}
+
+pub(crate) struct Loading<'a> {
+    pub replacement: Option<&'a str>,
+    pub images: &'a StdImages,
+    pub package_only: bool,
+    pub parse_sources: bool,
+    pub rebuild_images: bool,
+}
+pub(crate) fn load_program_inputs(
+    compiler: &Compiler,
+    path: &Path,
+    inputs: &dyn crate::loader_inputs::LoaderInputs,
+    loading: Loading<'_>,
+) -> Result<LoadedProgram, ToolError> {
+    let Loading {
+        replacement,
+        images,
+        package_only,
+        parse_sources,
+        rebuild_images,
+    } = loading;
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
-    let (graph, package) = Graph::program(path)?;
+    let (graph, package) = Graph::program_inputs(path, inputs)?;
     let root = graph.packages.get(&package).unwrap();
     let entry = if package_only {
         entry_path(
@@ -522,7 +556,7 @@ pub(crate) fn load_program_source_with_images(
             .map(|(p, _)| p.clone())
             .ok_or_else(|| invalid("entry module has no source"))?
     } else {
-        std::fs::canonicalize(path)?
+        inputs.canonicalize(path)?
     };
     if !root.sources.iter().any(|(p, _)| p == &primary_path) {
         return Err(invalid(
@@ -560,7 +594,7 @@ pub(crate) fn load_program_source_with_images(
                 replacement.unwrap().to_string()
             } else {
                 // Preserve the standalone UTF-8 diagnostic policy and original bytes.
-                crate::tools::read_source(source)?
+                crate::tools::decode_source(source, inputs.read(source)?.to_vec())?
             };
             files.push((source.clone(), context.clone()));
             texts.push(text);
@@ -682,7 +716,8 @@ pub(crate) fn load_program_source_with_images(
             // A toolchain owns its selected file; explicit image sets only
             // supply values. Rebuild a stale file from source with images off,
             // preserving an existing mapping until atomic replacement completes.
-            if selected.is_none()
+            if rebuild_images
+                && selected.is_none()
                 && !candidates.is_empty()
                 && let Some(path) = &toolchain.path
             {
@@ -722,29 +757,31 @@ pub(crate) fn load_program_source_with_images(
             eprintln!("hirsel: {note}");
         }
     }
-    for (file, context) in &program.files {
-        if program.engine.imaged(&context.package) {
-            continue;
+    if parse_sources {
+        for (file, context) in &program.files {
+            if program.engine.imaged(&context.package) {
+                continue;
+            }
+            program
+                .engine
+                .parse_file(*file, context)
+                .map_err(|e| program.error(e))?;
         }
-        program
-            .engine
-            .parse_file(*file, context)
-            .map_err(|e| program.error(e))?;
-    }
-    // A declared wrapper names an ordinary function of its own package.
-    for package in &program.unsafe_ffi {
-        let functions: BTreeMap<_, _> = program
-            .files
-            .iter()
-            .filter(|(_, c)| c.package == package.package)
-            .flat_map(|(file, _)| program.engine.file_functions(*file))
-            .collect();
-        for wrapper in package.wrappers.keys() {
-            if functions.get(wrapper) != Some(&false) {
-                return Err(invalid(&format!(
-                    "unsafe_ffi wrapper {wrapper} is not a non-extern function of {}@{}",
-                    package.package.name, package.package.version
-                )));
+        // A declared wrapper names an ordinary function of its own package.
+        for package in &program.unsafe_ffi {
+            let functions: BTreeMap<_, _> = program
+                .files
+                .iter()
+                .filter(|(_, c)| c.package == package.package)
+                .flat_map(|(file, _)| program.engine.file_functions(*file))
+                .collect();
+            for wrapper in package.wrappers.keys() {
+                if functions.get(wrapper) != Some(&false) {
+                    return Err(invalid(&format!(
+                        "unsafe_ffi wrapper {wrapper} is not a non-extern function of {}@{}",
+                        package.package.name, package.package.version
+                    )));
+                }
             }
         }
     }
@@ -795,25 +832,38 @@ type ForeignManifest = (
     BTreeMap<DefPath, hirsel_types::ForeignWrapper>,
     hirsel_types::ForeignThreads,
 );
-#[derive(Default)]
-struct Graph {
+struct Graph<'a> {
+    inputs: &'a dyn crate::loader_inputs::LoaderInputs,
     packages: BTreeMap<PackageId, SelectedPackage>,
     active: Vec<PathBuf>,
 }
-impl Graph {
-    /// Use the same graph for declarations, identities and executable programs.
+impl Default for Graph<'static> {
+    fn default() -> Self {
+        Self::with_inputs(&crate::loader_inputs::DiskInputs)
+    }
+}
+impl Graph<'static> {
     fn program(path: &Path) -> Result<(Self, PackageId), ToolError> {
-        let mut graph = Self::default();
+        Self::program_inputs(path, &crate::loader_inputs::DiskInputs)
+    }
+}
+impl<'a> Graph<'a> {
+    /// Use the same graph for declarations, identities and executable programs.
+    fn program_inputs(
+        path: &Path,
+        inputs: &'a dyn crate::loader_inputs::LoaderInputs,
+    ) -> Result<(Self, PackageId), ToolError> {
+        let mut graph = Self::with_inputs(inputs);
         let package = if path.extension().is_some_and(|e| e == "json") {
             graph.visit(path, None)?
         } else {
             let mut sidecar = path.as_os_str().to_os_string();
             sidecar.push(".json");
             let sidecar = PathBuf::from(sidecar);
-            match std::fs::metadata(&sidecar) {
+            match inputs.metadata(&sidecar) {
                 Ok(_) => graph.visit(&sidecar, None)?,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    let source = std::fs::canonicalize(path)?;
+                    let source = inputs.canonicalize(path)?;
                     let mut manifest = source.as_os_str().to_os_string();
                     manifest.push(".json");
                     let value = serde_json::json!({
@@ -822,13 +872,13 @@ impl Graph {
                         "sources": [{"path": source.file_name().unwrap().to_string_lossy(), "module": []}],
                         "entry": {"module": [], "name": "main"},
                         "dependencies": [{
-                            "manifest": toolchain_std_manifest()?,
+                            "manifest": crate::tools::toolchain_std_manifest_inputs(inputs)?,
                             "package": {"name": "std", "version": "1"},
                             "expose": [],
                         }],
                     });
                     let std = graph.visit(
-                        &toolchain_std_manifest()?,
+                        &crate::tools::toolchain_std_manifest_inputs(inputs)?,
                         Some(&PackageId {
                             name: "std".into(),
                             version: "1".into(),
@@ -868,6 +918,13 @@ impl Graph {
             }
         };
         Ok((graph, package))
+    }
+    fn with_inputs(inputs: &'a dyn crate::loader_inputs::LoaderInputs) -> Self {
+        Self {
+            inputs,
+            packages: BTreeMap::new(),
+            active: Vec::new(),
+        }
     }
     fn closure(&self, id: &PackageId) -> BTreeSet<PackageId> {
         let mut result = BTreeSet::new();
@@ -910,11 +967,11 @@ impl Graph {
         ContentHash::of_parts("hirsel.checked-package.v1", parts.iter().map(Vec::as_slice))
     }
     fn visit(&mut self, path: &Path, expected: Option<&PackageId>) -> Result<PackageId, ToolError> {
-        let path = std::fs::canonicalize(path)?;
+        let path = self.inputs.canonicalize(path)?;
         if self.active.contains(&path) {
             return Err(invalid("cyclic package dependency"));
         }
-        let bytes = std::fs::read(&path)?;
+        let bytes = self.inputs.read(&path)?.to_vec();
         let value: UniqueJson = serde_json::from_slice(&bytes)
             .map_err(|e| invalid(&format!("{}: {e}", path.display())))?;
         let object = object_value(
@@ -956,7 +1013,7 @@ impl Graph {
             .map(|s| {
                 let s = object_value(s, &["path", "module"])?;
                 let declared = Path::new(string(required(s, "path")?)?);
-                let source = std::fs::canonicalize(base.join(declared))?;
+                let source = self.inputs.canonicalize(&base.join(declared))?;
                 // Absolute entries may name the same directory through an alias
                 // such as /tmp. Compare canonical paths in that case; relative
                 // entries retain their declared names, including symlinks.
@@ -1043,7 +1100,7 @@ impl Graph {
         }
         let unsafe_ffi = object
             .get("unsafe_ffi")
-            .map(|v| foreign_manifest(v, base, &package))
+            .map(|v| foreign_manifest(v, base, &package, self.inputs))
             .transpose()?;
         self.active.pop();
         self.packages.insert(
@@ -1068,6 +1125,7 @@ fn foreign_manifest(
     v: &Value,
     base: &Path,
     package: &PackageId,
+    inputs: &dyn crate::loader_inputs::LoaderInputs,
 ) -> Result<ForeignManifest, ToolError> {
     let o = object_value(v, &["link", "headers_checked", "threads", "wrappers"])?;
     let link = array(required(o, "link")?)?
@@ -1075,7 +1133,7 @@ fn foreign_manifest(
         .map(|l| {
             let l = string(l)?;
             if l.contains('/') || [".a", ".o", ".so"].iter().any(|s| l.ends_with(s)) {
-                Ok(LinkInput::File(std::fs::canonicalize(base.join(l))?))
+                Ok(LinkInput::File(inputs.canonicalize(&base.join(l))?))
             } else if l
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"_.+-".contains(&b))

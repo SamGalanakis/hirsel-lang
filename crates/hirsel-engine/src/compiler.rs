@@ -6,6 +6,7 @@ use std::{io::Write, path::Path, sync::Arc};
 
 #[derive(Clone)]
 pub struct Compiler {
+    owned_engines: bool,
     phases: fn() -> Arc<dyn Phases>,
     /// Digest of the compiler's own sources; std images record the one they
     /// were checked under (docs/building.md, "The std image").
@@ -24,6 +25,7 @@ impl Compiler {
     /// A compiler whose sessions run V.
     pub const fn new(phases: fn() -> Arc<dyn Phases>, identity: [u8; 32]) -> Self {
         Self {
+            owned_engines: false,
             phases,
             identity,
             verify: Verify::On,
@@ -58,6 +60,12 @@ impl Compiler {
         self.result_store = Some(config.store);
         self
     }
+    /// Engines opened by a library host always reclaim their private domains,
+    /// even if a CLI has selected process-exit reclamation globally.
+    pub fn with_owned_engines(mut self) -> Self {
+        self.owned_engines = true;
+        self
+    }
     pub fn verify(&self) -> Verify {
         self.verify
     }
@@ -82,7 +90,7 @@ impl Compiler {
         );
         engine.verify_store = self.verify_store;
         engine.comptime_limits = self.comptime_limits();
-        engine.session = true;
+        engine.session = !self.owned_engines;
         engine.store_identity = self.identity();
         if let Some(store) = &self.result_store {
             engine = engine.with_result_store(store.clone());
@@ -110,7 +118,14 @@ impl Compiler {
         PhaseAdapters::compiler((self.phases)())
     }
     pub(crate) fn load(&self, path: &Path) -> Result<(QueryEngine, FileId), ToolError> {
-        let text = crate::tools::read_source(path)?;
+        self.load_inputs(path, &crate::loader_inputs::DiskInputs)
+    }
+    pub(crate) fn load_inputs(
+        &self,
+        path: &Path,
+        inputs: &dyn crate::loader_inputs::LoaderInputs,
+    ) -> Result<(QueryEngine, FileId), ToolError> {
+        let text = crate::tools::decode_source(path, inputs.read(path)?.to_vec())?;
         let mut engine = self.engine(default_environment());
         let file = engine
             .sources
@@ -148,6 +163,30 @@ impl Compiler {
         images: &StdImages,
     ) -> Result<LoadedProgram, ToolError> {
         crate::package::load_program_source_with_images(self, path, replacement, images, false)
+    }
+    /// Load exclusively from explicit input observations and immutable image
+    /// handles. Discovery closes the package/input set without source parsing,
+    /// so a syntax-error base can still be repaired. Manifest errors remain
+    /// loader errors. Unlike ordinary loading, this never rebuilds an image.
+    pub fn load_program_inputs(
+        &self,
+        path: &Path,
+        inputs: &dyn crate::loader_inputs::LoaderInputs,
+        images: &StdImages,
+        parse_sources: bool,
+    ) -> Result<LoadedProgram, ToolError> {
+        crate::package::load_program_inputs(
+            self,
+            path,
+            inputs,
+            crate::package::Loading {
+                replacement: None,
+                images,
+                package_only: false,
+                parse_sources,
+                rebuild_images: false,
+            },
+        )
     }
     /// Load an explicit test package without requiring a launch entry. The root
     /// package's sources are checked in full; no function is selected as main.

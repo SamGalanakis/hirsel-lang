@@ -61,18 +61,25 @@ impl From<io::Error> for ToolError {
 /// The std shipped with this toolchain. Source-tree builds use their checkout;
 /// distributed bundles carry the same tree beside the executable and precheck.
 pub fn toolchain_std_manifest() -> Result<std::path::PathBuf, ToolError> {
+    toolchain_std_manifest_inputs(&crate::loader_inputs::DiskInputs)
+}
+pub(crate) fn toolchain_std_manifest_inputs(
+    inputs: &dyn crate::loader_inputs::LoaderInputs,
+) -> Result<std::path::PathBuf, ToolError> {
     let executable = std::env::current_exe()?;
     // Buck2 and Cargo executables live below their source tree; installed
     // toolchains put stdlib immediately beside the binary.
     for directory in executable.ancestors().skip(1) {
         let manifest = directory.join("stdlib/std@1/hirsel.json");
-        if manifest.try_exists()? {
-            return Ok(std::fs::canonicalize(manifest)?);
+        match inputs.metadata(&manifest) {
+            Ok(_) => return Ok(inputs.canonicalize(&manifest)?),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
     }
     // Relocated test harnesses retain repository-relative CARGO_MANIFEST_DIR.
-    Ok(std::fs::canonicalize(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
+    Ok(inputs.canonicalize(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .parent()
@@ -196,7 +203,11 @@ pub fn default_environment() -> QueryEnvironment {
 }
 
 pub fn read_source(path: &Path) -> Result<String, ToolError> {
-    let bytes = std::fs::read(path)?;
+    decode_source(path, std::fs::read(path)?)
+}
+
+/// Decode the exact captured bytes with the ordinary source diagnostic policy.
+pub(crate) fn decode_source(path: &Path, bytes: Vec<u8>) -> Result<String, ToolError> {
     let text = match String::from_utf8(bytes) {
         Ok(text) => text,
         Err(error) => {

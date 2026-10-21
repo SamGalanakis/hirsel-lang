@@ -1,5 +1,7 @@
 use crate::memo::{MemoGraph, MemoKey, ReadKey, Reads, ReadsBuilder};
 use crate::*;
+mod candidate_products;
+pub use candidate_products::CheckedProducts;
 mod arm_fixes;
 mod frontier;
 pub use frontier::FrontChanges;
@@ -129,6 +131,7 @@ pub(crate) type ParsedFile = (
 pub struct QueryEngine {
     pub(crate) work: crate::WorkStats,
     pub(crate) store_identity: ContentHash,
+    store_adoptions: u64,
     pub(crate) verify_store: crate::store::VerifyStore,
     pending_store_checks: BTreeMap<(DefId, QueryKind), persistent::Expected>,
     store_check_spool: std::sync::Weak<persistent::Spool>,
@@ -460,6 +463,7 @@ impl QueryEngine {
         environment.builtin_signatures_hash = registry.revision();
         Self {
             work: crate::WorkStats::default(),
+            store_adoptions: 0,
             store_identity: ContentHash::default(),
             verify_store: crate::store::VerifyStore::Off,
             pending_store_checks: BTreeMap::new(),

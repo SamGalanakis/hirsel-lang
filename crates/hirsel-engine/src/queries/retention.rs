@@ -10,6 +10,11 @@ pub(super) struct LowerReceipt {
     /// universe in Reads. They contain no portable or executable TIR.
     validated_universe: bool,
 }
+impl LowerReceipt {
+    pub(super) fn retained_artifact(&self) -> bool {
+        !self.validated_universe
+    }
+}
 impl std::ops::Deref for LowerReceipt {
     type Target = Entry<()>;
     fn deref(&self) -> &Self::Target {

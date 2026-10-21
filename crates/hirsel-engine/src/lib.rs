@@ -46,6 +46,7 @@ mod adapters;
 mod facts;
 pub use adapters::*;
 pub mod image;
+pub mod loader_inputs;
 mod package;
 pub use image::{ImageRecord, StdImage, StdImages, release_shared_caches, report_images};
 mod policy;
