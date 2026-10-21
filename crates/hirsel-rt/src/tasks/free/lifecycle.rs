@@ -109,24 +109,30 @@ unsafe fn exit_scope(
     if let Some(token) = unsafe { (*s).scope(scope).deadline.as_ref().and_then(|d| d.token) } {
         unsafe { crate::host_waits::disarm(ctx, token) };
     }
-    let retired_scope = super::record::publish(ctx, Phase::Done, |writer| unsafe {
+    let replay = super::replay::token(ctx);
+    let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
         let s = &mut *s;
+        let mut expired = s.scope(scope).deadline.as_ref().map(|d| d.expired);
+        if let Some(value) = expired.as_mut() {
+            if let Some(writer) = writer {
+                writer.expired(*value);
+            } else if let Some(replay) = &replay {
+                *value = replay.expired(*value)?;
+            }
+        }
         for &child in children.iter().rev() {
             let chain = s.task(child).failure.take();
             retired.push((s.retire_task(child), chain));
         }
         let row = s.scopes[scope as usize].take().expect("an exiting scope");
-        if let Some(deadline) = &row.deadline
-            && let Some(writer) = writer
-        {
-            writer.expired(deadline.expired);
-        }
         if let Some(out) = out {
-            out.write(u8::from(row.deadline.as_ref().is_some_and(|d| d.expired)));
+            out.write(u8::from(expired.unwrap_or(false)));
         }
         s.vacant_scopes.push(scope);
-        row
-    })?;
+        Ok(row)
+    });
+    drop(replay);
+    let retired_scope = publication??;
     drop(retired_scope);
     // Failure order is by spawn path, independent of reverse row retirement.
     for (row, chain) in retired {
@@ -534,14 +540,22 @@ pub(crate) unsafe fn scope_enter_until(
     super::record::publish(ctx, Phase::Entered, |_| unsafe {
         install_scope(s, index, current, row);
     })?;
-    let token = unsafe { crate::host_waits::arm(ctx, index, clock, at) }?;
+    // Replay observes recorded cancellation checks and exit expiry. It has
+    // no timer request or readiness source on this host.
+    let replay = super::replay::on(ctx);
+    let token = if replay {
+        None
+    } else {
+        unsafe { crate::host_waits::arm(ctx, index, clock, at) }?
+    };
     // A fresh scope has no children or inner scopes, so immediate expiration
     // needs no allocation or graph walk inside this publication.
     super::record::publish(ctx, Phase::Done, |_| unsafe {
         let s = &mut *s;
         match token {
             Some(token) => s.scope(index).deadline.as_mut().unwrap().token = Some(token),
-            None => s.expire(index),
+            None if !replay => s.expire(index),
+            None => {}
         }
         out.write(handle(index, generation));
     })?;

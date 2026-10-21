@@ -1,6 +1,7 @@
 //! Deadline calls stay outside recorder sections and on their home adapter.
 use super::*;
 use crate::io::{Adapter, AdapterError, Completion, Request};
+use crate::tasks::free::replay::Replay;
 use hirsel_free::phase::Progress;
 use hirsel_free::projection::Projection;
 use hirsel_free::replay::Replayer;
@@ -15,6 +16,151 @@ struct Clock {
     calls: Arc<AtomicU64>,
     finishes: Arc<AtomicU64>,
     exit_op: u64,
+}
+
+struct NoReplayClock;
+impl Adapter for NoReplayClock {
+    fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+        panic!("native replay consulted a live deadline adapter")
+    }
+    fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+        panic!("native replay issued a live deadline")
+    }
+    fn ready(&mut self) -> Result<crate::io::Ready, AdapterError> {
+        panic!("native replay polled a live deadline")
+    }
+    fn finish(&mut self, _: u64) {
+        panic!("native replay finished a live deadline")
+    }
+}
+
+#[test]
+fn native_deadline_replay_substitutes_expiry_without_calling_live_timers() {
+    for durable in [false, true] {
+        for expired in [false, true] {
+            let recording =
+                super::super::record::Recording::new(b"native deadline replay", durable);
+            let install = recording.clone();
+            let calls = Arc::new(AtomicU64::new(0));
+            let finishes = Arc::new(AtomicU64::new(0));
+            let mut run = crate::host::BodyRun::new(8, true);
+            run.free = true;
+            run.adapter = Some(Box::new(Clock {
+                home: std::thread::current().id(),
+                recording: recording.clone(),
+                calls: calls.clone(),
+                finishes: finishes.clone(),
+                exit_op: 3,
+            }));
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe {
+                    super::super::enable(ctx);
+                    install.root(ctx);
+                },
+                move |ctx| unsafe {
+                    let mut scope = 0;
+                    let deadline = [11, if expired { 0 } else { 100 }];
+                    hirsel_rt_v2_task_scope_enter_until(
+                        ctx,
+                        std::ptr::null_mut(),
+                        &mut scope,
+                        &0,
+                        &deadline,
+                    );
+                    let mut cause = 99;
+                    hirsel_rt_v2_task_canceled(ctx, &mut cause, &0);
+                    assert_eq!(cause, if expired { CANCEL_DEADLINE + 1 } else { 0 });
+                    let mut observed = 99;
+                    hirsel_rt_v2_task_scope_exit_until(ctx, 0, 0, &mut observed, &scope, 0);
+                    assert_eq!(observed, u8::from(expired));
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            assert_eq!(calls.load(Ordering::Acquire), 1);
+            assert_eq!(finishes.load(Ordering::Acquire), 1);
+            recording.recorder.stop("returned", None).unwrap().unwrap();
+            let trace = recording.trace();
+            let bytes = Arc::try_unwrap(recording)
+                .ok()
+                .unwrap()
+                .recorder
+                .into_sink()
+                .bytes;
+            let entered = (1..bytes.len())
+                .find(|&end| {
+                    hirsel_free::tape::parse(&bytes[..end]).is_ok_and(|tape| {
+                        tape.cut.get(&Vec::new()) == Some(&Progress::new(1, Phase::Entered))
+                    })
+                })
+                .unwrap();
+            for end in [entered, entered + 1, bytes.len()] {
+                let parsed = hirsel_free::tape::parse(&bytes[..end]).unwrap();
+                let full = end == bytes.len();
+                let expected = Projection::new(
+                    if full { "returned" } else { "truncated" },
+                    &parsed.cut,
+                    &trace,
+                );
+                for width in [2, 8] {
+                    let replay = Replay::new(&bytes[..end]).unwrap();
+                    let install = replay.clone();
+                    let outputs = Arc::new((
+                        std::sync::atomic::AtomicU32::new(99),
+                        std::sync::atomic::AtomicU8::new(99),
+                    ));
+                    let observed = outputs.clone();
+                    let mut run = crate::host::BodyRun::new(width, true);
+                    run.free = true;
+                    run.adapter = Some(Box::new(NoReplayClock));
+                    unsafe { run.use_physical_dispatch() };
+                    let outcome = run.run(
+                        move |ctx| unsafe { install.root(ctx) },
+                        move |ctx| unsafe {
+                            let mut scope = 0;
+                            // The adapter must never interpret this different
+                            // deadline, even when the recording expired.
+                            hirsel_rt_v2_task_scope_enter_until(
+                                ctx,
+                                std::ptr::null_mut(),
+                                &mut scope,
+                                &0,
+                                &[999, u64::MAX],
+                            );
+                            hirsel_rt_v2_task_canceled(ctx, observed.0.as_ptr(), &0);
+                            hirsel_rt_v2_task_scope_exit_until(
+                                ctx,
+                                0,
+                                0,
+                                observed.1.as_ptr(),
+                                &scope,
+                                0,
+                            );
+                            panic!("native deadline replay passed its cut");
+                        },
+                    );
+                    assert!(
+                        matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
+                        "{outcome:?}"
+                    );
+                    assert_eq!(
+                        outputs.0.load(Ordering::Acquire),
+                        if full {
+                            if expired { CANCEL_DEADLINE + 1 } else { 0 }
+                        } else {
+                            99
+                        }
+                    );
+                    assert_eq!(
+                        outputs.1.load(Ordering::Acquire),
+                        if full { u8::from(expired) } else { 99 }
+                    );
+                    assert_eq!(replay.finish().unwrap(), expected);
+                }
+            }
+        }
+    }
 }
 impl Adapter for Clock {
     fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {

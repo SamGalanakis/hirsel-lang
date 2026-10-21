@@ -28,8 +28,9 @@ impl Replay {
     /// # Safety
     /// Admission only, before any task runs. This initial replay slice admits
     /// scalar atomics, administrative task-tree operations, pending Shared
-    /// root tails, thaw outcomes and explicit task.canceled checks only; no
-    /// host requests, versioned objects or cancellation-ended waits yet.
+    /// root tails, thaw outcomes, explicit task.canceled checks and deadline
+    /// scopes with settled children only; no host requests, versioned objects
+    /// or cancellation-ended waits yet.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
@@ -270,6 +271,12 @@ impl Token {
     pub(super) fn cancel(&self, live: Option<u32>) -> Stopped<Option<u32>> {
         self.shared
             .with(|session| session.cancel_check(&self.path, live))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
+
+    pub(super) fn expired(&self, live: bool) -> Stopped<bool> {
+        self.shared
+            .with(|session| session.expired(&self.path, live))
             .map_err(|error| Stop::Diverged(error.0))
     }
 }
