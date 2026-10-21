@@ -38,6 +38,7 @@ pub(crate) struct Driver {
     pub(super) host_poll: bool,
     /// A park/holding/end boundary cannot poll slots before its physical save.
     poll_after_save: Option<TaskId>,
+    return_after_save: Option<TaskId>,
     pub(super) carriers: BTreeMap<(crate::ordered::objects::Kind, u64), super::engine::Carrier>,
 }
 
@@ -55,6 +56,7 @@ impl Driver {
             returned: BTreeMap::new(),
             host_poll: false,
             poll_after_save: None,
+            return_after_save: None,
             carriers: BTreeMap::new(),
         }
     }
@@ -74,7 +76,7 @@ impl Driver {
     /// Selected frames are omitted from later scans until claimed and saved.
     /// During a deferred poll no new turn may be selected before wake merge.
     pub(crate) fn select(&mut self) -> Vec<TaskId> {
-        if self.poll_after_save.is_some() {
+        if self.poll_after_save.is_some() || self.return_after_save.is_some() {
             return Vec::new();
         }
         let Some(frontier) = &self.frontier else {
@@ -131,8 +133,18 @@ impl Driver {
     /// Native lifecycle adapters call this before suspending or finishing.
     pub(crate) fn defer_poll_until_saved(&mut self, task: TaskId) {
         assert!(!self.host_poll, "a home poll already owns this retirement");
-        assert_eq!(self.frontier.as_ref().unwrap().retiring_task(), Some(task));
+        assert!(self.frontier.as_ref().unwrap().retiring_task().is_some());
         assert!(self.poll_after_save.replace(task).is_none());
+    }
+
+    pub(super) fn poll_deferred(&self) -> bool {
+        self.poll_after_save.is_some() || self.return_after_save.is_some()
+    }
+
+    /// A child's no-poll return still waits for physical completion before its
+    /// caller can retire the child's row or stack.
+    pub(super) fn defer_return_until_saved(&mut self, task: TaskId) {
+        assert!(self.return_after_save.replace(task).is_none());
     }
 
     /// Called under the role immediately before the owner switches to idle.
@@ -177,6 +189,14 @@ pub(crate) fn after_save(
         unreachable!()
     };
     driver.saved(id, completed);
+    super::lifecycle::after_save(s, task, completed);
+    let super::super::Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    if driver.return_after_save == Some(id) {
+        assert!(completed, "a call returns only after child completion");
+        driver.return_after_save = None;
+    }
     let deferred = driver.poll_after_save;
     if let Some(retiring) = deferred {
         let task = retiring as u32;
@@ -192,7 +212,7 @@ pub(crate) fn after_save(
             let super::super::Logical::Ordered(driver) = &mut s.logical else {
                 unreachable!()
             };
-            assert_eq!(driver.frontier.as_ref().unwrap().retiring_task(), deferred);
+            assert!(driver.frontier.as_ref().unwrap().retiring_task().is_some());
             driver.frontier.as_mut().unwrap().complete_poll(ready);
             driver.poll_after_save = None;
         }

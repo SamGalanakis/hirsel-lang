@@ -498,7 +498,36 @@ impl<P, R> Frontier<P, R> {
         if early {
             backend.publish(task, &operation, &receipt.result);
         }
-        match receipt.next {
+        self.transition(task, receipt.next, backend)
+    }
+
+    /// Resume a waiting op or a called child's cleanup without inventing a
+    /// second op/ordinal or an extra scheduling point. The native continuation
+    /// effect is immediate, head-only, and runs after its stretch settles.
+    pub fn continue_head<B: Backend<P, Result = R>>(
+        &mut self,
+        before: Stretch,
+        backend: &mut B,
+        effect: impl FnOnce() -> Next,
+    ) -> Result<Progress, BudgetKind> {
+        assert!(!self.stopped);
+        assert!(self.polling.is_none(), "complete the retirement poll first");
+        let task = self.head.expect("a continuation has a head");
+        assert!(self.tasks[&task].log.is_empty(), "absorb before continuing");
+        if let Err(kind) = self.settled.settle(&before) {
+            self.stopped = true;
+            return Err(kind);
+        }
+        self.transition(task, effect(), backend)
+    }
+
+    fn transition<B: Backend<P, Result = R>>(
+        &mut self,
+        task: TaskId,
+        next: Next,
+        backend: &mut B,
+    ) -> Result<Progress, BudgetKind> {
+        match next {
             Next::Keep => Ok(Progress::Absorbed(task)),
             Next::Call {
                 members,

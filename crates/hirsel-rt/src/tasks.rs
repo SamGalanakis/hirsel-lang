@@ -2055,6 +2055,9 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
 /// # Safety
 /// `ctx` is live and `index` is the running child.
 unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
+    if ordered::engine::on(ctx) {
+        unsafe { ordered::lifecycle::complete(ctx, index, status) }
+    }
     if free::enabled(ctx) {
         unsafe { free::complete(ctx, index, status) }
     }
@@ -2157,6 +2160,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_enter");
+    if ordered::engine::on(ctx) {
+        return unsafe { crate::stop::check(ctx, ordered::lifecycle::scope_enter(ctx, out)) };
+    }
     crate::free::enter(ctx, Phase::Done);
     let (index, generation) = open_scope(ctx, None);
     crate::free::done(ctx);
@@ -2263,6 +2269,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_exit");
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(ctx, ordered::lifecycle::empty_scope_exit(ctx, scope))
+        };
+    }
     // SAFETY: caller contract.
     unsafe { exit_scope(&mut *ctx, scope, error, caller_site) }.0
 }
@@ -2390,7 +2401,48 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_spawn");
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::lifecycle::spawn(ctx, out, scope, code, environment, operation_site),
+            )
+        };
+    }
     crate::free::enter(ctx, Phase::Done);
+    // SAFETY: caller owns the closure and the named live scope.
+    let (index, generation, child) =
+        unsafe { spawn_child(ctx, scope, code, environment, operation_site) };
+    if crate::free::start(ctx, &child) {
+        // SAFETY: the context is live.
+        queued(unsafe { &*ctx });
+        let s = scheduler(ctx);
+        s.runnable.push_back(index);
+        #[cfg(feature = "measurement")]
+        if let Some(profile) = unsafe { &mut (*(*(*ctx).run_ptr()).mc_profile.get()) }.as_mut() {
+            profile.ready(s.task(index).path.clone());
+        }
+    }
+    crate::free::done(ctx);
+    // SAFETY: caller contract.
+    unsafe {
+        out.write(handle(index, generation));
+        yield_now(&mut *ctx);
+    }
+    STATUS_OK
+}
+
+/// Allocate and link one child at its spawn's commit. Physical notification
+/// belongs to the logical policy after this bounded mutation returns.
+/// # Safety
+/// The role is held; scope, closure and environment satisfy TaskSpawn's ABI.
+unsafe fn spawn_child(
+    ctx: *mut TaskCtx,
+    scope: *const u64,
+    code: TaskCode,
+    environment: *mut Header,
+    operation_site: u64,
+) -> (u32, u32, Vec<u32>) {
     // SAFETY: the context is live.
     let started = unsafe { (*ctx).run_ref() }
         .worker_metrics
@@ -2443,23 +2495,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     {
         metrics.spawn(started.elapsed());
     }
-    if crate::free::start(ctx, &child) {
-        // SAFETY: the context is live.
-        queued(unsafe { &*ctx });
-        let s = scheduler(ctx);
-        s.runnable.push_back(index);
-        #[cfg(feature = "measurement")]
-        if let Some(profile) = unsafe { &mut (*(*(*ctx).run_ptr()).mc_profile.get()) }.as_mut() {
-            profile.ready(s.task(index).path.clone());
-        }
-    }
-    crate::free::done(ctx);
-    // SAFETY: caller contract.
-    unsafe {
-        out.write(handle(index, generation));
-        yield_now(&mut *ctx);
-    }
-    STATUS_OK
+    (index, generation, child)
 }
 
 /// `$intrinsic.TaskFinish[R](mut slot, none, size)`: the running child computed `Some(r)` in
@@ -2480,6 +2516,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_finish");
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(ctx, ordered::lifecycle::finish(ctx, slot, none, size))
+        };
+    }
     let s = scheduler(ctx);
     let current = s.current;
     let held = Slot {
@@ -2531,6 +2572,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_join");
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::lifecycle::join(ctx, scope, task, slot, size, caller_site),
+            )
+        };
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });

@@ -4,6 +4,7 @@
 
 pub(crate) mod driver;
 pub(crate) mod engine;
+pub(crate) mod lifecycle;
 
 use std::cell::RefCell;
 
@@ -17,6 +18,11 @@ use hirsel_rt_operations::descriptors::op_descriptor;
 /// Mutex wrappers remain owner-local allocations outside these cell effects.
 /// Drops and task/host effects still need retirement/credit adapters.
 pub(crate) enum Command {
+    /// A strict-head, same-owner callback. This marker is never offered or
+    /// retained in a speculative log; Objects cannot execute it by itself.
+    Head {
+        name: &'static str,
+    },
     AtomicCreate {
         reservation: RefCell<Option<crate::sync::Reserved>>,
         image: Vec<u8>,
@@ -64,6 +70,7 @@ pub(crate) enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::Head { name } => name,
             Self::AtomicCreate { .. } => "atomic.create",
             Self::MutexCreate { .. } => "mutex.create",
             Self::ChannelOpen { .. } => "channel.open",
@@ -171,6 +178,7 @@ impl Backend<Command> for Objects<'_> {
     fn can_commit_early(&mut self, op: &Operation<Command>) -> bool {
         let s = super::scheduler(self.ctx);
         match &op.payload {
+            Command::Head { .. } => false,
             Command::AtomicLoad { word, .. }
             | Command::AtomicStore { word, .. }
             | Command::MutexPut { word, .. } => s.sync.initialized(*word),
@@ -194,6 +202,7 @@ impl Backend<Command> for Objects<'_> {
         // validity. All byte storage below is owned, including output images.
         let (result, next) = unsafe {
             match &op.payload {
+                Command::Head { .. } => panic!("strict head effect requires its owner callback"),
                 Command::AtomicCreate { reservation, image } => {
                     let reservation = reservation
                         .borrow_mut()

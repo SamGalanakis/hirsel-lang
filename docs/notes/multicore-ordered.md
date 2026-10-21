@@ -96,8 +96,16 @@ Mutex wrappers still belong to their owner's allocation/budget path.
 All ten E operations have native entry branches behind the ordered selector.
 The driver retains payload descriptors and None images alongside provisional
 handles, so later same-owner commands can be logged before creation commits.
-Duplicated senders retain the source's logical object binding. Drops, task
-operations and host operations still need native boundary adapters.
+Duplicated senders retain the source's logical object binding. Drops, remaining task operations and host operations still need native
+boundary adapters. Strict-head adapters now cover scope entry, committed spawn,
+holding result publication, join, empty scope exit and physical completion.
+Spawn scans the unstarted environment with the linked capture program. Task
+result types remain erased by the native spawn ABI, so captured Task handles
+are conservatively unknown. A join calls a saved holding child's rest; its
+completion returns to the caller without polling, and an already-holding join
+yields after that return. A waiting join's call/cleanup continuation consumes no
+new operation ordinal. The actual task effects execute inside Frontier's commit
+or continuation callback, after settlement, rather than preceding a marker op.
 
 Native object retirement can return an owned `Progress::Poll` continuation.
 The caller restores policy metadata before accessing host readiness; wake merge
@@ -114,17 +122,23 @@ preflights every woken runtime wait before performing any slot effect, polls in
 park order, merges wakes, and selects the next head. An unsupported service wait
 leaves the whole retirement pending for a future host continuation. Free and
 Ordered share the existing bounded runtime wait implementation; Free retains its
-callback and notification order. These lifecycle hooks remain uninstalled at
-native task boundaries. A real eight-worker
+callback and notification order. The strict native lifecycle adapters use this boundary. A separate return
+barrier keeps a caller suspended until physical completion invalidates the
+child's image, publishes Done and recycles its stack. Only then can the caller
+vacate the child's native row. A real eight-worker
 control cycles the root through 256 saved-stack resumptions without duplicate
 notifications. Every E entry now has an ordered submission branch. A
 command owns its image, an unaccepted full-log command remains on its owner's
 stack, and recorded outcomes are delivered to the owner's continuation by
 ordinal. Bounded object commit temporarily removes the frontier from its driver
 slot, restoring it before host polling or suspension; during a home poll other
-boundaries wait. The test-only admission path accepts no budget, root, task or
-host effects. The remaining native boundaries, budget hooks and production
-admission still need installation. These controls are not a parallel ordered
+boundaries wait. The test-only admission path accepts supported E and strict task boundaries,
+dropless closure environments, no budgets or root/host effects, no detached
+tasks or task sets/deadlines, and only scopes whose children have been joined
+before exit. Native controls at widths 2/4/8 cover both running and already
+holding joins, yielding rests, physical completion and repeated row/stack reuse.
+The remaining native boundaries, budget hooks and production admission still
+need installation. These controls are not a parallel ordered
 corpus or speed gate.
 
 ## Integration status

@@ -8,7 +8,7 @@ use crate::TaskCtx;
 use crate::budget::stretch::{Budgets, Settled, Stretch};
 use crate::ordered::footprint::{Footprint, Held, Item, ObjectId, TaskId};
 use crate::ordered::objects::{Kind, Registry};
-use crate::ordered::{Frontier, Offer, Operation, Policy, Progress};
+use crate::ordered::{Backend, Frontier, Next, Offer, Operation, Policy, Progress, Receipt};
 use crate::stop::{Stop, Stopped};
 
 use super::super::{Logical, handle, scheduler};
@@ -19,14 +19,14 @@ pub(crate) fn on(ctx: *mut TaskCtx) -> bool {
     matches!(scheduler(ctx).logical, Logical::Ordered(_))
 }
 
-fn driver(ctx: *mut TaskCtx) -> &'static mut Driver {
+pub(super) fn driver(ctx: *mut TaskCtx) -> &'static mut Driver {
     let Logical::Ordered(driver) = &mut scheduler(ctx).logical else {
         panic!("ordered submission without an ordered driver")
     };
     driver
 }
 
-fn current(ctx: *mut TaskCtx) -> TaskId {
+pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
     let s = scheduler(ctx);
     let task = s.current;
     handle(task, s.task(task).generation)
@@ -36,7 +36,9 @@ fn current(ctx: *mut TaskCtx) -> TaskId {
 /// # Safety
 /// Admission only, with physical dispatch installed and before root start.
 /// The body uses only supported ordered boundaries and explicit dispatch end;
-/// no budgeted allocation, fuel, root release, task/host or terminal effect.
+/// no budgets, fuel, root release, host or terminal effects. Native task tests
+/// use only nondetached children, supported joins and empty scope exits, with
+/// dropless closure environments; no task sets or deadlines are admitted.
 /// No native object exists before this admission.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
     let mut objects = Registry::default();
@@ -131,7 +133,7 @@ fn notify(ctx: *mut TaskCtx) {
 }
 
 fn advance(ctx: *mut TaskCtx) -> Stopped<()> {
-    if driver(ctx).host_poll {
+    if driver(ctx).host_poll || driver(ctx).poll_deferred() {
         return Ok(());
     }
     loop {
@@ -161,6 +163,121 @@ fn suspend(ctx: *mut TaskCtx, task: TaskId, head_only: bool) {
     driver(ctx).suspending(task, head_only);
     unsafe { crate::pool::free::suspend_current(ctx, false) };
     driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
+}
+
+/// Wait before any task-tree mutation. This gate keeps a later task's native
+/// arguments on its own stack until its existing log has retired at the head.
+pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
+    let task = current(ctx);
+    driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
+    loop {
+        advance(ctx)?;
+        if driver(ctx).frontier.as_ref().unwrap().head() == Some(task) {
+            return Ok(());
+        }
+        suspend(ctx, task, true);
+    }
+}
+
+struct HeadEffect<'a, 'b, F, T> {
+    objects: &'a mut Objects<'b>,
+    effect: Option<F>,
+    result: &'a mut Option<T>,
+}
+
+impl<F: FnOnce() -> (T, Next), T> Backend<Command> for HeadEffect<'_, '_, F, T> {
+    type Result = Outcome;
+
+    fn commit(&mut self, _: TaskId, op: &Operation<Command>, early: bool) -> Receipt<Outcome> {
+        assert!(!early, "a native task effect runs only at the head");
+        assert!(matches!(op.payload, Command::Head { .. }));
+        let (result, next) = self.effect.take().expect("head callback committed once")();
+        *self.result = Some(result);
+        Receipt {
+            result: Outcome::image(0, Vec::new()),
+            next,
+            credit: 0,
+        }
+    }
+    fn record(&mut self, task: TaskId, op: &Operation<Command>, result: &Outcome, retirement: u64) {
+        self.objects.record(task, op, result, retirement);
+    }
+    fn publish(&mut self, _: TaskId, _: &Operation<Command>, _: &Outcome) {
+        unreachable!("strict head effect cannot have an early receipt")
+    }
+    fn defer_poll(&self) -> bool {
+        true
+    }
+    fn poll(&mut self) -> Vec<TaskId> {
+        unreachable!("restore policy before a native retirement poll")
+    }
+}
+
+/// Execute the actual bounded native effect after stretch settlement. Nothing
+/// crosses a suspension here; only its owner supplies this immediate callback.
+/// The returned progress belongs to the caller, which installs any newly
+/// committed child before completing the retirement poll.
+pub(super) fn head_effect<T>(
+    ctx: *mut TaskCtx,
+    name: &'static str,
+    effect: impl FnOnce() -> (T, Next),
+) -> Stopped<(T, Progress)> {
+    at_head(ctx)?;
+    let task = current(ctx);
+    accepted(ctx, task, false);
+    let mut result = None;
+    let progress = with_frontier(ctx, |frontier, objects| {
+        let mut backend = HeadEffect {
+            objects,
+            effect: Some(effect),
+            result: &mut result,
+        };
+        frontier.apply_head(
+            empty(),
+            Command::Head { name }.operation(Footprint::default()),
+            &mut backend,
+        )
+    })
+    .map_err(Stop::BudgetExceeded)?;
+    Ok((result.expect("head effect completed"), progress))
+}
+
+/// Resume the same waiting/end op after a child call or park. This has no
+/// new accepted command and therefore consumes no operation ordinal.
+pub(super) fn head_continuation<T>(
+    ctx: *mut TaskCtx,
+    effect: impl FnOnce() -> (T, Next),
+) -> Stopped<(T, Progress)> {
+    at_head(ctx)?;
+    let mut result = None;
+    let progress = with_frontier(ctx, |frontier, backend| {
+        frontier.continue_head(empty(), backend, || {
+            let (value, next) = effect();
+            result = Some(value);
+            next
+        })
+    })
+    .map_err(Stop::BudgetExceeded)?;
+    Ok((result.expect("head continuation completed"), progress))
+}
+
+/// A strict native task op returns when its next serial continuation is head.
+pub(super) fn continue_at_head(ctx: *mut TaskCtx, progress: Progress) -> Stopped<()> {
+    if progress == Progress::Poll {
+        poll(ctx)?;
+    }
+    at_head(ctx)
+}
+
+/// A park or holding publication precedes physical save. The generic idle
+/// callback finishes its poll and may only then select a logical continuation.
+pub(super) fn save_boundary(ctx: *mut TaskCtx, progress: Progress) -> Stopped<()> {
+    let task = current(ctx);
+    if progress == Progress::Poll {
+        driver(ctx).defer_poll_until_saved(task);
+    }
+    suspend(ctx, task, false);
+    at_head(ctx)
 }
 
 /// The owning runtime entry keeps its carriers live while a pending command
