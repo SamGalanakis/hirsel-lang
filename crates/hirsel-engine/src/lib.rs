@@ -3,6 +3,8 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+mod work;
+pub use work::WorkStats;
 mod operations;
 pub use operations::*;
 mod native_audit;

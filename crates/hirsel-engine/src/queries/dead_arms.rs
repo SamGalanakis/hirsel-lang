@@ -20,6 +20,7 @@ impl QueryEngine {
         let mut bodies = vec![];
         let mut declarations = BTreeMap::new();
         for definition in &definitions {
+            self.work.lint_definition_visits += 1;
             let Ok(snapshot) = self.snapshot(definition) else {
                 return vec![];
             };
@@ -43,6 +44,7 @@ impl QueryEngine {
         let mut errors = BTreeSet::new();
         let mut constructed = BTreeSet::new();
         for definition in &bodies {
+            self.work.lint_body_visits += 1;
             let Some(inputs) = self.dead_arm_use(definition) else {
                 return vec![];
             };

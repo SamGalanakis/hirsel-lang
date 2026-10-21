@@ -2190,3 +2190,122 @@ fn dynamic_lower_facts_without_validation_cannot_survive_verification_enablement
         }
     });
 }
+
+#[test]
+fn explicitly_delivered_changes_check_the_applied_snapshot_without_repolling_disk() {
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        let source = fixture.0.join("main.hir");
+        let initial = b"fn main() {}\n";
+        std::fs::write(&source, initial).unwrap();
+        let mut session = session::Session::open(&source, Verify::On);
+        assert!(session.check().unwrap().diagnostics.is_empty());
+        let edited = b"fn main() { missing }\n".to_vec();
+        session.apply(vec![session::FileChange {
+            path: source.clone(),
+            bytes: Some(edited.clone()),
+        }]);
+        let input_work = session.input_work();
+        let actual = session.check_applied().unwrap();
+        assert_eq!(session.input_work(), input_work);
+        assert!(!actual.diagnostics.is_empty());
+        let revision = session.stats().revision;
+        session.apply(vec![session::FileChange {
+            path: source.clone(),
+            bytes: Some(edited),
+        }]);
+        assert_eq!(
+            session.stats().revision,
+            revision,
+            "duplicate delivery is idempotent"
+        );
+        assert_eq!(
+            diagnostics(&session.check_applied().unwrap()),
+            diagnostics(&actual)
+        );
+        assert_eq!(session.stats().touched, 0);
+        // The ordinary filesystem-owning entry point still observes disk.
+        assert!(session.check().unwrap().diagnostics.is_empty());
+        assert_eq!(session.stats().revision, revision + 1);
+    });
+}
+
+#[test]
+fn accepted_ten_thousand_definition_body_edit_reports_actual_index_and_aggregate_work() {
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        let source = fixture.0.join("main.hir");
+        let mut text = String::from("fn main() {}\nfn leaf(x:u8)->u8 { x }\n");
+        for i in 0..9_998 {
+            text.push_str(&format!("fn unrelated{i}()->u8 {{ 1u8 }}\n"));
+        }
+        std::fs::write(&source, &text).unwrap();
+        let mut session = session::Session::open(&source, Verify::On);
+        assert!(session.check().unwrap().diagnostics.is_empty());
+        let before = session.program_applied().unwrap().engine.work_stats();
+        let edit = text.replace("{ x }", "{ x + 1u8 }");
+        session.apply(vec![session::FileChange {
+            path: source.clone(),
+            bytes: Some(edit.clone().into_bytes()),
+        }]);
+        let output = session.check_applied().unwrap();
+        assert!(output.diagnostics.is_empty());
+        assert_eq!(output.completion, CheckCompletion::Complete);
+        let touched = session.stats().touched;
+        let work = session
+            .program_applied()
+            .unwrap()
+            .engine
+            .work_stats()
+            .since(before);
+        assert_eq!(work.parsed_bytes, edit.len() as u64);
+        assert_eq!(work.parsed_definitions, 10_000);
+        assert_eq!(work.index_occurrence_visits, 10_000);
+        assert!(work.index_anchor_visits <= 10_001, "{work:?}");
+        assert!(touched < 100, "{touched} memo touches");
+        // These remain linear whole-program scans. Keeping the assertion
+        // prevents low memo-touch counts from being called an affected-work bound.
+        assert!(work.gen5_visits >= 10_000, "{work:?}");
+        assert!(work.lint_definition_visits >= 10_000, "{work:?}");
+        eprintln!(
+            "accepted10k touched={touched} work={}",
+            serde_json::to_string(&work).unwrap()
+        );
+        std::fs::write(&source, edit).unwrap();
+        let cold = check_path(&source).unwrap();
+        assert_eq!(diagnostics(&output), diagnostics(&cold));
+        assert_eq!(output.completion, cold.completion);
+    });
+}
+
+#[test]
+fn first_failed_manifest_load_keeps_the_invalid_import_as_a_watched_input() {
+    with_compiler_stack(|| {
+        let fixture = crate::image_fixture::Fixture::new();
+        let source = fixture.0.join("nested").join("main.hir");
+        std::fs::create_dir(source.parent().unwrap()).unwrap();
+        let manifest = fixture.0.join("hirsel.json");
+        std::fs::write(&source, "fn main(").unwrap();
+        std::fs::write(
+            &manifest,
+            serde_json::json!({
+                "schema": 1, "package": {"name":"application", "version":"1"},
+                "entry": {"module":[], "name":"main"},
+                "sources":[{"path":"nested/main.hir", "module":[]}], "dependencies":[],
+                "unsafe_ffi":{"link":[], "headers_checked":false, "wrappers":[]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut session = session::Session::open(&manifest, Verify::On);
+        assert!(session.check().is_err());
+        assert!(session.watched().any(|input| input == source));
+        assert!(
+            session.poll().is_empty(),
+            "a failed load must wait for an edit"
+        );
+        std::fs::write(&source, "fn main() {}\n").unwrap();
+        assert_eq!(session.poll().len(), 1);
+        assert!(session.check().unwrap().diagnostics.is_empty());
+    });
+}

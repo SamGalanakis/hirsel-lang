@@ -10,7 +10,7 @@
 //! what to recompute, and any change loading itself read (a manifest, a
 //! sidecar appearing, a prechecked package's source) loads the program again.
 use hirsel_engine::{CheckOutput, LoadedProgram, ToolError, Verify};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -34,6 +34,15 @@ pub struct SessionStats {
     pub touched: u64,
 }
 
+/// Input work at the resident boundary, independent of query counters.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SessionInputWork {
+    pub polled_files: u64,
+    pub polled_bytes: u64,
+    pub applied_sources: u64,
+    pub applied_bytes: u64,
+}
+
 pub struct Session {
     entry: PathBuf,
     verify: Verify,
@@ -47,7 +56,9 @@ pub struct Session {
     /// same revision is the same check.
     checked: Option<(u64, CheckOutput)>,
     stats: SessionStats,
+    input_work: Cell<SessionInputWork>,
     loaded_revision: u64,
+    touched_before_apply: Option<u64>,
 }
 
 impl Session {
@@ -62,7 +73,9 @@ impl Session {
             seen: BTreeMap::new(),
             checked: None,
             stats: SessionStats::default(),
+            input_work: Cell::new(SessionInputWork::default()),
             loaded_revision: 0,
+            touched_before_apply: None,
         }
     }
     /// A resident host's explicit compiler policy and shared result provider.
@@ -79,6 +92,9 @@ impl Session {
     pub fn stats(&self) -> &SessionStats {
         &self.stats
     }
+    pub fn input_work(&self) -> SessionInputWork {
+        self.input_work.get()
+    }
     /// The files the session watches: the loaded program's sources and the
     /// manifests and sidecars loading read.
     pub fn watched(&self) -> impl Iterator<Item = &Path> {
@@ -91,6 +107,10 @@ impl Session {
             .iter()
             .filter_map(|(path, (_, seen))| {
                 let now = std::fs::read(path).ok();
+                let mut work = self.input_work.get();
+                work.polled_files += 1;
+                work.polled_bytes += now.as_ref().map_or(0, |bytes| bytes.len() as u64);
+                self.input_work.set(work);
                 (now != *seen).then(|| FileChange {
                     path: path.clone(),
                     bytes: now,
@@ -103,14 +123,31 @@ impl Session {
     /// prechecked package) makes the next use load the program again. Returns
     /// the new revision.
     pub fn apply(&mut self, changes: Vec<FileChange>) -> u64 {
-        if changes.is_empty() {
+        if changes.iter().all(|change| {
+            self.seen
+                .get(&change.path)
+                .is_some_and(|(_, bytes)| *bytes == change.bytes)
+        }) {
             return self.stats.revision;
+        }
+        if self.touched_before_apply.is_none() {
+            self.touched_before_apply = self
+                .program
+                .as_ref()
+                .map(|program| program.engine.memo_stats().touched);
         }
         self.stats.revision += 1;
         let Some(program) = &mut self.program else {
             return self.stats.revision;
         };
         for change in changes {
+            if self
+                .seen
+                .get(&change.path)
+                .is_some_and(|(_, bytes)| *bytes == change.bytes)
+            {
+                continue;
+            }
             let source = self
                 .seen
                 .get(&change.path)
@@ -129,6 +166,10 @@ impl Session {
                 return self.stats.revision;
             }
             self.stats.replaced += 1;
+            let mut work = self.input_work.get();
+            work.applied_sources += 1;
+            work.applied_bytes += change.bytes.as_ref().map_or(0, |bytes| bytes.len() as u64);
+            self.input_work.set(work);
             self.seen.insert(change.path, (true, change.bytes));
         }
         self.stats.revision
@@ -139,6 +180,11 @@ impl Session {
     pub fn program(&mut self) -> Result<&mut LoadedProgram, ToolError> {
         let changes = self.poll();
         self.apply(changes);
+        self.program_applied()
+    }
+    /// The explicitly applied snapshot, without reading unrelated disk inputs.
+    /// The caller owns change delivery for every watched source and loader input.
+    pub fn program_applied(&mut self) -> Result<&mut LoadedProgram, ToolError> {
         if self.stats.revision.saturating_sub(self.loaded_revision) >= 64 {
             self.program = None;
         }
@@ -173,7 +219,25 @@ impl Session {
             Some(config) => compiler.with_config(config.clone()),
             None => compiler,
         };
-        let program = compiler.load_program(&self.entry)?;
+        let program = match compiler.load_program(&self.entry) {
+            Ok(program) => program,
+            Err(error) => {
+                // A first manifest load can fail after reading an imported
+                // source. Keep its actual source snapshot so repairing that
+                // file wakes an event host as well as changing the manifest.
+                if let ToolError::Query { sources, .. } = &error {
+                    for (_, file, _) in sources.anchors() {
+                        if let Some(source) = sources.file(file) {
+                            self.seen.insert(
+                                source.path.clone(),
+                                (true, Some(source.text().as_bytes().to_vec())),
+                            );
+                        }
+                    }
+                }
+                return Err(error);
+            }
+        };
         // A source is watched with the text the program holds, so an edit
         // racing the load is applied on the next use.
         for (file, _) in &program.files {
@@ -193,13 +257,21 @@ impl Session {
     /// `hirsel check`: every package checked, lowering what compile-time
     /// evaluation executes.
     pub fn check(&mut self) -> Result<CheckOutput, ToolError> {
-        let before = self
-            .program
-            .as_ref()
-            .map_or(0, |p| p.engine.memo_stats().touched);
+        let changes = self.poll();
+        self.apply(changes);
+        self.check_applied()
+    }
+    /// Check the explicitly applied snapshot without polling input bytes;
+    /// an event/request host must deliver all input changes through `apply`.
+    pub fn check_applied(&mut self) -> Result<CheckOutput, ToolError> {
+        let before = self.touched_before_apply.take().unwrap_or_else(|| {
+            self.program
+                .as_ref()
+                .map_or(0, |p| p.engine.memo_stats().touched)
+        });
         let loads = self.stats.loads;
         self.stats.touched = 0;
-        self.program()?;
+        self.program_applied()?;
         let before = if self.stats.loads == loads { before } else { 0 };
         let revision = self.stats.revision;
         if let Some((checked, output)) = &self.checked
@@ -238,14 +310,26 @@ pub fn enable_resident(limit: usize) {
         })
     });
 }
+/// Current logical input paths, including absent manifests and sidecars.
+/// Event hosts register these before comparing bytes; event metadata alone
+/// never establishes source identity.
+pub fn resident_watched() -> Vec<PathBuf> {
+    RESIDENT.with(|r| {
+        r.borrow().as_ref().map_or_else(Vec::new, |registry| {
+            registry
+                .sessions
+                .iter()
+                .flat_map(|(_, session)| session.watched().map(Path::to_path_buf))
+                .collect()
+        })
+    })
+}
 /// Whether a file of any kept session changed since it was last used.
 pub fn resident_changed() -> bool {
     RESIDENT.with(|r| {
-        r.borrow().as_ref().is_some_and(|r| {
-            r.sessions
-                .iter()
-                .any(|(_, s)| s.program.is_none() || !s.poll().is_empty())
-        })
+        r.borrow()
+            .as_ref()
+            .is_some_and(|r| r.sessions.iter().any(|(_, s)| !s.poll().is_empty()))
     })
 }
 pub fn resident() -> bool {

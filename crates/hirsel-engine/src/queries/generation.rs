@@ -1026,20 +1026,20 @@ impl QueryEngine {
         &mut self,
         roots: impl IntoIterator<Item = DefPath>,
     ) -> Result<BTreeSet<DefPath>, QueryError> {
-        let any = self
-            .items
-            .iter()
-            .any(|(_, items)| items.first().is_some_and(|s| instance_bodied(s)))
-            || self
-                .image
-                .as_ref()
-                .is_some_and(|adopted| adopted.image.generates());
+        let any = self.items.iter().any(|(_, items)| {
+            self.work.selection_probe_visits += 1;
+            items.first().is_some_and(|s| instance_bodied(s))
+        }) || self
+            .image
+            .as_ref()
+            .is_some_and(|adopted| adopted.image.generates());
         let mut selected = BTreeSet::new();
         if !any {
             return Ok(selected);
         }
         let mut pending: Vec<(DefPath, hirsel_types::ActualBindings)> = vec![];
         for root in roots {
+            self.work.selection_root_visits += 1;
             if self.items.contains_key(&root)
                 && !self.front_summary(DefId::intern(&root))?.summary.frames[0].generic
             {
@@ -1048,6 +1048,7 @@ impl QueryEngine {
         }
         let mut seen = BTreeSet::new();
         while let Some((path, bindings)) = pending.pop() {
+            self.work.selection_walk_visits += 1;
             let binding_key: Vec<_> = bindings
                 .iter()
                 .map(|(site, actuals)| {

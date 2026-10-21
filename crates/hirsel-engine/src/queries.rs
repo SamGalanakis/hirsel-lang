@@ -127,6 +127,7 @@ pub(crate) type ParsedFile = (
 /// A single coherent session. Items are item-local syntax at anchors: moving an
 /// item moves its anchor, never its IDs, spans or cached results.
 pub struct QueryEngine {
+    pub(crate) work: crate::WorkStats,
     pub(crate) store_identity: ContentHash,
     pub(crate) verify_store: crate::store::VerifyStore,
     pending_store_checks: BTreeMap<(DefId, QueryKind), crate::store::Variant>,
@@ -447,6 +448,7 @@ impl QueryEngine {
         let registry = crate::registry::BuiltinRegistry::shared();
         environment.builtin_signatures_hash = registry.revision();
         Self {
+            work: crate::WorkStats::default(),
             store_identity: ContentHash::default(),
             verify_store: crate::store::VerifyStore::Off,
             pending_store_checks: BTreeMap::new(),
@@ -911,11 +913,13 @@ impl QueryEngine {
         };
         // Only definitions this source owned or now owns can change; every
         // other entry, including a shared image's, is left untouched.
-        let owned: Vec<DefPath> = self
-            .items
-            .iter()
-            .filter(|(_, candidates)| candidates.iter().any(|old| from_source(self, old)))
-            .map(|(path, _)| path.clone())
+        let source_items = self.declarations.source_definitions(&source_path);
+        self.work.index_owner_visits += source_items.len() as u64;
+        let owned: Vec<_> = source_items
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|path| self.items.contains_key(path))
             .collect();
         // A detached item stands where it was dropped until this index adopts it.
         let carried = std::mem::take(&mut self.detached);
@@ -963,12 +967,14 @@ impl QueryEngine {
         let new_positions: Vec<_> = file.items.iter().map(|new| self.position(new)).collect();
         let mut occurrences = vec![0u32; file.items.len()];
         let mut reordered = vec![];
-        for path in file
-            .items
-            .iter()
-            .map(|new| &new.item.definition)
-            .collect::<BTreeSet<_>>()
-        {
+        let mut ordinals: BTreeMap<DefPath, Vec<usize>> = BTreeMap::new();
+        for (i, new) in file.items.iter().enumerate() {
+            ordinals
+                .entry(new.item.definition.clone())
+                .or_default()
+                .push(i);
+        }
+        for (path, indices) in &ordinals {
             let mut order: Vec<(std::path::PathBuf, u32, Result<usize, Arc<ItemSyntax>>)> = self
                 .items
                 .get(path)
@@ -979,11 +985,10 @@ impl QueryEngine {
                     (p, base, Err(old.clone()))
                 })
                 .collect();
-            for (i, new) in file.items.iter().enumerate() {
-                if &new.item.definition == path {
-                    let (p, base) = new_positions[i].clone();
-                    order.push((p, base, Ok(i)));
-                }
+            for &i in indices {
+                self.work.index_occurrence_visits += 1;
+                let (p, base) = new_positions[i].clone();
+                order.push((p, base, Ok(i)));
             }
             order.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
             for (occurrence, (_, _, entry)) in order.into_iter().enumerate() {
@@ -1024,26 +1029,40 @@ impl QueryEngine {
             affected.insert(path);
         }
         let file_id = file.file;
+        let mut predecessor_slots: BTreeMap<(DefPath, u32), Vec<usize>> = BTreeMap::new();
+        for (i, old) in previous.iter().enumerate() {
+            predecessor_slots
+                .entry((old.item.definition.clone(), old.occurrence))
+                .or_default()
+                .push(i);
+        }
+        let mut previous: Vec<_> = previous.into_iter().map(Some).collect();
         for (i, new) in file.items.iter_mut().enumerate() {
             let occurrence = occurrences[i];
             let base = new_positions[i].1;
             let definition = new.item.definition.clone();
-            let unchanged = previous.iter().position(|old| {
-                old.item.definition == definition
-                    && old.text_hash == new.text_hash
-                    && old.occurrence == occurrence
+            let slots = predecessor_slots
+                .get(&(definition, occurrence))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let unchanged = slots.iter().copied().find(|&index| {
+                self.work.index_anchor_visits += 1;
+                previous[index]
+                    .as_ref()
+                    .is_some_and(|old| old.text_hash == new.text_hash)
             });
             if let Some(index) = unchanged {
-                let old = previous.remove(index);
+                let old = previous[index].take().unwrap();
                 self.sources.move_anchor(old.anchor, file_id, base);
                 *new = old;
             } else {
                 let syntax = Arc::make_mut(new);
                 syntax.occurrence = occurrence;
-                if let Some(index) = previous.iter().position(|old| {
-                    old.item.definition == definition && old.occurrence == occurrence
+                if let Some(index) = slots.iter().copied().find(|&index| {
+                    self.work.index_anchor_visits += 1;
+                    previous[index].is_some()
                 }) {
-                    let old = previous.remove(index);
+                    let old = previous[index].take().unwrap();
                     self.sources.move_anchor(old.anchor, file_id, base);
                     syntax.reanchor(old.anchor);
                 }
@@ -1051,9 +1070,12 @@ impl QueryEngine {
         }
         // Items this source dropped stay adoptable through the next index, with
         // their queries; a carried item nobody adopted expires now.
+        let carried_identity: std::collections::HashSet<_> =
+            carried.iter().map(Arc::as_ptr).collect();
         let (expired, dropped): (Vec<_>, Vec<_>) = previous
             .into_iter()
-            .partition(|old| carried.iter().any(|c| Arc::ptr_eq(c, old)));
+            .flatten()
+            .partition(|old| carried_identity.contains(&Arc::as_ptr(old)));
         for old in &expired {
             affected.insert(old.item.definition.clone());
         }
@@ -1783,6 +1805,10 @@ impl QueryEngine {
             return self.missing(QueryKind::Lex);
         };
         self.last_phase = Some(QueryKind::Lex);
+        self.work.parsed_bytes += self
+            .sources
+            .file(file)
+            .map_or(0, |source| source.text().len() as u64);
         let tokens = lexer.lex(file, &self.sources)?;
         if has_errors(&tokens.diagnostics) {
             return Err(QueryError::Diagnostics(tokens.diagnostics));
@@ -1792,6 +1818,7 @@ impl QueryEngine {
         };
         self.last_phase = Some(QueryKind::Parse);
         let mut output = parser.parse(file, tokens.value, context, &mut self.sources)?;
+        self.work.parsed_definitions += output.value.items.len() as u64;
         let mut diagnostics = tokens.diagnostics;
         diagnostics.append(&mut output.diagnostics);
         if context.package.name_is("std") {

@@ -26,6 +26,9 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[path = "serve_watch.rs"]
+mod watch_events;
+
 const MAGIC: &[u8; 4] = b"HRS1";
 const DEFAULT_IDLE: u64 = 900;
 /// The commands a server runs; the rest always run in their own process.
@@ -37,6 +40,7 @@ fn identity() -> String {
     hash.update(hirsel_driver::COMPILER_IDENTITY);
     hash.update(include_bytes!("main.rs"));
     hash.update(include_bytes!("serve.rs"));
+    hash.update(include_bytes!("serve_watch.rs"));
     hash.finalize()[..8]
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -598,8 +602,9 @@ fn unreachable_cwd<R>(cwd: &Path) -> R {
         cwd.display()
     )
 }
-/// `hirsel check --watch <args>`: check, then check again whenever a file
-/// the program depends on changes (polled every 100 ms), until interrupted.
+/// `hirsel check --watch <args>`: check, then reconcile current bytes when
+/// the kernel delivers an input event. Register before comparing bytes so an
+/// edit racing the previous check or watch installation cannot be missed.
 pub fn watch(args: Vec<OsString>) -> u8 {
     hirsel_driver::session::enable_resident(1);
     hirsel_engine::free_sessions(true);
@@ -611,10 +616,24 @@ pub fn watch(args: Vec<OsString>) -> u8 {
             started.elapsed().as_millis()
         );
         loop {
-            std::thread::sleep(Duration::from_millis(100));
+            let mut events =
+                match watch_events::Watch::new(hirsel_driver::session::resident_watched()) {
+                    Ok(events) => events,
+                    Err(error) => {
+                        eprintln!("hirsel: cannot watch inputs: {error}");
+                        return 3;
+                    }
+                };
             if hirsel_driver::session::resident_changed() {
                 break;
             }
+            if let Err(error) = events.wait() {
+                eprintln!("hirsel: cannot watch inputs: {error}");
+                return 3;
+            }
+            // Reinstall after every wake, including overflow/ignored watches,
+            // before the next byte comparison. An atomic save or renamed
+            // symlink target cannot leave us attached only to a stale inode.
         }
     }
 }

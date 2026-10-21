@@ -484,6 +484,22 @@ impl DeclarationIndex {
     pub(crate) fn snapshots(&self, path: &std::path::Path) -> std::collections::BTreeSet<FileId> {
         self.paths.get(path).cloned().unwrap_or_default()
     }
+    /// Current items of one logical source, including derived fact helpers.
+    /// Consult the existing source-to-snapshot index, never all program items.
+    pub(crate) fn source_definitions(&self, path: &std::path::Path) -> Vec<DefPath> {
+        self.paths
+            .get(path)
+            .into_iter()
+            .flatten()
+            .flat_map(|file| {
+                self.files
+                    .get(file)
+                    .into_iter()
+                    .flat_map(|items| items.iter())
+            })
+            .map(|item| item.item.definition.clone())
+            .collect()
+    }
     /// The manifest identity: every definition's path, visibility and kind.
     pub fn identity(&self) -> ContentHash {
         let bytes: Vec<u8> = self

@@ -351,6 +351,7 @@ impl QueryEngine {
         paths
             .into_iter()
             .map(|path| {
+                self.work.gen5_visits += 1;
                 let definition = DefId::intern(&path);
                 if let Some(checked) = self.front_products.checked.get(&definition) {
                     return Ok((definition, checked.clone()));
