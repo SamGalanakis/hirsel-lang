@@ -42,6 +42,9 @@ fn mutants<S: Stage>(
             let mut ed = Editor::new(unit.clone());
             ed.code[b][i] = match *inst {
                 Inst::Dup { value } | Inst::Release { value, .. } => Inst::Share { value },
+                // Remove the copy's new holder without consuming its source.
+                // A Take would also change source initialization and can become
+                // a valid last-use move after cleanup repairs a conditional drop.
                 Inst::Copy {
                     result,
                     address,
@@ -51,7 +54,7 @@ fn mutants<S: Stage>(
                     result,
                     address,
                     reaching,
-                    mode: ReadMode::Take,
+                    mode: ReadMode::Borrow,
                 },
                 _ => unreachable!(),
             };
