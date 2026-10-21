@@ -319,24 +319,26 @@ pub(crate) fn lower(
                     .collect::<Result<_, _>>()?,
                 object,
             };
-            let bytes = fragment.encode(program.table, program.keys).map_err(|e| {
-                NativeError::of(
-                    StageName::Emission,
-                    definition,
-                    format!("the unit's fragment: {e}"),
-                )
-            })?;
-            if hit && stored.as_deref() != Some(bytes.as_slice()) {
-                return Err(NativeError::of(
-                    StageName::Emission,
-                    definition,
-                    format!(
-                        "EveryStage recomputation differs from cached fragment for unit key {}",
-                        key.hex()
-                    ),
-                ));
+            if hit || program.objects.store.enabled() {
+                let bytes = fragment.encode(program.table, program.keys).map_err(|e| {
+                    NativeError::of(
+                        StageName::Emission,
+                        definition,
+                        format!("the unit's fragment: {e}"),
+                    )
+                })?;
+                if hit && stored.as_deref() != Some(bytes.as_slice()) {
+                    return Err(NativeError::of(
+                        StageName::Emission,
+                        definition,
+                        format!(
+                            "EveryStage recomputation differs from cached fragment for unit key {}",
+                            key.hex()
+                        ),
+                    ));
+                }
+                program.objects.store.put(key, &bytes);
             }
-            program.objects.store.put(key, &bytes);
             Ok(LoweredUnit { fragment, hit })
         },
     );
