@@ -74,17 +74,6 @@ fn read_stdin(input: Stdin, sorted_mode: bool) -> Result[unique Scan, AppError] 
   Ok(Scan(counts: counts, lines: take lines))
 }
 
-fn read_file(d: Dir, p: Path, sorted_mode: bool) -> Result[unique Scan, AppError] {
-  let mut reader = bufio.new(4096)
-  let mut f = file.open(d, p)?
-  let mut counts = Counts(lines: 0, words: 0, bytes: 0)
-  let mut lines: unique List[String] = []
-  while let Some(line) = bufio.file_read_line(d, mut f, mut reader, 1048576)? {
-    collect(mut counts, mut lines, line, sorted_mode)
-  }
-  Ok(Scan(counts: counts, lines: take lines))
-}
-
 fn execute(rt: Io, args: Args) -> Result[(), AppError] {
   let specs: List[cli.Flag] = [
     cli.Flag(
@@ -117,7 +106,15 @@ fn execute(rt: Io, args: Args) -> Result[(), AppError] {
     let scan = if source == "-" {
       read_stdin(io.stdin(rt)?, sorted_mode)?
     } else {
-      read_file(io.dir(rt, path.of("data"))?, path.of(source), sorted_mode)?
+      let d = io.dir(rt, path.of("data"))?
+      let mut f = file.open(d, path.of(source))?
+      let mut reader = bufio.new(4096)
+      let mut counts = Counts(lines: 0, words: 0, bytes: 0)
+      let mut found: unique List[String] = []
+      while let Some(line) = bufio.file_read_line(d, mut f, mut reader, 1048576)? {
+        collect(mut counts, mut found, line, sorted_mode)
+      }
+      Scan(counts: counts, lines: take found)
     }
     let Scan(counts: scan_counts, lines: scan_lines) = take scan
     total.lines += scan_counts.lines

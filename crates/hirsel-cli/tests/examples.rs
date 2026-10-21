@@ -2267,6 +2267,55 @@ fn dogfood5_wc2_package_tests() {
 }
 
 #[test]
+fn wc2_original_nested_file_loop_runs_on_both_backends() {
+    for (name, source, args, expected) in [
+        (
+            "wc2_loop",
+            include_str!("../../../examples/wc2/repros/invalid-origin.hir"),
+            &[][..],
+            "",
+        ),
+        (
+            "wc2",
+            include_str!("../../../examples/wc2/main.hir"),
+            &["x", "y"][..],
+            "3 3 10\n",
+        ),
+    ] {
+        let fixture = Fixture::new(name, source);
+        let data = fixture.0.join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::write(data.join("x"), b"one\ntwo\n").unwrap();
+        std::fs::write(data.join("y"), b"z\n").unwrap();
+        let grants = fixture.0.join("grants.json");
+        std::fs::write(
+            &grants,
+            serde_json::json!({"io":{"stdout":"stdout.bytes@1","stderr":"stderr.bytes@1","dirs":[{"path":"data","host":data,"access":"read"}]},"args":args})
+                .to_string(),
+        )
+        .unwrap();
+        for engine in [
+            &[][..],
+            &["--native", "--backend", "llvm"][..],
+            &["--native", "--backend", "cranelift"][..],
+        ] {
+            let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .env("XDG_CACHE_HOME", fixture.0.join("cache"))
+                .arg("run")
+                .args(engine)
+                .arg(fixture.0.join("hirsel.json"))
+                .arg("--grants")
+                .arg(&grants)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{name}/{engine:?}: {output:?}");
+            assert_eq!(output.stdout, expected.as_bytes(), "{name}/{engine:?}");
+            assert!(output.stderr.is_empty(), "{name}/{engine:?}: {output:?}");
+        }
+    }
+}
+
+#[test]
 fn dogfood5_csvstats_package_tests() {
     let example = Example::new(
         "csvstats",

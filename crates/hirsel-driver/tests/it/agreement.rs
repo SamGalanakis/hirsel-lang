@@ -1332,8 +1332,27 @@ fn nested_loop_origins_remain_live_until_their_own_iteration_or_explicit_end() {
                 } = &block.terminator
                 {
                     if path.0.name.as_str() == "read" {
+                        let token = body.places[arguments[1].value.place.0 as usize].ty;
+                        let mut origins = Vec::new();
+                        hirsel_types::visit_type_origins(types(), token, |origin, _| {
+                            origins.push(origin.clone());
+                            Ok(())
+                        })
+                        .unwrap();
+                        let owner = body
+                            .places
+                            .iter()
+                            .position(|p| {
+                                p.loan.is_none()
+                                    && p.binding
+                                        .as_ref()
+                                        .is_some_and(|name| origins.contains(name))
+                            })
+                            .expect("branded token names its original owner");
                         block.instructions.push(hirsel_tir::Instruction {
-                            kind: hirsel_tir::InstructionKind::EndOrigin(arguments[0].value.place),
+                            kind: hirsel_tir::InstructionKind::EndOrigin(hirsel_tir::PlaceId(
+                                owner as u32,
+                            )),
                             span: block.span,
                             on_failure: hirsel_tir::CleanupId(0),
                         });
