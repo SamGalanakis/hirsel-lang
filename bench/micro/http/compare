@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Compare finite HTTP servers in one seeded CPU31/CPU7 session."""
+import argparse
+import json
+from pathlib import Path
+import re
+import statistics
+import subprocess
+import sys
+import time
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[2]
+
+
+def client(port, output):
+    if port in (18475, 18476):
+        from load import run
+        while True:
+            try:
+                measured = run(port, 2048)
+                break
+            except ConnectionRefusedError:
+                time.sleep(.001)
+    else:
+        from hello_load import run
+        measured = run(port)
+    Path(output).write_text(json.dumps(measured) + '\n')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--client', nargs=2, metavar=('PORT', 'OUTPUT'))
+    parser.add_argument('--participants', type=Path)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--rounds', type=int, default=10)
+    parser.add_argument('--seed', type=int, default=20261021)
+    args = parser.parse_args()
+    if args.client:
+        client(int(args.client[0]), args.client[1])
+        return
+    if args.participants is None or args.output is None or args.rounds < 10:
+        parser.error('need --participants, --output and at least ten rounds')
+    entries = json.loads(args.participants.read_text())
+    ports = {entry['name']: entry['port'] for entry in entries}
+    runner = subprocess.Popen([str(HERE.parent / 'run'), str(args.participants),
+                               '--output', str(args.output), '--rounds', str(args.rounds),
+                               '--seed', str(args.seed)], cwd=ROOT,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, bufsize=1)
+    children = []
+    try:
+        for line in runner.stdout:
+            print(line, end='', flush=True)
+            match = re.match(r'round (\d+)/\d+: (\S+)', line)
+            if match:
+                ordinal, name = match.groups()
+                output = args.output.with_name(f'{args.output.stem}-{ordinal}-{name}-latency.json')
+                children.append(subprocess.Popen(['taskset', '-c', '7', sys.executable,
+                                                  str(HERE / 'compare'), '--client',
+                                                  str(ports[name]), str(output)]))
+        if runner.wait():
+            raise RuntimeError('measurement failed; inspect the session JSON')
+        for child in children:
+            if child.wait(timeout=30):
+                raise RuntimeError('client failed')
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.terminate()
+                child.wait()
+        if runner.poll() is None:
+            runner.terminate()
+            runner.wait()
+    data = json.loads(args.output.read_text())
+    for workload in ('hello', 'keep'):
+        def counts(name):
+            return [sample['counts']['instructions:u'] for sample in data['samples']
+                    if sample['name'] == name]
+        reference = counts('rust-' + workload)
+        if not reference:
+            continue
+        reference = statistics.median(reference)
+        for entry in entries:
+            name = entry['name']
+            if name.endswith('-' + workload):
+                instructions = statistics.median(counts(name))
+                print(f'{name}: {instructions / 1024:.1f} user instructions/request; '
+                      f'{instructions / reference:.4f}x tokio+httparse')
+
+
+if __name__ == '__main__':
+    main()

@@ -18,21 +18,30 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
     http.default_config()
   )
   for _ in 0u64..1024u64 {
-    let (owned, _) = match http.next_stream(mut connection, Some(clock)) {
-      Ok(Some(exchange)) => take exchange,
-      Ok(None()) => return Ok(()),
-      Error(e) => return Error(Http(take e)),
+    if !http.serve_next(
+      mut connection,
+      Some(clock),
+      fn(request: http.ServerRequestView) -> Result[http.ServerResponse, http.HttpError] uses {} {
+        Ok(
+          http.ServerResponse(
+            status: 200u16,
+            headers: [http.Header(name: "Content-Type", value: "text/plain")],
+            body: b"Hello, world",
+            close: false
+          )
+        )
+      }
+    ) ? Http {
+      return Ok(())
     }
-    let mut responding = take owned
-    http.respond(
-      mut responding,
-      200u16,
-      [http.Header(name: "Content-Type", value: "text/plain")],
-      b"Hello, world",
-      false
-    ) ? Http
   }
-  let _ = http.next_stream(mut connection, Some(clock))
+  let _ = http.serve_next(
+    mut connection,
+    Some(clock),
+    fn(request: http.ServerRequestView) -> Result[http.ServerResponse, http.HttpError] uses {} {
+      Ok(http.ServerResponse(status: 200u16, headers: [], body: b"", close: true))
+    }
+  )
   out.print(io.stdout(rt) ? Grant, "1024\n") ? Output
   Ok(())
 }

@@ -1690,6 +1690,88 @@ pub type ServerRequest {
   keep_alive: bool,
 }
 
+/// A parsed HTTP/1 head whose fields are byte spans over one retained buffer.
+/// Accessors materialize only the fields the handler uses. The view may outlive
+/// the callback: subsequent reads preserve its immutable bytes.
+pub opaque type ServerRequestView: copyable + inert + noalloc_drop uses {} {
+  data: Bytes,
+  line: http_wire.RequestLine,
+  headers: List[http_wire.RawHeader],
+  version: Version,
+  keep_alive: bool,
+  body: Bytes,
+  trailers: List[Header],
+}
+
+pub fn server_request_method(r: ServerRequestView) -> unique String uses {} {
+  // Construction validated UTF-8 and the request-line syntax.
+  match http_text(r.data, r.line.method_start, r.line.method_end) {
+    Ok(value) => take value,
+    Error(_) => "",
+  }
+}
+
+pub fn server_request_target(r: ServerRequestView) -> unique String uses {} {
+  match http_text(r.data, r.line.target_start, r.line.target_end) {
+    Ok(value) => take value,
+    Error(_) => "",
+  }
+}
+
+pub fn server_request_header(r: ServerRequestView, name: String) -> Option[String] uses {} {
+  for h in r.headers {
+    if http_token_is(r.data, h.name_start, h.name_end, name) {
+      return Some(
+        match http_text(r.data, h.value_start, h.value_end) {
+          Ok(value) => take value,
+          Error(_) => "",
+        }
+      )
+    }
+  }
+  None()
+}
+
+pub fn server_request_owned(r: ServerRequestView) -> unique ServerRequest uses {} {
+  let mut headers: List[Header] = []
+  for h in r.headers {
+    let name = match http_text(r.data, h.name_start, h.name_end) {
+      Ok(value) => take value,
+      Error(_) => "",
+    }
+    let value = match http_text(r.data, h.value_start, h.value_end) {
+      Ok(value) => take value,
+      Error(_) => "",
+    }
+    core@1/list.push(mut headers, Header(name: take name, value: take value))
+  }
+  ServerRequest(
+    method: server_request_method(r),
+    target: server_request_target(r),
+    version: r.version,
+    keep_alive: r.keep_alive,
+    headers: take headers,
+    body: unique r.body,
+    trailers: unique r.trailers
+  )
+}
+
+pub fn server_request_body(r: ServerRequestView) -> Bytes in r uses {} {
+  r.body
+}
+
+pub fn server_request_version(r: ServerRequestView) -> Version uses {} {
+  r.version
+}
+
+// A validation view: unlike http_text, this never builds a per-field byte list.
+fn http_span_text(take buf: Bytes, start: u64, end: u64) -> Result[String, HttpError] uses {} {
+  match core@1/string.from_bytes(copy core@1/bytes.slice(buf, start, end)) {
+    Ok(value) => Ok(take value),
+    Error(_) => Error(Malformed(HeaderValue())),
+  }
+}
+
 // Incremental request-body framing. The receive path consumes wire bytes as they
 // are decoded; only one incomplete metadata line and the decoded body are retained.
 type ServerBody {
@@ -2103,6 +2185,17 @@ fn http_receive_request(mut c: HttpExchange, clock: Option[MonotonicClock]) -> R
   if http_is_h2(c.transport) {
     return http_h2_receive_request(mut c, clock)
   }
+  let incoming_view = http_receive_view(mut c, clock)?
+  Ok(server_request_owned(incoming_view))
+}
+
+fn http_receive_view(mut c: HttpExchange, clock: Option[MonotonicClock]) -> Result[
+  ServerRequestView,
+  HttpError
+] {
+  if http_is_h2(c.transport) {
+    return Error(OutOfOrder())
+  }
   if c.state == 2 {
     return Error(Closed())
   }
@@ -2123,11 +2216,20 @@ fn http_receive_request(mut c: HttpExchange, clock: Option[MonotonicClock]) -> R
     initial_deadline
   }
   while true {
-    let buf = http_input_contents(c.transport.input)
-    if let Some((parsed, frame, end)) = http_server_head(buf, c.config)? {
+    let input = replace(mut c.transport.input, HttpInput(bytes: [], offset: 0))
+    let (returned_input, buf) = http_input_view(take input)
+    c.transport.input = take returned_input
+    if let Some((parsed, frame, end)) = internal.http1_parse.http_server_view(
+      take buf,
+      c.config
+    )? {
       let mut incoming = take parsed
       c.version = incoming.version
-      c.head_request = incoming.method == "HEAD"
+      c.head_request = core@1/bytes.slice(
+        incoming.data,
+        incoming.line.method_start,
+        incoming.line.method_end
+      ) == b"HEAD"
       http_input_consume(mut c.transport.input, end)
       let mut body = http_server_body(frame, c.config.max_body_bytes)?
       while body.state != 5 {

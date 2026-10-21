@@ -1,0 +1,93 @@
+self_percent	object	symbol	cause
+3.78	hello	[.] hirsel_rt::alloc::grow	Allocate/grow/reset managed input, span records, output or IO result storage; see callers
+2.02	libc.so.6	[.] __memmove_avx_unaligned_erms	Initialize/copy managed buffers or IO result objects; shared libc leaf, see callers
+1.93	libc.so.6	[.] _int_malloc	Allocate/grow/reset managed input, span records, output or IO result storage; see callers
+1.85	hello	[.] <hirsel_rt::io::State>::net_error	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+1.85	hello	[.] hirsel_rt::host_waits::issue	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+1.8	hello	[.] hirsel_rt_v2_alloc	Allocate/grow/reset managed input, span records, output or IO result storage; see callers
+1.72	hello	[.] _H13std118internal12http1__parse20http__output__appendI7655101fdf7d8d28E	Batched append for initial growth; indexed List stores for reused initialized prefix
+1.63	hello	[.] _H13std118internal12http1__parse18http__server__viewI441f7390c5b12f4fE	Scalar HTTP head/framing/target/UTF8 validation and span-list construction
+1.63	hello	[.] hirsel_rt_v2_seq_grow	Allocate/grow/reset managed input, span records, output or IO result storage; see callers
+1.63	[unknown]	[k] 0xffffffffb6a001cd	Unresolved/skid sample; no source attribution claimed
+1.59	hello	[.] <hirsel_rt::io::State>::execute_net	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+1.5	hello	[.] <hirsel_rt::io_real::RealIo>::perform	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+1.46	hello	[.] _H13std114http19http__receive__viewI1fc960531ad930cfE	Connection/request lifecycle, body framing and inline dispatch state
+1.38	hello	[.] <hirsel_rt::io::State>::stream_grant	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+1.29	hello	[.] _H13std118internal12http1__parse18http__output__headI0ba7d616d7835d02E	Validate and frame response; assemble retained head and body; write adapter
+1.16	libc.so.6	[.] __memset_avx2_unaligned_erms	Initialize/copy managed buffers or IO result objects; shared libc leaf, see callers
+1.12	hello	[.] hirsel_rt::io::capability_call	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+1.12	hello	[.] <hirsel_rt::io_real::RealIo as hirsel_rt::io::Adapter>::call	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+1.07	hello	[.] _H13std118internal12http1__parse18http__output__sendIc7b36cd0bc33ebf2E	Validate and frame response; assemble retained head and body; write adapter
+0.99	hello	[.] _H13std114http11serve__nextI2a34fe67bfc1536bE	Connection/request lifecycle, body framing and inline dispatch state
+0.95	hello	[.] _H13std114http17validate__headersI4aa60011d8ecd4abE	HTTP token/header syntax and case-insensitive framing-policy validation
+0.95	hello	[.] hirsel_rt::copy::clone_block	Managed handle/request copying and sharing credits around IO and buffer ownership
+0.86	hello	[.] <hirsel_rt::io::State>::preflight	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+0.82	hello	[.] _H13std114http24http__server__read__moreI7efb34b3ae919aecE	Connection/request lifecycle, body framing and inline dispatch state
+0.82	hello	[.] <hirsel_rt::readiness::Readiness>::finish	Cooperative readiness/task/context scheduling around socket IO
+0.77	hello	[.] <hirsel_rt::net_host::cooperative::CooperativeNet as hirsel_rt::net::NetProvider>::set_timeout	Install/check configured read or write timeout through Net provider
+0.73	hello	[.] _H13std118internal12http1__parse22http__view__add__batchIc0a641f992813676E	Scalar HTTP head/framing/target/UTF8 validation and span-list construction
+0.73	hello	[.] core::str::converts::from_utf8	Scalar HTTP head/framing/target/UTF8 validation and span-list construction
+0.73	hello	[.] hirsel_rt_v2_bytes_append	Managed sequence/string/view construction and field operations; see callers
+0.69	hello	[.] <hirsel_rt::net_host::cooperative::CooperativeNet as hirsel_rt::net::NetProvider>::net_io_inline	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+0.64	hello	[.] <hirsel_rt::launch::Shared<hirsel_rt::io_real::RealIo> as hirsel_rt::io::Adapter>::finish	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+0.6	hello	[.] _H13std118internal12http1__parse21http__output__respondIdd5ac93b112465f6E	Validate and frame response; assemble retained head and body; write adapter
+0.6	hello	[.] core::ptr::drop_glue::<hirsel_rt::io::Request>	Managed sharing, reference/drop accounting and capability ownership; see callers
+0.6	hello	[.] <hirsel_rt::readiness::ReadyState>::sync	Cooperative readiness/task/context scheduling around socket IO
+0.6	hello	[.] hirsel_rt_v2_bytes_slice	Managed sequence/string/view construction and field operations; see callers
+0.6	hello	[.] hirsel_rt_v2_dup	Managed handle/request copying and sharing credits around IO and buffer ownership
+0.6	[unknown]	[k] 0xffffffffb6b04104	Unresolved/skid sample; no source attribution claimed
+0.56	hello	[.] _H111http__micro115serveIb5aca8e74ff365acE	Application accept/handler loop and process startup
+0.56	hello	[.] _H13std114http17http__input__readIe16131b7da45d3faE	Receive buffer append/compaction and connection read state
+0.56	hello	[.] core::ptr::drop_glue::<hirsel_rt::io::Completion>	Managed sharing, reference/drop accounting and capability ownership; see callers
+0.56	hello	[.] hirsel_rt::host_waits::poll	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+0.56	hello	[.] hirsel_rt::tasks::poll_parked	Cooperative readiness/task/context scheduling around socket IO
+0.56	hello	[.] <hirsel_rt::launch::Shared<hirsel_rt::io_real::RealIo> as hirsel_rt::io::Adapter>::enter	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+0.56	hello	[.] <hirsel_rt::io::Completion as core::clone::Clone>::clone	Clone the runtime IO completion/result payload
+0.56	hello	[.] <hirsel_rt::io::Request as core::clone::Clone>::clone	Managed handle/request copying and sharing credits around IO and buffer ownership
+0.56	libc.so.6	[.] cfree@GLIBC_2.2.5	Allocate/grow/reset managed input, span records, output or IO result storage; see callers
+0.52	hello	[.] _H13std1110http__wire14parse__headersI87089df2d72a7a31E	Scalar HTTP head/framing/target/UTF8 validation and span-list construction
+0.52	hello	[.] hirsel_rt::tasks::try_yield	Cooperative readiness/task/context scheduling around socket IO
+0.52	hello	[.] hirsel_rt_v2_net_set_read_timeout	Net timeout bridge and provider dispatch
+0.47	hello	[.] _H13std114http24http__server__body__stepIb70d42a3fa611355E	Connection/request lifecycle, body framing and inline dispatch state
+0.47	[unknown]	[k] 0xffffffffb6a00083	Unresolved/skid sample; no source attribution claimed
+0.43	hello	[.] _H13std1110http__wire11name__tokenI4dc72f42be82b359E	Scalar HTTP header name token validation
+0.43	hello	[.] _H13std1110http__wire14parse__requestIfbb1bf011b26ca56E	Scalar HTTP head/framing/target/UTF8 validation and span-list construction
+0.43	hello	[.] _H13std114http16http__span__textI8aecda5f7a15e8aaE	Scalar HTTP head/framing/target/UTF8 validation and span-list construction
+0.43	hello	[.] _H13std118internal12http1__parse20http__server__targetI1f0f7138c28bad2bE	Scalar HTTP head/framing/target/UTF8 validation and span-list construction
+0.43	hello	[.] hirsel_rt::io::reserve_byte_list	Allocate/grow/reset managed input, span records, output or IO result storage; see callers
+0.43	hello	[.] <hirsel_rt::launch::Shared<hirsel_rt::io_real::RealIo> as hirsel_rt::io::Adapter>::call	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+0.43	hello	[.] <hirsel_rt::launch::Shared<hirsel_rt::io_real::RealIo> as hirsel_rt::io::Adapter>::ready	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+0.43	libc.so.6	[.] __libc_calloc	Allocate/grow/reset managed input, span records, output or IO result storage; see callers
+0.43	[unknown]	[k] 0xffffffffb65fea34	Unresolved/skid sample; no source attribution claimed
+0.43	[unknown]	[k] 0xffffffffb6a0008c	Unresolved/skid sample; no source attribution claimed
+0.39	hello	[.] _H13std1110http__wire7framingIe978087f786619d5E	Scalar HTTP head/framing/target/UTF8 validation and span-list construction
+0.39	hello	[.] _H13std114http18server__connectionI7cf0062cb81db40cE	Connection/request lifecycle, body framing and inline dispatch state
+0.39	hello	[.] <hirsel_rt::io::State>::execute::<hirsel_rt::io_real::Disk>	Dispatch process output IO (finite fixture prints its request count)
+0.39	hello	[.] <hirsel_rt::readiness::WaitLog>::finish	Readiness completion and wait bookkeeping
+0.39	hello	[.] <hirsel_rt::io::State>::listener_grant	Check listener authority before accepting a socket
+0.39	hello	[.] hirsel_rt::copy::holders	Managed handle/request copying and sharing credits around IO and buffer ownership
+0.39	hello	[.] hirsel_rt::pool::pool_exec	Runtime pool/context startup and callback dispatch
+0.39	hello	[.] <hirsel_rt::launch::Shared<hirsel_rt::io_real::RealIo> as hirsel_rt::io::Adapter>::wants_issuer	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+0.39	hello	[.] <hirsel_rt::launch::Shared<hirsel_rt::io_real::RealIo> as hirsel_rt::io::Adapter>::net_io	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+0.39	hello	[.] <hirsel_rt::net_host::cooperative::CooperativeNet as hirsel_rt::net::NetProvider>::read	Cooperative readiness/task/context scheduling around socket IO
+0.39	hello	[.] hirsel_rt_v2_atomic_create	Managed sharing, reference/drop accounting and capability ownership; see callers
+0.39	hello	[.] hirsel_rt_v2_detach	Managed resource detachment and cleanup bookkeeping
+0.34	hello	[.] _H13std118internal12http1__parse18http__output__byteI3b1594cb6b731f1bE	Status and Content-Length decimal conversion into reused storage
+0.34	hello	[.] <alloc::collections::btree::map::BTreeMap<u64, hirsel_rt::journal::Ticket>>::remove::<u64>	Remove runtime journal/wait bookkeeping entries
+0.34	hello	[.] <alloc::collections::btree::map::BTreeMap<u64, (u8, bool)>>::remove::<u64>	Remove runtime journal/wait bookkeeping entries
+0.34	hello	[.] <hirsel_rt::io_real::RealIo>::record	Capability validation and IO adapter/result dispatch for accept/read/write/timeouts
+0.34	hello	[.] hirsel_rt::copy::copy_held	Managed handle/request copying and sharing credits around IO and buffer ownership
+0.34	hello	[.] hirsel_rt::tasks::try_block	Cooperative readiness/task/context scheduling around socket IO
+0.34	[unknown]	[k] 0xffffffffb660038c	Unresolved/skid sample; no source attribution claimed
+0.3	hello	[.] _H13std114http17http__input__viewI2e92e3f092a46557E	Receive buffer append/compaction and connection read state
+0.3	hello	[.] <hirsel_rt::tasks::Scheduler>::canceled_task	Cooperative readiness/task/context scheduling around socket IO
+0.3	hello	[.] <hirsel_rt::readiness::Readiness>::ready	Cooperative readiness/task/context scheduling around socket IO
+0.3	hello	[.] <hirsel_rt::journal::NoJournal as hirsel_rt::journal::Journal>::records	Journal interface dispatch with recording disabled
+0.3	hello	[.] hirsel_rt_v2_net_accept	Net bridge and socket send/receive/accept operation
+0.3	libc.so.6	[.] __close	Close the per-connection socket file descriptor
+0.3	libc.so.6	[.] __send	Net bridge and socket send/receive/accept operation
+0.3	libc.so.6	[.] epoll_ctl	Cooperative readiness/task/context scheduling around socket IO
+0.3	[unknown]	[k] 0xffffffffb5a6a219	Unresolved/skid sample; no source attribution claimed
+0.3	[unknown]	[k] 0xffffffffb5b6c4d8	Unresolved/skid sample; no source attribution claimed
+0.3	[unknown]	[k] 0xffffffffb662d4fc	Unresolved/skid sample; no source attribution claimed
+0.3	[unknown]	[k] 0xffffffffb6a00080	Unresolved/skid sample; no source attribution claimed

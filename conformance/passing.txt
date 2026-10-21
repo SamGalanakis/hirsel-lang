@@ -4730,6 +4730,7 @@ conformance/SEM/SEM-1-http-server-chunk-prefix-3-run.hir
 conformance/SEM/SEM-1-http-server-chunked-run.hir
 conformance/SEM/SEM-1-http-server-clock-authority-run.hir
 conformance/SEM/SEM-1-http-server-decode-run.hir
+conformance/SEM/SEM-1-http-server-inline-run.hir
 conformance/SEM/SEM-1-http-server-persistence-run.hir
 conformance/SEM/SEM-1-http-server-respond-204-run.hir
 conformance/SEM/SEM-1-http-server-serial-handoff-run.hir

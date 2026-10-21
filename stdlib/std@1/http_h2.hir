@@ -1,7 +1,7 @@
 // Like hyper src/proto/h1/io.rs Buffered, the HTTP transport keeps one owned
 // byte buffer and a consume cursor. Owned fields let serial dispatch move it.
 type HttpInput {
-  bytes: unique List[u8],
+  bytes: List[u8],
   offset: u64,
 }
 
@@ -1134,7 +1134,8 @@ pub fn request_protocol(r: Request) -> Version uses {} {
 pub opaque resource type ServerConnection: noalloc_drop uses {Net, Tasks} {
   tasks: Tasks,
   exchange: Option[HttpExchange],
-  sender: Sender[HttpTransfer],
+  output: internal.http1_parse.HttpOutput,
+  sender: Option[Sender[HttpTransfer]],
   returned: Option[Receiver[HttpTransfer]],
   active: Atomic[u8],
 }
@@ -1144,16 +1145,78 @@ pub opaque resource type ServerConnection: noalloc_drop uses {Net, Tasks} {
 /// enables cleartext h2c; otherwise this uses HTTP/1.1.
 pub fn server_connection(tasks: Tasks, n: Net, take stream: Stream of n, config: Config) -> ServerConnection {
   let active = core@1/atomic.create(tasks, 0u8)
-  let (sender, receiver): (Sender[HttpTransfer], Receiver[HttpTransfer]) = channel.open(
-    tasks
-  )
   ServerConnection(
     tasks: tasks,
     exchange: Some(http_exchange(tasks, unique active, n, take stream, config)),
-    sender: take sender,
-    returned: Some(take receiver),
+    output: internal.http1_parse.HttpOutput(bytes: [], used: 0),
+    sender: None(),
+    returned: None(),
     active: active
   )
+}
+
+/// A complete response produced by an inline handler. Framing belongs to HTTP.
+pub type ServerResponse {
+  status: u16,
+  headers: List[Header],
+  body: Bytes,
+  close: bool,
+}
+
+/// Receive, handle and respond on this task, retaining the connection locally.
+/// Returns false at clean EOF. Use next_stream when the response handle must
+/// leave this call (worker handoff, streaming, or protocol detachment).
+// hyper b0733787 src/proto/h1/dispatch.rs:185-203,320-372,375-482:
+// drive one connection's read/dispatch/write states without a request task.
+pub fn serve_next(
+  mut c: ServerConnection,
+  clock: Option[MonotonicClock],
+  handler: fn(incoming: ServerRequestView) -> Result[ServerResponse, HttpError]
+) -> Result[bool, HttpError] {
+  let state = core@1/atomic.load(c.tasks, c.active)
+  if state == 1u8 {
+    return Error(OutOfOrder())
+  }
+  if state == 3u8 {
+    return Ok(false)
+  }
+  if let Some(current) = c.exchange {
+    if http_is_h2(current.transport) {
+      return Error(OutOfOrder())
+    }
+  }
+  // Mixing dispatch interfaces requires next_stream to receive an owned
+  // response's returned transport before inline dispatch can resume.
+  let Some(current) = replace(mut c.exchange, None()) else {
+    return Error(OutOfOrder())
+  }
+  let mut exchange = take current
+  let incoming = match http_receive_view(mut exchange, clock) {
+    Ok(parsed) => take parsed,
+    Error(Closed()) => {
+      http_h2_linger(mut exchange.transport)
+      return Ok(false)
+    },
+    Error(error) => {
+      http_server_reject(mut exchange, error)?
+      http_h2_linger(mut exchange.transport)
+      return Error(error)
+    },
+  }
+  let response = handler(incoming)?
+  let scratch = replace(
+    mut c.output,
+    internal.http1_parse.HttpOutput(bytes: [], used: 0)
+  )
+  let (output, outcome) = internal.http1_parse.http_output_respond(
+    mut exchange,
+    take scratch,
+    response
+  )
+  c.output = take output
+  outcome?
+  c.exchange = Some(take exchange)
+  Ok(true)
 }
 
 /// An owned request/response exchange. A completed response returns the
@@ -1217,10 +1280,20 @@ pub fn next_stream(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Re
       return Error(error)
     },
   }
+  if let None() = c.sender {
+    let (sender, receiver): (Sender[HttpTransfer], Receiver[HttpTransfer]) = channel.open(
+      c.tasks
+    )
+    c.sender = Some(take sender)
+    c.returned = Some(take receiver)
+  }
+  let Some(sender) = c.sender else {
+    return Error(Closed())
+  }
   core@1/atomic.store(c.tasks, c.active, 1u8)
   let stream = ServerStream(
     tasks: unique c.tasks,
-    returned: core@1/sender.dup(c.tasks, c.sender),
+    returned: core@1/sender.dup(c.tasks, sender),
     exchange: Some(http_exchange_transfer(take exchange)),
     version: incoming_request.version
   )
@@ -1392,7 +1465,7 @@ type HttpSerialData {
   served: bool,
   version: Version,
   head_request: bool,
-  input: HttpInput,
+  input: unique HttpInput,
   closed: bool,
 }
 
@@ -1472,7 +1545,7 @@ fn http_exchange_transfer(take exchange: HttpExchange) -> HttpTransfer {
           served: served,
           version: version,
           head_request: head_request,
-          input: take input,
+          input: unique input,
           closed: closed
         )
       )
@@ -1608,4 +1681,17 @@ fn http_exchange_from_transfer(take transfer: HttpTransfer) -> Result[
       stream_id: stream_id
     )
   )
+}
+
+// Move the input through the conversion so the slice owns a global sharing
+// credit; a borrowed List cannot be passed to the global take bridge. The
+// connection keeps its buffer, with COW preserving any retained request view.
+fn http_input_view(take incoming_buffer: HttpInput) -> (HttpInput, Bytes) uses {} {
+  let data = core@1/bytes.from_list(copy incoming_buffer.bytes)
+  let view_bytes = core@1/bytes.slice(
+    data,
+    incoming_buffer.offset,
+    core@1/bytes.len(data)
+  )
+  (take incoming_buffer, copy view_bytes)
 }

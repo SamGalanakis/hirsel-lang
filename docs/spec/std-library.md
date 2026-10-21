@@ -1775,6 +1775,14 @@ fn http.parse_server_request(buf: Bytes, config: Config) -> Result[Option[(Serve
 fn http.server_connection(tasks: Tasks, n: Net, take stream: Stream of n, config: Config) -> ServerConnection
 fn http.serve_tls(tasks: Tasks, n: Net, take stream: Stream of n, server: TlsServer, config: Config) -> Result[ServerConnection, HttpError]
 fn http.next_stream(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[Option[(sendable ServerStream, unique ServerRequest)], HttpError]
+ServerResponse = { status: u16, headers: List[Header], body: Bytes, close: bool }
+fn http.serve_next(mut c: ServerConnection, clock: Option[MonotonicClock], handler: fn(incoming: ServerRequestView) -> Result[ServerResponse, HttpError]) -> Result[bool, HttpError]
+fn http.server_request_method(r: ServerRequestView) -> unique String uses {}
+fn http.server_request_target(r: ServerRequestView) -> unique String uses {}
+fn http.server_request_header(r: ServerRequestView, name: String) -> Option[String] uses {}
+fn http.server_request_body(r: ServerRequestView) -> Bytes in r uses {}
+fn http.server_request_version(r: ServerRequestView) -> Version uses {}
+fn http.server_request_owned(r: ServerRequestView) -> unique ServerRequest uses {}
 fn http.protocol(s: ServerStream) -> Version uses {}
 fn http.request_protocol(r: Request) -> Version uses {}
 fn http.respond(mut s: ServerStream, status: u16, headers: List[Header], body: Bytes, close: bool) -> Result[(), HttpError]
@@ -1801,11 +1809,23 @@ The pure parser and socket receiver share one incremental body decoder. The rece
 consumes completed framing and payload as it progresses, retaining decoded data and
 only the unread wire suffix for pipelined requests.
 
+`serve_next` runs a complete HTTP/1 request and response on the calling task. Its
+handler receives an immutable `ServerRequestView`: request-line and header fields
+are validated spans into retained input bytes. Field accessors materialize only
+requested Strings; `server_request_owned` explicitly materializes the full public
+request, including body and trailers. A view remains valid across later requests.
+The handler returns response data; HTTP validates headers and owns framing. The
+connection retains response serialization storage, and creates no return channel
+for this path. `true` means one response completed; `false` means clean EOF.
+Handler or IO failure closes the checked-out connection. HTTP/2, streaming bodies,
+worker response handoff and detachment use `next_stream` instead.
+
 `ServerConnection` owns the transport between requests. `next_stream` yields an opaque,
 owned `ServerStream` and the decoded `ServerRequest`, or `None` at clean EOF. Responses
 are sent only on that stream. It is sendable, so a handler task may take it together
 with its request. The constructor takes the run's `Tasks` for the channel that returns
-completed transports; it creates no task. While a stream remains active, another
+completed transports; that channel is created lazily on the first owned checkout.
+It creates no task. While a stream remains active, another
 `next_stream` on the connection returns `OutOfOrder`. Completing `respond` or
 `end_response_body` automatically returns the transport; it needs no explicit finish
 operation. Every response operation on an already completed stream is `OutOfOrder`.

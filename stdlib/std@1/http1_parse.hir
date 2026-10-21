@@ -94,3 +94,388 @@ fn http_server_incoming(
     )
   )
 }
+
+// httparse a0fa552e src/lib.rs:481-520: one request-line/header pass,
+// with field offsets into the retained input instead of owned field strings.
+fn http_server_view(take buf: Bytes, config: http.HttpServerConfig) -> Result[
+  Option[(http.ServerRequestView, http_wire.Framing, u64)],
+  http.HttpError
+] uses {} {
+  let size = core@1/bytes.len(buf)
+  let bounded = core@1/bytes.slice(
+    buf,
+    0,
+    if size > config.max_head_bytes {
+      config.max_head_bytes
+    } else {
+      size
+    }
+  )
+  let empty = http_wire.RawHeader(
+    name_start: 0,
+    name_end: 0,
+    value_start: 0,
+    value_end: 0
+  )
+  let mut raw: Inline[http_wire.RawHeader, 16] = [
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty
+  ]
+  let mut line = http_wire.RequestLine(
+    method_start: 0,
+    method_end: 0,
+    target_start: 0,
+    target_end: 0,
+    version: 0
+  )
+  let mut count: u64 = 0
+  let mut first = true
+  let mut start: u64 = 0
+  let mut fields = HttpViewFields(
+    headers: [],
+    length: None(),
+    chunked: false,
+    has_transfer: false,
+    closed: false,
+    keep: false
+  )
+  while true {
+    let parsed = if first {
+      http_wire.parse_request(bounded, mut line, mut raw, mut count)
+    } else {
+      http_wire.parse_headers(bounded, start, mut raw, mut count)
+    }
+    let mut complete = false
+    match parsed {
+      Ok(Partial()) => {
+        if size >= config.max_head_bytes {
+          return Error(HeadTooLarge())
+        }
+        return Ok(None())
+      },
+      Ok(Complete(end)) => {
+        start = end
+        complete = true
+      },
+      Error(TooManyHeaders()) => {
+        start = raw[count - 1].value_end
+        while start < core@1/bytes.len(bounded) && bounded[start] != 10 {
+          start += 1
+        }
+        start += 1
+      },
+      Error(error) => return Error(Malformed(error)),
+    }
+    http_view_add_batch(
+      mut fields,
+      bounded,
+      raw,
+      count,
+      line.version,
+      config.max_headers
+    )?
+    if complete {
+      // Preserve the owned API's UTF-8 policy without allocating each value.
+      let _ = http.http_span_text(copy bounded, 0, start)?
+      let target = http.http_span_text(copy bounded, line.target_start, line.target_end)?
+      let method = http.http_span_text(copy bounded, line.method_start, line.method_end)?
+      if !http_server_target(method, target) {
+        return Error(Malformed(Token()))
+      }
+      let persistent = (line.version == 1 || fields.keep) && !fields.closed && !(line.version == 0 && fields.has_transfer)
+      let protocol_version: http.Version = if line.version == 1 {
+        Http11()
+      } else {
+        Http10()
+      }
+      return Ok(
+        Some(
+          (
+            http.ServerRequestView(
+              data: copy bounded,
+              line: line,
+              headers: copy fields.headers,
+              version: protocol_version,
+              keep_alive: persistent,
+              body: b"",
+              trailers: []
+            ),
+            http_wire.Framing(
+              content_length: fields.length,
+              chunked: fields.chunked,
+              keep_alive: persistent
+            ),
+            start
+          )
+        )
+      )
+    }
+    first = false
+  }
+  Ok(None())
+}
+
+fn http_malformed(error: http_wire.HeadError) -> http.HttpError uses {} {
+  Malformed(error)
+}
+
+type HttpViewFields {
+  headers: List[http_wire.RawHeader],
+  length: Option[u64],
+  chunked: bool,
+  has_transfer: bool,
+  closed: bool,
+  keep: bool,
+}
+
+fn http_view_connection(mut fields: HttpViewFields, buf: Bytes, h: http_wire.RawHeader) -> () uses {} {
+  let mut pos = h.value_start
+  while pos < h.value_end {
+    let mut end = pos
+    while end < h.value_end && buf[end] != 44 {
+      end += 1
+    }
+    let mut lo = pos
+    let mut hi = end
+    while lo < hi && (buf[lo] == 32 || buf[lo] == 9) {
+      lo += 1
+    }
+    while hi > lo && (buf[hi - 1] == 32 || buf[hi - 1] == 9) {
+      hi -= 1
+    }
+    if http.http_token_is(buf, lo, hi, "close") {
+      fields.closed = true
+    }
+    if http.http_token_is(buf, lo, hi, "keep-alive") {
+      fields.keep = true
+    }
+    pos = end + 1
+  }
+}
+
+fn http_view_add_batch(
+  mut fields: HttpViewFields,
+  buf: Bytes,
+  raw: Inline[http_wire.RawHeader, 16],
+  count: u64,
+  version: u8,
+  limit: u64
+) -> Result[(), http.HttpError] uses {} {
+  let have = core@1/list.len(fields.headers)
+  if have > limit || count > limit - have {
+    return Error(Malformed(TooManyHeaders()))
+  }
+  let frame = http_wire.framing(buf, version, raw, count) ? http_malformed
+  if let Some(value) = frame.content_length {
+    if let Some(old) = fields.length {
+      if old != value {
+        return Error(Malformed(ContentLength()))
+      }
+    }
+    fields.length = Some(value)
+  }
+  if fields.chunked && frame.chunked {
+    return Error(Malformed(TransferEncoding()))
+  }
+  fields.chunked = fields.chunked || frame.chunked
+  if fields.chunked && fields.length != None() {
+    return Error(Malformed(TransferEncoding()))
+  }
+  let mut i: u64 = 0
+  while i < count {
+    let h = raw[i]
+    if http.http_token_is(buf, h.name_start, h.name_end, "transfer-encoding") {
+      fields.has_transfer = true
+    }
+    if http.http_token_is(buf, h.name_start, h.name_end, "connection") {
+      http_view_connection(mut fields, buf, h)
+    }
+    core@1/list.push(mut fields.headers, h)
+    i += 1
+  }
+  Ok(())
+}
+
+// hyper src/proto/h1/role.rs Server::encode: retain serialization storage
+// between responses. A cursor replaces Vec::clear because Hirsel's list API
+// intentionally has no mutable byte-slice bridge or truncate primitive.
+type HttpOutput {
+  bytes: List[u8],
+  used: u64,
+}
+
+fn http_output_byte(mut buffer_state: HttpOutput, byte: u8) -> () uses {} {
+  if buffer_state.used < core@1/list.len(buffer_state.bytes) {
+    buffer_state.bytes[buffer_state.used] = byte
+  } else {
+    core@1/list.push(mut buffer_state.bytes, byte)
+  }
+  buffer_state.used += 1
+}
+
+fn http_output_append(mut buffer_state: HttpOutput, value: Bytes) -> () uses {} {
+  let length = core@1/bytes.len(value)
+  let offset = buffer_state.used
+  let available = core@1/list.len(buffer_state.bytes) - offset
+  let overwrite = if length < available {
+    length
+  } else {
+    available
+  }
+  let mut i: u64 = 0
+  while i < overwrite {
+    buffer_state.bytes[offset + i] = value[i]
+    i += 1
+  }
+  if overwrite < length {
+    core@1/bytes.append(
+      mut buffer_state.bytes,
+      core@1/bytes.slice(value, overwrite, length)
+    )
+  }
+  buffer_state.used += length
+}
+
+fn http_output_decimal(mut buffer_state: HttpOutput, value: u64) -> () uses {} {
+  let mut divisor: u64 = 1
+  while divisor <= value / 10 {
+    divisor *= 10
+  }
+  let mut remaining = value
+  while divisor != 0 {
+    http_output_byte(mut buffer_state, 48u8 + core@1/int.narrow(remaining / divisor))
+    remaining %= divisor
+    divisor /= 10
+  }
+}
+
+fn http_output_head(
+  mut buffer_state: HttpOutput,
+  status: u16,
+  headers: List[http.Header],
+  length: u64,
+  bodyless: bool,
+  keep: bool
+) -> Result[(), http.HttpError] uses {} {
+  http.validate_headers(headers)?
+  buffer_state.used = 0
+  http_output_append(mut buffer_state, b"HTTP/1.1 ")
+  http_output_decimal(mut buffer_state, core@1/int.widen(status))
+  http_output_append(mut buffer_state, b" \r\n")
+  for h in headers {
+    if http.http_same(h.name, "content-length") || http.http_same(
+      h.name,
+      "transfer-encoding"
+    ) || http.http_same(h.name, "connection") {
+      return Error(Malformed(ContentLength()))
+    }
+    http_output_append(mut buffer_state, core@1/string.as_bytes(h.name))
+    http_output_append(mut buffer_state, b": ")
+    http_output_append(mut buffer_state, core@1/string.as_bytes(h.value))
+    http_output_append(mut buffer_state, b"\r\n")
+  }
+  if !bodyless {
+    http_output_append(mut buffer_state, b"Content-Length: ")
+    http_output_decimal(mut buffer_state, length)
+    http_output_append(mut buffer_state, b"\r\n")
+  }
+  http_output_append(
+    mut buffer_state,
+    if keep {
+      b"Connection: keep-alive\r\n\r\n"
+    } else {
+      b"Connection: close\r\n\r\n"
+    }
+  )
+  Ok(())
+}
+
+fn http_output_respond(
+  mut c: http.HttpExchange,
+  take output: HttpOutput,
+  response: http.ServerResponse
+) -> (HttpOutput, Result[(), http.HttpError]) {
+  let mut storage = take output
+  let outcome = http_output_send(mut c, mut storage, response)
+  (take storage, take outcome)
+}
+
+fn http_output_send(
+  mut c: http.HttpExchange,
+  mut buffer_state: HttpOutput,
+  response: http.ServerResponse
+) -> Result[(), http.HttpError] {
+  if c.state != 1 && c.state != 3 {
+    return Error(OutOfOrder())
+  }
+  let keep = c.state == 1 && c.keep_alive && !response.close
+  c.state = 2
+  if response.status < 200 || response.status > 599 {
+    return Error(Malformed(Status()))
+  }
+  http_output_head(
+    mut buffer_state,
+    response.status,
+    response.headers,
+    core@1/bytes.len(response.body),
+    http.http_server_bodyless(false, response.status),
+    keep
+  )?
+  let size: u64 = if http.http_server_bodyless(c.head_request, response.status) {
+    0
+  } else {
+    core@1/bytes.len(response.body)
+  }
+  if size <= 65536 {
+    http_output_append(mut buffer_state, core@1/bytes.slice(response.body, 0, size))
+  }
+  http.http_transport_write_timeout(
+    mut c.transport,
+    http.http_timeout(c.config.write_timeout)?
+  )?
+  // The take adapter below shares only this initialized prefix while writing;
+  // it does not expose mutable storage to Net or to the handler.
+  let moved = replace(mut buffer_state.bytes, [])
+  let (returned, outcome) = http_output_write(
+    mut c.transport,
+    take moved,
+    buffer_state.used
+  )
+  buffer_state.bytes = take returned
+  outcome?
+  if size > 65536 {
+    http.http_transport_write(mut c.transport, response.body)?
+  }
+  c.served = true
+  if keep {
+    c.state = 0
+  }
+  Ok(())
+}
+
+fn http_output_write(
+  mut transport: http.HttpTransport,
+  take buffer: List[u8],
+  used: u64
+) -> (List[u8], Result[(), http.HttpError]) {
+  let data = core@1/bytes.from_list(copy buffer)
+  let outcome = http.http_transport_write(
+    mut transport,
+    core@1/bytes.slice(data, 0, used)
+  )
+  (take buffer, take outcome)
+}
