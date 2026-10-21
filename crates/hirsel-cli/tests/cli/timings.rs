@@ -32,10 +32,12 @@ const BUILD_PHASES: [&str; 15] = [
     "lir validate",
     "codegen",
 ];
-const INTERVALS: [&str; 9] = [
+const INTERVALS: [&str; 11] = [
     "image open",
     "S0",
+    "front prepare",
     "parallel",
+    "GEN-5",
     "S1",
     "parallel2",
     "merge",
@@ -43,7 +45,7 @@ const INTERVALS: [&str; 9] = [
     "units",
     "link",
 ];
-const PHASES: [&str; 18] = [
+const PHASES: [&str; 20] = [
     "parse",
     "resolve",
     "signatures",
@@ -62,8 +64,10 @@ const PHASES: [&str; 18] = [
     "codegen",
     "store lookup",
     "debug object",
+    "lex",
+    "declarations",
 ];
-const COUNTS: [&str; 28] = [
+const COUNTS: [&str; 43] = [
     "definitions",
     "units",
     "V runs",
@@ -92,6 +96,21 @@ const COUNTS: [&str; 28] = [
     "invalidated by environment",
     "mode memo queries",
     "mode memo hits",
+    "S1 claims",
+    "S1 parks",
+    "S1 duplicates",
+    "S1 lock wait ns",
+    "S1 park ns",
+    "invalidated by validation universe",
+    "S1 lower hold evictions",
+    "S1 lower hold recomputes",
+    "S1 lower hold peak bytes sum",
+    "S1 lower query attempts",
+    "S1 lower adapter calls",
+    "S1 root tasks",
+    "S1 discarded roots",
+    "S1 registration rounds",
+    "S1 scalar roots",
 ];
 
 fn build(source: &std::path::Path, timings: &str) -> std::process::Output {
@@ -344,4 +363,44 @@ fn release_and_explicit_lto_preserve_behavior() {
     }
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(exe).unwrap();
+}
+
+#[test]
+fn check_timings_separate_serial_preparation_lexing_and_growth() {
+    let source = std_file(HELLO);
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["check", "--timings=json"])
+        .arg(source)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report = report(&output.stderr);
+    for name in ["S0", "front prepare", "GEN-5"] {
+        let row = report["intervals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["interval"] == name)
+            .unwrap();
+        assert!(row["wall_ns"].as_u64().unwrap() > 0, "{name}: {report}");
+    }
+    for name in ["lex", "parse", "declarations", "signatures"] {
+        let row = report["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["phase"] == name)
+            .unwrap();
+        assert!(row["calls"].as_u64().unwrap() > 0, "{name}: {report}");
+    }
+    let intervals: u64 = report["intervals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["wall_ns"].as_u64().unwrap())
+        .sum();
+    assert_eq!(
+        intervals + report["untimed_ns"].as_u64().unwrap(),
+        report["wall_ns"]
+    );
 }

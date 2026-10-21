@@ -627,17 +627,24 @@ The report keeps three measures apart (`hirsel_intern::timings`):
   - `parallel`: checking each source file's definitions and lowering the
     program's reachable closure, which drive each definition's resolve,
     check, modes, lowering and V;
-  - `merge`: GEN-5, publishing checked packages and dropping the session;
+  - `front prepare`: serial preparation of immutable P and S1 worker inputs,
+    including signature snapshot normalization; this pauses its enclosing interval;
+  - `GEN-5`: the whole-program generic-instance growth verdict;
+  - `merge`: publishing checked packages and dropping the session;
   - `plan`: exporting, importing and adapting the native input;
   - `units`: each unit's LIR import, placement, RC, reuse, cleanup lowering,
     LIR validation and code generation;
   - `link`: the toolchain, the link and the output copy;
-  - `S1` and `parallel2` stay 0 until their driver steps exist.
+  - `S1`: dynamic compile-time Lower frontiers and canonical registration rounds;
+  - `parallel2`: remaining ordinary lowering and staged-instance completion.
 - **Phases** are work time (wall) and CPU time inside each phase, excluding
   the phases nested in it, summed over every thread, with their entry counts.
   Engine bookkeeping for a query (cache validation, read recording) counts as
   that query's phase. `verify in comptime` is the part of `verify` run inside
   compile-time evaluation. Phases overlap the intervals and are not added up.
+  `lex` times tokenization alone. `parse` excludes nested lexer work;
+  `declarations` times declaration indexing, excluding nested signature phases.
+  Broad source/declaration startup is the `S0` interval, not lexer work.
 - **Wait** is time threads spend waiting for each other; 0 while compiling is
   single-threaded.
 
@@ -668,6 +675,13 @@ which compiler-bench reads:
  "counts":{"definitions":2,"units":168, ...},
  "runner":{"image_runs":1,"cached_images":0,"fallbacks":[]}}
 ```
+
+S1 root task counts include registration retries and speculative suffixes.
+`S1 discarded roots` counts outcomes withheld by prefix barriers, not their
+CPU cost; `S1 registration rounds` counts restarted rounds. `S1 scalar roots`
+exposes compatibility evaluation, including cached constant revalidation.
+Physical Lower attempt/adapter counters include helpers and discarded work.
+These timing names are additive schema-1 fields; artifact identities are unchanged.
 
 Every interval, phase and count appears, in that order, including those still
 0. `crates/hirsel-cli/tests/cli/timings.rs` checks the schema.

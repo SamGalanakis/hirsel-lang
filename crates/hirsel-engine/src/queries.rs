@@ -2000,6 +2000,7 @@ impl DefinitionQueries for QueryEngine {
         let result = if has_errors(&output.diagnostics) {
             Err(QueryError::Diagnostics(output.diagnostics.clone()))
         } else {
+            let _timing = timings::phase(Phase::Declarations);
             self.index(&mut output.value, context).map(|_| output)
         };
         self.parsed.insert(

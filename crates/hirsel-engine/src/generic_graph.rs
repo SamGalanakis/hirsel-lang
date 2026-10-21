@@ -430,7 +430,7 @@ impl QueryEngine {
     }
 }
 pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryError> {
-    let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Merge);
+    let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::GenericGraph);
     let inputs = VerdictInputs::read(engine);
     if let Some(verdict) = &engine.generic_verdict {
         if verdict.inputs == inputs {

@@ -26,14 +26,20 @@ pub enum Interval {
     Units,
     Link,
     ImageOpen,
+    /// Serial preparation of immutable per-definition worker inputs.
+    FrontPrepare,
+    /// Whole-program generic-instance growth checking.
+    GenericGraph,
 }
 
 impl Interval {
     /// Every interval, in pipeline order.
-    pub const ALL: [Interval; 9] = [
+    pub const ALL: [Interval; 11] = [
         Interval::ImageOpen,
         Interval::S0,
+        Interval::FrontPrepare,
         Interval::Parallel,
+        Interval::GenericGraph,
         Interval::S1,
         Interval::Parallel2,
         Interval::Merge,
@@ -53,6 +59,8 @@ impl Interval {
             Interval::Units => "units",
             Interval::Link => "link",
             Interval::ImageOpen => "image open",
+            Interval::FrontPrepare => "front prepare",
+            Interval::GenericGraph => "GEN-5",
         }
     }
 }
@@ -79,11 +87,15 @@ pub enum Phase {
     StoreLookup,
     /// The link's debug object (line tables from the objects' debug intervals).
     DebugObject,
+    /// Tokenization alone, excluding parser and declaration publication.
+    Lex,
+    /// Declaration indexing, including its signature demands.
+    Declarations,
 }
 
 impl Phase {
     /// Every phase, in declaration order.
-    pub const ALL: [Phase; 18] = [
+    pub const ALL: [Phase; 20] = [
         Phase::Parse,
         Phase::Resolve,
         Phase::Signatures,
@@ -102,6 +114,8 @@ impl Phase {
         Phase::Codegen,
         Phase::StoreLookup,
         Phase::DebugObject,
+        Phase::Lex,
+        Phase::Declarations,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -124,6 +138,8 @@ impl Phase {
             Phase::Codegen => "codegen",
             Phase::StoreLookup => "store lookup",
             Phase::DebugObject => "debug object",
+            Phase::Lex => "lex",
+            Phase::Declarations => "declarations",
         }
     }
 }
@@ -210,11 +226,19 @@ pub enum Count {
     S1LowerQueryAttempts,
     /// Actual worker LoweringPhase::lower calls, including discarded work.
     S1LowerAdapterCalls,
+    /// Root tasks dispatched, including registration retries and suffix work.
+    S1RootTasks,
+    /// Dispatched root outcomes excluded by an earlier publication barrier.
+    S1DiscardedRoots,
+    /// Rounds repeated after publishing required declarations or generated text.
+    S1RegistrationRounds,
+    /// Root outcomes obtained through the scalar compatibility path.
+    S1ScalarRoots,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 39] = [
+    pub const ALL: [Count; 43] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -254,6 +278,10 @@ impl Count {
         Count::S1LowerHoldPeakBytes,
         Count::S1LowerQueryAttempts,
         Count::S1LowerAdapterCalls,
+        Count::S1RootTasks,
+        Count::S1DiscardedRoots,
+        Count::S1RegistrationRounds,
+        Count::S1ScalarRoots,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -297,6 +325,10 @@ impl Count {
             Count::S1LowerHoldPeakBytes => "S1 lower hold peak bytes sum",
             Count::S1LowerQueryAttempts => "S1 lower query attempts",
             Count::S1LowerAdapterCalls => "S1 lower adapter calls",
+            Count::S1RootTasks => "S1 root tasks",
+            Count::S1DiscardedRoots => "S1 discarded roots",
+            Count::S1RegistrationRounds => "S1 registration rounds",
+            Count::S1ScalarRoots => "S1 scalar roots",
         }
     }
 }

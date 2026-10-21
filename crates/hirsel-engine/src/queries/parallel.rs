@@ -734,6 +734,7 @@ impl QueryEngine {
         jobs: Jobs,
         compact: bool,
     ) -> Vec<FrontResult> {
+        let prepare = timings::interval(Interval::FrontPrepare);
         let mut outputs: Vec<Option<FrontResult>> = (0..definitions.len()).map(|_| None).collect();
         let mut sources = Vec::new();
         let mut first = BTreeMap::new();
@@ -918,6 +919,7 @@ impl QueryEngine {
         } else {
             BTreeMap::new()
         };
+        drop(prepare);
         let completed = {
             let citations = self.citation_source();
             let worker = Worker {

@@ -832,6 +832,7 @@ impl QueryEngine {
         }
     }
     fn scalar_root_outcome(&mut self, path: &DefPath, kind: RootKind) -> RootOutcome {
+        timings::count(Count::S1ScalarRoots);
         self.last_phase = None;
         self.unavailable = None;
         self.last_comptime_limit = None;
@@ -904,6 +905,7 @@ impl QueryEngine {
         if definitions.is_empty() {
             return Some(vec![]);
         }
+        let prepare = timings::interval(Interval::FrontPrepare);
         self.note_environment();
         self.prepare_materialization_environment();
         let mut results: Vec<Option<RootOutcome>> = vec![None; definitions.len()];
@@ -935,11 +937,12 @@ impl QueryEngine {
             return Some(results.into_iter().map(Option::unwrap).collect());
         }
         let mut shared = worker::TaskShared::new(self.s1.coordinator().clone());
-        let workers = jobs.get().min(tasks.len()).max(1);
+        let workers = jobs.worker_count(tasks.len()).max(1);
         let lower_budget = self.available_hold_bytes() / workers as u64;
         let source = match self.frozen_s1_source(lower_budget) {
             Ok(source) => source,
             Err(_) => {
+                drop(prepare);
                 let mut outcomes = vec![];
                 for path in definitions {
                     let outcome = self.scalar_root_outcome(path, kind);
@@ -952,6 +955,8 @@ impl QueryEngine {
                 return Some(outcomes);
             }
         };
+        drop(prepare);
+        timings::count_by(Count::S1RootTasks, tasks.len() as u64);
         let mut completed = hirsel_intern::jobs::map_with_state(
             jobs,
             tasks,
@@ -1025,7 +1030,12 @@ impl QueryEngine {
         } else {
             definitions.len()
         };
+        let dispatched = completed.len();
         completed.retain(|(index, ..)| *index < end);
+        timings::count_by(
+            Count::S1DiscardedRoots,
+            (dispatched - completed.len()) as u64,
+        );
         let mut demanded: BTreeSet<DefId> = definitions[..end].iter().map(DefId::intern).collect();
         for (_, _, product, _, _, _, _, _) in &completed {
             for (read, _) in product.reads.iter() {
@@ -1083,6 +1093,7 @@ impl QueryEngine {
             for registration in declarations.into_values() {
                 self.install_staged(registration);
             }
+            timings::count(Count::S1RegistrationRounds);
             return None;
         }
         let mut instances = BTreeMap::new();
@@ -1128,6 +1139,7 @@ impl QueryEngine {
             }
         }
         if registered {
+            timings::count(Count::S1RegistrationRounds);
             return None;
         }
         let mut generated = shared.take_generators();
@@ -1145,6 +1157,7 @@ impl QueryEngine {
             }
         }
         if published {
+            timings::count(Count::S1RegistrationRounds);
             return None;
         }
         // Successes reached inside a failed root remain independently valid.

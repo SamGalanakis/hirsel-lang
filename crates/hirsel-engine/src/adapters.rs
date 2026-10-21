@@ -10,6 +10,7 @@ impl LexerPhase for LexerAdapter {
         file: FileId,
         sources: &SourceMap,
     ) -> Result<QueryOutput<Vec<Token>>, QueryError> {
+        let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Lex);
         let result = hirsel_lexer::lex(file, sources);
         Ok(QueryOutput {
             value: result.tokens,

@@ -1913,7 +1913,18 @@ fn frozen_s1_prefix_tir_receipts_and_diagnostics_are_invariant_under_jobs_and_sa
             for source in cases {
                 let mut expected = None;
                 for jobs in [1, 2, 8] {
-                    for budget in [0, 8192] {
+                    for budget in [0, 1, 8192, 1 << 20] {
+                        let roots = vec![path("B"), path("A"), path("B")];
+                        let mut scalar = engine(source);
+                        let mut scalar_values = Vec::new();
+                        for root in &roots {
+                            let value = scalar.lower_to_tir(root);
+                            let failed = value.is_err();
+                            scalar_values.push(lowering_text(&scalar, value));
+                            if failed {
+                                break;
+                            }
+                        }
                         let mut candidate = engine(source).with_config(CompileConfig {
                             hold_bytes: budget,
                             retention: memo::Retention::Resident,
@@ -1921,12 +1932,19 @@ fn frozen_s1_prefix_tir_receipts_and_diagnostics_are_invariant_under_jobs_and_sa
                         });
                         for warm in [false, true] {
                             let outcomes = candidate.lower_definition_prefix(
-                                vec![path("B"), path("A"), path("B")],
+                                roots.clone(),
                                 hirsel_intern::jobs::Jobs::new(jobs),
                             );
                             let mut current = String::new();
-                            for outcome in outcomes {
+                            assert_eq!(outcomes.len(), scalar_values.len());
+                            for (outcome, expected_value) in
+                                outcomes.into_iter().zip(&scalar_values)
+                            {
                                 let value = lowering_text(&candidate, outcome.result);
+                                assert_eq!(
+                                    &value, expected_value,
+                                    "scalar cold jobs={jobs} budget={budget} warm={warm}"
+                                );
                                 current.push_str(&format!("{value:?}\n{:?}\n", outcome.phase));
                                 current.push_str(&placed_evidence(
                                     &candidate.sources,
