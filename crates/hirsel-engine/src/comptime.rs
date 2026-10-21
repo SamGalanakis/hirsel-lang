@@ -46,6 +46,7 @@ pub(crate) struct StagedDeclarationInput<'a> {
     pub(crate) inputs: Vec<SizeParameterRef>,
 }
 
+#[derive(Clone)]
 pub(crate) struct StagedRegistration {
     pub(crate) path: DefPath,
     pub(crate) constant: StagedConstant,

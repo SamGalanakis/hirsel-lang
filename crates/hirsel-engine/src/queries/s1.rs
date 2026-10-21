@@ -3,6 +3,7 @@
 //! Like rustc's body tasks (rustc_hir_analysis/src/lib.rs:166-220), a dependency
 //! returns products for its caller to merge, including when evaluation fails.
 use super::*;
+mod worker;
 use hirsel_tir::{DefinitionRef, MaterializedRef, TirProvider};
 use hirsel_types::GenericArgument;
 
@@ -212,7 +213,7 @@ mod tests {
     /// A real private constant artifact that reads a dependency through the
     /// interpreter. V admission and the returned type must remain independent
     /// of whether the provider later succeeds or fails.
-    fn reading_artifact(
+    pub(super) fn reading_artifact(
         types: &hirsel_types::TypeInterner,
         root: &DefPath,
         dependency: &DefPath,
