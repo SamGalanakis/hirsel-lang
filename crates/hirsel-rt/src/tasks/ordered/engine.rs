@@ -50,7 +50,9 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
         )
     };
     let mut objects = Registry::default();
-    objects.install_types(unsafe { crate::ordered::capture::types(ctx) });
+    let types = unsafe { crate::ordered::capture::types(ctx) };
+    let plain_layouts = unsafe { super::drops::plain_layouts(ctx, &types) };
+    objects.install_types(types);
     let root = current(ctx);
     let mut driver = Driver::new(
         root,
@@ -62,6 +64,7 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
         },
         objects,
     );
+    driver.plain_layouts = plain_layouts;
     driver
         .frontier
         .as_mut()

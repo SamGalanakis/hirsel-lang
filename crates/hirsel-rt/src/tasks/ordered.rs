@@ -20,6 +20,10 @@ use hirsel_rt_operations::descriptors::op_descriptor;
 /// Mutex wrappers remain owner-local allocations outside these cell effects.
 /// Drops and task/host effects still need retirement/credit adapters.
 pub(crate) enum Command {
+    PlainClose {
+        word: u64,
+        mutex: bool,
+    },
     TaskDetachAll {
         scope: u64,
         set: u64,
@@ -111,6 +115,7 @@ pub(crate) enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::PlainClose { .. } => "drop.trivial",
             Self::TaskDetachAll { .. } => "task.detach_all",
             Self::TaskDetach { .. } => "task.detach",
             Self::TaskSpawn { .. } => "task.async",
@@ -234,6 +239,7 @@ impl Backend<Command> for Objects<'_> {
         let s = super::scheduler(self.ctx);
         match &op.payload {
             Command::Head { .. }
+            | Command::PlainClose { .. }
             | Command::TaskDetachAll { .. }
             | Command::TaskDetach { .. }
             | Command::TaskSpawn { .. }
@@ -262,6 +268,27 @@ impl Backend<Command> for Objects<'_> {
 
     fn commit(&mut self, task: TaskId, op: &Operation<Command>, early: bool) -> Receipt<Outcome> {
         assert_eq!(op.descriptor.name, op.payload.name());
+        if let Command::PlainClose { word, mutex } = &op.payload {
+            assert!(!early, "close only retires");
+            let before = unsafe { (*self.ctx).ordered_freed.get() };
+            if *mutex {
+                let left = super::scheduler(self.ctx).sync.close(*word);
+                if let Some((image, descriptor)) = left {
+                    unsafe { drops::plain_images(self.ctx, &image, descriptor) };
+                }
+            } else {
+                let left = super::scheduler(self.ctx).channels.close(*word);
+                if let Some((images, descriptor)) = left {
+                    unsafe { drops::plain_images(self.ctx, &images, descriptor) };
+                }
+            }
+            let credit = unsafe { (*self.ctx).ordered_freed.replace(before) } - before;
+            return Receipt {
+                result: Outcome::image(0, Vec::new()),
+                next: Next::Keep,
+                credit,
+            };
+        }
         if let Command::RootRelease { block } = &op.payload {
             assert!(!early, "root releases only retire");
             // Every preceding segment free was captured before entering the
@@ -281,6 +308,7 @@ impl Backend<Command> for Objects<'_> {
         // validity. All byte storage below is owned, including output images.
         let (result, next) = unsafe {
             match &op.payload {
+                Command::PlainClose { .. } => unreachable!("cleanup owns no scheduler borrow"),
                 Command::TaskDetachAll { scope, set } => {
                     assert!(!early, "bulk detach only retires");
                     let scope = s.scope_handle(*scope);

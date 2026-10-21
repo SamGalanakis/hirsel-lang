@@ -295,6 +295,17 @@ pub(crate) unsafe fn retire_shared(ctx: *mut TaskCtx, block: *mut Header) {
     ctx.roots.in_phase = phase;
 }
 
+/// Nested decrements of a non-suspending retirement/phase cleanup apply now.
+/// # Safety
+/// `ctx` is exclusively running under the role. `action` runs no user code,
+/// performs no host operation and cannot suspend or publish the phase early.
+pub(crate) unsafe fn immediate<T>(ctx: *mut TaskCtx, action: impl FnOnce() -> T) -> T {
+    let phase = unsafe { std::mem::replace(&mut (*ctx).roots.in_phase, true) };
+    let result = action();
+    unsafe { (*ctx).roots.in_phase = phase };
+    result
+}
+
 /// Free mode: an entered phase of the running task's op applies its pending releases,
 /// walking the roots they free and applying those walks' nested releases at once.
 pub(crate) fn apply_pending(ctx: *mut TaskCtx) {

@@ -1,4 +1,4 @@
-//! Strict retirement boundaries for endpoint/mutex closes, roots and thaw.
+//! Retirement boundaries for endpoint/mutex closes, roots and thaw.
 //!
 //! A close detaches its images in a bounded head callback. The owning task
 //! then scans and finalizes them outside Frontier, so nested ops may suspend
@@ -9,6 +9,61 @@ use super::super::*;
 use super::engine;
 use crate::ordered::objects::Kind;
 use crate::ordered::{Next, Progress};
+
+/// Reuse the compiler's complete type-edge graph. A cyclic component is safe
+/// only if every layout it can reach has a known program without user code or
+/// handle close. Missing/erased metadata never certifies a speculative drop.
+/// # Safety
+/// Admission only; the immutable linked descriptor registry is live.
+pub(super) unsafe fn plain_layouts(
+    ctx: *mut TaskCtx,
+    types: &crate::ordered::capture::Types,
+) -> std::collections::BTreeSet<u32> {
+    let mut plain: std::collections::BTreeSet<_> = types
+        .definitions
+        .keys()
+        .copied()
+        .filter(|&id| {
+            let layout = unsafe { &*(*ctx).descriptor(id) };
+            if layout.finalizer.is_some() || layout.flags & crate::LAYOUT_MUTEX_ROOT != 0 {
+                return false;
+            }
+            let steps = if layout.step_count == 0 {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(layout.steps, layout.step_count as usize) }
+            };
+            steps.iter().all(|step| {
+                matches!(
+                    step.kind,
+                    crate::STEP_RELEASE
+                        | crate::STEP_RELEASE_LAST
+                        | crate::STEP_RELEASE_ROOT
+                        | crate::STEP_TAG
+                        | crate::STEP_NONNULL
+                        | crate::STEP_LIVE_BIT
+                        | crate::STEP_LOOP
+                        | crate::STEP_COLUMN
+                        | crate::STEP_THAW
+                )
+            }) && (steps.is_empty() || layout.scan_words != 0)
+        })
+        .collect();
+    loop {
+        let rejected: Vec<_> = plain
+            .iter()
+            .copied()
+            .filter(|id| !types.definitions[id].is_subset(&plain))
+            .collect();
+        if rejected.is_empty() {
+            break;
+        }
+        for id in rejected {
+            plain.remove(&id);
+        }
+    }
+    plain
+}
 
 /// # Safety
 /// As for close_endpoint; this entry owns the role and one endpoint credit.
@@ -26,6 +81,19 @@ pub(crate) unsafe fn endpoint(
     // whose earlier initialization is still in this same owner's log.
     if engine::is_sender(ctx, word) {
         engine::sender_close(ctx, word)?;
+        return Ok(STATUS_OK);
+    }
+    let descriptor = engine::carrier_descriptor(ctx, Kind::Receiver, word);
+    if engine::driver(ctx).plain_layouts.contains(&descriptor) {
+        engine::submit(
+            ctx,
+            super::Command::PlainClose { word, mutex: false }.operation(engine::footprint(
+                ctx,
+                Kind::Receiver,
+                word,
+                true,
+            )),
+        )?;
         return Ok(STATUS_OK);
     }
     engine::at_head(ctx)?;
@@ -80,6 +148,19 @@ pub(crate) unsafe fn mutex(
     anchor: u64,
     operation_site: u64,
 ) -> Stopped<u8> {
+    let descriptor = engine::carrier_descriptor(ctx, Kind::Mutex, word);
+    if engine::driver(ctx).plain_layouts.contains(&descriptor) {
+        engine::submit(
+            ctx,
+            super::Command::PlainClose { word, mutex: true }.operation(engine::footprint(
+                ctx,
+                Kind::Mutex,
+                word,
+                true,
+            )),
+        )?;
+        return Ok(STATUS_OK);
+    }
     engine::at_head(ctx)?;
     let descriptor = engine::carrier_descriptor(ctx, Kind::Mutex, word);
     let layout = unsafe { &*(*ctx).descriptor(descriptor) };
@@ -107,6 +188,35 @@ pub(crate) unsafe fn mutex(
             operation_site,
         )
     })
+}
+
+/// Drop detached, statically certified images. No scheduler borrow survives
+/// this walk and nested roots apply in the same retirement credit event.
+/// # Safety
+/// The images and descriptor match and are owned by this retiring command;
+/// admission certified their entire type graph has no finalizer/handle close.
+pub(super) unsafe fn plain_images(
+    ctx: *mut TaskCtx,
+    images: &crate::channels::Ring,
+    descriptor: u32,
+) {
+    unsafe {
+        crate::roots::immediate(ctx, || {
+            for index in 0..images.len() {
+                let mut continuation = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
+                let status = crate::finalize::hirsel_rt_v2_finalize(
+                    ctx,
+                    descriptor,
+                    images.at(index),
+                    std::ptr::null(),
+                    continuation.as_mut_ptr(),
+                    0,
+                    0,
+                );
+                assert_eq!(status, STATUS_OK, "certified cleanup cannot fail");
+            }
+        })
+    };
 }
 
 /// Root decrement's actual atomic action is supplied by roots::consume. Its
@@ -232,6 +342,348 @@ mod tests {
             count: 0,
             count_offset: 0,
             layout: std::ptr::null(),
+        }
+    }
+
+    #[test]
+    fn plain_cleanup_certificate_requires_a_complete_transitively_safe_type_graph() {
+        use hirsel_core_contract::handle_scan::TYPE_EDGE;
+        let release = step(crate::STEP_RELEASE, 0);
+        let close = step(crate::STEP_CLOSE_HANDLE, 0);
+        // Linked user layout IDs start at two, after the runtime builtins.
+        let edge = |id| [TYPE_EDGE, 0, id, 0, 0, 0, 0, 0];
+        let safe_cycle = edge(3);
+        let to_finalizer = edge(4);
+        let to_handle = edge(5);
+        let to_unknown = edge(6);
+        let scalar = layout(8);
+        let cycle = crate::Layout {
+            steps: &release,
+            step_count: 1,
+            field_count: 1,
+            scan: safe_cycle.as_ptr(),
+            scan_words: 8,
+            ..layout(8)
+        };
+        let finalizer = crate::Layout {
+            finalizer: Some(log_drop),
+            ..layout(24)
+        };
+        let handle = crate::Layout {
+            steps: &close,
+            step_count: 1,
+            field_count: 1,
+            ..layout(8)
+        };
+        let unknown = crate::Layout {
+            scan_words: u64::MAX,
+            ..layout(8)
+        };
+        let reaches_finalizer = crate::Layout {
+            scan: to_finalizer.as_ptr(),
+            scan_words: 8,
+            ..cycle
+        };
+        let reaches_handle = crate::Layout {
+            scan: to_handle.as_ptr(),
+            scan_words: 8,
+            ..cycle
+        };
+        let reaches_unknown = crate::Layout {
+            scan: to_unknown.as_ptr(),
+            scan_words: 8,
+            ..cycle
+        };
+        let missing_scan = crate::Layout {
+            scan_words: 0,
+            ..cycle
+        };
+        let layouts = [
+            &scalar as *const crate::Layout,
+            &cycle,
+            &finalizer,
+            &handle,
+            &unknown,
+            &reaches_finalizer,
+            &reaches_handle,
+            &reaches_unknown,
+            &missing_scan,
+        ];
+        let mut run = crate::host::BodyRun::new(1, true);
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = layouts.len() as u32;
+        let outcome = run.run(
+            |_| {},
+            |ctx| unsafe {
+                let types = crate::ordered::capture::types(ctx);
+                let plain = plain_layouts(ctx, &types);
+                assert!(plain.contains(&2), "null empty step table is plain");
+                assert!(plain.contains(&3), "safe cyclic type closure is plain");
+                for id in 4..=10 {
+                    assert!(
+                        !plain.contains(&id),
+                        "unsafe or unknown graph {id} must stay at head"
+                    );
+                }
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+    }
+
+    #[test]
+    fn another_tasks_plain_close_credits_before_its_following_allocation_summary() {
+        use super::super::{Command, Objects, Outcome};
+        use crate::budget::stretch::{Budgets, Settled, Stretch};
+        use crate::ordered::{Frontier, Offer};
+        use hirsel_core_contract::handle_scan::{ROOT, TYPE_EDGE};
+
+        // The queued image holds a Shared root. Its nested owned child dies
+        // during close too, even if the committer is a speculative task.
+        let release_child = step(crate::STEP_RELEASE, 0);
+        let release_root = step(crate::STEP_RELEASE_ROOT, 0);
+        let child_edge = [TYPE_EDGE, 0, 2, 0, 0, 0, 0, 0];
+        let root_edge = [ROOT, 0, 0, 0, 0, 0, 0, 0, TYPE_EDGE, 0, 3, 0, 0, 0, 0, 0];
+        let scalar = layout(8);
+        let root_layout = crate::Layout {
+            flags: crate::LAYOUT_FROZEN,
+            steps: &release_child,
+            step_count: 1,
+            field_count: 1,
+            scan: child_edge.as_ptr(),
+            scan_words: 8,
+            ..layout(8)
+        };
+        let image_layout = crate::Layout {
+            steps: &release_root,
+            step_count: 1,
+            field_count: 1,
+            scan: root_edge.as_ptr(),
+            scan_words: 16,
+            ..layout(8)
+        };
+        let layouts = [&scalar as *const crate::Layout, &root_layout, &image_layout];
+        for mutex in [false, true] {
+            let mut run = crate::host::BodyRun::new(2, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = layouts.len() as u32;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe {
+                    let charge = crate::alloc::allocation_charge(ctx, 2, 8, 8);
+                    (*ctx).set_budgets(None, Some(2 * charge));
+                },
+                move |ctx| unsafe {
+                    let _role = role::Guard::new(ctx);
+                    let types = crate::ordered::capture::types(ctx);
+                    assert!(plain_layouts(ctx, &types).contains(&4));
+                    let charge = crate::alloc::allocation_charge(ctx, 2, 8, 8);
+                    let child = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        2,
+                        8,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    let root = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        3,
+                        8,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    crate::alloc::payload(root)
+                        .cast::<*mut Header>()
+                        .write(child);
+                    let mut image = root;
+                    let none = std::ptr::null::<Header>();
+                    let image_layout = &*(*ctx).descriptor(4);
+                    let element = crate::channels::Element::new(
+                        4,
+                        image_layout,
+                        (&none as *const *const Header).cast(),
+                    );
+                    let (word, sender) = if mutex {
+                        (
+                            scheduler(ctx).sync.create_mutex(
+                                element,
+                                image_layout,
+                                (&mut image as *mut *mut Header).cast(),
+                            ),
+                            None,
+                        )
+                    } else {
+                        let (sender, receiver) =
+                            scheduler(ctx).channels.open(element, image_layout);
+                        let (channel, _) = scheduler(ctx).channels.endpoint_of(sender);
+                        assert_eq!(
+                            scheduler(ctx)
+                                .channels
+                                .send(channel, (&mut image as *mut *mut Header).cast()),
+                            crate::channels::DONE
+                        );
+                        (receiver, Some(sender))
+                    };
+                    assert!(image.is_null(), "ownership moved into the carrier");
+                    let atomic = scheduler(ctx)
+                        .sync
+                        .create_image((&0u64 as *const u64).cast(), 8);
+                    (*ctx).heap_ref().meter.ordered((*ctx).run_ptr());
+                    let empty = || {
+                        Stretch::new(Budgets {
+                            fuel: false,
+                            memory: true,
+                        })
+                    };
+                    let mut frontier = Frontier::new(
+                        0,
+                        Policy::admit(&Default::default(), None),
+                        Settled {
+                            level: 2 * charge,
+                            limit: 2 * charge,
+                            fuel: u64::MAX,
+                        },
+                    );
+                    frontier.enqueue(2, Default::default());
+                    let mut records = Vec::new();
+                    let mut record = |task, name, _: &Outcome, _| records.push((task, name));
+                    let mut poll = Vec::new;
+                    let mut objects = Objects::new(ctx, &mut record, &mut poll);
+                    let close = Command::PlainClose { word, mutex }.operation(Default::default());
+                    assert_eq!(
+                        frontier.offer(2, empty(), close, &mut objects).0,
+                        Offer::Logged
+                    );
+                    assert!(crate::roots::sole(root), "logged close retains its image");
+                    let store = || {
+                        Command::AtomicStore {
+                            word: atomic,
+                            image: 7u64.to_ne_bytes().to_vec(),
+                        }
+                        .operation(Default::default())
+                    };
+                    let mut after = empty();
+                    after.alloc(2 * charge).unwrap();
+                    frontier.offer(2, after, store(), &mut objects);
+                    frontier.apply_head(empty(), store(), &mut objects).unwrap();
+                    (*ctx).roots.speculative = true;
+                    assert_eq!(frontier.absorb(&mut objects), Ok(Progress::Absorbed(2)));
+                    (*ctx).roots.speculative = false;
+                    assert_eq!(
+                        frontier.settled.level, 0,
+                        "both deaths belong to close's position"
+                    );
+                    assert_eq!(
+                        (*ctx).ordered_freed.get(),
+                        0,
+                        "no credit leaks to the committer"
+                    );
+                    frontier.absorb(&mut objects).unwrap();
+                    assert_eq!(
+                        frontier.settled.level,
+                        2 * charge,
+                        "next allocation fits exactly"
+                    );
+                    assert_eq!((*ctx).ordered_freed.get(), 0);
+                    drop(objects);
+                    assert_eq!(records[1..], [(2, "drop.trivial"), (2, "atomic.store")]);
+                    if let Some(sender) = sender {
+                        scheduler(ctx).channels.close(sender);
+                    }
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+        }
+    }
+
+    #[test]
+    fn native_plain_receiver_close_updates_the_live_meter_before_reallocation() {
+        use hirsel_core_contract::handle_scan::TYPE_EDGE;
+        let release = step(crate::STEP_RELEASE, 0);
+        let edge = [TYPE_EDGE, 0, 2, 0, 0, 0, 0, 0];
+        let scalar = layout(8);
+        let image = crate::Layout {
+            steps: &release,
+            step_count: 1,
+            field_count: 1,
+            scan: edge.as_ptr(),
+            scan_words: 8,
+            ..layout(8)
+        };
+        let layouts = [&scalar as *const crate::Layout, &image];
+        for width in [2, 4, 8] {
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = layouts.len() as u32;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe {
+                    let charge = crate::alloc::allocation_charge(ctx, 2, 8, 8);
+                    (*ctx).set_budgets(None, Some(charge));
+                    engine::enable(ctx, Policy::admit(&Default::default(), Some(charge)));
+                },
+                |ctx| unsafe {
+                    for _ in 0..3 {
+                        let mut endpoints = [0u64; 2];
+                        let none = std::ptr::null::<Header>();
+                        assert_eq!(
+                            hirsel_rt_v2_channel_open(
+                                ctx,
+                                std::ptr::null_mut(),
+                                endpoints.as_mut_ptr(),
+                                &0,
+                                (&none as *const *const Header).cast(),
+                                3
+                            ),
+                            STATUS_OK
+                        );
+                        let mut block = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            8,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        let mut sent = u32::MAX;
+                        assert_eq!(
+                            hirsel_rt_v2_channel_send(
+                                ctx,
+                                &mut sent,
+                                &mut endpoints[0],
+                                (&mut block as *mut *mut Header).cast()
+                            ),
+                            STATUS_OK
+                        );
+                        assert_eq!(sent, crate::channels::DONE);
+                        assert!(block.is_null());
+                        assert_eq!(
+                            crate::finalize::hirsel_rt_v2_close_handle(ctx, endpoints[1], 0, 0),
+                            STATUS_OK
+                        );
+                        let _role = role::Guard::new(ctx);
+                        engine::at_head(ctx).unwrap();
+                        assert_eq!(
+                            engine::driver(ctx).frontier.as_ref().unwrap().settled.level,
+                            0
+                        );
+                        assert_eq!((*ctx).heap_ref().meter.held(), 0);
+                        assert_eq!((*ctx).ordered_freed.get(), 0, "credit consumed once");
+                        assert_eq!(
+                            crate::finalize::hirsel_rt_v2_close_handle(ctx, endpoints[0], 0, 0),
+                            STATUS_OK
+                        );
+                    }
+                    let _role = role::Guard::new(ctx);
+                    let task = engine::current(ctx);
+                    engine::driver(ctx).finishing(task);
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
         }
     }
 

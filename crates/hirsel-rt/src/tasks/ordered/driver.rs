@@ -5,7 +5,7 @@
 //! notify a running segment and accidentally bypass a pending head boundary.
 //! No scheduler borrow or context pointer is retained here.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::budget::stretch::Settled;
 use crate::ordered::footprint::{Held, TaskId};
@@ -41,6 +41,7 @@ pub(crate) struct Driver {
     pub(super) stretches: BTreeMap<TaskId, crate::budget::stretch::Stretch>,
     pub(super) spawn_ordinals: BTreeMap<TaskId, u32>,
     pub(super) detaching: BTreeMap<TaskId, u32>,
+    pub(super) plain_layouts: BTreeSet<u32>,
     pub(super) memory: bool,
     pub(super) budgets: crate::budget::stretch::Budgets,
     /// A park/holding/end boundary cannot poll slots before its physical save.
@@ -67,6 +68,7 @@ impl Driver {
             stretches: BTreeMap::new(),
             spawn_ordinals: BTreeMap::new(),
             detaching: BTreeMap::new(),
+            plain_layouts: BTreeSet::new(),
             memory: false,
             budgets: crate::budget::stretch::Budgets {
                 fuel: false,
