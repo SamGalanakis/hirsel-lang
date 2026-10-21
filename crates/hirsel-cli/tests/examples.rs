@@ -172,8 +172,12 @@ impl Fixture {
     /// suspension changing the task's compute worker.
     fn migrated(&self, backend: &str, expected: &str) {
         let executable = self.0.join(format!("migrate-{backend}"));
-        let built = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .args(["build", "--release", "--backend", backend])
+        let mut build = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        build.args(["build", "--backend", backend]);
+        if backend == "llvm" {
+            build.arg("--release");
+        }
+        let built = build
             .arg(self.0.join("hirsel.json"))
             .arg("-o")
             .arg(&executable)
