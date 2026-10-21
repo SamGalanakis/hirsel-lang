@@ -1,0 +1,73 @@
+// HTTP/2 prior knowledge wire bytes follow Go net/http's server tests and the
+// accepted GOAWAY/streamed vectors in SEM-1-http-h2-server-run.
+fn grant(e: GrantError) -> () uses {} {
+  ()
+}
+
+fn network(e: NetError) -> () uses {} {
+  ()
+}
+
+fn protocol(e: http.HttpError) -> () uses {} {
+  ()
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let n = io.net(rt) ? grant
+  let tasks = io.tasks(rt) ? grant
+  let output = io.stdout(rt) ? grant
+  let address = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: PORTu16)
+  let listener = net.listen(n, address) ? network
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[(), ()] {
+      let server = task.async(
+        scope,
+        fn() -> Result[(), ()] {
+          let mut owned_listener = take listener
+          let (socket, _) = net.accept(n, mut owned_listener) ? network
+          let mut config = http.default_config()
+          config.http2_prior_knowledge = true
+          let mut connection = http.server_connection(tasks, n, take socket, config)
+          let Some((owned, incoming)) = http.next_stream(mut connection, None()) ? protocol else {
+            return Error(())
+          }
+          failure.check(
+            incoming.version == Http2() && incoming.method == "GET",
+            Arithmetic()
+          )
+          let mut exchange = take owned
+          http.respond_head(mut exchange, 200u16, []) ? protocol
+          http.write_response_body(mut exchange, b"ok") ? protocol
+          http.end_response_body(mut exchange) ? protocol
+          Ok(())
+        }
+      )
+      let client = task.async(
+        scope,
+        fn() -> Result[(), ()] {
+          let mut socket = net.connect_addr(n, address, Unbounded()) ? network
+          net.write_all(
+            n,
+            mut socket,
+            b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x03\x01\x05\x00\x00\x00\x01\x82\x86\x84"
+          ) ? network
+          let expected = b"\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\xfa\x00\x00\x00\x04\x01\x00\x00\x00\x00\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x02\x00\x00\x00\x00\x00\x01ok\x00\x00\x00\x00\x01\x00\x00\x00\x01"
+          let mut received: List[u8] = []
+          while list.len(received) < bytes.len(expected) {
+            let count = net.read(n, mut socket, mut received, 1024) ? network
+            failure.check(count != 0, Arithmetic())
+          }
+          failure.check(bytes.from_list(take received) == expected, Arithmetic())
+          net.close(n, take socket)
+          Ok(())
+        }
+      )
+      task.await(scope, take server)?
+      task.await(scope, take client)?
+      Ok(())
+    }
+  )?
+  let _ = out.print(output, "h2 accepted\n")
+  Ok(())
+}

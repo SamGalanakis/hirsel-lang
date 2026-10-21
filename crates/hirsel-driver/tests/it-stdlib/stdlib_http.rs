@@ -639,12 +639,18 @@ fn pooled_client_scripts_replay_without_network_authority() {
             "conformance/SEM/SEM-1-http-client-idle-expiry-run.hir",
             "conformance/CONC/CONC-3-http-client-deadline-run.hir",
         ] {
-            assert_http_script_replay(relative);
+            assert_http_script_replay(relative, |_| HttpScriptConnection::Connect);
         }
     });
 }
 
-fn assert_http_script_replay(relative: &str) {
+#[derive(Clone, Copy)]
+enum HttpScriptConnection {
+    Connect,
+    Accept,
+}
+
+fn assert_http_script_replay(relative: &str, connection: impl Fn(&str) -> HttpScriptConnection) {
     use hirsel_interp::observation::Effect;
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -659,9 +665,12 @@ fn assert_http_script_replay(relative: &str) {
         let tests = testing::discover(&mut program, &[], None, testing::Selection::Tests)
             .unwrap_or_else(|e| panic!("{}", details(&e)));
         assert!(!tests.is_empty(), "{relative}: no tests discovered");
-        tests.into_iter().map(|test| test.entry).collect()
+        tests
+            .into_iter()
+            .map(|test| (test.entry, test.definition.0.name.to_string()))
+            .collect()
     } else {
-        vec![program.entry.clone()]
+        vec![(program.entry.clone(), program.entry.0.name.to_string())]
     };
     let mut simulation = SimulationConfig::default();
     if source.lines().any(|line| line == "// grant: clock") {
@@ -673,7 +682,7 @@ fn assert_http_script_replay(relative: &str) {
     {
         simulation.net = Some(serde_json::from_str(net).unwrap());
     }
-    for entry in entries {
+    for (entry, name) in entries {
         let config = RunConfiguration {
             entry,
             hash_seed: 0,
@@ -698,7 +707,33 @@ fn assert_http_script_replay(relative: &str) {
                 _ => None,
             })
             .collect();
-        assert!(events.iter().any(|e| e.operation == "net.connect"));
+        let count = |operation| events.iter().filter(|e| e.operation == operation).count();
+        match connection(&name) {
+            HttpScriptConnection::Connect => {
+                assert!(count("net.connect") > 0, "{relative}::{name}: no connect");
+                assert_eq!(count("net.listen"), 0, "{relative}::{name}");
+                assert_eq!(count("net.accept"), 0, "{relative}::{name}");
+            }
+            HttpScriptConnection::Accept => {
+                assert_eq!(count("net.connect"), 0, "{relative}::{name}");
+                assert_eq!(count("net.listen"), 1, "{relative}::{name}");
+                assert_eq!(count("net.accept"), 1, "{relative}::{name}");
+            }
+        }
+        let mut output = Vec::new();
+        for line in source
+            .lines()
+            .filter_map(|line| line.strip_prefix("// stdout: "))
+        {
+            output.extend_from_slice(line.as_bytes());
+            output.push(b'\n');
+        }
+        assert_eq!(observation.output, output, "{relative}::{name}: output");
+        assert_eq!(observation.exit_code, Some(0), "{relative}::{name}");
+        assert!(observation.returned.is_some(), "{relative}::{name}");
+        assert!(observation.failures.is_empty(), "{relative}::{name}");
+        assert!(observation.blocked.is_none(), "{relative}::{name}");
+        assert!(observation.signaled.is_none(), "{relative}::{name}");
         assert!(events.iter().any(|e| e.operation == "net.close"));
         if relative.ends_with("http-server-stream-drop-run.hir") {
             assert_eq!(
@@ -742,7 +777,7 @@ fn streaming_http_scripts_replay_writes_completion_and_drop() {
             "conformance/SEM/SEM-1-http-headers-many-run.hir",
             "conformance/SEM/SEM-1-http-headers-limits-run.hir",
         ] {
-            assert_http_script_replay(relative);
+            assert_http_script_replay(relative, |_| HttpScriptConnection::Connect);
         }
     });
 }
@@ -756,7 +791,13 @@ fn http2_adapter_scripts_record_and_replay() {
             "conformance/SEM/SEM-1-http-h2-client-run.hir",
             "conformance/SEM/SEM-1-http-h2-server-run.hir",
         ] {
-            assert_http_script_replay(relative);
+            assert_http_script_replay(relative, |name| match (relative, name) {
+                (
+                    "conformance/SEM/SEM-1-http-h2-server-run.hir",
+                    "peer_goaway_closes_gracefully",
+                ) => HttpScriptConnection::Accept,
+                _ => HttpScriptConnection::Connect,
+            });
         }
     });
 }
@@ -823,6 +864,47 @@ fn http2_250_concurrent_streams_and_refusals_agree_on_all_engines() {
                 String::from_utf8_lossy(&stderr)
             );
             assert!(stdout.is_empty(), "{backend:?}: {stdout:?}");
+        }
+    });
+}
+
+#[test]
+fn http2_session_freeze_controls_agree_with_checked_interpreter() {
+    with_compiler_stack(|| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../native-tests/regressions/http2-session-freeze.hir");
+        let mut program = load_program_source(&path, None).unwrap();
+        let tests = testing::discover(&mut program, &[], None, testing::Selection::Tests).unwrap();
+        assert_eq!(tests.len(), 4);
+        for test in tests {
+            let config = RunConfiguration {
+                entry: test.entry,
+                hash_seed: 0,
+                inputs: vec![],
+            };
+            let simulation = SimulationConfig {
+                test_seed: test.seed,
+                ..Default::default()
+            };
+            let plain =
+                run_observed_snapshot(&mut program.engine, &config, simulation.clone()).unwrap();
+            let checked = run_observed_checked(&mut program.engine, &config, simulation).unwrap();
+            for result in [&plain, &checked] {
+                assert!(
+                    matches!(
+                        result.outcome,
+                        Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+                    ),
+                    "{}: {:?}",
+                    test.definition,
+                    result.outcome
+                );
+            }
+            assert_eq!(
+                plain.observation, checked.observation,
+                "{}",
+                test.definition
+            );
         }
     });
 }

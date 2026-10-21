@@ -45,6 +45,7 @@ impl Fixture {
             .arg(self.0.join("main.hir.json"))
             .arg(flag)
             .arg(tape)
+            .env("XDG_CACHE_HOME", self.0.join("cache"))
             .stdin(Stdio::null());
         if flag == "--record" {
             command.arg("--grants").arg(self.0.join("grants.json"));
@@ -363,5 +364,50 @@ fn net_chunks_and_partial_writer_suffixes_replay_without_peer() {
         );
         fixture.remove_grants();
         fixture.replay(&tape, expected);
+    }
+}
+
+#[test]
+fn http2_real_accepted_connection_records_and_replays_on_both_backends() {
+    let source = include_str!("stream_replay/http2_accept.hir");
+    for backend in BACKENDS {
+        let reservation = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = reservation.local_addr().unwrap().port();
+        let fixture = Fixture::new(
+            &format!("h2-accepted-{backend}"),
+            &source.replace("PORT", &port.to_string()),
+        );
+        fixture.grants(serde_json::json!({
+            "io": {"stdout": "stdout.bytes@1", "tasks": "tasks.cooperative@1", "dirs": [],
+                "net": {"provider": "net.stream@1", "rules": [
+                    {"address": "127.0.0.1", "service": port.to_string(), "operation": "listen"},
+                    {"address": "127.0.0.1", "service": port.to_string(), "operation": "connect"}
+                ]}}
+        }));
+        drop(reservation);
+        let (tape, text) = fixture.record(backend, b"h2 accepted\n");
+        for operation in [
+            "listen ",
+            "accept ",
+            "connect_addr ",
+            "net_write_all ",
+            "net_read ",
+            "close ",
+        ] {
+            assert!(
+                events(&text)
+                    .lines()
+                    .any(|line| line.starts_with(operation)),
+                "missing {operation}: {text}"
+            );
+        }
+        fixture.remove_grants();
+        fixture.replay(&tape, b"h2 accepted\n");
+        for replay_backend in BACKENDS {
+            assert_output(
+                &fixture.run(Some(replay_backend), "--replay", &tape),
+                b"h2 accepted\n",
+            );
+        }
     }
 }
