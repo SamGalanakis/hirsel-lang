@@ -3901,6 +3901,11 @@ pub(crate) unsafe fn close_mutex(
             )
         };
     }
+    if free::enabled(ctx) {
+        return unsafe {
+            crate::stop::check(ctx, free::mutex::close(ctx, word, anchor, operation_site))
+        };
+    }
     if crate::free::close(ctx, (crate::free::MUTEX, word), "close mutex") == Some(false) {
         return STATUS_OK;
     }

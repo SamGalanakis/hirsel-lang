@@ -9,6 +9,8 @@ use super::super::*;
 use hirsel_free::mutex::Acquired;
 
 #[cfg(test)]
+mod close_tests;
+#[cfg(test)]
 mod record_tests;
 
 pub(crate) fn live(ctx: *mut TaskCtx) -> bool {
@@ -185,6 +187,52 @@ pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64, chain: Vec<Chained>) -> 
         s.wake(task);
     }
     unsafe { try_yield(&mut *ctx) }
+}
+
+/// # Safety
+/// As for close_mutex: this task owns the last wrapper and its role. Payload
+/// destruction can yield, and must run after the versioned cell detaches.
+pub(crate) unsafe fn close(
+    ctx: *mut TaskCtx,
+    word: u64,
+    anchor: u64,
+    operation_site: u64,
+) -> Stopped<u8> {
+    super::record::begin(ctx);
+    let s = scheduler(ctx) as *mut Scheduler;
+    let cell = unsafe { (*s).sync.mutex(word) };
+    let empty = crate::channels::Ring::new(cell.element.size, 1);
+    let mut state = cell.lock();
+    let publication = super::record::publish(ctx, Phase::Done, |writer| {
+        let version = state.permit.observe();
+        if let Some(writer) = writer {
+            writer.touch(
+                cell.object.get().expect("a recorded mutex identity"),
+                version,
+                0,
+                "close mutex",
+            );
+        }
+        unsafe { (*s).sync.close_locked(word, &cell, &mut state, empty) }
+    });
+    drop(state);
+    drop(cell);
+    let Some((image, descriptor)) = publication?.into_left() else {
+        return Ok(STATUS_OK);
+    };
+    let mut continuation = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
+    let status = unsafe {
+        crate::finalize::hirsel_rt_v2_finalize(
+            ctx,
+            descriptor,
+            image.at(0),
+            std::ptr::null(),
+            continuation.as_mut_ptr(),
+            anchor,
+            operation_site,
+        )
+    };
+    Ok(status)
 }
 
 /// # Safety

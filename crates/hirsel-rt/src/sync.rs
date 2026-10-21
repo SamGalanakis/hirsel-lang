@@ -60,6 +60,22 @@ pub(crate) struct MutexImage {
     closed: bool,
 }
 
+/// Owned storage moved out by a bounded close action. Metadata and an inert
+/// image are destroyed after publication; user cleanup receives the live image.
+pub(crate) struct ClosedMutex {
+    image: Ring,
+    descriptor: u32,
+    inert: bool,
+    _cell: Arc<MutexCell>,
+    _dead: Option<Vec<Chained>>,
+}
+
+impl ClosedMutex {
+    pub(crate) fn into_left(self) -> Option<(Ring, u32)> {
+        (!self.image.is_empty() && !self.inert).then_some((self.image, self.descriptor))
+    }
+}
+
 impl MutexCell {
     pub(crate) fn lock(&self) -> MutexGuard<'_, MutexImage> {
         self.state.lock().unwrap()
@@ -293,17 +309,41 @@ impl Synchronizers {
         cell.clone()
     }
 
-    /// Detach before running user destruction, which may create or close cells.
-    pub(crate) fn close(&mut self, word: u64) -> Option<(Ring, u32)> {
+    /// Detach using an already-held object lock; no allocation, lock wait,
+    /// backing-storage destruction or user code occurs in this action.
+    pub(crate) fn close_locked(
+        &mut self,
+        word: u64,
+        mutex: &Arc<MutexCell>,
+        state: &mut MutexImage,
+        empty: Ring,
+    ) -> ClosedMutex {
         let cell = self.cell(word);
-        let Payload::Mutex(mutex) = std::mem::replace(&mut cell.payload, Payload::Closed) else {
+        let Payload::Mutex(owner) = std::mem::replace(&mut cell.payload, Payload::Closed) else {
             fault("a mutex closed twice or an atomic closed as a mutex");
         };
-        cell.dead = None;
-        let mut state = mutex.lock();
+        assert!(
+            Arc::ptr_eq(&owner, mutex),
+            "the locked cell matches its live row"
+        );
         state.closed = true;
-        let image = std::mem::replace(&mut state.image, Ring::new(mutex.element.size, 1));
-        (!image.is_empty() && !mutex.element.inert).then_some((image, mutex.element.descriptor))
+        ClosedMutex {
+            image: std::mem::replace(&mut state.image, empty),
+            descriptor: mutex.element.descriptor,
+            inert: mutex.element.inert,
+            _cell: owner,
+            _dead: cell.dead.take(),
+        }
+    }
+
+    /// Detach before running user destruction, which may create or close cells.
+    pub(crate) fn close(&mut self, word: u64) -> Option<(Ring, u32)> {
+        let mutex = self.mutex(word);
+        let mut state = mutex.lock();
+        let closed = self.close_locked(word, &mutex, &mut state, Ring::new(mutex.element.size, 1));
+        drop(state);
+        drop(mutex);
+        closed.into_left()
     }
 
     pub(crate) fn end(&mut self) {
