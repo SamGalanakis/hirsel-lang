@@ -1,0 +1,1 @@
+pub fn main() { let result = 0u64 }

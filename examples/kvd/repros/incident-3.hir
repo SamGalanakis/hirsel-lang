@@ -1,0 +1,21 @@
+type E = Bad(String)
+
+fn work() -> Result[(), E] {
+  Ok(())
+}
+
+pub fn main(t: Test) {
+  let tasks = test.tasks(t)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let h = task.async(
+        s,
+        fn() -> Result[(), E] {
+          work()
+        }
+      )
+      let _ = task.await(s, take h)
+    }
+  )
+}

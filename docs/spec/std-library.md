@@ -48,15 +48,19 @@ fn markdown.default_options() -> Options uses {}
 fn markdown.gfm_options() -> Options uses {}
 fn markdown.parse(take source: String, options: Options) -> Node uses {}
 fn markdown.render_html(document: Node) -> String uses {}
+fn markdown.render_html_with_options(document: Node, options: Options) -> String uses {}
 fn markdown.to_html(take source: String, options: Options) -> String uses {}
 ```
 
-`Options` has four independent booleans: `tables`, `strikethrough`, `autolinks`
-and `task_lists`. All default to false; `gfm_options` enables all four. Markdown
+`Options` has seven booleans: `tables`, `strikethrough`, `autolinks`,
+`task_lists`, `footnotes`, `allow_unsafe` and `tagfilter`. All default to false;
+`gfm_options` enables the GFM extensions. Markdown
 is a total grammar: incomplete delimiters are ordinary text, CRLF/bare CR
 normalize to LF, and NUL becomes U+FFFD. Named entities use a generated table
-from cmark-gfm. `render_html` escapes text and attributes and emits raw HTML
-nodes verbatim. List payloads hold `(ordered, start, tight)`; table cells hold
+from cmark-gfm. `render_html` escapes text and attributes and omits raw HTML and unsafe link
+destinations by default. `render_html_with_options` and `to_html` accept explicit
+options; `allow_unsafe` permits raw HTML and unsafe destinations, while `tagfilter`
+filters disallowed GFM tags. List payloads hold `(ordered, start, tight)`; table cells hold
 alignment `0` (none), `1` (left), `2` (center) or `3` (right). Task items hold
 `None()` for an ordinary item and `Some(checked)` for a checkbox.
 

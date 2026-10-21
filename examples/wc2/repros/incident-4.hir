@@ -1,0 +1,11 @@
+fn add(mut xs: List[u64]) {
+  list.push(mut xs, 1)
+}
+
+fn need(take xs: unique List[u64]) {}
+
+pub fn main() {
+  let mut xs: unique List[u64] = []
+  add(mut xs)
+  need(take xs)
+}

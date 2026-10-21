@@ -1,0 +1,175 @@
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Number(scalar.ParseError) | Invalid | Files(
+  FileError
+) | Compile(regex.CompileError) | Match(regex.MatchError) | Clock(ClockError) | Time(
+  time.TimeError
+) | Output(OutputError) | Utf8
+
+// Retain partial lines across events; truncation/replacement resets the byte offset.
+fn complete(mut pending: List[u8], data: Bytes, re: regex.Regex, stamp: String) -> Result[
+  List[String],
+  AppError
+] {
+  let mut matches: List[String] = []
+  for byte in data {
+    if byte == b'\n' {
+      let raw = bytes.from_list(unique pending)
+      let line = match string.from_bytes(take raw) {
+        Ok(s) => take s,
+        Error(_) => return Error(Utf8()),
+      }
+      if regex.is_match(re, line, 1000000)? {
+        list.push(mut matches, f"{stamp} {line}\n")
+      }
+      pending = []
+    } else {
+      if list.len(pending) >= 1048576 {
+        return Error(Invalid())
+      }
+      list.push(mut pending, byte)
+    }
+  }
+  Ok(take matches)
+}
+
+fn drain(
+  d: Dir,
+  p: Path,
+  mut offset: u64,
+  mut pending: List[u8],
+  re: regex.Regex,
+  stamp: String
+) -> Result[List[String], AppError] {
+  let size = file.size(d, p)?
+  if size < offset {
+    offset = 0
+    pending = []
+  }
+  let mut f = file.open(d, p)?
+  file.seek(d, mut f, offset)?
+  let mut matches: List[String] = []
+  while true {
+    let mut bytes: List[u8] = []
+    let n = file.read(d, mut f, mut bytes, 4096)?
+    if n == 0 {
+      break
+    }
+    offset += n
+    let rows = complete(mut pending, bytes.from_list(take bytes), re, stamp)?
+    for row in rows {
+      list.push(mut matches, unique row)
+    }
+  }
+  Ok(take matches)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) < 2 || arg.len(args) > 3 {
+    return Error(Invalid())
+  }
+  let p = path.of(arg.text(args, 0)?)
+  let re = regex.compile(arg.text(args, 1)?, 4096)?
+  let events = if arg.len(args) == 3 {
+    u64.parse(arg.text(args, 2)?)?
+  } else {
+    18446744073709551615u64
+  }
+  let d = io.dir(rt, path.of("data"))?
+  let clock = io.wall_clock(rt)?
+  let out = io.stdout(rt)?
+  // Watch the parent so an atomic replacement does not leave us watching the old inode.
+  let parent = match path.parent(p) {
+    Some(v) => take v,
+    None() => path.of(""),
+  }
+  let mut watcher = file.watch(d, parent, false)?
+  let mut offset = 0u64
+  let mut pending: List[u8] = []
+  let mut remaining = events
+  while true {
+    let ns: i128 = int.widen(clock.wall(clock)?)
+    let stamp = time.to_string(time.Timestamp(unix_nanoseconds: ns))?
+    match drain(d, p, mut offset, mut pending, re, stamp) {
+      Ok(lines) => {
+        for line in lines {
+          out.print(out, line)?
+        }
+      },
+      Error(Files(NotFound())) => {
+        offset = 0
+        pending = []
+      },
+      Error(e) => return Error(take e),
+    }
+    if remaining == 0 {
+      break
+    }
+    let event = watcher.next(d, mut watcher)?
+    match event {
+      Removed(changed) | Created(changed) => {
+        if changed == p {
+          offset = 0
+          pending = []
+        }
+      },
+      Renamed(from, to) => {
+        if from == p || to == p {
+          offset = 0
+          pending = []
+        }
+      },
+      Overflow() => {
+        offset = 0
+        pending = []
+      },
+      _ => {},
+    }
+    remaining -= 1
+  }
+  Ok(())
+}
+
+@test
+fn partial_lines(t: Test) -> Result[(), AppError] {
+  let re = regex.compile("^ERROR [0-9]+", 100)?
+  let mut pending: List[u8] = []
+  test.check(t, complete(mut pending, b"ERROR ", re, "T")? == [])
+  test.check(t, complete(mut pending, b"42\nINFO ok\n", re, "T")? == ["T ERROR 42\n"])
+  Ok(())
+}
+
+@test
+fn watching_growth(t: Test) -> Result[(), AppError] {
+  let d = test.dir(t, [(path.of("app.log"), b"INFO first\n")])
+  let mut w = file.watch(d, path.of(""), false)?
+  let re = regex.compile("ERROR", 100)?
+  let mut pending: List[u8] = []
+  let mut offset = 0u64
+  test.check(t, drain(d, path.of("app.log"), mut offset, mut pending, re, "T")? == [])
+  file.write_bytes(d, path.of("app.log"), b"INFO first\nERROR next\n")?
+  test.dir_event(t, d, Modified(path.of("app.log")))
+  test.check(t, watcher.next(d, mut w)? == Modified(path.of("app.log")))
+  test.check(
+    t,
+    drain(d, path.of("app.log"), mut offset, mut pending, re, "T")? == [
+      "T ERROR next\n"
+    ]
+  )
+  Ok(())
+}
+
+@test
+fn truncation(t: Test) -> Result[(), AppError] {
+  let d = test.dir(t, [(path.of("x"), b"long old line\n")])
+  let re = regex.compile(".", 100)?
+  let mut pending: List[u8] = []
+  let mut offset = 100u64
+  test.check(
+    t,
+    drain(d, path.of("x"), mut offset, mut pending, re, "T")? == ["T long old line\n"]
+  )
+  test.check(
+    t,
+    time.to_string(time.Timestamp(unix_nanoseconds: 0)) == Ok("1970-01-01T00:00:00Z")
+  )
+  Ok(())
+}

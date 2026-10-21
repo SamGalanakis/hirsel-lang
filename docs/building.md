@@ -257,6 +257,37 @@ artifact with the pinned qemu and a glibc for AArch64 (the cross sysroot here):
   --hirsel-run /absolute/path/run.json
 ```
 
+### Compiler worker limits
+
+Set `HIRSEL_JOBS=1` when running several CLI invocations on a shared host. This
+bounds compiler workers; it grants no program authority. A source build with many
+workers can exhaust thread or address-space limits before resident memory reaches
+the reported memory cap. The repository's `tools/capped` wrapper also sets a
+worker budget; installed CLI users can set `HIRSEL_JOBS` directly.
+
+### Scripted network grants
+
+The JSON representation of a scripted peer differs from the Hirsel `NetPeer`
+constructor: `resolves_to` contains IP **strings**. A `net.script@2` grant always
+includes `peers`, even when it is empty. Listeners use `address` and `port` on each
+client, rather than the source constructor's `from: SocketAddr` field:
+
+```json
+{"io":{"net":{"provider":"net.script@2","rules":[
+  {"address":"check.test","service":"80","operation":"connect"}
+],"peers":[{"address":"check.test","port":80,
+  "resolves_to":["127.0.0.1"],"tls":"plain",
+  "connections":[{"open":[{"send":[111,107]},"close"]}]}]}}}
+```
+
+For a server grant, use `"peers":[]` and add, for example,
+`"listeners":[{"address":"127.0.0.1","port":18765,"clients":[{"address":"127.0.0.1","port":40000,"tls":"plain","steps":[{"send":[71,69,84,32,120,10]},"stall"]}]}]`
+alongside an exact `listen` rule. See [linkcheck](../examples/linkcheck/grants.json)
+and [kvd](../examples/kvd/session-grants.json) for complete launch templates.
+An exhausted listener reports `ConnectionAborted`; keep its scripted client at
+`"stall"` when testing graceful shutdown with a scripted signal. A
+`signals.script@1` arrival is delivered only when all tasks are idle.
+
 ### Native runs without an executable
 
 `hirsel run --native`, `hirsel test --native` and the native agreement and

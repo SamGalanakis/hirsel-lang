@@ -1,0 +1,221 @@
+pub type AppError = Files(FileError) | Grant(GrantError) | Net(NetError) | Read(
+  bufio.ReadError[NetError]
+) | Store(store.StoreError) | Signal(SignalError) | Output(OutputError)
+
+// Redis string.tcl:2-10 and keyspace.tcl:2-7 supply SET/GET/DEL vectors.
+// A line protocol: SET key value, GET key, DEL key. Values may contain spaces.
+fn command(mut db: store.Store[Dir], line: String) -> Result[String, AppError] {
+  let words = string.split_once(string.trim(line), " ")
+  let Some((verb, rest)) = words else {
+    return Ok("ERR command\n")
+  }
+  if verb == "GET" {
+    let snap = store.snapshot(mut db)
+    let value = store.get(snap, string.as_bytes(rest))
+    return Ok(
+      match value {
+        Some(raw) => match string.from_bytes(unique raw) {
+          Ok(text) => f"VALUE {text}\n",
+          Error(_) => "ERR utf8\n",
+        },
+        None() => "NOT_FOUND\n",
+      }
+    )
+  }
+  let mut tx = store.begin(mut db)
+  if verb == "SET" {
+    let Some((key, value)) = string.split_once(rest, " ") else {
+      return Ok("ERR value\n")
+    }
+    if key == "" || store.reserved(string.as_bytes(key)) {
+      return Ok("ERR key\n")
+    }
+    txn.put(mut tx, unique string.as_bytes(key), unique string.as_bytes(value))
+  } else if verb == "DEL" {
+    if rest == "" || store.reserved(string.as_bytes(rest)) {
+      return Ok("ERR key\n")
+    }
+    txn.delete(mut tx, unique string.as_bytes(rest))
+  } else {
+    return Ok("ERR command\n")
+  }
+  let ticket = store.commit(mut db, take tx)?
+  store.durable(mut db, ticket)?
+  Ok("OK\n")
+}
+
+fn session(
+  n: Net,
+  mut stream: Stream of n,
+  mut db: store.Store[Dir],
+  tasks: Tasks,
+  stats: Mutex[u64]
+) -> Result[(), AppError] {
+  let mut reader = bufio.new(4096)
+  while let Some(line) = bufio.stream_read_line(n, mut stream, mut reader, 1048576)? {
+    let reply = command(mut db, line)?
+    mutex.with(
+      tasks,
+      stats,
+      fn(mut count: unique u64) -> () uses {} {
+        count += 1
+      }
+    )
+    net.write_all(n, mut stream, string.as_bytes(reply))?
+  }
+  Ok(())
+}
+
+fn accept_loop(
+  n: Net,
+  mut listener: Listener of n,
+  mut db: store.Store[Dir],
+  tasks: Tasks,
+  stats: Mutex[u64]
+) -> Result[(), AppError] {
+  while true {
+    let (stream, _) = match net.accept(n, mut listener) {
+      Ok(pair) => take pair,
+      Error(Canceled(_)) => return Ok(()),
+      Error(e) => return Error(Net(e)),
+    }
+    let mut current = take stream
+    match session(n, mut current, mut db, tasks, stats) {
+      Ok(()) => {},
+      Error(Read(Source(Canceled(_)))) | Error(Net(Canceled(_))) => return Ok(()),
+      Error(e) => return Error(take e),
+    }
+  }
+  Ok(())
+}
+
+fn serve(n: Net, d: Dir, tasks: Tasks, stats: Mutex[u64], output: Stdout) -> Result[
+  (),
+  AppError
+] {
+  let mut db = store.open(d, store.default_config())?
+  let mut listener = net.listen(
+    n,
+    SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 18765)
+  )?
+  out.print(output, "kvd listening 127.0.0.1:18765\n")?
+  let outcome = accept_loop(n, mut listener, mut db, tasks, stats)
+  store.close(take db)?
+  take outcome
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let signals = io.signals(rt)?
+  let tasks = io.tasks(rt)?
+  let d = io.dir(rt, path.of("data"))?
+  let n = io.net(rt)?
+  let output = io.stdout(rt)?
+  let stats = mutex.create(tasks, 0u64)
+  let outcome = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[(), AppError] {
+      let mut set: TaskSet[unique Result[(), AppError]] of s = task.set(s)
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> unique Result[(), AppError] {
+            unique serve(n, d, tasks, stats, output)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> unique Result[(), AppError] {
+            let _ = signal.wait(signals, [Terminate()])?
+            Ok(())
+          }
+        )
+      )
+      let (_, outcome) = task.select(s, take set)
+      take outcome
+    }
+  )
+  let count = mutex.with(
+    tasks,
+    stats,
+    fn(mut served: unique u64) -> u64 uses {} {
+      served
+    }
+  )
+  out.print(output, f"kvd stopped after {count} commands\n")?
+  take outcome
+}
+
+@test
+fn persistent(t: Test) -> Result[(), AppError] {
+  let d = test.dir(t, [])
+  let mut db = store.open(d, store.default_config())?
+  test.check(t, command(mut db, "SET sheep wool")? == "OK\n")
+  store.close(take db)?
+  let mut reopened = store.open(d, store.default_config())?
+  test.check(t, command(mut reopened, "GET sheep")? == "VALUE wool\n")
+  store.close(take reopened)?
+  Ok(())
+}
+
+@test
+fn deletion_and_reserved(t: Test) -> Result[(), AppError] {
+  let d = test.dir(t, [])
+  let mut db = store.open(d, store.default_config())?
+  test.check(t, command(mut db, "SET hirsel.no no")? == "ERR key\n")
+  test.check(t, command(mut db, "SET x two words")? == "OK\n")
+  test.check(t, command(mut db, "GET x")? == "VALUE two words\n")
+  test.check(t, command(mut db, "DEL x")? == "OK\n")
+  test.check(t, command(mut db, "GET x")? == "NOT_FOUND\n")
+  store.close(take db)?
+  Ok(())
+}
+
+@test
+fn scripted_session(t: Test) -> Result[(), AppError] {
+  let d = test.dir(t, [])
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: 18765,
+        clients: [
+          NetClient(
+            from: SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 40000),
+            tls: Plain(),
+            steps: [Send(b"SET a b\nGET a\n"), Expect(b"OK\nVALUE b\n"), Close()]
+          )
+        ]
+      )
+    ]
+  )
+  let mut listener = net.listen(
+    n,
+    SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 18765)
+  )?
+  let (stream, _) = net.accept(n, mut listener)?
+  let mut current = take stream
+  let mut db = store.open(d, store.default_config())?
+  let tasks = test.tasks(t)
+  let stats = mutex.create(tasks, 0u64)
+  session(n, mut current, mut db, tasks, stats)?
+  test.check(
+    t,
+    mutex.with(
+      tasks,
+      stats,
+      fn(mut served: unique u64) -> u64 uses {} {
+        served
+      }
+    ) == 2
+  )
+  store.close(take db)?
+  Ok(())
+}

@@ -1,0 +1,8 @@
+type Status {
+  url: String,
+}
+
+pub fn main(t: Test) {
+  let tasks = test.tasks(t)
+  let (tx, rx): (Sender[Status], Receiver[Status]) = channel.open(tasks)
+}

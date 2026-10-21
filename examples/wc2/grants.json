@@ -1,0 +1,17 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {
+        "path": "data",
+        "host": "data",
+        "access": "read"
+      }
+    ],
+    "stdin": "stdin.bytes@1",
+    "stderr": "stderr.bytes@1"
+  },
+  "args": [
+    "input.txt"
+  ]
+}

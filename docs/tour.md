@@ -165,6 +165,8 @@ The mistakes to avoid first:
 - Every top-level function has a complete signature. An omitted result means
   `()`, not an inferred result. Use the last expression for a block's value;
   a final `return` is rejected (LANG-6, LANG-11).
+- `result` and `distinct` are reserved names (LANG-14); use `output` or
+  `sorted_unique` for ordinary bindings and helpers.
 - Functions are module-qualified, not methods. Build records with labelled
   fields; write variants bare, such as `Ok(())`, never `Result.Ok(())`.
   Match refutable patterns, test one with `if let P = e { .. }` or
@@ -893,9 +895,11 @@ total 2.50h
 ## Standard library: JSON
 
 `std@1` is ordinary Hirsel source. JSON numbers retain their decimal spelling;
-objects retain insertion order and duplicate keys are rejected. There is no
-automatic conversion of application records to JSON: construct or inspect
-`json.Value`, whose nested arrays and objects contain `Value`s. A raw literal such
+objects retain insertion order and duplicate keys are rejected. Construct or inspect `json.Value`, whose nested arrays and objects contain
+`Value`s. For application records, generate an explicit converter with
+`fn report_to_json(r: Report) -> json.Value uses {} = comptime derive.json_value(shape(Report))`.
+Nested record fields use their type's snake-case converter name (for example,
+`Summary` calls `summary_to_json`); see [derived bodies](spec/std-library.md#derived-bodies). A raw literal such
 as `r#"{"n": 1}"#` writes JSON text without escaping its quotes.
 
 <!-- tour: conformance/LANG/LANG-8-tour-06-json-run.hir -->

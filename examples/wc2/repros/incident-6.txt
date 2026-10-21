@@ -1,0 +1,2 @@
+hirsel: TIR validation: DefPath(ItemPath { package: PackageId { name: "wc2", version: "1" }, modules: [], name: "main" }): [Violation { body: Some(BodyId(0)), block: Some(BlockId(19)), instruction: None, kind: InvalidOrigin(PlaceId(70)) }]
+EXIT 3

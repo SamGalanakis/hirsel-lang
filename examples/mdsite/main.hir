@@ -1,0 +1,117 @@
+pub type AppError = Grant(GrantError) | Files(FileError) | Utf8 | Output(OutputError)
+
+fn page(title: String, take source: String) -> String {
+  let body = markdown.to_html(take source, markdown.default_options())
+  f"<!doctype html>\n<meta charset=\"utf-8\">\n<title>{html.esc(title)}</title>\n{body}"
+}
+
+fn output_name(name: String) -> String {
+  f"{name}.html"
+}
+
+fn build(d: Dir) -> Result[u64, AppError] {
+  let entries = file.list_recursive(d, path.of("content"))?
+  file.mkdir_all(d, path.of("site"))?
+  let mut index: List[u8] = []
+  text.append(
+    mut index,
+    "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Index</title>\n<ul>\n"
+  )
+  let mut count = 0u64
+  for entry in entries {
+    let name = path.text(entry.path)
+    if entry.kind != Regular() || !string.ends_with(name, ".md") {
+      continue
+    }
+    // Preserve the input path under site, including .md, to avoid name collisions.
+    let destination = output_name(name)
+    let target = path.of(f"site/{destination}")
+    if let Some(parent) = path.parent(target) {
+      file.mkdir_all(d, parent)?
+    }
+    let raw = file.read_bytes(d, entry.path)?
+    let source = match string.from_bytes(unique raw) {
+      Ok(s) => take s,
+      Error(_) => return Error(Utf8()),
+    }
+    let rendered = page(name, take source)
+    file.write_bytes(d, target, string.as_bytes(rendered))?
+    let url = string.join(
+      list.map(
+        string.split(unique destination, "/"),
+        fn(s: String) -> String {
+          uri.percent_encode(string.as_bytes(s))
+        }
+      ),
+      "/"
+    )
+    text.append(
+      mut index,
+      f"<li><a href=\"{html.esc(url)}\">{html.esc(name)}</a></li>\n"
+    )
+    count += 1
+  }
+  text.append(mut index, "</ul>\n")
+  file.write_bytes(d, path.of("site/index.html"), bytes.from_list(take index))?
+  Ok(count)
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let n = build(io.dir(rt, path.of("data"))?)?
+  out.print(io.stdout(rt)?, f"rendered {n} pages\n")?
+  Ok(())
+}
+
+@test
+fn escaping(t: Test) {
+  test.check(
+    t,
+    string.contains(
+      page("<name>&", "# Sheep & goats"),
+      "<title>&lt;name&gt;&amp;</title>"
+    )
+  )
+  test.check(
+    t,
+    string.contains(
+      page("x", "<b>trusted</b>"),
+      "<!-- raw HTML omitted -->trusted<!-- raw HTML omitted -->"
+    )
+  )
+}
+
+@test
+fn nested(t: Test) -> Result[(), AppError] {
+  let d = test.dir(
+    t,
+    [
+      (path.of("content/a.md"), b"# A"),
+      (path.of("content/sub/b.md"), b"**B**"),
+      (path.of("content/no.txt"), b"skip"),
+      (path.of("content/a & b.md"), b"# Escaped")
+    ]
+  )
+  test.check(t, build(d)? == 3)
+  let raw_index = file.read_bytes(d, path.of("site/index.html"))?
+  let index = match string.from_bytes(unique raw_index) {
+    Ok(s) => take s,
+    Error(_) => return Error(Utf8()),
+  }
+  test.check(t, string.contains(index, "content/a%20%26%20b.md.html"))
+  test.check(t, string.contains(index, "content/a &amp; b.md</a>"))
+  test.check(
+    t,
+    file.read_bytes(d, path.of("site/content/sub/b.md.html")) == Ok(
+      string.as_bytes(page("content/sub/b.md", "**B**"))
+    )
+  )
+  Ok(())
+}
+
+@test
+fn empty_directory(t: Test) -> Result[(), AppError] {
+  let d = test.dir(t, [])
+  file.mkdir_all(d, path.of("content"))?
+  test.check(t, build(d)? == 0)
+  Ok(())
+}

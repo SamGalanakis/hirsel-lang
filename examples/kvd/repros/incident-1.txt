@@ -1,0 +1,17 @@
+error[LANG-4]: a local cannot shadow another local
+ --> examples/kvd/main.hir:83:47
+  83 |   let count = mutex.with(tasks, stats, fn(mut n: unique u64) -> u64 uses {} { n })
+     |                                               ^
+ --> examples/kvd/main.hir:70:7
+  70 |   let n = io.net(rt)?
+     |       ^ earlier local
+  = help: Use the exact declared name and module path. Disambiguate with a full `package@version/module/name` path; rename a conflicting binding and its references.
+error[LANG-4]: a local cannot shadow another local
+ --> examples/kvd/main.hir:124:49
+ 124 |   test.check(t, mutex.with(tasks, stats, fn(mut n: unique u64) -> u64 uses {} { n }) == 2)
+     |                                                 ^
+ --> examples/kvd/main.hir:116:7
+ 116 |   let n = test.net(t, [], [NetListener(address: "127.0.0.1", port: 18765, clients: [NetClient(from: SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 40000), tls: Plain(), steps: [Send(b"SET a b\nGET a\n"), Expect(b"OK\nVALUE b\n"), Close()])])])
+     |       ^ earlier local
+  = help: Use the exact declared name and module path. Disambiguate with a full `package@version/module/name` path; rename a conflicting binding and its references.
+EXIT 1

@@ -1,0 +1,4 @@
+kvd listening 127.0.0.1:18765
+kvd stopped after 4 commands
+error: Net(ConnectionAborted)
+EXIT 1

@@ -1,0 +1,178 @@
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Flags(cli.ParseError) | Files(
+  FileError
+) | FileRead(bufio.ReadError[FileError]) | InputRead(bufio.ReadError[InputError]) | Output(
+  OutputError
+)
+
+type Counts {
+  lines: u64,
+  words: u64,
+  bytes: u64,
+}
+
+// GNU coreutils wc.c:646-694: count word starts and LF bytes independently.
+fn count(text: String) -> Counts {
+  let mut lines = 0u64
+  let mut words = 0u64
+  let mut inside = false
+  for c in string.scalars(text) {
+    if c == '\n' {
+      lines += 1
+    }
+    let space = c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\u{b}' || c == '\u{c}'
+    if !space && !inside {
+      words += 1
+    }
+    inside = !space
+  }
+  Counts(lines: lines, words: words, bytes: string.byte_len(text))
+}
+
+@preserves_unique(lines)
+fn remember(mut lines: List[String], line: String) {
+  let parts = string.split(unique line, "\n")
+  list.push(mut lines, unique parts[0])
+}
+
+fn sorted_unique(take lines: unique List[String]) -> String {
+  let mut sorted = take lines
+  list.sort(mut sorted, string.compare)
+  let mut output_lines: List[String] = []
+  let mut previous: Option[String] = None()
+  for line in sorted {
+    if previous != Some(line) {
+      list.push(mut output_lines, f"{line}\n")
+      previous = Some(unique line)
+    }
+  }
+  string.join(output_lines, "")
+}
+
+type Scan {
+  counts: Counts,
+  lines: unique List[String],
+}
+
+@preserves_unique(lines)
+fn collect(mut counts: Counts, mut lines: List[String], line: String, sorted_mode: bool) {
+  let n = count(line)
+  counts.lines += n.lines
+  counts.words += n.words
+  counts.bytes += n.bytes
+  if sorted_mode {
+    remember(mut lines, line)
+  }
+}
+
+fn read_stdin(input: Stdin, sorted_mode: bool) -> Result[unique Scan, AppError] {
+  let mut reader = bufio.new(4096)
+  let mut counts = Counts(lines: 0, words: 0, bytes: 0)
+  let mut lines: unique List[String] = []
+  while let Some(line) = bufio.stdin_read_line(input, mut reader, 1048576)? {
+    collect(mut counts, mut lines, line, sorted_mode)
+  }
+  Ok(Scan(counts: counts, lines: take lines))
+}
+
+fn read_file(d: Dir, p: Path, sorted_mode: bool) -> Result[unique Scan, AppError] {
+  let mut reader = bufio.new(4096)
+  let mut f = file.open(d, p)?
+  let mut counts = Counts(lines: 0, words: 0, bytes: 0)
+  let mut lines: unique List[String] = []
+  while let Some(line) = bufio.file_read_line(d, mut f, mut reader, 1048576)? {
+    collect(mut counts, mut lines, line, sorted_mode)
+  }
+  Ok(Scan(counts: counts, lines: take lines))
+}
+
+fn execute(rt: Io, args: Args) -> Result[(), AppError] {
+  let specs: List[cli.Flag] = [
+    cli.Flag(
+      name: "unique",
+      short: Some(b'u'),
+      kind: Switch(),
+      help: "sort distinct lines"
+    ),
+    cli.Flag(name: "help", short: Some(b'h'), kind: Switch(), help: "show usage")
+  ]
+  let mut argv: List[String] = []
+  for i in 0u64..arg.len(args) {
+    list.push(mut argv, arg.text(args, i)?)
+  }
+  let parsed = cli.parse(take argv, specs)?
+  let output = io.stdout(rt)?
+  if map.contains(parsed.flags, "help") {
+    out.print(output, cli.usage("wc2 [FILE ... | -]", specs))?
+    return Ok(())
+  }
+  let sources: List[String] = if list.len(parsed.positional) == 0 {
+    ["-"]
+  } else {
+    unique parsed.positional
+  }
+  let sorted_mode = map.contains(parsed.flags, "unique")
+  let mut total = Counts(lines: 0, words: 0, bytes: 0)
+  let mut lines: unique List[String] = []
+  for source in take sources {
+    let scan = if source == "-" {
+      read_stdin(io.stdin(rt)?, sorted_mode)?
+    } else {
+      read_file(io.dir(rt, path.of("data"))?, path.of(source), sorted_mode)?
+    }
+    let Scan(counts: scan_counts, lines: scan_lines) = take scan
+    total.lines += scan_counts.lines
+    total.words += scan_counts.words
+    total.bytes += scan_counts.bytes
+    for line in scan_lines {
+      list.push(mut lines, unique line)
+    }
+  }
+  if sorted_mode {
+    out.print(output, sorted_unique(take lines))?
+  } else {
+    out.print(output, f"{total.lines} {total.words} {total.bytes}\n")?
+  }
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  match execute(rt, args) {
+    Ok(()) => Ok(()),
+    Error(e) => {
+      err.print(
+        io.stderr(rt)?,
+        "wc2: invalid flags, input, or grant (lines limited to 1 MiB)\n"
+      )?
+      Error(take e)
+    },
+  }
+}
+
+@test
+fn count_words(t: Test) {
+  let n = count("é sheep\nlast")
+  test.check(t, n.lines == 1 && n.words == 3 && n.bytes == 13)
+}
+
+@test
+fn unique_lines(t: Test) {
+  test.check(t, sorted_unique(["z", "a", "a", ""]) == "\na\nz\n")
+}
+
+@test
+fn empty(t: Test) {
+  test.check(t, count("").words == 0 && sorted_unique([]) == "")
+}
+
+@test
+fn buffered_file(t: Test) -> Result[(), AppError] {
+  let d = test.dir(t, [(path.of("in"), b"a\na\nb")])
+  let mut f = file.open(d, path.of("in"))?
+  let mut r = bufio.new(2)
+  let mut lines: unique List[String] = []
+  while let Some(line) = bufio.file_read_line(d, mut f, mut r, 16)? {
+    remember(mut lines, line)
+  }
+  test.check(t, sorted_unique(take lines) == "a\nb\n")
+  Ok(())
+}

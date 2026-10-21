@@ -1,0 +1,6 @@
+pub fn main() -> Result[(), ()] {
+  let document = markdown.parse("# Hello", markdown.default_options())
+  let rendered = markdown.render_html(document)
+  failure.check(string.contains(rendered, "<h1>Hello</h1>"), TextInvariant())
+  Ok(())
+}

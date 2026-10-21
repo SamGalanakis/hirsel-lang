@@ -1,0 +1,29 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {
+        "path": "data",
+        "host": "data",
+        "access": "read_write"
+      }
+    ],
+    "tasks": "tasks.cooperative@1",
+    "net": {
+      "provider": "net.stream@1",
+      "rules": [
+        {
+          "address": "127.0.0.1",
+          "service": "18765",
+          "operation": "listen"
+        }
+      ]
+    },
+    "signals": {
+      "provider": "signals.host@1",
+      "kinds": [
+        "terminate"
+      ]
+    }
+  }
+}

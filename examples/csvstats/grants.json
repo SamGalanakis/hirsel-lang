@@ -1,0 +1,12 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {
+        "path": "data",
+        "host": "data",
+        "access": "read_write"
+      }
+    ]
+  }
+}

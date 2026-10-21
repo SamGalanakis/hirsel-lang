@@ -1,0 +1,188 @@
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Invalid | Number(
+  scalar.ParseError
+) | Output(OutputError) | Channel(ChannelError)
+
+type Status {
+  url: String,
+  code: u16,
+  state: String,
+}
+
+fn fetch_one(n: Net, tasks: Tasks, c: MonotonicClock, take url: unique String) -> unique Status {
+  let deadline = match time.deadline(c, duration.from_parts(2, 0)) {
+    Ok(at) => Deadline(clock: c, at: at),
+    Error(_) => return Status(url: take url, code: 0, state: "clock-error"),
+  }
+  let bounded = task.scope_until(
+    tasks,
+    deadline,
+    fn(s: Scope) -> Result[http.Response, http.HttpError] {
+      let mut config = http.default_config()
+      config.idle_timeout = None()
+      config.status_as_error = false
+      config.max_body_bytes = 1048576
+      let mut client = http.client(n, None(), config)?
+      http.client_fetch(mut client, Get(), url, [], None())
+    }
+  )
+  match bounded {
+    Expired(_) => Status(url: take url, code: 0, state: "timeout"),
+    Finished(Ok(response)) => Status(
+      url: take url,
+      code: response.status,
+      state: "http"
+    ),
+    Finished(Error(_)) => Status(url: take url, code: 0, state: "fetch-error"),
+  }
+}
+
+// Batches cap live workers, clients and response buffers at jobs (1..=32).
+fn check(n: Net, tasks: Tasks, clock: MonotonicClock, urls: List[String], jobs: u64) -> Result[
+  List[Status],
+  AppError
+] {
+  if jobs == 0 || jobs > 32 {
+    return Error(Invalid())
+  }
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[Status], AppError] {
+      let mut rows: List[Status] = []
+      let mut start = 0u64
+      while start < list.len(urls) {
+        let count = if list.len(urls) - start < jobs {
+          list.len(urls) - start
+        } else {
+          jobs
+        }
+        let (tx, rx): (Sender[unique Status], Receiver[unique Status]) = channel.open(
+          tasks
+        )
+        let mut pending: TaskSet[()] of s = task.set(s)
+        for i in start..start + count {
+          let sender = sender.dup(tasks, tx)
+          let url = unique urls[i]
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> () {
+                let row = fetch_one(n, tasks, clock, take url)
+                let mut outgoing = take sender
+                let _ = channel.send(tasks, mut outgoing, take row)
+              }
+            )
+          )
+        }
+        let mut incoming = take rx
+        for i in 0u64..count {
+          let row: unique Status = channel.receive(tasks, mut incoming)?
+          list.push(mut rows, take row)
+        }
+        while let Some(i) = task.await_any(s, pending) {
+          task.await_at(s, mut pending, i)
+        }
+        task.cancel_all(s, take pending)
+        start += count
+      }
+      Ok(take rows)
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) < 2 {
+    return Error(Invalid())
+  }
+  let jobs = u64.parse(arg.text(args, 0)?)?
+  let mut urls: List[String] = []
+  for i in 1u64..arg.len(args) {
+    list.push(mut urls, arg.text(args, i)?)
+  }
+  let rows = check(io.net(rt)?, io.tasks(rt)?, io.monotonic_clock(rt)?, urls, jobs)?
+  let output = io.stdout(rt)?
+  for row in rows {
+    out.print(output, f"{row.code} {row.state} {row.url}\n")?
+  }
+  Ok(())
+}
+
+fn peer(connections: List[NetConnection]) -> NetPeer {
+  NetPeer(
+    address: "check.test",
+    port: 80,
+    resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+    tls: Plain(),
+    connections: unique connections
+  )
+}
+
+@test
+fn redirect(t: Test) -> Result[(), AppError] {
+  let n = test.net(
+    t,
+    [
+      peer(
+        [
+          Open(
+            [
+              Send(
+                b"HTTP/1.1 302 Found\r\nLocation: /ok\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+              )
+            ]
+          ),
+          Open([Send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")])
+        ]
+      )
+    ],
+    []
+  )
+  let rows = check(n, test.tasks(t), test.clock(t), ["http://check.test/old"], 1)?
+  test.check(t, rows[0].code == 200)
+  Ok(())
+}
+
+@test
+fn bounded_statuses(t: Test) -> Result[(), AppError] {
+  let n = test.net(
+    t,
+    [
+      peer(
+        [
+          Open([Send(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")]),
+          Open([Send(b"HTTP/1.1 204 No Content\r\n\r\n")]),
+          Open([Send(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")])
+        ]
+      )
+    ],
+    []
+  )
+  let rows = check(
+    n,
+    test.tasks(t),
+    test.clock(t),
+    ["http://check.test/a", "http://check.test/b", "http://check.test/c"],
+    2
+  )?
+  test.check(t, list.len(rows) == 3)
+  let mut total = 0u64
+  for row in rows {
+    total += int.widen(row.code)
+  }
+  test.check(t, total == 808)
+  Ok(())
+}
+
+@test
+fn request_deadline(t: Test) {
+  let n = test.net(t, [peer([Open([Stall()])])], [])
+  let row = fetch_one(n, test.tasks(t), test.clock(t), "http://check.test/slow")
+  test.check(t, row.state == "timeout")
+}
+
+@test
+fn invalid_bound(t: Test) {
+  let n = test.net(t, [], [])
+  test.check(t, check(n, test.tasks(t), test.clock(t), [], 0) == Error(Invalid()))
+}

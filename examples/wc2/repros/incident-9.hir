@@ -1,0 +1,10 @@
+fn need(take xs: unique List[String]) {}
+
+pub fn main() {
+  let source: List[String] = ["a"]
+  let mut out: unique List[String] = []
+  for line in source {
+    list.push(mut out, copy line)
+  }
+  need(take out)
+}

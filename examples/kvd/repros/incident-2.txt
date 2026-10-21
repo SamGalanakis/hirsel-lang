@@ -1,0 +1,15 @@
+error[LANG-8]: plain ? has no arm for `FileError` in `AppError`
+ --> examples/kvd/main.hir:69:38
+  69 |   let d = io.dir(rt, path.of("data"))?
+     |                                      ^
+ --> examples/kvd/main.hir:69:11
+  69 |   let d = io.dir(rt, path.of("data"))?
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^ propagates `FileError`
+  = note: `AppError` has injectable arms Grant(GrantError), Net(NetError), Read(std@1/bufio/ReadError[NetError]), Store(std@1/store/StoreError), Signal(SignalError), Output(OutputError)
+  = help: (b) handle the error at this site, with `match` or `let Ok(..) = .. else { .. }`
+  = help: (c) map it explicitly with `? C`, where C is a function from `FileError` to `AppError` or an arm whose payload it is
+  = help: (a) add the arm `File(FileError)` to `AppError`; this changes the error contract of every function that returns it (replace with " | File(FileError)")
+ --> examples/kvd/main.hir:1:158
+   1 | pub type AppError = Grant(GrantError) | Net(NetError) | Read(bufio.ReadError[NetError]) | Store(store.StoreError) | Signal(SignalError) | Output(OutputError)
+     |                                                                                                                                                              ^ suggested replacement
+EXIT 1

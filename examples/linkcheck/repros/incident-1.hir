@@ -1,0 +1,5 @@
+fn deadline() {}
+
+pub fn main() {
+  let deadline = 0u64
+}

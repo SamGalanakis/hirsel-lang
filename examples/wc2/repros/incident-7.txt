@@ -1,0 +1,66 @@
+error[LANG-4]: a local cannot shadow a top-level value in the same module
+ --> examples/wc2/main.hir:42:16
+  42 | fn collect(mut counts: Counts, mut lines: List[String], line: String, sorted_mode: bool) {
+     |                ^^^^^^
+  = help: Use the exact declared name and module path. Disambiguate with a full `package@version/module/name` path; rename a conflicting binding and its references.
+error[LANG-4]: unresolved name `counts.lines`
+ --> examples/wc2/main.hir:44:3
+  44 |   counts.lines += n.lines
+     |   ^^^^^^^^^^^^
+  = help: Use the exact declared name and module path. Disambiguate with a full `package@version/module/name` path; rename a conflicting binding and its references.
+error[LANG-4]: unresolved name `counts.words`
+ --> examples/wc2/main.hir:45:3
+  45 |   counts.words += n.words
+     |   ^^^^^^^^^^^^
+  = help: Use the exact declared name and module path. Disambiguate with a full `package@version/module/name` path; rename a conflicting binding and its references.
+error[LANG-4]: unresolved name `counts.bytes`
+ --> examples/wc2/main.hir:46:3
+  46 |   counts.bytes += n.bytes
+     |   ^^^^^^^^^^^^
+  = help: Use the exact declared name and module path. Disambiguate with a full `package@version/module/name` path; rename a conflicting binding and its references.
+error[LANG-4]: a local cannot shadow a top-level value in the same module
+ --> examples/wc2/main.hir:52:11
+  52 |   let mut counts = Counts(lines: 0, words: 0, bytes: 0)
+     |           ^^^^^^
+  = help: Use the exact declared name and module path. Disambiguate with a full `package@version/module/name` path; rename a conflicting binding and its references.
+error[LANG-4]: a local cannot shadow a top-level value in the same module
+ --> examples/wc2/main.hir:61:11
+  61 |   let mut counts = Counts(lines: 0, words: 0, bytes: 0)
+     |           ^^^^^^
+  = help: Use the exact declared name and module path. Disambiguate with a full `package@version/module/name` path; rename a conflicting binding and its references.
+error[OWN-8]: destructure the whole owned value to move a part: this is a part of `scan`, but this needs an owned value
+ --> examples/wc2/main.hir:86:17
+  86 |     for line in take scan.lines { list.push(mut lines, take line) }
+     |                 ^^^^^^^^^^^^^^^
+ --> examples/wc2/main.hir:82:9
+  82 |     let scan = if source == "-" { read_stdin(io.stdin(rt)?, sorted_mode)? } else { read_file(io.dir(rt, path.of("data"))?, path.of(source), sorted_mode)? }
+     |         ^^^^ provided: a part of an owned value; moving it would leave `scan` partly moved
+ --> examples/wc2/main.hir:86:17
+  86 |     for line in take scan.lines { list.push(mut lines, take line) }
+     |                 ^^^^^^^^^^^^^^^ required: taking moves the value out of its owner
+error[OWN-1]: a borrowed value cannot be taken: `scan` is local to this function, but this needs an owned value
+ --> examples/wc2/main.hir:86:35
+  86 |     for line in take scan.lines { list.push(mut lines, take line) }
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ --> examples/wc2/main.hir:82:9
+  82 |     let scan = if source == "-" { read_stdin(io.stdin(rt)?, sorted_mode)? } else { read_file(io.dir(rt, path.of("data"))?, path.of(source), sorted_mode)? }
+     |         ^^^^ provided: `scan` is storage of this body; it ends with its scope
+ --> examples/wc2/main.hir:86:35
+  86 |     for line in take scan.lines { list.push(mut lines, take line) }
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required: taking moves the value out of its owner
+  = help: Read the borrowed value, or copy it first with `copy x` if its type is copyable. If the function must consume or mutate the caller's storage, declare its parameter `take x` or `mut x` and update callers accordingly.
+error[MODE-2]: this operation requires a unique value: `[]` is not proved unique, but a unique value is required
+ --> examples/wc2/main.hir:89:23
+  89 |     out.print(output, sorted_unique(take lines))?
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^
+ --> examples/wc2/main.hir:89:37
+  89 |     out.print(output, sorted_unique(take lines))?
+     |                                     ^^^^^^^^^^ parameter mode requirement
+ --> examples/wc2/main.hir:80:40
+  80 |   let mut lines: unique List[String] = []
+     |                                        ^^ provided: `[]` may share counted storage; its current contract does not prove uniqueness
+ --> examples/wc2/main.hir:89:23
+  89 |     out.print(output, sorted_unique(take lines))?
+     |                       ^^^^^^^^^^^^^ required: this requires a unique value (MODE-2)
+  = help: End live shares before this operation, or use `unique x` to obtain a deep unique copy of counted data. Deep copying may allocate and preserves arena placement; `copy x` shares storage.
+EXIT 1

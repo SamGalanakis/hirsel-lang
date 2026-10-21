@@ -1,0 +1,2 @@
+hirsel: {"kind":"invalid","field":"io.net.peers","detail":"peers is required only for net.script@2"}
+EXIT 3

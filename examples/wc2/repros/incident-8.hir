@@ -1,0 +1,8 @@
+type Row {
+  values: List[u64],
+}
+
+pub fn main() {
+  let r = Row(values: [1])
+  let values = take r.values
+}

@@ -1,0 +1,12 @@
+pub type AppError = Files(FileError) | Read(bufio.ReadError[FileError])
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let sources: List[String] = ["x"]
+  for source in sources {
+    let d = io.dir(rt, path.of("data"))?
+    let mut f = file.open(d, path.of(source))?
+    let mut reader = bufio.new(4096)
+    while let Some(line) = bufio.file_read_line(d, mut f, mut reader, 16)? {}
+  }
+  Ok(())
+}

@@ -1,0 +1,5 @@
+
+thread 'hirsel-compiler' (2495385) panicked at crates/hirsel-intern/src/jobs.rs:110:22:
+job worker creation failed: Os { code: 11, kind: WouldBlock, message: "Resource temporarily unavailable" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+EXIT 101

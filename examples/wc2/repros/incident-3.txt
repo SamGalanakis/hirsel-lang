@@ -1,0 +1,25 @@
+error[LANG-2]: sequence literal needs an expected sequence type
+ --> examples/wc2/main.hir:39:15
+  39 |   let specs = [cli.Flag(name: "unique", short: Some(b'u'), kind: Switch(), help: "sort distinct lines"), cli.Flag(name: "help", short: Some(b'h'), kind: Switch(), help: "show usage")]
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: Give the expression a written type, qualify its constructor, or suffix a numeric literal, for example `let n: u64 = 1` or `1u64`. Generic arguments must be determined from the declared signature.
+error[LANG-2]: sequence literal needs an expected sequence type
+ --> examples/wc2/main.hir:47:55
+  47 |   let sources = if list.len(parsed.positional) == 0 { ["-"] } else { unique parsed.positional }
+     |                                                       ^^^^^
+  = help: Give the expression a written type, qualify its constructor, or suffix a numeric literal, for example `let n: u64 = 1` or `1u64`. Generic arguments must be determined from the declared signature.
+error[MODE-2]: this operation requires a unique value: `[]` is not proved unique, but a unique value is required
+ --> examples/wc2/main.hir:110:17
+ 110 |   test.check(t, sorted_unique(take lines) == "a\nb\n")
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+ --> examples/wc2/main.hir:110:31
+ 110 |   test.check(t, sorted_unique(take lines) == "a\nb\n")
+     |                               ^^^^^^^^^^ parameter mode requirement
+ --> examples/wc2/main.hir:108:40
+ 108 |   let mut lines: unique List[String] = []
+     |                                        ^^ provided: `[]` may share counted storage; its current contract does not prove uniqueness
+ --> examples/wc2/main.hir:110:17
+ 110 |   test.check(t, sorted_unique(take lines) == "a\nb\n")
+     |                 ^^^^^^^^^^^^^ required: this requires a unique value (MODE-2)
+  = help: End live shares before this operation, or use `unique x` to obtain a deep unique copy of counted data. Deep copying may allocate and preserves arena placement; `copy x` shares storage.
+EXIT 1

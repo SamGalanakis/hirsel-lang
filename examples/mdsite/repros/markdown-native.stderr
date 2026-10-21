@@ -1,0 +1,5 @@
+
+thread 'hirsel-compiler' (2586800) panicked at crates/hirsel-rc/src/import/mod.rs:572:19:
+index 115 of 115
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+EXIT 101

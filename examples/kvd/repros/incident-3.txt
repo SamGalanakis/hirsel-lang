@@ -1,0 +1,26 @@
+error[MODE-4]: each actual generic occurrence must be sendable before parameter weakening: the value is not proved sendable, but a sendable value is required
+ --> examples/kvd/main.hir:75:26
+  75 |     task.add(s, mut set, task.async(s, fn() -> Result[(), AppError] { serve(n, d, tasks, stats, output) }))
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ --> examples/kvd/main.hir:75:40
+  75 |     task.add(s, mut set, task.async(s, fn() -> Result[(), AppError] { serve(n, d, tasks, stats, output) }))
+     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ provided: the value cannot cross a task boundary under its current type and ownership contract
+ --> examples/kvd/main.hir:75:26
+  75 |     task.add(s, mut set, task.async(s, fn() -> Result[(), AppError] { serve(n, d, tasks, stats, output) }))
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required: this crosses a task boundary (MODE-4)
+ --> examples/kvd/main.hir:75:40
+  75 |     task.add(s, mut set, task.async(s, fn() -> Result[(), AppError] { serve(n, d, tasks, stats, output) }))
+     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ generic parameter instantiation failed
+  = help: For counted data, pass a `unique` value with sendable parts; remove local borrows or non-sendable handles from the payload. A `copy` does not prove sendability.
+error[MODE-4]: the callback result must be sendable: the value is not proved sendable, but a sendable value is required
+ --> examples/kvd/main.hir:75:26
+  75 |     task.add(s, mut set, task.async(s, fn() -> Result[(), AppError] { serve(n, d, tasks, stats, output) }))
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ --> examples/kvd/main.hir:75:26
+  75 |     task.add(s, mut set, task.async(s, fn() -> Result[(), AppError] { serve(n, d, tasks, stats, output) }))
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ provided: the value cannot cross a task boundary under its current type and ownership contract
+ --> examples/kvd/main.hir:75:26
+  75 |     task.add(s, mut set, task.async(s, fn() -> Result[(), AppError] { serve(n, d, tasks, stats, output) }))
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required: this crosses a task boundary (MODE-4)
+  = help: For counted data, pass a `unique` value with sendable parts; remove local borrows or non-sendable handles from the payload. A `copy` does not prove sendability.
+EXIT 1

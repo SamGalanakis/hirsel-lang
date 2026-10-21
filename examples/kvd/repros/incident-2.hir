@@ -1,0 +1,4 @@
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let d = io.dir(rt, path.of("data"))?
+  Ok(())
+}

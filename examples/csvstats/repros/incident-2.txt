@@ -1,0 +1,2 @@
+hirsel: memory limit 4G reached (HIRSEL_MEMORY_LIMIT); allocating 98304 more bytes failed with a resident peak of 694M. Under Buck2 the limit is the test's measured reservation (tools/buck2/test_sizes.bzl); report the program that grew rather than raising it.
+EXIT 71

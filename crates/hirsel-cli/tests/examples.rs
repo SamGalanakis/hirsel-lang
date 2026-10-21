@@ -2252,6 +2252,78 @@ fn tasks_package_tests() {
     );
 }
 
+#[test]
+fn dogfood5_wc2_package_tests() {
+    let example = Example::new(
+        "wc2",
+        &[("main.hir", include_str!("../../../examples/wc2/main.hir"))],
+        include_str!("../../../examples/wc2/hirsel.json"),
+    );
+    check_interpreted_and_llvm_package_tests("wc2", &example.dir.join("hirsel.json"), 4);
+}
+
+#[test]
+fn dogfood5_csvstats_package_tests() {
+    let example = Example::new(
+        "csvstats",
+        &[(
+            "main.hir",
+            include_str!("../../../examples/csvstats/main.hir"),
+        )],
+        include_str!("../../../examples/csvstats/hirsel.json"),
+    );
+    check_interpreted_and_llvm_package_tests("csvstats", &example.dir.join("hirsel.json"), 4);
+}
+
+#[test]
+fn dogfood5_linkcheck_package_tests() {
+    let example = Example::new(
+        "linkcheck",
+        &[(
+            "main.hir",
+            include_str!("../../../examples/linkcheck/main.hir"),
+        )],
+        include_str!("../../../examples/linkcheck/hirsel.json"),
+    );
+    check_interpreted_and_llvm_package_tests("linkcheck", &example.dir.join("hirsel.json"), 4);
+}
+
+#[test]
+fn dogfood5_kvd_package_tests() {
+    let example = Example::new(
+        "kvd",
+        &[("main.hir", include_str!("../../../examples/kvd/main.hir"))],
+        include_str!("../../../examples/kvd/hirsel.json"),
+    );
+    check_interpreted_and_llvm_package_tests("kvd", &example.dir.join("hirsel.json"), 3);
+}
+
+#[test]
+fn dogfood5_logtail_package_tests() {
+    let example = Example::new(
+        "logtail",
+        &[(
+            "main.hir",
+            include_str!("../../../examples/logtail/main.hir"),
+        )],
+        include_str!("../../../examples/logtail/hirsel.json"),
+    );
+    check_interpreted_and_llvm_package_tests("logtail", &example.dir.join("hirsel.json"), 3);
+}
+
+#[test]
+fn dogfood5_mdsite_package_tests() {
+    let example = Example::new(
+        "mdsite",
+        &[(
+            "main.hir",
+            include_str!("../../../examples/mdsite/main.hir"),
+        )],
+        include_str!("../../../examples/mdsite/hirsel.json"),
+    );
+    check_interpreted_and_llvm_package_tests("mdsite", &example.dir.join("hirsel.json"), 3);
+}
+
 /// A process whose stdout is read line by line on a thread, killed if still running
 /// when dropped.
 struct Running {

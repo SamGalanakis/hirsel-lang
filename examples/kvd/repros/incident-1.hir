@@ -1,0 +1,6 @@
+pub fn main() {
+  let n = 0u64
+  let f = fn(n: u64) -> u64 {
+    n
+  }
+}

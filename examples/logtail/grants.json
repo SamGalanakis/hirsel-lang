@@ -1,0 +1,18 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {
+        "path": "data",
+        "host": "data",
+        "access": "read"
+      }
+    ],
+    "wall_clock": "clock.wall.unix_ns@1"
+  },
+  "args": [
+    "app.log",
+    "ERROR",
+    "0"
+  ]
+}

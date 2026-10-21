@@ -1,0 +1,34 @@
+error[MODE-2]: this operation requires a unique value: `take url` is not proved unique, but a unique value is required
+ --> examples/linkcheck/main.hir:8:36
+   8 |     Error(_) => return Status(url: take url, code: 0, state: "clock-error"),
+     |                                    ^^^^^^^^
+ --> examples/linkcheck/main.hir:8:36
+   8 |     Error(_) => return Status(url: take url, code: 0, state: "clock-error"),
+     |                                    ^^^^^^^^ provided: `take url` may share counted storage; its current contract does not prove uniqueness
+ --> examples/linkcheck/main.hir:5:76
+   5 | fn fetch_one(n: Net, tasks: Tasks, c: MonotonicClock, take url: String) -> unique Status {
+     |                                                                            ^^^^^^^^^^^^^ required: this requires a unique value (MODE-2)
+  = help: End live shares before this operation, or use `unique x` to obtain a deep unique copy of counted data. Deep copying may allocate and preserves arena placement; `copy x` shares storage.
+error[MODE-2]: this operation requires a unique value: `url` is not proved unique, but a unique value is required
+ --> examples/linkcheck/main.hir:19:36
+  19 |     Expired(_) => Status(url: take url, code: 0, state: "timeout"),
+     |                                    ^^^
+ --> examples/linkcheck/main.hir:19:36
+  19 |     Expired(_) => Status(url: take url, code: 0, state: "timeout"),
+     |                                    ^^^ provided: `url` may share counted storage; its current contract does not prove uniqueness
+ --> examples/linkcheck/main.hir:5:76
+   5 | fn fetch_one(n: Net, tasks: Tasks, c: MonotonicClock, take url: String) -> unique Status {
+     |                                                                            ^^^^^^^^^^^^^ required: this requires a unique value (MODE-2)
+  = help: End live shares before this operation, or use `unique x` to obtain a deep unique copy of counted data. Deep copying may allocate and preserves arena placement; `copy x` shares storage.
+error[MODE-2]: the receiving type cannot change this nested uniqueness contract: `mut incoming` is not proved unique, but a unique value is required
+ --> examples/linkcheck/main.hir:45:73
+  45 |       for i in 0u64..count { list.push(mut rows, channel.receive(tasks, mut incoming)?) }
+     |                                                                         ^^^^^^^^^^^^
+ --> examples/linkcheck/main.hir:45:73
+  45 |       for i in 0u64..count { list.push(mut rows, channel.receive(tasks, mut incoming)?) }
+     |                                                                         ^^^^^^^^^^^^ provided: `mut incoming` may share counted storage; its current contract does not prove uniqueness
+ --> examples/linkcheck/main.hir:45:50
+  45 |       for i in 0u64..count { list.push(mut rows, channel.receive(tasks, mut incoming)?) }
+     |                                                  ^^^^^^^^^^^^^^^ required: this requires a unique value (MODE-2)
+  = help: End live shares before this operation, or use `unique x` to obtain a deep unique copy of counted data. Deep copying may allocate and preserves arena placement; `copy x` shares storage.
+EXIT 1

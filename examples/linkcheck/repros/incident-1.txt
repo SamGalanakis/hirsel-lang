@@ -1,0 +1,45 @@
+error[LANG-4]: a local cannot shadow a top-level value in the same module
+ --> examples/linkcheck/main.hir:6:7
+   6 |   let deadline = match time.deadline(c, duration.from_parts(2, 0)) {
+     |       ^^^^^^^^
+  = help: Use the exact declared name and module path. Disambiguate with a full `package@version/module/name` path; rename a conflicting binding and its references.
+error[CONC-6]: channel payload type must be sendable; for counted data, write `unique` on the payload type (Sender[unique T] and Receiver[unique T]) or on its counted fields: `channel.open(tasks)` is not proved sendable, but a sendable value is required
+ --> examples/linkcheck/main.hir:33:58
+  33 |       let (tx, rx): (Sender[Status], Receiver[Status]) = channel.open(tasks)
+     |                                                          ^^^^^^^^^^^^^^^^^^^
+ --> examples/linkcheck/main.hir:33:58
+  33 |       let (tx, rx): (Sender[Status], Receiver[Status]) = channel.open(tasks)
+     |                                                          ^^^^^^^^^^^^^^^^^^^ provided: `channel.open(tasks)` cannot cross a task boundary under its current type and ownership contract
+ --> examples/linkcheck/main.hir:33:58
+  33 |       let (tx, rx): (Sender[Status], Receiver[Status]) = channel.open(tasks)
+     |                                                          ^^^^^^^^^^^^^^^^^^^ required: this crosses a task boundary (MODE-4)
+error[CONC-6]: each actual generic occurrence must be sendable before parameter weakening: `mut outgoing` is not proved sendable, but a sendable value is required
+ --> examples/linkcheck/main.hir:41:19
+  41 |           let _ = channel.send(tasks, mut outgoing, take row)
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ --> examples/linkcheck/main.hir:41:39
+  41 |           let _ = channel.send(tasks, mut outgoing, take row)
+     |                                       ^^^^^^^^^^^^ provided: `mut outgoing` cannot cross a task boundary under its current type and ownership contract
+ --> examples/linkcheck/main.hir:41:19
+  41 |           let _ = channel.send(tasks, mut outgoing, take row)
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required: this crosses a task boundary (MODE-4)
+ --> examples/linkcheck/main.hir:41:39
+  41 |           let _ = channel.send(tasks, mut outgoing, take row)
+     |                                       ^^^^^^^^^^^^ generic parameter instantiation failed
+ --> examples/linkcheck/main.hir:41:53
+  41 |           let _ = channel.send(tasks, mut outgoing, take row)
+     |                                                     ^^^^^^^^ generic parameter instantiation failed
+error[CONC-6]: each actual generic occurrence must be sendable before parameter weakening: `take row` is not proved unique, but a sendable value is required
+ --> examples/linkcheck/main.hir:41:19
+  41 |           let _ = channel.send(tasks, mut outgoing, take row)
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ --> examples/linkcheck/main.hir:41:53
+  41 |           let _ = channel.send(tasks, mut outgoing, take row)
+     |                                                     ^^^^^^^^ parameter mode requirement
+ --> examples/linkcheck/main.hir:41:53
+  41 |           let _ = channel.send(tasks, mut outgoing, take row)
+     |                                                     ^^^^^^^^ provided: `take row` may share counted storage; its current contract does not prove uniqueness
+ --> examples/linkcheck/main.hir:41:19
+  41 |           let _ = channel.send(tasks, mut outgoing, take row)
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required: this crosses a task boundary (MODE-4)
+EXIT 1

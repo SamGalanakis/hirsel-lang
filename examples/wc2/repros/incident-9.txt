@@ -1,0 +1,15 @@
+error[MODE-2]: this operation requires a unique value: `[]` is not proved unique, but a unique value is required
+ --> examples/wc2/main.hir:90:23
+  90 |     out.print(output, sorted_unique(take lines))?
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^
+ --> examples/wc2/main.hir:90:37
+  90 |     out.print(output, sorted_unique(take lines))?
+     |                                     ^^^^^^^^^^ parameter mode requirement
+ --> examples/wc2/main.hir:80:40
+  80 |   let mut lines: unique List[String] = []
+     |                                        ^^ provided: `[]` may share counted storage; its current contract does not prove uniqueness
+ --> examples/wc2/main.hir:90:23
+  90 |     out.print(output, sorted_unique(take lines))?
+     |                       ^^^^^^^^^^^^^ required: this requires a unique value (MODE-2)
+  = help: End live shares before this operation, or use `unique x` to obtain a deep unique copy of counted data. Deep copying may allocate and preserves arena placement; `copy x` shares storage.
+EXIT 1

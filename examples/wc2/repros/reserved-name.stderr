@@ -1,0 +1,5 @@
+error[LANG-14]: `result` is reserved for the returned value in a postcondition; choose another name
+ --> examples/wc2/repros/reserved-name.hir:1:21
+   1 | pub fn main() { let result = 0u64 }
+     |                     ^^^^^^
+  = help: Rename this identifier and its references, for example to `value` or `result`; reserved keywords cannot be used as binding names.

@@ -1,0 +1,11 @@
+error[LANG-14]: `distinct` is reserved for a distinct type declaration; choose another name
+ --> examples/wc2/main.hir:24:4
+  24 | fn distinct(take lines: unique List[String]) -> String {
+     |    ^^^^^^^^
+  = help: Rename this identifier and its references, for example to `value` or `result`; reserved keywords cannot be used as binding names.
+error[LANG-14]: `result` is reserved for the returned value in a postcondition; choose another name
+ --> examples/wc2/main.hir:27:11
+  27 |   let mut result: List[String] = []
+     |           ^^^^^^
+  = help: Rename this identifier and its references, for example to `value` or `result`; reserved keywords cannot be used as binding names.
+EXIT 1

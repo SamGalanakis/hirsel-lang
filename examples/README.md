@@ -70,6 +70,12 @@ selects an explicit bound.
 | [bench-lite](bench-lite/main.hir) | `[WORDS [SEED [ARENA_BYTES]]]`: count the words of a seeded generated corpus in a `List`/`Map` on the heap and again in a bounded arena, print the summary and its checksum, and check the two agree. Deterministic, with no timing. |
 | [kvstore](kvstore/main.hir) | `[PORT]`: serve `GET /kv`, `GET`/`PUT`/`DELETE /kv/<key>` with percent-decoded UTF-8 keys, one task per connection; entries live in a mutex and a writer task replaces `data/kv.json` atomically before each reply. |
 | [tasks](tasks/README.md) | `tasks/run [PORT]`: a task manager over HTTP with [Datastar](../packages/datastar@1/README.md). Server-rendered HTML with inline editing, filters, search and sorting; every open browser updates live over an event stream; snapshots in `data/` survive restarts. Unit tests and a Hirsel end-to-end suite (`tasks/e2e`). |
+| [wc2](wc2/README.md) | Count lines, ASCII words and bytes across granted files/stdin; `-u` sorts unique UTF-8 lines, with bounded line reads and explicit stderr errors. |
+| [csvstats](csvstats/README.md) | Group `group,value` CSV rows into a derived JSON report of counts, sums and means. |
+| [linkcheck](linkcheck/README.md) | Check URLs in bounded concurrent batches, with redirects, channel results and whole-request deadlines; scripted peers cover 200, 404 and timeout. |
+| [kvd](kvd/README.md) | Durable std-store key/value TCP service, a Mutex request counter and graceful SIGTERM shutdown; scripted session grants exercise four commands and shutdown. |
+| [logtail](logtail/README.md) | Follow a growing log with a parent-directory watcher, bounded regex searches, partial-line retention and UTC timestamps. |
+| [mdsite](mdsite/README.md) | Recursively render Markdown to HTML with an escaped, path-preserving index and safe default rendering. |
 
 The E2E tests are in `crates/hirsel-cli/tests/examples.rs`. They check exact output
 through both CLI backends and additional supplied-file cases, including a
@@ -104,3 +110,7 @@ or `hirsel test examples/kvstore/hirsel.json`; no host grants are needed.
 in a compiled executable. `hirsel doc examples/kvstore/hirsel.json` documents
 the package's public declarations. The filesystem and HTTP wrappers use their
 interpreted and native E2Es to exercise capability behavior.
+
+The six first-contact examples above each include `FRICTION.md` with copied diagnostics,
+minimal reproducers and fixes. Their five-line READMEs show interpreted/native runs and
+record/replay commands; all launch authority lives in the checked-in grants templates.

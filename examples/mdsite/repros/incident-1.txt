@@ -1,0 +1,10 @@
+test mdsite@1/empty_directory ... ok (seed=4122076144906914880)
+test mdsite@1/escaping ... FAILED (seed=17355067977861893280): runtime failure[LANG-9] at mdsite@1/escaping (examples/mdsite/main.hir:46:3)
+    <!doctype html>
+    <meta charset="utf-8">
+    <title>x</title>
+    <p><!-- raw HTML omitted -->trusted<!-- raw HTML omitted --></p>
+
+test mdsite@1/nested ... ok (seed=7397311493970699513)
+test result: FAILED. 2 passed; 1 failed; 3 total
+EXIT 1

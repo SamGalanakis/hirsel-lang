@@ -1,0 +1,105 @@
+pub type AppError = Grant(GrantError) | Files(FileError) | Utf8 | Invalid | Csv(
+  csv.CsvError
+) | Number(scalar.ParseError) | Json(json.JsonError) | Output(OutputError)
+
+type Summary {
+  count: u64,
+  sum: f64,
+  mean: f64,
+}
+
+fn summary_to_json(s: Summary) -> json.Value uses {} = comptime derive.json_value(
+  shape(Summary)
+)
+
+type Report {
+  groups: Map[String, Summary],
+}
+
+fn report_to_json(r: Report) -> json.Value uses {} = comptime derive.json_value(
+  shape(Report)
+)
+
+fn aggregate(take source: String) -> Result[Report, AppError] {
+  let rows = csv.parse(take source, csv.default_config())?
+  if list.len(rows) == 0 {
+    return Error(Invalid())
+  }
+  if rows[0] != ["group", "value"] {
+    return Error(Invalid())
+  }
+  let mut groups: Map[String, Summary] = map.empty()
+  for i in 1u64..list.len(rows) {
+    let row = rows[i]
+    if list.len(row) != 2 {
+      return Error(Invalid())
+    }
+    let n = f64.parse(row[1])?
+    if n != n || float.abs(n) > 1.7976931348623157e308f64 {
+      return Error(Invalid())
+    }
+    let old = match map.get(groups, row[0]) {
+      Some(s) => Summary(count: s.count, sum: s.sum, mean: s.mean),
+      None() => Summary(count: 0, sum: 0.0, mean: 0.0),
+    }
+    let count = old.count + 1
+    let sum = old.sum + n
+    if sum != sum || float.abs(sum) > 1.7976931348623157e308f64 {
+      return Error(Invalid())
+    }
+    let denominator: f64 = float.from_int(count)
+    map.insert(
+      mut groups,
+      unique row[0],
+      Summary(count: count, sum: sum, mean: sum / denominator)
+    )
+  }
+  Ok(Report(groups: take groups))
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let d = io.dir(rt, path.of("data"))?
+  let bytes = file.read_bytes(d, path.of("input.csv"))?
+  let text = match string.from_bytes(unique bytes) {
+    Ok(s) => take s,
+    Error(_) => return Error(Utf8()),
+  }
+  let report = aggregate(take text)?
+  let output = json.stringify(report_to_json(report))?
+  file.write_bytes(d, path.of("report.json"), string.as_bytes(f"{output}\n"))?
+  out.print(io.stdout(rt)?, f"{output}\n")?
+  Ok(())
+}
+
+@test
+fn grouped(t: Test) -> Result[(), AppError] {
+  let r = aggregate("group,value\na,2.5\nb,3\na,1.5\n")?
+  test.check(
+    t,
+    json.stringify(report_to_json(r)) == Ok(
+      r#"{"groups":{"a":{"count":2,"sum":4,"mean":2},"b":{"count":1,"sum":3,"mean":3}}}"#
+    )
+  )
+  Ok(())
+}
+
+@test
+fn quoted(t: Test) -> Result[(), AppError] {
+  let r = aggregate("group,value\n\"a,b\",-2\n")?
+  test.check(t, map.len(r.groups) == 1 && map.contains(r.groups, "a,b"))
+  Ok(())
+}
+
+@test
+fn rejects(t: Test) {
+  test.check(t, aggregate("wrong,value\na,2") == Error(Invalid()))
+  test.check(t, aggregate("group,value\na,2,3") == Error(Invalid()))
+  test.check(t, aggregate("group,value\na,NaN") == Error(Invalid()))
+}
+
+@test
+fn header_only(t: Test) -> Result[(), AppError] {
+  let r = aggregate("group,value\n")?
+  test.check(t, map.len(r.groups) == 0)
+  Ok(())
+}

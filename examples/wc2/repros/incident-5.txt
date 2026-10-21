@@ -1,0 +1,6 @@
+error[LANG-7]: expression does not have the expected type: expected `Result[(), AppError]`, found `()`
+ --> examples/wc2/main.hir:46:12
+  46 |     return out.print(output, cli.usage("wc2 [FILE ... | -]", specs)) ? Output
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: Make the operand and receiving annotation agree. For a non-exhaustive `match`, add arms for the missing values; guarded arms do not establish complete coverage.
+EXIT 1

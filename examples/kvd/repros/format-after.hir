@@ -1,0 +1,6 @@
+pub type E = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), E] {
+  out.print(io.stdout(rt)?, "ok\n")?
+  Ok(())
+}
