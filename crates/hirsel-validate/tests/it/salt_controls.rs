@@ -54,7 +54,9 @@ fn fixtures() -> Vec<(String, Fixture)> {
 /// Each fixture's verdict, with session ids left out.
 fn verdicts() -> String {
     let mut out = String::new();
-    for (name, f) in fixtures() {
+    let fixtures = fixtures();
+    let fixture_count = fixtures.len();
+    for (name, f) in fixtures {
         let verdict = hirsel_validate::validate(
             &tabled(&f.definition),
             interner(),
@@ -63,7 +65,11 @@ fn verdicts() -> String {
         );
         out += &format!("{name}: {}\n", without_ids(&format!("{verdict:?}")));
     }
-    out += &without_ids(&crate::checks::mutation_verdicts());
+    let mutations = crate::checks::mutation_verdicts();
+    let mutation_count = mutations.lines().count();
+    assert!(fixture_count > 0 && mutation_count > 0);
+    out += &without_ids(&mutations);
+    out += &format!("executed {fixture_count} fixtures and {mutation_count} mutations\n");
     out
 }
 
@@ -87,10 +93,15 @@ fn verdicts_do_not_depend_on_id_assignment() {
     ) else {
         return;
     };
+    assert_eq!(runs.len(), 3, "all requested subprocess salts executed");
     assert!(runs.iter().all(|run| *run == runs[0]), "{runs:#?}");
     assert_eq!(
         runs[0],
         verdicts(),
         "salted runs agree with the unsalted one"
+    );
+    eprintln!(
+        "V salt differential: 1, 2, 0x5eed and unsalted; {}",
+        runs[0].lines().last().unwrap()
     );
 }

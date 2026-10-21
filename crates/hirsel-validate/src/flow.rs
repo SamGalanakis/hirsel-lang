@@ -31,6 +31,10 @@ pub(super) mod tags;
 #[path = "uniqueness.rs"]
 mod uniqueness;
 
+#[cfg(test)]
+#[path = "flow_evidence_laws.rs"]
+mod evidence_laws;
+
 // A powerset lattice, with absent entry states denoting unreachable blocks.
 // Transfer functions are monotone; every bit only increases at a join. No path
 // enumeration, recursion, iteration cutoff, or reducibility assumption.
