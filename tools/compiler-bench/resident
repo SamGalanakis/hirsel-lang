@@ -117,6 +117,8 @@ class Server:
         if daemon == 'auto' and results == 'dir@1':
             after = self.log_path.read_bytes().count(b'exited ')
             if after != before + 1:
+                if self.process.poll() is not None:
+                    raise RuntimeError(f'resident server exited {self.process.returncode}')
                 raise RuntimeError('command did not use the resident compiler')
         return result, wall
 
@@ -335,7 +337,8 @@ def campaign(args):
             log = directory / 'session.log'
             with log.open('wb') as stream:
                 result = subprocess.run(command, stdout=stream, stderr=stream)
-            row |= {'status': 'pass' if result.returncode == 0 else 'timeout' if result.returncode == 124 else 'failed',
+            killed = 'resident server exited -9' in log.read_text(errors='replace')
+            row |= {'status': 'pass' if result.returncode == 0 else 'cap' if killed or result.returncode == 137 else 'timeout' if result.returncode == 124 else 'failed',
                     'exit': result.returncode, 'log': str(log), 'output': str(output)}
             if output.exists():
                 part = json.loads(output.read_text())
@@ -343,7 +346,7 @@ def campaign(args):
                 report['runs'].extend(part.get('runs', []))
                 report['medians'].extend(part.get('medians', []))
                 report['comparisons'] += part.get('comparisons', 0)
-            if result.returncode in (124, 137) and re.fullmatch(r'syn\d+k', name):
+            if row['status'] in ('cap', 'timeout') and re.fullmatch(r'syn\d+k', name):
                 scale_stopped = True
         report['programs'].append(row)
         write_json(args.output, report)
