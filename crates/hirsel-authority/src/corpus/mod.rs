@@ -579,3 +579,22 @@ fn ownership_retains_named_function_type_separately_from_its_body_result() {
         TypeKind::Primitive(Primitive::U32)
     ));
 }
+
+#[test]
+fn generic_dictionary_uses_are_charged_at_the_caller() {
+    for (source, rejected) in [
+        (
+            include_str!("../../../../conformance/CAP/CAP-1-captured-dictionary-bad.hir"),
+            true,
+        ),
+        (
+            include_str!("../../../../conformance/CAP/CAP-1-captured-dictionary-ok.hir"),
+            false,
+        ),
+    ] {
+        let (_, out) = check_source(source);
+        assert!(out.failure.is_none(), "{:?}", out.failure);
+        let rules: Vec<_> = out.diagnostics.iter().map(|d| d.rule.as_str()).collect();
+        assert_eq!(rules, if rejected { vec!["CAP-1"] } else { vec![] });
+    }
+}

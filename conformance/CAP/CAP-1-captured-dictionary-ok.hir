@@ -1,0 +1,30 @@
+// rule: CAP-1
+// expect: accept
+// boundary: A generic captured function dictionary charges its invocation authority.
+pub type Backend[S] {
+  run: fn(mut state: S) -> () uses {state},
+}
+
+@captures(backend)
+pub opaque type Handle[S]: () uses {S} {
+  state: S,
+  backend: Backend[S],
+}
+
+fn access(mut d: Dir) -> () uses {d} {
+  let _ = file.read_bytes(d, path.of("entry"))
+}
+
+fn work[S](mut h: Handle[S]) -> () {
+  h.backend.run(mut h.state)
+}
+
+fn invoke[S](take state: S, take backend: Backend[S]) -> Handle[S] uses {state, backend} {
+  let mut h: Handle[S] = Handle(state: take state, backend: take backend)
+  work(mut h)
+  take h
+}
+
+pub fn main(d: Dir) -> Handle[Dir] uses {d} {
+  invoke(d, Backend(run: access))
+}

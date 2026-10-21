@@ -287,7 +287,7 @@ impl Checker<'_> {
         let derivation = self
             .frames
             .last()
-            .map(|frame| (frame.owner, self.used(value)));
+            .map(|frame| (frame.owner, self.used(value), value));
         let writes_iteration = iteration
             || match &self.source_place(value).root {
                 SourceRoot::Binding { owner, binding } => {

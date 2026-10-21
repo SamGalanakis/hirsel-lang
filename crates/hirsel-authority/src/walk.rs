@@ -121,7 +121,7 @@ pub(super) struct Checker<'a> {
     facts: BTreeMap<ExprId, AuthoritySummary>,
     /// Immutable receipts retain the authority of their value derivation in
     /// the creating frame. Capturing that receipt still charges its own type.
-    derivations: BTreeMap<BindingKey, (NameSite, AuthoritySummary)>,
+    derivations: BTreeMap<BindingKey, (NameSite, AuthoritySummary, ExprId)>,
     binding_types: BindingTypes,
     /// Borrowed captures the closure bodies being walked see as borrowed
     /// parameters (CLO-1).
@@ -448,7 +448,16 @@ impl<'a> Checker<'a> {
                         .parameters
                         .iter()
                         .filter_map(|p| {
-                            import_type(&self.signature.types, p.ty, &mut self.out.body.types).ok()
+                            import_type(&self.signature.types, p.ty, &mut self.out.body.types)
+                                .ok()
+                                .and_then(|ty| {
+                                    bind_parameter_scopes(
+                                        &mut self.out.body.types,
+                                        ty,
+                                        &[self.lexical.site(NameSite::Item)],
+                                    )
+                                    .ok()
+                                })
                         })
                         .collect();
                     let parameters: Vec<_> = parameter_types
@@ -468,7 +477,8 @@ impl<'a> Checker<'a> {
                         .enumerate()
                         .map(|(i, _)| {
                             AuthoritySummary::Known(
-                                vec![AuthorityTerm::TypeParameter(TypeParameterRef::bound(
+                                vec![AuthorityTerm::TypeParameter(TypeParameterRef::body(
+                                    self.lexical.site(NameSite::Item),
                                     TypeParamId(i as u32),
                                 ))]
                                 .into(),
@@ -1426,7 +1436,8 @@ impl<'a> Checker<'a> {
                         // their value from the same entrusted root.
                         used = self.authority(binding.ty);
                     }
-                    if let Some((owner, derived)) = self.derivations.get(&binding_key(&binding)) {
+                    if let Some((owner, derived, _)) = self.derivations.get(&binding_key(&binding))
+                    {
                         if self
                             .frames
                             .last()

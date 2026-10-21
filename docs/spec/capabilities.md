@@ -159,6 +159,10 @@ stay the declaration's. A carrier cannot export `inert` (CAP-2) and cannot be a 
 capability, a resource, `flat`, `serializable` or refined (CLO-4). A selector that names
 no representation field is CLO-4.
 
+A call also charges the authority selected by its declared `uses`, including when a
+generic state or a captured function dictionary supplies that authority; instantiation
+cannot erase those selectors merely because no parameter is a nominal capability.
+
 ### CAP-3: Restriction
 
 A scope-forming library function (a transaction, [STORE-3](storage.md#store-3-transaction-scope);

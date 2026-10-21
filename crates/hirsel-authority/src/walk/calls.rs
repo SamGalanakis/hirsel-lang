@@ -5,21 +5,99 @@ impl Checker<'_> {
     /// enclosing declaration. Discharge only that exact receipt, independently
     /// of every other operand and of the callee's ambient authority.
     fn receipt_authority(
-        &self,
+        &mut self,
         value: ExprId,
         authority: AuthoritySummary,
         frame: &Frame,
     ) -> AuthoritySummary {
-        if authority == AuthoritySummary::Unknown
-            && self.binding(self.transparent_value(value)).is_some_and(|binding| {
+        let mut pending = vec![(value, authority)];
+        let mut seen = BTreeSet::new();
+        let mut result = AuthoritySummary::inert();
+        while let Some((value, authority)) = pending.pop() {
+            if authority != AuthoritySummary::Unknown {
+                result = result.join(authority);
+                continue;
+            }
+            let value = self.transparent_value(value);
+            if !seen.insert(value) {
+                continue;
+            }
+            if self.binding(value).is_some_and(|binding| {
                 binding.owner == frame.owner
                     && matches!(binding.binding, ResolvedName::Parameter(p) if frame.receipts.contains(&p))
-            })
-        {
-            AuthoritySummary::inert()
-        } else {
-            authority
+            }) {
+                continue;
+            }
+            if let Some(source) = self.binding(value).and_then(|binding| {
+                self.derivations
+                    .get(&binding_key(&binding))
+                    .and_then(|(owner, _, source)| (*owner == frame.owner).then_some(*source))
+            }) {
+                pending.push((source, self.used(source)));
+                continue;
+            }
+            // Construction retains exactly its operands. Discharge selected
+            // parameters separately so unknown erased evidence cannot hide a
+            // second operand's known authority.
+            let children = match &self.tree.expressions[value.0 as usize].kind {
+                ExprKind::Tuple(parts) | ExprKind::Sequence(parts) => Some(parts.clone()),
+                ExprKind::Unary {
+                    op: UnaryOp::Take | UnaryOp::Copy | UnaryOp::Box,
+                    value,
+                } => Some(vec![*value]),
+                ExprKind::Call { arguments, .. }
+                    if self
+                        .call_row(value)
+                        .is_some_and(|call| matches!(call.target, CallTarget::Constructor(_))) =>
+                {
+                    Some(arguments.iter().map(|a| a.value).collect())
+                }
+                _ => None,
+            };
+            if let Some(children) = children {
+                pending.extend(children.into_iter().map(|child| (child, self.used(child))));
+                continue;
+            }
+            if let Some(captures) = self
+                .captures
+                .get(&value)
+                .filter(|table| {
+                    matches!(
+                        table.context,
+                        CaptureContext::Escaping | CaptureContext::Task
+                    )
+                })
+                .map(|table| table.captures.clone())
+            {
+                for capture in captures {
+                    let selected = capture.owner == frame.owner
+                        && matches!(capture.binding, ResolvedName::Parameter(p) if frame.receipts.contains(&p));
+                    if !selected {
+                        if let Some(source) = self
+                            .derivations
+                            .get(&binding_key(&BindingDecision {
+                                owner: capture.owner,
+                                binding: capture.binding.clone(),
+                                site: capture.owner,
+                                ty: capture.ty,
+                                usage: capture.usage,
+                                mutable: false,
+                            }))
+                            .and_then(|(owner, _, source)| {
+                                (*owner == frame.owner).then_some(*source)
+                            })
+                        {
+                            pending.push((source, self.used(source)));
+                        } else {
+                            result = result.join(self.authority(capture.ty));
+                        }
+                    }
+                }
+                continue;
+            }
+            return AuthoritySummary::Unknown;
         }
+        result
     }
     fn callback_result_span(&self, call: ExprId) -> Span {
         if let ExprKind::Call { arguments, .. } = &self.tree.expressions[call.0 as usize].kind {
@@ -1351,6 +1429,21 @@ impl Checker<'_> {
                         &receipt_arguments,
                         &generic_authorities,
                     ));
+                    if let Uses::Only(uses) = &f.uses {
+                        let selected: Vec<_> = arguments
+                            .iter()
+                            .map(|argument| {
+                                self.receipt_authority(
+                                    argument.value,
+                                    self.used(argument.value),
+                                    &frame,
+                                )
+                            })
+                            .collect();
+                        receipt_required = receipt_required.join(self.scoped_authority(
+                            substitute_authority(uses, &selected, &generic_authorities),
+                        ));
+                    }
                     for (parameter, authority) in f.parameters.iter().zip(&receipt_arguments) {
                         if parameter.passing == PassingMode::Borrow
                             && matches!(

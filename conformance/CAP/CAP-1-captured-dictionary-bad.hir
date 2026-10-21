@@ -1,0 +1,30 @@
+// rule: CAP-1
+// expect: reject CAP-1 at line 29
+// twin: CAP/CAP-1-captured-dictionary-ok.hir
+pub type Backend[S] {
+  run: fn(mut state: S) -> () uses {state},
+}
+
+@captures(backend)
+pub opaque type Handle[S]: () uses {S} {
+  state: S,
+  backend: Backend[S],
+}
+
+fn access(mut d: Dir) -> () uses {d} {
+  let _ = file.read_bytes(d, path.of("entry"))
+}
+
+fn work[S](mut h: Handle[S]) -> () {
+  h.backend.run(mut h.state)
+}
+
+fn invoke[S](take state: S, take backend: Backend[S]) -> Handle[S] uses {state, backend} {
+  let mut h: Handle[S] = Handle(state: take state, backend: take backend)
+  work(mut h)
+  take h
+}
+
+pub fn main(d: Dir) -> Handle[Dir] uses {} {
+  invoke(d, Backend(run: access))
+}
