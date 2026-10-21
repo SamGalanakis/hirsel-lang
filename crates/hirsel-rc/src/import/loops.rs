@@ -140,16 +140,15 @@ impl Importer<'_> {
             .ok_or_else(|| InstanceError::MissingRevision(self.def.path.path().clone()))?;
         let table = self.layouts.table();
         let mut unit = LirUnit::<Value>::new(UnitHeader {
+            key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
             track_caller: self.def.tracks_caller(view.body),
             stage: StageKind::Value,
             lir_version: hirsel_lir::LIR_VERSION,
             origin: UnitOrigin::Source,
-            input: self.program.input.clone(),
             definition: self.def.path.path().clone(),
             implementation_revision: revision,
             instance: view.key.digest(),
             target: table.target,
-            layouts: table.digest(),
             abi: self.instances.abis[self.id.index()],
         });
         let out = std::mem::take(&mut self.out);

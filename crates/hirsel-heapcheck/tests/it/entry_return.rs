@@ -406,10 +406,6 @@ fn the_terminal_drain_rejects_an_unreleased_block_with_a_clean_twin() {
             // holder reaches the harness, but its block must not become exempt.
             let layout = p.layouts.fn_abis[0].result.as_ref().unwrap().layout;
             p.layouts.layouts[layout.0 as usize].drop.clear();
-            let digest = p.layouts.digest();
-            for unit in &mut p.units {
-                unit.header.layouts = digest;
-            }
         }
         for full_recount_every_step in [false, true] {
             let run = hirsel_heapcheck::run(

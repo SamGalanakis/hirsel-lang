@@ -252,10 +252,6 @@ fn heap_independently_rejects_undeclared_borrowed_returns_and_early_loan_end() {
                 }
                 open.instructions = instructions;
             }
-            let digest = p.layouts.digest();
-            for unit in &mut p.units {
-                unit.header.layouts = digest;
-            }
             let run = hirsel_heapcheck::run(
                 &p,
                 &support::path("main"),

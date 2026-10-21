@@ -268,10 +268,6 @@ fn input_program(src: &str, enabled: bool, n: u64) -> hirsel_heapcheck::Program<
         ],
     );
     *sum = ed.finish();
-    let digest = p.layouts.digest();
-    for u in &mut p.units {
-        u.header.layouts = digest;
-    }
     p
 }
 fn run(p: &hirsel_heapcheck::Program<Rc>) -> hirsel_heapcheck::Run {

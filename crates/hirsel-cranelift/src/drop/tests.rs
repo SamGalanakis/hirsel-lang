@@ -260,16 +260,15 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         version: hirsel_lir::ABI_VERSION,
     };
     let mut unit = LirUnit::<Ready>::new(UnitHeader {
+        key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
         track_caller: false,
         stage: StageKind::Ready,
         lir_version: hirsel_lir::LIR_VERSION,
         origin: UnitOrigin::Source,
-        input: input.clone(),
         definition: path("probe"),
         implementation_revision: instance,
         instance,
         target: table.target,
-        layouts: table.digest(),
         abi: FnAbiId(0),
     });
     unit.tables.cleanup_anchors.push(CleanupAnchor {

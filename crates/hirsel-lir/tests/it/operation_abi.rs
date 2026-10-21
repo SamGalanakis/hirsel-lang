@@ -102,12 +102,7 @@ pub(super) fn scalar_signature(
     signature(name, &store, function(parameters, result, vec![]))
 }
 
-fn nominal(
-    owners: &mut Owners,
-    name: &str,
-    generics: Vec<GenericParameter>,
-    shape: TypeId,
-) {
+fn nominal(owners: &mut Owners, name: &str, generics: Vec<GenericParameter>, shape: TypeId) {
     owners.nominals.insert(
         DefId::intern(&path(name)),
         OwnerRepresentation::Defined(RepresentationRecord {
@@ -432,7 +427,6 @@ fn copying_the_declared_key_does_not_hide_wrong_parameter_layouts() {
         .derive(&read, &[], &TargetSpec::x86_64_unknown_linux_gnu())
         .unwrap();
     table.fn_abis[0].key = expected.key;
-    unit.header.layouts = table.digest();
     unit.tables.operations[0] = read;
     unit.tables.calls[0].operation_arguments.clear();
     assert_eq!(
@@ -552,6 +546,5 @@ fn canonical_and_typed_scalar_children_share_the_declared_operation_abi() {
             record.key.instance = Some(ContentHash::of_bytes(b"typed scalar key"));
         }
     }
-    unit.header.layouts = table.digest();
     assert_eq!(check(&unit, &table, &registry), []);
 }

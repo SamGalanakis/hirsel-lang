@@ -350,16 +350,15 @@ impl<'t> Unit<'t> {
     /// A unit named `name` with the signature `abi`, and its entry block.
     pub fn new(table: &'t Table, name: &str, abi: &str) -> Self {
         let mut lir = LirUnit::<Ready>::new(UnitHeader {
+            key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
             track_caller: false,
             stage: StageKind::Ready,
             lir_version: hirsel_lir::LIR_VERSION,
             origin: hirsel_lir::ir::UnitOrigin::Source,
-            input: input(),
             definition: path(name),
             implementation_revision: revision(name),
             instance: instance(name),
             target: table.table.target,
-            layouts: table.table.digest(),
             abi: table.abi(abi),
         });
         lir.tables.task_domains = 1;

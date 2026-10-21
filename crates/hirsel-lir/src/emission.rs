@@ -309,10 +309,9 @@ pub fn register_result(layouts: &LayoutTable, abi: &FnAbi) -> Option<ScalarKind>
     (!matches!(kind, ScalarKind::U128 | ScalarKind::I128)).then_some(kind)
 }
 
-/// Checks a unit's receipt against the inputs emission was given. A receipt binds the unit,
-/// the layout table, the target, the manifest, the validator and the front-end input; any
-/// other value means the unit was validated against something else. The error is the
-/// problem, for the unit's definition.
+/// Independently bind the receipt to the unit and its actual reached input rows.
+/// Unrelated layouts, ABIs, manifest rows and program input digests do not affect
+/// a unit. Neither a producer-stamped UnitKey nor cached LayoutKeys is a proof.
 pub fn check_receipt(unit: &ValidatedUnit<Ready>, inputs: &EmitInputs<'_>) -> Result<(), String> {
     let raw = unit.receipt().raw();
     let header = &unit.unit().header;
@@ -330,18 +329,20 @@ pub fn check_receipt(unit: &ValidatedUnit<Ready>, inputs: &EmitInputs<'_>) -> Re
         return reject("the receipt is from another validator version");
     }
     let target = inputs.target.digest();
-    if raw.target != target || header.target != target || inputs.layouts.target != target {
+    if header.target != target || inputs.layouts.target != target {
         return reject("the receipt names another target");
     }
-    let layouts = inputs.layouts.digest();
-    if raw.layouts != layouts || header.layouts != layouts {
-        return reject("the receipt names another layout table");
+    if raw.key != header.key {
+        return reject("the receipt names another unit key");
     }
-    if raw.manifest != crate::snapshot::digest("manifest", inputs.manifest) {
-        return reject("the receipt names another operation manifest");
+    let evidence = crate::validate::UnitInputs {
+        target: inputs.target,
+        layouts: inputs.layouts,
+        manifest: inputs.manifest,
     }
-    if raw.input != *inputs.input || header.input != *inputs.input {
-        return reject("the receipt names another front-end input");
+    .digest(unit.unit())?;
+    if unit.receipt().checked_inputs() != evidence {
+        return reject("the receipt names other checked inputs");
     }
     if inputs.input.interface_version != crate::INTERFACE_VERSION {
         return reject("the input is of another interface version");

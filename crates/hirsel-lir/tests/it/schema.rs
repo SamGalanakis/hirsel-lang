@@ -336,27 +336,19 @@ fn fixture_table(target: &TargetSpec) -> LayoutTable {
     t
 }
 
-fn input() -> InputIdentity {
-    InputIdentity {
-        interface_version: hirsel_lir::INTERFACE_VERSION,
-        digest: hash("fixture native input"),
-    }
-}
-
 /// A referentially valid unit using every instruction and terminator variant and
 /// every enum family the unit schema contains.
 fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     let mut u = LirUnit::<S>::new(UnitHeader {
+        key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
         track_caller: false,
         stage: StageKind::Value,
         lir_version: hirsel_lir::LIR_VERSION,
         origin: UnitOrigin::Source,
-        input: input(),
         definition: path("f"),
         implementation_revision: hash("f source"),
         instance: hash("f instance"),
         target: table.target,
-        layouts: table.digest(),
         abi: FnAbiId(0),
     });
     let reprs = [
@@ -1274,15 +1266,12 @@ fn raw_artifacts_round_trip_deterministically_on_both_targets() {
 }
 
 #[test]
-fn receipts_artifacts_and_manifests_round_trip_and_bind_the_interface_version() {
+fn receipts_artifacts_and_manifests_round_trip_and_bind_the_unit_key() {
     let raw = RawReceipt {
-        input: input(),
+        key: hirsel_lir::objects::UnitKey(hash("unit key")),
         stage: StageKind::Ready,
         lir_version: hirsel_lir::LIR_VERSION,
         unit: hash("unit"),
-        target: hash("target"),
-        layouts: hash("layouts"),
-        manifest: hash("manifest"),
         validator_version: hirsel_lir::VALIDATOR_VERSION,
     };
     assert_round_trip(&raw);
@@ -1290,7 +1279,7 @@ fn receipts_artifacts_and_manifests_round_trip_and_bind_the_interface_version() 
         assert_round_trip(&stage);
     }
     let mut stale = raw.clone();
-    stale.input.interface_version -= 1;
+    stale.key = hirsel_lir::objects::UnitKey(hash("other key"));
     assert_ne!(raw.digest(), stale.digest());
 
     let artifact = ObjectArtifact {
@@ -1453,6 +1442,11 @@ fn foreign_and_stale_identities_are_rejected() {
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let table = fixture_table(&target);
     let unit = fixture_unit::<Rc>(&table);
+    let (_, mut layouts, mut abis) = hirsel_lir::objects::erased(&unit);
+    layouts.sort();
+    abis.sort();
+    assert_eq!(hirsel_lir::objects::references(&unit), (layouts, abis));
+
     assert_eq!(unit.check_identity(&table), Ok(()));
 
     let mut foreign_value = unit.clone();
@@ -1493,13 +1487,6 @@ fn foreign_and_stale_identities_are_rejected() {
         Err(SchemaError::ForeignId { kind: "value", .. })
     ));
 
-    let mut stale_interface = unit.clone();
-    stale_interface.header.input.interface_version = hirsel_lir::INTERFACE_VERSION - 1;
-    assert_eq!(
-        stale_interface.check_identity(&table),
-        Err(SchemaError::Stale("front-end interface version"))
-    );
-
     let mut stale_version = unit.clone();
     stale_version.header.lir_version += 1;
     assert_eq!(
@@ -1511,14 +1498,12 @@ fn foreign_and_stale_identities_are_rejected() {
     let other = fixture_table(&TargetSpec::aarch64_unknown_linux_gnu());
     assert_eq!(
         unit.check_identity(&other),
-        Err(SchemaError::Stale("layout table digest"))
+        Err(SchemaError::Stale("layout table target"))
     );
     let mut edited = table.clone();
     edited.layouts[1].align = 16;
-    assert_eq!(
-        unit.check_identity(&edited),
-        Err(SchemaError::Stale("layout table digest"))
-    );
+    // Same-target row content is checked by validation and receipt evidence.
+    assert_eq!(unit.check_identity(&edited), Ok(()));
 
     let mut torn = unit.clone();
     torn.terminators.pop();

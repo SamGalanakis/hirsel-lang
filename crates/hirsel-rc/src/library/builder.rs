@@ -301,16 +301,15 @@ impl<'c, 'a> Body<'c, 'a> {
         let table = cx.layouts.table();
         let key = cx.instances.view(cx.id).key.digest();
         let mut unit = LirUnit::<Value>::new(UnitHeader {
+            key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
             track_caller: false,
             stage: StageKind::Value,
             lir_version: hirsel_lir::LIR_VERSION,
             origin: UnitOrigin::Library,
-            input: cx.program.input.clone(),
             definition: cx.path.clone(),
             implementation_revision: super::revision(&cx.path),
             instance: key,
             target: table.target,
-            layouts: table.digest(),
             abi: cx.abi,
         });
         unit.tables.task_domains = 1;

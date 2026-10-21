@@ -94,7 +94,6 @@ const NO_EXTERNAL_PRODUCTION: &[&str] = &[
     "hirsel-layout",
     "hirsel-core-contract",
     "hirsel-codec",
-    "hirsel-proof-export",
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

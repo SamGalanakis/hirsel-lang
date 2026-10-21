@@ -361,9 +361,8 @@ pub fn lower_cached(
                 .iter()
                 .map(|k| abi_ids.get(k).copied().ok_or_else(|| bind("an FnAbi")))
                 .collect::<Result<Vec<_>, _>>()?;
-            let mut unit = hirsel_lir::objects::rebound(hit.unit, &layouts, &abis)
+            let unit = hirsel_lir::objects::rebound(hit.unit, &layouts, &abis)
                 .map_err(|e| LowerError::Replay(id, e))?;
-            unit.header.input = program.input.clone();
             units[id.index()] = Some(unit);
         }
         for (id, effects) in imported {
@@ -393,9 +392,7 @@ pub fn lower_cached(
     // later stage creates after sealing.
     layouts.header();
     let table = layouts.finish();
-    let digest = table.digest();
     for unit in &mut units {
-        unit.header.layouts = digest;
         unit.header.target = table.target;
     }
     let units = units

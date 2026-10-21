@@ -356,14 +356,6 @@ fn fixture(mut l: Layouts, units: Vec<LirUnit<Rc>>, args: Vec<Arg>) -> Fixture {
         });
     }
     l.table.fn_abis.push(abi);
-    let digest = l.table.digest();
-    let units = units
-        .into_iter()
-        .map(|mut u| {
-            u.header.layouts = digest;
-            u
-        })
-        .collect();
     let (target, table) = l.finish();
     Fixture {
         target,

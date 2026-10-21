@@ -82,7 +82,7 @@ fn a_unit_has_one_digest_and_one_object_across_programs_that_number_its_layouts_
                     assert_eq!(ka, kb, "{name} {unit} {opt:?}: the digest");
                     // Another program's front-end input: the digest binds no program.
                     let mut elsewhere = ub.unit().clone();
-                    elsewhere.header.input.digest = hash("another program");
+                    elsewhere.header.key = hirsel_lir::objects::UnitKey(hash("another program"));
                     let kc = ready_digest(&elsewhere, &ib, "llvm", false, &[]).unwrap();
                     assert_eq!(ka, kc, "{name} {unit}: the digest of another input");
                     assert!(keys.insert(ka), "{name} {unit}: two units share a digest");

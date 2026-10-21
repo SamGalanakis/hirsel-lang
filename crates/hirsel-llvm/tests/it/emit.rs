@@ -121,23 +121,44 @@ fn a_receipt_for_other_inputs_is_rejected() {
         other => panic!("expected a receipt rejection, got {other:?}"),
     };
 
+    // Unrelated rows and front-end snapshots do not change this unit's proof.
+    // Keep the original LayoutKeys deliberately: the receipt reads actual rows.
     let mut table = program.table.table.clone();
     table.layouts.push(table.layouts[0].clone());
+    emit_object(
+        &units,
+        &EmitInputs {
+            layouts: &table,
+            ..valid.clone()
+        },
+    )
+    .expect("unrelated layouts do not affect a unit");
+    let manifest = Manifest::skeleton([]);
+    emit_object(
+        &units,
+        &EmitInputs {
+            manifest: &manifest,
+            ..valid.clone()
+        },
+    )
+    .expect("these scalar units reference no manifest rows");
+    let reached = units[0].unit().types[0].layout;
+    table.layouts[reached.0 as usize].align += 1;
     assert_eq!(
         problem(&EmitInputs {
             layouts: &table,
             ..valid.clone()
         }),
-        "the receipt names another layout table"
+        "the receipt names other checked inputs"
     );
-
-    let manifest = Manifest::skeleton([]);
+    let mut table = program.table.table.clone();
+    table.fn_abis[units[0].unit().header.abi.0 as usize].caller_site = true;
     assert_eq!(
         problem(&EmitInputs {
-            manifest: &manifest,
+            layouts: &table,
             ..valid.clone()
         }),
-        "the receipt names another operation manifest"
+        "the receipt names other checked inputs"
     );
 
     let aarch64 = TargetSpec::aarch64_unknown_linux_gnu();
@@ -153,13 +174,14 @@ fn a_receipt_for_other_inputs_is_rejected() {
         interface_version: input.interface_version,
         digest: hash("another input"),
     };
-    assert_eq!(
-        problem(&EmitInputs {
+    emit_object(
+        &units,
+        &EmitInputs {
             input: &other,
             ..valid.clone()
-        }),
-        "the receipt names another front-end input"
-    );
+        },
+    )
+    .expect("a program input digest is not unit input evidence");
 
     // A unit sealed against an AArch64 table cannot be emitted with the x86-64 table.
     let foreign = scalar_program(&aarch64);

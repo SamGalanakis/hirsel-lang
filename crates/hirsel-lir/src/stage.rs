@@ -164,18 +164,15 @@ stages!(Value, Placed, Rc, Reuse, Ready);
 /// The digests a stage receipt binds. Plain data; decodable; never a proof.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct RawReceipt {
-    pub input: InputIdentity,
+    pub key: crate::objects::UnitKey,
     pub stage: StageKind,
     pub lir_version: u32,
     pub unit: ContentHash,
-    pub target: ContentHash,
-    pub layouts: ContentHash,
-    pub manifest: ContentHash,
     pub validator_version: u32,
 }
 
 impl RawReceipt {
-    /// Content digest, including the interface version through `input`.
+    /// Content digest, including the unit content key.
     pub fn digest(&self) -> ContentHash {
         crate::snapshot::digest("receipt", self)
     }
@@ -194,12 +191,19 @@ impl RawReceipt {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct NativeReceipt {
     raw: RawReceipt,
+    checked_inputs: ContentHash,
 }
 
 impl NativeReceipt {
     /// For the stage validators only, after every check passed.
-    pub(crate) fn issue(raw: RawReceipt) -> Self {
-        Self { raw }
+    pub(crate) fn issue(raw: RawReceipt, checked_inputs: ContentHash) -> Self {
+        Self {
+            raw,
+            checked_inputs,
+        }
+    }
+    pub(crate) fn checked_inputs(&self) -> ContentHash {
+        self.checked_inputs
     }
     pub fn raw(&self) -> &RawReceipt {
         &self.raw
@@ -317,13 +321,10 @@ snapshot_enum!(StageKind {
     Ready
 });
 snapshot_struct!(RawReceipt {
-    input,
+    key,
     stage,
     lir_version,
     unit,
-    target,
-    layouts,
-    manifest,
     validator_version
 });
 snapshot_enum!(ObjectSymbolKind {

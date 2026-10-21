@@ -435,10 +435,6 @@ pub fn summarize(units: &mut [LirUnit<Value>], table: &mut LayoutTable) {
             }
         }
     }
-    let digest = table.digest();
-    for u in units {
-        u.header.layouts = digest;
-    }
 }
 
 /// Placement is final before the construction flag is selected.

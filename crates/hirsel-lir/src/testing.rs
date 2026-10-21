@@ -308,7 +308,6 @@ impl<S: Stage> UnitBuilder<S> {
     /// Bind the finished unit to its fixture layout table.
     pub fn finish_with_layouts(mut self, table: &LayoutTable) -> LirUnit<S> {
         self.unit.header.target = table.target;
-        self.unit.header.layouts = table.digest();
         self.finish()
     }
 

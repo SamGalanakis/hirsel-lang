@@ -30,6 +30,15 @@ use std::time::SystemTime;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct UnitKey(pub ContentHash);
 
+impl hirsel_codec::Snapshot for UnitKey {
+    fn write(&self, w: &mut hirsel_codec::Writer) {
+        self.0.write(w);
+    }
+    fn read(r: &mut hirsel_codec::Reader<'_>) -> Result<Self, hirsel_codec::DecodeError> {
+        Ok(Self(ContentHash::read(r)?))
+    }
+}
+
 impl UnitKey {
     /// The key's lowercase hex digits, as stores name entries.
     pub fn hex(&self) -> String {
@@ -419,13 +428,58 @@ fn for_each_table_id<S>(unit: &mut LirUnit<S>, f: &mut impl FnMut(TableId<'_>)) 
     }
 }
 
-/// `unit`, at any stage, with its program bindings erased: the input and layout-table
-/// digests zeroed, and each `LayoutId` and `FnAbiId` renumbered by first use. Returns it
+/// Every table row a unit directly names, in id order, without cloning the unit.
+/// Keep this read walk paired with `for_each_table_id`; the erasure round-trip
+/// test compares them so a new operand cannot silently escape receipt evidence.
+pub fn references<S>(unit: &LirUnit<S>) -> (Vec<LayoutId>, Vec<FnAbiId>) {
+    let mut layouts = std::collections::BTreeSet::new();
+    let mut abis = std::collections::BTreeSet::from([unit.header.abi]);
+    layouts.extend(unit.types.iter().map(|ty| ty.layout));
+    for inst in &unit.instructions {
+        match *inst {
+            Inst::Compare { layout, .. }
+            | Inst::FlatCopy { layout, .. }
+            | Inst::Hash { layout, .. }
+            | Inst::Release { layout, .. }
+            | Inst::Reset { layout, .. }
+            | Inst::RegionReserve { layout, .. } => {
+                layouts.insert(layout);
+            }
+            _ => {}
+        }
+    }
+    abis.extend(unit.tables.calls.iter().map(|call| call.abi));
+    layouts.extend(unit.tables.constructs.iter().map(|site| site.layout));
+    for site in &unit.tables.closures {
+        abis.extend(site.code.iter().map(|code| code.abi));
+        layouts.insert(site.environment);
+    }
+    layouts.extend(
+        unit.tables
+            .init_flags
+            .iter()
+            .filter_map(|flag| flag.environment),
+    );
+    for plan in &unit.tables.codecs {
+        // Codec plans expose their reference traversal mutably; clone only the
+        // node instead of the whole unit, including its CFG and source maps.
+        for node in &plan.nodes {
+            let mut node = node.clone();
+            for layout in node.layouts_mut() {
+                layouts.insert(*layout);
+            }
+        }
+        abis.extend(plan.checks.iter().map(|check| check.abi));
+    }
+    (layouts.into_iter().collect(), abis.into_iter().collect())
+}
+
+/// `unit`, at any stage, with its key zeroed and each `LayoutId` and `FnAbiId`
+/// renumbered by first use. Returns it
 /// with the original ids in that order.
 pub fn erased<S: Clone>(unit: &LirUnit<S>) -> (LirUnit<S>, Vec<LayoutId>, Vec<FnAbiId>) {
     let mut erased = unit.clone();
-    erased.header.input.digest = ContentHash([0; 32]);
-    erased.header.layouts = ContentHash([0; 32]);
+    erased.header.key = UnitKey(ContentHash([0; 32]));
     let (mut layouts, mut abis) = (Vec::new(), Vec::new());
     let (mut layout_index, mut abi_index) = (BTreeMap::new(), BTreeMap::new());
     for_each_table_id(&mut erased, &mut |id| match id {

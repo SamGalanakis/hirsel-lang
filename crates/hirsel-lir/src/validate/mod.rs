@@ -77,6 +77,109 @@ pub struct Inputs<'a> {
     pub discharge: Option<&'a crate::discharge::Discharge>,
 }
 
+/// The independently supplied inputs reached by one unit. Unlike a planned
+/// object key, this evidence is computed from the actual rows checked here.
+///
+/// Borrowed from Cranelift's function stencil/ISA cache split
+/// (`cranelift/codegen/src/incremental_cache.rs:147-205`): hash a function's
+/// dependencies, never its compilation's unrelated functions. Differs because
+/// a native receipt must independently reject a producer's stale LayoutKeys;
+/// it binds actual records and local ids, not producer-supplied content keys.
+#[derive(Clone, Copy)]
+pub struct UnitInputs<'a> {
+    pub target: &'a TargetSpec,
+    pub layouts: &'a LayoutTable,
+    pub manifest: &'a Manifest,
+}
+
+impl<'a> From<&Inputs<'a>> for UnitInputs<'a> {
+    fn from(inputs: &Inputs<'a>) -> Self {
+        Self {
+            target: inputs.target,
+            layouts: inputs.layouts,
+            manifest: inputs.manifest,
+        }
+    }
+}
+
+/// A unit's direct FnAbis and transitive layout closure, in local id order.
+/// The ids are meaningful only with the table supplied to `UnitInputs`.
+#[derive(Debug, Eq, PartialEq)]
+pub struct InputClosure {
+    pub layouts: Vec<LayoutId>,
+    pub abis: Vec<crate::FnAbiId>,
+}
+
+impl UnitInputs<'_> {
+    /// Enumerate only rows this unit can read, rejecting every foreign id.
+    /// Cycles are visited once, including edges in scan/drop programs.
+    pub fn closure<S: Stage>(&self, unit: &LirUnit<S>) -> Result<InputClosure, String> {
+        let (mut pending, abis) = crate::objects::references(unit);
+        let mut reached = std::collections::BTreeSet::new();
+        for id in &abis {
+            let abi = self
+                .layouts
+                .fn_abis
+                .get(id.0 as usize)
+                .ok_or_else(|| format!("the unit names FnAbi {}, outside the table", id.0))?;
+            pending.extend(abi.parameters.iter().map(|p| p.layout));
+            pending.extend(abi.result.iter().map(|r| r.layout));
+        }
+        while let Some(id) = pending.pop() {
+            if !reached.insert(id) {
+                continue;
+            }
+            let record = self
+                .layouts
+                .layout(id)
+                .ok_or_else(|| format!("the unit names layout {}, outside the table", id.0))?;
+            pending.extend(record.references());
+        }
+        Ok(InputClosure {
+            layouts: reached.into_iter().collect(),
+            abis,
+        })
+    }
+
+    /// Exact checked-input evidence. No scan, allocation or hash is proportional
+    /// to the size of the program's table or manifest. Emission recomputes this
+    /// from its own inputs; copying a UnitKey cannot substitute for the check.
+    pub fn digest<S: Stage>(
+        &self,
+        unit: &LirUnit<S>,
+    ) -> Result<hirsel_syntax::ContentHash, String> {
+        let closure = self.closure(unit)?;
+        let mut parts = vec![
+            self.target.digest().0.to_vec(),
+            self.layouts.target.0.to_vec(),
+            self.layouts.layout_version.to_le_bytes().to_vec(),
+            self.layouts.abi_version.to_le_bytes().to_vec(),
+            crate::INTERFACE_VERSION.to_le_bytes().to_vec(),
+            crate::LIR_VERSION.to_le_bytes().to_vec(),
+            crate::VALIDATOR_VERSION.to_le_bytes().to_vec(),
+            (closure.layouts.len() as u64).to_le_bytes().to_vec(),
+        ];
+        for id in closure.layouts {
+            parts.push(id.0.to_le_bytes().to_vec());
+            parts.push(hirsel_codec::to_text(&self.layouts.layouts[id.0 as usize]).into_bytes());
+        }
+        parts.push((closure.abis.len() as u64).to_le_bytes().to_vec());
+        for id in closure.abis {
+            parts.push(id.0.to_le_bytes().to_vec());
+            parts.push(hirsel_codec::to_text(&self.layouts.fn_abis[id.0 as usize]).into_bytes());
+        }
+        parts.push((unit.tables.operations.len() as u64).to_le_bytes().to_vec());
+        for operation in &unit.tables.operations {
+            parts.push(hirsel_codec::to_text(operation).into_bytes());
+            parts.push(hirsel_codec::to_text(&self.manifest.row(operation).cloned()).into_bytes());
+        }
+        Ok(hirsel_syntax::ContentHash::of_parts(
+            "hirsel.checked-unit-inputs.v1",
+            parts.iter().map(Vec::as_slice),
+        ))
+    }
+}
+
 /// Checks and identities shared by units that borrow the same immutable inputs.
 /// No unit or producer analysis is retained: each stage still reconstructs all
 /// of its structural and ownership facts. The borrows prevent a table, target
@@ -89,8 +192,6 @@ pub struct ValidationContext<'a> {
     layouts: &'a LayoutTable,
     target: &'a TargetSpec,
     manifest: &'a Manifest,
-    layout_digest: std::sync::OnceLock<hirsel_syntax::ContentHash>,
-    manifest_digest: std::sync::OnceLock<hirsel_syntax::ContentHash>,
     layout_errors: std::sync::OnceLock<Vec<crate::layout_validate::Violation>>,
 }
 
@@ -100,9 +201,22 @@ impl<'a> ValidationContext<'a> {
             layouts: inputs.layouts,
             target: inputs.target,
             manifest: inputs.manifest,
-            layout_digest: std::sync::OnceLock::new(),
-            manifest_digest: std::sync::OnceLock::new(),
             layout_errors: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Check the immutable table once per build, including builds with no units.
+    /// Unit checks preserve their schema-first diagnostic ordering.
+    pub fn preflight(&self) -> Result<(), &[crate::layout_validate::Violation]> {
+        let errors = self.layout_errors.get_or_init(|| {
+            crate::layout_validate::validate_table(self.layouts, self.target)
+                .err()
+                .unwrap_or_default()
+        });
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.as_slice())
         }
     }
 
@@ -110,10 +224,6 @@ impl<'a> ValidationContext<'a> {
         std::ptr::eq(self.layouts, inputs.layouts)
             && std::ptr::eq(self.target, inputs.target)
             && std::ptr::eq(self.manifest, inputs.manifest)
-    }
-
-    fn layout_digest(&self) -> hirsel_syntax::ContentHash {
-        *self.layout_digest.get_or_init(|| self.layouts.digest())
     }
 
     /// Validate and seal a fresh stage input, sharing only immutable program
@@ -131,18 +241,19 @@ impl<'a> ValidationContext<'a> {
             return Err(Box::new(Rejected { unit, violations }));
         }
         let raw = RawReceipt {
-            input: unit.header.input.clone(),
+            key: unit.header.key,
             stage: S::KIND,
             lir_version: unit.header.lir_version,
             unit: unit.digest(),
-            target: self.layouts.target,
-            layouts: self.layout_digest(),
-            manifest: *self
-                .manifest_digest
-                .get_or_init(|| crate::snapshot::digest("manifest", self.manifest)),
             validator_version: crate::VALIDATOR_VERSION,
         };
-        Ok(ValidatedUnit::seal(unit, NativeReceipt::issue(raw)))
+        let evidence = UnitInputs::from(inputs)
+            .digest(&unit)
+            .expect("the independent validator checked every input reference");
+        Ok(ValidatedUnit::seal(
+            unit,
+            NativeReceipt::issue(raw, evidence),
+        ))
     }
 
     /// Every violation, with exactly the same ordering as `check`.
@@ -421,18 +532,13 @@ fn check_with_context<S: Stage>(
     inputs: &Inputs<'_>,
     context: &ValidationContext<'_>,
 ) -> Vec<Violation> {
-    if let Err(error) = unit.check_identity_using(inputs.layouts, || context.layout_digest()) {
+    if let Err(error) = unit.check_identity(inputs.layouts) {
         return vec![Violation {
             site: Site::UNIT,
             kind: ViolationKind::Schema(schema_text(&error)),
         }];
     }
-    let errors = context.layout_errors.get_or_init(|| {
-        crate::layout_validate::validate_table(inputs.layouts, inputs.target)
-            .err()
-            .unwrap_or_default()
-    });
-    if !errors.is_empty() {
+    if let Err(errors) = context.preflight() {
         return errors
             .iter()
             .map(|e| Violation {

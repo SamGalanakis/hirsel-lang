@@ -49,7 +49,6 @@ fn stage<S: Stage>() {
     let mut changed = table.clone();
     changed.layouts[l::I64.0 as usize].align = 3;
     mutant = unit.clone();
-    mutant.header.layouts = changed.digest();
     let changed_inputs = Inputs {
         layouts: &changed,
         ..inputs
@@ -94,4 +93,96 @@ fn shared_checks_preserve_receipts_and_reject_mutations_at_every_stage() {
 fn program_validation_context_is_sync() {
     fn sync<T: Sync>() {}
     sync::<ValidationContext<'_>>();
+}
+
+#[test]
+fn input_evidence_covers_exact_rows_and_ignores_unrelated_program_changes() {
+    use hirsel_core_contract::{Disposition, Manifest, OperationId};
+    use hirsel_lir::{LayoutId, LayoutKeys, layout_types::LayoutKind, validate::UnitInputs};
+    let (mut unit, table, manifest) = identity::<Ready>();
+    unit.tables.operations.clear();
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let evidence = |table: &LayoutTable, manifest: &Manifest| {
+        UnitInputs {
+            target: &target,
+            layouts: table,
+            manifest,
+        }
+        .digest(&unit)
+        .unwrap()
+    };
+    let before = evidence(&table, &manifest);
+    let mut unrelated = table.clone();
+    unrelated.layouts.push(table.layouts[0].clone());
+    unrelated.fn_abis.push(table.fn_abis[0].clone());
+    assert_eq!(before, evidence(&unrelated, &manifest));
+    let empty = Manifest::skeleton([]);
+    let unrelated_operation = OperationId {
+        definition: support::path("unrelated"),
+        declaration_digest: support::hash("unrelated"),
+    };
+    let unrelated_manifest = Manifest::skeleton(
+        manifest
+            .rows()
+            .map(|r| r.id.clone())
+            .chain([unrelated_operation]),
+    );
+    assert_eq!(before, evidence(&table, &unrelated_manifest));
+
+    let keys = LayoutKeys::new(&table);
+    let mut changed = table.clone();
+    changed.layouts[l::I64.0 as usize].align = 3;
+    assert_ne!(before, evidence(&changed, &manifest));
+    // Producer-stamped keys are still the old keys: they are never authority
+    // for the validation evidence.
+    assert_eq!(keys, LayoutKeys::new(&table));
+    let mut changed = table.clone();
+    changed.fn_abis[unit.header.abi.0 as usize].caller_site = true;
+    assert_ne!(before, evidence(&changed, &manifest));
+
+    // Traverse recursive references exactly once, including an indirect row
+    // that appears in neither the unit's types nor its FnAbi.
+    let mut cyclic = table.clone();
+    let child = LayoutId(cyclic.layouts.len() as u32);
+    cyclic
+        .layouts
+        .push(table.layouts[l::I64.0 as usize].clone());
+    cyclic.layouts[l::I64.0 as usize].kind = LayoutKind::Box { payload: child };
+    cyclic.layouts[child.0 as usize].kind = LayoutKind::Box { payload: l::I64 };
+    let inputs = UnitInputs {
+        target: &target,
+        layouts: &cyclic,
+        manifest: &manifest,
+    };
+    assert_eq!(inputs.closure(&unit).unwrap().layouts, [l::I64, child]);
+    let recursive = inputs.digest(&unit).unwrap();
+    cyclic.layouts[child.0 as usize].align += 1;
+    assert_ne!(recursive, evidence(&cyclic, &manifest));
+
+    let operation = OperationId {
+        definition: support::path("witness"),
+        declaration_digest: support::hash("witness"),
+    };
+    unit.tables.operations.push(operation.clone());
+    let mut used = Manifest::skeleton([operation.clone()]);
+    let inputs = UnitInputs {
+        target: &target,
+        layouts: &table,
+        manifest: &used,
+    };
+    let original = inputs.digest(&unit).unwrap();
+    let mut row = used.row(&operation).unwrap().clone();
+    row.dispositions.native = Disposition::RuntimePrimitive("another primitive".into());
+    used.replace(row).unwrap();
+    let inputs = UnitInputs {
+        target: &target,
+        layouts: &table,
+        manifest: &used,
+    };
+    assert_ne!(original, inputs.digest(&unit).unwrap());
+    let inputs = UnitInputs {
+        manifest: &empty,
+        ..inputs
+    };
+    assert_ne!(original, inputs.digest(&unit).unwrap());
 }

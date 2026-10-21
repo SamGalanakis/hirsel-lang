@@ -200,7 +200,11 @@ pub(crate) fn lower(
         units.iter().map(|_| OnceLock::new()).collect();
     let units: Vec<std::sync::Mutex<Option<LirUnit<Value>>>> = units
         .into_iter()
-        .map(|u| std::sync::Mutex::new(Some(u)))
+        .enumerate()
+        .map(|(i, mut unit)| {
+            unit.header.key = keys[i];
+            std::sync::Mutex::new(Some(unit))
+        })
         .collect();
     let ready = |i: usize| -> Result<&ValidatedUnit<Ready>, NativeError> {
         lowered[i]

@@ -443,9 +443,5 @@ pub fn permute_parameters(
             }
         }
     }
-    let layouts = lowered.table.digest();
-    for unit in &mut lowered.units {
-        unit.header.layouts = layouts;
-    }
     Ok(new_abi_id)
 }

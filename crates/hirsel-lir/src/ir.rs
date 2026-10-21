@@ -11,7 +11,7 @@
 use crate::abi_types::FnAbiId;
 use crate::effect::Effects;
 use crate::layout_types::{LayoutId, ScalarKind};
-use crate::stage::{InputIdentity, Stage, StageKind};
+use crate::stage::{Stage, StageKind};
 use hirsel_codec::{snapshot_enum, snapshot_struct};
 use hirsel_core_contract::OperationId;
 use hirsel_core_contract::Passing;
@@ -1505,14 +1505,13 @@ pub struct UnitHeader {
     pub stage: StageKind,
     pub lir_version: u32,
     pub origin: UnitOrigin,
-    pub input: InputIdentity,
+    /// The planned content key; independently checked input evidence lives in the receipt.
+    pub key: crate::objects::UnitKey,
     pub definition: DefPath,
     pub implementation_revision: ContentHash,
     /// Digest of the unit's `InstanceKey`.
     pub instance: ContentHash,
     pub target: ContentHash,
-    /// Digest of the `LayoutTable` that `LayoutId`/`FnAbiId` index.
-    pub layouts: ContentHash,
     pub abi: FnAbiId,
 }
 
@@ -2490,19 +2489,10 @@ pub enum SchemaError {
 }
 
 impl<S: Stage> LirUnit<S> {
-    /// Check stage, versions, layout-table identity and that every index and
+    /// Check stage, versions, target identity and that every index and
     /// pool range lies inside the arena it names. This is referential integrity
     /// only; it never substitutes for a stage validator.
     pub fn check_identity(&self, layouts: &crate::LayoutTable) -> Result<(), SchemaError> {
-        self.check_identity_using(layouts, || layouts.digest())
-    }
-
-    /// The caller binds a precomputed digest to an immutable table borrow.
-    pub(crate) fn check_identity_using(
-        &self,
-        layouts: &crate::LayoutTable,
-        digest: impl FnOnce() -> ContentHash,
-    ) -> Result<(), SchemaError> {
         if self.header.stage != S::KIND {
             return Err(SchemaError::StageMismatch {
                 expected: S::KIND,
@@ -2512,16 +2502,13 @@ impl<S: Stage> LirUnit<S> {
         if self.header.lir_version != crate::LIR_VERSION {
             return Err(SchemaError::Stale("LIR version"));
         }
-        if self.header.input.interface_version != crate::INTERFACE_VERSION {
-            return Err(SchemaError::Stale("front-end interface version"));
-        }
         if layouts.layout_version != crate::LAYOUT_VERSION
             || layouts.abi_version != crate::ABI_VERSION
         {
             return Err(SchemaError::Stale("layout table version"));
         }
-        if self.header.layouts != digest() || self.header.target != layouts.target {
-            return Err(SchemaError::Stale("layout table digest"));
+        if self.header.target != layouts.target {
+            return Err(SchemaError::Stale("layout table target"));
         }
         if self.blocks.len() != self.terminators.len() {
             return Err(SchemaError::Malformed(
@@ -3152,12 +3139,11 @@ snapshot_struct!(UnitHeader {
     stage,
     lir_version,
     origin,
-    input,
+    key,
     definition,
     implementation_revision,
     instance,
     target,
-    layouts,
     abi
 });
 

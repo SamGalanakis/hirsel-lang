@@ -1468,7 +1468,7 @@ fn accepted_units_are_sealed_and_rejected_units_returned() {
     };
     let sealed = validate::validate(unit, &inputs).expect("accepted");
     assert_eq!(sealed.receipt().raw().unit, digest);
-    assert_eq!(sealed.receipt().raw().layouts, table.digest());
+    assert_eq!(sealed.receipt().raw().key, sealed.unit().header.key);
     assert_eq!(
         sealed.receipt().raw().validator_version,
         hirsel_lir::VALIDATOR_VERSION
@@ -1485,9 +1485,9 @@ fn accepted_units_are_sealed_and_rejected_units_returned() {
     let rejected = validate::validate(unit.clone(), &inputs).expect_err("rejected");
     assert_eq!(rejected.unit, unit);
     assert_eq!(rejected.violations.len(), 1);
-    // A stale layout table is a schema rejection before any other check.
+    // A stale table version is a schema rejection before ownership checks.
     let mut stale = table.clone();
-    stale.layouts.pop();
+    stale.layout_version += 1;
     let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
     let inputs = Inputs {
         discharge: None,

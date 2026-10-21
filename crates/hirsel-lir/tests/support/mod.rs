@@ -572,19 +572,15 @@ impl<S: Stage> Lir<S> {
     pub fn new(params: &[(Passing, LayoutId)], result: Option<LayoutId>) -> Self {
         let table = table();
         let mut unit = LirUnit::<S>::new(UnitHeader {
+            key: hirsel_lir::objects::UnitKey(hirsel_syntax::ContentHash([0; 32])),
             track_caller: false,
             stage: S::KIND,
             lir_version: hirsel_lir::LIR_VERSION,
             origin: UnitOrigin::Source,
-            input: InputIdentity {
-                interface_version: hirsel_lir::INTERFACE_VERSION,
-                digest: hash("validator fixture input"),
-            },
             definition: path("f"),
             implementation_revision: hash("f source"),
             instance: hash("f instance"),
             target: table.target,
-            layouts: table.digest(),
             abi: FnAbiId(0),
         });
         unit.tables.task_domains = 1;
@@ -1464,8 +1460,7 @@ impl<S: Stage> Lir<S> {
     }
 
     pub fn finish(self) -> (LirUnit<S>, LayoutTable, Manifest) {
-        let mut unit = self.builder.finish();
-        unit.header.layouts = self.table.digest();
+        let unit = self.builder.finish();
         let _ = &self.own;
         (unit, self.table, self.manifest)
     }
