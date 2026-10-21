@@ -752,8 +752,164 @@ fn path_selection_runs_only_matches_and_gates_them() {
             }
         )
         .unwrap_err()
-        .contains("selected no corpus files")
+        .contains("matched no corpus files globally")
     );
+    // Global validation is independent of shard membership and invokes no driver
+    // when even one request is absent (including several typos together).
+    struct MustNotRun;
+    impl Driver for MustNotRun {
+        fn evaluate(&self, _: &Path, _: &Expect) -> (Status, Observation) {
+            panic!("invalid selection or empty partition invoked the compiler");
+        }
+    }
+    let owning = (1..=2)
+        .map(|index| Shard { index, count: 2 })
+        .find(|shard| shard.holds(&paths[0]))
+        .unwrap();
+    let outside = Shard {
+        index: 3 - owning.index,
+        count: 2,
+    };
+    let absent = [
+        "conformance/absent-a".to_owned(),
+        "conformance/absent-b".to_owned(),
+    ];
+    for requested in [
+        absent.to_vec(),
+        vec![paths[0].clone(), absent[0].clone(), absent[1].clone()],
+    ] {
+        for shard in [None, Some(owning), Some(outside)] {
+            let error = run_suite_selected(
+                &root.0,
+                &MustNotRun,
+                Selection {
+                    shard,
+                    paths: &requested,
+                },
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                format!("--path prefixes matched no corpus files globally: {absent:?}")
+            );
+        }
+    }
+    let overlaps = [
+        "conformance/OWN/".to_owned(),
+        paths[0].clone(),
+        "conformance/OWN/".to_owned(),
+    ];
+    let all = run_suite_selected(
+        &root.0,
+        &passing(),
+        Selection {
+            shard: None,
+            paths: &overlaps,
+        },
+    )
+    .unwrap();
+    assert_eq!(all.tests.len(), 4);
+    assert!(all.tests.windows(2).all(|pair| pair[0].path < pair[1].path));
+    assert_eq!(all.selection.requested_prefixes, overlaps);
+    assert_eq!(all.selection.globally_matched, 4);
+    let mut split = Vec::new();
+    for index in 1..=2 {
+        let shard = Shard { index, count: 2 };
+        let part = run_suite_selected(
+            &root.0,
+            &passing(),
+            Selection {
+                shard: Some(shard),
+                paths: &overlaps,
+            },
+        )
+        .unwrap();
+        assert!(part.success(), "{:?}", part.errors);
+        assert_eq!(part.selection.globally_matched, 4);
+        assert_eq!(part.selection.selected, part.counts.validated);
+        assert!(part.tests.iter().all(|test| shard.holds(&test.path)));
+        split.extend(part.tests.into_iter().map(|test| test.path));
+    }
+    split.sort();
+    assert_eq!(
+        split,
+        all.tests
+            .iter()
+            .map(|test| test.path.clone())
+            .collect::<Vec<_>>()
+    );
+    let empty_selection = Selection {
+        shard: Some(outside),
+        paths: &paths,
+    };
+    let empty_report = run_suite_selected(&root.0, &MustNotRun, empty_selection).unwrap();
+    assert!(empty_report.success());
+    assert_eq!(
+        empty_report.json()["selection"],
+        serde_json::json!({
+            "requested_prefixes": paths, "globally_matched": 1,
+            "shard": format!("{}/2", outside.index), "selected": 0,
+            "executed": 0, "empty_partition": true,
+        })
+    );
+    assert_eq!(empty_report.counts.validated, 0);
+    assert_eq!(empty_report.in_gate.validated, 0);
+    assert!(empty_report.tests.is_empty());
+    let cli = |requested: &[String], shard: Shard, json: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel-conformance"));
+        command.args([
+            "--root",
+            root.0.to_str().unwrap(),
+            "--check-format",
+            "--shard",
+            &format!("{}/{}", shard.index, shard.count),
+        ]);
+        if json {
+            command.arg("--json");
+        }
+        for path in requested {
+            command.args(["--path", path]);
+        }
+        command.output().unwrap()
+    };
+    for requested in [
+        absent.to_vec(),
+        vec![paths[0].clone(), absent[0].clone(), absent[1].clone()],
+    ] {
+        let output = cli(&requested, outside, true);
+        assert!(!output.status.success());
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            json["errors"][0],
+            format!("--path prefixes matched no corpus files globally: {absent:?}")
+        );
+        assert!(json.get("tests").is_none());
+    }
+    let output = cli(&paths, outside, true);
+    assert!(output.status.success(), "{:?}", output);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["selection"], empty_report.json()["selection"]);
+    assert_eq!(json["summary"]["validated"], 0);
+    assert_eq!(json["in_gate"]["validated"], 0);
+    assert_eq!(json["tests"], serde_json::json!([]));
+    let output = cli(&paths, outside, false);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    for line in [
+        "selection: 1 prefixes / 1 globally matched / 0 shard-selected / 0 executed (empty partition)",
+        "whole corpus: 0 validated / 0 passing / 0 failing / 0 not implemented",
+        "in-gate corpus: 0 validated / 0 passing / 0 failing / 0 not implemented",
+        "corpus formatting: 0 intentional syntax rejections exempt",
+    ] {
+        assert!(text.lines().any(|actual| actual == line), "{text}");
+    }
+    let output = cli(&[paths[0].clone(), paths[0].clone()], owning, true);
+    assert!(output.status.success(), "{:?}", output);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["selection"]["globally_matched"], 1);
+    assert_eq!(json["selection"]["selected"], 1);
+    assert_eq!(json["selection"]["executed"], 1);
+    assert_eq!(json["tests"].as_array().unwrap().len(), 1);
     let report = run_suite_selected(&root.0, &failing("OWN-6-accept.hir"), selection).unwrap();
     assert_eq!(report.counts.failing, 1);
     assert!(
@@ -795,6 +951,17 @@ fn path_selection_runs_only_matches_and_gates_them() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 validated / 1 passing"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("not formatter-canonical"));
+    // No implicit selection may validate a globally empty corpus either.
+    fs::remove_dir_all(root.0.join("conformance/OWN")).unwrap();
+    assert_eq!(
+        run_suite(&root.0, &MustNotRun).unwrap_err(),
+        "global corpus selection contains no files"
+    );
+    assert!(
+        run_suite_selected(&root.0, &MustNotRun, selection)
+            .unwrap_err()
+            .contains(&paths[0])
+    );
 }
 
 #[test]

@@ -798,8 +798,23 @@ impl std::fmt::Display for Counts {
     }
 }
 
+/// Selection scope, independent of how many cases reach the driver.
+#[derive(Default, Debug)]
+pub struct SelectionReport {
+    pub requested_prefixes: Vec<String>,
+    pub globally_matched: usize,
+    pub shard: Option<Shard>,
+    pub selected: usize,
+}
+impl SelectionReport {
+    pub fn empty_partition(&self) -> bool {
+        self.globally_matched > 0 && self.selected == 0 && self.shard.is_some()
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct Report {
+    pub selection: SelectionReport,
     pub counts: Counts,
     pub in_gate: Counts,
     pub exclusions: BTreeMap<String, Vec<String>>,
@@ -817,6 +832,14 @@ impl Report {
         // Retain the external unchecked counters as zero; validation is complete.
         serde_json::json!({
             "summary": self.counts.json(), "in_gate": self.in_gate.json(),
+            "selection": {
+                "requested_prefixes": self.selection.requested_prefixes,
+                "globally_matched": self.selection.globally_matched,
+                "shard": self.selection.shard.map(|s| format!("{}/{}", s.index, s.count)),
+                "selected": self.selection.selected,
+                "executed": self.counts.validated,
+                "empty_partition": self.selection.empty_partition(),
+            },
             "unchecked": 0,
             "format_exemptions": self.format_exemptions,
             "prefixes": self.prefixes.iter().map(|(p,c)| (p.clone(), c.json())).collect::<BTreeMap<_,_>>(),
@@ -867,17 +890,51 @@ impl Selection<'_> {
             && (self.paths.is_empty() || self.paths.iter().any(|prefix| path.starts_with(prefix)))
     }
     pub(crate) fn files(self, root: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+        self.resolve(root).map(|(files, _)| files)
+    }
+
+    fn resolve(self, root: &Path) -> Result<(Vec<std::path::PathBuf>, SelectionReport), String> {
         let mut files = Vec::new();
         discover(&root.join("conformance"), &mut files)?;
-        files.retain(|file| self.holds(&relative(root, file)));
-        files.sort();
-        if !self.paths.is_empty() && files.is_empty() {
+        // Like Koru e52455a4 run_regression.sh:871-911, validate every request before
+        // running any case. H uses its existing prefix grammar and discovers
+        // once; global validation precedes its stable shard partition.
+        let mut matched = vec![false; self.paths.len()];
+        files.retain(|file| {
+            let path = relative(root, file);
+            let mut keep = self.paths.is_empty();
+            for (prefix, matched) in self.paths.iter().zip(&mut matched) {
+                if path.starts_with(prefix) {
+                    *matched = true;
+                    keep = true;
+                }
+            }
+            keep
+        });
+        let unmatched: Vec<_> = self
+            .paths
+            .iter()
+            .zip(matched)
+            .filter_map(|(prefix, matched)| (!matched).then_some(prefix))
+            .collect();
+        if !unmatched.is_empty() {
             return Err(format!(
-                "--path {:?} selected no corpus files in this shard",
-                self.paths
+                "--path prefixes matched no corpus files globally: {unmatched:?}"
             ));
         }
-        Ok(files)
+        if files.is_empty() {
+            return Err("global corpus selection contains no files".into());
+        }
+        let globally_matched = files.len();
+        files.retain(|file| in_shard(self.shard, &relative(root, file)));
+        files.sort();
+        let scope = SelectionReport {
+            requested_prefixes: self.paths.to_vec(),
+            globally_matched,
+            shard: self.shard,
+            selected: files.len(),
+        };
+        Ok((files, scope))
     }
 }
 
@@ -963,16 +1020,29 @@ pub fn run_suite_selected(
     driver: &impl Driver,
     selection: Selection<'_>,
 ) -> Result<Report, String> {
+    run_suite_selected_with_format(root, driver, selection, false)
+}
+
+/// Execute and optionally check formatting using one globally validated inventory.
+pub fn run_suite_selected_with_format(
+    root: &Path,
+    driver: &impl Driver,
+    selection: Selection<'_>,
+    check_format: bool,
+) -> Result<Report, String> {
+    let (files, scope) = selection.resolve(root)?;
     let rules = spec_rules(root)?;
-    let files = selection.files(root)?;
-    let mut report = Report::default();
+    let mut report = Report {
+        selection: scope,
+        ..Report::default()
+    };
     let pending = pending(root)?;
     let discovered: BTreeSet<_> = files.iter().map(|file| relative(root, file)).collect();
     // Validate the selected corpus before invoking any compiler entry point.
     let mut headers = Vec::new();
-    for file in files {
+    for file in &files {
         let path = file.strip_prefix(root).map_err(|e| e.to_string())?;
-        let source = fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let source = fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
         match parse_header(path, &source, &rules) {
             Ok(header) => {
                 let path = path.to_string_lossy().replace('\\', "/");
@@ -1033,6 +1103,9 @@ pub fn run_suite_selected(
         selection,
     );
     report.errors.extend(errors);
+    if check_format {
+        corpus_format::check_canonical_files(root, &mut report, &files)?;
+    }
     Ok(report)
 }
 

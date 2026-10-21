@@ -203,6 +203,29 @@ class NativePoolRouting(unittest.TestCase):
                                              full=True, native_selection='//:native-selection')
                 self.assertEqual(calls[-1]['native_selection'], expected)
 
+    def test_selected_conformance_forwards_every_prefix_in_each_slice(self):
+        source = (sync.ROOT / 'tools/buck2/defs.bzl').read_text()
+        code = source[source.index('def selected_paths('):source.index('def _script_binary_impl(')]
+        real = 'conformance/OWN/OWN-8-local-aggregate-ok.hir'
+        missing = 'conformance/definitely-not-a-case.hir'
+        calls = []
+        scope = dict(FULL_GATE=False, TESTS_ON_HOST=False, TEST_SEED='',
+                     read_root_config=lambda section, key, default:
+                         f'{real}|{missing};{real}|{real}' if key == 'conformance_paths' else default,
+                     native_tool_inputs=lambda: {}, _test_platform=lambda name: [],
+                     _request=lambda name: [], _stage=lambda name: name,
+                     _rust_test=lambda **kwargs: calls.append(kwargs))
+        exec(code, scope)
+        for index, expected in [(1, [real, missing]), (2, [real, real])]:
+            scope['hirsel_command_test'](f'gate-conformance-selected-shard-{index}',
+                                         '//:binary', ['--check-format'], [], '.',
+                                         selected=('conformance_paths', '--path', index))
+            self.assertEqual(calls[-1]['args'], ['--check-format'] +
+                             [arg for path in expected for arg in ['--path', path]])
+        scope['hirsel_command_test']('gate-conformance-selected-shard-3', '//:binary',
+                                     [], [], '.', selected=('conformance_paths', '--path', 3))
+        self.assertEqual(len(calls), 2)
+
     def test_generated_tests_have_no_host_partition(self):
         buck = (sync.ROOT / 'BUCK').read_text()
         self.assertNotIn('host_cases =', buck)

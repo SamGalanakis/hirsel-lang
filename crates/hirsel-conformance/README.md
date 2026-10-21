@@ -21,8 +21,19 @@ Common `--root`, `--hash-seed` and `--shard` values share validation and
 argument errors print to stderr and exit 2. Paths retain OS bytes.
 
 `--path PREFIX` selects only matching repository-relative corpus files for both
-execution and `--check-format`. Prefixes may repeat; a selection matching zero
-files fails. Every selected file must pass its expected outcome. It intersects `--shard`.
+execution and `--check-format`. Every explicit prefix must match the globally
+discovered corpus before `--shard` is applied; all unmatched prefixes are
+reported together and refuse execution. An empty global inventory also fails.
+Overlapping or repeated prefixes never duplicate a file. Every selected file
+must pass its expected outcome. A valid selection may have an empty shard: it
+succeeds with an explicit empty-partition receipt and zero count records.
+
+Text and JSON reports distinguish requested prefixes, unique globally matched
+cases, shard-selected cases and executed case evaluations. `executed` counts
+calls to the conformance driver (including acceptance/rejection checks), not
+program entry executions. JSON adds `selection` with `requested_prefixes`,
+`globally_matched`, `shard`, `selected`, `executed` and `empty_partition`.
+The existing whole/in-gate count records remain present even for empty partitions.
 
 The runner prints `whole corpus` and `in-gate corpus` counts. JSON retains
 `summary` for the whole corpus and adds `in_gate`, plus each test's `in_gate`,

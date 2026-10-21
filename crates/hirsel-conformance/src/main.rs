@@ -5,7 +5,7 @@ use hirsel_cli_args::{
     lexopt::{Arg::*, Parser, ValueExt},
     parse_or_exit,
 };
-use hirsel_conformance::{SeededCompiler, Status, run_suite_selected};
+use hirsel_conformance::{SeededCompiler, Status, run_suite_selected_with_format};
 use std::{env, process::ExitCode};
 
 fn main() -> ExitCode {
@@ -62,14 +62,12 @@ fn main_on_compiler_thread() -> ExitCode {
             shard,
             paths: &paths,
         };
-        let mut report = run_suite_selected(&root, &SeededCompiler(hash_seed), selection)?;
-        if check_format {
-            hirsel_conformance::corpus_format::check_canonical_selected(
-                &root,
-                &mut report,
-                selection,
-            )?;
-        }
+        let report = run_suite_selected_with_format(
+            &root,
+            &SeededCompiler(hash_seed),
+            selection,
+            check_format,
+        )?;
         Ok::<_, String>(report)
     })();
     match result {
@@ -77,6 +75,18 @@ fn main_on_compiler_thread() -> ExitCode {
             if json {
                 println!("{}", report.json());
             } else {
+                println!(
+                    "selection: {} prefixes / {} globally matched / {} shard-selected / {} executed{}",
+                    report.selection.requested_prefixes.len(),
+                    report.selection.globally_matched,
+                    report.selection.selected,
+                    report.counts.validated,
+                    if report.selection.empty_partition() {
+                        " (empty partition)"
+                    } else {
+                        ""
+                    },
+                );
                 println!("whole corpus: {}", report.counts);
                 println!("in-gate corpus: {}", report.in_gate);
                 if check_format {

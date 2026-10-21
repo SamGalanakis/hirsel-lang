@@ -240,6 +240,12 @@ native programs run through the selected targets (`;` separates slices, `|` the 
 python3 tools/buck2/native.py <program> <program>  # cost-bounded shards, both backends
 ```
 
+Each conformance slice validates every `|`-separated prefix against the whole
+corpus before partitioning. A typo beside a valid case fails the slice before
+case compilation. Overlapping prefixes run each case once. With an explicit
+runner `--shard`, a globally valid empty partition reports zero selected and
+executed cases and retains its count records; a missing report is an error.
+
 The checked heap executor (smoke's `heap+inject` configuration) has no model of runners,
 so a corpus case with a `// runners:` header fails there; judge it by the other
 configurations. Land checks only what breaks everyone; main's fast run tests main every

@@ -629,9 +629,17 @@ pub fn check_canonical_selected(
     selection: crate::Selection<'_>,
 ) -> Result<(), String> {
     let files = selection.files(root)?;
+    check_canonical_files(root, report, &files)
+}
+
+pub(crate) fn check_canonical_files(
+    root: &Path,
+    report: &mut Report,
+    files: &[std::path::PathBuf],
+) -> Result<(), String> {
     for path in files {
-        let old = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        let canonical = match hirsel_driver::format_path(&path) {
+        let old = fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let canonical = match hirsel_driver::format_path(path) {
             Ok(source) => source,
             Err(hirsel_engine::ToolError::Query {
                 error: hirsel_engine::QueryError::Diagnostics(diagnostics),

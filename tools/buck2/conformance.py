@@ -78,6 +78,19 @@ def self_test():
         'in-gate corpus: 4 validated / 4 passing / 0 failing / 0 not implemented',
         'corpus formatting: 2 intentional syntax rejections exempt',
     ]
+    empty = ('selection: 1 prefixes / 1 globally matched / 0 shard-selected / 0 executed (empty partition)\n'
+             'whole corpus: 0 validated / 0 passing / 0 failing / 0 not implemented\n'
+             'in-gate corpus: 0 validated / 0 passing / 0 failing / 0 not implemented\n'
+             'corpus formatting: 0 intentional syntax rejections exempt\n')
+    assert summarize({'a': shard, 'b': empty}, 2) == summarize({'a': shard}, 1)
+    assert summarize({'a': empty}, 1) == empty.splitlines()[1:]
+    for missing in ['', empty.split('whole corpus:')[0], empty.replace('corpus formatting:', 'absent:')]:
+        try:
+            summarize({'a': missing}, 1)
+        except ValueError as raised:
+            assert 'a reported no counts for:' in str(raised), raised
+        else:
+            raise AssertionError('an empty partition still requires every count record')
     for outputs, error in [({'a': shard}, '1 of 2'), ({'a': shard, 'b': shard.split('in-gate')[0]}, 'b reported')]:
         try:
             summarize(outputs, 2)
