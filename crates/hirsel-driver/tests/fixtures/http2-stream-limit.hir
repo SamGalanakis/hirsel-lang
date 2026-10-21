@@ -1,0 +1,89 @@
+// Full server-limit acceptance exceeds the corpus step budget; exercised by
+// stdlib_http::http2_250_concurrent_streams_and_refusals_agree_on_all_engines.
+// Go net/http/internal/http2/server.go:2182: the server's advertised concurrent stream limit.
+fn field(name: Bytes, value: Bytes) -> std@1/hpack.Field {
+  std@1/hpack.Field(name: unique name, value: unique value, sensitive: false)
+}
+
+fn request_fields() -> List[std@1/hpack.Field] {
+  [
+    field(b":method", b"GET"),
+    field(b":scheme", b"https"),
+    field(b":path", b"/"),
+    field(b":authority", b"localhost")
+  ]
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // A server advertises Go's 250 streams (server.go:53, 839). Exceeding the
+  // limit is REFUSED_STREAM before the peer acknowledges SETTINGS and
+  // PROTOCOL_ERROR after (server.go:2182); either way the block is decoded.
+  let mut server = std@1/http2.session(Server(), 65536)
+  let (_, initial) = std@1/http2.drain_frames(mut server)
+  test.check(
+    t,
+    list.len(initial) == 1 && initial[0].kind == 4 && initial[0].payload == b"\x00\x03\x00\x00\x00\xfa"
+  )
+  let _ = std@1/http2.receive(
+    mut server,
+    std@1/http2_wire.Frame(kind: 4, flags: 0, stream: 0, payload: b"")
+  )
+  let mut encoder = std@1/hpack.encoder(4096)
+  // After the first block inserts :authority, every later block is the same
+  // four indexed fields.
+  let mut block = std@1/hpack.encode(mut encoder, request_fields())
+  let steady = std@1/hpack.encode(mut encoder, request_fields())
+  let mut id: u32 = 1
+  while id <= 499 {
+    let open = std@1/http2_wire.Frame(
+      kind: 1,
+      flags: 4,
+      stream: id,
+      payload: replace(mut block, copy steady)
+    )
+    test.check(
+      t,
+      std@1/http2.receive(mut server, open) == Ok(Headers(id, request_fields(), false))
+    )
+    id += 2
+  }
+  let over = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 4,
+    stream: 501,
+    payload: copy steady
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, over) == Error(
+      Wire(StreamError(501, RefusedStream()))
+    )
+  )
+  let _ = std@1/http2.receive(
+    mut server,
+    std@1/http2_wire.Frame(kind: 4, flags: 1, stream: 0, payload: b"")
+  )
+  let after = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 4,
+    stream: 503,
+    payload: copy steady
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, after) == Error(Wire(StreamError(503, Protocol())))
+  )
+  // Ending one stream frees a slot; the refused blocks kept HPACK in step.
+  test.check(t, std@1/http2.reset(mut server, 1, Cancel()) == Ok(()))
+  let next = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 5,
+    stream: 505,
+    payload: copy steady
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, next) == Ok(Headers(505, request_fields(), true))
+  )
+  Ok(())
+}

@@ -753,3 +753,69 @@ fn http2_adapter_scripts_record_and_replay() {
         }
     });
 }
+
+// The full 250-stream vector exceeds the corpus's 1M instruction cap even with
+// indexed stream storage. Keep its original acceptance/refusal assertions here.
+#[test]
+fn http2_250_concurrent_streams_and_refusals_agree_on_all_engines() {
+    with_compiler_stack(|| {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/http2-stream-limit.hir");
+        let mut program = load_program_source(&fixture, None).unwrap();
+        program.check_for_execution().unwrap();
+        program.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
+            limits: hirsel_interp::Limits {
+                steps: Some(12_000_000),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        let config = RunConfiguration {
+            entry: program.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        for checked in [false, true] {
+            let observed = if checked {
+                run_observed_checked(&mut program.engine, &config, SimulationConfig::default())
+            } else {
+                run_observed_snapshot(&mut program.engine, &config, SimulationConfig::default())
+            }
+            .unwrap();
+            assert!(
+                matches!(
+                    observed.outcome,
+                    Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+                ),
+                "checked={checked}: {:?}",
+                observed.outcome
+            );
+        }
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let outcome = native::run_path_native_backend(
+                &fixture,
+                HostLaunch::empty(),
+                None,
+                backend,
+                native::Output::Streams {
+                    stdout: &mut stdout,
+                    stderr: &mut stderr,
+                },
+                Verify::On,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(
+                matches!(
+                    outcome,
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+                ),
+                "{backend:?}: {outcome:?}; {}",
+                String::from_utf8_lossy(&stderr)
+            );
+            assert!(stdout.is_empty(), "{backend:?}: {stdout:?}");
+        }
+    });
+}

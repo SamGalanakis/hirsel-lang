@@ -2,6 +2,10 @@
 // transport/server flow control and frame dispatch (ebe2feef). No push.
 // BSD-3-Clause (Go)
 // third-party/NOTICES.md.
+// Indexed stream storage follows h2 src/proto/streams/store.rs:11-15, 102-128,
+// 402-418 and counts.rs:281-330: id lookup plus dense storage and a maintained
+// active count. Swap removal replaces h2's slab because indices never escape
+// this Session; retained receive credit keeps closed states until consumed.
 pub type Role = Client | Server
 
 // The concurrent streams a server advertises and enforces: Go's
@@ -32,6 +36,7 @@ type StreamState {
   body_forbidden: bool,
   content_length: Option[u64],
   received_bytes: u64,
+  counted: bool,
 }
 
 /// A transport-independent HTTP/2 endpoint. Feed complete validated frames
@@ -43,6 +48,8 @@ pub opaque type Session: copyable + inert + noalloc_drop uses {} {
   encoder: hpack.Encoder,
   decoder: hpack.Decoder,
   streams: List[StreamState],
+  stream_ids: Map[u32, u64],
+  active: u64,
   next_id: u32,
   last_peer: u32,
   last_processed: u32,
@@ -75,6 +82,8 @@ pub fn session(role: Role, header_limit: u64) -> Session uses {} {
     encoder: hpack.encoder(4096),
     decoder: hpack.decoder(4096),
     streams: [],
+    stream_ids: core@1/map.empty(),
+    active: 0,
     next_id: 1,
     last_peer: 0,
     last_processed: 0,
@@ -160,17 +169,12 @@ pub fn output(mut s: Session) -> unique Bytes uses {} {
 
 @noalloc
 fn stream_index(s: Session, id: u32) -> Option[u64] uses {} {
-  let mut i: u64 = 0
-  while i < core@1/list.len(s.streams) {
-    if s.streams[i].id == id {
-      return Some(i)
-    }
-    i += 1
-  }
-  None()
+  core@1/map.get(s.stream_ids, id)
 }
 
 fn add_stream(mut s: Session, id: u32) uses {} {
+  core@1/map.insert(mut s.stream_ids, id, core@1/list.len(s.streams))
+  s.active += 1
   core@1/list.push(
     mut s.streams,
     StreamState(
@@ -185,31 +189,53 @@ fn add_stream(mut s: Session, id: u32) uses {} {
       head_request: false,
       body_forbidden: false,
       content_length: None(),
-      received_bytes: 0
+      received_bytes: 0,
+      counted: true
     )
   )
 }
 
-fn retire(mut s: Session) uses {} {
-  // Rebuild the list only when a stream has finished: with many open streams,
-  // copying it on every frame is quadratic.
-  let mut finished = false
-  for state in s.streams {
-    if state.sent_end && state.received_end && state.unconsumed == 0 {
-      finished = true
-      break
-    }
+// Closing frees a concurrency slot even while application receive credit
+// keeps the state alive. Count each stream once (h2 counts.rs transition_after).
+fn close_count(mut s: Session, index: u64) -> bool uses {} {
+  if !s.streams[index].sent_end || !s.streams[index].received_end {
+    return false
   }
-  if !finished {
+  if s.streams[index].counted {
+    s.active -= 1
+    s.streams[index].counted = false
+  }
+  true
+}
+
+// Only the stream this transition changed can have become closed. Remove
+// its id and move the final row into its slot; repair that row's id index.
+fn retire(mut s: Session, id: u32) uses {} {
+  let Some(index) = stream_index(s, id) else {
     return ()
   }
-  let mut active: List[StreamState] = []
-  for state in s.streams {
-    if !state.sent_end || !state.received_end || state.unconsumed != 0 {
-      core@1/list.push(mut active, copy state)
-    }
+  if !close_count(mut s, index) {
+    return ()
   }
-  s.streams = take active
+  if s.streams[index].unconsumed != 0 {
+    return ()
+  }
+  // Session remains copyable for transport snapshots. Take its tables out
+  // before the consuming removals; uniqueness copies only shared storage.
+  let mut ids = unique replace(mut s.stream_ids, core@1/map.empty())
+  let mut streams = unique replace(mut s.streams, [])
+  let _ = core@1/map.remove(mut ids, id)
+  let Some(last) = core@1/list.pop(mut streams) else {
+    core@1/failure.check(false, TextInvariant())
+    return ()
+  }
+  if index < core@1/list.len(streams) {
+    let moved = last.id
+    streams[index] = take last
+    core@1/map.insert(mut ids, moved, index)
+  }
+  s.stream_ids = take ids
+  s.streams = take streams
 }
 
 // RFC 9113 section 8.2: lowercase names, pseudo-fields before ordinary
@@ -395,7 +421,7 @@ fn send_headers(
     s.streams[index].sent_headers = true
   }
   s.streams[index].sent_end = end
-  retire(mut s)
+  retire(mut s, id)
   Ok(())
 }
 
@@ -405,7 +431,7 @@ pub fn open(mut s: Session, fields: List[hpack.Field], end: bool) -> Result[u32,
   if s.role != Client() || s.draining || s.failed || s.next_id > 2147483647u32 {
     return Error(Closed())
   }
-  if active_streams(s) >= core@1/int.widen(s.max_concurrent) {
+  if s.active >= core@1/int.widen(s.max_concurrent) {
     return Error(WouldBlock())
   }
   let id = s.next_id
@@ -421,7 +447,7 @@ pub fn open(mut s: Session, fields: List[hpack.Field], end: bool) -> Result[u32,
       }
       s.streams[index].sent_end = true
       s.streams[index].received_end = true
-      retire(mut s)
+      retire(mut s, id)
       Error(error)
     },
   }
@@ -489,7 +515,7 @@ pub fn send_data(mut s: Session, id: u32, data: Bytes, end: bool) -> Result[u64,
   s.send_window -= sent
   s.streams[index].send_window -= sent
   s.streams[index].sent_end = finished
-  retire(mut s)
+  retire(mut s, id)
   Ok(count)
 }
 
@@ -506,6 +532,7 @@ pub fn consumed(mut s: Session, id: u32, amount: u32) -> Result[(), Error] uses 
     return Error(Wire(StreamError(id, FlowControl())))
   }
   if amount == 0 {
+    retire(mut s, id)
     return Ok(())
   }
   s.streams[index].unconsumed -= amount
@@ -532,7 +559,7 @@ pub fn consumed(mut s: Session, id: u32, amount: u32) -> Result[(), Error] uses 
       )
     )
   }
-  retire(mut s)
+  retire(mut s, id)
   Ok(())
 }
 
@@ -567,7 +594,7 @@ pub fn reset(mut s: Session, id: u32, code: http2_wire.Code) -> Result[(), Error
   s.streams[index].received_end = true
   let unconsumed = s.streams[index].unconsumed
   consumed(mut s, id, unconsumed)?
-  retire(mut s)
+  retire(mut s, id)
   Ok(())
 }
 
@@ -623,7 +650,7 @@ fn complete_headers(mut s: Session) -> Result[Event, Error] uses {} {
     return Error(Wire(StreamError(id, RefusedStream())))
   }
   let trailers = s.streams[index].received_headers
-  if s.role == Server() && !trailers && active_streams(s) > MAX_PEER_STREAMS {
+  if s.role == Server() && !trailers && s.active > MAX_PEER_STREAMS {
     // Exceeding the advertised limit is PROTOCOL_ERROR once the peer has
     // acknowledged it, else REFUSED_STREAM (Go server.go:2182). The block is
     // decoded first, as for every refused stream.
@@ -694,7 +721,7 @@ fn complete_headers(mut s: Session) -> Result[Event, Error] uses {} {
   if s.role == Server() && id > s.last_processed {
     s.last_processed = id
   }
-  retire(mut s)
+  retire(mut s, id)
   Ok(Headers(id, take fields, end))
 }
 
@@ -886,6 +913,8 @@ fn handle(mut s: Session, frame: http2_wire.Frame) -> Result[Event, Error] uses 
     s.streams[index].unconsumed += cost
     let end = frame.flags & 1 != 0
     s.streams[index].received_end = end
+    // Even empty DATA must remain addressable until the consumer releases it.
+    let _ = close_count(mut s, index)
     return Ok(Data(id, unique http2_wire.fragment(frame), cost, end))
   }
   if frame.kind == 3 {
@@ -899,7 +928,7 @@ fn handle(mut s: Session, frame: http2_wire.Frame) -> Result[Event, Error] uses 
     s.streams[index].received_end = true
     let amount = s.streams[index].unconsumed
     consumed(mut s, id, amount)?
-    retire(mut s)
+    retire(mut s, id)
     return Ok(Reset(id, http2_wire.read_u32(frame.payload, 0)))
   }
   Ok(Idle())
@@ -991,7 +1020,7 @@ pub fn flush(mut c: Connection) -> Result[(), Error] {
     core@1/net.write_all(n, mut c.stream, prefix) ? net_error
   }
   for frame in frames {
-    let data = http2_wire.encode(frame, 16777215) ?
+    let data = http2_wire.encode(frame, 16777215)?
     core@1/net.write_all(n, mut c.stream, data) ? net_error
   }
   c.closed = false
@@ -1180,17 +1209,6 @@ fn decimal(data: Bytes) -> Option[u64] uses {} {
     i += 1
   }
   Some(value)
-}
-
-@noalloc
-fn active_streams(s: Session) -> u64 uses {} {
-  let mut count: u64 = 0
-  for state in s.streams {
-    if !state.sent_end || !state.received_end {
-      count += 1
-    }
-  }
-  count
 }
 
 @noalloc

@@ -1,0 +1,110 @@
+// rule: SEM-1
+// expect: test
+// h2 store.rs swap_remove and counts.rs transition_after: removing a middle
+// stream preserves moved IDs; a closed stream retains only unconsumed credit.
+fn field(name: Bytes, value: Bytes) -> std@1/hpack.Field {
+  std@1/hpack.Field(name: unique name, value: unique value, sensitive: false)
+}
+
+fn request_fields() -> List[std@1/hpack.Field] {
+  [
+    field(b":method", b"GET"),
+    field(b":scheme", b"https"),
+    field(b":path", b"/"),
+    field(b":authority", b"localhost")
+  ]
+}
+
+fn transfer(mut endpoint: std@1/http2.Session, wire: Bytes) -> List[std@1/http2.Event] {
+  let mut offset: u64 = if bytes.len(wire) >= 24 && bytes.slice(wire, 0, 24) == std@1/http2_wire.preface() {
+    24
+  } else {
+    0
+  }
+  let mut events: List[std@1/http2.Event] = []
+  while offset < bytes.len(wire) {
+    let Ok(Some((frame, end))) = std@1/http2_wire.parse(wire, offset, 16384) else {
+      failure.check(false, TextInvariant())
+      return []
+    }
+    let Ok(event) = std@1/http2.receive(mut endpoint, frame) else {
+      failure.check(false, TextInvariant())
+      return []
+    }
+    list.push(mut events, take event)
+    offset = end
+  }
+  take events
+}
+
+fn handshake(mut client: std@1/http2.Session, mut server: std@1/http2.Session) {
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+  let _ = transfer(mut client, std@1/http2.output(mut server))
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+}
+
+@test
+fn indexed_retirement(t: Test) {
+  let mut client = std@1/http2.session(Client(), 65536)
+  let mut server = std@1/http2.session(Server(), 65536)
+  handshake(mut client, mut server)
+  test.check(t, std@1/http2.open(mut client, request_fields(), true) == Ok(1))
+  test.check(t, std@1/http2.open(mut client, request_fields(), true) == Ok(3))
+  test.check(t, std@1/http2.open(mut client, request_fields(), true) == Ok(5))
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+  let mut snapshot = copy server
+  // Retiring the first row moves the last row. Later frames still address 5,
+  // and a copied Session retains its independent id index and stream state.
+  test.check(t, std@1/http2.reset(mut server, 1, Cancel()) == Ok(()))
+  let _ = transfer(mut client, std@1/http2.output(mut server))
+  test.check(t, std@1/http2.reset(mut server, 1, Cancel()) == Error(UnknownStream()))
+  test.check(t, std@1/http2.reset(mut snapshot, 1, Cancel()) == Ok(()))
+  test.check(t, std@1/http2.reset(mut snapshot, 5, Cancel()) == Ok(()))
+  let response: List[std@1/hpack.Field] = [field(b":status", b"200")]
+  test.check(t, std@1/http2.headers(mut server, 5, response, false) == Ok(()))
+  test.check(t, std@1/http2.send_data(mut server, 5, b"five", true) == Ok(4))
+  test.check(
+    t,
+    transfer(mut client, std@1/http2.output(mut server)) == [
+      Headers(5, copy response, false),
+      Data(5, b"five", 4, true)
+    ]
+  )
+  // Set a one-stream concurrency limit while stream 3 remains active. Stream 5
+  // is closed but still owns DATA credit, so only stream 3 counts against it.
+  test.check(
+    t,
+    std@1/http2.receive(
+      mut client,
+      std@1/http2_wire.Frame(
+        kind: 4,
+        flags: 0,
+        stream: 0,
+        payload: b"\x00\x03\x00\x00\x00\x01"
+      )
+    ) == Ok(Settings())
+  )
+  let _ = std@1/http2.drain_frames(mut client)
+  test.check(
+    t,
+    std@1/http2.open(mut client, request_fields(), true) == Error(WouldBlock())
+  )
+  // Retire stream 3 before consuming 5: the remaining closed-credit row must
+  // not count as an active stream, and its index must survive another move.
+  test.check(t, std@1/http2.headers(mut server, 3, response, true) == Ok(()))
+  test.check(
+    t,
+    transfer(mut client, std@1/http2.output(mut server)) == [
+      Headers(3, copy response, true)
+    ]
+  )
+  test.check(t, std@1/http2.open(mut client, request_fields(), true) == Ok(7))
+  // The protocol stream is closed but the DATA credit is still retained.
+  test.check(t, std@1/http2.consumed(mut client, 5, 3) == Ok(()))
+  test.check(t, std@1/http2.consumed(mut client, 5, 1) == Ok(()))
+  test.check(t, std@1/http2.consumed(mut client, 5, 0) == Error(UnknownStream()))
+  let _ = transfer(mut server, std@1/http2.output(mut client))
+  // Reset with zero credit retires once, including a newly reused dense slot.
+  test.check(t, std@1/http2.reset(mut server, 7, Cancel()) == Ok(()))
+  test.check(t, std@1/http2.reset(mut server, 7, Cancel()) == Error(UnknownStream()))
+}

@@ -1,0 +1,128 @@
+// rule: SEM-1
+// expect: run
+// RFC 7301 and hyper connection builders: the negotiated protocol chooses
+// the server codec; the caller's preference order and refusal are preserved.
+fn identity() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn network(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+fn exercise(t: Test, protocols: List[String], offer: List[String], h2: bool) -> Result[
+  (),
+  http.HttpError
+] {
+  let home = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16)
+  let steps: List[NetStep] = if h2 {
+    [
+      Send(
+        b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x03\x01\x05\x00\x00\x00\x01\x82\x86\x84"
+      ),
+      Expect(
+        b"\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\xfa\x00\x00\x00\x04\x01\x00\x00\x00\x00"
+      ),
+      Expect(
+        b"\x00\x00\x01\x01\x04\x00\x00\x00\x01\x88\x00\x00\x00\x00\x01\x00\x00\x00\x01"
+      ),
+      Close()
+    ]
+  } else {
+    [
+      Send(b"GET / HTTP/1.1\r\nConnection: close\r\n\r\n"),
+      Expect(b"HTTP/1.1 200 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+      Close()
+    ]
+  }
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: home.port,
+        clients: [
+          NetClient(
+            from: home,
+            tls: Offers(["localhost"], unique offer),
+            steps: take steps
+          )
+        ]
+      )
+    ]
+  )
+  let mut listener = net.listen(n, home) ? network
+  let (socket, _) = net.accept(n, mut listener) ? network
+  let mut settings = http.default_config()
+  // HTTPS must use the negotiated protocol even if a cleartext preference differs.
+  settings.http2_prior_knowledge = !h2
+  let mut c = http.serve_tls(
+    test.tasks(t),
+    n,
+    take socket,
+    TlsServer(identities: [identity()], clients: Anonymous(), alpn: unique protocols),
+    settings
+  )?
+  let Some((owned, incoming)) = http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  let mut stream = take owned
+  test.check(
+    t,
+    incoming.version == if h2 {
+      Http2()
+    } else {
+      Http11()
+    }
+  )
+  test.check(t, http.protocol(stream) == incoming.version)
+  if h2 {
+    http.respond_head(mut stream, 200u16, [])?
+    http.end_response_body(mut stream)?
+  } else {
+    http.respond(mut stream, 200u16, [], b"", true)?
+  }
+  Ok(())
+}
+
+fn refuses(t: Test) -> Result[(), http.HttpError] {
+  let home = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16)
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: home.port,
+        clients: [NetClient(from: home, tls: Offers(["localhost"], ["h2"]), steps: [])]
+      )
+    ]
+  )
+  let mut listener = net.listen(n, home) ? network
+  let (socket, _) = net.accept(n, mut listener) ? network
+  match http.serve_tls(
+    test.tasks(t),
+    n,
+    take socket,
+    TlsServer(identities: [identity()], clients: Anonymous(), alpn: ["http/1.1"]),
+    http.default_config()
+  ) {
+    Error(Net(Tls(HandshakeFailure()))) => (),
+    _ => test.check(t, false),
+  }
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  exercise(t, ["h2"], ["h2"], true)?
+  exercise(t, ["h2", "http/1.1"], ["http/1.1", "h2"], true)?
+  exercise(t, ["http/1.1", "h2"], ["h2", "http/1.1"], false)?
+  exercise(t, [], ["h2"], false)?
+  exercise(t, ["h2"], [], false)?
+  refuses(t)?
+  Ok(())
+}

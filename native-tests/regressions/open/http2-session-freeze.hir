@@ -1,0 +1,14 @@
+// Open compiler/runtime defect (net-gaps, 2026-10-21).
+// LLVM O0 diagnostic aborts: a freeze reached a block with more than one holder.
+// The full HTTP/2 ALPN case reproduces identically with the original Session
+// before stream indexing. No exclusion added; tracked in tools/known-failures.tsv.
+@test
+fn session_freeze(t: Test) {
+  let original = std@1/http2.session(Server(), 65536)
+  let endpoint = unique original
+  let frozen = shared.freeze(take endpoint)
+  test.check(t, match shared.thaw(take frozen) {
+    Ok(value) => true,
+    Error(value) => false,
+  })
+}

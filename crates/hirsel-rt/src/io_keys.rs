@@ -13,6 +13,8 @@
 //!   link of the same inode, or against output to a redirected stdout file, with nothing
 //!   resolved.
 //! - **Sockets** take their own key; listen, bind and connect take their Net's port key.
+//!   Split halves take distinct direction keys and the stream key shared; whole-stream
+//!   operations take its key exclusively, including close and join.
 //! - **Clocks, random, telemetry, test worlds:** one key per grant. **Env reads:** none.
 //! - **Processes:** a spawn takes the process grant's key, the namespace exclusively and the
 //!   run's sink keys, for the spawn call only; child stream ops and waits take the child's key.
@@ -93,6 +95,9 @@ pub enum Kind {
     Sink { file_backed: bool },
     /// Any other resource: a stream, socket, listener, child, clock, random or test world.
     Other,
+    /// A split direction: its own key serializes that direction, while shared access
+    /// to the parent orders it against whole-stream close without coupling read/write.
+    Half { stream: Key },
 }
 
 /// Assigns logical keys as resources appear, with live alias discovery.
@@ -187,6 +192,14 @@ impl Registry {
             self.handles.insert(to, row);
         }
     }
+    /// Register the two handles returned by a successful `NetSplit`. Like `resource`
+    /// and `alias`, the adapter calls this when the handles appear, before publishing
+    /// their completion. The original stream identity remains valid for close/join.
+    pub fn split(&mut self, stream: u64, read: u64, write: u64) {
+        let (parent, _) = self.handle(stream);
+        self.resource(read, Kind::Half { stream: parent });
+        self.resource(write, Kind::Half { stream: parent });
+    }
     /// `handle` was closed. Its key stays valid for any alias.
     pub fn forget(&mut self, handle: u64) {
         self.handles.remove(&handle);
@@ -214,6 +227,9 @@ impl Registry {
         let on = |registry: &Registry, keys: &mut Vec<(Key, Mode)>, handle: u64, mode: Mode| {
             let (key, kind) = registry.handle(handle);
             keys.push((key, mode));
+            if let Kind::Half { stream } = kind {
+                keys.push((stream, S));
+            }
             if matches!(kind, Kind::File | Kind::Sink { file_backed: true }) {
                 keys.push((NAMESPACE, S));
             }
@@ -345,10 +361,13 @@ impl Registry {
             | R::TlsProtocol { stream, .. }
             | R::TlsClose { stream, .. }
             | R::NetSplit { stream, .. } => on(self, &mut keys, *stream, X),
-            // The halves of one stream are its one host resource in two directions.
             R::NetJoin { read, write, .. } => {
-                on(self, &mut keys, *read, X);
-                on(self, &mut keys, *write, X);
+                for half in [read, write] {
+                    on(self, &mut keys, *half, X);
+                    if let (_, Kind::Half { stream }) = self.handle(*half) {
+                        keys.push((stream, X));
+                    }
+                }
             }
             R::UdpSend { socket, .. } | R::UdpRecv { socket, .. } => {
                 on(self, &mut keys, *socket, X)
@@ -766,6 +785,93 @@ mod tests {
             deadline: None,
         });
         assert_eq!(wait.keys(), &[(child, Mode::Exclusive)]);
+    }
+
+    #[test]
+    fn split_halves_have_independent_keys_and_whole_stream_close_waits_for_both() {
+        let mut keys = registry();
+        let parent = keys.resource(10, Kind::Other);
+        // The split's handles must be registered as directions of their stream.
+        keys.split(10, 11, 12);
+        let read_keys = keys.keys(&R::NetRead {
+            net: 4,
+            stream: 11,
+            max: 1,
+        });
+        let write_keys = keys.keys(&R::NetWriteAll {
+            net: 4,
+            stream: 12,
+            bytes: vec![1],
+        });
+        assert_ne!(
+            read_keys, write_keys,
+            "opposite directions must not serialize"
+        );
+        assert!(!read_keys.contains(COUPLED, Mode::Exclusive));
+        assert!(read_keys.contains(parent, Mode::Shared));
+        let table = KeyTable::default();
+        let read = table.take(&read_keys);
+        let write = table.take(&write_keys);
+        assert!(read.ready() && write.ready());
+        let another_read = table.take(&read_keys);
+        assert!(!another_read.ready(), "one direction stays ordered");
+        read.end();
+        assert!(another_read.ready());
+        let close = table.take(&keys.keys(&R::Close { handle: 10 }));
+        assert!(!close.ready());
+        another_read.end();
+        assert!(!close.ready(), "the writer still uses the stream");
+        write.end();
+        assert!(close.ready());
+    }
+
+    #[test]
+    fn split_join_excludes_both_directions_and_half_aliases_keep_the_parent() {
+        let mut keys = registry();
+        let parent = keys.resource(10, Kind::Other);
+        keys.split(10, 11, 12);
+        keys.alias(11, 13);
+        let read = keys.keys(&R::NetRead {
+            net: 4,
+            stream: 11,
+            max: 1,
+        });
+        let alias = keys.keys(&R::NetRead {
+            net: 4,
+            stream: 13,
+            max: 1,
+        });
+        assert_eq!(read, alias);
+        let join_keys = keys.keys(&R::NetJoin {
+            net: 4,
+            read: 11,
+            write: 12,
+        });
+        assert!(join_keys.contains(parent, Mode::Exclusive));
+        let table = KeyTable::default();
+        let first = table.take(&read);
+        let join = table.take(&join_keys);
+        let later_write = table.take(&keys.keys(&R::NetWriteAll {
+            net: 4,
+            stream: 12,
+            bytes: vec![],
+        }));
+        assert!(first.ready());
+        assert!(!join.ready() && !later_write.ready());
+        first.end();
+        assert!(join.ready() && !later_write.ready());
+        join.end();
+        assert!(later_write.ready());
+        // Forgetting a half does not remove its live alias's close dependency.
+        keys.forget(11);
+        assert_eq!(
+            keys.keys(&R::NetRead {
+                net: 4,
+                stream: 13,
+                max: 1
+            }),
+            read
+        );
     }
 
     #[test]

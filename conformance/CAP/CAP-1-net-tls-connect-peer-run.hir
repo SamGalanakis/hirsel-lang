@@ -68,12 +68,16 @@ pub fn main(t: Test) -> Result[(), NetError] {
   let s = net.connect(n, "beta.hirsel.test", 443u16, Unbounded())?
   test.check(t, tls.peer(n, s)? == None())
   let mut secure = tls.connect(n, take s, "beta.hirsel.test", WebPki())?
+  let verified = chain(n, secure)?
   test.check(
     t,
-    std@1/sha256.digest_hex(chain(n, secure)?) == "4078060b05f03fd867a0ed9b71721c0e9bb51c6d61dea9e6c385ea7065d3b6b7"
+    std@1/sha256.digest_hex(verified) == "4078060b05f03fd867a0ed9b71721c0e9bb51c6d61dea9e6c385ea7065d3b6b7"
   )
   let mut buf: List[u8] = []
   test.check(t, net.read(n, mut secure, mut buf, 8u64)? == 2u64)
+  // Reading EOF does not discard the verified server identity.
+  test.check(t, net.read(n, mut secure, mut buf, 8u64)? == 0u64)
+  test.check(t, chain(n, secure)? == verified)
   // An IP literal sends no SNI: the first identity, which names 127.0.0.1.
   let literal = net.connect(n, "127.0.0.1", 443u16, Unbounded())?
   let by_ip = tls.connect(n, take literal, "127.0.0.1", WebPki())?

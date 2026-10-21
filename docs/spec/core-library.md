@@ -974,7 +974,8 @@ certificates the peer sent, leaf first, concatenated (each DER certificate delim
 itself), so a program reads the peer's identity as data, and the chain's SHA-256
 identifies it; [`std@1/x509`](std-library.md#x509-certificate-fields) reads its subject and
 alternative names. It returns `None()` on plain streams and on `tls.accept` streams whose
-client sent no certificate. It reads handshake state only: it never blocks, is never a
+client sent no certificate. Client-side chain access requires no client identity and also
+works with `tls.connect_with`. It reads handshake state only: it never blocks, is never a
 cancellation point, and answers the same after the stream's peer closes or resets.
 
 `tls.negotiated_protocol` returns the ALPN protocol the stream's handshake negotiated, on

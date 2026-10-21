@@ -488,7 +488,7 @@ pub fn request(
 ) -> Result[Request, HttpError] {
   validate_headers(headers)?
   validate_headers([Header(name: "user-agent", value: config.user_agent)])?
-  let parsed_uri = uri.parse(url) ?
+  let parsed_uri = uri.parse(url)?
   let target = uri.component_encoded(parsed_uri.path, Path())
   http_validate_target(target)?
   if let Some(q) = parsed_uri.query {
@@ -1324,7 +1324,7 @@ fn http_client_request(
   headers: List[Header]
 ) -> Result[Request, HttpError] {
   validate_headers(headers)?
-  let parsed = uri.parse(url) ?
+  let parsed = uri.parse(url)?
   if !http_same(parsed.scheme, "http") && !http_same(parsed.scheme, "https") {
     return Error(UnsupportedScheme())
   }
@@ -1577,14 +1577,13 @@ pub fn serve_tls(
   // A ListenTls stream allows options before its handshake.
   core@1/net.set_read_timeout(n, mut plain, rt) ? http_net_error
   core@1/net.set_write_timeout(n, mut plain, wt) ? http_net_error
-  // This server speaks HTTP/1.1 alone, so it selects that protocol whatever the caller lists.
-  let http1 = TlsServer(
-    identities: server.identities,
-    clients: server.clients,
-    alpn: ["http/1.1"]
-  )
-  let secure = core@1/tls.accept(n, take plain, http1) ? http_net_error
-  Ok(server_connection(tasks, n, take secure, config))
+  // rustls records ALPN during the handshake; choose the codec from that
+  // result, independently of the cleartext prior-knowledge configuration.
+  let secure = core@1/tls.accept(n, take plain, server) ? http_net_error
+  let negotiated = core@1/tls.negotiated_protocol(n, secure) ? http_net_error
+  let mut selected = copy config
+  selected.http2_prior_knowledge = negotiated == Some("h2")
+  Ok(server_connection(tasks, n, take secure, selected))
 }
 
 /// A server connection after an HTTP/1.1 request, with the bytes already read past that

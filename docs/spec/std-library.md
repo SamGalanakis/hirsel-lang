@@ -1862,9 +1862,10 @@ timeouts from `read_timeout` and `write_timeout` (unbounded when `None`), so the
 each socket wait of the server handshake, performs `tls.accept` with `server`, and returns
 `server_connection` over the secured stream; every later receive sets its own read
 timeout as above. A handshake or timeout failure is `Net(error)` and closes the stream.
-The connection then behaves exactly as a plaintext one; the handshake selects ALPN
-`http/1.1` only, replacing `server.alpn`, so a client offering ALPN without it fails the
-handshake. A server that reads the client's certificate chain performs
+The handshake uses `server.alpn` unchanged: `h2` selects the HTTP/2 server;
+`http/1.1` or no negotiated protocol selects HTTP/1.1. The cleartext
+`http2_prior_knowledge` setting does not override the TLS negotiation. A server that
+reads the client's certificate chain performs
 `tls.accept` and `tls.peer` itself and passes the secured stream to `server_connection`.
 
 #### Streaming HTTP responses and EventSource framing

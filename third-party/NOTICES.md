@@ -16,6 +16,7 @@ the license named in its row; the license texts follow once each.
 | mimalloc | `src/theap.c:124-147` collection also reclaims retired pages; `src/prim/unix/prim.c:549-558` immediate RSS reduction with MADV_DONTNEED | worker collection in `crates/hirsel-rt/src/context.rs`, slab retirement in `alloc.rs` | microsoft/mimalloc `31d034d94cdb8e22f7d7ed55967f581a2d6e831d` | MIT (mimalloc) |
 | Rust compiler | restricted Damerau-Levenshtein distance and name matching thresholds (`compiler/rustc_span/src/edit_distance.rs:24-104,235-334`) and test vectors (`edit_distance/tests.rs`) | `crates/hirsel-diag/src/near_miss.rs` | rust-lang/rust `a7c37f9f0ee5e93396106e9de20f4a86b4154e63` | MIT (Rust) |
 | Go runtime | cgroup-v2 membership/mount/CPU-limit reader structure (`src/internal/runtime/cgroup/cgroup_linux.go:116-140,201-237`), quota parser and `TestParseV2Limit` vectors (`cgroup.go:72-107`, `cgroup_test.go:74-155`) | `crates/hirsel-run-config/src/managed_cores`, managed-core integration tests | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
+| h2 | Stream id index, dense storage removal and active-stream count transitions (`src/proto/streams/store.rs:11-15,102-128,402-418`, `counts.rs:281-330`) | `stdlib/std@1/http2.hir`, indexed retirement corpus | hyperium/h2 `e64c1662ebb14794fc19cbcbb5b5dd0f67925f27` | MIT (Copyright (c) 2017 h2 authors) |
 | hyper | HTTP/1 persistent dispatch, owned read buffer, keep-alive and pipelined-request vectors (`src/proto/h1/{dispatch,io}.rs`, `tests/server.rs`) | `stdlib/std@1/http_h2.hir`, `conformance/SEM/SEM-1-http-server-serial-handoff-run.hir` | hyperium/hyper `b07337878fe57b34b2065335ae8cae9ce5a780a0` | MIT (Copyright (c) 2014-2026 Sean McArthur) |
 | xsum | Signed overlapping small accumulator, deferred carries and complete one/two/three/ten-term tables | `stdlib/std@1/superacc.hir`, `native-tests/library/vectors/xsum.json` | radfordneal/xsum `b766b3e104cdbd6769c8df033fb430700fce32dd` | MIT, Copyright 2015, 2018, 2021, 2024 Radford M. Neal; full text in `native-tests/library/vectors/LICENSE.xsum` |
 | CPython | All fixed `testFsum` vectors and telescoping case | `native-tests/library/vectors/cpython-fsum.json` | python/cpython `8b7d6c53eee2226b08bed761d5a1742b5adb8507` | PSF-2.0; full text in `native-tests/library/vectors/LICENSE.cpython` |
@@ -284,6 +285,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - toml-test: Copyright (c) 2018 TOML authors
 - toml_edit: Copyright (c) Individual contributors
 - mimalloc: Copyright (c) 2018-2025 Microsoft Corporation, Daan Leijen
+- h2: Copyright (c) 2017 h2 authors
 - hyper: Copyright (c) 2014-2026 Sean McArthur
 - httparse: Copyright (c) 2015-2026 Sean McArthur
 - rustls: Copyright (c) 2016 Joseph Birr-Pixton

@@ -10,6 +10,46 @@ use hirsel_rt::net_tls::{WEBPKI_VERSION, pem_digest};
 use std::io::Read;
 
 #[test]
+fn an_anonymous_client_reads_the_entire_verified_server_chain_and_replays_it() {
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    let expected: Vec<u8> =
+        CertificateDer::pem_slice_iter(include_bytes!("tls-data/end.fullchain"))
+            .flat_map(|cert| cert.unwrap().as_ref().to_vec())
+            .collect();
+    let (port, thread) = server(false, false);
+    let mut real = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+    crate::support::host(&mut real);
+    real.set_net_rules(rules(port));
+    let (net, stream, done) = connect(&mut real, port, "localhost", pem_digest(PEM));
+    assert_eq!(done, Completion::Protocol(Ok(None)));
+    assert_eq!(
+        real.call(Request::TlsPeer { net, stream }),
+        Ok(Completion::Certificates(Ok(Some(expected.clone()))))
+    );
+    // The peer is still waiting for application input: querying its chain does no IO.
+    real.call(Request::Close { handle: stream }).unwrap();
+    thread.join().unwrap();
+    let mut sim = SimIo::new(Tree::new(Default::default()).unwrap(), real.tape().to_vec());
+    crate::support::host(&mut sim);
+    sim.set_net_rules(rules(port));
+    let (replay_net, replay_stream, replay_done) =
+        connect(&mut sim, port, "localhost", pem_digest(PEM));
+    assert_eq!(replay_done, done);
+    assert_eq!(
+        sim.call(Request::TlsPeer {
+            net: replay_net,
+            stream: replay_stream
+        }),
+        Ok(Completion::Certificates(Ok(Some(expected))))
+    );
+    sim.call(Request::Close {
+        handle: replay_stream,
+    })
+    .unwrap();
+    assert_eq!(sim.finish(), Ok(()));
+}
+
+#[test]
 fn pem_success_and_truncated_stream_record_plaintext_and_replay_without_a_server() {
     for (truncated, tls12) in [(false, false), (true, false), (false, true), (true, true)] {
         let (port, thread) = server(truncated, tls12);
