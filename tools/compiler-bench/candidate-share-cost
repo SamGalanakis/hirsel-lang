@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Production structured serial vs current core baselines, same 10-round/perf
+and CPU-lock protocol as candidate-cost. No fork/concurrent cell is invented.
+"""
+import argparse, contextlib, hashlib, importlib.machinery, importlib.util, json, os
+from pathlib import Path
+import random, resource, subprocess, sys, time, tempfile
+ROOT=Path(__file__).resolve().parents[2]
+loader=importlib.machinery.SourceFileLoader('candidate_cost',str(ROOT/'tools/compiler-bench/candidate-cost'))
+spec=importlib.util.spec_from_loader(loader.name,loader);base=importlib.util.module_from_spec(spec);loader.exec_module(base)
+dump=base.dump
+
+def structured(args):
+    data=json.loads(args.spec.read_text());root=Path(data['entry']).parent
+    runtime=tempfile.TemporaryDirectory(prefix='share-runtime-')
+    env=os.environ|{'HIRSEL_DAEMON':'auto','HIRSEL_RESULTS':'none@1','HIRSEL_OBJECTS':'none@1','HIRSEL_JOBS':'1','XDG_RUNTIME_DIR':runtime.name}
+    if args.image:env['HIRSEL_IMAGE']=str(args.image)
+    start=time.monotonic_ns()
+    server_log=open(args.out.with_suffix('.server.stderr'),'w')
+    server=subprocess.Popen(['taskset','-c','31',str(args.cli),'serve','--workspace',str(root),'--idle','30'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,env=env,text=True)
+    client=None
+    try:
+        ready=server.stderr.readline();server_log.write(ready);server_log.flush();assert 'serving ' in ready,ready
+        client=subprocess.Popen([str(args.cli),'candidate','--workspace',str(root)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=open(args.out.with_suffix('.stderr'),'w'),env=env,text=True,bufsize=1)
+        def send(value):
+            client.stdin.write(json.dumps({'version':1}|value)+'\n');client.stdin.flush()
+        def receive():
+            line=client.stdout.readline();assert line,'structured client ended'
+            value=json.loads(line);assert 'error' not in value,value;return value['ok']
+        def call(value):send(value);return receive()
+        captured=call({'op':'capture','entry':data['entry']})
+        source_path=Path(data['source']).resolve()
+        sources=[s for s in captured['sources'] if s['file']==source_path.name or s['file'].endswith('/'+source_path.name)]
+        # Fixture has exactly one main.hir; match the canonical source key.
+        assert len(sources)==1,sources
+        source=sources[0];initialization=time.monotonic_ns()-start
+        sent=[]
+        # All eight submissions are open-loop. No preceding result is awaited.
+        for i,text in enumerate(data['variants']):
+            sent.append(time.monotonic_ns())
+            send({'op':'submit','base':captured['base'],'id':i,'priority':'selected' if i==0 else 'background','edits':[{'file':source['file'],'expected':source['expected'],'edits':[{'start':0,'end':source['bytes'],'replacement':text}]}]})
+        leases=[receive()['lease'] for _ in sent]
+        rows=[]
+        for i,lease in enumerate(leases):
+            while True:
+                r=call({'op':'result','lease':lease})
+                if r.get('pending'):time.sleep(.002);continue
+                assert r['completion']=='Complete' and r['verdict']=='Pass' and not r['diagnostics'],r
+                assert r['base']==captured['token'],r
+                rows.append({'id':i,'digest':list(bytes.fromhex(r['checked_products'])),'input_sha256':hashlib.sha256(data['variants'][i].encode()).hexdigest(),'candidate_inputs':r['candidate_inputs'],'latency_ns':time.monotonic_ns()-sent[i]})
+                break
+        counts=call({'op':'counters'})
+        expected=len(set(data['variants']));assert counts['frozen_loads']==expected,counts;assert counts['completed_results']==expected,counts;assert counts['forks']==0,counts
+        for lease in leases:call({'op':'release','lease':lease})
+        call({'op':'release','lease':captured['base']})
+        released=call({'op':'counters'})
+        client.stdin.close();assert client.wait()==0
+        server_log.write(server.stderr.read());server_log.flush();assert server.wait()==0
+        counts['after_release']=released
+        counts['peak_child_rss_bytes']=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss*1024
+        dump(args.out,dict(mode='structured',spec=str(args.spec),ready={'initialization_ns':initialization},rows=rows,counters=counts,wall_ns=time.monotonic_ns()-start,submitted=8,completed=8,cancelled=0,unique=expected))
+    finally:
+        for child in [client,server]:
+            if child and child.poll() is None:child.kill();child.wait()
+        server_log.close();runtime.cleanup()
+
+def main(args):
+    assert os.environ.get('HIRSEL_JOBS','2')=='2'
+    assert os.environ.get('HIRSEL_MEMORY_LIMIT','4G')=='4G'
+    args.work.mkdir(parents=True,exist_ok=True)
+    specs=base.prepare(args.work,args.image,['body','signature','private-view','generator'])
+    if args.only:specs=[s for s in specs if args.only in str(s)]
+    modes=args.modes.split(',')
+    metadata=dict(seed=62417,rounds=args.rounds,source_head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),server_cpu=31,client_cpu=7,worker_jobs=1,cap=4<<30,kernel=os.uname().release,modes=modes,binaries={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in [args.exe,args.cli,args.image] if p},environment={k:os.getenv(k) for k in ['HIRSEL_JOBS','HIRSEL_MEMORY_LIMIT']})
+    dump(args.work/'environment.json',metadata)
+    def run(spec,mode,prefix,timed):
+        output=prefix.with_suffix('.json');perf=prefix.with_suffix('.perf')
+        if mode=='structured':cmd=[sys.executable,__file__,'--cell','--cli',str(args.cli),'--exe',str(args.exe),'--spec',str(spec),'--out',str(output)]
+        else:cmd=[sys.executable,str(ROOT/'tools/compiler-bench/candidate-cost'),'--cell','--exe',str(args.exe),'--spec',str(spec),'--out',str(output),'--mode',mode]
+        if args.image:cmd+=['--image',str(args.image)]
+        cmd=['taskset','-c','7']+cmd
+        if timed:cmd=['perf','stat','-x,','-e','cycles,instructions','-o',str(perf),'--']+cmd
+        measured=subprocess.run([str(ROOT/'tools/capped'),'--timeout','300']+cmd,cwd=ROOT,capture_output=True,text=True)
+        prefix.with_suffix('.capped.log').write_text(measured.stdout+measured.stderr)
+        assert measured.returncode==0,measured.stderr
+        value=json.loads(output.read_text());assert value['submitted']==value['completed']==8
+        if timed:
+            events={f[2]:int(f[0]) for line in perf.read_text().splitlines() if len(f:=line.split(','))>2 and f[2] in ['cycles','instructions']}
+            assert set(events)=={'cycles','instructions'},perf.read_text();value['perf']=events
+        print(f"{prefix.name} complete",flush=True);return value
+    preflight=[];baselines={}
+    for spec in specs:
+        with contextlib.ExitStack() as locks:
+            locks.enter_context(base.timing_lock(7));locks.enter_context(base.timing_lock(31))
+            group=[run(spec,mode,args.work/f'preflight-{spec.parent.parent.name}-{spec.parent.name}-{mode}',False) for mode in modes]
+        cold=next(v for v in group if v['mode']=='cold')
+        expected=[(r['input_sha256'],r['digest']) for r in cold['rows']];baselines[str(spec)]=expected
+        for v in group:assert [(r['input_sha256'],r['digest']) for r in v['rows']]==expected,(v['mode'],str(spec))
+        preflight+=group;dump(args.work/'preflight.json',preflight)
+    cells=[];rng=random.Random(62417)
+    for round in range(args.rounds):
+        groups=list(specs);rng.shuffle(groups)
+        for spec in groups:
+            order=list(modes);rng.shuffle(order)
+            with contextlib.ExitStack() as locks:
+                locks.enter_context(base.timing_lock(7));locks.enter_context(base.timing_lock(31))
+                for mode in order:
+                    value=run(spec,mode,args.work/f'r{round}-{spec.parent.parent.name}-{spec.parent.name}-{mode}',True)
+                    assert [(r['input_sha256'],r['digest']) for r in value['rows']]==baselines[str(spec)],(mode,str(spec))
+                    value['round']=round;cells.append(value);dump(args.work/'results.json',dict(metadata=metadata,cells=cells))
+
+p=argparse.ArgumentParser();p.add_argument('--exe',type=Path,required=True);p.add_argument('--cli',type=Path,required=True);p.add_argument('--image',type=Path);p.add_argument('--work',type=Path);p.add_argument('--rounds',type=int,default=10);p.add_argument('--modes',default='cold,resident,frozen,structured');p.add_argument('--only');p.add_argument('--cell',action='store_true');p.add_argument('--spec',type=Path);p.add_argument('--out',type=Path)
+if __name__=='__main__':
+    args=p.parse_args();structured(args) if args.cell else main(args)

@@ -25,11 +25,11 @@ def copy_fixture(source, target):
     dump(entry, data)
     return (entry, [target / s['path'] for s in data['sources']])
 
-def prepare(work, image):
+def prepare(work, image, categories=None):
     """Independently materialize each accepted class and every cold candidate."""
     specs = []
     for fixture in ['small', 'tasks']:
-        for category in ['body', 'private-view', 'generator']:
+        for category in categories or ['body', 'private-view', 'generator']:
             base = work / fixture / (category + '-base')
             if fixture == 'small':
                 base.mkdir(parents=True, exist_ok=True)
@@ -52,6 +52,8 @@ def prepare(work, image):
                 values = [1 if duplicate else i + 1 for i in range(8)]
                 if category == 'body':
                     variants = [original.replace('candidate_cost_probe()->u64{0}', f'candidate_cost_probe()->u64{{{i}}}') for i in values]
+                elif category == 'signature':
+                    variants = [original.replace('candidate_cost_probe()->u64{0}', 'candidate_cost_probe(' + ','.join(f'x{j}:u64' for j in range(i)) + ')->u64{0}') for i in values]
                 elif category == 'private-view':
                     variants = [original.replace('level:u64,', f'level:u64, extra{i}:u64,') for i in values]
                 else:
@@ -186,14 +188,15 @@ def main(args):
             baseline = next((v for v in matching if v['mode'] == 'cold'))
             for v in matching:
                 assert [(r['input_sha256'], r['digest']) for r in v['rows']] == [(r['input_sha256'], r['digest']) for r in baseline['rows']], (v['mode'], str(spec))
-p = argparse.ArgumentParser()
-p.add_argument('--cell', action='store_true')
-p.add_argument('--exe', type=P, required=True)
-p.add_argument('--work', type=P)
-p.add_argument('--image', type=P)
-p.add_argument('--rounds', type=int, default=10)
-p.add_argument('--spec', type=P)
-p.add_argument('--mode')
-p.add_argument('--out', type=P)
-args = p.parse_args()
-cell(args) if args.cell else main(args)
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument('--cell', action='store_true')
+    p.add_argument('--exe', type=P, required=True)
+    p.add_argument('--work', type=P)
+    p.add_argument('--image', type=P)
+    p.add_argument('--rounds', type=int, default=10)
+    p.add_argument('--spec', type=P)
+    p.add_argument('--mode')
+    p.add_argument('--out', type=P)
+    args = p.parse_args()
+    cell(args) if args.cell else main(args)
