@@ -12,6 +12,7 @@ pub(crate) mod channel;
 pub(crate) mod lifecycle;
 pub(crate) mod mutex;
 pub(crate) mod record;
+pub(crate) mod sets;
 
 #[derive(Default)]
 pub(crate) struct Driver;

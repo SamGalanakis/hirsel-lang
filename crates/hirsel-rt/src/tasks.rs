@@ -2824,6 +2824,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set(
     if ordered::engine::on(ctx) {
         return unsafe { crate::stop::check(ctx, ordered::sets::create(ctx, scope, out)) };
     }
+    if free::enabled(ctx) {
+        unsafe { crate::stop::check(ctx, free::sets::create(ctx, scope.read(), out)) };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     let s = scheduler(ctx);
     // SAFETY: caller contract.
@@ -2873,6 +2877,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_add(
     if ordered::engine::on(ctx) {
         return unsafe { crate::stop::check(ctx, ordered::sets::add(ctx, scope, set, task)) };
     }
+    if free::enabled(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                free::sets::add(ctx, scope.read(), set.read(), task.read()),
+            )
+        };
+        return STATUS_OK;
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let (scope, set, word) = unsafe { (s.scope_handle(scope.read()), set.read(), task.read()) };
@@ -2921,6 +2934,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
                 ordered::sets::await_any(ctx, scope, set, out, caller_site),
             )
         };
+    }
+    if free::enabled(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                free::sets::await_any(ctx, scope.read(), set.read(), out, caller_site),
+            )
+        };
+        return STATUS_OK;
     }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
@@ -3025,6 +3047,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_has(
     if ordered::engine::on(ctx) {
         return unsafe { crate::stop::check(ctx, ordered::sets::has(ctx, scope, set, index, out)) };
     }
+    if free::enabled(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                free::sets::has(ctx, scope.read(), set.read(), index, out),
+            )
+        };
+        return STATUS_OK;
+    }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -3061,6 +3092,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_take(
         return unsafe {
             crate::stop::check(ctx, ordered::sets::take(ctx, scope, set, index, out))
         };
+    }
+    if free::enabled(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                free::sets::take(ctx, scope.read(), set.read(), index, out),
+            )
+        };
+        return STATUS_OK;
     }
     let s = scheduler(ctx);
     // SAFETY: caller contract.
@@ -3559,6 +3599,10 @@ pub(crate) unsafe fn close_endpoint(
         };
     }
     if word & TASK_SET != 0 {
+        if free::enabled(ctx) {
+            unsafe { crate::stop::check(ctx, free::sets::close(ctx, word)) };
+            return STATUS_OK;
+        }
         // A dropped task set: its members stay children of their scope, joined at its exit.
         let s = scheduler(ctx);
         let index = word as u32;
