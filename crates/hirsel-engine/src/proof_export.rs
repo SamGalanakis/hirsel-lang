@@ -91,6 +91,10 @@ impl QueryEngine {
                     }),
                 }
             }
+            // Exports include executable classification, annotations and source
+            // locations even when the reached definition came from an image.
+            // Missing indexed syntax does not make an imaged body a registry op.
+            self.materialize(path)?;
             let Ok(items) = self.definition_items(path) else {
                 continue;
             };

@@ -51,7 +51,14 @@ fn o1_cells_agree_with_the_baseline_including_native_artifacts() {
         .arg(&work)
         .args(["--root"])
         .arg(root())
-        .args(["--path", "conformance/CT/CT-2-dependent-constant.hir"])
+        .args([
+            "--path",
+            "conformance/CT/CT-2-dependent-constant.hir",
+            "--path",
+            "conformance/CT/CT-5-cross-module-spelling-run.hir",
+            "--path",
+            "conformance/CT/CT-5-generator-error-bad.hir",
+        ])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -59,7 +66,7 @@ fn o1_cells_agree_with_the_baseline_including_native_artifacts() {
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["fail"], 0, "{stderr}");
     assert_eq!(report["todo"], 0, "{stderr}");
-    assert_eq!(report["pass"], 11, "{stderr}");
+    assert_eq!(report["pass"], 33, "{stderr}");
     let baseline = work.join("0/baseline");
     for artifact in [
         "diagnostics",
@@ -106,6 +113,96 @@ fn o2_warm_runs_equal_cold_after_every_scripted_edit() {
     holds(&report);
     assert!(report.passed(false), "{}", report.text());
     assert_eq!(report.checks.len(), 3 * selected.len(), "{}", report.text());
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+/// Keep the source-std case separately selectable on the pool: a changed std
+/// body must invalidate both the resident session and a second process's disk hit.
+#[test]
+fn o2_std_body_edit_matches_cold() {
+    let work = work("o2-std");
+    let scenario = Scenario::read(
+        &root().join(SCENARIOS).join("o2/std-touching.edit"),
+        &root(),
+    )
+    .unwrap();
+    assert!(scenario.with_std);
+    let report = o2::run(
+        Path::new(env!("CARGO_BIN_EXE_oracle")),
+        &root(),
+        &[scenario],
+        &work,
+    );
+    require_accepted_export(&work.join("std-touching/cold"));
+    if !report.failures().is_empty() {
+        show_tir_difference(&work.join("std-touching"));
+    }
+    assert!(report.passed(false), "{}", report.text());
+    assert_eq!(report.checks.len(), 3, "{}", report.text());
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+fn require_accepted_export(artifacts: &Path) {
+    let diagnostics = std::fs::read_to_string(artifacts.join("diagnostics")).unwrap();
+    let tir = std::fs::read_to_string(artifacts.join("tir"))
+        .unwrap_or_else(|e| panic!("{e}: {diagnostics}"));
+    assert!(!tir.starts_with("export:"), "{tir}");
+    let header = hirsel_proof_export::read_header(&tir).unwrap();
+    assert_eq!(header.format, hirsel_proof_export::FORMAT);
+    for line in diagnostics.lines() {
+        let diagnostic: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_ne!(diagnostic["severity"], "error", "{line}");
+    }
+}
+
+fn show_tir_difference(base: &Path) {
+    let cold = std::fs::read_to_string(base.join("cold/tir")).unwrap();
+    let expected: Vec<_> = cold.lines().collect();
+    for mode in ["resident", "disk-after"] {
+        let warm = std::fs::read_to_string(base.join(mode).join("tir")).unwrap();
+        let actual: Vec<_> = warm.lines().collect();
+        if let Some(first) = expected.iter().zip(&actual).position(|(a, b)| a != b) {
+            let start = first.saturating_sub(8);
+            eprintln!(
+                "{mode}: TIR lines {} versus {}; first difference at {}\ncold: {}\nwarm: {}",
+                expected.len(),
+                actual.len(),
+                first + 1,
+                expected[start..(first + 16).min(expected.len())].join("\n"),
+                actual[start..(first + 16).min(actual.len())].join("\n")
+            );
+        }
+    }
+}
+
+#[test]
+fn o2_std_option_body_edit_matches_cold_in_minimal_manifest() {
+    let work = work("o2-std-minimal");
+    let mut scenario = Scenario::read(
+        &root().join(SCENARIOS).join("o2/std-touching.edit"),
+        &root(),
+    )
+    .unwrap();
+    // Keep the actual std option source and edit, narrowing only its manifest
+    // to the module reached by this program.
+    let manifest = r#"{"schema":1,"package":{"name":"std","version":"1"},"sources":[{"path":"option.hir","module":["option"]}],"dependencies":[]}"#;
+    scenario
+        .before
+        .insert("std@1/hirsel.json".into(), manifest.into());
+    scenario
+        .after
+        .insert("std@1/hirsel.json".into(), manifest.into());
+    let report = o2::run(
+        Path::new(env!("CARGO_BIN_EXE_oracle")),
+        &root(),
+        &[scenario],
+        &work,
+    );
+    require_accepted_export(&work.join("std-touching/cold"));
+    if !report.failures().is_empty() {
+        show_tir_difference(&work.join("std-touching"));
+    }
+    assert!(report.passed(false), "{}", report.text());
     let _ = std::fs::remove_dir_all(&work);
 }
 
