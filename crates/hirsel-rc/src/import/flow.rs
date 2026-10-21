@@ -188,6 +188,7 @@ impl Importer<'_> {
             self.new_slot(ty, SlotKind::Capture(capture), ScopeId(0));
         }
         self.flat_copies()?;
+        self.encoding_copies()?;
         // A loop-carried borrowed parameter still arrives in its caller's storage.
         let abi =
             self.layouts.table().fn_abis[self.instances.abis[self.id.index()].0 as usize].clone();
@@ -380,7 +381,7 @@ impl Importer<'_> {
                 self.loan_map.push(LoanId(u32::MAX));
                 continue;
             };
-            if self.elided_place(place) {
+            if self.elided_place(place) || self.elided_loan(tir::LoanId(l)) {
                 self.loan_map.push(LoanId(u32::MAX));
                 continue;
             }

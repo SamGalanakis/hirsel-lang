@@ -94,6 +94,7 @@ impl StageKind {
             | Opcode::Read
             | Opcode::FlatCopy
             | Opcode::FlatView
+            | Opcode::SliceView
             | Opcode::FlatLength
             | Opcode::FlatNext
             | Opcode::SeqLen

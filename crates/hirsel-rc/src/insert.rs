@@ -677,6 +677,13 @@ impl Facts {
                             changed = true;
                         }
                     }
+                    Inst::SliceView { result, value, .. } => {
+                        let b = backing[value.index()];
+                        if b.is_some() && backing[result.index()] != b {
+                            backing[result.index()] = b;
+                            changed = true;
+                        }
+                    }
                     Inst::RegionEnter { result, region } => {
                         marks[region.index()] = Some(result);
                     }
@@ -1959,6 +1966,7 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::UpdateMask { result, .. }
             | Inst::FlatCopy { result, .. }
             | Inst::FlatView { result, .. }
+            | Inst::SliceView { result, .. }
             | Inst::FlatLength { result, .. }
             | Inst::FlatNext { result, .. }
             | Inst::SeqLen { result, .. }
@@ -3562,6 +3570,18 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
                 *result = map(*result);
                 *mark = map(*mark);
                 *budget = budget.map(map);
+            }
+            Inst::SliceView {
+                result,
+                value,
+                start,
+                end,
+                ..
+            } => {
+                *result = map(*result);
+                *value = map(*value);
+                *start = map(*start);
+                *end = map(*end);
             }
             Inst::Unary {
                 result, operand, ..

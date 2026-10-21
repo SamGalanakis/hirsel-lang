@@ -642,6 +642,16 @@ pub enum Inst {
         result: ValueId,
         address: AddressId,
     },
+    /// A checked byte subinterval under the source's existing loan. Checks
+    /// start <= end <= value.length before publishing any view; no credit
+    /// is acquired. The result has the same Slice layout and borrowed loan.
+    SliceView {
+        result: ValueId,
+        value: ValueId,
+        start: ValueId,
+        end: ValueId,
+        failure: FailureId,
+    },
     /// The element count of the flat sequence encoding (List, Array, String,
     /// Bytes) at `address`: a Plain u64. A list of variable elements stores
     /// its count after the byte-length prefix; any other sequence divides its
@@ -1757,6 +1767,7 @@ impl Inst {
             | Inst::Copy { result, .. }
             | Inst::FlatCopy { result, .. }
             | Inst::FlatView { result, .. }
+            | Inst::SliceView { result, .. }
             | Inst::FlatLength { result, .. }
             | Inst::FlatNext { result, .. }
             | Inst::SeqLen { result, .. }
@@ -1833,6 +1844,7 @@ impl Inst {
             | Inst::Address { failure, .. }
             | Inst::Copy { failure, .. }
             | Inst::FlatCopy { failure, .. }
+            | Inst::SliceView { failure, .. }
             | Inst::UniqueCopy { failure, .. }
             | Inst::ArenaPush { failure, .. }
             | Inst::Replace { failure, .. }
@@ -1910,6 +1922,7 @@ impl Inst {
             | Inst::Address { failure, .. }
             | Inst::Copy { failure, .. }
             | Inst::FlatCopy { failure, .. }
+            | Inst::SliceView { failure, .. }
             | Inst::UniqueCopy { failure, .. }
             | Inst::ArenaPush { failure, .. }
             | Inst::Replace { failure, .. }
@@ -2215,6 +2228,18 @@ impl Inst {
                 f(R::Address(address));
                 f(R::Construct(construct));
                 f(R::Value(version));
+            }
+            Self::SliceView {
+                result,
+                value,
+                start,
+                end,
+                failure,
+            } => {
+                for v in [result, value, start, end] {
+                    f(R::Value(v));
+                }
+                f(R::Failure(failure));
             }
             Self::FlatView { result, address }
             | Self::FlatLength { result, address }
@@ -3053,6 +3078,7 @@ snapshot_enum!(Inst {
     FrameEnter { failure },
     FrameLeave,
     Unavailable { feature, anchor },
+    SliceView { result, value, start, end, failure },
 });
 snapshot_struct!(Edge { target, arguments });
 snapshot_struct!(SwitchArm { value, edge });

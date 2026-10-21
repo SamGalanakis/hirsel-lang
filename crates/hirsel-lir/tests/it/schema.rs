@@ -1019,6 +1019,13 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         result: v(48),
         address: a(0),
     });
+    insts.push(Inst::SliceView {
+        result: v(48),
+        value: v(2),
+        start: v(1),
+        end: v(3),
+        failure: f,
+    });
     insts.push(Inst::FlatLength {
         result: v(49),
         address: a(0),

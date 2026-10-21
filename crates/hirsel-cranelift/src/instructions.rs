@@ -297,6 +297,37 @@ impl FnEmitter<'_, '_, '_> {
                 layout,
                 failure,
             } => self.compare(result, op, left, right, layout, failure),
+            Inst::SliceView {
+                result,
+                value,
+                start,
+                end,
+                failure,
+            } => {
+                let layout = self.value_type(value)?.layout;
+                let record = self.layout(layout)?;
+                let V::Mem { addr, .. } = self.get(value)? else {
+                    return self.invalid("slice view source");
+                };
+                let from = self.get1(start)?;
+                let to = self.get1(end)?;
+                let owner = self.load_ty(PTR, addr, record.fields[0].offset);
+                let origin = self.load_ty(types::I64, addr, record.fields[1].offset);
+                let length = self.load_ty(types::I64, addr, record.fields[2].offset);
+                let reversed = self.b.ins().icmp(IntCC::UnsignedGreaterThan, from, to);
+                let outside = self.b.ins().icmp(IntCC::UnsignedGreaterThan, to, length);
+                let failed = self.b.ins().bor(reversed, outside);
+                self.guard(failed, failure)?;
+                let start = self.b.ins().iadd(origin, from);
+                let length = self.b.ins().isub(to, from);
+                let slice = self.stack(layout)?;
+                for (field, word) in record.fields.iter().zip([owner, start, length]) {
+                    self.store_at(word, slice.ptr, field.offset);
+                }
+                let shape = self.layout_shape(layout)?;
+                let value = self.load(shape, slice);
+                self.define(result, value)
+            }
             Inst::FlatView { result, address } => {
                 // A borrowed slice of the String or Bytes encoding at `address`.
                 let place = self.place(address)?;

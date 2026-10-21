@@ -2397,6 +2397,18 @@ impl<S: Stage> Walker<'_, '_, S> {
             }
             // A view of a flat variable part happens inside its loan, as a
             // borrowed read does; a flat length is a plain read.
+            Inst::SliceView {
+                result,
+                value,
+                start,
+                end,
+                ..
+            } => {
+                for v in [value, start, end] {
+                    self.borrow(site, st, cr, v);
+                }
+                self.create(site, st, cr, result);
+            }
             Inst::FlatView { result, address } => {
                 self.read(site, st, cr, address, false);
                 if let Holding::Borrowed(loan) = self.holding(result)

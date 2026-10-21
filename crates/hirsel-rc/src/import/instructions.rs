@@ -203,6 +203,30 @@ impl Importer<'_> {
                     let p = self.place(o.place)?;
                     self.address(&p)?;
                 }
+                if self
+                    .encoding_views
+                    .contains(&(self.body.places[destination.0 as usize].root.0 as usize))
+                {
+                    // Eliding the physical credit must still preserve MEM-6's
+                    // permanent arena-sharing event at the original Copy site.
+                    let p = self.place(o.place)?;
+                    let address = self.address(&p)?;
+                    let loan = self.synthetic_loan(address);
+                    let value = self.value(p.ty, Holding::Borrowed(loan));
+                    let reaching = self.reaching(p.slot)?;
+                    self.push(Inst::Read {
+                        result: value,
+                        address,
+                        reaching,
+                        mode: ReadMode::Borrow,
+                    });
+                    self.push(Inst::Share { value });
+                    self.push(Inst::EndLoan {
+                        loan,
+                        if_active: false,
+                    });
+                    self.state.loans[loan.index()] = Tri::No;
+                }
                 true
             }
             _ => false,

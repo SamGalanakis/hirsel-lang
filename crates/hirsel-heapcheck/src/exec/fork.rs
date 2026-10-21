@@ -87,6 +87,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     | Inst::Check { .. }
                     | Inst::Copy { .. }
                     | Inst::FlatCopy { .. }
+                    | Inst::SliceView { .. }
                     | Inst::UniqueCopy { .. }
                     | Inst::Hash { .. }
                     | Inst::FrameEnter { .. } => true,

@@ -69,6 +69,7 @@ mod build;
 mod byte_views;
 mod calls;
 mod cleanup;
+mod encoding_views;
 mod flat_builder;
 mod flat_field;
 mod flat_views;
@@ -79,6 +80,7 @@ mod loops;
 mod materialize;
 mod patterns;
 mod places;
+mod slice_views;
 
 type R<T> = Result<T, PassError>;
 
@@ -1140,6 +1142,8 @@ fn import_mapped(
         out: Out::default(),
         local_slot: Vec::new(),
         aliases: view_temporaries(body),
+        slices: slice_views::Slices::default(),
+        encoding_views: BTreeSet::new(),
         observations: discarded_callable_reads(body, types),
         nullary: nullary_temporaries(body),
         node_anchors: node_anchors(body),
@@ -1210,6 +1214,20 @@ fn import_mapped(
     let loans: Vec<_> = im.fields.loans.iter().copied().collect();
     im.elided_loans.extend(loans);
     byte_views::aliases(body, types, &mut im.aliases);
+    im.slices = slice_views::discover(body, types, &im.aliases);
+    for (l, selected) in im.slices.locals.iter().enumerate() {
+        if *selected {
+            im.joined[l] = true;
+            im.aliases[l] = None;
+        }
+    }
+    for inst in body.blocks.iter().flat_map(|b| &b.instructions) {
+        if let tir::InstructionKind::BeginLoan { id, place, .. } = inst.kind
+            && im.slices.locals[body.places[place.0 as usize].root.0 as usize]
+        {
+            im.elided_loans.insert(id);
+        }
+    }
     im.cfg()?;
     let mut entry: Vec<Option<State>> = vec![None; body.blocks.len()];
     // Abstract states only grow (towards Maybe), so this reaches a fixpoint.
@@ -1269,6 +1287,8 @@ struct Importer<'a> {
     local_slot: Vec<Option<SlotId>>,
     /// A view temporary: the place it views, read through instead of storage.
     aliases: Vec<Option<tir::PlaceId>>,
+    slices: slice_views::Slices,
+    encoding_views: BTreeSet<usize>,
     /// Unread callable borrow temporaries evaluate their source without a store.
     observations: Vec<bool>,
     /// Per TIR local, the nullary variant it only ever holds (`nullary_temporaries`).

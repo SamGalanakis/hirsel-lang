@@ -175,6 +175,10 @@ impl Importer<'_> {
             self.terminate(Terminator::Jump(edge));
             return Ok(());
         }
+        if let Some(source) = self.slices.sources.get(&self.call_block).copied() {
+            let ret = returns.ok_or_else(|| PassError::Malformed("slice continuation".into()))?;
+            return self.slice_view(arguments, ret, source);
+        }
         // A family's inline lowering replaces the call by instructions.
         if let tir::Callee::Definition {
             path,

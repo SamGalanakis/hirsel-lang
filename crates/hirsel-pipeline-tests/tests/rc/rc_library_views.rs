@@ -264,3 +264,469 @@ fn unicode16_break_vectors_agree_through_compiled_hirsel() {
         },
     );
 }
+
+#[test]
+fn encoding_field_copies_keep_only_the_parameter_owner() {
+    let source = r#"
+type Row { text: String }
+fn emit(row: Row, mut out: List[u8]) {
+  std@1/json.write_text_into(row.text, mut out)
+}
+fn main() -> u64 {
+  let mut out: List[u8] = []
+  emit(Row(text: "é😀\n"), mut out)
+  list.len(out)
+}
+"#;
+    let (_, lowered) = crate::rc_support::lower_valid(source);
+    let emit = crate::rc_support::unit_named(&lowered, "emit");
+    assert!(
+        !emit
+            .instructions
+            .iter()
+            .any(|i| matches!(i, hirsel_lir::ir::Inst::Copy { .. })),
+        "{}",
+        crate::rc_support::dump(emit)
+    );
+}
+
+#[test]
+fn generated_encoding_tag_projection_keeps_only_the_parameter_owner() {
+    let source = r#"
+@serializable
+type Item { title: String, description: String, tags: List[String] }
+@preserves_unique(out)
+fn item_json_into(value: Item, mut out: List[u8], depth: u64) -> Result[(), std@1/json.JsonError] uses {} = comptime std@1/derive.json_into(shape(Item))
+fn main() -> u64 {
+  let mut out: List[u8] = []
+  let _ = item_json_into(Item(title: "a", description: "b", tags: ["c"]), mut out, 0)
+  list.len(out)
+}
+"#;
+    let (_, lowered) = crate::rc_support::lower_valid(source);
+    let unit = crate::rc_support::unit_named(&lowered, "item_json_into");
+    assert!(
+        !unit
+            .instructions
+            .iter()
+            .any(|i| matches!(i, hirsel_lir::ir::Inst::Copy { .. })),
+        "{}",
+        crate::rc_support::dump(unit)
+    );
+}
+
+fn encoding_audit(source: &str, name: &str) {
+    let source = source.to_owned();
+    let name = name.to_owned();
+    with_compiler_stack(move || {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../hirsel-driver/tests/fixtures/std_source/main.hir");
+        let mut loaded = hirsel_driver::load_program_source(&path, Some(&source)).unwrap();
+        loaded.check_for_execution().unwrap();
+        let entry = loaded.entry.clone();
+        let run = run_observed_snapshot(
+            &mut loaded.engine,
+            &RunConfiguration {
+                entry: entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            SimulationConfig::default(),
+        )
+        .unwrap();
+        let reference = Observation::of_reference(run.observation.as_ref().unwrap());
+        if name.ends_with("first-failure") {
+            assert_eq!(
+                reference.failures.first().map(|f| f.rule.as_str()),
+                Some("SEM-3")
+            );
+            assert!(reference.output.is_empty());
+        } else {
+            assert_eq!(reference.output, b"ok\n");
+            assert!(reference.failures.is_empty());
+        }
+        let input = loaded.engine.export_native_input().unwrap();
+        let validated = loaded.engine.import_native_input(input).unwrap();
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let tools =
+            Toolchain::in_tree_diagnostic(&root.join("encoding-runtime"), &[&target]).unwrap();
+        let directory = root.join(&name);
+        std::fs::create_dir_all(&directory).unwrap();
+        let configurations = if name.starts_with("encoding-cranelift") {
+            vec![Configuration {
+                options: Options::new(target),
+                engine: Engine::Cranelift {
+                    partition: Partition::Whole,
+                    runtime: Runtime::Diagnostic,
+                },
+            }]
+        } else {
+            vec![
+                Configuration {
+                    options: Options::new(target.clone()),
+                    engine: Engine::Heap { campaign: true },
+                },
+                Configuration {
+                    options: Options::new(target),
+                    engine: Engine::Native {
+                        opt: OptLevel::Speed,
+                        partition: Partition::Whole,
+                        runtime: Runtime::Diagnostic,
+                    },
+                },
+            ]
+        };
+        for (configuration, outcome) in differential(
+            &validated,
+            &entry,
+            &reference,
+            &configurations,
+            &tools,
+            &directory,
+        ) {
+            assert_eq!(outcome, Outcome::Agree, "{name} {configuration}\n{source}");
+        }
+    });
+}
+
+const ENCODING_PREFIX: &str = r#"
+fn output_error[E](take e: E) -> () {}
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} { () }
+fn emit(text: String, mut out: List[u8]) {
+  let data = string.as_bytes(text)
+  bytes.append(mut out, bytes.slice(data, 1, bytes.len(data)))
+}
+"#;
+
+#[test]
+fn borrowed_encoding_and_alias_controls_agree_on_native_and_heap_failures() {
+    encoding_audit(
+        &format!(
+            r#"{ENCODING_PREFIX}
+fn retain(data: Bytes) -> Bytes in data {{ bytes.slice(data, 1, bytes.len(data)) }}
+fn twice(data: Bytes, mut a: List[u8], mut b: List[u8]) {{
+  bytes.append(mut a, data)
+  bytes.append(mut b, data)
+}}
+type Nested {{ root: Shared[String] }}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
+  let mut source: List[u8] = []
+  std@1/text.append(mut source, "hé😀<&")
+  let text = std@1/text.finish_valid(copy source)
+  emit(text, mut source)
+  let data = bytes.from_list(copy source)
+  let kept = retain(data)
+  bytes.append(mut source, bytes.slice(data, 1, bytes.len(data)))
+  let mut other: List[u8] = []
+  twice(kept, mut source, mut other)
+  let built: String = "nested root"
+  let frozen = shared.freeze(take built)
+  let nested = Nested(root: copy frozen)
+  let nested_size = shared.with(nested.root, fn(frozen_text: String) -> u64 {{
+    let mut bytes: List[u8] = []
+    emit(frozen_text, mut bytes)
+    list.len(bytes)
+  }})
+  let root_kept = match shared.thaw(take frozen) {{ Ok(_) => false, Error(_) => true }}
+  out.print(io.stdout(rt) ? grant_error, if kept == string.as_bytes("é😀<&é😀<&") && std@1/text.finish_valid(copy source) == "hé😀<&é😀<&é😀<&é😀<&é😀<&é😀<&" && std@1/text.finish_valid(copy other) == "é😀<&é😀<&" && nested_size == 10 && root_kept {{ "ok\n" }} else {{ "bad\n" }}) ? output_error
+  Ok(())
+}}
+"#
+        ),
+        "encoding-alias-controls",
+    );
+}
+
+#[test]
+fn borrowed_encoding_bounds_fail_before_the_appends_effect() {
+    encoding_audit(
+        &format!(
+            r#"{ENCODING_PREFIX}
+fn fail(text: String, mut out: List[u8]) {{
+  let data = string.as_bytes(text)
+  bytes.append(mut out, bytes.slice(data, 2, 1))
+}}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
+  let mut out: List[u8] = []
+  std@1/text.append(mut out, "live")
+  fail(std@1/text.finish_valid(copy out), mut out)
+  out.print(io.stdout(rt) ? grant_error, "unreachable\n") ? output_error
+  Ok(())
+}}
+"#
+        ),
+        "encoding-first-failure",
+    );
+}
+
+#[test]
+fn transient_encoding_subslice_has_no_temporary_finite_credit() {
+    use hirsel_lir::ir::Inst;
+    let source = format!(
+        "{ENCODING_PREFIX}\nfn main() -> u64 {{ let mut out: List[u8] = []\n std@1/text.append(mut out, \"\")\n emit(\"hé😀\", mut out)\n list.len(out) }}"
+    );
+    let (program, lowered) = crate::rc_support::lower_valid(&source);
+    let emit = crate::rc_support::unit_named(&lowered, "emit");
+    assert_eq!(
+        emit.instructions
+            .iter()
+            .filter(|i| matches!(i, Inst::SliceView { .. }))
+            .count(),
+        1,
+        "{}",
+        crate::rc_support::dump(emit)
+    );
+    let manifest_source = source.clone();
+    let manifest = with_compiler_stack(move || {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../hirsel-driver/tests/fixtures/std_source/main.hir");
+        let mut loaded = hirsel_driver::load_program_source(&path, Some(&manifest_source)).unwrap();
+        loaded.check_for_execution().unwrap();
+        hirsel_driver::native::manifest(&loaded.engine.export_native_input().unwrap()).unwrap()
+    });
+    for target in TargetSpec::executed() {
+        let ready =
+            hirsel_driver::native::build_program(&program, manifest.clone(), &Options::new(target))
+                .unwrap();
+        let emit = ready
+            .units
+            .iter()
+            .map(|u| u.unit())
+            .find(|u| u.header.definition.0.name == "emit")
+            .unwrap();
+        let slice_layout = emit
+            .instructions
+            .iter()
+            .find_map(|i| match i {
+                Inst::SliceView { result, .. } => {
+                    Some(emit.types[emit.values[result.index()].ty.index()].layout)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            !emit.instructions.iter().any(|i| match i {
+                Inst::Copy { result: value, .. }
+                | Inst::Dup { value }
+                | Inst::Release { value, .. } =>
+                    emit.types[emit.values[value.index()].ty.index()].layout == slice_layout,
+                _ => false,
+            }),
+            "{}",
+            crate::rc_support::dump(emit)
+        );
+        assert!(
+            !emit
+                .tables
+                .operations
+                .iter()
+                .any(|op| op.definition.is_core("bytes.slice"))
+        );
+    }
+}
+
+#[test]
+fn encoding_contract_twins_keep_take_mut_and_noalloc_checks() {
+    let valid = [
+        "fn append(xs: List[u8], mut out: List[u8]) { for b in xs { list.push(mut out, b) } }\nfn main() { let mut xs: List[u8] = [1u8]\n let ys = copy xs\n append(ys, mut xs) }",
+        "fn emit(text: String, mut out: List[u8]) { let data = string.as_bytes(text)\n bytes.append(mut out, bytes.slice(data,0,bytes.len(data))) }",
+        "fn take_bytes(take data: Bytes) {}\nfn main() { let data = b\"abc\"\n take_bytes(copy data) }",
+    ];
+    let rejected = [
+        "fn append(xs: List[u8], mut out: List[u8]) { for b in xs { list.push(mut out, b) } }\nfn main() { let mut xs: List[u8] = [1u8]\n append(xs, mut xs) }",
+        "@noalloc\nfn emit(text: String, mut out: List[u8]) { let data = string.as_bytes(text)\n bytes.append(mut out, bytes.slice(data,0,bytes.len(data))) }",
+        "fn take_bytes(take data: Bytes) {}\nfn main() { let data = b\"abc\"\n take_bytes(data) }",
+    ];
+    for source in valid {
+        crate::rc_support::try_compile(source).unwrap();
+    }
+    for source in rejected {
+        assert!(crate::rc_support::try_compile(source).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn transient_encoding_c_rejects_forged_credits_and_expired_loans() {
+    use hirsel_lir::ir::{Holding, Inst};
+    let source = format!(
+        "{ENCODING_PREFIX}\nfn main() {{ let mut out: List[u8] = []\n emit(\"abc\",mut out) }}"
+    );
+    let (program, lowered) = crate::rc_support::lower_valid(&source);
+    let id = crate::rc_support::instances_of(&lowered, "emit")[0];
+    let unit = &lowered.units[id.index()];
+    let (result, value, failure) = unit
+        .instructions
+        .iter()
+        .find_map(|i| match i {
+            Inst::SliceView {
+                result,
+                value,
+                failure,
+                ..
+            } => Some((*result, *value, *failure)),
+            _ => None,
+        })
+        .unwrap();
+    let target = crate::rc_support::target();
+    let manifest = crate::rc_support::manifest(&program);
+    let operations = program.operation_registry();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &lowered.table,
+        manifest: &manifest,
+    };
+    for mutation in 0..3 {
+        let mut forged = unit.clone();
+        let unit = &mut forged;
+        match mutation {
+            0 => unit.values[result.index()].holding = Holding::Owned,
+            1 => unit.values[value.index()].holding = Holding::Plain,
+            _ => unit.tables.failures[failure.index()].rule = Some("MEM-14".into()),
+        }
+        assert!(
+            !hirsel_lir::validate::check(&forged, &inputs).is_empty(),
+            "forgery {mutation}"
+        );
+    }
+    let Holding::Borrowed(loan) = unit.values[result.index()].holding else {
+        panic!("slice view loan")
+    };
+    let mut editor = hirsel_rc::insert::Editor::new(unit.clone());
+    let (b, i) = editor
+        .code
+        .iter()
+        .enumerate()
+        .find_map(|(b, c)| {
+            c.iter()
+                .position(|i| matches!(i, Inst::SliceView { .. }))
+                .map(|i| (b, i))
+        })
+        .unwrap();
+    editor.code[b].insert(
+        i,
+        Inst::EndLoan {
+            loan,
+            if_active: false,
+        },
+    );
+    let bad = editor.finish();
+    assert!(!hirsel_lir::validate::check(&bad, &inputs).is_empty());
+}
+
+#[test]
+fn transient_encoding_retained_taken_stored_and_two_mutable_uses_keep_ownership() {
+    use hirsel_lir::ir::Inst;
+    let source = format!(
+        r#"{ENCODING_PREFIX}
+fn raw(data: Bytes, mut out: List[u8]) {{ bytes.append(mut out, bytes.slice(data, 0, bytes.len(data))) }}
+fn retain(data: Bytes) -> Bytes in data {{ bytes.slice(data, 0, bytes.len(data)) }}
+fn consume(take data: Bytes) {{}}
+fn taken(take text: String) {{ let data = string.as_bytes(text)
+ consume(bytes.slice(data, 0, bytes.len(data))) }}
+fn sink(data: Bytes, mut a: List[u8], mut b: List[u8]) {{ bytes.append(mut a, data)
+ bytes.append(mut b, data) }}
+fn two(text: String, mut a: List[u8], mut b: List[u8]) {{ let data = string.as_bytes(text)
+ sink(bytes.slice(data, 0, bytes.len(data)), mut a, mut b) }}
+fn stored(take text: String, mut values: List[Bytes]) {{ let data = string.as_bytes(text)
+ list.push(mut values, bytes.slice(data, 0, bytes.len(data))) }}
+fn main() {{ let mut a: List[u8] = []
+ let mut b: List[u8] = []
+ let mut values: List[Bytes] = []
+ std@1/text.append(mut a, "a")
+ raw(b"abc", mut a)
+ let kept = retain(b"abc")
+ bytes.append(mut b, kept)
+ taken("abc")
+ two("abc", mut a, mut b)
+ stored("abc", mut values)
+}}
+"#
+    );
+    let (_, lowered) = crate::rc_support::lower_valid(&source);
+    for name in ["raw", "retain", "taken", "two", "stored"] {
+        let unit = crate::rc_support::unit_named(&lowered, name);
+        assert!(
+            !unit
+                .instructions
+                .iter()
+                .any(|i| matches!(i, Inst::SliceView { .. })),
+            "{name}\n{}",
+            crate::rc_support::dump(unit)
+        );
+        assert!(
+            unit.tables
+                .operations
+                .iter()
+                .any(|op| op.definition.is_core("bytes.slice")),
+            "{name}\n{}",
+            crate::rc_support::dump(unit)
+        );
+    }
+}
+
+#[test]
+fn borrowed_encoding_success_and_first_failure_agree_through_cranelift() {
+    encoding_audit(
+        &format!(
+            r#"{ENCODING_PREFIX}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
+ let mut out: List[u8] = []
+ emit("hé😀<&", mut out)
+ let valid = std@1/text.finish_valid(take out) == "é😀<&"
+ out.print(io.stdout(rt) ? grant_error, if valid {{ "ok\n" }} else {{ "bad\n" }}) ? output_error
+ Ok(())
+}}
+"#
+        ),
+        "encoding-cranelift",
+    );
+    encoding_audit(
+        &format!(
+            r#"{ENCODING_PREFIX}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
+ let mut out: List[u8] = []
+ emit("", mut out)
+ out.print(io.stdout(rt) ? grant_error, "unreachable\n") ? output_error
+ Ok(())
+}}
+"#
+        ),
+        "encoding-cranelift-first-failure",
+    );
+}
+
+#[test]
+fn generated_encoding_preserves_permanent_arena_sharing_and_charge_order() {
+    encoding_audit(
+        r#"
+@serializable
+type Row { tags: List[String] }
+@preserves_unique(out)
+fn row_json_into(value: Row, mut out: List[u8], depth: u64) -> Result[(), std@1/json.JsonError] uses {} = comptime std@1/derive.json_into(shape(Row))
+fn output_error[E](take e: E) -> () {}
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} { () }
+fn bounded(cap: u64) -> Result[bool, OutOfSpace] {
+ arena.bounded(cap, fn(a: Arena) -> bool {
+  let tags: List[String] in a = ["a", "b"]
+  let mut row = Row(tags: take tags)
+  let mut out: List[u8] = []
+  let _ = row_json_into(row, mut out, 0)
+  list.push(mut row.tags, "c")
+  list.len(row.tags) == 3
+ })
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+ let valid = bounded(40) == Ok(true) && bounded(39) == Error(OutOfSpace())
+ out.print(io.stdout(rt) ? grant_error, if valid { "ok\n" } else { "bad\n" }) ? output_error
+ Ok(())
+}
+"#,
+        "encoding-arena-sharing",
+    );
+}

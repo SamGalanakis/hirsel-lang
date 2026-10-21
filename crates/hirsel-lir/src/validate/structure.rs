@@ -337,7 +337,9 @@ fn borrowed_holders<S: Stage>(cx: &Cx<'_, S>, facts: &mut Facts) {
     }
     for inst in &u.instructions {
         match *inst {
-            Inst::Recast { result, value } => dependencies[result.index()].push(value),
+            Inst::Recast { result, value } | Inst::SliceView { result, value, .. } => {
+                dependencies[result.index()].push(value)
+            }
             Inst::Read {
                 result, reaching, ..
             } if views(result) => dependencies[result.index()].push(reaching),
@@ -1771,9 +1773,36 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
                 self.fresh_holding(site, result);
             }
+            // A byte interval preserves its source's active loan and backing.
+            Inst::SliceView {
+                result,
+                value,
+                start,
+                end,
+                failure,
+            } => {
+                let slice = matches!(layouts.get(self.layout_of(value)), Some(LayoutRecord {
+                    kind: LayoutKind::Slice { element }, ..
+                }) if layouts.get(*element).is_some_and(|e| e.kind == LayoutKind::Scalar(ScalarKind::U8)));
+                if !slice
+                    || !self.same_type(result, value)
+                    || self.scalar(start) != Some(ScalarKind::U64)
+                    || self.scalar(end) != Some(ScalarKind::U64)
+                    || unit.tables.failures[failure.index()].rule.as_deref() != Some("SEM-3")
+                {
+                    self.add(site, K::Type("slice view"));
+                }
+                match (
+                    unit.values[value.index()].holding,
+                    unit.values[result.index()].holding,
+                ) {
+                    (Holding::Borrowed(a), Holding::Borrowed(b)) if a == b => {}
+                    _ => self.add(site, K::Holding(result)),
+                }
+                facts.backing[result.index()] = Backing::Value(value);
+            }
             // A String or Bytes encoding inside a flat value held in a block,
-            // viewed at its source type under a loan covering it (LIR schema
-            // revision 4).
+            // viewed at its source type under a loan covering it.
             Inst::FlatView { result, address } => {
                 let Some(addr) = facts.addresses[address.index()].clone() else {
                     return;
@@ -4368,6 +4397,9 @@ fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usage)> {
             ..
         } => out.extend([op(left), op(right), op(addend)]),
         Inst::Check { condition, .. } => out.push(op(condition)),
+        Inst::SliceView {
+            value, start, end, ..
+        } => out.extend([op(value), op(start), op(end)]),
         Inst::Address { address, .. } => {
             let info = &unit.addresses[address.index()];
             if let AddressBase::Value(v) = info.base {

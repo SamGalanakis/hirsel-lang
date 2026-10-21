@@ -4118,6 +4118,44 @@ impl<'p, S: Stage> Machine<'p, S> {
                 };
                 self.define_fresh(f, result, val)?;
             }
+            Inst::SliceView {
+                result,
+                value,
+                start,
+                end,
+                failure,
+            } => {
+                let Val::Image(image) = self.read_use(f, value)? else {
+                    return fail(V::TypeConfusion, "slice view source");
+                };
+                let (Val::Bits { bits: from, .. }, Val::Bits { bits: to, .. }) =
+                    (self.read_use(f, start)?, self.read_use(f, end)?)
+                else {
+                    return fail(V::TypeConfusion, "slice view bounds");
+                };
+                let layout = self.value_type(unit, value)?.layout;
+                // Independently inspect the source's bytes and range, then
+                // preserve its original owner and checked origin.
+                let length = self.slice_bytes(&Val::Image(image.clone()), layout)?.len() as u128;
+                if self.injection_site() {
+                    return self.fail_at(f, failure, true);
+                }
+                if from > to || to > length {
+                    return self.fail_at(f, failure, false);
+                }
+                let fields = &self.record(layout)?.fields;
+                let owner = match image.cells.get(&fields[0].offset) {
+                    Some(Cell::Data { ptr, .. }) => *ptr,
+                    _ => return fail(V::ForgedPointer, "slice view owner"),
+                };
+                let origin =
+                    u64::from_le_bytes(image.read_bytes(fields[1].offset, 8).try_into().unwrap());
+                let start = origin
+                    .checked_add(from as u64)
+                    .ok_or_else(|| err(V::OutOfExtent, "slice view origin overflow"))?;
+                let val = Val::Image(self.slice_image(layout, owner, start, (to - from) as u64)?);
+                self.define_fresh(f, result, val)?;
+            }
             Inst::FlatView { result, address } => {
                 let r = self.resolve_use(f, address)?;
                 if let Holding::Borrowed(l) = self.value_info(unit, result)?.holding

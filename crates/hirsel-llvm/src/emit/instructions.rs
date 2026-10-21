@@ -987,6 +987,40 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 };
                 self.define(result, holds)
             }
+            Inst::SliceView {
+                result,
+                value,
+                start,
+                end,
+                failure,
+            } => {
+                let layout = self.value_type(value)?.layout;
+                let record = self.layout(layout)?;
+                let source = self.stack(layout)?;
+                self.store(self.value_shape(value)?, self.get(value)?, source);
+                let word = |ordinal: usize| {
+                    self.builder
+                        .offset(source.ptr, self.const_u64(record.fields[ordinal].offset))
+                };
+                let owner = self.builder.load(self.module.ptr_type(), word(0), 8);
+                let origin = self.load_u64(word(1));
+                let length = self.load_u64(word(2));
+                let from = self.get(start)?;
+                let to = self.get(end)?;
+                let reversed = self.builder.icmp(IntPredicate::Ugt, from, to);
+                let outside = self.builder.icmp(IntPredicate::Ugt, to, length);
+                let failed = self.builder.binary(BinOp::Or, reversed, outside);
+                self.guard(failed, failure)?;
+                let start = self.builder.binary(BinOp::Add, origin, from);
+                let length = self.builder.binary(BinOp::Sub, to, from);
+                let slice = self.stack(layout)?;
+                for (field, word) in record.fields.iter().zip([owner, start, length]) {
+                    let at = self.builder.offset(slice.ptr, self.const_u64(field.offset));
+                    self.builder.store(word, at, slice.align.min(8));
+                }
+                let value = self.load(self.layout_shape(layout)?, slice);
+                self.define(result, value)
+            }
             Inst::FlatView { result, address } => {
                 // A borrowed slice of the String or Bytes encoding at `address`: the block
                 // holding it is the owner, the encoding's offset in its payload the start,
