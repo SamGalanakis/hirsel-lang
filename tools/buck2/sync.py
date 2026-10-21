@@ -954,6 +954,8 @@ def first_party(meta: dict) -> str:
                             full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
                             precheck=PRECHECK, runtime_archives=RUNTIME_ARCHIVES,
                             data=Raw(f"glob({starlark(['bench/native/programs/**', 'bench/native/inputs/**', 'bench/native/manifest.json', 'bench/micro/**', 'examples/hello-web/**', 'examples/todo-api/**', 'examples/common.hir', 'stdlib/**', 'tools/perf-counts.tsv'], 4)})")))
+    out.append("\n" + call("hirsel_script_test", name="gate-core-broker", script="tools/tests/core_broker.py", full=False,
+                            data=["tools/core-broker", "tools/tests/core_broker.py"]))
     # summerwind/h2spec v2.6.0, the latest release (tools/h2spec/run).
     out.append("\n" + call("http_file", name="h2spec-release",
                             urls=["https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz"],

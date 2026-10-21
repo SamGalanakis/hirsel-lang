@@ -116,3 +116,87 @@ The live-width probe can run under `tools/capped` with `HIRSEL_JOBS=2` or `8`
 and `HIRSEL_CORES_EXPECTED` on hosts whose ancestor grants allow that width.
 Production concurrent execution and its width-1/8 tape differential remain owned
 by E1/F1; this service does not declare those gates passed.
+
+## Host core broker
+
+`tools/core-broker /run/hirsel/broker.json` manages guaranteed and burst grants
+across runs through the admitted control sockets. It works with either task
+provider. `--once` performs one rebalance and exits, returning nonzero on failure.
+The daemon emits a JSON diagnostic line per iteration; its default interval is
+one second, configurable from 100 to 1000 milliseconds. None of this becomes a
+run input or tape event.
+
+```json
+{
+  "cores": 8,
+  "interval_ms": 1000,
+  "delay_ns": 1000000,
+  "cgroup_root": "/sys/fs/cgroup",
+  "runs": [
+    {
+      "name": "interactive",
+      "control": "/run/hirsel/interactive/ctl",
+      "cgroup": "/sys/fs/cgroup/hirsel/interactive",
+      "guaranteed": 2,
+      "burst": 6
+    },
+    {
+      "name": "batch",
+      "control": "/run/hirsel/batch/ctl",
+      "cgroup": "/sys/fs/cgroup/hirsel/batch",
+      "guaranteed": 2,
+      "burst": 6
+    }
+  ]
+}
+```
+
+`burst` is the total maximum width, including the guarantee. Admission refuses
+overcommitted guarantees and unknown config members. The host manager supplies
+the pool size and grants within its available CPUs and any limits invisible
+above `cgroup_root`. It keeps each run's configured cgroup path current (restart
+the broker after moving a run), admits its control socket outside program
+grants, and runs the broker with the launcher uid. This daemon controls widths;
+it does not alter cgroup quotas. Run one broker for the pool and give it exclusive
+ownership of these runs' width controls. An exclusive lock on the config file
+prevents two brokers using that same file; separate configs must not overlap.
+
+Each iteration reads all snapshots and all visible ancestor `cpu.max` files
+before issuing changes. Every integer target is at most the ceiling of the
+smallest quota ratio and the run's burst grant. Quota contraction can reduce a
+guarantee; the report marks `guarantee_limited`. K1 additionally enforces the
+admitted CPU intersection and process permit ceiling. Failed reads or malformed
+metrics freeze the iteration and report an error. Successfully applied shrinks
+remain in effect if a later request fails; the next iteration reconciles actual
+state from new snapshots.
+
+When p99 segment-ready delay rises above `delay_ns` and `role_busy < 0.8`, a run
+can gain one core per iteration. Idle runs return burst capacity to their
+guarantee. Burst allocation rotates across equally congested runs after reserving
+guarantees. A saturated scheduler role is flagged for `tasks.free@1` or runner
+sharding. Unknown/null queue or role measurements never trigger growth; supplying
+those counters belongs to the executor. Pending width increases are reserved,
+shrinks must release actual workers before capacity is lent, and lost permits
+or workers pending reclamation reduce available capacity. The broker never
+manufactures replacement capacity or restarts a stopped run. If stopped workers
+consume guaranteed capacity, growth waits for reclamation or an explicit host
+grant increase.
+
+The policy ports Caladan's guarantee/max admission and queue-delay congestion
+structure from `shenango/caladan` at
+`bdb4ddebc2198cd95991079ed20e44a5f210d6d3`:
+`iokernel/simple.c:16-40,90-112,226-259` and `iokernel/sched.c:890-908`.
+Its guarantee-before-burst and delay-threshold vectors are exercised in
+`tools/tests/core_broker.py`. Deviations: K1 JSON-line transactions replace
+kernel-bypass core assignment at the specified host-manager cadence; rising
+delay and the scheduler-role saturation filter implement Hirsel's section 7;
+cooperative shrink acknowledgments and stopped-worker reservations replace
+immediate preemption; ancestor quota ceilings prevent integer controls from
+bypassing quotas. Socket framing and peer credentials reuse the K1 protocol.
+
+Run `.buck2/bin/buck2 test //:gate-core-broker` (also collected by `tools/main-runs`
+as `python3 tools/tests/core_broker.py`).
+The toy-broker test launches the actual broker against two Unix control peers,
+rebalances widths from 3/1 to 1/3, and asserts both change. Other tests cover
+pending resize, guarantees, burst limits, saturation, missing signals, quota
+contraction and exact ancestor ratios, lost capacity and invalid requests.

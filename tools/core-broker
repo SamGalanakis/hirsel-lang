@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Manage a host core pool through Hirsel's private placement control sockets.
+
+    tools/core-broker <config.json> [--once]
+
+See docs/managed-cores.md. Policy follows Caladan's simple scheduler:
+shenango/caladan bdb4ddebc2198cd95991079ed20e44a5f210d6d3,
+iokernel/simple.c:16-40,90-112,226-259 (guarantee/max, congestion, grow),
+iokernel/sched.c:890-908 (admission of guarantees). Unlike its kernel-bypass
+core assignment, this loop uses bounded K1 control transactions at 100-1000 ms,
+and waits for cooperative shrink before lending capacity to another run.
+"""
+
+import argparse
+import fcntl
+from fractions import Fraction
+import json
+import math
+import os
+from pathlib import Path
+import socket
+import struct
+import sys
+import time
+
+
+def integer(value, name, minimum=1):
+    if type(value) is not int or value < minimum:
+        raise ValueError(f'{name}: expected an integer >= {minimum}')
+    return value
+
+
+def fields(value, allowed, required):
+    if not isinstance(value, dict) or value.keys() - allowed or required - value.keys():
+        raise ValueError(f'expected fields {sorted(required)}, allowed {sorted(allowed)}')
+
+
+def config(value):
+    fields(value, {'cores', 'runs', 'interval_ms', 'delay_ns', 'cgroup_root'}, {'cores', 'runs'})
+    integer(value['cores'], 'cores')
+    interval = integer(value.get('interval_ms', 1000), 'interval_ms')
+    if not 100 <= interval <= 1000:
+        raise ValueError('interval_ms must be in 100..1000')
+    integer(value.get('delay_ns', 1_000_000), 'delay_ns')
+    root = Path(value.get('cgroup_root', '/sys/fs/cgroup')).resolve(strict=True)
+    if not isinstance(value['runs'], list) or not value['runs']:
+        raise ValueError('runs must be a nonempty list')
+    names, sockets = set(), set()
+    for run in value['runs']:
+        fields(run, {'name', 'control', 'cgroup', 'guaranteed', 'burst'},
+               {'name', 'control', 'cgroup', 'guaranteed', 'burst'})
+        if not isinstance(run['name'], str) or not run['name'] or run['name'] in names:
+            raise ValueError('run names must be unique nonempty strings')
+        names.add(run['name'])
+        path = Path(run['control'])
+        if not path.is_absolute() or str(path) in sockets:
+            raise ValueError('control paths must be unique absolute paths')
+        sockets.add(str(path))
+        group = Path(run['cgroup']).resolve(strict=True)
+        if not group.is_relative_to(root) or not group.is_dir():
+            raise ValueError('cgroup must be a directory under cgroup_root')
+        if integer(run['burst'], 'burst') < integer(run['guaranteed'], 'guaranteed'):
+            raise ValueError('burst (total maximum) must be >= guaranteed')
+    if sum(run['guaranteed'] for run in value['runs']) > value['cores']:
+        raise ValueError('guaranteed cores exceed the pool')
+    return value
+
+
+def quota_ceiling(run, root):
+    """K1's ancestor walk, managed_cores/linux.rs:108-131, with exact ratios.
+
+    The manager supplies paths in its own cgroup namespace. Limits above its
+    visible root must already be folded into the configured host pool/grants.
+    """
+    group, root = Path(run['cgroup']).resolve(strict=True), Path(root).resolve(strict=True)
+    if not group.is_dir() or not group.is_relative_to(root):
+        raise ValueError('run cgroup disappeared or escaped cgroup_root')
+    limit = run['burst']
+    for directory in (group, *group.parents):
+        try:
+            parts = (directory / 'cpu.max').read_text().split()
+        except FileNotFoundError:
+            # The namespace root, or a cgroup without the CPU controller.
+            parts = ['max', '1']
+        if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdigit() or int(parts[1]) < 1:
+            raise ValueError(f'{directory}/cpu.max: invalid quota')
+        if parts[0] != 'max':
+            if not parts[0].isascii() or not parts[0].isdigit() or int(parts[0]) < 1:
+                raise ValueError(f'{directory}/cpu.max: invalid quota')
+            limit = min(limit, math.ceil(Fraction(int(parts[0]), int(parts[1]))))
+        if directory == root:
+            return limit
+    raise ValueError('cgroup root not reached')
+
+
+def snapshot(value):
+    """Accept K1's extensible diagnostic snapshot, rejecting malformed counters."""
+    if not isinstance(value, dict):
+        raise ValueError('control reply must be an object')
+    if 'error' in value:
+        raise ValueError(f'control refused: {value["error"]}')
+    width = value['width']
+    integer(width['effective'], 'width.effective', 0)
+    integer(width['pending'], 'width.pending', 0)
+    requested = width['requested']
+    if requested != 'auto':
+        if isinstance(requested, dict):
+            fields(requested, {'min', 'max'}, {'min', 'max'})
+            if integer(requested['max'], 'width.max') < integer(requested['min'], 'width.min'):
+                raise ValueError('invalid width range')
+        else:
+            integer(requested, 'width.requested')
+    for name in ('runnable', 'lost_permits', 'reclamation_pending'):
+        if value.get(name) is not None:
+            integer(value[name], name, 0)
+    delay = value.get('segment_ready_delay_ns')
+    if delay is not None:
+        integer(delay['p99'], 'segment_ready_delay_ns.p99', 0)
+    role = value.get('role_busy')
+    if role is not None and (type(role) not in (int, float) or not math.isfinite(role) or not 0 <= role <= 1):
+        raise ValueError('role_busy must be null or a share in 0..1')
+    for name in ('stop_requested', 'home_busy'):
+        if value.get(name) is not None and type(value[name]) is not bool:
+            raise ValueError(f'{name} must be null or a boolean')
+    return value
+
+
+def exchange(path, request, timeout=0.1):
+    """One bounded JSON line; the peer is the launcher's uid, as in K1."""
+    deadline = time.monotonic() + timeout
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
+        peer.settimeout(timeout)
+        peer.connect(str(path))
+        _, uid, _ = struct.unpack('3i', peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        if uid != os.geteuid():
+            raise ValueError('control peer uid differs from broker uid')
+        peer.sendall(json.dumps(request, separators=(',', ':')).encode() + b'\n')
+        data = bytearray()
+        while b'\n' not in data:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('control reply deadline')
+            peer.settimeout(remaining)
+            chunk = peer.recv(min(4096, 1024 * 1024 + 1 - len(data)))
+            if not chunk:
+                raise ValueError('control reply ended before newline')
+            data.extend(chunk)
+            if len(data) > 1024 * 1024:
+                raise ValueError('control reply exceeds 1 MiB')
+        line, tail = data.split(b'\n', 1)
+        if tail.strip():
+            raise ValueError('multiple control replies')
+        return snapshot(json.loads(line))
+
+
+def reserved(run, sample):
+    width = sample['width']
+    # Auto/range requests can grow behind our back; reserve the full grant
+    # until the broker replaces them with an acknowledged integer target.
+    requested = width['requested']
+    requested = requested if type(requested) is int else run['burst']
+    return max(width['effective'], width['pending'], requested)
+
+
+def stranded(sample):
+    # Reclamation and lost permits may name the same stopped worker.
+    return max(sample.get('lost_permits') or 0, sample.get('reclamation_pending') or 0)
+
+
+class Broker:
+    def __init__(self, settings, transport=exchange):
+        self.settings = config(settings)
+        self.transport = transport
+        self.previous_delay = {}
+        self.waiting = {}
+        self.round = 0
+
+    def tick(self):
+        runs = self.settings['runs']
+        # Read all peers and quotas before mutating anything. A dead peer or
+        # unreadable limit freezes this tick, rather than lending its reservation.
+        samples = [self.transport(run['control'], {'metrics': True}) for run in runs]
+        caps = [quota_ceiling(run, self.settings.get('cgroup_root', '/sys/fs/cgroup')) for run in runs]
+        floors = [min(run['guaranteed'], cap) for run, cap in zip(runs, caps)]
+        capacity = self.settings['cores']
+        usable = max(0, capacity - sum(stranded(sample) for sample in samples))
+        wanted, congested, saturated = [], [], []
+        next_delay = self.previous_delay.copy()
+        for run, sample, cap, floor in zip(runs, samples, caps, floors):
+            delay = sample.get('segment_ready_delay_ns')
+            delay = delay['p99'] if delay is not None else None
+            busy = sample.get('role_busy')
+            saturated.append(busy is not None and busy >= 0.8)
+            pressure = (delay is not None and delay >= self.settings.get('delay_ns', 1_000_000)
+                        and busy is not None and busy < 0.8
+                        and sample.get('runnable') is not None and sample['runnable'] > 0
+                        and not sample.get('stop_requested'))
+            rising = pressure and delay > self.previous_delay.get(run['name'], -1)
+            congested.append(pressure)
+            width = sample['width']
+            current = max(width['effective'], width['pending'],
+                          width['requested'] if type(width['requested']) is int else 0)
+            idle = (sample.get('runnable') == 0 and delay is not None
+                    and delay < self.settings.get('delay_ns', 1_000_000))
+            demand = max(current + int(rising), self.waiting.get(run['name'], 0) if pressure else 0)
+            wanted.append(min(cap, floor if idle else max(floor, demand)))
+            if delay is not None:
+                next_delay[run['name']] = delay
+
+        # Guarantees first, then round-robin burst grants to congested runs,
+        # then incumbents. Rotation avoids permanent config-order preference.
+        targets = floors.copy()
+        if sum(targets) <= usable:
+            order = [(self.round + i) % len(runs) for i in range(len(runs))]
+            for pressure in (True, False):
+                eligible = [i for i in order if congested[i] == pressure]
+                while sum(targets) < usable:
+                    changed = False
+                    for i in eligible:
+                        if targets[i] < wanted[i] and sum(targets) < usable:
+                            targets[i] += 1
+                            changed = True
+                    if not changed:
+                        break
+        self.round += 1
+
+        # Shrink before grow. A pending shrink still occupies its old capacity;
+        # stopped workers keep their reservations until the host removes them.
+        for i, run in enumerate(runs):
+            if (targets[i] < reserved(run, samples[i])
+                    or type(samples[i]['width']['requested']) is not int):
+                samples[i] = self.transport(run['control'], {'placement': {'cores': targets[i]}})
+        for i, run in enumerate(runs):
+            used = sum(reserved(r, s) + stranded(s) for r, s in zip(runs, samples))
+            current = reserved(run, samples[i])
+            if targets[i] > current and not samples[i].get('stop_requested'):
+                grant = min(targets[i], current + max(0, capacity - used))
+                if grant > current:
+                    samples[i] = self.transport(run['control'], {'placement': {'cores': grant}})
+        self.waiting = {run['name']: target for run, sample, target in zip(runs, samples, targets)
+                        if target > reserved(run, sample)}
+        self.previous_delay = next_delay
+        return {'runs': [dict(name=run['name'], target=target, width=sample['width'],
+                              suggest='tasks.free@1 or runner sharding' if full else None,
+                              guarantee_limited=cap < run['guaranteed'])
+                         for run, target, sample, full, cap in zip(runs, targets, samples, saturated, caps)]}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('config', type=Path)
+    parser.add_argument('--once', action='store_true', help='rebalance once and print the result')
+    args = parser.parse_args()
+    # A second daemon using this configuration must not race the first one.
+    with args.config.open() as source:
+        fcntl.flock(source, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        broker = Broker(json.load(source))
+        interval = broker.settings.get('interval_ms', 1000) / 1000
+        while True:
+            started = time.monotonic()
+            try:
+                print(json.dumps(broker.tick()), flush=True)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                print(json.dumps({'error': str(error)}), flush=True)
+                if args.once:
+                    return 1
+            if args.once:
+                return 0
+            time.sleep(max(0, interval - (time.monotonic() - started)))
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(f'core-broker: {error}', file=sys.stderr)
+        sys.exit(1)
