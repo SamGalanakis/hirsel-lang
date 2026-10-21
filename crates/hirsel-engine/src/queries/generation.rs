@@ -1081,8 +1081,9 @@ impl QueryEngine {
             {
                 continue;
             }
-            let analyzed = self.mode_query(&path)?;
-            let (summary, _) = crate::summary::summarize(self.types(), &analyzed.value.typed);
+            let published = self.definition_summary(DefId::intern(&path))?;
+            self.merge_execution(&published.reads);
+            let summary = &published.summary;
             // Calls that name a definition: written ones, then planned instances.
             let calls: Vec<_> = summary
                 .calls
@@ -1126,7 +1127,6 @@ impl QueryEngine {
                 } else if actuals.arguments.is_empty() {
                     pending.push((callee, BTreeMap::new()));
                 } else if closed {
-                    self.mode_query(&callee)?;
                     pending.push((callee, BTreeMap::from([(binder, actuals)])));
                 }
             }

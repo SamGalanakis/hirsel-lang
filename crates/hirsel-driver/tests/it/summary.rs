@@ -501,3 +501,27 @@ fn published_summary_survives_body_release_and_rejects_stale_seeds() {
         engine.definition_summary(main).unwrap();
     });
 }
+
+#[test]
+fn published_summaries_match_mode_refined_selection_inputs() {
+    hirsel_engine::with_compiler_stack(|| {
+        for source in [
+            format!("{WIDTH}\nfn forward[T](v: T) -> u64 uses {{}} {{ width(v) }}\npub fn main() -> Result[(), ()] {{ let _ = forward(Point(x: 1, y: 2)); Ok(()) }}"),
+            "fn outer[n: size](xs: Inline[u8, n]) -> u64 { fn inner[m: size](ys: Inline[u8, m]) -> u64 { let _ = ys; comptime (n * m) }; inner(xs) }\npub fn main() { let xs: Inline[u8, 2] = [1, 2]; let _ = outer(xs) }".into(),
+            "fn identity[T](take x: T) -> T { x }\nfn pair[T: copyable](take x: T) -> (T, T) { identity((copy x, copy x)) }\npub fn main() { let _ = pair(1u64); let f = fn(x: u64) -> u64 { identity(x) }; let _ = f(2) }".into(),
+        ] {
+            let (mut engine, output) = check(&source);
+            assert!(output.diagnostics.is_empty(), "{source}\n{:?}", output.diagnostics);
+            let checked = engine.definition_summaries().unwrap();
+            for (checked, _) in checked {
+                let path = checked.owner.path();
+                let analyzed = engine.mode_definition(path).unwrap();
+                let mode = summarize(engine.types(), &analyzed.value.typed);
+                // Exact equality is stronger than CT-3 selection equivalence:
+                // every frame, call, generic argument, site and growth edge.
+                let published = engine.definition_summary(checked.owner).unwrap();
+                assert_eq!((&published.summary, &published.growth), (&mode.0, &mode.1), "{path}\n{source}");
+            }
+        }
+    });
+}

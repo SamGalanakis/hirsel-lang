@@ -1149,7 +1149,7 @@ fn specialize_sizes(
 }
 
 impl QueryEngine {
-    /// Select staged constants from checked call actuals, after signatures and
+    /// Select staged constants from final-mode call actuals, after signatures and
     /// GEN-5, reading each body's definition summary. Local generic frames
     /// retain their enclosing lexical size bindings. Calls inside comptime are
     /// selected by execution, preserving dead branches.
@@ -1158,10 +1158,19 @@ impl QueryEngine {
         if self.staged_constants.is_empty() {
             return Ok(());
         }
-        let bodies = self.instantiation_bodies()?;
+        let roots: Vec<_> = self
+            .items
+            .iter()
+            .filter(|(path, _)| !self.imaged(&path.0.package))
+            .filter_map(|(path, items)| {
+                items
+                    .first()
+                    .map(|syntax| (path.clone(), syntax.item.origin.span))
+            })
+            .collect();
         let mut pending = VecDeque::new();
-        for (path, body) in &bodies {
-            let signature = self.item_signature(path)?.value;
+        for (path, site) in roots {
+            let signature = self.item_signature(&path)?.value;
             if signature.generics().is_empty()
                 && !matches!(signature.kind, SignatureKind::Const { .. })
             {
@@ -1170,11 +1179,12 @@ impl QueryEngine {
                     path.clone(),
                     scope,
                     BTreeMap::<SizeParameterRef, u64>::new(),
-                    crate::summary::source_site(&body.value.syntax, scope),
+                    site,
                 ));
             }
         }
         let mut seen = BTreeSet::new();
+        let mut registered = BTreeSet::new();
         while let Some((path, scope, bindings, site)) = pending.pop_front() {
             if !seen.insert((path.clone(), scope, bindings.clone())) {
                 continue;
@@ -1182,9 +1192,15 @@ impl QueryEngine {
             if seen.len() > 65536 {
                 return Err(operational("compile-time instance expansion limit"));
             }
-            let analyzed = self.mode_query(&path)?;
-            self.register_staged(&analyzed.value)?;
-            let (summary, _) = crate::summary::summarize(self.types(), &analyzed.value.typed);
+            let published = self.definition_summary(DefId::intern(&path))?;
+            self.merge_execution(&published.reads);
+            let summary = &published.summary;
+            // Registration needs the analyzed body; traversal retains only the
+            // published summary, including on repeated size instantiations.
+            if !summary.staged.is_empty() && registered.insert(path.clone()) {
+                let analyzed = self.mode_query(&path)?;
+                self.register_staged(&analyzed.value)?;
+            }
             let frames = &summary.frames;
             let frame_of = |site: NameSite| {
                 frames
@@ -1283,7 +1299,6 @@ impl QueryEngine {
                         {
                             continue;
                         }
-                        self.mode_query(&callee)?;
                         (callee, NameSite::Item, BTreeMap::new())
                     }
                     Some(_) => (path.clone(), call.binder.site, bindings.clone()),
