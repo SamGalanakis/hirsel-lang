@@ -210,3 +210,25 @@ writes. `HIRSEL_MAIN_RUNS` defaults to
 `${XDG_STATE_HOME:-$HOME/.local/state}/hirsel/main-runs`. Timestamped results
 are named `<UTC timestamp>-<commit>.json`; `latest.json` holds the most recent
 result. Nothing is installed or enabled by these commands.
+
+## Resident edit loop
+
+`resident oracle` compares the stdout, stderr and exit code of a resident
+check, a fresh process loading disk results and a cache-free process after
+each unchanged, body, signature, insertion, movement, deletion, syntax-error
+and recovery edit, in both human and JSON modes. It uses the corpus generators
+above and edits private copies of the programs.
+
+```sh
+tools/capped --long --timeout 7200 tools/compiler-bench/resident oracle \
+  --toolchain <bundle> --work /tmp/hirsel-resident-oracle --output oracle.json
+tools/capped --long --timeout 7200 tools/compiler-bench/resident measure \
+  --toolchain <bundle> --work /tmp/hirsel-resident-measure --output edit-loop.json
+```
+
+`measure` runs ten seeded interleaved rounds on tasks and syn10k. The server
+uses CPU31 and the client CPU7. `perf stat` counts cycles and instructions in
+both processes, and a control/ack pipe enables the server counters only for
+the request. The report retains each sample and medians; compare times only
+as ratios inside that session. `--select` filters oracle programs, and
+`--scale` supplies comma-separated generated scale sizes.

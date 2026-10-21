@@ -266,6 +266,9 @@ impl QueryEngine {
         })
     }
     pub(super) fn load_mode(&mut self, path: &DefPath) -> Option<Arc<Entry<AnalyzedBody>>> {
+        if !self.s1.is_empty() {
+            return None;
+        }
         let variant = self.stored_variant(path, QueryKind::Modes)?;
         let record: ModeRecord = self.decode_record(&variant.payload)?;
         if self.verify_store == crate::store::VerifyStore::Recompute {
@@ -309,7 +312,11 @@ impl QueryEngine {
         path: &DefPath,
         entry: &Entry<AnalyzedBody>,
     ) -> Result<(), QueryError> {
-        if self.result_store.is_none() || !entry.consistent || !self.s1.failure_is_own() {
+        if self.result_store.is_none()
+            || !entry.consistent
+            || !self.s1.is_empty()
+            || !self.s1.failure_is_own()
+        {
             return Ok(());
         }
         let output = match entry.result() {
@@ -357,8 +364,23 @@ impl QueryEngine {
         &mut self,
         path: &DefPath,
     ) -> Option<Arc<Entry<hirsel_tir::DefinitionRef>>> {
+        if !self.s1.is_empty() {
+            return None;
+        }
         let variant = self.stored_variant(path, QueryKind::Lower)?;
+        // Such results also own depth requests/registrations. Until those
+        // products have a portable replay record, use their ordinary S1 path.
+        if variant
+            .reads
+            .iter()
+            .any(|(read, _)| matches!(read, ReadKey::ExecutedBody(_)))
+        {
+            return None;
+        }
         let record: LowerRecord = self.decode_record(&variant.payload)?;
+        if crate::comptime::has_staged_reads(&record.output.value) {
+            return None;
+        }
         if self.verify_store == crate::store::VerifyStore::Recompute {
             self.pending_store_checks
                 .insert((DefId::intern(path), QueryKind::Lower), variant);
@@ -400,7 +422,7 @@ impl QueryEngine {
             hirsel_validate::read_holds(r, snapshot.validation(&definition.path.path().0.package))
         })
     }
-    pub(super) fn ensure_lowered_verdict(
+    pub(crate) fn ensure_lowered_verdict(
         &mut self,
         definition: &hirsel_tir::DefinitionRef,
     ) -> Result<(), QueryError> {
@@ -431,12 +453,26 @@ impl QueryEngine {
         entry: &Entry<hirsel_tir::DefinitionRef>,
         verdict: Option<Vec<hirsel_validate::VRead>>,
     ) -> Result<(), QueryError> {
-        if self.result_store.is_none() || !entry.consistent || !self.s1.failure_is_own() {
+        if self.result_store.is_none()
+            || !entry.consistent
+            || !self.s1.is_empty()
+            || !self.s1.failure_is_own()
+        {
+            return Ok(());
+        }
+        if entry
+            .reads()
+            .iter()
+            .any(|(read, _)| matches!(read, ReadKey::ExecutedBody(_)))
+        {
             return Ok(());
         }
         let Ok(output) = entry.output() else {
             return Ok(());
         };
+        if crate::comptime::has_staged_reads(&output.value) {
+            return Ok(());
+        }
         self.write_record(
             path,
             QueryKind::Lower,

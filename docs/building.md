@@ -46,6 +46,42 @@ versioned directories keeps those links intact. `-o` also accepts JSON output.
 Std's manifest publishes core registry entries and std declarations together
 through this same renderer.
 
+## The resident compiler
+
+`check`, `build` and `run` start a compiler server for the workspace on demand.
+It keeps the loaded program and query results between commands. A body edit
+reuses callers checked against the same declared signatures; a signature edit
+invalidates the definitions that read it. Diagnostics use the current source
+positions, including when an item moves.
+
+```sh
+hirsel serve --workspace . --idle 900  # foreground server, seconds until idle exit
+hirsel check app/hirsel.json          # use the workspace server
+hirsel check --watch app/hirsel.json  # check after edits until interrupted
+HIRSEL_DAEMON=off hirsel check app/hirsel.json  # a fresh compiler process
+```
+
+A workspace is the nearest ancestor of the entry with a `.git` file or
+directory, or the entry's directory outside a checkout. Its socket lives in a
+user-private directory under `$XDG_RUNTIME_DIR` (or the system temporary
+directory). `HIRSEL_SERVE_IDLE` sets the default idle timeout, in seconds;
+`--idle` overrides it. A busy server lets the client compile in its own
+process. Commands with `--timings` or `--mem-usage` run in their own process,
+as do programs reading a terminal. A client with different compiler code,
+environment or file creation permissions uses a fresh process.
+
+Definition results also persist under `$XDG_CACHE_HOME/hirsel/results-v2`
+(or `$HOME/.cache/hirsel/results-v2`). A new process verifies the recorded
+signature, lookup, representation and execution reads before using a result.
+Lowered TIR carries the validator's own recorded reads; missing or stale
+validation evidence runs V before use. A corrupt entry is a cache miss.
+
+`HIRSEL_RESULTS` selects `dir@1` (the default), `mem@1`, `none@1` or `sim@1`;
+`HIRSEL_RESULTS_DIR` overrides the disk directory. `HIRSEL_VERIFY_CACHE=1`
+recomputes disk hits and compares their canonical bytes. Use `none@1` with
+`HIRSEL_DAEMON=off` for a cache-free reference check. Source snapshots are
+renewed from disk results after 64 edited revisions to bound retained history.
+
 ## Build and launch a program
 
 ```sh

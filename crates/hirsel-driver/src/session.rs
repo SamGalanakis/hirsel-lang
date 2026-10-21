@@ -30,6 +30,8 @@ pub struct SessionStats {
     pub loads: u64,
     /// Sources replaced in place.
     pub replaced: u64,
+    /// Query memo reads/writes touched by the last check (O3).
+    pub touched: u64,
 }
 
 pub struct Session {
@@ -133,9 +135,7 @@ impl Session {
         if self.program.is_none() {
             self.load()?;
         }
-        let program = self.program.as_mut().unwrap();
-        program.parse_sources()?;
-        Ok(program)
+        Ok(self.program.as_mut().unwrap())
     }
     fn load(&mut self) -> Result<(), ToolError> {
         self.stats.loads += 1;
@@ -170,7 +170,14 @@ impl Session {
     /// `hirsel check`: every package checked, lowering what compile-time
     /// evaluation executes.
     pub fn check(&mut self) -> Result<CheckOutput, ToolError> {
+        let before = self
+            .program
+            .as_ref()
+            .map_or(0, |p| p.engine.memo_stats().touched);
+        let loads = self.stats.loads;
+        self.stats.touched = 0;
         self.program()?;
+        let before = if self.stats.loads == loads { before } else { 0 };
         let revision = self.stats.revision;
         if let Some((checked, output)) = &self.checked
             && *checked == revision
@@ -178,9 +185,9 @@ impl Session {
             return Ok(output.clone());
         }
         let program = self.program.as_mut().unwrap();
-        let output = program
-            .check(LoweringPolicy::Comptime)
-            .map_err(|error| program.error(error))?;
+        let output = program.check(LoweringPolicy::Comptime);
+        self.stats.touched = program.engine.memo_stats().touched.saturating_sub(before);
+        let output = output.map_err(|error| program.error(error))?;
         self.checked = Some((revision, output.clone()));
         Ok(output)
     }
