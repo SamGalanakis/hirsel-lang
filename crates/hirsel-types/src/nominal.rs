@@ -1,7 +1,8 @@
 //! Declaration-path memoization for finite instantiated nominal graphs.
 use crate::*;
 use hirsel_intern::work::{self, Counter};
-use std::collections::{HashMap, HashSet};
+type HashMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
+type HashSet<K> = std::collections::HashSet<K, hirsel_intern::IdHasher>;
 
 /// Operational budget for strictly growing polymorphic recursion. Ordinary
 /// graph width, depth and regular recursive cycles do not consume this budget.
@@ -106,7 +107,7 @@ impl Shapes {
             (Some(a), Some(b)) if a <= b => (),
             _ => return None,
         }
-        let mut memo = std::collections::HashMap::new();
+        let mut memo = HashMap::default();
         let mut pending = vec![(old, new, false)];
         while let Some((a, b, exit)) = pending.pop() {
             if memo.contains_key(&(a, b)) {

@@ -1,6 +1,8 @@
 //! Pure graph transport. Signature lookup and rule diagnostics remain phase-owned.
 use crate::*;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+type IdMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
+type IdSet<K> = std::collections::HashSet<K, hirsel_intern::IdHasher>;
 
 /// Role of an edge in the complete structural type graph. Callable edges cross
 /// one binder for value, type and size parameters, even on nongeneric callables.
@@ -94,7 +96,7 @@ pub fn compile_time_only(kind: &TypeKind) -> bool {
 /// type arguments and callable headers included; nominal representations are
 /// their declarations' own.
 pub fn mentions_compile_time_only(store: &TypeInterner, ty: TypeId) -> bool {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = IdSet::default();
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
         if !seen.insert(ty) {
@@ -110,7 +112,7 @@ pub fn mentions_compile_time_only(store: &TypeInterner, ty: TypeId) -> bool {
 }
 /// Whether `ty` names a generic type or size parameter anywhere in its graph.
 pub fn mentions_parameter(store: &TypeInterner, ty: TypeId) -> bool {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = IdSet::default();
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
         if !seen.insert(ty) {
@@ -290,8 +292,8 @@ pub fn substitute(
         Importer {
             t,
             substitution: *s,
-            memo: HashMap::new(),
-            active: HashSet::new(),
+            memo: IdMap::default(),
+            active: IdSet::default(),
         }
         .ty(ty, 0)
     })
@@ -317,8 +319,8 @@ pub(crate) fn substitute_header(
     let importer = Importer {
         t,
         substitution: *s,
-        memo: HashMap::new(),
-        active: HashSet::new(),
+        memo: IdMap::default(),
+        active: IdSet::default(),
     };
     importer.authority(&mut f.authority, 0)?;
     if let Uses::Only(a) = &mut f.uses {
@@ -344,8 +346,8 @@ pub(crate) fn expand(
             authorities: &authorities,
             roles,
         },
-        memo: HashMap::new(),
-        active: HashSet::new(),
+        memo: IdMap::default(),
+        active: IdSet::default(),
     }
     .ty(representation, 0)
 }
@@ -353,8 +355,8 @@ pub(crate) fn expand(
 struct Importer<'a> {
     t: &'a TypeInterner,
     substitution: Substitution<'a>,
-    memo: HashMap<(TypeId, u32), TypeId>,
-    active: HashSet<TypeId>,
+    memo: IdMap<(TypeId, u32), TypeId>,
+    active: IdSet<TypeId>,
 }
 fn raise_reference<P: Copy>(p: BinderRef<P>, amount: u32) -> BinderRef<P> {
     match p {
@@ -725,7 +727,7 @@ pub(crate) fn directional_equal(
     };
     // `header`: the row is a callable's parameter or result.
     let mut pending = vec![(expected, b_root, payloads.is_some(), root, false)];
-    let mut seen = HashSet::new();
+    let mut seen = IdSet::default();
     while let Some((left, right, view, variance, header)) = pending.pop() {
         if !seen.insert((left, right, view, variance, header)) {
             continue;
@@ -868,8 +870,8 @@ pub fn visit_type_origins_where(
     mut visit: impl FnMut(&Origin, u32) -> Result<(), GraphError>,
 ) -> Result<(), GraphError> {
     let mut pending = vec![(root, 0u32, false)];
-    let mut active = std::collections::HashSet::new();
-    let mut done = std::collections::HashSet::new();
+    let mut active = IdSet::default();
+    let mut done = IdSet::default();
     while let Some((id, depth, exit)) = pending.pop() {
         if exit {
             active.remove(&id);
@@ -940,7 +942,7 @@ pub fn shape_equal_with_holes(
     t.validate(a_root)?;
     t.validate(b_root)?;
     let mut pending = vec![(a_root, b_root)];
-    let mut seen = HashSet::new();
+    let mut seen = IdSet::default();
     while let Some((a_id, b_id)) = pending.pop() {
         if !seen.insert((a_id, b_id)) {
             continue;
