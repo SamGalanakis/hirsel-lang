@@ -47,6 +47,18 @@ impl Compiler {
         engine.verify = self.verify;
         engine.comptime_limits = self.comptime_limits();
         engine.session = true;
+        engine.store_identity = self.identity();
+        if crate::policy::uses_persistent_results() {
+            let name = std::env::var("HIRSEL_RESULTS").unwrap_or_else(|_| "dir@1".into());
+            if std::env::var_os("HIRSEL_VERIFY_CACHE").is_some_and(|v| v != "0") {
+                engine.verify_store = crate::store::VerifyStore::Recompute;
+            }
+            engine.result_store = crate::store::store_by_name(
+                &name,
+                std::env::var_os("HIRSEL_RESULTS_DIR").map(Into::into),
+            )
+            .ok();
+        }
         engine
     }
     pub(crate) fn identity(&self) -> ContentHash {

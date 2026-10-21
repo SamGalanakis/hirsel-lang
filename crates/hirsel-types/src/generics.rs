@@ -5,7 +5,7 @@ use hirsel_intern::work::{self, Counter};
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Shared source declarations with a separate lexical signature overlay.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct GenericDeclarations {
     body: Arc<BTreeMap<SiteRef, Arc<[GenericParameter]>>>,
     permissions: Arc<BTreeMap<SiteRef, Arc<[GenericParameter]>>>,
@@ -13,7 +13,7 @@ pub struct GenericDeclarations {
     depth: i64,
     pub lexical: Option<LexicalContext>,
 }
-#[derive(Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Eq, PartialEq)]
 struct BoundDeclarations {
     position: i64,
     parameters: Arc<[GenericParameter]>,
@@ -298,12 +298,12 @@ pub fn generic_authority_valid(
 }
 
 /// One lexical declaration tree, shared by every body's constant-size view.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct LexicalDeclarations {
     parameters: BTreeMap<SiteRef, (Vec<usize>, std::sync::Arc<[GenericParameter]>)>,
     intervals: Vec<(usize, usize)>,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct LexicalContext {
     declarations: std::sync::Arc<LexicalDeclarations>,
     scope: usize,

@@ -144,7 +144,8 @@ pub fn build_path_native_backend_with_validation(
             if let Some(proofs) = &proofs {
                 options.discharge = proofs.discharge.clone();
             }
-            options.objects = super::units::selected(&target, backend, profile.opt(), sources.is_some(), fuel)?;
+            options.objects =
+                super::units::selected(&target, backend, profile.opt(), sources.is_some(), fuel)?;
             let mut program = super::build(&validated, &options)?;
             // Fuel checks let the executable accept a fuel budget (`budgets.limits@1`).
             program.fuel = fuel;
@@ -162,8 +163,13 @@ pub fn build_path_native_backend_with_validation(
                 false,
                 sources.as_ref(),
             )?;
-            let linked =
-                super::link::link_standalone(&program, &loaded.entry, &objects, &tools, &scratch.0)?;
+            let linked = super::link::link_standalone(
+                &program,
+                &loaded.entry,
+                &objects,
+                &tools,
+                &scratch.0,
+            )?;
             let timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
             std::fs::copy(&linked.path, output).map_err(io)?;
             // The debug file keeps its build-id name beside the executable, where

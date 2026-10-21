@@ -10,7 +10,7 @@
 //! the one-shot CLI does, on those descriptors, and answers with its exit
 //! code; so every byte a command writes is the byte a fresh process writes.
 //! A server refuses (and the client runs the command itself) a client built
-//! from other compiler sources, or whose `HIRSEL_*` environment differs from
+//! from other compiler sources, or whose environment differs from
 //! the server's own, since the compiler reads some of it once per process.
 //!
 //! The socket is `<runtime dir>/hirsel/<identity>-<workspace>.sock`. The
@@ -46,11 +46,11 @@ pub fn workspace(path: &Path) -> PathBuf {
     } else {
         absolute.parent().map(Path::to_path_buf).unwrap_or_default()
     };
-    start
+    let root = start
         .ancestors()
         .find(|a| a.join(".git").exists())
-        .unwrap_or(&start)
-        .to_path_buf()
+        .unwrap_or(&start);
+    std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
 /// The workspace's socket for this compiler.
@@ -70,13 +70,9 @@ fn runtime_dir() -> PathBuf {
     base.join("hirsel")
 }
 
-/// The `HIRSEL_*` variables, which a server must share with its clients.
-fn hirsel_environment(env: &[(String, String)]) -> Vec<(String, String)> {
-    let mut vars: Vec<_> = env
-        .iter()
-        .filter(|(k, _)| k.starts_with("HIRSEL_") && k != "HIRSEL_DAEMON")
-        .cloned()
-        .collect();
+/// Process-wide settings must match: never mutate a multithreaded process's environment.
+fn compatible_environment(env: &[(String, String)]) -> Vec<(String, String)> {
+    let mut vars: Vec<_> = env.iter().cloned().collect();
     vars.sort();
     vars
 }
@@ -84,6 +80,20 @@ fn environment() -> Option<Vec<(String, String)>> {
     std::env::vars_os()
         .map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
         .collect()
+}
+
+// Reading Linux's proc status avoids changing the process-wide umask while
+// another thread may create a file. An unsupported host uses the cold path.
+fn umask() -> Option<u32> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    u32::from_str_radix(
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("Umask:"))?
+            .trim(),
+        8,
+    )
+    .ok()
 }
 
 // ---- the client ----
@@ -156,12 +166,17 @@ fn entry_argument(args: &[String]) -> Option<String> {
 }
 
 fn request(mut stream: UnixStream, argv: Vec<String>) -> Option<u8> {
-    let cwd = std::env::current_dir().ok()?.into_os_string().into_string().ok()?;
+    let cwd = std::env::current_dir()
+        .ok()?
+        .into_os_string()
+        .into_string()
+        .ok()?;
     let body = serde_json::json!({
         "identity": identity(),
         "cwd": cwd,
         "argv": argv,
         "env": environment()?,
+        "umask": umask()?,
     })
     .to_string();
     let mut frame = MAGIC.to_vec();
@@ -200,7 +215,9 @@ fn start(socket: &Path, workspace: &Path) -> Option<UnixStream> {
         .stderr(std::process::Stdio::null());
     unsafe {
         command.pre_exec(|| {
-            libc::setsid();
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
             Ok(())
         });
     }
@@ -262,12 +279,21 @@ pub fn serve(args: &[OsString]) -> u8 {
     while let Some(arg) = args.next() {
         match (arg.to_str(), args.next()) {
             (Some("--workspace"), Some(dir)) => workspace_dir = Some(PathBuf::from(dir)),
-            (Some("--idle"), Some(seconds)) => match seconds.to_str().and_then(|s| s.parse().ok())
-            {
-                Some(seconds) => idle = seconds,
-                None => return usage(),
-            },
+            (Some("--idle"), Some(seconds)) => {
+                match seconds.to_str().and_then(|s| s.parse().ok()) {
+                    Some(seconds) => idle = seconds,
+                    None => return usage(),
+                }
+            }
             _ => return usage(),
+        }
+    }
+    // Own a process group before accepting run requests. Disconnect cleanup
+    // must never signal the invoking shell's process group.
+    unsafe {
+        if libc::getpgrp() != libc::getpid() && libc::setpgid(0, 0) != 0 {
+            eprintln!("hirsel: serve: {}", std::io::Error::last_os_error());
+            return 3;
         }
     }
     let workspace = workspace(&workspace_dir.unwrap_or_else(|| PathBuf::from(".")));
@@ -275,7 +301,10 @@ pub fn serve(args: &[OsString]) -> u8 {
     let listener = match bind(&socket) {
         Ok(Some(listener)) => listener,
         Ok(None) => {
-            eprintln!("hirsel: serve: a server already runs at {}", socket.display());
+            eprintln!(
+                "hirsel: serve: a server already runs at {}",
+                socket.display()
+            );
             return 0;
         }
         Err(error) => {
@@ -308,6 +337,18 @@ fn bind(socket: &Path) -> std::io::Result<Option<UnixListener>> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     }
+    // Serialize stale-socket replacement with other starting servers.
+    use std::os::unix::fs::OpenOptionsExt;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .open(socket.with_extension("lock"))?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
     match UnixListener::bind(socket) {
         Ok(listener) => Ok(Some(listener)),
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
@@ -329,7 +370,7 @@ fn bind(socket: &Path) -> std::io::Result<Option<UnixListener>> {
 fn run_server(listener: &UnixListener, idle: Duration, startup: &[(String, String)]) -> u8 {
     use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
     use std::sync::{Arc, mpsc};
-    let ours = hirsel_environment(startup);
+    let ours = compatible_environment(startup);
     let busy = Arc::new(AtomicBool::new(false));
     let (send, receive) = mpsc::channel::<UnixStream>();
     let Ok(acceptor) = listener.try_clone() else {
@@ -354,7 +395,7 @@ fn run_server(listener: &UnixListener, idle: Duration, startup: &[(String, Strin
         };
         // A request that panicked may have left a session half-updated:
         // answer it, then stop, and the next client starts afresh.
-        let served = serve_one(stream, &ours, startup);
+        let served = serve_one(stream, &ours);
         busy.store(false, SeqCst);
         if served.is_err() {
             return 3;
@@ -367,15 +408,19 @@ struct Request {
     argv: Vec<String>,
     env: Vec<(String, String)>,
     fds: Vec<OwnedFd>,
+    umask: u32,
 }
 
-fn serve_one(mut stream: UnixStream, ours: &[(String, String)], startup: &[(String, String)]) -> Result<(), ()> {
+fn serve_one(mut stream: UnixStream, ours: &[(String, String)]) -> Result<(), ()> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let Some(request) = read_request(&stream) else {
         let _ = stream.write_all(b"R");
         return Ok(());
     };
-    if hirsel_environment(&request.env) != ours || request.fds.len() != 3 {
+    if compatible_environment(&request.env) != ours
+        || request.fds.len() != 3
+        || Some(request.umask) != umask()
+    {
         let _ = stream.write_all(b"R");
         return Ok(());
     }
@@ -386,7 +431,12 @@ fn serve_one(mut stream: UnixStream, ours: &[(String, String)], startup: &[(Stri
     // A run ends with its client: a client that goes away (interrupted,
     // killed) takes the program it ran with it, which here is this server
     // and the process group it leads.
-    let running = request.argv.iter().any(|a| a == "run");
+    let running = request
+        .argv
+        .iter()
+        .take_while(|a| a.as_str() != "--")
+        .find(|a| !a.starts_with("--"))
+        .is_some_and(|a| a == "run");
     let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     if running && let Ok(mut watch) = stream.try_clone() {
         let done = done.clone();
@@ -394,14 +444,16 @@ fn serve_one(mut stream: UnixStream, ours: &[(String, String)], startup: &[(Stri
             let mut byte = [0u8; 1];
             let ended = matches!(watch.read(&mut byte), Ok(0) | Err(_));
             if ended && !done.load(std::sync::atomic::Ordering::SeqCst) {
-                unsafe { libc::kill(0, libc::SIGKILL) };
+                unsafe { libc::kill(-libc::getpid(), libc::SIGKILL) };
             }
         });
     }
     let argv: Vec<OsString> = request.argv.iter().map(OsString::from).collect();
     let started = Instant::now();
-    let outcome = with_request(&request, startup, || {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::execute_resident(argv)))
+    let outcome = with_request(&request, || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::execute_resident(argv)
+        }))
     });
     done.store(true, std::sync::atomic::Ordering::SeqCst);
     let code = outcome.as_ref().map_or(101, |code| *code);
@@ -431,6 +483,9 @@ fn read_request(stream: &UnixStream) -> Option<Request> {
         return None;
     }
     let length = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    if length > 8 * 1024 * 1024 {
+        return None;
+    }
     while bytes.len() < 8 + length {
         let mut more = vec![0u8; 8 + length - bytes.len()];
         let n = (&*stream).read(&mut more).ok()?;
@@ -444,7 +499,10 @@ fn read_request(stream: &UnixStream) -> Option<Request> {
         return None;
     }
     let strings = |v: &serde_json::Value| -> Option<Vec<String>> {
-        v.as_array()?.iter().map(|s| s.as_str().map(str::to_owned)).collect()
+        v.as_array()?
+            .iter()
+            .map(|s| s.as_str().map(str::to_owned))
+            .collect()
     };
     Some(Request {
         cwd: PathBuf::from(value["cwd"].as_str()?),
@@ -455,6 +513,7 @@ fn read_request(stream: &UnixStream) -> Option<Request> {
             .map(|pair| Some((pair[0].as_str()?.to_owned(), pair[1].as_str()?.to_owned())))
             .collect::<Option<_>>()?,
         fds,
+        umask: value["umask"].as_u64()?.try_into().ok()?,
     })
 }
 
@@ -470,7 +529,8 @@ fn recv_with_fds(stream: &UnixStream, buffer: &mut [u8]) -> std::io::Result<(usi
     message.msg_iovlen = 1;
     message.msg_control = control.as_mut_ptr().cast();
     message.msg_controllen = space as _;
-    let received = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut message, libc::MSG_CMSG_CLOEXEC) };
+    let received =
+        unsafe { libc::recvmsg(stream.as_raw_fd(), &mut message, libc::MSG_CMSG_CLOEXEC) };
     if received < 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -489,18 +549,25 @@ fn recv_with_fds(stream: &UnixStream, buffer: &mut [u8]) -> std::io::Result<(usi
             header = libc::CMSG_NXTHDR(&message, header);
         }
     }
+    if message.msg_flags & libc::MSG_CTRUNC != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "truncated descriptors",
+        ));
+    }
     Ok((received as usize, fds))
 }
 
 /// Run `f` as the request's process would: on its standard descriptors, in
 /// its working directory, under its environment; then restore the server's.
-fn with_request<R>(request: &Request, startup: &[(String, String)], f: impl FnOnce() -> R) -> R {
-    let saved: Vec<RawFd> = (0..3).map(|fd| unsafe { libc::dup(fd) }).collect();
+fn with_request<R>(request: &Request, f: impl FnOnce() -> R) -> R {
+    let saved: Vec<RawFd> = (0..3)
+        .map(|fd| unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) })
+        .collect();
     let cwd = std::env::current_dir().ok();
     for (fd, client) in request.fds.iter().enumerate() {
         unsafe { libc::dup2(client.as_raw_fd(), fd as RawFd) };
     }
-    set_environment(&request.env);
     let entered = std::env::set_current_dir(&request.cwd).is_ok();
     let result = if entered {
         f()
@@ -518,28 +585,14 @@ fn with_request<R>(request: &Request, startup: &[(String, String)], f: impl FnOn
     if let Some(cwd) = cwd {
         let _ = std::env::set_current_dir(cwd);
     }
-    set_environment(startup);
     result
 }
 fn unreachable_cwd<R>(cwd: &Path) -> R {
-    panic!("hirsel: serve: the client's working directory {} is gone", cwd.display())
+    panic!(
+        "hirsel: serve: the client's working directory {} is gone",
+        cwd.display()
+    )
 }
-/// Make the process environment exactly `env`. The server's work runs on
-/// this one thread, so nothing reads the environment while it changes.
-fn set_environment(env: &[(String, String)]) {
-    let wanted: std::collections::BTreeMap<_, _> = env.iter().cloned().collect();
-    for (key, _) in std::env::vars_os() {
-        if key.to_str().is_none_or(|k| !wanted.contains_key(k)) {
-            unsafe { std::env::remove_var(key) };
-        }
-    }
-    for (key, value) in &wanted {
-        if std::env::var(key).ok().as_ref() != Some(value) {
-            unsafe { std::env::set_var(key, value) };
-        }
-    }
-}
-
 /// `hirsel check --watch <args>`: check, then check again whenever a file
 /// the program depends on changes (polled every 100 ms), until interrupted.
 pub fn watch(args: Vec<OsString>) -> u8 {
@@ -552,8 +605,60 @@ pub fn watch(args: Vec<OsString>) -> u8 {
             "hirsel: checked in {} ms (exit {code}); watching for changes",
             started.elapsed().as_millis()
         );
-        while !hirsel_driver::session::resident_changed() {
+        loop {
             std::thread::sleep(Duration::from_millis(100));
+            if hirsel_driver::session::resident_changed() {
+                break;
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn resident_descriptors_and_split_frames_round_trip() {
+        let (sender, receiver) = UnixStream::pair().unwrap();
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let expected = b"a frame split after its descriptors";
+        send_with_fds(&sender, &expected[..7], &[file.as_raw_fd(); 3]).unwrap();
+        (&sender).write_all(&expected[7..]).unwrap();
+        let mut buffer = [0; 128];
+        let (n, fds) = recv_with_fds(&receiver, &mut buffer).unwrap();
+        assert_eq!(fds.len(), 3);
+        assert_eq!(&buffer[..n], &expected[..n]);
+        for fd in fds {
+            assert_ne!(
+                unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+                0
+            );
+        }
+    }
+    #[test]
+    fn resident_request_bounds_frame_size_before_allocation() {
+        let (sender, receiver) = UnixStream::pair().unwrap();
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend(u32::MAX.to_le_bytes());
+        sender
+            .set_write_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        (&sender).write_all(&bytes).unwrap();
+        assert!(read_request(&receiver).is_none());
+    }
+    #[test]
+    fn resident_entry_options_do_not_select_an_option_value_as_a_workspace() {
+        let args: Vec<_> = [
+            "--backend",
+            "cranelift",
+            "--debug",
+            "-o",
+            "out",
+            "source.hir",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        assert_eq!(entry_argument(&args).as_deref(), Some("source.hir"));
     }
 }

@@ -8,7 +8,7 @@ rust-version.workspace = true
 [[bin]]
 name = "hirsel"
 path = "src/main.rs"
-test = false
+test = true
 
 [dependencies]
 hirsel-guard = { path = "../hirsel-guard" }

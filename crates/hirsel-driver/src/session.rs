@@ -44,6 +44,7 @@ pub struct Session {
     /// same revision is the same check.
     checked: Option<(u64, CheckOutput)>,
     stats: SessionStats,
+    loaded_revision: u64,
 }
 
 impl Session {
@@ -57,6 +58,7 @@ impl Session {
             seen: BTreeMap::new(),
             checked: None,
             stats: SessionStats::default(),
+            loaded_revision: 0,
         }
     }
     pub fn entry(&self) -> &Path {
@@ -97,15 +99,16 @@ impl Session {
             return self.stats.revision;
         };
         for change in changes {
-            let source = self.seen.get(&change.path).is_some_and(|(source, _)| *source);
+            let source = self
+                .seen
+                .get(&change.path)
+                .is_some_and(|(source, _)| *source);
             let text = change
                 .bytes
                 .as_ref()
                 .and_then(|b| String::from_utf8(b.clone()).ok());
             let replaced = match text {
-                Some(text) if source => program
-                    .replace_source(&change.path, text)
-                    .unwrap_or(false),
+                Some(text) if source => program.replace_source(&change.path, text).unwrap_or(false),
                 _ => false,
             };
             if !replaced {
@@ -124,6 +127,9 @@ impl Session {
     pub fn program(&mut self) -> Result<&mut LoadedProgram, ToolError> {
         let changes = self.poll();
         self.apply(changes);
+        if self.stats.revision.saturating_sub(self.loaded_revision) >= 64 {
+            self.program = None;
+        }
         if self.program.is_none() {
             self.load()?;
         }
@@ -133,7 +139,15 @@ impl Session {
     }
     fn load(&mut self) -> Result<(), ToolError> {
         self.stats.loads += 1;
+        self.loaded_revision = self.stats.revision;
         self.seen.clear();
+        self.seen
+            .insert(self.entry.clone(), (false, std::fs::read(&self.entry).ok()));
+        let mut sidecar = self.entry.as_os_str().to_os_string();
+        sidecar.push(".json");
+        let sidecar = PathBuf::from(sidecar);
+        self.seen
+            .insert(sidecar.clone(), (false, std::fs::read(sidecar).ok()));
         let program = crate::COMPILER
             .with_verify(self.verify)
             .load_program(&self.entry)?;
@@ -197,9 +211,11 @@ pub fn enable_resident(limit: usize) {
 /// Whether a file of any kept session changed since it was last used.
 pub fn resident_changed() -> bool {
     RESIDENT.with(|r| {
-        r.borrow()
-            .as_ref()
-            .is_some_and(|r| r.sessions.iter().any(|(_, s)| !s.poll().is_empty()))
+        r.borrow().as_ref().is_some_and(|r| {
+            r.sessions
+                .iter()
+                .any(|(_, s)| s.program.is_none() || !s.poll().is_empty())
+        })
     })
 }
 pub fn resident() -> bool {

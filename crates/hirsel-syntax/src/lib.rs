@@ -340,7 +340,7 @@ pub enum BinaryOp {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AssignOp(pub Option<BinaryOp>);
 /// Literal spelling is preserved independently of type inference and numeric conversion (LANG-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Literal {
     Integer(String),
     Float(String),
@@ -1515,7 +1515,7 @@ mod tests {
 }
 
 /// Definition manifest assigns module identity independently of file layout (PROG-1/5; issue #4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct FileContext {
     pub package: PackageId,
     pub modules: Vec<String>,

@@ -478,6 +478,7 @@ dependencies = [
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-types",
+ "serde",
 ]
 
 [[package]]
@@ -1131,6 +1132,7 @@ dependencies = [
  "hirsel-tir",
  "hirsel-type-analysis",
  "hirsel-types",
+ "serde",
 ]
 
 [[package]]

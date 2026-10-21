@@ -44,7 +44,7 @@ pub mod image;
 mod package;
 pub use image::{ImageRecord, StdImage, StdImages, release_shared_caches, report_images};
 mod policy;
-pub use policy::{LoweringPolicy, Verify, free_sessions};
+pub use policy::{LoweringPolicy, Verify, free_sessions, persistent_results};
 mod admission;
 mod proof_export;
 mod queries;

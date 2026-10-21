@@ -4,7 +4,7 @@ use hirsel_syntax::PackageId;
 
 /// Every attempted manifest lookup is retained, including misses. The explicit
 /// manifest revision closes the gap in SignatureDependency (spec issue #4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum DependencyRead {
     ProviderLookup {
         context: FileContext,
@@ -32,7 +32,7 @@ pub enum DependencyRead {
 }
 
 /// Contextual ordinals belong to this nominal owner, never to a file or Symbol.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum ContextualName {
     Constructor(DefPath),
     Variant {
@@ -46,27 +46,27 @@ pub enum ContextualName {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct DeferredName {
     pub site: NameSite,
     pub span: Span,
     pub name: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum GenericParameterName {
     Type(TypeParameterRef),
     Size(SizeParameterRef),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct GenericBinding {
     pub owner: NameSite,
     pub name: Symbol,
     pub parameter: GenericParameterName,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum LookupError {
     Missing,
     /// A known module head was searched, retaining its candidates for diagnostics

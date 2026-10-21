@@ -16,11 +16,15 @@ use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
 
 /// V's identity of one signature view: a hash over every field it holds.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub struct ValidationDigest(pub ContentHash);
 
 /// One input V observed.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub enum VRead {
     /// The view of a signature V read, by its digest.
     View(DefId, ValidationDigest),

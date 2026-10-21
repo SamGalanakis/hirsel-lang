@@ -68,6 +68,7 @@ mod receiving_loans;
 mod recursive_groups;
 mod registry_sources;
 mod representation;
+mod resident;
 mod run_isolation;
 mod runner;
 mod runtime;

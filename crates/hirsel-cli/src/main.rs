@@ -16,6 +16,7 @@ mod serve;
 use execution_policy::{DEFAULT_BENCH_MILLISECONDS, DEFAULT_RUN_MAX_STEPS};
 
 fn main() -> ExitCode {
+    hirsel_engine::persistent_results(true);
     let start = std::time::Instant::now();
     hirsel_engine::with_compiler_stack(|| {
         ExitCode::from(execute(env::args_os().skip(1).collect(), start))

@@ -751,7 +751,7 @@ pub struct Signature {
 pub type SignatureRef = std::sync::Arc<Signature>;
 
 /// A resolved name is a binding, primitive, nominal definition or contextual variant (LANG-4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedName {
     Local(LocalId),
     Parameter(ParamId),
@@ -762,7 +762,7 @@ pub enum ResolvedName {
     Primitive(Primitive),
 }
 /// Resolver output is shared data, not resolver crate internals (LANG-4, PROG-5).
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct Resolution {
     pub reads: Vec<DependencyRead>,
     pub contextual: Vec<(NameSite, ContextualName)>,
@@ -788,12 +788,12 @@ pub enum UseKind {
     Mut,
 }
 /// The lowering action selected for a unary `unique` operation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UniqueAction {
     AlreadyUnique,
     DeepCopy,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct UniqueDecision {
     pub expression: ExprId,
     pub action: UniqueAction,
@@ -808,21 +808,21 @@ impl UniqueAction {
     }
 }
 /// A guard tests borrowed payloads before committing ownership to its arm.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct GuardedPatternUse {
     pub pattern: PatternId,
     pub test: UseKind,
     pub commit: UseKind,
 }
 /// Capture creation context shared by authority, ownership and lowering.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CaptureContext {
     Scoped,
     OwningScoped,
     Escaping,
     Task,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct CaptureMode {
     pub expression: ExprId,
     pub ordinal: u32,
@@ -831,7 +831,7 @@ pub struct CaptureMode {
     pub context: CaptureContext,
 }
 /// Complete static decisions; cleanup lowering still determines ordered drops.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct OwnershipFacts {
     /// Plain rows in the session interner; K omits their cleanup.
     pub plain_types: std::collections::HashSet<TypeId>,
@@ -866,7 +866,7 @@ pub struct OwnershipFacts {
 }
 
 /// Lowering must obey checker decisions instead of inferring ownership again (LANG-3, OWN-8).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Elaboration {
     pub expression: ExprId,
     pub ty: TypeId,
@@ -874,21 +874,21 @@ pub struct Elaboration {
     pub instantiated_arguments: Vec<GenericArgument>,
 }
 /// Recorded generic call; TypeIds refer to the enclosing CheckedBody.types (GEN-5).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Instantiation {
     pub expression: ExprId,
     pub callee: DefPath,
     pub arguments: Vec<GenericArgument>,
 }
 /// Explicit capture selected at closure construction, independent of uses inside its body (CLO-1/3/4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Capture {
     pub binding: ResolvedName,
     pub usage: UseKind,
     pub ty: TypeId,
 }
 /// Mode-checked environment layout in capture evaluation order (MODE-5, LANG-3).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ClosureInfo {
     /// Complete body result, independently of the contextual callable promise.
     pub result_evidence: Option<TypeId>,
@@ -897,7 +897,7 @@ pub struct ClosureInfo {
     pub ty: TypeId,
 }
 /// Binding identity is scoped by its declaring function; resolver locals are not TIR slots.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct BindingDecision {
     pub owner: NameSite,
     pub binding: ResolvedName,
@@ -907,7 +907,7 @@ pub struct BindingDecision {
     pub mutable: bool,
 }
 /// Explicit pattern decision; children map source patterns to declaration-order fields.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct PatternDecision {
     pub pattern: PatternId,
     pub ty: TypeId,
@@ -933,7 +933,7 @@ impl PatternDecision {
 }
 /// The mode axes a `let` annotation writes (MODE-1/2/3). A written axis is the
 /// receiving contract; an unwritten one follows the received value.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct WrittenModes {
     /// `sendable` qualifies the annotation root.
     pub sendable: bool,
@@ -947,7 +947,7 @@ pub struct WrittenModes {
     /// the contract and whose multiplicity is Many unless `once` is written.
     pub function: bool,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum PatternDecisionKind {
     Wildcard,
     Binding(LocalId),
@@ -962,14 +962,14 @@ pub enum PatternDecisionKind {
 }
 /// A checked source storage path. Value roots cover computed receivers as well
 /// as expressions which do not designate a binding's storage.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct SourcePlace {
     pub expression: ExprId,
     pub root: SourceRoot,
     pub projections: SharedPath<SourceProjection>,
     pub access: SourceAccess,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum SourceRoot {
     Binding {
         owner: NameSite,
@@ -978,19 +978,19 @@ pub enum SourceRoot {
     Definition(DefPath),
     Value(ExprId),
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct SourceProjection {
     /// The source node performing this step; dotted path steps share a node.
     pub expression: ExprId,
     pub kind: SourceProjectionKind,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum SourceProjectionKind {
     Field(FieldId),
     VariantField { variant: VariantId, field: FieldId },
     Index(ExprId),
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceAccess {
     Read,
     Copy,
@@ -999,7 +999,7 @@ pub enum SourceAccess {
     Unique,
 }
 /// One H-checked call, keyed by its retained source expression.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct CheckedCall {
     pub expression: ExprId,
     pub target: CallTarget,
@@ -1010,31 +1010,31 @@ pub struct CheckedCall {
     pub result: TypeId,
     pub state: CallState,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct CheckedArgument {
     pub expression: ExprId,
     /// Missing only for an unmapped recovery operand; never a positional fallback.
     pub parameter: Option<(u32, Parameter)>,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum CallTarget {
     Definition(DefPath),
     Value(ExprId),
     Constructor(ContextualName),
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CallState {
     Complete,
     MissingCapabilities,
     Recovery,
 }
 /// Source-authorized loop conversion, independently checked after lowering.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum CheckedTailKind {
     SelfTail,
     ConstructorHole(Vec<u32>),
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct CheckedTail {
     pub call: ExprId,
     pub kind: CheckedTailKind,
@@ -1042,7 +1042,7 @@ pub struct CheckedTail {
     pub owned_loop_arguments: Vec<(ParamId, ExprId)>,
 }
 /// Typechecked body tables keyed by source expression; mode checking enriches these tables (MODE-7).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct CheckedBody {
     /// The definition occurrence whose syntax these tables are keyed by; rows
     /// qualify the body's lexical sites with it.
@@ -1095,14 +1095,14 @@ mod tests {
 }
 
 /// Query failures distinguish unavailable implementation from language diagnostics (LANG-6).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum QueryError {
     /// Transient host/provider failure, never a deterministic rejection cache entry.
     Operational(OperationalFailure),
     NotImplemented,
     Diagnostics(Vec<Diagnostic>),
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct OperationalFailure {
     pub operation: String,
     pub message: String,
@@ -1113,7 +1113,7 @@ impl QueryError {
     }
 }
 /// A query may return recoverable diagnostics together with syntax (LANG-1).
-#[derive(Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct QueryOutput<T> {
     pub value: T,
     pub diagnostics: Vec<Diagnostic>,
@@ -1127,7 +1127,7 @@ pub struct SignatureDependency {
 }
 
 /// One lookup records a manifest dependency even when resolution failed.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct LookupOutput {
     pub manifest: ContentHash,
     pub result: Result<DefPath, QueryError>,
