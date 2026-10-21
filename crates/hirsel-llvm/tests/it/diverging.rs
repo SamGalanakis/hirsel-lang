@@ -46,6 +46,7 @@ fn a_diverging_call_branches_on_status_without_noreturn() {
     let input = input();
     let failures = failure_codes();
     let inputs = EmitInputs {
+        verify_backend: true,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,

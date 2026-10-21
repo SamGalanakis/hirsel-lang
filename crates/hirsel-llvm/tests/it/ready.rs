@@ -233,6 +233,7 @@ fn emit(program: &Program, opt: OptLevel) -> Vec<u8> {
     let codes = failure_codes();
     let input = input();
     let inputs = EmitInputs {
+        verify_backend: true,
         input: &input,
         target: &program.table.target,
         layouts: &program.table.table,

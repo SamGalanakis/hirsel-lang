@@ -205,6 +205,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
     let empty = BTreeSet::new();
     let registry = DescriptorRegistry::new(&table, &finalizers);
     let inputs = EmitInputs {
+        verify_backend: true,
         input: &input,
         target,
         layouts: &table,

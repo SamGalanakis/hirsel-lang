@@ -642,15 +642,14 @@ impl<'context> Module<'context> {
         };
     }
 
-    /// Gives a function `linkonce_odr` linkage: every object whose units call it carries
-    /// an identical copy, the linker keeps one, and an object that inlines every call may
-    /// drop it (a library unit, LIR schema revision 7).
-    pub(crate) fn make_linkonce_odr(&self, function: Function<'_>) {
+    /// Retain a template's out-of-line implementation in its own object even when
+    /// this module inlines every local call. Other programs may share this object.
+    pub(crate) fn make_weak_odr(&self, function: Function<'_>) {
         // SAFETY: `function` is a live function of this module.
         unsafe {
             LLVMSetLinkage(
                 function.value.raw,
-                llvm_sys::LLVMLinkage::LLVMLinkOnceODRLinkage,
+                llvm_sys::LLVMLinkage::LLVMWeakODRLinkage,
             )
         };
     }

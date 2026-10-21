@@ -223,8 +223,8 @@ fn optimize_and_emit(
 /// src/options.rs:3014), which Cranelift emission shares (`hirsel_cranelift`'s
 /// `enable_verifier`). Text IR (`compile_ir`) and the inspected IR texts are always
 /// verified.
-fn validate_stages() -> bool {
-    cfg!(debug_assertions) || hirsel_lir::emission::validate_stages()
+fn verify_backend(inputs: &EmitInputs<'_>) -> bool {
+    cfg!(debug_assertions) || inputs.verify_backend
 }
 
 fn optimize(
@@ -270,7 +270,7 @@ pub fn emit_object_profile(
     sources: Option<&crate::ProfileSources>,
 ) -> Result<ObjectArtifact, CodegenError> {
     let (bytes, manifested) = lower(units, inputs, sources, |module, machine| {
-        optimize_and_emit(module, machine, inputs.opt, validate_stages())
+        optimize_and_emit(module, machine, inputs.opt, verify_backend(inputs))
     })?;
     let file = ObjectFile::read(inputs.target, bytes)
         .map_err(|message| CodegenError::Object { message })?;
@@ -329,6 +329,7 @@ fn lower<T>(
         });
     }
     let mut manifested = Manifested::default();
+    let mut optimizer_only = BTreeSet::new();
     let finished = {
         let machine = machine(inputs.target, inputs.opt != OptLevel::None)?;
         let context = Context::new();
@@ -339,6 +340,9 @@ fn lower<T>(
         let mut functions = Vec::new();
         for unit in units {
             let unit = unit.unit();
+            let template = unit.header.origin == UnitOrigin::Library
+                || inputs.inline_instances.contains(&unit.header.instance);
+            let copy = inputs.available_externally.contains(&unit.header.instance);
             let abi = fn_abi(inputs.layouts, unit.header.abi, &unit.header.definition)?;
             let name = symbol_name(&unit.header.definition, Some(&unit.header.instance));
             if module.defines(&name)
@@ -386,19 +390,25 @@ fn lower<T>(
                     &external,
                     inputs.layouts,
                 );
-                module.make_linkonce_odr(entry);
+                if copy {
+                    module.make_available_externally(entry);
+                    optimizer_only.insert(name.clone());
+                    optimizer_only.insert(body_name.clone());
+                } else {
+                    module.make_weak_odr(entry);
+                }
                 module.add_attribute(entry, AttributeSlot::Function, Attribute::InlineHint);
                 manifested.library.insert(body_name);
                 entry
             };
             // A small source unit another object implements and exports: here only an
             // inlinable body. Calls the optimizer keeps stay imports of that export.
-            if inputs.available_externally.contains(&unit.header.instance) {
+            if copy && !template {
                 module.make_available_externally(function);
                 functions.push((unit, function, signature));
                 continue;
             }
-            if inputs.callbacks.contains(&unit.header.definition) {
+            if !copy && inputs.callbacks.contains(&unit.header.definition) {
                 let thunk =
                     callback_thunk_name(&unit.header.definition, Some(&unit.header.instance));
                 let callback = foreign::define_callback_thunk(
@@ -414,7 +424,7 @@ fn lower<T>(
                 if unit.header.origin == UnitOrigin::Library
                     || inputs.inline_instances.contains(&unit.header.instance)
                 {
-                    module.make_linkonce_odr(callback);
+                    module.make_weak_odr(callback);
                     module.add_attribute(callback, AttributeSlot::Function, Attribute::InlineHint);
                     manifested.library.insert(thunk);
                 } else {
@@ -429,13 +439,16 @@ fn lower<T>(
                     );
                 }
             }
-            // A library unit is in every object whose units call it, `linkonce_odr` and
-            // `inlinehint`, so a partition never changes whether it inlines. It is no
-            // export of the object: the copy may be gone once every call is inlined.
-            if unit.header.origin == UnitOrigin::Library
-                || inputs.inline_instances.contains(&unit.header.instance)
-            {
-                module.make_linkonce_odr(function);
+            // rustc_middle/src/mono.rs:132: shared owners at O0, local optimizer
+            // copies above. A template's owner retains its definition independently
+            // of its callers; an available_externally copy emits no machine code.
+            if template {
+                if copy {
+                    module.make_available_externally(function);
+                    optimizer_only.insert(name.clone());
+                } else {
+                    module.make_weak_odr(function);
+                }
                 let attribute = if unit.header.definition.is_core("list.push")
                     || unit.header.definition.is_core("$native.list_push_spare")
                     || unit.header.definition.is_core("net.read_into")
@@ -458,7 +471,12 @@ fn lower<T>(
                     let name =
                         function_thunk_name(&unit.header.definition, Some(&unit.header.instance));
                     let thunk = define_function_thunk(&module, &name, entry, &external);
-                    module.make_linkonce_odr(thunk);
+                    if copy {
+                        module.make_available_externally(thunk);
+                        optimizer_only.insert(name.clone());
+                    } else {
+                        module.make_weak_odr(thunk);
+                    }
                     module.add_attribute(thunk, AttributeSlot::Function, Attribute::InlineHint);
                     manifested.library.insert(name);
                 }
@@ -515,6 +533,49 @@ fn lower<T>(
             }
             emitter.registry_table()?;
             emitter.emit()?;
+        }
+        // Copied root bodies were visible during lowering for the private root ABI.
+        // They are optimizer-only: residual calls resolve to the template's owner.
+        for name in &optimizer_only {
+            manifested.library.remove(name);
+            manifested
+                .imports
+                .entry(name.clone())
+                .or_insert_with(|| ObjectSymbol {
+                    name: name.clone(),
+                    kind: ObjectSymbolKind::Function,
+                    definition: None,
+                    abi: None,
+                });
+        }
+        // The retained owner symbols are visible to other objects' link manifests.
+        // `library` also tracks the private root ABI while lowering, so promote only
+        // after every body has been emitted.
+        for unit in units {
+            let header = &unit.unit().header;
+            if inputs.available_externally.contains(&header.instance) {
+                continue;
+            }
+            let name = symbol_name(&header.definition, Some(&header.instance));
+            let abi = fn_abi(inputs.layouts, header.abi, &header.definition)?;
+            for name in [
+                format!("{name}{ROOTS_SUFFIX}"),
+                name,
+                function_thunk_name(&header.definition, Some(&header.instance)),
+                callback_thunk_name(&header.definition, Some(&header.instance)),
+            ] {
+                if manifested.library.remove(&name) {
+                    manifested.exports.insert(
+                        name.clone(),
+                        ObjectSymbol {
+                            name,
+                            kind: ObjectSymbolKind::Function,
+                            definition: Some(header.definition.clone()),
+                            abi: Some(abi_digest(abi)),
+                        },
+                    );
+                }
+            }
         }
         // An import the module also defines is internal to the object.
         manifested.imports.retain(|name, _| {

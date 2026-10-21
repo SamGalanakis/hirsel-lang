@@ -107,6 +107,7 @@ pub fn emit_ir(program: &ReadyProgram, opt: OptLevel) -> Result<String, NativeEr
     let failures = failure_codes(program);
     let units: Vec<_> = program.units.iter().collect();
     let inputs = EmitInputs {
+        verify_backend: hirsel_lir::emission::validate_stages(),
         input: &program.input,
         target: &program.target,
         layouts: &program.table,
@@ -137,6 +138,7 @@ pub fn emit_clif(program: &ReadyProgram) -> Result<String, NativeError> {
     let failures = failure_codes(program);
     let units: Vec<_> = program.units.iter().collect();
     let inputs = EmitInputs {
+        verify_backend: hirsel_lir::emission::validate_stages(),
         input: &program.input,
         target: &program.target,
         layouts: &program.table,
@@ -179,6 +181,7 @@ pub(crate) fn emit_registered(
         .map(|(_, unit)| unit)
         .collect();
     let inputs = EmitInputs {
+        verify_backend: hirsel_lir::emission::validate_stages(),
         input: &program.input,
         target: &program.target,
         layouts: &program.table,

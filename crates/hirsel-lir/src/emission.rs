@@ -78,8 +78,9 @@ pub struct EmitInputs<'a> {
     pub finalizers: &'a BTreeMap<LayoutId, ContentHash>,
     /// Source specializations and known callable bodies replicated by the driver.
     pub inline_instances: &'a BTreeSet<ContentHash>,
-    /// Small source units another object of the partition implements, emitted here as
-    /// `available_externally` bodies so calls into them inline across objects.
+    /// Units owned by another object: LLVM keeps these as optimizer-only bodies,
+    /// including library templates and their root adapters and callable thunks.
+    /// Cranelift skips these bodies. Omit them entirely when no inlining is needed.
     pub available_externally: &'a BTreeSet<ContentHash>,
     /// The definitions some unit of the program names as a C callback (PROG-4): each one's
     /// own object exports its `callback_thunk_name` thunk.
@@ -89,6 +90,9 @@ pub struct EmitInputs<'a> {
     /// non-blocking `home` call.
     pub foreign: &'a BTreeMap<DefPath, u64>,
     pub opt: OptLevel,
+    /// Run the backend IR verifier (the explicit every-stage harness policy).
+    /// Debug-assertion compilers verify regardless of this value.
+    pub verify_backend: bool,
     pub registry: crate::descriptor_registry::DescriptorRegistry,
     /// Instrument inline count edges. Set only when linking a measurement runtime archive.
     pub measurement: bool,
@@ -656,6 +660,7 @@ mod tests {
         };
         let finalizers = BTreeMap::new();
         let inputs = EmitInputs {
+            verify_backend: true,
             input: &input,
             target: &target,
             layouts: &layouts,

@@ -199,6 +199,10 @@ pub(crate) struct Emitter<'a> {
 }
 
 pub(crate) fn isa(target: &TargetSpec, opt: OptLevel) -> Emitted<OwnedTargetIsa> {
+    isa_with_verifier(target, opt, hirsel_lir::emission::validate_stages())
+}
+
+fn isa_with_verifier(target: &TargetSpec, opt: OptLevel, verify: bool) -> Emitted<OwnedTargetIsa> {
     let refuse = |message: String| CodegenError::Target {
         triple: target.triple.clone(),
         message,
@@ -217,7 +221,7 @@ pub(crate) fn isa(target: &TargetSpec, opt: OptLevel) -> Emitted<OwnedTargetIsa>
         // shipped compiler skips it, as cg_clif does (src/lib.rs:257).
         (
             "enable_verifier",
-            if cfg!(debug_assertions) || hirsel_lir::emission::validate_stages() {
+            if cfg!(debug_assertions) || verify {
                 "true"
             } else {
                 "false"
@@ -298,22 +302,17 @@ pub(crate) fn emit(
             definition: Some(header.definition.clone()),
             abi: Some(abi_digest(abi)),
         };
-        if library {
-            emitter.manifested.library.insert(name.clone());
-            if let Some(thunk) = &thunk {
-                emitter.manifested.library.insert(thunk.clone());
-            }
-        } else {
+        // A template's own object retains weak definitions; callers import them.
+        // The owner participates in the same link manifest as an ordinary source unit.
+        emitter
+            .manifested
+            .exports
+            .insert(name.clone(), record(&name));
+        if let Some(thunk) = &thunk {
             emitter
                 .manifested
                 .exports
-                .insert(name.clone(), record(&name));
-            if let Some(thunk) = &thunk {
-                emitter
-                    .manifested
-                    .exports
-                    .insert(thunk.clone(), record(thunk));
-            }
+                .insert(thunk.clone(), record(thunk));
         }
         if let Some(thunk) = thunk {
             let thunk_sig = thunk_signature(&sig.ir, abi.caller_site);
@@ -325,14 +324,10 @@ pub(crate) fn emit(
                 &header.definition,
                 Some(&header.instance),
             );
-            if library {
-                emitter.manifested.library.insert(callback.clone());
-            } else {
-                emitter
-                    .manifested
-                    .exports
-                    .insert(callback.clone(), record(&callback));
-            }
+            emitter
+                .manifested
+                .exports
+                .insert(callback.clone(), record(&callback));
             emitter.define_callback(&callback, id, &sig, linkage, &header.definition)?;
         }
         bodies.push((unit, id, sig));
@@ -431,7 +426,7 @@ pub(crate) fn colocate_hirsel_symbols(
 
 impl<'a> Emitter<'a> {
     pub(crate) fn new(inputs: &'a EmitInputs<'a>, clif: bool) -> Emitted<Self> {
-        let isa = isa(inputs.target, inputs.opt)?;
+        let isa = isa_with_verifier(inputs.target, inputs.opt, inputs.verify_backend)?;
         let call_conv = isa.default_call_conv();
         let builder = ObjectBuilder::new(isa, "hirsel", cranelift_module::default_libcall_names())
             .map_err(|e| CodegenError::Target {

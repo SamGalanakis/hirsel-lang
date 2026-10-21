@@ -24,6 +24,7 @@ fn inputs<'a>(
     static EMPTY_INLINE: std::collections::BTreeSet<hirsel_syntax::ContentHash> =
         std::collections::BTreeSet::new();
     EmitInputs {
+        verify_backend: true,
         input,
         target: &program.table.target,
         layouts: &program.table.table,
@@ -171,6 +172,7 @@ fn a_receipt_for_other_inputs_is_rejected() {
     };
     assert_eq!(
         problem(&EmitInputs {
+            verify_backend: true,
             input: &other,
             ..valid.clone()
         }),
