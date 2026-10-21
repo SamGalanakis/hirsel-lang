@@ -447,3 +447,88 @@ fn fully_restored_frozen_frontier_does_not_validate_a_signature_snapshot() {
         }
     });
 }
+
+#[test]
+fn cold_frozen_frontier_defers_v_until_the_validation_universe_is_requested() {
+    with_compiler_stack(|| {
+        use hirsel_intern::{
+            jobs::Jobs,
+            work::{self, Counter},
+        };
+        let source = "fn a(x:u8) -> u8 { x + 1u8 }\nfn b() -> u8 { a(2u8) }\n";
+        for jobs in [1, 2, 8] {
+            let mut frozen = engine(Arc::new(store::NoneStore));
+            let file = frozen.sources.add("resident.hir", source.into()).unwrap();
+            frozen.parse_file(file, &default_context()).unwrap();
+            let before = work::read(Counter::ValidateSignatureRows);
+            let outputs = frozen.mode_definitions(vec![path("a"), path("b")], Jobs::new(jobs));
+            assert!(
+                outputs
+                    .iter()
+                    .all(|o| o.result.as_ref().unwrap().diagnostics.is_empty())
+            );
+            assert_eq!(
+                work::read(Counter::ValidateSignatureRows) - before,
+                0,
+                "ordinary P reads signatures, without consuming V's universe"
+            );
+            let snapshot = frozen.signature_snapshot();
+            assert!(work::read(Counter::ValidateSignatureRows) > before);
+            let after = work::read(Counter::ValidateSignatureRows);
+            let second = frozen.signature_snapshot();
+            assert!(Arc::ptr_eq(&snapshot, &second));
+            assert_eq!(work::read(Counter::ValidateSignatureRows), after);
+            let mut scalar = engine(Arc::new(store::NoneStore));
+            assert!(checked(&mut scalar, source).diagnostics.is_empty());
+            assert_eq!(
+                frozen.export_tir(&path("b")).unwrap(),
+                scalar.export_tir(&path("b")).unwrap()
+            );
+        }
+    });
+}
+
+#[test]
+fn deferred_snapshot_extensions_preserve_unconsumed_seed_receipts() {
+    with_compiler_stack(|| {
+        use hirsel_intern::{
+            jobs::Jobs,
+            work::{self, Counter},
+        };
+        let source = "fn a() -> u8 { 1u8 }\nfn b() -> u8 { 2u8 }\n";
+        let mut writer = engine(Arc::new(store::NoneStore));
+        let file = writer.sources.add("resident.hir", source.into()).unwrap();
+        writer.parse_file(file, &default_context()).unwrap();
+        let seed = writer.signature_snapshot().seed();
+        drop(writer);
+        for jobs in [1, 2, 8] {
+            let mut reader = engine(Arc::new(store::NoneStore));
+            let file = reader.sources.add("resident.hir", source.into()).unwrap();
+            reader.parse_file(file, &default_context()).unwrap();
+            reader.seed_signature_verdicts(&seed);
+            let before = work::read(Counter::ValidateSignatureRows);
+            assert!(
+                reader
+                    .mode_definitions(vec![path("a"), path("b")], Jobs::new(jobs))
+                    .iter()
+                    .all(|o| o.result.is_ok())
+            );
+            let edited = source.replace("fn a() -> u8 { 1u8 }", "fn a() -> u16 { 1u16 }");
+            let file = reader.sources.add("resident.hir", edited).unwrap();
+            reader.parse_file(file, &default_context()).unwrap();
+            assert!(
+                reader
+                    .mode_definitions(vec![path("a")], Jobs::new(jobs))
+                    .iter()
+                    .all(|o| o.result.is_ok())
+            );
+            assert_eq!(work::read(Counter::ValidateSignatureRows) - before, 0);
+            reader.signature_snapshot();
+            assert_eq!(
+                work::read(Counter::ValidateSignatureRows) - before,
+                1,
+                "only a changed view is checked; unused successful seed receipts survive deferred epochs"
+            );
+        }
+    });
+}

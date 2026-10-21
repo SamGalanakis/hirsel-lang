@@ -837,3 +837,10 @@ declaration's lexical identity. `checked_definition_summaries` exposes keyed
 pre-mode inputs for consumers that need query identity. Independent checked
 summary memos retain those inputs before mode publication and body release.
 Fully cached frontiers return before building worker snapshot inputs.
+
+Frozen P signature inputs defer construction of V's signature universe until a
+validation consumer requests it. The public `signature_snapshot` API still
+returns a validated snapshot. Independent representation digests are computed
+per demanded view; validation checks the actual frozen views and all contextual
+receipts. Unconsumed receipt candidates survive deferred snapshot extensions,
+and initialization releases the preceding universe after reusing its receipts.

@@ -508,7 +508,7 @@ impl QueryEngine {
         // only afterwards, and never retry a failed header after freezing: a
         // transient provider failure must not mix two universes in one task.
         let saved_phase = (self.last_phase, self.unavailable);
-        let snapshot = self.signature_snapshot();
+        let snapshot = self.signature_inputs();
         let declarations = self.frozen_declarations();
         (self.last_phase, self.unavailable) = saved_phase;
         for task in &mut tasks {

@@ -10,7 +10,7 @@ use hirsel_syntax::{DefId, DefMap, PackageId};
 use hirsel_types::{LookupOutput, SignatureRef, TypeInterner};
 use hirsel_validate::{SignatureLookup, ValidatedSignatures, ValidationDigest};
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 mod declarations;
 mod provider;
@@ -50,13 +50,24 @@ pub struct SignatureSnapshot {
     signatures: DefMap<Result<SignatureRef, QueryError>>,
     /// Each opaque type's private view, which only its own package's bodies see.
     private: DefMap<SignatureRef>,
-    /// V's universe: every public view, with its verdict.
-    views: Arc<ViewTable>,
-    /// Each package with private views, as its bodies see the universe.
-    packages: BTreeMap<PackageId, PackageViews>,
-    validated: ValidatedSignatures,
+    /// Signature inputs are sufficient for P; V builds its universe on demand.
+    validation: OnceLock<Arc<ValidationState>>,
+    validation_inputs: Mutex<Option<ValidationCandidates>>,
+    representation_digests: DefMap<OnceLock<ValidationDigest>>,
     /// What lookups resolve against, frozen with the signatures.
     lookup: LookupInput,
+}
+/// Receipt candidates are not source authority. Keep them through deferred
+/// epochs, and release the old universe once this snapshot initializes V.
+#[derive(Clone, Default)]
+struct ValidationCandidates {
+    previous: Option<Arc<ValidationState>>,
+    seeds: ValidatedSignatures,
+}
+struct ValidationState {
+    views: Arc<ViewTable>,
+    packages: BTreeMap<PackageId, PackageViews>,
+    validated: ValidatedSignatures,
 }
 /// A snapshot's lookup input: the provider manifest hash every lookup
 /// observes, the registry a bare name falls back to, the source builtins and
@@ -84,20 +95,24 @@ impl SignatureSnapshot {
         private: impl IntoIterator<Item = SignatureRef>,
         previous: Option<&SignatureSnapshot>,
     ) -> Self {
-        Self::build(epoch, types, signatures, private, previous, None)
+        let snapshot = Self::build(epoch, types, signatures, private, previous, None);
+        snapshot.validation_state();
+        snapshot
     }
     /// Import the views, independently digesting them before any successful
     /// receipt is reused. Changed views or contextual reads are checked again.
     pub fn from_seed(epoch: Revision, types: Arc<TypeInterner>, seed: &SnapshotSeed) -> Self {
         let store = seed.verdicts();
-        Self::build(
+        let snapshot = Self::build(
             epoch,
             types,
             seed.public.iter().map(|s| (s.definition, Ok(s.clone()))),
             seed.private.iter().cloned(),
             None,
             Some(&store),
-        )
+        );
+        snapshot.validation_state();
+        snapshot
     }
     fn build(
         epoch: Revision,
@@ -107,59 +122,110 @@ impl SignatureSnapshot {
         previous: Option<&SignatureSnapshot>,
         seeds: Option<&ValidatedSignatures>,
     ) -> Self {
-        let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Verify);
-        let t = &*types;
         let signatures: DefMap<_> = signatures.into_iter().collect();
         let private: DefMap<SignatureRef> = private
             .into_iter()
             .map(|view| (view.definition, view))
             .collect();
-        let mut combined;
-        let old = if let Some(seeds) = seeds.filter(|store| !store.is_empty()) {
-            combined = previous.map(|p| p.validated.clone()).unwrap_or_default();
-            for (digest, reads) in seeds.successful() {
-                combined.seed_success(digest, reads.to_vec());
-            }
-            Some(&combined)
-        } else {
-            previous.map(|p| &p.validated)
-        };
-        let mut validated = ValidatedSignatures::default();
-        let views = Arc::new(ViewTable::new(
-            t,
-            signatures.values().filter_map(|s| s.as_ref().ok().cloned()),
-            previous.map(|p| &*p.views),
-            &mut validated,
-            old,
-        ));
-        let mut owned: BTreeMap<PackageId, Vec<View>> = BTreeMap::new();
-        for (d, view) in &private {
-            let package = &d.path().0.package;
-            let earlier = previous
-                .and_then(|p| p.packages.get(package))
-                .and_then(|p| p.replacement(*d));
-            owned
-                .entry(package.clone())
-                .or_default()
-                .push(View::new(t, view.clone(), earlier));
-        }
-        let packages = owned
-            .into_iter()
-            .map(|(package, replaced)| {
-                let views = PackageViews::new(t, views.clone(), replaced, &mut validated, old);
-                (package, views)
-            })
+        let representation_digests = signatures
+            .keys()
+            .chain(private.keys())
+            .map(|d| (*d, OnceLock::new()))
             .collect();
+        let mut candidates = previous
+            .map(|p| p.validation_candidates())
+            .unwrap_or_default();
+        if let Some(seeds) = seeds {
+            for (digest, reads) in seeds.successful() {
+                candidates.seeds.seed_success(digest, reads.to_vec());
+            }
+        }
         Self {
             epoch,
             types,
             signatures,
             private,
-            views,
-            packages,
-            validated,
+            validation: OnceLock::new(),
+            validation_inputs: Mutex::new(Some(candidates)),
+            representation_digests,
             lookup: LookupInput::default(),
         }
+    }
+    fn validation_candidates(&self) -> ValidationCandidates {
+        if let Some(state) = self.validation.get() {
+            return ValidationCandidates {
+                previous: Some(state.clone()),
+                seeds: Default::default(),
+            };
+        }
+        let pending = self.validation_inputs.lock().unwrap().clone();
+        pending.unwrap_or_else(|| {
+            // An initializer has taken the inputs but has not yet published.
+            // Join that initializer after releasing the short input lock.
+            self.validation_state();
+            ValidationCandidates {
+                previous: self.validation.get().cloned(),
+                seeds: Default::default(),
+            }
+        })
+    }
+    fn validation_state(&self) -> &ValidationState {
+        self.validation.get_or_init(|| {
+            let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Verify);
+            let t = &*self.types;
+            let ValidationCandidates { previous, seeds } = self
+                .validation_inputs
+                .lock()
+                .unwrap()
+                .take()
+                .expect("OnceLock consumes validation inputs once");
+            let previous = previous.as_deref();
+            let mut combined;
+            let old = if !seeds.is_empty() {
+                combined = previous.map(|p| p.validated.clone()).unwrap_or_default();
+                for (digest, reads) in seeds.successful() {
+                    combined.seed_success(digest, reads.to_vec());
+                }
+                Some(&combined)
+            } else {
+                previous.map(|p| &p.validated)
+            };
+            let mut validated = ValidatedSignatures::default();
+            let views = Arc::new(ViewTable::new(
+                t,
+                self.signatures
+                    .values()
+                    .filter_map(|s| s.as_ref().ok().cloned()),
+                previous.map(|p| &*p.views),
+                &mut validated,
+                old,
+            ));
+            let mut owned: BTreeMap<PackageId, Vec<View>> = BTreeMap::new();
+            for (d, view) in &self.private {
+                let package = &d.path().0.package;
+                let earlier = previous
+                    .and_then(|p| p.packages.get(package))
+                    .and_then(|p| p.replacement(*d));
+                owned
+                    .entry(package.clone())
+                    .or_default()
+                    .push(View::new(t, view.clone(), earlier));
+            }
+            let packages = owned
+                .into_iter()
+                .map(|(package, replaced)| {
+                    (
+                        package,
+                        PackageViews::new(t, views.clone(), replaced, &mut validated, old),
+                    )
+                })
+                .collect();
+            Arc::new(ValidationState {
+                views,
+                packages,
+                validated,
+            })
+        })
     }
     /// Retain only successful verdicts; failures are checked again on import.
     pub fn seed(&self) -> SnapshotSeed {
@@ -172,6 +238,7 @@ impl SignatureSnapshot {
         let mut private: Vec<_> = self.private.values().cloned().collect();
         private.sort_by_key(|s| s.definition);
         let mut verdicts: Vec<_> = self
+            .validation_state()
             .validated
             .successful()
             .map(|(digest, reads)| (digest, reads.to_vec()))
@@ -258,39 +325,60 @@ impl SignatureSnapshot {
         &self,
         d: DefId,
     ) -> Option<Result<(&SignatureRef, ValidationDigest), &QueryError>> {
-        let package = &d.path().0.package;
-        if let Some(view) = self.packages.get(package).and_then(|p| p.replacement(d)) {
-            return Some(Ok((&view.signature, view.digest)));
+        if let Some(state) = self.validation.get() {
+            if let Some(view) = state
+                .packages
+                .get(&d.path().0.package)
+                .and_then(|p| p.replacement(d))
+            {
+                return Some(Ok((&view.signature, view.digest)));
+            }
+            let view = state.views.get(d);
+            return match self.signatures.get(&d)? {
+                Ok(_) => view.map(|v| Ok((&v.signature, v.digest))),
+                Err(error) => Some(Err(error)),
+            };
         }
-        match self.signatures.get(&d)? {
-            Ok(_) => self.views.get(d).map(|v| Ok((&v.signature, v.digest))),
-            Err(error) => Some(Err(error)),
-        }
+        let view = if let Some(private) = self.private.get(&d) {
+            private
+        } else {
+            match self.signatures.get(&d)? {
+                Ok(public) => public,
+                Err(error) => return Some(Err(error)),
+            }
+        };
+        let digest = self
+            .representation_digests
+            .get(&d)?
+            .get_or_init(|| hirsel_validate::digest(&self.types, view));
+        Some(Ok((view, *digest)))
     }
     /// V's verdicts on this snapshot's views.
     pub fn validated(&self) -> &ValidatedSignatures {
-        &self.validated
+        &self.validation_state().validated
     }
     /// The universe V validates `package`'s bodies against.
     pub fn validation(&self, package: &PackageId) -> &dyn SignatureLookup {
-        match self.packages.get(package) {
+        let state = self.validation_state();
+        match state.packages.get(package) {
             Some(views) => views,
-            None => &*self.views,
+            None => &*state.views,
         }
     }
     /// `package`'s universe with `signature` in place of its declared view:
     /// compile-time evaluation validates a materialized owner against it.
     pub fn validation_with(&self, package: &PackageId, signature: SignatureRef) -> PackageViews {
         let t = &*self.types;
+        let state = self.validation_state();
         let mut store = ValidatedSignatures::default();
-        match self.packages.get(package) {
-            Some(views) => views.replace(t, signature, &mut store, Some(&self.validated)),
+        match state.packages.get(package) {
+            Some(views) => views.replace(t, signature, &mut store, Some(&state.validated)),
             None => PackageViews::new(
                 t,
-                self.views.clone(),
+                state.views.clone(),
                 [View::new(t, signature, None)],
                 &mut store,
-                Some(&self.validated),
+                Some(&state.validated),
             ),
         }
     }
@@ -309,6 +397,12 @@ impl QueryEngine {
     /// This revision's snapshot, built once after its inputs changed. It is
     /// kept only when every signature normalized, so a failed one is retried.
     pub fn signature_snapshot(&mut self) -> Arc<SignatureSnapshot> {
+        let snapshot = self.signature_inputs();
+        snapshot.validation_state();
+        snapshot
+    }
+    /// P needs immutable signatures and views, without eagerly validating V's universe.
+    pub(crate) fn signature_inputs(&mut self) -> Arc<SignatureSnapshot> {
         let stamp = self.snapshot_stamp();
         if let Some((kept, snapshot)) = &self.snapshot
             && *kept == stamp

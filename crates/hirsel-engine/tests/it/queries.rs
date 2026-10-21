@@ -40,6 +40,13 @@ impl Fake {
     }
     fn fail(&self, phase: &str, span: Span) -> Result<(), QueryError> {
         self.event(phase);
+        if self.reject == Some("resolve+signature") && matches!(phase, "resolve" | "signature") {
+            return Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                const { RuleId::of("LANG-1") },
+                span,
+                format!("{phase} fixture rejection"),
+            )]));
+        }
         if self.reject == Some(phase) {
             Err(error(span))
         } else {
@@ -453,7 +460,22 @@ fn phases_run_in_order_and_stop_at_every_error_boundary_on_compiler_thread() {
             check_snapshot(&mut engine, file, &default_context()),
             Err(QueryError::Diagnostics(_))
         ));
-        assert_eq!(*events.lock().unwrap(), phases[..=stop]);
+        let expected = match stop {
+            0 => vec!["lex"],
+            1 => vec!["lex", "parse"],
+            2 | 3 => vec!["lex", "parse", "signature", "resolve"],
+            _ => [
+                vec!["lex", "parse", "signature", "resolve"],
+                phases[4..=stop].to_vec(),
+            ]
+            .concat(),
+        };
+        assert_eq!(
+            *events.lock().unwrap(),
+            expected,
+            "program rejects at {}",
+            phases[stop]
+        );
     }
     let (mut engine, events) = make_engine(None, false);
     let file = engine
@@ -465,7 +487,76 @@ fn phases_run_in_order_and_stop_at_every_error_boundary_on_compiler_thread() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(*events.lock().unwrap(), phases);
+    assert_eq!(
+        *events.lock().unwrap(),
+        [
+            "lex",
+            "parse",
+            "signature",
+            "resolve",
+            "check",
+            "modes",
+            "lower"
+        ]
+    );
+}
+/// Direct body queries still demand resolution before the owner signature;
+/// program checks freeze signatures in S0 before running the same body stages.
+#[test]
+fn scalar_queries_preserve_phase_order_and_stop_at_every_error_boundary() {
+    with_compiler_stack(|| {
+        let phases = [
+            "lex",
+            "parse",
+            "resolve",
+            "signature",
+            "check",
+            "modes",
+            "lower",
+        ];
+        for stop in 0..phases.len() {
+            let (mut engine, events) = make_engine(Some(phases[stop]), false);
+            let file = engine
+                .sources
+                .add("fixture.hir", "fn a () { 1 }\n".into())
+                .unwrap();
+            let result = engine
+                .parse_file(file, &default_context())
+                .and_then(|parsed| {
+                    if !parsed.diagnostics.is_empty() {
+                        return Err(QueryError::Diagnostics(parsed.diagnostics));
+                    }
+                    engine.lower_to_tir(&path("a"))
+                });
+            assert!(matches!(result, Err(QueryError::Diagnostics(_))));
+            assert_eq!(*events.lock().unwrap(), phases[..=stop]);
+        }
+        let (mut engine, events) = make_engine(None, false);
+        parse(&mut engine, "fn a () { 1 }\n");
+        engine.lower_to_tir(&path("a")).unwrap();
+        assert_eq!(*events.lock().unwrap(), phases);
+    });
+}
+#[test]
+fn frozen_signature_preflight_preserves_resolution_rejection_precedence() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2, 8] {
+            let (mut engine, events) = make_engine(Some("resolve+signature"), false);
+            parse(&mut engine, "fn a () { 1 }\n");
+            let outcomes =
+                engine.mode_definitions(vec![path("a")], hirsel_intern::jobs::Jobs::new(jobs));
+            assert_eq!(outcomes[0].phase, Some(QueryKind::Resolve));
+            let Err(QueryError::Diagnostics(diagnostics)) = &outcomes[0].result else {
+                panic!("expected resolution rejection");
+            };
+            assert_eq!(diagnostics.len(), 1);
+            assert_eq!(diagnostics[0].message, "resolve fixture rejection");
+            assert_eq!(
+                *events.lock().unwrap(),
+                ["lex", "parse", "signature", "resolve"]
+            );
+        }
+    });
 }
 #[test]
 fn changing_one_body_recomputes_only_that_definition() {
