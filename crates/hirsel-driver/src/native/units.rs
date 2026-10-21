@@ -297,9 +297,24 @@ pub(crate) fn lower(
                 // harness hits recompute and compare; production keeps the fast hit.
                 if let Some(fragment) = cached
                     && program.options.validation == super::stages::Validation::Ready
-                    && (!program.capture_plan || super::plan::load_calls(program.objects.store.as_ref(), key, stored.as_ref().unwrap()).is_some())
+                    && (!program.capture_plan
+                        || super::plan::load_calls(
+                            program.objects.store.as_ref(),
+                            key,
+                            stored.as_ref().unwrap(),
+                        )
+                        .is_some())
                 {
-                    let calls = if program.capture_plan { super::plan::load_calls(program.objects.store.as_ref(), key, stored.as_ref().unwrap()).unwrap() } else { Vec::new() };
+                    let calls = if program.capture_plan {
+                        super::plan::load_calls(
+                            program.objects.store.as_ref(),
+                            key,
+                            stored.as_ref().unwrap(),
+                        )
+                        .unwrap()
+                    } else {
+                        Vec::new()
+                    };
                     return Ok(LoweredUnit {
                         key: *key,
                         calls,
@@ -350,7 +365,15 @@ pub(crate) fn lower(
                     )
                     .map_err(|e| NativeError::of(StageName::Emission, definition, e))
                 };
-                let calls = if program.capture_plan { super::plan::calls(&selected.iter().map(|u| u.unit()).collect::<Vec<_>>(), program.table, program.keys) } else { Vec::new() };
+                let calls = if program.capture_plan {
+                    super::plan::calls(
+                        &selected.iter().map(|u| u.unit()).collect::<Vec<_>>(),
+                        program.table,
+                        program.keys,
+                    )
+                } else {
+                    Vec::new()
+                };
                 let fragment = UnitFragment {
                     summary: summary(own)?,
                     templates: selected[1..]
@@ -377,10 +400,22 @@ pub(crate) fn lower(
                             ),
                         ));
                     }
-                    if program.capture_plan { super::plan::save_calls(program.objects.store.as_ref(), key, &bytes, &calls)?; }
+                    if program.capture_plan {
+                        super::plan::save_calls(
+                            program.objects.store.as_ref(),
+                            key,
+                            &bytes,
+                            &calls,
+                        )?;
+                    }
                     program.objects.store.put(key, &bytes);
                 }
-                Ok(LoweredUnit { key: *key, calls, fragment, hit })
+                Ok(LoweredUnit {
+                    key: *key,
+                    calls,
+                    fragment,
+                    hit,
+                })
             })();
             bodies.finished(i, &copies[i]);
             result

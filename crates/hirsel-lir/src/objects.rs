@@ -49,6 +49,11 @@ impl UnitKey {
 /// Stored unit fragments by `UnitKey`. A `get` that cannot produce intact bytes is a
 /// miss; a `put` that cannot store is dropped. Neither is ever an error the build sees.
 pub trait ObjectStore: Send + Sync {
+    /// Can retain approved local production associations. A legacy seed layered
+    /// over none@1 does not justify rebuilding bodies to populate an absent store.
+    fn production_enabled(&self) -> bool {
+        false
+    }
     /// An association from an approved local provider. Unknown adapters and
     /// arbitrary read-only directories cannot turn coherent bytes into producer
     /// evidence. This retains the trusted-local-directory model; it is not a
@@ -81,6 +86,9 @@ pub struct SeededObjects {
 }
 
 impl ObjectStore for SeededObjects {
+    fn production_enabled(&self) -> bool {
+        self.writable.production_enabled()
+    }
     fn get_produced(&self, key: &UnitKey) -> Option<ProducedBytes> {
         self.writable
             .get_produced(key)
@@ -246,6 +254,9 @@ impl DirObjects {
 }
 
 impl ObjectStore for DirObjects {
+    fn production_enabled(&self) -> bool {
+        true
+    }
     fn get_produced(&self, key: &UnitKey) -> Option<ProducedBytes> {
         self.get(key).map(ProducedBytes)
     }
@@ -369,6 +380,9 @@ impl SimObjects {
     }
 }
 impl ObjectStore for SimObjects {
+    fn production_enabled(&self) -> bool {
+        true
+    }
     fn get_produced(&self, key: &UnitKey) -> Option<ProducedBytes> {
         self.get(key).map(ProducedBytes)
     }

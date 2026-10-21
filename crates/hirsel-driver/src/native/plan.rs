@@ -264,7 +264,7 @@ fn prepare_in(
     let Some(objects) = &options.objects else {
         return fallback(stats, "bodies-required");
     };
-    if !objects.store.enabled() {
+    if !objects.store.enabled() || !objects.store.production_enabled() {
         return fallback(stats, "store-disabled");
     }
     let Some(bytes) = input_manifest(validated.snapshot(), options) else {
@@ -301,7 +301,13 @@ fn prepare_in(
     let ready = super::stages::build_full(validated, &reference)?;
     drop(reset);
     let plan = NativePlan::of(action, &ready)?;
-    check(&plan, &ready.summaries)?;
+    if let Err(error) = check(&plan, &ready.summaries) {
+        if mode == Mode::VerifyReuse && cached.is_some() {
+            return Err(error);
+        }
+        stats.fallback = Some("unsupported-production-evidence");
+        return Ok(Prepared { ready, stats });
+    }
     let encoded = encode(&plan);
     stats.metadata_bytes = encoded.len();
     if mode == Mode::VerifyReuse {
@@ -760,6 +766,7 @@ fn input_manifest(input: &NativeInput, options: &Options) -> Option<Vec<u8>> {
                 p,
                 o.implementation_revision,
                 o.syntax.owner().site(hirsel_types::NameSite::Item),
+                o.generated.as_ref().map(|g| (&g.text, g.site)),
             )
         })
         .collect();
@@ -876,8 +883,14 @@ fn link_identity(target: &hirsel_lir::TargetSpec, debug: bool) -> Option<Vec<u8>
         kit.join("manifest.json"),
         kit.join("digest"),
         llvm.join("bin/ld.lld"),
-        llvm.join("lib/libLLVM.so"),
+        std::env::current_exe().ok()?,
     ];
+    let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
+    let loaded_llvm = maps
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(5))
+        .find(|path| path.contains("/libLLVM") && path.starts_with('/'))?;
+    files.push(PathBuf::from(loaded_llvm));
     // The approved kit manifest content-names all members. Existing link kit
     // checking and normal linker rebinding remain mandatory after assembly.
     files.sort();
@@ -924,6 +937,9 @@ mod tests {
         drop_writes: std::sync::atomic::AtomicBool,
     }
     impl ObjectStore for Store {
+        fn production_enabled(&self) -> bool {
+            true
+        }
         fn get_produced(&self, key: &UnitKey) -> Option<hirsel_lir::objects::ProducedBytes> {
             self.get(key)?;
             self.produced.get_produced(key)
@@ -963,6 +979,7 @@ mod tests {
             debug: false,
             fuel: false,
             jobs: hirsel_intern::jobs::Jobs::new(jobs),
+            byte_budget: None,
         });
         options
     }
@@ -1145,5 +1162,83 @@ mod tests {
                 Some("bodies-required")
             );
         });
+    }
+    #[test]
+    fn independent_checker_rejects_forged_calls_owners_policy_and_untrusted_associations() {
+        hirsel_engine::with_compiler_stack(|| {
+            let store = Arc::new(Store::default());
+            let options = options(store.clone(), 1);
+            let input = input(SOURCE, Verify::On);
+            let prepared = prepare_in(&input, &options, Mode::Reuse).unwrap();
+            let bytes = input_manifest(input.snapshot(), &options).unwrap();
+            let action = ContentHash::of_parts("hirsel.native-plan.input.v1", [bytes.as_slice()]);
+            let plan = NativePlan::of(action, &prepared.ready).unwrap();
+            let summaries = &prepared.ready.summaries;
+            let mut forged = plan.clone();
+            forged.owners.clear();
+            assert!(check(&forged, summaries).is_err());
+            let mut forged = plan.clone();
+            forged.tracking = !forged.tracking;
+            assert!(check(&forged, summaries).is_err());
+            let mut forged = plan.clone();
+            forged.callbacks.push(DefPath::core("unselected"));
+            assert!(check(&forged, summaries).is_err());
+            let mut forged = plan.clone();
+            let mut abi = forged.table.fn_abis[0].clone();
+            abi.result_arena = Some(0);
+            let key = LayoutKeys::new(&forged.table).fn_abi(&abi);
+            forged.table.fn_abis.push(abi);
+            let mut contradictory = forged.clone();
+            let call = contradictory
+                .records
+                .iter_mut()
+                .flat_map(|r| r.calls.iter_mut())
+                .flat_map(|r| r.calls.iter_mut())
+                .find(|c| c.direct.is_some())
+                .expect("written helper call");
+            call.abi = key;
+            assert!(
+                check(&contradictory, summaries)
+                    .unwrap_err()
+                    .message
+                    .contains("result-arena ABI")
+            );
+            call_direct_none(&mut contradictory);
+            assert!(
+                check(&contradictory, summaries)
+                    .unwrap_err()
+                    .message
+                    .contains("indirect call")
+            );
+            let mut wrong_schema = plan.clone();
+            wrong_schema.schema += 1;
+            publish(store.as_ref(), action, &encode(&wrong_schema));
+            assert!(!prepare_in(&input, &options, Mode::Reuse).unwrap().stats.hit);
+            struct Unknown(Arc<Store>);
+            impl ObjectStore for Unknown {
+                fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
+                    self.0.get(key)
+                }
+                fn put(&self, key: &UnitKey, bytes: &[u8]) {
+                    self.0.put(key, bytes);
+                }
+            }
+            let mut unknown = options.clone();
+            unknown.objects.as_mut().unwrap().store = Arc::new(Unknown(store));
+            assert!(
+                !prepare_in(&input, &unknown, Mode::Reuse).unwrap().stats.hit,
+                "coherent bytes supplied their own provenance"
+            );
+        });
+    }
+    fn call_direct_none(plan: &mut NativePlan) {
+        for call in plan
+            .records
+            .iter_mut()
+            .flat_map(|r| r.calls.iter_mut())
+            .flat_map(|r| r.calls.iter_mut())
+        {
+            call.direct = None;
+        }
     }
 }
