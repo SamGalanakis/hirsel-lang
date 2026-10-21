@@ -3,6 +3,9 @@
 
 pub mod sync;
 
+#[path = "../../../../crates/hirsel-free/src/atomic.rs"]
+pub mod atomic;
+
 #[path = "../../../../crates/hirsel-free/src/cancel.rs"]
 pub mod cancel;
 

@@ -42,6 +42,20 @@ pub fn sc_load(word: &AtomicU32) -> u32 {
     word.load(Ordering::SeqCst)
 }
 
+pub fn sc_store64(word: &AtomicU64, value: u64) {
+    word.store(value, Ordering::SeqCst);
+    fence(Ordering::SeqCst);
+}
+
+pub fn sc_load64(word: &AtomicU64) -> u64 {
+    fence(Ordering::SeqCst);
+    word.load(Ordering::SeqCst)
+}
+
+pub fn sc_fence() {
+    fence(Ordering::SeqCst);
+}
+
 pub fn relax() {
     loom::thread::yield_now();
 }

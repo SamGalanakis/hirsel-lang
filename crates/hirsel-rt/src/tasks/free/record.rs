@@ -50,10 +50,18 @@ fn slot() -> usize {
     crate::pool::compute_index().map_or(0, |index| usize::from(index) + 1)
 }
 
-/// The caller owns the scheduler role and supplies bounded runtime work.
+/// The running task supplies bounded runtime work. Table actions hold the
+/// scheduler role; resolved cell actions instead hold their independent access.
 /// The local recorder is removed from ctx before action borrows the context,
 /// and restored before any stop or physical suspension can leave this stack.
-fn phase<T>(ctx: *mut TaskCtx, action: impl FnOnce(&mut Writer<'_, '_>) -> T) -> Stopped<T> {
+fn phase<T>(
+    ctx: *mut TaskCtx,
+    action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
+) -> Stopped<T> {
+    if !on(ctx) {
+        // Live free mode has no recorder, section gate, ordinal, or encoder.
+        return Ok(action(None));
+    }
     // Root walks need their own entered-phase integration; this admission
     // fails before acting if an unsupported root release has been deferred.
     assert!(
@@ -73,10 +81,21 @@ fn phase<T>(ctx: *mut TaskCtx, action: impl FnOnce(&mut Writer<'_, '_>) -> T) ->
     let progress = Progress::new(task.ordinal, Phase::Done);
     let result = shared
         .recorder
-        .phase(&mut worker, &mut task.log, progress, action);
+        .phase(&mut worker, &mut task.log, progress, |writer| {
+            action(Some(writer))
+        });
     drop(worker);
     unsafe { (*ctx).recording = Some(task) };
     result.map_err(|_| Stop::Requested)
+}
+
+fn entry(ctx: *mut TaskCtx) {
+    if !on(ctx) {
+        // Live entry releases happen under the role, before obtaining a cell
+        // or relinquishing scheduler ownership. Recorded roots are not yet
+        // part of this narrow admission and phase() rejects them.
+        crate::roots::apply_pending(ctx);
+    }
 }
 
 /// # Safety
@@ -88,6 +107,7 @@ pub(crate) unsafe fn atomic_create(
     value: *const u8,
     size: u64,
 ) -> Stopped<()> {
+    entry(ctx);
     phase(ctx, |_| unsafe {
         out.write(crate::tasks::scheduler(ctx).sync.create_image(value, size));
     })
@@ -101,14 +121,30 @@ pub(crate) unsafe fn atomic_load(
     slot: *mut u8,
     size: u64,
 ) -> Stopped<()> {
+    entry(ctx);
     let size_bytes = usize::try_from(size).expect("an atomic image fits memory");
-    assert!(size_bytes <= 16, "an atomic image fits 128 bits");
-    phase(ctx, |writer| unsafe {
-        crate::tasks::scheduler(ctx).sync.read(word, slot, size);
-        let mut bits = [0; 16];
-        std::ptr::copy_nonoverlapping(slot, bits.as_mut_ptr(), size_bytes);
-        writer.load(u128::from_le_bytes(bits));
-    })
+    if on(ctx) {
+        assert!(size_bytes <= 16, "a recorded atomic image fits 128 bits");
+    }
+    let image = crate::tasks::scheduler(ctx).sync.image(word, size);
+    unsafe { crate::tasks::role::release(ctx) };
+    // The wide-image stripe is acquired outside the section. Retain it until
+    // progress is published, so its next accessor cannot observe an action
+    // that the cutter cannot yet see. No scheduler borrow remains here.
+    let access = image.access();
+    let result = phase(ctx, |writer| unsafe {
+        let out = std::slice::from_raw_parts_mut(slot, size_bytes);
+        access.load(out);
+        if let Some(writer) = writer {
+            let mut bits = [0; 16];
+            bits[..size_bytes].copy_from_slice(out);
+            writer.load(u128::from_le_bytes(bits));
+        }
+    });
+    drop(access);
+    drop(image);
+    unsafe { crate::tasks::role::enter(ctx) };
+    result
 }
 
 /// # Safety
@@ -119,9 +155,16 @@ pub(crate) unsafe fn atomic_store(
     value: *const u8,
     size: u64,
 ) -> Stopped<()> {
-    phase(ctx, |_| unsafe {
-        crate::tasks::scheduler(ctx).sync.write(word, value, size)
-    })
+    entry(ctx);
+    let image = crate::tasks::scheduler(ctx).sync.image(word, size);
+    let value = unsafe { std::slice::from_raw_parts(value, image.size()) };
+    unsafe { crate::tasks::role::release(ctx) };
+    let access = image.access();
+    let result = phase(ctx, |_| access.store(value));
+    drop(access);
+    drop(image);
+    unsafe { crate::tasks::role::enter(ctx) };
+    result
 }
 
 #[cfg(test)]
@@ -173,7 +216,7 @@ impl Task {
 #[cfg(test)]
 pub(crate) fn child(ctx: *mut TaskCtx) -> Stopped<Task> {
     let shared = unsafe { (*ctx).recording.as_ref().unwrap().shared.clone() };
-    let log = phase(ctx, |writer| writer.spawn())?;
+    let log = phase(ctx, |writer| writer.unwrap().spawn())?;
     Ok(Task {
         shared,
         log,
@@ -190,6 +233,40 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     const OPS: u64 = 32;
+
+    #[test]
+    fn live_free_atomics_use_stable_cells_without_a_recorder() {
+        let mut run = crate::host::BodyRun::new(2, false);
+        run.free = true;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe { crate::tasks::free::enable(ctx) },
+            |ctx| {
+                assert!(!on(ctx));
+                for size in [1, 2, 4, 8, 16, 32] {
+                    let value: Vec<u8> = (0..size as u8).map(|i| i.wrapping_mul(7)).collect();
+                    let mut word = 0;
+                    let mut out = vec![0; size];
+                    unsafe {
+                        hirsel_rt_v2_atomic_create(
+                            ctx,
+                            std::ptr::null_mut(),
+                            &mut word,
+                            out.as_ptr(),
+                            size as u64,
+                        );
+                        hirsel_rt_v2_atomic_store(ctx, &word, value.as_ptr(), size as u64);
+                        hirsel_rt_v2_atomic_load(ctx, &word, out.as_mut_ptr(), size as u64);
+                    }
+                    assert_eq!(out, value);
+                }
+                assert!(!on(ctx));
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+    }
 
     struct Race {
         word: u64,

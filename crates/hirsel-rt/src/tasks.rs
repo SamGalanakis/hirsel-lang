@@ -3742,7 +3742,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
         unsafe { crate::stop::check(ctx, ordered::engine::atomic_create(ctx, out, value, size)) };
         return STATUS_OK;
     }
-    if free::record::on(ctx) {
+    if free::enabled(ctx) {
         unsafe {
             crate::stop::check(ctx, free::record::atomic_create(ctx, out, value, size));
             yield_now(&mut *ctx);
@@ -3778,7 +3778,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
         unsafe { crate::stop::check(ctx, ordered::engine::atomic_load(ctx, a.read(), slot, size)) };
         return STATUS_OK;
     }
-    if free::record::on(ctx) {
+    if free::enabled(ctx) {
         unsafe {
             crate::stop::check(ctx, free::record::atomic_load(ctx, a.read(), slot, size));
             yield_now(&mut *ctx);
@@ -3830,7 +3830,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
         };
         return STATUS_OK;
     }
-    if free::record::on(ctx) {
+    if free::enabled(ctx) {
         unsafe {
             crate::stop::check(ctx, free::record::atomic_store(ctx, a.read(), value, size));
             yield_now(&mut *ctx);

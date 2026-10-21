@@ -36,6 +36,11 @@ expected result; the gate runs it when these models or the kernel source they co
   cached observation cannot survive cancellation when the scheduler role
   changes owners. Runtime tests cover scope precedence, shielding, promotion
   of descendants when a spawner retires, and row reuse.
+- `loom/tests/atomic.rs` runs native-word and wide-image fallback cells at
+  preemption bound **2**. The store-buffering litmus forbids both loads seeing
+  the initial value for native/native, native/fallback and fallback/fallback
+  pairs. Concurrent wide loads must see a whole old or new image. Both models
+  compile the production cell implementation through the same sync shim.
 
 GenMC is built once by `check.sh`, pinned by commit, into
 `${XDG_CACHE_HOME:-~/.cache}/genmc-<commit>`; it needs cmake, clang and LLVM 19-22 with their

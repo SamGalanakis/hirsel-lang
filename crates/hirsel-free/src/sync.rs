@@ -41,6 +41,18 @@ pub fn sc_load(word: &AtomicU32) -> u32 {
     word.load(Ordering::SeqCst)
 }
 
+pub fn sc_store64(word: &AtomicU64, value: u64) {
+    word.store(value, Ordering::SeqCst);
+}
+
+pub fn sc_load64(word: &AtomicU64) -> u64 {
+    word.load(Ordering::SeqCst)
+}
+
+pub fn sc_fence() {
+    std::sync::atomic::fence(Ordering::SeqCst);
+}
+
 /// One step of a bounded wait for another thread's short critical work.
 pub fn relax() {
     std::hint::spin_loop();

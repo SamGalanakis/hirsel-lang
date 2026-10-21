@@ -9,13 +9,15 @@ use crate::channels::{Element, Ring};
 use crate::failure::Chained;
 use crate::fault;
 use crate::release::Layout;
+pub(crate) use hirsel_free::atomic::Image as AtomicImage;
+use std::sync::Arc;
 
 /// Internal handle tag, disjoint from channel endpoints and task sets.
 pub(crate) const MUTEX: u64 = 1 << 61;
 
 enum Payload {
     Reserved,
-    Image(Vec<u8>),
+    Image(Arc<AtomicImage>),
     Mutex { element: Element, image: Ring },
     Closed,
 }
@@ -42,6 +44,7 @@ impl Reserved {
 pub(crate) struct Synchronizers {
     cells: Vec<Cell>,
     generation: u32,
+    stripes: Option<Arc<hirsel_free::atomic::Stripes>>,
 }
 
 impl Synchronizers {
@@ -91,10 +94,10 @@ impl Synchronizers {
         if reservation.word & MUTEX != 0 {
             fault("a mutex reservation initialized as an atomic");
         }
-        self.initialize(
-            reservation,
-            Payload::Image(unsafe { bytes(image, size) }.to_vec()),
-        );
+        let image = AtomicImage::new(unsafe { bytes(image, size) }, || {
+            self.stripes.get_or_insert_with(Default::default).clone()
+        });
+        self.initialize(reservation, Payload::Image(Arc::new(image)));
     }
 
     /// # Safety
@@ -149,25 +152,29 @@ impl Synchronizers {
     /// # Safety
     /// `slot` is writable for `size` bytes.
     pub(crate) unsafe fn read(&mut self, word: u64, slot: *mut u8, size: u64) {
-        let Payload::Image(image) = &self.cell(word).payload else {
-            fault("an atomic load of a cell without an image");
-        };
-        if image.len() as u64 != size {
-            fault("an Atomic image of another size");
-        }
-        unsafe { std::ptr::copy_nonoverlapping(image.as_ptr(), slot, image.len()) };
+        let image = self.image(word, size);
+        image
+            .access()
+            .load(unsafe { std::slice::from_raw_parts_mut(slot, image.size()) });
     }
 
     /// # Safety
     /// `image` is readable for `size` bytes.
     pub(crate) unsafe fn write(&mut self, word: u64, image: *const u8, size: u64) {
-        let Payload::Image(old) = &mut self.cell(word).payload else {
-            fault("an atomic store to a cell without an image");
+        let old = self.image(word, size);
+        old.access().store(unsafe { bytes(image, size) });
+    }
+
+    /// Resolve under the role, then retain independently while another task
+    /// grows or retires the table. Access never borrows the task registry.
+    pub(crate) fn image(&mut self, word: u64, size: u64) -> Arc<AtomicImage> {
+        let Payload::Image(image) = &self.cell(word).payload else {
+            fault("an atomic access of a cell without an image");
         };
-        if old.len() as u64 != size {
+        if image.size() as u64 != size {
             fault("an Atomic image of another size");
         }
-        old.copy_from_slice(unsafe { bytes(image, size) });
+        image.clone()
     }
 
     /// # Safety
@@ -232,4 +239,30 @@ impl Synchronizers {
 unsafe fn bytes<'a>(image: *const u8, size: u64) -> &'a [u8] {
     let size = usize::try_from(size).unwrap_or_else(|_| fault("a payload size overflows"));
     unsafe { std::slice::from_raw_parts(image, size) }
+}
+
+#[cfg(test)]
+mod free_atomic_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_images_remain_live_after_registry_growth_and_retirement() {
+        let mut cells = Synchronizers::default();
+        let initial = [0x13u8; 32];
+        let word = unsafe { cells.create_image(initial.as_ptr(), initial.len() as u64) };
+        let image = cells.image(word, initial.len() as u64);
+        for _ in 0..128 {
+            unsafe { cells.create_image(initial.as_ptr(), initial.len() as u64) };
+        }
+        cells.end();
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| image.access().store(&[0x57; 32]))
+                .join()
+                .unwrap();
+        });
+        let mut loaded = [0; 32];
+        image.access().load(&mut loaded);
+        assert_eq!(loaded, [0x57; 32]);
+    }
 }
