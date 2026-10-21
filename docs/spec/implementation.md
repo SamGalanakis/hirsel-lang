@@ -128,6 +128,14 @@ file that cannot yet is listed in `conformance/pending.txt` with its reason, and
 as soon as it passes; a file depending on an open specification question carries a `// spec: #N`
 comment.
 
+Coverage status is recorded separately from language requirements in the
+[coverage ledger](../../conformance/coverage-ledger.md). A source run establishes
+its observed result; it cannot establish physical addresses, count fields or a
+universal arithmetic property. Runtime/model and native controls state exactly the
+instrumentation and configurations executed. Building a test or selecting zero
+cases supplies no execution evidence. Unspecified contracts remain decisions under
+[the spec index](index.md#unspecified), even when an implementation has a limit.
+
 ## Agreement
 
 The source checker and the independent IR checker must agree: no program the source checker

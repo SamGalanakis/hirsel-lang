@@ -184,6 +184,10 @@ than supply a language-visible answer.
 - Complete layout composition rules for `@soa`, variants and flat types, and the native
   data ABI ([MEM-7](memory.md#mem-7-layout)).
 
+The [coverage ledger](../../conformance/coverage-ledger.md) distinguishes these
+open decisions from missing instrumentation, current defects and resolved feature
+history. It records finite executable evidence without assigning normative budgets.
+
 ## Prior art
 
 The design draws on value semantics, modes, reference counting, capability-based I/O,

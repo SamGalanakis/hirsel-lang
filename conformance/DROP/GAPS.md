@@ -1,12 +1,21 @@
-# Remaining destruction coverage
+# Destruction coverage dispositions
 
-V20 ratifies unit-only, nonpropagating finalizers, bug failure during drop,
-explicit @noalloc drop and structural noalloc_drop. New cleanup pairs cover generic
-and concrete implicit destruction, allocating bodies and owned fields. Allocation
-instrumentation must cover cancellation and failure exits as well as normal exits.
+[DROP-2/3](../../docs/spec/failure.md#drop-2-resources) define strict cleanup,
+unit-only nonpropagating finalizers, bug failure during drop, declared `@noalloc`
+and structural `noalloc_drop`. These are settled rules, not v20 proposals.
 
-Cross-module forget and external resource destructuring need #4 package fixtures;
-source declaration names cannot contain module paths. Same-module forget remains
-covered. Cancellation-specific drop traces now have declared child-local Scope
-and error signatures, but still need the M2 injected scheduler oracle. Unsafe-FFI
-drop termination additionally needs #6 foreign metadata/harness support.
+- **Resolved fixture-support history:** cross-module `forget` has package-backed
+  accepted/rejected controls. External representation restrictions use current
+  package fixtures; source declaration names need no dotted-path extension.
+- **Instrumented controls present:** runtime tests cover shielded finalization,
+  failure chains, fields after failed drop and process termination for a failing
+  unsafe-FFI finalizer. Foreign metadata support is shipped.
+- **Open oracle scope:** allocation instrumentation across every failure and
+  cancellation exit, and scheduler/Io interleaving coverage, remain obligations.
+  The M2 scheduler is implemented; a missing *particular oracle* must not be
+  described as an absent scheduler. The cancellation/drop source control and
+  low-level shielding controls are finite witnesses.
+
+See [UNTESTABLE.md](UNTESTABLE.md) for universal obligations and the
+[evidence index](../coverage-ledger.md#destruction-and-failure) for exact executed
+controls, current failures, owners and minimal commands.

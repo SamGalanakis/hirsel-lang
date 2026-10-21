@@ -900,6 +900,69 @@ fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
     }
 }
 
+// Boundary pattern: rust-lang/rust a7c37f9f0ee5, core/src/num/int_macros.rs:586-587
+// and uint_macros.rs:944-947 (in library/): last fitting sum / first overflow.
+// MEM-8 uses SEM-1's scalar bounds. Explicit boundary vectors keep this oracle
+// independent of integer::binary, which is also used by simd.add itself.
+#[test]
+fn simd_add_checks_every_integer_width_and_each_lane() {
+    use Primitive::*;
+    let mut h = Harness::new(Default::default());
+    let cases = [
+        (U8, 0, u8::MAX as u128),
+        (U16, 0, u16::MAX as u128),
+        (U32, 0, u32::MAX as u128),
+        (U64, 0, u64::MAX as u128),
+        (U128, 0, u128::MAX),
+        (I8, i8::MIN as i128, i8::MAX as u128),
+        (I16, i16::MIN as i128, i16::MAX as u128),
+        (I32, i32::MIN as i128, i32::MAX as u128),
+        (I64, i64::MIN as i128, i64::MAX as u128),
+        (I128, i128::MIN, i128::MAX as u128),
+    ];
+    for (kind, min, max) in cases {
+        let sequence = |values: [i128; 3]| {
+            collection::sequence(
+                BuiltinType::Simd,
+                values.map(|value| Value::Integer(n(kind, value))),
+            )
+        };
+        let added = h.value(
+            "simd.add",
+            vec![sequence([min, max as i128, 0]), sequence([0, 0, 1])],
+        );
+        assert_eq!(
+            collection::elements(&added, BuiltinType::Simd).unwrap(),
+            collection::elements(&sequence([min, max as i128, 1]), BuiltinType::Simd).unwrap(),
+            "{kind:?} boundary lanes"
+        );
+        for lane in 0..3 {
+            let mut left = [0; 3];
+            let mut right = [0; 3];
+            left[lane] = max as i128;
+            right[lane] = 1;
+            let mut boundaries = vec![(left, right)];
+            if min < 0 {
+                left[lane] = min;
+                right[lane] = -1;
+                boundaries.push((left, right));
+            }
+            for (left, right) in boundaries {
+                let result = h.call(
+                    "simd.add",
+                    vec![sequence(left), sequence(right)],
+                    TypeKind::Tuple(vec![].into()),
+                );
+                assert!(
+                    matches!(result, OperationResult::Failed(ref f)
+                        if f.rule.as_str() == "SEM-1" && f.line == 7),
+                    "{kind:?} lane {lane}: {result:?}"
+                );
+            }
+        }
+    }
+}
+
 fn released(displaced: collection::Displaced) {
     for value in displaced.0 {
         value.discard();
@@ -1172,8 +1235,8 @@ fn configured_projection_denial_records_not_granted_without_a_handle() {
     }
 }
 
-// Safe source cannot retain a non-sendable mutex across isolate (#22). Exercise
-// the runtime boundary directly to inspect dead-state ownership and causes.
+// Source exercises legal copied Mutex handles across isolate. This operation
+// boundary additionally inspects dead-state ownership and the exact cause chain.
 #[test]
 fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
     let mut h = Harness::new(Default::default());
