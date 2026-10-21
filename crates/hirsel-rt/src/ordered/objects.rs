@@ -66,6 +66,12 @@ pub struct Registry {
 }
 
 impl Registry {
+    /// Read-only canonical identity lookup for an initialized-value decoder.
+    /// Typed families disambiguate native words that coincide across tables.
+    pub fn identity(&self, kind: Kind, word: u64) -> Option<&ObjectId> {
+        self.handles.get(&word)?.get(&kind)?.object.as_ref()
+    }
+
     /// Install the admitted native type graph before dispatch. Runtime object
     /// creation ABIs sometimes erase their generic handle type; register such
     /// an object under every linked type of its known family. This overstates

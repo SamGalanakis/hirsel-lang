@@ -627,16 +627,9 @@ pub(crate) unsafe fn receive(
         // next segment refreshes the held set before any following E boundary.
         unsafe { engine::obtained_image(ctx, message, descriptor) };
     }
-    // The ABI guarantees the active value, not initialized inactive fields or
-    // padding. CLOSED/CANCELED may leave the whole output unwritten. Do not
-    // form a byte slice until descriptor-aware active-field decoding exists.
-    super::events::complete_owner(ctx, "channel.receive", || {
-        super::events::OwnerOutcome::Receive {
-            status,
-            descriptor,
-            payload: None,
-        }
-    });
+    // Metadata enumerates initialized fields; no whole-carrier byte slice is
+    // formed. CLOSED/CANCELED may leave the output entirely unwritten.
+    unsafe { super::events::complete_receive(ctx, status, descriptor, message) };
     unsafe { out.write(status) };
     Ok(STATUS_OK)
 }

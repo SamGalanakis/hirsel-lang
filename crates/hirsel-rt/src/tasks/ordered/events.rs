@@ -178,6 +178,7 @@ pub(super) struct Log {
     /// after close so delayed evidence cannot be confused with a reused row.
     sets: BTreeMap<u64, ObjectId>,
     tasks: BTreeMap<u64, ObjectId>,
+    values: BTreeMap<u32, super::values::Program>,
     canonical: Vec<CanonicalEvent>,
     unsupported: Vec<Unsupported>,
 }
@@ -259,6 +260,65 @@ pub(super) fn enable(ctx: *mut TaskCtx) {
     let driver = super::engine::driver(ctx);
     assert!(driver.recorded.is_empty());
     assert!(driver.events.replace(Log::default()).is_none());
+}
+
+/// # Safety
+/// Test admission only. Program must describe the actual initialized fields
+/// of every value of this descriptor, including its active variant tags.
+#[cfg(test)]
+pub(super) unsafe fn install_value(
+    ctx: *mut TaskCtx,
+    descriptor: u32,
+    program: super::values::Program,
+) {
+    assert_eq!(
+        unsafe { (*(*ctx).descriptor(descriptor)).size },
+        program.extent() as u64
+    );
+    let log = super::engine::driver(ctx)
+        .events
+        .as_mut()
+        .expect("evidence enabled at admission");
+    assert!(log.values.insert(descriptor, program).is_none());
+}
+
+/// # Safety
+/// As for channel.receive: DONE guarantees a live owner-local value matching
+/// descriptor. No bytes at message are read for any other status.
+pub(super) unsafe fn complete_receive(
+    ctx: *mut TaskCtx,
+    status: u32,
+    descriptor: u32,
+    message: *const u8,
+) {
+    // SAFETY: the receiving owner has its role; no bridge or stop observation.
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap() };
+    let Logical::Ordered(driver) = &s.logical else {
+        unreachable!()
+    };
+    let Some(log) = &driver.events else { return };
+    let payload = if status == crate::channels::DONE {
+        log.values.get(&descriptor).and_then(|program| unsafe {
+            program
+                .encode(message, |kind, word| {
+                    use crate::ordered::objects::Kind;
+                    match kind {
+                        Kind::Task => log.tasks.get(&word),
+                        Kind::TaskSet => log.sets.get(&word),
+                        _ => driver.objects.identity(kind, word),
+                    }
+                    .cloned()
+                })
+                .ok()
+        })
+    } else {
+        None
+    };
+    complete_owner(ctx, "channel.receive", || OwnerOutcome::Receive {
+        status,
+        descriptor,
+        payload,
+    });
 }
 
 /// Capture after the owned request returned, before its caller can yield.
@@ -1825,7 +1885,7 @@ mod tests {
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
     }
     #[test]
-    fn receive_completion_keeps_status_and_refuses_unclassified_payloads() {
+    fn receive_completion_decodes_certified_fields_and_refuses_missing_metadata() {
         use crate::tasks::*;
         let layout = crate::Layout {
             magic: crate::LAYOUT_MAGIC,
@@ -1843,7 +1903,10 @@ mod tests {
             scan_words: 0,
         };
         let layouts = [&layout as *const crate::Layout];
-        for width in [2, 4, 8] {
+        for (width, decoded) in [2, 4, 8]
+            .into_iter()
+            .flat_map(|width| [(width, false), (width, true)])
+        {
             let mut run = crate::host::BodyRun::new(width, true);
             run.config.layouts = layouts.as_ptr();
             run.config.layout_count = 1;
@@ -1852,8 +1915,11 @@ mod tests {
                 |ctx| unsafe {
                     super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
                     enable(ctx);
+                    if decoded {
+                        install_value(ctx, 2, received_integer_program());
+                    }
                 },
-                |ctx| unsafe {
+                move |ctx| unsafe {
                     let none = [0u64; 2];
                     let mut endpoints = [0u64; 2];
                     assert_eq!(
@@ -1907,7 +1973,9 @@ mod tests {
                     };
                     assert_eq!(*status, crate::channels::DONE);
                     assert_eq!(*descriptor, 2);
-                    assert_eq!(payload, &None);
+                    let expected = decoded
+                        .then(|| [1u32.to_le_bytes().as_slice(), &42u64.to_le_bytes()].concat());
+                    assert_eq!(payload, &expected);
                     assert!(
                         log.canonical().is_err(),
                         "unsupported carrier cannot become a complete trace"
@@ -1917,6 +1985,22 @@ mod tests {
             );
             assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
         }
+    }
+
+    fn received_integer_program() -> super::super::values::Program {
+        use super::super::values::{Field, Node, Program, Tag};
+        Program::new(
+            vec![
+                Node::Variant {
+                    extent: 16,
+                    tag: Tag::Ordinal { offset: 0 },
+                    arms: vec![vec![], vec![Field { offset: 8, node: 1 }]],
+                },
+                Node::Bits(8),
+            ],
+            0,
+        )
+        .unwrap()
     }
     #[test]
     fn closed_and_canceled_receive_evidence_never_reads_the_unwritten_output() {
@@ -1946,6 +2030,7 @@ mod tests {
                 |ctx| unsafe {
                     super::super::engine::enable(ctx, Policy::admit(&Default::default(), None));
                     enable(ctx);
+                    install_value(ctx, 2, received_integer_program());
                 },
                 move |ctx| unsafe {
                     let mut endpoints = [0u64; 2];
