@@ -332,13 +332,17 @@ pub fn project_failures(
     let mut failures = failures.iter().map(|failure| {
         Ok(hirsel_run_schema::Failure {
             rule: failure.failure.rule.to_string(),
-            site: locate(sources, &failure.anchor.definition, failure.anchor.site)
-                .ok_or_else(|| RuntimeError::Tool("failure has no source site".into()))?,
+            site: locate(
+                sources,
+                failure.anchor.definition.path(),
+                failure.anchor.site,
+            )
+            .ok_or_else(|| RuntimeError::Tool("failure has no source site".into()))?,
             operation: failure
                 .operation
                 .as_ref()
                 .map(|anchor| {
-                    locate(sources, &anchor.definition, anchor.site).ok_or_else(|| {
+                    locate(sources, anchor.definition.path(), anchor.site).ok_or_else(|| {
                         RuntimeError::Tool("failure operation has no source site".into())
                     })
                 })
@@ -376,7 +380,7 @@ pub fn project_outcome(
                 .map(|wait| {
                     Ok(Wait {
                         spawn_path: wait.spawn_path.clone(),
-                        site: locate(&wait.anchor.definition, wait.anchor.site).ok_or_else(
+                        site: locate(wait.anchor.definition.path(), wait.anchor.site).ok_or_else(
                             || RuntimeError::Tool("Blocked wait has no source site".into()),
                         )?,
                         kind: wait.kind.clone(),

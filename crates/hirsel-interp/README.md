@@ -717,3 +717,18 @@ checks, cancellation or injected provider faults.
 `bytes.append` publishes a byte-list update through the same operation completion
 boundary as list mutations. Its bounded-arena charge covers the input length and
 any shared destination copy before the update, matching native bulk reads.
+
+Operation targets cache `Operations::resolve` once per direct closed call site,
+including `None` (execute TIR). Built-in libraries dispatch provider-local ids
+through a handler table; anchors retain `DefId` until source projection.
+Call-only providers retain the legacy path-dispatch fallback. An
+`OperationsAdapter` that intercepts calls overrides `call_resolved`; its resolver
+forwards to the underlying provider unless it also introduces new operation paths.
+Interpreter-only body caches resolve local operands and place offsets. Frames
+reuse projection workspace, retaining dynamic indices and variant checks at access.
+
+`Operations::immediate` is an opt-in promise that a primitive produces no task
+rests and needs no completion hook. A fully transferred Complete result with
+no updates or releases can then restore its mut inputs and publish immediately.
+Untransferred non-inert owners, callbacks, Free mode, checked execution and
+memory-metered execution keep the ordinary scheduled completion path.

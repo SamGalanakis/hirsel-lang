@@ -10,6 +10,15 @@ struct Writeback {
     invalid: bool,
 }
 impl Operations for Writeback {
+    fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+        let _ = path;
+        (!matches!(path.0.name.as_str(), "too_deep" | "step" | "even_deeper")).then_some(
+            hirsel_interp::OperationId {
+                index: 0,
+                name: "test",
+            },
+        )
+    }
     fn call(
         &mut self,
         call: OperationCall<'_>,

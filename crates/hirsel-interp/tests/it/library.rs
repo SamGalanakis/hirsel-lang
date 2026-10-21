@@ -1208,7 +1208,7 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
             .is_empty()
     );
     let anchor = hirsel_interp::observation::Anchor {
-        definition: support::path("body"),
+        definition: (support::path("body")).into(),
         body: BodyId(0),
         cleanup: None,
         site: support::site(7),
@@ -1359,7 +1359,7 @@ fn recorded_scheduler_choices_select_runnable_tasks_and_reject_blocked_ones() {
     assert!(h.library.simulation.events.is_empty());
     assert_eq!(h.library.choose_task(&[4, 9]).unwrap(), 1);
     let anchor = hirsel_interp::observation::Anchor {
-        definition: support::path("main"),
+        definition: (support::path("main")).into(),
         body: BodyId(0),
         cleanup: None,
         site: support::site(7),

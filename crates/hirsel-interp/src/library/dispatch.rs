@@ -1698,30 +1698,42 @@ impl Operations for Library {
         }
         Ok(())
     }
+    fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<crate::OperationId> {
+        operation_ids()
+            .get(&hirsel_syntax::DefId::get(path)?)
+            .copied()
+    }
+    fn immediate(&self, operation: crate::OperationId) -> bool {
+        self.free.is_none()
+            && operation.name != "shared.thaw"
+            && PRIMARY_HANDLERS
+                .get(operation.index)
+                .is_none_or(|entry| entry.2 == super::OperationDisposition::Primitive)
+    }
     fn call(
         &mut self,
         call: OperationCall<'_>,
         context: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
-        if !call.path.package_is("core", "1") {
-            return Ok(None);
+        match self.resolve(call.path) {
+            Some(operation) => self.call_resolved(operation, call, context),
+            None => Ok(None),
         }
-        let name = call
-            .path
-            .0
-            .modules
-            .iter()
-            .chain(std::iter::once(&call.path.0.name))
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join(".");
-        if let Some(result) = super::dictionaries::call(&name, call.arguments)? {
-            return Ok(Some(result));
+    }
+    fn call_resolved(
+        &mut self,
+        operation: crate::OperationId,
+        call: OperationCall<'_>,
+        context: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        let name = operation.name;
+        if operation.index == PRIMARY_HANDLERS.len() {
+            return super::dictionaries::call(name, call.arguments);
         }
-        if let Some(result) = super::cursors::call(&name, call.arguments)? {
-            return Ok(Some(result));
+        if operation.index == PRIMARY_HANDLERS.len() + 1 {
+            return super::cursors::call(name, call.arguments);
         }
-        let access = match name.as_str() {
+        let access = match name {
             "atomic.load" | "atomic.store" => match call.arguments.get(1) {
                 Some(Value::Handle { kind, id }) if kind == "Atomic" => {
                     Some(("Atomic", *id, name == "atomic.store"))
@@ -1734,15 +1746,59 @@ impl Operations for Library {
             },
             _ => None,
         };
-        let result = self.dispatch_primary(call, context, &name)?;
+        let result = (PRIMARY_HANDLERS[operation.index].1)(self, call, context, name)?;
         if result.is_some()
             && let Some((kind, id, write)) = access
         {
-            self.race_access(kind, id, &name, write, context);
+            self.race_access(kind, id, name, write, context);
         }
         Ok(result)
     }
 }
+type PrimaryHandler = fn(
+    &mut Library,
+    OperationCall<'_>,
+    &mut OperationContext<'_>,
+    &str,
+) -> Result<Option<OperationResult>, Error>;
+
+fn operation_ids() -> &'static hirsel_syntax::DefMap<crate::OperationId> {
+    static IDS: std::sync::OnceLock<hirsel_syntax::DefMap<crate::OperationId>> =
+        std::sync::OnceLock::new();
+    IDS.get_or_init(|| {
+        let mut ids = hirsel_syntax::DefMap::default();
+        for (index, (names, _, _)) in PRIMARY_HANDLERS.iter().enumerate() {
+            for &name in *names {
+                ids.insert(
+                    hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core(name)),
+                    crate::OperationId { index, name },
+                );
+            }
+        }
+        for &(name, _) in super::dictionaries::INTEGER_ORDERS {
+            ids.insert(
+                hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core(name)),
+                crate::OperationId {
+                    index: PRIMARY_HANDLERS.len(),
+                    name,
+                },
+            );
+        }
+        for name in super::cursors::operation_names() {
+            let path = hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core(&name));
+            let name = Box::leak(name.into_boxed_str());
+            ids.insert(
+                path,
+                crate::OperationId {
+                    index: PRIMARY_HANDLERS.len() + 1,
+                    name,
+                },
+            );
+        }
+        ids
+    })
+}
+
 // The dispatch arms and exported path set are emitted from one declaration.
 macro_rules! primary_operations {
     ($library:ident, $call:ident, $context:ident, $name:ident, $args:ident, $value:ident;
@@ -1751,24 +1807,20 @@ macro_rules! primary_operations {
         pub(super) const PRIMARY_OPERATIONS: &[(&str, super::OperationDisposition)] = &[
             $( $( ($path, super::OperationDisposition::$kind), )+ )*
         ];
-        impl Library {
-            fn dispatch_primary(&mut $library, $call: OperationCall<'_>,
-                $context: &mut OperationContext<'_>, $name: &str)
-                -> Result<Option<OperationResult>, Error> {
+        #[allow(unused_variables, unreachable_code)]
+        const PRIMARY_HANDLERS: &[(&[&str], PrimaryHandler, super::OperationDisposition)] = &[
+            $( (&[ $( $path ),+ ], |$library, $call, $context, $name| {
                 let $args = &*$call.arguments;
-                let $value = match $name {
-                    $( $( $path )|+ => $handler, )*
-                    _ => return Ok(None),
-                };
+                let $value = $handler;
                 $finish
-            }
-        }
+            }, super::OperationDisposition::$kind), )*
+        ];
     };
 }
 
-primary_operations! { self, call, context, name, a, value;
+primary_operations! { library, call, context, name, a, value;
     Primitive: "codec.encode" | "codec.decode" => {
-        return super::codec::call(self, name, &call).map(Some);
+        return super::codec::call(library, name, &call).map(Some);
     },
     Primitive: "type_shape.info" => super::shape::info(&call)?,
     // Typed generation: a generated body is its text; only the compiler reads it.
@@ -1787,32 +1839,32 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "shared.freeze" | "shared.thaw" => {
         if name == "shared.thaw" {
             // Free mode: a thaw is an op, its outcome a recorded bit.
-            match self.free_enter(hirsel_free::phase::Phase::Done, context)? {
+            match library.free_enter(hirsel_free::phase::Phase::Done, context)? {
                 super::free::Enter::Off => {}
                 super::free::Enter::Park(park) => return Ok(Some(park)),
                 super::free::Enter::Run => {
                     let [Value::Shared(root)] = a else {
                         return Err(invalid("Shared representation"));
                     };
-                    return self.free_thaw(root.clone(), context).map(Some);
+                    return library.free_thaw(root.clone(), context).map(Some);
                 }
             }
         }
-        let result = super::shared::call(name, a, &mut self.next_shared)?;
+        let result = super::shared::call(name, a, &mut library.next_shared)?;
         if let (Some(trace), OperationResult::Complete { value: Value::Shared(root), .. }) =
-            (&mut self.simulation.root_trace, &result)
+            (&mut library.simulation.root_trace, &result)
             && name == "shared.freeze"
         {
             trace.frozen(root);
         }
         return Ok(Some(result));
     },
-    Primitive: "shared.with" => { return self.shared_with(a).map(Some); },
+    Primitive: "shared.with" => { return library.shared_with(a).map(Some); },
     Capability: "mapped.with" => {
         // A rejected replay never publishes the view.
-        let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
-        let result = self.mapped_with(a, context);
-        if result.is_err() && let Some(saved) = saved { self.simulation = saved; }
+        let saved = (!context.configuration.inputs.is_empty()).then(|| library.simulation.clone());
+        let result = library.mapped_with(a, context);
+        if result.is_err() && let Some(saved) = saved { library.simulation = saved; }
         return result.map(Some);
     },
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
@@ -1821,50 +1873,50 @@ primary_operations! { self, call, context, name, a, value;
     Capability: "io.signals" | "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "err.write" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "out.write" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.tasks" | "test.clock" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" | "file.map" | "file.watch" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
-                let saved = self.simulation.clone();
+                let saved = library.simulation.clone();
                 let out_len = context.stdout.len();
                 let trace_len = context.trace.len();
-                let result = self.capability(name, &call, context);
+                let result = library.capability(name, &call, context);
                 if result.is_err() {
-                    self.simulation = saved;
+                    library.simulation = saved;
                     context.stdout.truncate(out_len);
                     context.trace.truncate(trace_len);
                 }
                 return result;
             }
-            return self.capability(name, &call, context);
+            return library.capability(name, &call, context);
             },
-    Capability: "task.scope" | "task.scope_until" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.set" | "task.add" | "task.await_any" | "task.await_at" | "task.cancel_all" | "task.detach_all" | "task.check_canceled" | "task.isolate" => { return self.task_call(name, &call, context).map(Some); },
-    Capability: "channel.open" | "channel.send" | "channel.receive" | "sender.dup" => { let saved = (!context.configuration.inputs.is_empty()).then(|| self.channels.clone());
-        let result = self.channel_call(name, &call, context);
-        if result.is_err() && let Some(saved) = saved { self.channels = saved; }
+    Capability: "task.scope" | "task.scope_until" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.set" | "task.add" | "task.await_any" | "task.await_at" | "task.cancel_all" | "task.detach_all" | "task.check_canceled" | "task.isolate" => { return library.task_call(name, &call, context).map(Some); },
+    Capability: "channel.open" | "channel.send" | "channel.receive" | "sender.dup" => { let saved = (!context.configuration.inputs.is_empty()).then(|| library.channels.clone());
+        let result = library.channel_call(name, &call, context);
+        if result.is_err() && let Some(saved) = saved { library.channels = saved; }
         return result.map(Some); },
-    Capability: "mutex.create" | "mutex.with" | "atomic.create" | "atomic.load" | "atomic.store" => { let saved = (!context.configuration.inputs.is_empty()).then(|| self.synchronizers.clone());
-        let result = self.synchronization_call(name, &call, context);
-        if result.is_err() && let Some(saved) = saved { self.synchronizers = saved; }
+    Capability: "mutex.create" | "mutex.with" | "atomic.create" | "atomic.load" | "atomic.store" => { let saved = (!context.configuration.inputs.is_empty()).then(|| library.synchronizers.clone());
+        let result = library.synchronization_call(name, &call, context);
+        if result.is_err() && let Some(saved) = saved { library.synchronizers = saved; }
         return result.map(Some); },
     Unavailable: "arena.seal" | "region.with" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
     Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "net.split" | "net.join" | "read_half.read" | "read_half.read_into" | "read_half.set_timeout" | "read_half.close" | "write_half.write" | "write_half.write_all" | "write_half.shutdown" | "write_half.set_timeout" | "write_half.close" | "tls.connect" | "tls.connect_as" | "tls.connect_with" | "tls.accept" | "tls.peer" | "tls.negotiated_protocol" | "tls.close" | "test.net" | "net.listen" | "net.unix_connect" | "net.unix_listen" | "net.accept" | "net.local_addr" | "net.udp_bind" | "udp.send_to" | "udp.recv_from" | "udp.close" => {
-        return self.network_call(name, &call, context).map(Some);
+        return library.network_call(name, &call, context).map(Some);
     },
     // A rejected replay never publishes effects or consumes script entries; a scripted
     // child's read parks as a scripted peer's does.
     Capability: "io.process" | "proc.narrow" | "proc.run" | "proc.pipeline" | "test.process" | "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" | "proc.spawn_pipeline" | "group.write" | "group.close_stdin" | "group.read_stdout" | "proc.wait_group" | "group.kill" => {
-        return self.network_call(name, &call, context).map(Some);
+        return library.network_call(name, &call, context).map(Some);
     },
     Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelOpen" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.SharedThawTurn" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" | "$intrinsic.RunnerSend" | "$intrinsic.RunnerWait" | "$intrinsic.RunnerTake" | "$intrinsic.RunnerEntry" | "$intrinsic.RunnerArgument" | "$intrinsic.RunnerIo" | "$intrinsic.RunnerTasks" | "$intrinsic.RunnerReply" | "$intrinsic.RunnerGrants" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
     Capability: "io.telemetry" | "capture.begin" | "capture.context" | "capture.event" | "capture.finish" | "capture.log" | "capture.measure" => {
         // A rejected replay never publishes effects or delivers identities.
-        let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
-        let result = self.telemetry_call(name, &call, context);
-        if result.is_err() && let Some(saved) = saved { self.simulation = saved; }
+        let saved = (!context.configuration.inputs.is_empty()).then(|| library.simulation.clone());
+        let result = library.telemetry_call(name, &call, context);
+        if result.is_err() && let Some(saved) = saved { library.simulation = saved; }
         return result.map(Some);
     },
     Capability: "watcher.next" | "test.dir_event" => {
         // A rejected replay never publishes effects or consumes an event.
-        let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
-        let result = self.watch_call(name, &call, context);
-        if result.is_err() && let Some(saved) = saved { self.simulation = saved; }
+        let saved = (!context.configuration.inputs.is_empty()).then(|| library.simulation.clone());
+        let result = library.watch_call(name, &call, context);
+        if result.is_err() && let Some(saved) = saved { library.simulation = saved; }
         return result.map(Some);
     },
     Unavailable: "$intrinsic.MappedView" | "$intrinsic.MappedCheck" => { return Err(Error::Unavailable(format!("{name} is an entry of mapped.with's compiled body; the reference executes mapped.with"))); },
@@ -1875,23 +1927,23 @@ primary_operations! { self, call, context, name, a, value;
         _ => return Err(invalid("runner.entry_path expects an Entry")),
     },
     Capability: "io.runner" | "runner.grants" | "runner.narrow" | "runner.only" | "runner.compute" | "runner.call" | "runner.spawn" | "test.runner" => {
-        return self.runner_call(name, &call, context).map(Some);
+        return library.runner_call(name, &call, context).map(Some);
     },
     Capability: "signal.wait" => {
         // A rejected replay never publishes effects, consumes arrivals or keeps a wait.
-        let saved = (!context.configuration.inputs.is_empty()).then(|| (self.simulation.clone(), self.signals.clone()));
-        let result = self.wait_signal(a, context);
-        if result.is_err() && let Some((simulation, signals)) = saved { self.simulation = simulation; self.signals = signals; }
+        let saved = (!context.configuration.inputs.is_empty()).then(|| (library.simulation.clone(), library.signals.clone()));
+        let result = library.wait_signal(a, context);
+        if result.is_err() && let Some((simulation, signals)) = saved { library.simulation = simulation; library.signals = signals; }
         return result.map(Some);
     },
     Capability: "clock.sleep_until" => {
         // A rejected replay never publishes effects, consumes faults or keeps a timer.
-        let saved = (!context.configuration.inputs.is_empty()).then(|| (self.simulation.clone(), self.timers.clone()));
-        let result = self.sleep_until(&call, context);
-        if result.is_err() && let Some((simulation, timers)) = saved { self.simulation = simulation; self.timers = timers; }
+        let saved = (!context.configuration.inputs.is_empty()).then(|| (library.simulation.clone(), library.timers.clone()));
+        let result = library.sleep_until(&call, context);
+        if result.is_err() && let Some((simulation, timers)) = saved { library.simulation = simulation; library.timers = timers; }
         return result.map(Some);
     },
-    Primitive: "instant.checked_add" => self.instant_checked_add(a)?,
+    Primitive: "instant.checked_add" => library.instant_checked_add(a)?,
     Primitive: "instant.ticks" => {
         match arg(a, 0)? {
             Value::Handle { kind, id } if kind == "Instant" => u64_value(*id),
@@ -1927,8 +1979,8 @@ primary_operations! { self, call, context, name, a, value;
         | "int.checked_mul" => {
                 let offset = usize::from(name == "int.unchecked_add");
                 if offset == 1 {
-                    self.simulation.id(arg(a, 0)?, "Unsafe")?;
-                    self.simulation.record(
+                    library.simulation.id(arg(a, 0)?, "Unsafe")?;
+                    library.simulation.record(
                         "Unsafe",
                         &name,
                         encode_arguments(a),
@@ -2170,7 +2222,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "map.empty" => collection::sequence(BuiltinType::Map, []),
     Primitive: "set.empty" => collection::sequence(BuiltinType::Set, []),
     Primitive: "map.upsert_with" | "map.update_with" => {
-        return Ok(Some(keyed(self.map_edit(a, name == "map.upsert_with"), &call, context)?));
+        return Ok(Some(keyed(library.map_edit(a, name == "map.upsert_with"), &call, context)?));
     },
     Primitive: "map.insert" => {
                 let (key, item) = (take_arg(call.arguments, 1)?, take_arg(call.arguments, 2)?);
@@ -2215,7 +2267,7 @@ primary_operations! { self, call, context, name, a, value;
                     .transferring([0, 1]),
                 ));
             },
-    Primitive: "iter.next" => return self.next_iterator(arg(a, 0)?.clone()).map(Some),
+    Primitive: "iter.next" => return library.next_iterator(arg(a, 0)?.clone()).map(Some),
     Primitive: "simd.splat" => {
                 let n = call
                     .generics
@@ -2267,10 +2319,10 @@ primary_operations! { self, call, context, name, a, value;
                 collection::sequence(BuiltinType::Simd, out)
             },
     Primitive: "sorted_map.len" => super::callbacks::sorted_len(a)?,
-    Primitive: "sorted_map.get" => { return Ok(Some(self.sorted_access(a, false)?)); },
-    Primitive: "sorted_map.remove" => { return Ok(Some(self.sorted_access(a, true)?)); },
+    Primitive: "sorted_map.get" => { return Ok(Some(library.sorted_access(a, false)?)); },
+    Primitive: "sorted_map.remove" => { return Ok(Some(library.sorted_access(a, true)?)); },
     Primitive: "sorted_map.empty" => super::callbacks::sorted(arg(a, 0)?.clone(), vec![]),
-    Primitive: "sorted_map.insert" => return self.sorted_insert(a).map(Some),
+    Primitive: "sorted_map.insert" => return library.sorted_insert(a).map(Some),
     ; finish Ok(Some(OperationResult::returned(value)))
 }
 

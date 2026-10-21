@@ -42,6 +42,9 @@ struct RecordingLibrary {
     finalizer_values: Vec<u128>,
 }
 impl hirsel_interp::Operations for RecordingLibrary {
+    fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+        self.library.resolve(path)
+    }
     fn call(
         &mut self,
         call: hirsel_interp::OperationCall<'_>,
@@ -380,4 +383,89 @@ fn a_diverging_self_tail_call_is_a_checked_loop_site() {
         forged.definitions.insert(path, std::sync::Arc::new(bad));
         assert!(engine.import_native_input(forged).is_err());
     });
+}
+
+#[test]
+fn primitive_completion_matches_scheduled_completion_with_steps_traces_and_budgets() {
+    use hirsel_interp::{Operations, RunBudgets, TraceMode};
+    struct Scheduled(hirsel_interp::library::Library);
+    impl Operations for Scheduled {
+        fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+            self.0.resolve(path)
+        }
+        fn call(
+            &mut self,
+            call: hirsel_interp::OperationCall<'_>,
+            context: &mut hirsel_interp::OperationContext<'_>,
+        ) -> Result<Option<hirsel_interp::OperationResult>, hirsel_interp::Error> {
+            self.0.call(call, context)
+        }
+    }
+    let (mut engine, _) = prepare(
+        "fn main()->u64 { let mut xs: List[u64] = []; let mut i:u64=0; while i<20u64 { list.push(mut xs,i); i+=1 }; list.len(xs) }",
+    );
+    let sources = engine.sources.clone();
+    let config = RunConfiguration {
+        entry: entry_path(&default_context()),
+        hash_seed: 0,
+        inputs: vec![],
+    };
+    for trace_mode in [TraceMode::Full, TraceMode::Effects] {
+        for steps in [None, Some(1), Some(80), Some(700)] {
+            for checked in [false, true] {
+                for budgets in [
+                    RunBudgets::default(),
+                    RunBudgets {
+                        fuel: Some(5),
+                        memory_bytes: None,
+                    },
+                    RunBudgets {
+                        fuel: None,
+                        memory_bytes: Some(512),
+                    },
+                ] {
+                    let mut runtime = if checked {
+                        engine.checked_runtime_types().unwrap()
+                    } else {
+                        engine.runtime_types().unwrap()
+                    };
+                    runtime.trace_mode = trace_mode;
+                    runtime.budgets = budgets;
+                    let limits = Limits {
+                        steps,
+                        call_depth: 256,
+                    };
+                    let mut fast =
+                        hirsel_interp::library::Library::new(&config, Default::default()).unwrap();
+                    let mut slow = Scheduled(
+                        hirsel_interp::library::Library::new(&config, Default::default()).unwrap(),
+                    );
+                    let expected = hirsel_interp::run_with_runtime(
+                        &mut engine,
+                        &sources,
+                        &config,
+                        vec![],
+                        limits,
+                        &mut slow,
+                        &runtime,
+                    )
+                    .unwrap();
+                    let actual = hirsel_interp::run_with_runtime(
+                        &mut engine,
+                        &sources,
+                        &config,
+                        vec![],
+                        limits,
+                        &mut fast,
+                        &runtime,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        actual, expected,
+                        "{trace_mode:?}, {limits:?}, {budgets:?}, checked={checked}"
+                    );
+                }
+            }
+        }
+    }
 }

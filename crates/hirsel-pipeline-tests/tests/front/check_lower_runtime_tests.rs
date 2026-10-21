@@ -9,6 +9,12 @@ struct Emit {
     fail: Option<String>,
 }
 impl hirsel_interp::Operations for Emit {
+    fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+        (path.0.name == "emit").then_some(hirsel_interp::OperationId {
+            index: 0,
+            name: "emit",
+        })
+    }
     fn call(
         &mut self,
         call: hirsel_interp::OperationCall<'_>,

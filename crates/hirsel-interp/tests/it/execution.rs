@@ -530,6 +530,13 @@ fn effect_only_tracing_preserves_anchored_operations_and_failure_observations() 
         fail: bool,
     }
     impl Operations for Add {
+        fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+            let _ = path;
+            (path == &support::path("add")).then_some(hirsel_interp::OperationId {
+                index: 0,
+                name: "test",
+            })
+        }
         fn call(
             &mut self,
             call: OperationCall<'_>,
@@ -603,5 +610,118 @@ fn effect_only_tracing_preserves_anchored_operations_and_failure_observations() 
         assert_eq!(effects.steps, full.steps);
         assert_eq!(effects.failures, full.failures);
         assert_eq!(effects.stdout, full.stdout);
+    }
+}
+
+#[test]
+fn operation_decisions_are_static_at_repeated_call_sites_including_declines() {
+    use std::cell::Cell;
+    struct StaticDecision {
+        resolved: Cell<usize>,
+        called: usize,
+        intercept: bool,
+    }
+    impl Operations for StaticDecision {
+        fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+            assert_eq!(path, &support::path("add"));
+            self.resolved.set(self.resolved.get() + 1);
+            self.intercept.then_some(hirsel_interp::OperationId {
+                index: 0,
+                name: "add",
+            })
+        }
+        fn call(
+            &mut self,
+            call: OperationCall<'_>,
+            _: &mut OperationContext<'_>,
+        ) -> Result<Option<OperationResult>, Error> {
+            self.called += 1;
+            let [Value::Integer(a), Value::Integer(b)] = call.arguments else {
+                panic!("arguments")
+            };
+            Ok(Some(OperationResult::returned(Value::Integer(
+                Integer::new(P::U32, a.bits() + b.bits()).unwrap(),
+            ))))
+        }
+    }
+    for intercept in [false, true] {
+        let mut operations = StaticDecision {
+            resolved: Cell::new(0),
+            called: 0,
+            intercept,
+        };
+        let mut provider = Provider {
+            definitions: loop_program(),
+            queries: vec![],
+        };
+        let execution = hirsel_interp::run_with_runtime(
+            &mut provider,
+            &sources(),
+            &RunConfiguration {
+                entry: path("main"),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            vec![],
+            Limits::default(),
+            &mut operations,
+            &runtime(),
+        )
+        .unwrap();
+        returned(&execution, int(P::U32, 15));
+        assert_eq!(operations.resolved.get(), 1);
+        assert_eq!(operations.called, if intercept { 5 } else { 0 });
+    }
+}
+
+#[test]
+fn call_only_operation_providers_keep_interception_and_tir_fallback() {
+    struct Legacy {
+        calls: usize,
+        intercept: bool,
+    }
+    impl Operations for Legacy {
+        fn call(
+            &mut self,
+            call: OperationCall<'_>,
+            _: &mut OperationContext<'_>,
+        ) -> Result<Option<OperationResult>, Error> {
+            self.calls += 1;
+            if !self.intercept {
+                return Ok(None);
+            }
+            let [Value::Integer(a), Value::Integer(b)] = call.arguments else {
+                panic!("arguments")
+            };
+            Ok(Some(OperationResult::returned(Value::Integer(
+                Integer::new(P::U32, a.bits() + b.bits()).unwrap(),
+            ))))
+        }
+    }
+    for intercept in [false, true] {
+        let mut operations = Legacy {
+            calls: 0,
+            intercept,
+        };
+        let mut provider = Provider {
+            definitions: loop_program(),
+            queries: vec![],
+        };
+        let execution = hirsel_interp::run_with_runtime(
+            &mut provider,
+            &sources(),
+            &RunConfiguration {
+                entry: path("main"),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            vec![],
+            Limits::default(),
+            &mut operations,
+            &runtime(),
+        )
+        .unwrap();
+        returned(&execution, int(P::U32, 15));
+        assert_eq!(operations.calls, 5);
     }
 }

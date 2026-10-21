@@ -2130,6 +2130,62 @@ impl HostLibrary {
         })
     }
 }
+// Provider-local ids retain the library token in their low bits. A host route
+// is selected once; handle-dependent host/simulation choice remains per call.
+const HOST_ROUTE_SHIFT: usize = 16;
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum HostRoute {
+    Library,
+    Input,
+    Random,
+    Signal,
+    Telemetry,
+    Runner,
+    Sleep,
+    Projection,
+    Watch,
+    Mapped,
+    Storage,
+    Process,
+    NetProjection,
+    Network,
+}
+fn host_route(name: &str) -> HostRoute {
+    match name {
+        "io.stdin" | "io.stderr" | "io.stdout" | "io.random" | "io.tasks" | "io.signals"
+        | "stdin.read" | "err.print" | "err.write" | "out.print" | "out.write" | "env.get"
+        | "env.narrow" => HostRoute::Input,
+        "random.bytes" => HostRoute::Random,
+        "signal.wait" => HostRoute::Signal,
+        "io.telemetry" => HostRoute::Telemetry,
+        "runner.compute" | "runner.call" | "runner.spawn" => HostRoute::Runner,
+        "clock.sleep_until" => HostRoute::Sleep,
+        "io.dir" | "io.monotonic_clock" | "io.wall_clock" => HostRoute::Projection,
+        "watcher.next" => HostRoute::Watch,
+        "mapped.with" => HostRoute::Mapped,
+        "io.net" => HostRoute::NetProjection,
+        "io.process" => HostRoute::Process,
+        "dir.narrow" | "dir.read_only" | "dir.remove_all" => HostRoute::Storage,
+        _ if name.starts_with("capture.") => HostRoute::Telemetry,
+        _ if name.starts_with("file.") || name.starts_with("clock.") => HostRoute::Storage,
+        _ if name.starts_with("proc.")
+            || name.starts_with("child.")
+            || name.starts_with("group.") =>
+        {
+            HostRoute::Process
+        }
+        _ if name.starts_with("net.")
+            || name.starts_with("tls.")
+            || name.starts_with("udp.")
+            || name.starts_with("read_half.")
+            || name.starts_with("write_half.") =>
+        {
+            HostRoute::Network
+        }
+        _ => HostRoute::Library,
+    }
+}
 impl hirsel_interp::OperationsAdapter for HostLibrary {
     fn resume(
         &mut self,
@@ -2447,112 +2503,88 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             }
         }
     }
+    fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+        let mut operation = self.library.resolve(path)?;
+        operation.index |= (host_route(operation.name) as usize) << HOST_ROUTE_SHIFT;
+        Some(operation)
+    }
+    fn immediate(&self, operation: hirsel_interp::OperationId) -> bool {
+        operation.index >> HOST_ROUTE_SHIFT == HostRoute::Library as usize
+            && self.library.immediate(operation)
+    }
     fn call(
         &mut self,
         call: OperationCall<'_>,
         cx: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
-        if call.path.package_is("core", "1") {
-            let name = call
-                .path
-                .0
-                .modules
-                .iter()
-                .cloned()
-                .chain([call.path.0.name.clone()])
-                .collect::<Vec<_>>()
-                .join(".");
-            if matches!(
-                name.as_str(),
-                "io.stdin"
-                    | "io.stderr"
-                    | "io.stdout"
-                    | "io.random"
-                    | "io.tasks"
-                    | "io.signals"
-                    | "stdin.read"
-                    | "err.print"
-                    | "err.write"
-                    | "out.print"
-                    | "out.write"
-                    | "env.get"
-                    | "env.narrow"
-            ) {
-                let result = self.host_input(&name, call, cx);
-                self.echo(cx.stdout)?;
-                return result;
+        match hirsel_interp::OperationsAdapter::resolve(self, call.path) {
+            Some(operation) => {
+                hirsel_interp::OperationsAdapter::call_resolved(self, operation, call, cx)
             }
-            if name == "random.bytes" {
-                return self.host_random(call, cx);
+            None => Ok(None),
+        }
+    }
+    fn call_resolved(
+        &mut self,
+        mut operation: hirsel_interp::OperationId,
+        call: OperationCall<'_>,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        let route = operation.index >> HOST_ROUTE_SHIFT;
+        operation.index &= (1 << HOST_ROUTE_SHIFT) - 1;
+        let name = operation.name;
+        if route == HostRoute::Input as usize {
+            let result = self.host_input(&name, call, cx);
+            self.echo(cx.stdout)?;
+            return result;
+        }
+        if route == HostRoute::Random as usize {
+            return self.host_random(call, cx);
+        }
+        if route == HostRoute::Signal as usize {
+            return self.host_signal(call, cx);
+        }
+        if route == HostRoute::Telemetry as usize
+            && (name == "io.telemetry"
+                || call.arguments.first().is_some_and(|v| self.id(v).is_ok()))
+        {
+            return self.host_telemetry(&name, call.arguments).map(Some);
+        }
+        if route == HostRoute::Runner as usize {
+            let result = self.library.call_resolved(operation, call, cx)?;
+            self.runner_sends(cx)?;
+            return Ok(result);
+        }
+        if route == HostRoute::Sleep as usize
+            && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
+        {
+            return self.host_sleep(call.arguments, cx).map(Some);
+        }
+        if route == HostRoute::Projection as usize {
+            if !matches!(call.arguments.first(),Some(Value::Handle {kind,..}) if kind=="Io") {
+                return Err(invalid());
             }
-            if name == "signal.wait" {
-                return self.host_signal(call, cx);
-            }
-            if name == "io.telemetry"
-                || (name.starts_with("capture.")
-                    && call.arguments.first().is_some_and(|v| self.id(v).is_ok()))
-            {
-                return self.host_telemetry(&name, call.arguments).map(Some);
-            }
-            if matches!(
-                name.as_str(),
-                "runner.compute" | "runner.call" | "runner.spawn"
-            ) {
-                let result = self.library.call(call, cx)?;
-                self.runner_sends(cx)?;
-                return Ok(result);
-            }
-            if name == "clock.sleep_until"
-                && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
-            {
-                return self.host_sleep(call.arguments, cx).map(Some);
-            }
-            if name == "io.dir" || name == "io.monotonic_clock" || name == "io.wall_clock" {
-                if !matches!(call.arguments.first(),Some(Value::Handle {kind,..}) if kind=="Io") {
-                    return Err(invalid());
-                }
-                return self.storage(&name, call.arguments).map(Some);
-            }
-            if name == "watcher.next" && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
-            {
-                return self.host_watch_next(call.arguments, cx).map(Some);
-            }
-            if name == "mapped.with" && call.arguments.first().is_some_and(|v| self.id(v).is_ok()) {
-                return self.host_mapped_with(call.arguments).map(Some);
-            }
-            if (name.starts_with("file.")
-                || name == "dir.narrow"
-                || name == "dir.read_only"
-                || name == "dir.remove_all"
-                || name.starts_with("clock."))
-                && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
-            {
-                return self.storage(&name, call.arguments).map(Some);
-            }
-            if name == "io.process"
-                || (name.starts_with("proc.")
-                    || name.starts_with("child.")
-                    || name.starts_with("group."))
-                    && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
-            {
-                if name == "io.process" {
-                    // Validate the Io operand through the ordinary library before projecting it.
-                    self.library.call(
-                        OperationCall {
-                            runtime: call.runtime,
-                            path: call.path,
-                            generics: call.generics,
-                            arguments: call.arguments,
-                            result_type: call.result_type,
-                            types: call.types,
-                            site: call.site,
-                        },
-                        cx,
-                    )?;
-                }
-                return self.host_process(&name, call.arguments, cx).map(Some);
-            }
-            if name == "io.net" {
+            return self.storage(&name, call.arguments).map(Some);
+        }
+        if route == HostRoute::Watch as usize
+            && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
+        {
+            return self.host_watch_next(call.arguments, cx).map(Some);
+        }
+        if route == HostRoute::Mapped as usize
+            && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
+        {
+            return self.host_mapped_with(call.arguments).map(Some);
+        }
+        if route == HostRoute::Storage as usize
+            && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
+        {
+            return self.storage(&name, call.arguments).map(Some);
+        }
+        if route == HostRoute::Process as usize
+            && (name == "io.process" || call.arguments.first().is_some_and(|v| self.id(v).is_ok()))
+        {
+            if name == "io.process" {
                 // Validate the Io operand through the ordinary library before projecting it.
                 self.library.call(
                     OperationCall {
@@ -2566,19 +2598,31 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                     },
                     cx,
                 )?;
-                return self.host_network(&name, call.arguments, cx).map(Some);
             }
-            if (name.starts_with("net.")
-                || name.starts_with("tls.")
-                || name.starts_with("udp.")
-                || name.starts_with("read_half.")
-                || name.starts_with("write_half."))
-                && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
-            {
-                return self.host_network(&name, call.arguments, cx).map(Some);
-            }
+            return self.host_process(&name, call.arguments, cx).map(Some);
         }
-        let result = self.library.call(call, cx);
+        if route == HostRoute::NetProjection as usize {
+            // Validate the Io operand through the ordinary library before projecting it.
+            self.library.call(
+                OperationCall {
+                    runtime: call.runtime,
+                    path: call.path,
+                    generics: call.generics,
+                    arguments: call.arguments,
+                    result_type: call.result_type,
+                    types: call.types,
+                    site: call.site,
+                },
+                cx,
+            )?;
+            return self.host_network(&name, call.arguments, cx).map(Some);
+        }
+        if route == HostRoute::Network as usize
+            && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
+        {
+            return self.host_network(&name, call.arguments, cx).map(Some);
+        }
+        let result = self.library.call_resolved(operation, call, cx);
         for (scope, clock, at) in self.library.take_deadlines() {
             self.arm_deadline(scope, &clock, at, cx)?;
         }

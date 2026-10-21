@@ -6,7 +6,7 @@ use hirsel_tir::{BodyId, CapabilityEvent, CleanupId};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Anchor {
-    pub definition: DefPath,
+    pub definition: hirsel_syntax::DefId,
     pub body: BodyId,
     pub cleanup: Option<(CleanupId, u32)>,
     pub site: Span,
@@ -65,7 +65,7 @@ impl Anchor {
     pub fn source_site(&self, sources: &SourceMap) -> Option<SourceSite> {
         let loc = sources.location(self.site)?;
         Some(SourceSite {
-            definition: self.definition.clone(),
+            definition: self.definition.path().clone(),
             file: sources
                 .file(sources.resolve(self.site).file)?
                 .path

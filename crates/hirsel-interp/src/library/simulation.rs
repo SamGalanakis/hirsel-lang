@@ -1212,7 +1212,7 @@ mod semantic_events {
         let file = sources.add("effect.hir", "operation\n".into()).unwrap();
         let site = Span::new(sources.file_anchor(file), 0, 9).unwrap();
         let anchor = Anchor {
-            definition: run.entry.clone(),
+            definition: (run.entry.clone()).into(),
             body: BodyId(77),
             cleanup: None,
             site,

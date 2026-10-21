@@ -103,12 +103,61 @@ pub(crate) struct Target {
     /// The self-tail site the call restarts, when it calls its own definition.
     pub tail: Option<TailSite>,
     pub forget: bool,
-    /// A core@1 path, which the evaluator's arena and freeze rules may name.
-    pub core: bool,
+    /// Evaluator arena accounting, selected once with the call target.
+    pub arena: ArenaCall,
     /// The TIR entry, once an operation layer has declined the call.
     pub entry: std::cell::OnceCell<Entry>,
+    /// The operation layer's static decision, including a declined path.
+    pub operation: std::cell::OnceCell<Option<Operation>>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct Operation {
+    pub id: crate::OperationId,
+    pub immediate: bool,
+}
+#[derive(Clone, Copy)]
+pub(crate) enum ArenaCall {
+    None,
+    Copy,
+    List(&'static str),
+    Keyed(&'static str),
+    Read(&'static str),
+}
+impl ArenaCall {
+    pub fn resolve(path: &hirsel_syntax::DefPath) -> Self {
+        if !path.package_is("core", "1") {
+            return Self::None;
+        }
+        if path.is_core("copy_to") {
+            return Self::Copy;
+        }
+        for name in ["list.push", "list.pop", "list.remove", "list.swap"] {
+            if path.is_core(name) {
+                return Self::List(name);
+            }
+        }
+        for name in ["map.insert", "set.insert", "map.remove", "set.remove"] {
+            if path.is_core(name) {
+                return Self::Keyed(name);
+            }
+        }
+        for name in [
+            "bytes.append_from_history",
+            "bytes.append",
+            "stdin.read",
+            "file.read",
+            "net.read",
+            "read_half.read",
+            "udp.recv_from",
+        ] {
+            if path.is_core(name) {
+                return Self::Read(name);
+            }
+        }
+        Self::None
+    }
+}
 pub(crate) struct Entry {
     pub definition: DefinitionRef,
     pub body: BodyId,
@@ -117,7 +166,33 @@ pub(crate) struct Entry {
     pub code: u32,
 }
 
+/// Interpreter-only place layout. Field offsets and index slots are host-sized;
+/// type rows and source bindings stay in the TIR and are never rewritten.
+pub(crate) struct PlaceCode {
+    pub root: usize,
+    pub once: bool,
+    pub projection: Box<[ProjectionCode]>,
+}
+#[derive(Clone, Copy)]
+pub(crate) enum ProjectionCode {
+    Field(usize),
+    VariantField { variant: u32, field: usize },
+    Index(usize),
+}
+impl From<&Projection> for ProjectionCode {
+    fn from(projection: &Projection) -> Self {
+        match *projection {
+            Projection::Field(field) => Self::Field(field as usize),
+            Projection::VariantField { variant, field } => Self::VariantField {
+                variant,
+                field: field as usize,
+            },
+            Projection::Index(LocalId(index)) => Self::Index(index as usize),
+        }
+    }
+}
 pub(crate) struct Code {
+    pub places: std::rc::Rc<[PlaceCode]>,
     /// The op index of each block's first instruction; its terminator follows
     /// its instructions.
     starts: Box<[u32]>,
@@ -170,6 +245,17 @@ impl Code {
             });
         }
         Self {
+            places: body
+                .places
+                .iter()
+                .map(|place| PlaceCode {
+                    root: place.root.0 as usize,
+                    once: types
+                        .get(place.ty)
+                        .is_some_and(|ty| ty.modes.multiplicity == Multiplicity::Once),
+                    projection: place.projection.iter().map(ProjectionCode::from).collect(),
+                })
+                .collect(),
             starts: starts.into(),
             ops: ops.into(),
         }

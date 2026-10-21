@@ -287,7 +287,7 @@ pub struct TaskStart {
 // operation hook therefore delegates automatically instead of inheriting a no-op.
 macro_rules! operation_boundary {
     (shared { $( $(#[$smeta:meta])* fn $shared:ident(&self $(, $sa:ident: $st:ty)*) -> $sr:ty $sb:block)* }
-     mutable { $( $(#[$mmeta:meta])* fn $mutable:ident(&mut self $(, $ma:ident: $mt:ty)*) $(-> $mr:ty)? $mb:block)* }
+     mutable { $( $(#[$mmeta:meta])* fn $mutable:ident(&mut $mself:ident $(, $ma:ident: $mt:ty)*) $(-> $mr:ty)? $mb:block)* }
      required { $( $(#[$rmeta:meta])* fn $required:ident(&mut self $(, $ra:ident: $rt:ty)*) -> $rr:ty;)* }) => {
         /// Extension boundary for the library: names and signatures come from its registry.
         /// Return None for an ordinary TIR definition. Arguments are in parameter order,
@@ -295,7 +295,7 @@ macro_rules! operation_boundary {
         /// call's cleanup; it must carry the defining operation's rule and source site.
         pub trait Operations {
             $($(#[$smeta])* fn $shared(&self, $($sa: $st),*) -> $sr $sb)*
-            $($(#[$mmeta])* fn $mutable(&mut self, $($ma: $mt),*) $(-> $mr)? $mb)*
+            $($(#[$mmeta])* fn $mutable(&mut $mself, $($ma: $mt),*) $(-> $mr)? $mb)*
             $($(#[$rmeta])* fn $required(&mut self, $($ra: $rt),*) -> $rr;)*
         }
         /// An operation layer overrides only the hooks it intercepts. Every other
@@ -328,6 +328,16 @@ macro_rules! operation_boundary {
 }
 operation_boundary! {
     shared {
+    /// Resolve a path once for a call target. The decision is static for this run;
+    /// None executes its TIR body without offering the call again. The default
+    /// legacy token still offers calls to providers implementing only `call`.
+    /// Adapters overriding `call` must also override `call_resolved`.
+    fn resolve(&self, _path: &DefPath) -> Option<OperationId> { Some(OperationId::LEGACY) }
+    /// This id cannot create task rests or require completion hooks. The evaluator
+    /// may finish a Complete result without suspending it, provided no untransferred
+    /// taken owners need release. Adapters introducing those effects override this
+    /// promise. Checked and memory-metered runs retain scheduled completion.
+    fn immediate(&self, _operation: OperationId) -> bool { false }
     /// Absolute deadline of a parked timer, independent of host readiness or replay.
     /// The scheduler polls timers by deadline, preserving suspension order on ties.
     fn wait_deadline(&self, _token: u64) -> Option<u64> { None }
@@ -351,6 +361,12 @@ operation_boundary! {
     fn stops_itself(&self) -> bool { false }
     }
     mutable {
+    /// Execute an id returned by this provider's `resolve`. The default retains
+    /// the path-based adapter API for small custom providers.
+    fn call_resolved(&mut self, _operation: OperationId, call: OperationCall<'_>,
+        context: &mut OperationContext<'_>) -> Result<Option<OperationResult>, Error> {
+        self.call(call, context)
+    }
     /// A scheduling point: the index in `runnable` (queue order, nonempty) of the task to run
     /// next, the task that ran last being current (`enter_task`).
     fn choose_task(&mut self, _runnable: &[u64]) -> Result<usize, Error> {
@@ -497,6 +513,20 @@ operation_boundary! {
         _context: &mut OperationContext<'_>) -> Result<Option<OperationResult>, Error> ;
     }
 }
+/// Provider-local dispatch token. Its meaning is stable for the life of a run.
+/// The canonical name is static metadata, never assembled on the call path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OperationId {
+    pub index: usize,
+    pub name: &'static str,
+}
+impl OperationId {
+    /// Compatibility for a provider whose path decision is still made by `call`.
+    pub const LEGACY: Self = Self {
+        index: usize::MAX,
+        name: "",
+    };
+}
 pub struct OperationCall<'a> {
     /// Checked nominal declarations; incoming bytes can never supply these.
     pub runtime: &'a aggregate::RuntimeTypes,
@@ -576,6 +606,10 @@ pub enum OperationResult {
 }
 pub struct NoOperations;
 impl Operations for NoOperations {
+    fn resolve(&self, _: &DefPath) -> Option<OperationId> {
+        None
+    }
+
     fn call(
         &mut self,
         _: OperationCall<'_>,

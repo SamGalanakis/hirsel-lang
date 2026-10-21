@@ -104,8 +104,9 @@ fn overdue_timers_resume_in_deadline_order_and_keep_ties_in_suspension_order() {
         fn operations_mut(&mut self) -> &mut dyn Operations {
             &mut self.library
         }
-        fn call(
+        fn call_resolved(
             &mut self,
+            operation: hirsel_interp::OperationId,
             call: OperationCall<'_>,
             cx: &mut OperationContext<'_>,
         ) -> Result<Option<OperationResult>, Error> {
@@ -118,7 +119,7 @@ fn overdue_timers_resume_in_deadline_order_and_keep_ties_in_suspension_order() {
                 );
                 self.library.simulation.config.monotonic = 100;
             }
-            let result = self.library.call(call, cx)?;
+            let result = self.library.call_resolved(operation, call, cx)?;
             if matches!(result, Some(OperationResult::Park { .. })) {
                 self.parked += 1;
             }
@@ -210,8 +211,9 @@ fn watched_waits_are_polled_only_when_woken_and_resume_in_poll_order() {
         fn operations_mut(&mut self) -> &mut dyn Operations {
             &mut self.library
         }
-        fn call(
+        fn call_resolved(
             &mut self,
+            operation: hirsel_interp::OperationId,
             call: OperationCall<'_>,
             cx: &mut OperationContext<'_>,
         ) -> Result<Option<OperationResult>, Error> {
@@ -220,7 +222,7 @@ fn watched_waits_are_polled_only_when_woken_and_resume_in_poll_order() {
             {
                 self.library.simulation.config.monotonic = 100;
             }
-            self.library.call(call, cx)
+            self.library.call_resolved(operation, call, cx)
         }
         fn watched(&self, token: u64) -> bool {
             self.library.wait_deadline(token).is_some()

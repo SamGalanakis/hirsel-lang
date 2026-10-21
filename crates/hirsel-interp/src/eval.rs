@@ -789,25 +789,30 @@ pub(crate) fn execute_frames(
                                 abandon_operation(frame, state)?;
                                 continue;
                             }
-                            if let Some(result) = operations.call(
-                                OperationCall {
-                                    runtime,
-                                    path: &reference.definition,
-                                    generics: &reference.arguments,
-                                    arguments: &mut arguments,
-                                    result_type: function.result,
-                                    types: &reference.types,
-                                    site: state.anchor.site,
-                                },
-                                &mut OperationContext {
-                                    configuration,
-                                    sources,
-                                    stdout: &mut execution.stdout,
-                                    trace: &mut execution.trace,
-                                    trace_mode: runtime.trace_mode,
-                                    anchor: Some(&state.anchor),
-                                },
-                            )? {
+                            let operation = operations.resolve(&reference.definition);
+                            if let Some(result) = match operation {
+                                None => None,
+                                Some(operation) => operations.call_resolved(
+                                    operation,
+                                    OperationCall {
+                                        runtime,
+                                        path: &reference.definition,
+                                        generics: &reference.arguments,
+                                        arguments: &mut arguments,
+                                        result_type: function.result,
+                                        types: &reference.types,
+                                        site: state.anchor.site,
+                                    },
+                                    &mut OperationContext {
+                                        configuration,
+                                        sources,
+                                        stdout: &mut execution.stdout,
+                                        trace: &mut execution.trace,
+                                        trace_mode: runtime.trace_mode,
+                                        anchor: Some(&state.anchor),
+                                    },
+                                )?,
+                            } {
                                 execution.steps = execution.steps.saturating_add(1);
                                 let taken = function
                                     .parameters
@@ -1540,7 +1545,7 @@ pub(crate) fn execute_frames(
                         caller.work.push_back(crate::resources::Work::Release(
                             value,
                             crate::observation::Anchor {
-                                definition: caller.definition.path.path().clone(),
+                                definition: caller.definition.path,
                                 body: caller.body_id,
                                 cleanup: None,
                                 site: site_of(caller)?,
@@ -1794,6 +1799,7 @@ pub(crate) fn execute_frames(
             None => {
                 let code = codes.id(&runtime.types, &frame.definition, frame.body_id);
                 frame.code = Some(code);
+                frame.places = Some(codes.get(code).places.clone());
                 code
             }
         };
@@ -1862,7 +1868,7 @@ pub(crate) fn execute_frames(
                 Terminator::Call {
                     callee: Callee::Definition { path, .. },
                     ..
-                } => path.is_core("atomic.store"),
+                } => path.0.name == "store" && path.is_core("atomic.store"),
                 Terminator::Call {
                     callee: Callee::Indirect { value, .. },
                     ..
@@ -2212,14 +2218,20 @@ pub(crate) fn execute_frames(
                         let types = &*runtime.types;
                         // MEM-6: a copy into a bounded arena charges its whole tree first,
                         // and builds every List and Array of it unshared there.
-                        let exhausted = if !target.core {
-                            None
-                        } else if path.is_core("copy_to") {
-                            copy_to_arena(runtime, result_type, &mut arguments, &mut budgets)?
-                        } else {
-                            list_write(path, &mut arguments, &mut budgets)
-                                .or_else(|| keyed_write(path, &mut arguments, &mut budgets))
-                                .or_else(|| read_write(path, &mut arguments, &mut budgets))
+                        let exhausted = match target.arena {
+                            crate::code::ArenaCall::None => None,
+                            crate::code::ArenaCall::Copy => {
+                                copy_to_arena(runtime, result_type, &mut arguments, &mut budgets)?
+                            }
+                            crate::code::ArenaCall::List(name) => {
+                                list_write(name, &mut arguments, &mut budgets)
+                            }
+                            crate::code::ArenaCall::Keyed(name) => {
+                                keyed_write(name, &mut arguments, &mut budgets)
+                            }
+                            crate::code::ArenaCall::Read(name) => {
+                                read_write(name, &mut arguments, &mut budgets)
+                            }
                         };
                         let result = if let Some(arena) = exhausted {
                             budgets.exhausted(arena, execution.failures.len());
@@ -2229,8 +2241,14 @@ pub(crate) fn execute_frames(
                                 "MEM-6",
                                 "OutOfSpace",
                             )?))
-                        } else {
-                            operations.call(
+                        } else if let Some(operation) = *target.operation.get_or_init(|| {
+                            operations.resolve(path).map(|id| crate::code::Operation {
+                                id,
+                                immediate: operations.immediate(id),
+                            })
+                        }) {
+                            operations.call_resolved(
+                                operation.id,
                                 OperationCall {
                                     runtime,
                                     path,
@@ -2249,8 +2267,29 @@ pub(crate) fn execute_frames(
                                     anchor: Some(&anchor(frame, site)),
                                 },
                             )?
+                        } else {
+                            None
                         };
-                        if let Some(result) = result {
+                        if let Some(mut result) = result {
+                            if frame.check.is_none()
+                                && !budgets.run.metered()
+                                && target
+                                    .operation
+                                    .get()
+                                    .copied()
+                                    .flatten()
+                                    .is_some_and(|op| op.immediate)
+                                && complete_immediate(
+                                    frame,
+                                    &mut result,
+                                    &mut arguments,
+                                    &mut_places,
+                                    &taken,
+                                    returns,
+                                )?
+                            {
+                                continue;
+                            }
                             // MODE-2: a native operation's parameter declared
                             // `unique`, such as `shared.freeze`'s sole-owner
                             // precondition (MEM-11), received no value another
@@ -2371,6 +2410,7 @@ pub(crate) fn execute_frames(
                 }
                 callee.type_arguments = invocation_types;
                 callee.code = callee_code;
+                callee.places = callee_code.map(|id| codes.get(id).places.clone());
                 let writebacks = mut_places
                     .into_iter()
                     .map(|(i, p)| {
@@ -2673,7 +2713,7 @@ fn anchored_root(frames: &[Frame], id: u64) -> Result<(), Error> {
 
 fn anchor(frame: &Frame, site: Span) -> crate::observation::Anchor {
     crate::observation::Anchor {
-        definition: frame.definition.path.path().clone(),
+        definition: frame.definition.path,
         body: frame.body_id,
         cleanup: None,
         site,
@@ -3244,13 +3284,10 @@ fn copy_to_arena(
 /// element (`pop` of an empty List, `swap(xs, i, i)`) writes nothing, and
 /// `reserve` is only a hint there. Returns the arena whose budget is exceeded.
 fn list_write(
-    path: &hirsel_syntax::DefPath,
+    name: &str,
     arguments: &mut [Value],
     budgets: &mut crate::bounded::Budgets,
 ) -> Option<u64> {
-    let name = ["list.push", "list.pop", "list.remove", "list.swap"]
-        .into_iter()
-        .find(|name| path.is_core(name))?;
     let index = |at: usize| match arguments.get(at) {
         Some(Value::Integer(i)) => Some(i.bits()),
         _ => None,
@@ -3300,11 +3337,11 @@ fn list_write(
 /// so an `OutOfSpace` reads nothing. Returns the arena whose budget is
 /// exceeded.
 fn read_write(
-    path: &hirsel_syntax::DefPath,
+    name: &str,
     arguments: &mut [Value],
     budgets: &mut crate::bounded::Budgets,
 ) -> Option<u64> {
-    let (buffer, max) = if path.is_core("bytes.append_from_history") {
+    let (buffer, max) = if name == "bytes.append_from_history" {
         let Some(Value::Sequence { elements, .. }) = arguments.first() else {
             return None;
         };
@@ -3327,7 +3364,7 @@ fn read_write(
             return None;
         }
         (0, count)
-    } else if path.is_core("bytes.append") {
+    } else if name == "bytes.append" {
         let Some(Value::Bytes(data)) = arguments.get(1) else {
             return None;
         };
@@ -3336,12 +3373,12 @@ fn read_write(
         }
         (0, data.len() as u64)
     } else {
-        let (buffer, max) = if path.is_core("stdin.read") {
+        let (buffer, max) = if name == "stdin.read" {
             (1, 2)
-        } else if path.is_core("file.read")
-            || path.is_core("net.read")
-            || path.is_core("read_half.read")
-            || path.is_core("udp.recv_from")
+        } else if name == "file.read"
+            || name == "net.read"
+            || name == "read_half.read"
+            || name == "udp.recv_from"
         {
             (2, 3)
         } else {
@@ -3388,13 +3425,10 @@ fn read_write(
 /// (`Depth`) charges nothing: the operation fails. Returns the arena whose
 /// budget is exceeded.
 fn keyed_write(
-    path: &hirsel_syntax::DefPath,
+    name: &str,
     arguments: &mut [Value],
     budgets: &mut crate::bounded::Budgets,
 ) -> Option<u64> {
-    let name = ["map.insert", "set.insert", "map.remove", "set.remove"]
-        .into_iter()
-        .find(|name| path.is_core(name))?;
     let (container, rest) = arguments.split_first_mut()?;
     if container.arena_storage().is_none() {
         return None;
@@ -3838,6 +3872,9 @@ fn execute_terminator(
             Action::Continue
         }
         Terminator::Return { ref value, .. } => {
+            if frame.check.is_none() {
+                return Ok(Action::Return(frame.operand(value)?));
+            }
             let (value, shadow) = frame.operand_shadow(value)?;
             if let Some(check) = &mut frame.check {
                 check.returned = Some(shadow);
@@ -3963,7 +4000,11 @@ fn execute_terminator(
                 )
             });
             let mut values = vec![None; arguments.len()];
-            let mut checks = vec![crate::checked::Argument::default(); arguments.len()];
+            let mut checks = if frame.check.is_some() {
+                vec![crate::checked::Argument::default(); arguments.len()]
+            } else {
+                vec![]
+            };
             // The argument places already contain caller temporaries, in explicit source order.
             for argument in arguments {
                 let mut operand = argument.value.clone();
@@ -3971,7 +4012,11 @@ fn execute_terminator(
                     arena_write(frame, operand.place, true, budgets)?;
                     operand.usage = hirsel_types::UseKind::Take;
                 }
-                let (value, shadow) = frame.operand_shadow(&operand)?;
+                let (value, shadow) = if frame.check.is_some() {
+                    frame.operand_shadow(&operand)?
+                } else {
+                    (frame.operand(&operand)?, Shadow::default())
+                };
                 let slot = values
                     .get_mut(argument.parameter.0 as usize)
                     .ok_or_else(|| invalid("parameter ordinal out of range"))?;
@@ -4082,11 +4127,12 @@ fn target(
         .flatten();
     Ok(crate::code::Target {
         forget: runtime.forget.as_ref() == Some(&path),
-        core: path.package_is("core", "1"),
+        arena: crate::code::ArenaCall::resolve(&path),
         path,
         actuals,
         tail,
         entry: Default::default(),
+        operation: Default::default(),
     })
 }
 enum RuntimeCallee {
@@ -4122,6 +4168,10 @@ fn checked_callee(
         return Ok((callee, None, None));
     };
     let path = path.path();
+    // The common ordinary call needs no arena dispatch or path comparison.
+    if frame.check.is_none() && !matches!(path.0.name.as_str(), "with" | "bounded") {
+        return Ok((callee, None, None));
+    }
     let bounded = path.is_core(crate::library::ARENA_BOUNDED_OPERATION);
     let Some(check) = &frame.check else {
         if !bounded && !path.is_core(crate::library::ARENA_WITH_OPERATION) {
@@ -4263,6 +4313,60 @@ fn callee_lifetime(
         owned: environment.owned_captures.clone(),
         lifetime,
     }))
+}
+
+/// The scheduled Complete path with no user release, callback, checker or
+/// memory-meter work. The provider promised there are no task rests to collect.
+fn complete_immediate(
+    frame: &mut Frame,
+    result: &mut OperationResult,
+    arguments: &mut Vec<Value>,
+    mut_places: &[(usize, PlaceId)],
+    taken: &[usize],
+    returns: Option<CallReturn>,
+) -> Result<bool, Error> {
+    let OperationResult::Complete {
+        arguments: updates,
+        consumed,
+        released,
+        ..
+    } = result
+    else {
+        return Ok(false);
+    };
+    if !updates.is_empty()
+        || !released.is_empty()
+        || taken
+            .iter()
+            .any(|i| !consumed.contains(i) && !arguments[*i].inert())
+    {
+        return Ok(false);
+    }
+    for (ordinal, index) in consumed.iter().enumerate() {
+        if consumed[..ordinal].contains(index) || !taken.contains(index) {
+            return Err(invalid("operation transferred an argument it does not own"));
+        }
+    }
+    let OperationResult::Complete { value, .. } =
+        std::mem::replace(result, OperationResult::returned(Value::Unit))
+    else {
+        unreachable!()
+    };
+    for &(index, place) in mut_places {
+        let value = std::mem::replace(&mut arguments[index], Value::Unit);
+        frame.put(place, Some(value), Shadow::default())?;
+    }
+    // Transferred owners are snapshots, and remaining taken inputs are inert.
+    // Discarding snapshots never performs a semantic release.
+    for value in arguments.drain(..) {
+        value.discard();
+    }
+    let Some(CallReturn { destination, next }) = returns else {
+        return Err(invalid("diverging operation returned"));
+    };
+    frame.assign(destination, value)?;
+    frame.goto(next);
+    Ok(true)
 }
 
 fn restore_operation(

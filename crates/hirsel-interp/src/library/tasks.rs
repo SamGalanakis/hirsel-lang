@@ -1518,7 +1518,7 @@ mod tests {
                 };
                 let sources = SourceMap::default();
                 let anchor = Anchor {
-                    definition: run.entry.clone(),
+                    definition: (run.entry.clone()).into(),
                     body: BodyId(0),
                     cleanup: None,
                     site: Span::default(),
@@ -1640,7 +1640,7 @@ mod tests {
         };
         let sources = SourceMap::default();
         let anchor = Anchor {
-            definition: run.entry.clone(),
+            definition: (run.entry.clone()).into(),
             body: BodyId(0),
             cleanup: None,
             site: Span::default(),

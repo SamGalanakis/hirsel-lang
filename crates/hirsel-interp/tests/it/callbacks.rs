@@ -9,6 +9,16 @@ struct Repeat {
     mutating: bool,
 }
 impl Operations for Repeat {
+    fn immediate(&self, _: hirsel_interp::OperationId) -> bool {
+        true
+    }
+    fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+        let _ = path;
+        (true).then_some(hirsel_interp::OperationId {
+            index: 0,
+            name: "test",
+        })
+    }
     fn call(
         &mut self,
         _: OperationCall<'_>,
@@ -32,7 +42,7 @@ impl Operations for Repeat {
         _arguments: &mut [Value],
         ctx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
-        assert_eq!(ctx.anchor().unwrap().definition, path("main"));
+        assert_eq!(ctx.anchor().unwrap().definition.path(), &path("main"));
         self.resumes += 1;
         if let OperationResult::Failed(_) = result {
             return Ok(OperationResult::returned(Value::Unit));
@@ -216,6 +226,13 @@ fn handle_cleanup_hook_runs_high_to_low_with_the_parent_cleanup_anchor() {
         seen: Vec<u64>,
     }
     impl Operations for Hooks {
+        fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+            let _ = path;
+            (false).then_some(hirsel_interp::OperationId {
+                index: 0,
+                name: "test",
+            })
+        }
         fn call(
             &mut self,
             _: OperationCall<'_>,
@@ -299,6 +316,13 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
         native_fails: bool,
     }
     impl Operations for Owned {
+        fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+            let _ = path;
+            (true).then_some(hirsel_interp::OperationId {
+                index: 0,
+                name: "test",
+            })
+        }
         fn call(
             &mut self,
             call: OperationCall<'_>,
@@ -553,6 +577,13 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
         resumes: usize,
     }
     impl Operations for Pull {
+        fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+            let _ = path;
+            (true).then_some(hirsel_interp::OperationId {
+                index: 0,
+                name: "test",
+            })
+        }
         fn call(
             &mut self,
             call: OperationCall<'_>,
@@ -785,6 +816,13 @@ fn nested_native_named_callbacks_resume_mut_updates_and_preserve_failure_and_dep
         resumed: Vec<u64>,
     }
     impl Operations for Native {
+        fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+            let _ = path;
+            (true).then_some(hirsel_interp::OperationId {
+                index: 0,
+                name: "test",
+            })
+        }
         fn call(
             &mut self,
             call: OperationCall<'_>,
@@ -937,6 +975,13 @@ fn blocked_stop_retains_the_prefix_and_runs_no_language_cleanup() {
         drops: usize,
     }
     impl Operations for Block {
+        fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+            let _ = path;
+            (true).then_some(hirsel_interp::OperationId {
+                index: 0,
+                name: "test",
+            })
+        }
         fn call(
             &mut self,
             _: OperationCall<'_>,

@@ -1699,7 +1699,7 @@ impl Simulation {
             }
             Err(NetFault::Blocked) => {
                 let anchor = cx.anchor().cloned().unwrap_or(crate::observation::Anchor {
-                    definition: call.path.clone(),
+                    definition: (call.path.clone()).into(),
                     body: hirsel_tir::BodyId(0),
                     cleanup: None,
                     site: call.site,

@@ -337,6 +337,13 @@ fn projection_ignores_instrumentation_and_is_identical_over_one_hundred_runs() {
 fn capability_effects_are_ordered_with_resource_effects_and_exact_output() {
     struct Fake;
     impl Operations for Fake {
+        fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+            let _ = path;
+            (true).then_some(hirsel_interp::OperationId {
+                index: 0,
+                name: "test",
+            })
+        }
         fn call(
             &mut self,
             call: OperationCall<'_>,
@@ -504,5 +511,5 @@ fn suspended_call_failure_drops_transferred_argument_before_callers_local() {
         vec![],
     );
     assert_eq!(finalizers(&e), ["Argument", "Local"]);
-    assert_eq!(e.failures[0].anchor.definition, path("callee"));
+    assert_eq!(e.failures[0].anchor.definition.path(), &path("callee"));
 }

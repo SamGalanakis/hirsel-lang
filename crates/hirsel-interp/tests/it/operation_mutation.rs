@@ -5,6 +5,13 @@ use hirsel_types::{ParamId, TypeKind, UseKind};
 use support::*;
 struct Update;
 impl Operations for Update {
+    fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+        let _ = path;
+        (true).then_some(hirsel_interp::OperationId {
+            index: 0,
+            name: "test",
+        })
+    }
     fn call(
         &mut self,
         _: OperationCall<'_>,
@@ -135,8 +142,19 @@ fn operation_updates_only_mut_argument_places() {
 fn operation_releases_untransferred_inputs_in_reverse_source_order_before_displaced_values() {
     struct Complete {
         dropped: Vec<u64>,
+        releases: bool,
     }
     impl Operations for Complete {
+        fn immediate(&self, _: hirsel_interp::OperationId) -> bool {
+            true
+        }
+        fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+            let _ = path;
+            (true).then_some(hirsel_interp::OperationId {
+                index: 0,
+                name: "test",
+            })
+        }
         fn call(
             &mut self,
             _: OperationCall<'_>,
@@ -146,12 +164,16 @@ fn operation_releases_untransferred_inputs_in_reverse_source_order_before_displa
                 value: Value::Unit,
                 arguments: vec![],
                 consumed: vec![],
-                released: [3, 4]
-                    .map(|id| Value::Handle {
-                        kind: "counter".into(),
-                        id,
-                    })
-                    .to_vec(),
+                released: if self.releases {
+                    [3, 4]
+                        .map(|id| Value::Handle {
+                            kind: "counter".into(),
+                            id,
+                        })
+                        .to_vec()
+                } else {
+                    vec![]
+                },
             }))
         }
         fn drop_handle(
@@ -198,37 +220,56 @@ fn operation_releases_untransferred_inputs_in_reverse_source_order_before_displa
         1,
     );
     let main = b.finish("main", result);
-    let mut operations = Complete { dropped: vec![] };
-    let execution = run_with_operations(
-        &mut Provider {
-            definitions: vec![main],
-            queries: vec![],
-        },
-        &crate::support::session(),
-        &sources(),
-        &RunConfiguration {
-            entry: path("main"),
-            hash_seed: 0,
-            inputs: vec![],
-        },
-        [1, 2]
-            .map(|id| Value::Handle {
-                kind: "counter".into(),
-                id,
-            })
-            .to_vec(),
-        Limits::default(),
-        &mut operations,
-    )
-    .unwrap();
-    assert!(matches!(execution.outcome, Outcome::Returned { .. }));
-    assert_eq!(operations.dropped, [2, 1, 4, 3]);
+    for releases in [false, true] {
+        let mut operations = Complete {
+            dropped: vec![],
+            releases,
+        };
+        let execution = run_with_operations(
+            &mut Provider {
+                definitions: vec![main.clone()],
+                queries: vec![],
+            },
+            &crate::support::session(),
+            &sources(),
+            &RunConfiguration {
+                entry: path("main"),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            [1, 2]
+                .map(|id| Value::Handle {
+                    kind: "counter".into(),
+                    id,
+                })
+                .to_vec(),
+            Limits::default(),
+            &mut operations,
+        )
+        .unwrap();
+        assert!(matches!(execution.outcome, Outcome::Returned { .. }));
+        assert_eq!(
+            operations.dropped,
+            if releases {
+                vec![2, 1, 4, 3]
+            } else {
+                vec![2, 1]
+            }
+        );
+    }
 }
 
 #[test]
 fn api_execution_errors_retain_exact_prior_stdout_and_original_cause() {
     struct Broken(Error);
     impl Operations for Broken {
+        fn resolve(&self, path: &hirsel_syntax::DefPath) -> Option<hirsel_interp::OperationId> {
+            let _ = path;
+            (true).then_some(hirsel_interp::OperationId {
+                index: 0,
+                name: "test",
+            })
+        }
         fn call(
             &mut self,
             _: OperationCall<'_>,
@@ -282,4 +323,54 @@ fn api_execution_errors_retain_exact_prior_stdout_and_original_cause() {
         assert_eq!(error.stdout, b"prior\0output\n");
         assert_eq!(format!("{:?}", error.error), original);
     }
+}
+
+#[test]
+fn immediate_completion_rejects_a_return_from_a_diverging_operation() {
+    struct Complete;
+    impl Operations for Complete {
+        fn immediate(&self, _: OperationId) -> bool {
+            true
+        }
+        fn call(
+            &mut self,
+            _: OperationCall<'_>,
+            _: &mut OperationContext<'_>,
+        ) -> Result<Option<OperationResult>, Error> {
+            Ok(Some(OperationResult::returned(Value::Unit)))
+        }
+    }
+    let mut b = Builder::new();
+    b.block(
+        Terminator::Call {
+            callee: Callee::Definition {
+                path: path("diverging"),
+                arguments: vec![],
+            },
+            arguments: vec![],
+            returns: None,
+            on_failure: CleanupId(0),
+        },
+        1,
+    );
+    let error = run_with_operations(
+        &mut Provider {
+            definitions: vec![b.definition("main")],
+            queries: vec![],
+        },
+        &session(),
+        &sources(),
+        &RunConfiguration {
+            entry: path("main"),
+            hash_seed: 0,
+            inputs: vec![],
+        },
+        vec![],
+        Limits::default(),
+        &mut Complete,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error.error, Error::InvalidTir(ref detail) if detail == "diverging operation returned")
+    );
 }

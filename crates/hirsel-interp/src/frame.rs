@@ -30,6 +30,7 @@ impl From<AccessError> for Error {
     }
 }
 
+#[derive(Clone, Copy)]
 enum AccessStep {
     Field(usize),
     VariantField { variant: u32, field: usize },
@@ -85,7 +86,7 @@ impl CallerSite {
     }
     pub fn anchor(&self) -> crate::observation::Anchor {
         crate::observation::Anchor {
-            definition: self.definition.path.path().clone(),
+            definition: self.definition.path,
             body: self.body,
             site: self.site,
             cleanup: None,
@@ -126,6 +127,9 @@ pub(crate) struct Frame {
     pub fuel_due: bool,
     /// This body's dispatch form in the run's `Codes`, resolved at its first step.
     pub code: Option<u32>,
+    pub places: Option<std::rc::Rc<[crate::code::PlaceCode]>>,
+    /// Reused projection workspace. Resolving a place never allocates a Vec.
+    steps: std::cell::RefCell<Vec<AccessStep>>,
 }
 impl Frame {
     /// Replace value storage while retaining the lexical size environment and
@@ -258,6 +262,8 @@ impl Frame {
             bounded: None,
             fuel_due: true,
             code: None,
+            places: None,
+            steps: Default::default(),
         })
     }
     pub fn body(&self) -> &Body {
@@ -269,30 +275,40 @@ impl Frame {
             .get(id.0 as usize)
             .ok_or_else(|| invalid("place out of range"))
     }
-    fn indices(&self, place: &Place) -> Result<Vec<AccessStep>, AccessError> {
-        let mut steps = vec![];
-        let mut value = self
-            .slots
-            .get(place.root.0 as usize)
-            .and_then(Option::as_ref);
-        for projection in &place.projection {
-            let step = match *projection {
-                Projection::Field(field) => AccessStep::Field(field as usize),
-                Projection::VariantField { variant, field } => AccessStep::VariantField {
-                    variant,
-                    field: field as usize,
-                },
-                Projection::Index(LocalId(index)) => {
-                    let index = match self.slots.get(index as usize).and_then(Option::as_ref) {
+    fn indices<'a>(
+        &self,
+        id: PlaceId,
+        scratch: &'a std::cell::RefCell<Vec<AccessStep>>,
+    ) -> Result<std::cell::Ref<'a, [AccessStep]>, AccessError> {
+        use crate::code::ProjectionCode;
+        let mut steps = scratch.borrow_mut();
+        steps.clear();
+        let place = self.place(id)?;
+        let resolved = self
+            .places
+            .as_ref()
+            .and_then(|places| places.get(id.0 as usize));
+        let root = resolved.map_or(place.root.0 as usize, |place| place.root);
+        let count = resolved.map_or(place.projection.len(), |place| place.projection.len());
+        let mut value = self.slots.get(root).and_then(Option::as_ref);
+        for ordinal in 0..count {
+            let projection = resolved.map_or_else(
+                || ProjectionCode::from(&place.projection[ordinal]),
+                |place| place.projection[ordinal],
+            );
+            let step = match projection {
+                ProjectionCode::Field(field) => AccessStep::Field(field),
+                ProjectionCode::VariantField { variant, field } => {
+                    AccessStep::VariantField { variant, field }
+                }
+                ProjectionCode::Index(index) => {
+                    let index = match self.slots.get(index).and_then(Option::as_ref) {
                         Some(Value::Integer(i)) if !i.is_signed() || i.signed() >= 0 => {
                             usize::try_from(i.bits()).map_err(|_| AccessError::OutOfBounds)?
                         }
                         _ => return Err(invalid("invalid index operand").into()),
                     };
-                    // SortedMap's logical indexed payload is its physical map
-                    // field. Value access and shadow access use the same path.
-                    if matches!(value, Some(Value::Record { definition, .. })
-                        if definition.is_core("SortedMap"))
+                    if matches!(value, Some(Value::Record { definition, .. }) if definition.is_core("SortedMap"))
                     {
                         steps.push(AccessStep::Field(1));
                         value = value
@@ -303,32 +319,31 @@ impl Frame {
                     AccessStep::Index(index)
                 }
             };
-            let index = match step {
-                AccessStep::Field(i)
-                | AccessStep::VariantField { field: i, .. }
-                | AccessStep::Index(i) => i,
-            };
+            let (index, _, _) = step.parts();
             value = value
                 .and_then(Value::fields)
                 .and_then(|f| f.get(index))
                 .and_then(Option::as_ref);
             steps.push(step);
         }
-        Ok(steps)
+        drop(steps);
+        Ok(std::cell::Ref::map(scratch.borrow(), |steps| &**steps))
     }
     pub fn slot(&mut self, id: PlaceId) -> Result<&mut Option<Value>, AccessError> {
         let place = self.place(id)?;
         let root = place.root.0 as usize;
-        let indices = if place.projection.is_empty() {
-            vec![]
-        } else {
-            self.indices(place)?
-        };
+        if place.projection.is_empty() {
+            return self
+                .slots
+                .get_mut(root)
+                .ok_or_else(|| invalid("local out of range").into());
+        }
+        let indices = self.indices(id, &self.steps)?;
         let mut slot = self
             .slots
             .get_mut(root)
             .ok_or_else(|| invalid("local out of range"))?;
-        for step in indices {
+        for &step in indices.iter() {
             let (index, variant, indexed) = step.parts();
             let fields = match slot.as_mut() {
                 Some(v)
@@ -374,7 +389,7 @@ impl Frame {
         if place.projection.is_empty() {
             return Ok(slot);
         }
-        for step in self.indices(place)? {
+        for &step in self.indices(id, &self.steps)?.iter() {
             let (index, variant, indexed) = step.parts();
             let fields = match slot.as_ref() {
                 Some(v)
@@ -428,14 +443,14 @@ impl Frame {
             return Ok(None);
         }
         let root = place.root.0 as usize;
-        let Ok(steps) = self.indices(place) else {
+        let Ok(steps) = self.indices(id, &self.steps) else {
             return Ok(None);
         };
         let Some(mut value) = self.slots.get_mut(root).and_then(Option::as_mut) else {
             return Ok(None);
         };
         let mut crossed = false;
-        for step in steps {
+        for &step in steps.iter() {
             let index = match step {
                 AccessStep::Field(i) | AccessStep::Index(i) => i,
                 AccessStep::VariantField { variant, field } => {
@@ -560,7 +575,7 @@ impl Frame {
         let mut value = self.slots[place.root.0 as usize]
             .as_ref()
             .ok_or_else(|| invalid("match on dead storage"))?;
-        for step in self.indices(place)? {
+        for &step in self.indices(id, &self.steps)?.iter() {
             let (field, variant) = match step {
                 AccessStep::Field(n) | AccessStep::Index(n) => (n, None),
                 AccessStep::VariantField { variant, field } => (field, Some(variant)),
@@ -580,7 +595,14 @@ impl Frame {
         Ok(value)
     }
     pub fn operand(&mut self, operand: &Operand) -> Result<Value, AccessError> {
-        self.operand_shadow(operand).map(|(value, _)| value)
+        if self.check.is_some() {
+            return self.operand_shadow(operand).map(|(value, _)| value);
+        }
+        let value = self.extract(operand)?;
+        if operand.usage == UseKind::Copy {
+            value.share_arena_storage();
+        }
+        Ok(value)
     }
     /// Extract an operand with its bound; checked execution traps on an ended one.
     pub fn operand_shadow(
@@ -620,10 +642,24 @@ impl Frame {
         Ok((value, shadow))
     }
     fn extract(&mut self, operand: &Operand) -> Result<Value, AccessError> {
+        if let Some(local) = self
+            .places
+            .as_ref()
+            .and_then(|places| places.get(operand.place.0 as usize))
+            .filter(|place| place.projection.is_empty())
+            .map(|place| crate::code::Local {
+                slot: place.root as u32,
+                usage: operand.usage,
+                once: place.once,
+            })
+            && let Some(value) = self.local_operand(local)
+        {
+            return Ok(value);
+        }
         // Bytes indexing is a scalar snapshot, never mutable byte storage.
         // Retain ordinary address bounds and ownership access for the parent.
         let place = self.place(operand.place)?;
-        let steps = self.indices(place)?;
+        let steps = self.indices(operand.place, &self.steps)?;
         let mut source = self.slots[place.root.0 as usize].as_ref();
         for (depth, step) in steps.iter().enumerate() {
             if let (Some(Value::Bytes(bytes)), AccessStep::Index(index)) = (source, step) {
@@ -645,6 +681,7 @@ impl Frame {
                 .and_then(|fields| fields.get(field))
                 .and_then(Option::as_ref);
         }
+        drop(steps);
         if operand.usage == UseKind::Copy {
             let ty = self
                 .types
@@ -778,7 +815,7 @@ impl Frame {
             // needs its own uniqueness; arena descendants always detach (MEM-4).
             let mut value = self.slots[place.root.0 as usize].as_ref();
             let mut ownership = check.shadows[place.root.0 as usize].clone();
-            for (depth, step) in self.indices(place)?.iter().enumerate() {
+            for (depth, step) in self.indices(id, &self.steps)?.iter().enumerate() {
                 if value.is_some_and(|v| {
                     crate::checked::inline_fields(v).is_none() && crate::checked::holds_storage(v)
                 }) && (!ownership.is_unique()
@@ -849,7 +886,7 @@ impl Frame {
             .get(place.root.0 as usize)
             .ok_or_else(|| invalid("local out of range"))?;
         let mut node: Option<Shadow> = None;
-        for step in self.indices(place)? {
+        for &step in self.indices(id, &self.steps)?.iter() {
             let current = node.as_ref().unwrap_or(root);
             let part = match step {
                 AccessStep::Field(i) | AccessStep::VariantField { field: i, .. } => current.part(i),
@@ -916,8 +953,8 @@ impl Frame {
                 ),
             ));
         }
-        let indices = self.indices(&place)?;
-        let Frame { check, slots, .. } = self;
+        let indices = self.indices(id, &self.steps)?;
+        let (check, slots) = (&mut self.check, &mut self.slots);
         let check = check.as_mut().unwrap();
         let root = place.root.0 as usize;
         if place.projection.is_empty() {
@@ -928,7 +965,7 @@ impl Frame {
             .shadows
             .get_mut(root)
             .ok_or_else(|| invalid("local out of range"))?;
-        for step in indices {
+        for &step in indices.iter() {
             while let Shadow::Ownership { content, .. } = node {
                 node = content;
             }

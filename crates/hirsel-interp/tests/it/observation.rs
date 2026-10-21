@@ -8,7 +8,7 @@ fn fixture() -> (SourceMap, Execution) {
     let file = sources.add("input.hir", "one\ntwo\n".into()).unwrap();
     let path = hirsel_syntax::DefPath::core("fixture");
     let anchor = Anchor {
-        definition: path,
+        definition: (path).into(),
         body: BodyId(7),
         cleanup: Some((CleanupId(8), 3)),
         site: Span::new(sources.file_anchor(file), 4, 7).unwrap(),
@@ -117,7 +117,7 @@ fn semantic_anchor_roles_are_complete_and_independent_of_transient_ids() {
     let TraceEvent::Effect(original) = &execution.trace[0] else {
         unreachable!()
     };
-    let path = original.anchor.definition.clone();
+    let path = original.anchor.definition.path().clone();
     let cases = [
         (
             Effect::ResourceCreated {
@@ -242,7 +242,7 @@ fn operation_sites_are_independent_semantic_failure_locations() {
     let helper = sources.add("helper.hir", "operation\n".into()).unwrap();
     let helper = sources.file_anchor(helper);
     let mut operation = execution.failures[0].anchor.clone();
-    operation.definition = hirsel_syntax::DefPath::core("helper");
+    operation.definition = hirsel_syntax::DefPath::core("helper").into();
     operation.site = Span::new(helper, 0, 9).unwrap();
     execution.failures[0].operation = Some(operation);
     let first = execution.observable(&sources).unwrap();

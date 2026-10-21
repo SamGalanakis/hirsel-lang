@@ -447,8 +447,9 @@ impl hirsel_interp::OperationsAdapter for HttpClockProgress {
     fn operations_mut(&mut self) -> &mut dyn hirsel_interp::Operations {
         &mut self.library
     }
-    fn call(
+    fn call_resolved(
         &mut self,
+        operation: hirsel_interp::OperationId,
         call: hirsel_interp::OperationCall<'_>,
         context: &mut hirsel_interp::OperationContext<'_>,
     ) -> Result<Option<hirsel_interp::OperationResult>, hirsel_interp::Error> {
@@ -456,7 +457,8 @@ impl hirsel_interp::OperationsAdapter for HttpClockProgress {
         let read = name.0.package.package_is("core", "1")
             && name.0.modules.iter().map(|s| s.as_str()).eq(["net"])
             && matches!(name.0.name.as_str(), "read" | "read_into");
-        let result = hirsel_interp::Operations::call(&mut self.library, call, context)?;
+        let result =
+            hirsel_interp::Operations::call_resolved(&mut self.library, operation, call, context)?;
         if read {
             self.library.simulation.config.monotonic += self.ticks_per_read;
         }
