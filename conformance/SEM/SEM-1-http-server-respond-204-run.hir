@@ -1,5 +1,7 @@
 // rule: SEM-1
 // expect: run
+// RFC 9110 sections 9.3.2, 15.3.5, 15.4.5; hyper src/proto/h1/role.rs:524-545.
+// Complete replies retain HEAD metadata and suppress 204/304 framing and payload.
 fn http_net(error: NetError) -> http.HttpError uses {} {
   Net(error)
 }
@@ -19,12 +21,13 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
             tls: Plain(),
             steps: [
               Send(
-                b"GET / HTTP/1.1\r\n\r\nHEAD /head HTTP/1.1\r\n\r\nGET /next HTTP/1.1\r\nConnection: close\r\n\r\n"
+                b"GET / HTTP/1.1\r\n\r\nHEAD /head HTTP/1.1\r\n\r\nGET /cached HTTP/1.1\r\n\r\nGET /next HTTP/1.1\r\nConnection: close\r\n\r\n"
               ),
               Expect(b"HTTP/1.1 204 \r\nConnection: keep-alive\r\n\r\n"),
               Expect(
                 b"HTTP/1.1 200 \r\nContent-Length: 5\r\nConnection: keep-alive\r\n\r\n"
               ),
+              Expect(b"HTTP/1.1 304 \r\nConnection: keep-alive\r\n\r\n"),
               Expect(
                 b"HTTP/1.1 200 \r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
               ),
@@ -55,6 +58,12 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   let mut exchange_head = take current_head
   test.check(t, head.method == "HEAD" && head.target == "/head")
   http.respond(mut exchange_head, 200u16, [], b"hello", false)?
+  let Some((cached, cached_request)) = http.next_stream(mut c, None())? else {
+    return Error(Closed())
+  }
+  let mut cached_exchange = take cached
+  test.check(t, cached_request.target == "/cached")
+  http.respond(mut cached_exchange, 304u16, [], b"elided", false)?
   let Some((current2, next)) = http.next_stream(mut c, None())? else {
     return Error(Closed())
   }

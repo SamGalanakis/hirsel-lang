@@ -1,0 +1,59 @@
+// rule: SEM-1
+// expect: run
+// The response APIs accept final responses only. A rejected 1xx must write
+// neither Content-Length nor payload (RFC 9110 section 8.6).
+fn network(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+fn rejected(t: Test, status: u16, streaming: bool) -> Result[(), http.HttpError] {
+  let home = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: home.port,
+        clients: [
+          NetClient(
+            from: home,
+            tls: Plain(),
+            steps: [Send(b"GET / HTTP/1.1\r\n\r\n"), Close()]
+          )
+        ]
+      )
+    ]
+  )
+  let mut listener = net.listen(n, home) ? network
+  let (socket, _) = net.accept(n, mut listener) ? network
+  let mut connection = http.server_connection(
+    test.tasks(t),
+    n,
+    take socket,
+    http.default_config()
+  )
+  let Some((owned, _)) = http.next_stream(mut connection, None())? else {
+    return Error(Closed())
+  }
+  let mut stream = take owned
+  let outcome = if streaming {
+    http.respond_head(mut stream, status, [])
+  } else {
+    http.respond(mut stream, status, [], b"must not be sent", false)
+  }
+  test.check(t, outcome == Error(Malformed(Status())))
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  rejected(t, 100u16, false)?
+  rejected(t, 101u16, false)?
+  rejected(t, 103u16, false)?
+  rejected(t, 199u16, false)?
+  rejected(t, 100u16, true)?
+  rejected(t, 101u16, true)?
+  rejected(t, 103u16, true)?
+  rejected(t, 199u16, true)?
+  Ok(())
+}
