@@ -26,8 +26,8 @@ mod testing;
 mod timeout;
 mod tool;
 mod units;
-pub use units::UnitObjects;
 pub use testing::{bench_path, test_path};
+pub use units::UnitObjects;
 
 pub use adapt::{input_identity, manifest, program};
 pub use coverage::backend_features;
@@ -40,7 +40,10 @@ pub use emit::{
     Backend, KIND_BUG, check_runtime_calls, emit, emit_clif, emit_glue, emit_ir, failure_codes,
     failure_rules,
 };
-pub use executable::{BuildProfile, build_path_native, build_path_native_backend};
+pub use executable::{
+    BuildProfile, build_path_native, build_path_native_backend,
+    build_path_native_backend_with_validation,
+};
 pub use heap::{HeapRun, HeapWorld, heap_campaign, heap_campaign_in, run_heap, run_heap_in};
 pub use hirsel_lir::emission::OptLevel;
 pub use hirsel_lir::layout_types::TargetSpec;
@@ -58,8 +61,11 @@ pub use observe::{Failure, OBSERVATION_SCHEMA, Observation, Sites, site_codes};
 pub use pairwise::pairwise_matrix;
 pub use proofs::{Evidence, Proofs, parse as parse_sidecar};
 pub use runner::{Counts, Execution, Image, Mode, Runner, counts, runner};
-pub use stages::{NativeError, Options, ReadyProgram, StageName, build, build_program};
-pub use tool::{Output, run_path_native, run_path_native_backend, run_path_native_with_config};
+pub use stages::{NativeError, Options, ReadyProgram, StageName, Validation, build, build_program};
+pub use tool::{
+    Output, run_path_native, run_path_native_backend, run_path_native_backend_with_validation,
+    run_path_native_with_config,
+};
 
 /// The pinned LLVM release emission binds, for reports and artifacts.
 pub fn llvm_version() -> String {
@@ -87,6 +93,8 @@ pub fn profile_sources(input: &hirsel_engine::NativeInput) -> ProfileSources {
 }
 
 #[cfg(test)]
-mod validation_tests;
-#[cfg(test)]
+#[path = "../../tests/native-validation/smoke.rs"]
 mod smoke_validation_tests;
+#[cfg(test)]
+#[path = "../../tests/native-validation/roots.rs"]
+mod validation_tests;

@@ -71,6 +71,27 @@ pub fn run_path_native_backend(
     output: Output<'_>,
     verify: hirsel_engine::Verify,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
+    run_path_native_backend_with_validation(
+        path,
+        launch,
+        evidence,
+        backend,
+        output,
+        verify,
+        super::Validation::Ready,
+    )
+}
+
+/// Run with an explicit LIR validation policy. Harnesses use `EveryStage`.
+pub fn run_path_native_backend_with_validation(
+    path: &Path,
+    launch: crate::HostLaunch<'_>,
+    evidence: Option<&super::Evidence>,
+    backend: super::Backend,
+    output: Output<'_>,
+    verify: hirsel_engine::Verify,
+    validation: super::Validation,
+) -> Result<Result<RunOutcome, NativeError>, ToolError> {
     let (mut host_stdout, mut host_stderr) = (std::io::stdout(), std::io::stderr());
     let (inherit, json, stdout, stderr): (bool, bool, &mut dyn Write, &mut dyn Write) = match output
     {
@@ -156,6 +177,7 @@ pub fn run_path_native_backend(
         (&host.0, host.1),
         proofs.as_ref(),
         backend,
+        validation,
         inherit,
         stdout,
         stderr,
@@ -189,12 +211,14 @@ fn run(
     (run, tape): (&hirsel_run_config::ValidatedRun, super::link::Tape<'_>),
     proofs: Option<&super::Proofs>,
     backend: super::Backend,
+    validation: super::Validation,
     inherit: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<super::link::Observed, NativeError> {
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let mut options = Options::new(target.clone());
+    options.validation = validation;
     if let Some(proofs) = proofs {
         options.discharge = proofs.discharge.clone();
     }

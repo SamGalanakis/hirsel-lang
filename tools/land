@@ -33,7 +33,8 @@ BUCK2 = str(ROOT / '.buck2/bin/buck2')
 # The Clippy twins exist under hirsel.clippy, which changes no other action's
 # key; land queues above a lane's tests (50) and main's run (40) on the pool.
 CONFIG = ['-c', 'hirsel.clippy=true', '-c', 'hirsel.priority=75']
-ENV = {'HIRSEL_BUCK2_CONFIG': ' '.join(CONFIG), 'GIT_EDITOR': 'true'}
+ENV = {'HIRSEL_BUCK2_CONFIG': ' '.join(CONFIG), 'GIT_EDITOR': 'true',
+       'HIRSEL_VALIDATE_STAGES': '1'}
 # The workspace without tests, Clippy twins, campaign targets, the two-host
 # link build (it holds a host-wide lock) and the std precheck (a test that
 # takes minutes).

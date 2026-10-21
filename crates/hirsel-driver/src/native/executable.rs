@@ -84,6 +84,31 @@ pub fn build_path_native_backend(
     fuel: bool,
     verify: hirsel_engine::Verify,
 ) -> Result<Result<Vec<String>, NativeError>, ToolError> {
+    build_path_native_backend_with_validation(
+        source,
+        output,
+        target,
+        profile,
+        backend,
+        evidence,
+        fuel,
+        verify,
+        super::Validation::Ready,
+    )
+}
+
+/// Build with an explicit LIR validation policy. Harnesses use `EveryStage`.
+pub fn build_path_native_backend_with_validation(
+    source: &Path,
+    output: &Path,
+    target: TargetSpec,
+    profile: BuildProfile,
+    backend: super::Backend,
+    evidence: Option<&super::Evidence>,
+    fuel: bool,
+    verify: hirsel_engine::Verify,
+    validation: super::Validation,
+) -> Result<Result<Vec<String>, NativeError>, ToolError> {
     if profile == BuildProfile::Release && backend == super::Backend::Cranelift {
         return Ok(Err(NativeError::new(
             StageName::Emission,
@@ -112,6 +137,7 @@ pub fn build_path_native_backend(
     };
     Ok((|| {
         let mut options = Options::new(target.clone());
+        options.validation = validation;
         let proofs = evidence
             .map(|e| super::Proofs::assess(&mut engine, &loaded.entry, &validated, e))
             .transpose()?;

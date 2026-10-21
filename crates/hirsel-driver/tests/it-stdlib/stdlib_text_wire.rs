@@ -222,9 +222,20 @@ fn full_gate_deflate_matches_zlib_native() {
             .join("tests/fixtures/deflate-zlib-native.hir");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let outcome = native::run_path_native(&path, &mut stdout, &mut stderr)
-            .unwrap()
-            .unwrap();
+        let outcome = native::run_path_native_backend_with_validation(
+            &path,
+            hirsel_driver::HostLaunch::empty(),
+            None,
+            native::Backend::Llvm,
+            native::Output::Streams {
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+            },
+            Verify::On,
+            native::Validation::EveryStage,
+        )
+        .unwrap()
+        .unwrap();
         assert!(
             matches!(
                 outcome,
@@ -607,7 +618,7 @@ fn telemetry_limits_and_goldens_agree_on_both_native_backends() {
                     } else {
                         r#"{"io":{"dirs":[],"stderr":"stderr.bytes@1"}}"#
                     };
-                let outcome = native::run_path_native_backend(
+                let outcome = native::run_path_native_backend_with_validation(
                     &path,
                     HostLaunch::Live {
                         config: LaunchConfig::Grants {
@@ -624,6 +635,7 @@ fn telemetry_limits_and_goldens_agree_on_both_native_backends() {
                         stderr: &mut stderr,
                     },
                     Verify::On,
+                    hirsel_driver::native::Validation::EveryStage,
                 )
                 .unwrap()
                 .unwrap();

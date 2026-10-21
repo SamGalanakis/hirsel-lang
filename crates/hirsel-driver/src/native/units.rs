@@ -11,7 +11,7 @@
 //! template it needs once, whichever unit asks first.
 
 use super::emit::Backend;
-use super::stages::{NativeError, Options, StageName, seal, timed};
+use super::stages::{NativeError, Options, StageName, checkpoint, seal, timed};
 use hirsel_intern::timings::{self, Count, Phase};
 use hirsel_lir::LayoutKeys;
 use hirsel_lir::emission::{EmitInputs, OptLevel};
@@ -397,20 +397,26 @@ fn stages(
     let definition = unit.header.definition.clone();
     let fail = |stage, message: String| NativeError::of(stage, &definition, message);
     timings::count(Count::Units);
-    let value = seal(StageName::Import, || {
-        program.validation.validate(unit, inputs)
-    })?
-    .into_raw();
+    let value = checkpoint(
+        StageName::Import,
+        unit,
+        inputs,
+        program.validation,
+        options.validation,
+    )?;
     let placement =
         hirsel_rc::placement::Options::for_instance(options.regions, program.instances, id);
     let placed = timed(Phase::Place, || {
         hirsel_rc::placement::place(value, table, &placement)
     })
     .map_err(|e| fail(StageName::Placement, e.to_string()))?;
-    let placed = seal(StageName::Placement, || {
-        program.validation.validate(placed, inputs)
-    })?
-    .into_raw();
+    let placed = checkpoint(
+        StageName::Placement,
+        placed,
+        inputs,
+        program.validation,
+        options.validation,
+    )?;
     let proofs = Proofs::for_instance(program.instances, id);
     let mut unit = timed(Phase::Rc, || {
         hirsel_rc::insert::insert(placed, table, &proofs)
@@ -420,19 +426,25 @@ fn stages(
         unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
             .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
     }
-    let rc = seal(StageName::Perceus, || {
-        program.validation.validate(unit, inputs)
-    })?
-    .into_raw();
+    let rc = checkpoint(
+        StageName::Perceus,
+        unit,
+        inputs,
+        program.validation,
+        options.validation,
+    )?;
     let reuse = hirsel_rc::reuse::Options {
         reuse: options.reuse,
     };
     let reused = timed(Phase::Reuse, || hirsel_rc::reuse::reuse(rc, table, &reuse))
         .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
-    let reused = seal(StageName::Reuse, || {
-        program.validation.validate(reused, inputs)
-    })?
-    .into_raw();
+    let reused = checkpoint(
+        StageName::Reuse,
+        reused,
+        inputs,
+        program.validation,
+        options.validation,
+    )?;
     let ready = timed(Phase::Ready, || {
         hirsel_rc::ready::ready(reused, table, program.finalizers)
     })

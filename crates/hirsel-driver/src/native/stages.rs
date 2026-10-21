@@ -1,5 +1,5 @@
-//! P1 to P6: one Ready program from a validated snapshot. Each stage's output
-//! is used only after that stage's validator in `hirsel-lir` accepted it; a
+//! P1 to P6: one Ready program from a validated snapshot. Production validates
+//! the emitted unit at Ready; harnesses also validate each intermediate stage. A
 //! rejected unit, a pass error and an unavailable feature are all
 //! `NativeError`s that name the stage and the definition.
 use super::adapt;
@@ -18,10 +18,21 @@ use hirsel_syntax::{ContentHash, DefPath};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+/// When the independent LIR validator runs. Ready is mandatory in both modes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Validation {
+    /// Production: validate each emitted unit once, after all lowering.
+    Ready,
+    /// Harnesses: also validate every intermediate stage to localize pass faults.
+    EveryStage,
+}
+
 /// Compiler choices and explicit launch inputs. Compiler choices and the hash
 /// seed preserve observations; capability seeds select their own inputs.
 #[derive(Clone, Debug)]
 pub struct Options {
+    /// Production judges Ready once; harnesses retain the stage ladder.
+    pub validation: Validation,
     /// Explicit launch inputs; placement and capability seeds are independent.
     pub launch: hirsel_run_schema::Inputs,
     pub target: TargetSpec,
@@ -41,9 +52,10 @@ pub struct Options {
 }
 
 impl Options {
-    /// The default configuration for a target: every optimization on.
+    /// The harness configuration: every optimization and every stage validator on.
     pub fn new(target: TargetSpec) -> Self {
         Self {
+            validation: Validation::EveryStage,
             launch: Default::default(),
             target,
             regions: true,
@@ -323,6 +335,23 @@ pub(crate) fn seal<S: Stage>(
     })
 }
 
+/// An intermediate stage stays raw in production. Only the Ready validator
+/// manufactures the seal emission requires; harnesses retain the full ladder.
+pub(crate) fn checkpoint<S: Stage>(
+    stage: StageName,
+    unit: LirUnit<S>,
+    inputs: &Inputs<'_>,
+    context: &hirsel_lir::validate::ValidationContext<'_>,
+    validation: Validation,
+) -> Result<LirUnit<S>, NativeError> {
+    match validation {
+        Validation::Ready => Ok(unit),
+        Validation::EveryStage => {
+            seal(stage, || context.validate(unit, inputs)).map(ValidatedUnit::into_raw)
+        }
+    }
+}
+
 /// Lower a validated snapshot to a Ready program for `options.target`.
 pub fn build(
     validated: &ValidatedNativeInput,
@@ -404,16 +433,25 @@ pub fn build_program(
         let definition = unit.header.definition.clone();
         let fail = |stage, message: String| NativeError::of(stage, &definition, message);
         timings::count(Count::Units);
-        let value = seal(StageName::Import, || validation.validate(unit, &inputs))?.into_raw();
+        let value = checkpoint(
+            StageName::Import,
+            unit,
+            &inputs,
+            &validation,
+            options.validation,
+        )?;
         let placement = hirsel_rc::placement::Options::for_instance(options.regions, instances, id);
         let placed = timed(Phase::Place, || {
             hirsel_rc::placement::place(value, table, &placement)
         })
         .map_err(|e| fail(StageName::Placement, e.to_string()))?;
-        let placed = seal(StageName::Placement, || {
-            validation.validate(placed, &inputs)
-        })?
-        .into_raw();
+        let placed = checkpoint(
+            StageName::Placement,
+            placed,
+            &inputs,
+            &validation,
+            options.validation,
+        )?;
         let proofs = Proofs::for_instance(instances, id);
         let mut unit = timed(Phase::Rc, || {
             hirsel_rc::insert::insert(placed, table, &proofs)
@@ -425,7 +463,13 @@ pub fn build_program(
             unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
                 .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
         }
-        rc.push(seal(StageName::Perceus, || validation.validate(unit, &inputs))?.into_raw());
+        rc.push(checkpoint(
+            StageName::Perceus,
+            unit,
+            &inputs,
+            &validation,
+            options.validation,
+        )?);
     }
     // Cleanup reads only the plan's finalizer facts: no unit waits for another's RC output.
     let finalizers = Finalizers::planned(instances, table);
@@ -440,7 +484,13 @@ pub fn build_program(
             hirsel_rc::reuse::reuse(unit, table, &reuse)
         })
         .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
-        let reused = seal(StageName::Reuse, || validation.validate(reused, &inputs))?.into_raw();
+        let reused = checkpoint(
+            StageName::Reuse,
+            reused,
+            &inputs,
+            &validation,
+            options.validation,
+        )?;
         let ready = timed(Phase::Ready, || {
             hirsel_rc::ready::ready(reused, table, &finalizers)
         })

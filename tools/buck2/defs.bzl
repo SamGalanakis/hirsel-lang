@@ -266,6 +266,7 @@ def _rust_test_impl(ctx):
     inputs += list(tools.values())
     env = {
         "HIRSEL_TEST_CWD": ctx.attrs.cwd,
+        "HIRSEL_VALIDATE_STAGES": "1",
         "HIRSEL_TEST_TMPDIR": TEST_TMPDIR,
         # The same effective request as the executor, including focus mode.
         "HIRSEL_TEST_CPUS": ctx.attrs.request[0],

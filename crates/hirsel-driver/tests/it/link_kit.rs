@@ -36,7 +36,7 @@ fn build(source: &Path, dir: &Path, target: &TargetSpec, profile: BuildProfile) 
     let source = source.to_path_buf();
     let target = target.clone();
     let built = with_compiler_stack(|| {
-        native::build_path_native_backend(
+        native::build_path_native_backend_with_validation(
             &source,
             &executable,
             target,
@@ -45,6 +45,7 @@ fn build(source: &Path, dir: &Path, target: &TargetSpec, profile: BuildProfile) 
             None,
             false,
             hirsel_engine::Verify::On,
+            hirsel_driver::native::Validation::EveryStage,
         )
     })
     .unwrap();

@@ -455,7 +455,7 @@ fn native_c_fixture(
     std::fs::write(root.join("grants.json"), r#"{"unsafe":true}"#).unwrap();
     let path = launch(&root, json!([select_lib()]));
     let executable = root.join("app");
-    let built = native::build_path_native_backend(
+    let built = native::build_path_native_backend_with_validation(
         &path,
         &executable,
         target,
@@ -464,6 +464,7 @@ fn native_c_fixture(
         None,
         false,
         hirsel_engine::Verify::On,
+        hirsel_driver::native::Validation::EveryStage,
     )
     .unwrap();
     assert!(built.is_ok(), "{built:?}");
@@ -507,14 +508,17 @@ fn native_calls_c_with_scalars_a_byte_view_and_a_released_handle() {
             record: Some(&tape),
             revocations: None,
         };
-        let refused = native::run_path_native_with_config(
+        let refused = native::run_path_native_backend_with_validation(
             &path,
             launch,
             None,
+            native::Backend::Llvm,
             native::Output::Streams {
                 stdout: &mut Vec::new(),
                 stderr: &mut Vec::new(),
             },
+            hirsel_engine::Verify::On,
+            native::Validation::EveryStage,
         );
         let Err(ToolError::Runtime(message)) = refused else {
             panic!(

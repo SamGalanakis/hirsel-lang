@@ -31,7 +31,7 @@ fn reuseaddr(backend: Option<hirsel_driver::native::Backend>) {
                 .join(format!("net-reuseaddr-{}", backend.name()));
             std::fs::create_dir_all(&scratch).unwrap();
             let executable = scratch.join("server");
-            hirsel_driver::native::build_path_native_backend(
+            hirsel_driver::native::build_path_native_backend_with_validation(
                 &source,
                 &executable,
                 TargetSpec::x86_64_unknown_linux_gnu(),
@@ -40,6 +40,7 @@ fn reuseaddr(backend: Option<hirsel_driver::native::Backend>) {
                 None,
                 false,
                 hirsel_engine::Verify::On,
+                hirsel_driver::native::Validation::EveryStage,
             )
             .unwrap()
             .unwrap();
@@ -66,6 +67,7 @@ fn reuseaddr(backend: Option<hirsel_driver::native::Backend>) {
                 },
                 None,
                 hirsel_engine::Verify::On,
+                hirsel_driver::native::Validation::EveryStage,
             )
             .unwrap();
             assert!(

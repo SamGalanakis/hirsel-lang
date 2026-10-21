@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>...";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--validate-stages] [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>...";
 
 mod allocator;
 mod execution_policy;
@@ -63,6 +63,7 @@ enum Command {
         backend: hirsel_driver::native::Backend,
         proofs: Proofs,
         fuel: bool,
+        validation: hirsel_driver::native::Validation,
     },
     View {
         tape: OsString,
@@ -88,6 +89,7 @@ enum Command {
         file: OsString,
         launch: Launch,
         native: bool,
+        validation: hirsel_driver::native::Validation,
         backend: Option<hirsel_driver::native::Backend>,
         proofs: Proofs,
         arguments: Option<Vec<OsString>>,
@@ -143,6 +145,15 @@ impl Launch {
             },
             Self::Replay(tape) => hirsel_driver::HostLaunch::Replay(Path::new(tape)),
         }
+    }
+}
+
+/// Harness subprocesses inherit the same policy as `--validate-stages`.
+fn validation(stages: bool) -> hirsel_driver::native::Validation {
+    if stages || env::var_os("HIRSEL_VALIDATE_STAGES").is_some_and(|v| v == "1") {
+        hirsel_driver::native::Validation::EveryStage
+    } else {
+        hirsel_driver::native::Validation::Ready
     }
 }
 
@@ -378,6 +389,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             let mut selected = None;
             let mut proofs = Proofs::default();
             let mut fuel = false;
+            let mut validate_stages = false;
             while let Some(arg) = args.next()? {
                 match arg {
                     Long("proofs") if proofs.sidecar.is_none() => {
@@ -385,6 +397,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     }
                     Long("trust") => proofs.trust(args.value()?)?,
                     Long("fuel") if !fuel => fuel = true,
+                    Long("validate-stages") if !validate_stages => validate_stages = true,
                     Long("release") if profile.is_none() => profile = Some(BuildProfile::Release),
                     Long("debug") if profile.is_none() => profile = Some(BuildProfile::Debug),
                     Long("backend") if selected.is_none() => {
@@ -421,6 +434,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     proofs
                 },
                 fuel,
+                validation: validation(validate_stages),
             }
         }
         Some(Value(command)) if command == "precheck" => {
@@ -540,6 +554,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 let mut revocations = None;
                 let mut replay = None;
                 let mut native = false;
+                let mut validate_stages = false;
                 let mut json = false;
                 let mut selected = None;
                 let mut simulation = None;
@@ -562,6 +577,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         }
                         Long("trust") => proofs.trust(args.value()?)?,
                         Long("native") if !native => native = true,
+                        Long("validate-stages") if !validate_stages => validate_stages = true,
                         Long("json") if !json => json = true,
                         Long("backend") if selected.is_none() => {
                             selected = Some(backend(args.value()?)?)
@@ -611,6 +627,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 proofs.check()?;
                 if !native && proofs.sidecar.is_some() {
                     return Err("--proofs requires --native".into());
+                }
+                if !native && validate_stages {
+                    return Err("--validate-stages requires --native".into());
                 }
                 if !native && selected.is_some() {
                     return Err("--backend requires --native".into());
@@ -675,6 +694,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         file,
                         launch,
                         native,
+                        validation: validation(validate_stages),
                         backend: selected,
                         proofs,
                         arguments,
@@ -1104,12 +1124,13 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             backend,
             proofs,
             fuel,
+            validation,
         } => {
             let evidence = match proofs.evidence() {
                 Ok(evidence) => evidence,
                 Err(error) => return tool_error(error, false),
             };
-            return match hirsel_driver::native::build_path_native_backend(
+            return match hirsel_driver::native::build_path_native_backend_with_validation(
                 Path::new(&source),
                 Path::new(&output),
                 target,
@@ -1118,6 +1139,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                 evidence.as_ref(),
                 fuel,
                 verify,
+                validation,
             ) {
                 Ok(Ok(report)) => {
                     for line in report {
@@ -1228,6 +1250,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             file,
             launch,
             native: true,
+            validation,
             backend,
             proofs,
             arguments,
@@ -1241,13 +1264,14 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             // Native code is an engine choice, never a source verdict: the
             // same diagnostics come first, and a stage that cannot build the
             // program yet is a tool outcome (exit 3).
-            return match hirsel_driver::native::run_path_native_backend(
+            return match hirsel_driver::native::run_path_native_backend_with_validation(
                 Path::new(&file),
                 launch.host(arguments.as_deref()),
                 evidence.as_ref(),
                 backend.unwrap_or_default(),
                 hirsel_driver::native::Output::Inherit { json },
                 verify,
+                validation,
             ) {
                 // The native driver already wrote the complete failure chain.
                 Ok(Ok(outcome @ RunOutcome::Failed { .. })) => outcome.exit_code() as u8,
@@ -1263,6 +1287,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             file,
             launch,
             native: false,
+            validation: _,
             backend: _,
             proofs: _,
             arguments,
