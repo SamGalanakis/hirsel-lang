@@ -175,10 +175,11 @@ pub(crate) unsafe fn await_any(
     out: *mut IndexOption,
     caller_site: u64,
 ) -> Stopped<u8> {
+    let set_word = unsafe { set.read() };
     let ((set, waiting, must_wait), progress) = engine::head_effect(ctx, "task.await_any", || {
         let s = scheduler(ctx);
         let scope = s.scope_handle(unsafe { scope.read() });
-        let set = s.set_handle(unsafe { set.read() }, scope);
+        let set = s.set_handle(set_word, scope);
         let waiting = s.set(set).members.iter().any(Option::is_some);
         let must_wait = waiting && s.first_completed(set).is_none();
         ((set, waiting, must_wait), Next::Yield)
@@ -199,6 +200,7 @@ pub(crate) unsafe fn await_any(
     } else {
         None
     };
+    super::events::complete_await_any(ctx, set_word, index);
     unsafe {
         out.write(IndexOption {
             tag: u32::from(index.is_some()),

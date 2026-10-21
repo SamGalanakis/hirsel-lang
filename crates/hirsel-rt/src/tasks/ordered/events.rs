@@ -61,6 +61,12 @@ pub(super) enum OwnerOutcome {
         status: u8,
         expired: bool,
     },
+    AwaitAny {
+        set: ObjectId,
+        index: Option<u64>,
+        member: Option<ObjectId>,
+        rank: Option<u64>,
+    },
     /// Payload is unavailable until a descriptor-aware initialized-field
     /// decoder certifies it. Never copy padding or an unwritten carrier.
     Receive {
@@ -268,6 +274,37 @@ pub(super) fn complete_owner(
         op,
         outcome: outcome(),
     });
+}
+
+/// Fix the chosen member and its actual completion rank in the owner's
+/// return window. Neither a later completion nor row recycling may rewrite
+/// this observation. Native table words stay inside the lookup maps.
+pub(super) fn complete_await_any(ctx: *mut TaskCtx, set_word: u64, index: Option<u64>) {
+    // SAFETY: the owner has resumed under the role; this window cannot yield.
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let Logical::Ordered(driver) = &s.logical else {
+        return;
+    };
+    if driver.events.is_none() {
+        return;
+    }
+    let selected = index.map(|index| {
+        let word = s.set(set_word as u32).members[index as usize].expect("a selected set member");
+        let row = s.task(word as u32);
+        assert_eq!(row.generation, (word >> 32) as u32);
+        (word, row.completed)
+    });
+    let Logical::Ordered(driver) = &s.logical else {
+        unreachable!()
+    };
+    let log = driver.events.as_ref().unwrap();
+    let outcome = OwnerOutcome::AwaitAny {
+        set: log.sets[&set_word].clone(),
+        index,
+        member: selected.map(|(word, _)| log.tasks[&word].clone()),
+        rank: selected.map(|(_, rank)| rank),
+    };
+    complete_owner(ctx, "task.await_any", || outcome);
 }
 
 pub(super) fn record(
@@ -540,10 +577,33 @@ mod tests {
 
     unsafe extern "C" fn held_set_member(
         ctx: *mut TaskCtx,
-        _: *mut crate::Header,
+        env: *mut crate::Header,
         _: u64,
         _: u64,
     ) -> u8 {
+        if unsafe { crate::alloc::payload(env).cast::<u64>().read() } != 0 {
+            use crate::tasks::*;
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let waiting = {
+                    let _guard = unsafe { role::Guard::new(ctx) };
+                    let s = scheduler(ctx);
+                    matches!(s.task(0).wait, Some(Wait::Any { .. })) && readiness::saved(s, 0)
+                };
+                if waiting {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < until,
+                    "await_any never published its saved wait"
+                );
+                let mut cause = 0;
+                assert_eq!(
+                    unsafe { hirsel_rt_v2_task_canceled(ctx, &mut cause, &0) },
+                    crate::STATUS_OK
+                );
+            }
+        }
         let mut result = [1u64, 42];
         unsafe {
             crate::tasks::hirsel_rt_v2_task_finish(
@@ -552,6 +612,196 @@ mod tests {
                 [0u64; 2].as_ptr().cast(),
                 16,
             )
+        }
+    }
+
+    #[test]
+    fn await_any_completion_keeps_one_ordinal_across_a_saved_wait_and_records_the_rank() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let environment = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&environment as *const crate::Layout];
+        let mut reference = None;
+        for width in [2, 4, 8] {
+            for reorder in [
+                hirsel_run_config::Reorder::Off,
+                hirsel_run_config::Reorder::Auto,
+            ] {
+                let output = Arc::new(Mutex::new(Vec::new()));
+                let seen = output.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 1;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.reorder = reorder;
+                        super::super::engine::enable(ctx, policy);
+                        enable(ctx);
+                    },
+                    move |ctx| unsafe {
+                        let mut scope = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_enter(
+                                ctx,
+                                std::ptr::null_mut(),
+                                &mut scope,
+                                &0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        let mut set = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_set(ctx, std::ptr::null_mut(), &mut set, &scope),
+                            crate::STATUS_OK
+                        );
+                        let mut answer = IndexOption {
+                            tag: 99,
+                            padding: 99,
+                            index: 99,
+                        };
+                        assert_eq!(
+                            hirsel_rt_v2_task_await_any(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut answer,
+                                &scope,
+                                &set
+                            ),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!(answer.tag, 0);
+                        let env = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            8,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        crate::alloc::payload(env).cast::<u64>().write(1);
+                        let mut child = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_spawn(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut child,
+                                &scope,
+                                held_set_member,
+                                env,
+                                0
+                            ),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!(
+                            hirsel_rt_v2_task_add(ctx, &scope, &mut set, &mut child),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!(
+                            hirsel_rt_v2_task_await_any(
+                                ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
+                                &mut answer,
+                                &scope,
+                                &set
+                            ),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!((answer.tag, answer.index), (1, 0));
+                        let log = super::super::engine::driver(ctx).events.as_ref().unwrap();
+                        let completions = &log.owner_completions;
+                        assert_eq!(completions.len(), 2);
+                        let set_id = ObjectId {
+                            creator: vec![],
+                            ordinal: 1,
+                        };
+                        assert_eq!(
+                            completions[0],
+                            OwnerCompletion {
+                                task: vec![],
+                                ordinal: 2,
+                                op: "task.await_any",
+                                outcome: OwnerOutcome::AwaitAny {
+                                    set: set_id.clone(),
+                                    index: None,
+                                    member: None,
+                                    rank: None
+                                }
+                            }
+                        );
+                        assert_eq!(
+                            completions[1],
+                            OwnerCompletion {
+                                task: vec![],
+                                ordinal: 5,
+                                op: "task.await_any",
+                                outcome: OwnerOutcome::AwaitAny {
+                                    set: set_id,
+                                    index: Some(0),
+                                    member: Some(ObjectId {
+                                        creator: vec![],
+                                        ordinal: 3
+                                    }),
+                                    rank: Some(0)
+                                }
+                            }
+                        );
+                        assert!(log.boundaries.iter().any(|row| row.task.is_empty()
+                            && row.ordinal == 5
+                            && row.op.is_none()
+                            && row.transition == Transition::Park));
+                        assert_eq!(
+                            log.boundaries
+                                .iter()
+                                .filter(
+                                    |row| row.task.is_empty() && row.op == Some("task.await_any")
+                                )
+                                .count(),
+                            2,
+                            "retries add no operation ordinal"
+                        );
+                        *seen.lock().unwrap() = completions.clone();
+                        assert_eq!(
+                            crate::finalize::hirsel_rt_v2_close_handle(ctx, set, 0, 0),
+                            crate::STATUS_OK
+                        );
+                        assert_eq!(
+                            hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                            crate::STATUS_OK
+                        );
+                        crate::STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                let completions = output.lock().unwrap().clone();
+                if let Some(reference) = &reference {
+                    assert_eq!(&completions, reference);
+                } else {
+                    reference = Some(completions);
+                }
+            }
         }
     }
 
