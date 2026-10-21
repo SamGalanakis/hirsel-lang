@@ -41,7 +41,7 @@ fn cores_shorthand_equals_record_placement_in_source_and_native_headers() {
             let placement: serde_json::Value =
                 serde_json::from_slice(&decode(&field("placement "))).unwrap();
             assert_eq!(placement["cores"], 8);
-            assert_eq!(placement["cpus"], "0-3");
+            assert_eq!(placement["cpus"], cpus);
             let canonical: serde_json::Value =
                 serde_json::from_slice(&decode(&field("run "))).unwrap();
             assert!(canonical.get("placement").is_none());
