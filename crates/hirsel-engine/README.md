@@ -909,3 +909,7 @@ lowering diagnostics survive a later failure. Unchanged lower products skip S1
 materialization. Image release omits optional whole-universe lower/constant
 products from unrecorded files before proving the retained package closure.
 This admission does not yet bound S1 completion queues or body holds.
+Image construction withholds production worker admission while producing
+portable receipts; the prior admission purpose is restored on success or error.
+This preserves imported constants without body recomputation while whole-universe
+worker receipts remain unsuitable as portable image evidence.

@@ -868,7 +868,28 @@ fn image_releases_unrecorded_files_after_parallel_constant_publication() {
         std::fs::write(&library, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let main = "pub fn main()->Result[(),()]{Ok(())}\n";
         let imager = f.program("imager", main, &library, "lib");
-        let bytes = image(&f, &mut load(&imager, &StdImages::none()), "lib").unwrap();
+        let path = DefPath(hirsel_syntax::ItemPath {
+            package: package("lib"),
+            modules: vec!["later".into()],
+            name: "VALUE".into(),
+        });
+        let mut producer = load(&imager, &StdImages::none());
+        assert!(
+            producer
+                .engine
+                .materialize_values(vec![path.clone()], hirsel_intern::jobs::Jobs::ONE)[0]
+                .is_ok()
+        );
+        producer.engine.lower_to_tir(&path).unwrap();
+        assert!(
+            producer
+                .engine
+                .memo_reads(&path, QueryKind::Lower)
+                .unwrap()
+                .iter()
+                .any(|(read, _)| matches!(read, memo::ReadKey::ValidationUniverse(_)))
+        );
+        let bytes = image(&f, &mut producer, "lib").unwrap();
         let stored = StdImage::from_bytes(bytes).unwrap();
         let client = f.program("client", main, &library, "lib");
         let mut program = load(&client, &StdImages::of(vec![stored]));

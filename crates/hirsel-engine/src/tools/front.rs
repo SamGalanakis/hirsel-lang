@@ -122,7 +122,7 @@ impl QueryEngine {
     /// static target, no generic/staged/generated requirement can publish new
     /// declarations from a later speculative root. Dynamic roots stay serial.
     pub(crate) fn static_constant_frontier(&mut self, root: &DefPath) -> bool {
-        if self.adapters.phases.is_none() {
+        if self.adapters.phases.is_none() || self.portable_products {
             return false;
         }
         self.invalidate_front_products();

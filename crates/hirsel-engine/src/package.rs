@@ -286,22 +286,24 @@ impl LoadedProgram {
             )
         });
         let mut released = false;
-        let output = self
-            .check_with(LoweringPolicy::Comptime, |engine, file| match &mut build {
-                Some(build) if build.has_file(file) => {
-                    let paths = engine.file_definitions(file);
-                    engine.image_definitions(build, paths)?;
-                    // GEN-5 has consumed every body's summary. Release the
-                    // other sources' products before writing their records.
-                    if !released {
-                        released = true;
-                        engine.release_unrecorded(build);
-                    }
-                    Ok(())
+        let portable = self.engine.portable_products;
+        self.engine.portable_products = true;
+        let checked = self.check_with(LoweringPolicy::Comptime, |engine, file| match &mut build {
+            Some(build) if build.has_file(file) => {
+                let paths = engine.file_definitions(file);
+                engine.image_definitions(build, paths)?;
+                // GEN-5 has consumed every body's summary. Release the
+                // other sources' products before writing their records.
+                if !released {
+                    released = true;
+                    engine.release_unrecorded(build);
                 }
-                _ => Ok(()),
-            })
-            .map_err(|error| self.error(error))?;
+                Ok(())
+            }
+            _ => Ok(()),
+        });
+        self.engine.portable_products = portable;
+        let output = checked.map_err(|error| self.error(error))?;
         if !output.diagnostics.is_empty() {
             return Err(self.error(QueryError::Diagnostics(output.diagnostics)));
         }

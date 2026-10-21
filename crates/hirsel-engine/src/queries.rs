@@ -135,6 +135,9 @@ pub struct QueryEngine {
     pub verify: Verify,
     /// A `Compiler` opened this engine as a session (`free_sessions`).
     pub(crate) session: bool,
+    /// Image construction requires closure-local evidence. Until worker V
+    /// receipts are closure-qualified, its source materializations stay scalar.
+    pub(crate) portable_products: bool,
     pub comptime_limits: hirsel_interp::Limits,
     pub last_comptime_limit: Option<hirsel_tir::ToolingLimit>,
     /// This engine's S1 stack: the open evaluations, generators and staged
@@ -425,6 +428,7 @@ impl QueryEngine {
             result_store: None,
             verify: Verify::On,
             session: false,
+            portable_products: false,
             comptime_limits: hirsel_interp::Limits::default(),
             last_comptime_limit: None,
             s1: crate::memo::S1Coordinator::new().worker(),
