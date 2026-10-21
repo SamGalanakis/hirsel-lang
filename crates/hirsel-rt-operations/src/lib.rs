@@ -2191,6 +2191,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
 
 /// The scalar core-library operations legalized into LIR instructions.
 pub const SCALAR_INTRINSICS: &[&str] = &[
+    "int.unchecked_add",
     "int.widen",
     "int.try_narrow",
     "int.narrow",

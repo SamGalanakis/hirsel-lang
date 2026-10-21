@@ -832,3 +832,38 @@ fn feature_collection_releases_each_cases_process_and_retains_check_errors() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn safe_runner_replay_preserves_the_prepared_callee_facts() {
+    on_compiler(|| {
+        let matrix = hirsel_driver::native::smoke_matrix();
+        let toolchain = hirsel_driver::native::Toolchain::for_matrix(
+            &native::runtime_cache().unwrap(),
+            &matrix,
+        )
+        .unwrap();
+        let scratch = native::scratch::RunRoot::create_in(
+            &std::env::temp_dir().join("hirsel-safe-runner-replay"),
+        )
+        .unwrap();
+        let id = "conformance/RUN/RUN-8-safe-place-run.hir";
+        let path = root().join(id);
+        let source = std::fs::read_to_string(&path).unwrap();
+        let dir = scratch.join("safe").unwrap();
+        let result = native::replay_source_with_config(
+            id,
+            &source,
+            Some(&path),
+            &toolchain,
+            &dir,
+            Default::default(),
+        );
+        assert!(result.snapshot.is_none(), "{:?}", result.snapshot);
+        assert_eq!(result.outcomes.len(), 1);
+        assert!(
+            matches!(result.outcomes[0].2, Outcome::Agree),
+            "{:?}",
+            result.outcomes
+        );
+    });
+}

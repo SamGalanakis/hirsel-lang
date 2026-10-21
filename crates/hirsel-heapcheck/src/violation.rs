@@ -94,6 +94,8 @@ pub enum ViolationKind {
     Malformed,
     /// An operation this executor or M1b does not execute; never a pass.
     Unsupported,
+    /// A detected MEM-9 precondition violation, outside the parity domain.
+    UndefinedBehavior,
     /// Every task of the run waits on another (CONC-8): no violation but the run's
     /// Blocked observation, which `run` reports without the terminal audit.
     Blocked,

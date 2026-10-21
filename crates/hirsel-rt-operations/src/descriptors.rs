@@ -804,6 +804,7 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_hash_finish", Local),
     entry("hirsel_rt_v2_abi_version", Immutable),
     ops("hirsel_rt_v2_invariant_fault", &["stop"]),
+    ops("hirsel_rt_v2_unchecked_add_overflow", &["stop"]),
     // measurement.rs
     entry("hirsel_rt_v2_measure_release", Concurrent),
     entry("hirsel_rt_v2_profile_enter", Concurrent),

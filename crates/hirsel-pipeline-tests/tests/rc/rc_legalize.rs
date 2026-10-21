@@ -1455,3 +1455,18 @@ fn joined_string_view_copies_keep_their_backing_alive() {
         Outcome::Returned(8)
     );
 }
+
+#[test]
+fn unchecked_add_legalizes_the_unsafe_permit_and_checks_each_width() {
+    let mut source = String::new();
+    for kind in [
+        "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128",
+    ] {
+        source.push_str(&format!("fn add_{kind}(permit: Unsafe, a: {kind}, b: {kind}) -> {kind} {{ int.unchecked_add(permit, a, b) }}\n"));
+    }
+    let ready = build(&source);
+    let checks = ready.units.iter().flat_map(|unit| unit.instructions.iter().map(move |inst| (unit, inst))).filter(|(unit, inst)| {
+        matches!(inst, Inst::Check { failure, .. } if unit.tables.failures[failure.index()].rule.as_deref() == Some("MEM-9"))
+    }).count();
+    assert_eq!(checks, 10);
+}

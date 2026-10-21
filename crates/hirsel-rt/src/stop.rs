@@ -42,6 +42,8 @@ pub enum Stop {
     Signaled(hirsel_run_schema::SignalKind),
     /// The embedding host stopped the run ([`crate::host::RunControl::stop`]).
     Requested,
+    /// An unchecked precondition failed; no language failure or cleanup follows.
+    UndefinedBehavior(hirsel_run_schema::ExecutionDiagnostic),
 }
 
 impl Stop {
@@ -70,6 +72,7 @@ impl Stop {
             Stop::Environmental(cause) => RunOutcome::Environmental(cause),
             Stop::Failed => crate::fault("a failed run reported as a stop"),
             Stop::Signaled(kind) => RunOutcome::Signaled(kind),
+            Stop::UndefinedBehavior(diagnostic) => RunOutcome::UndefinedBehavior(diagnostic),
             Stop::Requested => RunOutcome::Environmental(Environmental::Stopped),
         }
     }

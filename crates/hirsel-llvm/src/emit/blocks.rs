@@ -205,6 +205,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let here = self.builder.current();
         let block = self.module.append_block(self.function);
         self.builder.position(block);
+        if edge.rule.as_deref() == Some("MEM-9") {
+            let stop = self.runtime(RuntimeEntry::UncheckedAddOverflow)?;
+            let site = self.anchor_code(edge.anchor)?;
+            let site = self
+                .module
+                .const_int(self.module.int_type(64), u128::from(site));
+            self.builder.call(stop, &[self.context, site]);
+            self.builder.unreachable();
+            self.builder.position(here);
+            self.failures.insert(failure, block);
+            return Ok(block);
+        }
         if let Some(rule) = &edge.rule {
             let Some(code) = self.inputs.failures.codes.get(rule).copied() else {
                 return Err(CodegenError::UnknownRule {

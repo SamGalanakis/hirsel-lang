@@ -101,6 +101,7 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::BuilderGrow
         | R::BuilderPublish
         | R::InvariantFault
+        | R::UncheckedAddOverflow
         | R::DiagPanic
         | R::CallbackFailed
         | R::ForeignViolation

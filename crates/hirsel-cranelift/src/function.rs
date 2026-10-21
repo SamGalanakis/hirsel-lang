@@ -1303,6 +1303,15 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             Deferred::Failure { block, failure } => {
                 self.b.switch_to_block(block);
                 let edge = self.failure_edge(failure)?;
+                if edge.rule.as_deref() == Some("MEM-9") {
+                    let site = self.anchor_code(edge.anchor)?;
+                    let site = self.b.ins().iconst(types::I64, site as i64);
+                    self.rt(RuntimeEntry::UncheckedAddOverflow, &[self.context, site])?;
+                    self.b
+                        .ins()
+                        .trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
+                    return Ok(());
+                }
                 if let Some(rule) = &edge.rule {
                     let code = self.failure_code(rule)?;
                     let site = self.anchor_code(edge.anchor)?;

@@ -3410,3 +3410,79 @@ fn run_outcomes_are_reported_alike_by_both_engines() {
     }
     std::fs::remove_dir(present).unwrap();
 }
+
+/// Unchecked preconditions are outside deterministic replay, so this checks the
+/// native process outcome directly instead of classifying UB as a corpus failure.
+#[test]
+fn native_unchecked_add_checks_every_integer_width_and_reports_overflow() {
+    let source = file(
+        r#"pub fn main(rt: Io, args: Args, permit: Unsafe) -> Result[(), GrantError] {
+  let _ = out.print(io.stdout(rt)?, "before unchecked\n")
+  failure.check(int.unchecked_add(permit, 200u8, 55u8) == 255u8, Arithmetic())
+  failure.check(int.unchecked_add(permit, 65534u16, 1u16) == 65535u16, Arithmetic())
+  failure.check(int.unchecked_add(permit, 4294967294u32, 1u32) == 4294967295u32, Arithmetic())
+  failure.check(int.unchecked_add(permit, 18446744073709551614u64, 1u64) == 18446744073709551615u64, Arithmetic())
+  failure.check(int.unchecked_add(permit, 340282366920938463463374607431768211454u128, 1u128) == 340282366920938463463374607431768211455u128, Arithmetic())
+  failure.check(int.unchecked_add(permit, -120i8, -8i8) == -128i8, Arithmetic())
+  failure.check(int.unchecked_add(permit, -32767i16, -1i16) == -32768i16, Arithmetic())
+  failure.check(int.unchecked_add(permit, -2147483647i32, -1i32) == -2147483648i32, Arithmetic())
+  failure.check(int.unchecked_add(permit, -9223372036854775807i64, -1i64) == -9223372036854775808i64, Arithmetic())
+  failure.check(int.unchecked_add(permit, -170141183460469231731687303715884105727i128, -1i128) == -170141183460469231731687303715884105728i128, Arithmetic())
+  match arg.len(args) {
+    1u64 => { let _ = int.unchecked_add(permit, 255u8, 1u8); },
+    2u64 => { let _ = int.unchecked_add(permit, 127i8, 1i8); },
+    3u64 => { let _ = int.unchecked_add(permit, 340282366920938463463374607431768211455u128, 1u128); },
+    4u64 => { let _ = int.unchecked_add(permit, 170141183460469231731687303715884105727i128, 1i128); },
+    5u64 => { let _ = int.unchecked_add(permit, -170141183460469231731687303715884105728i128, -1i128); },
+    _ => (),
+  }
+  Ok(())
+}
+"#,
+    );
+    for backend in ["llvm", "cranelift"] {
+        let executable = build_executable(&source, &["--backend", backend]);
+        for count in 0..=5 {
+            let grants = serde_json::json!({"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":vec!["overflow";count],"unsafe":true}).to_string();
+            let native = Command::new(&executable)
+                .args(["--hirsel-grants", &grants])
+                .args(vec!["overflow"; count])
+                .output()
+                .unwrap();
+            let interpreted = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .arg("run")
+                .arg(&source)
+                .args(["--grants", &grants])
+                .output()
+                .unwrap();
+            assert_eq!(
+                native.status.code(),
+                interpreted.status.code(),
+                "{backend} count={count}: {native:?} vs {interpreted:?}"
+            );
+            assert_eq!(
+                native.status.code(),
+                Some(if count == 0 { 0 } else { 3 }),
+                "{backend}: {native:?}"
+            );
+            assert_eq!(
+                native.stdout, b"before unchecked\n",
+                "{backend}: {native:?}"
+            );
+            assert_eq!(native.stdout, interpreted.stdout);
+            let message = String::from_utf8(native.stderr).unwrap();
+            if count == 0 {
+                assert!(message.is_empty(), "{message}");
+            } else {
+                assert!(
+                    message.contains("undefined behaviour detected: int.unchecked_add at line"),
+                    "{message}"
+                );
+                assert!(message.contains("mathematical sum must fit"), "{message}");
+                assert!(!message.contains("runtime failure"), "{message}");
+            }
+        }
+        std::fs::remove_file(executable).unwrap();
+    }
+    std::fs::remove_file(source).unwrap();
+}

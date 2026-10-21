@@ -354,3 +354,8 @@ pub(crate) fn foreign_location(ctx: *mut TaskCtx, code: u64) -> String {
         source.definition, source.file, source.line, source.column
     )
 }
+
+/// A compiler-supplied site in the attached program's immutable source table.
+pub(crate) fn source_site(ctx: *mut TaskCtx, code: u64) -> hirsel_run_schema::Site {
+    table(ctx).located(code)
+}

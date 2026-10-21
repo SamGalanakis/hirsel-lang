@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 32
+#define HIRSEL_RT_V2_ABI_VERSION 33
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 40
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_FOREIGN_THREADS_HOME 0
@@ -683,8 +683,10 @@ void hirsel_rt_v2_exit_report(hirsel_rt_v2_ctx *ctx, uint8_t *value,
                               uint32_t layout, uint64_t payload_offset,
                               const hirsel_rt_v2_report_node *node);
 
-/* Diagnostic probe: panics inside the runtime; the process aborts at the C boundary. */
+/* MEM-9: abandon the run with a located unchecked-contract diagnostic; no cleanup. */
+void hirsel_rt_v2_unchecked_add_overflow(hirsel_rt_v2_ctx *ctx, uint64_t site);
 void hirsel_rt_v2_invariant_fault(void);
+/* Diagnostic probe: panics inside the runtime; the process aborts at the C boundary. */
 void hirsel_rt_v2_diag_panic(void);
 
 /* PROG-4: an extern call records its thread's run context for C callback thunks; a

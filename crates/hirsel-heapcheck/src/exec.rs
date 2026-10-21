@@ -2876,6 +2876,12 @@ impl<'p, S: Stage> Machine<'p, S> {
             .failures
             .get(failure.index())
             .ok_or_else(|| err(V::Malformed, format!("unknown failure {failure:?}")))?;
+        if !injected && edge.rule.as_deref() == Some("MEM-9") {
+            return fail(
+                V::UndefinedBehavior,
+                "int.unchecked_add: mathematical sum must fit the destination integer type",
+            );
+        }
         if injected {
             self.record_failure(f, INJECTED_RULE, edge.anchor);
         } else if let Some(rule) = &edge.rule {

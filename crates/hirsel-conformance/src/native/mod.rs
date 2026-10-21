@@ -788,6 +788,7 @@ pub fn replay_source_with_config(
             input: validated,
             entry,
             reference,
+            callees,
             ..
         }) => CaseResult {
             id: id.to_string(),
@@ -802,7 +803,10 @@ pub fn replay_source_with_config(
                     toolchain,
                     dir,
                     launch,
-                    &crate::fixture(source).unwrap(),
+                    &hirsel_driver::native::Fixture {
+                        callees,
+                        ..crate::fixture(source).unwrap()
+                    },
                 ),
             )],
             reference: Some(reference),
@@ -825,34 +829,39 @@ pub fn oracle_source(
         .first()
         .map(|c| c.options.launch.clone())
         .unwrap_or_default();
-    let probe = |validated: &hirsel_engine::ValidatedNativeInput,
-                 entry: &hirsel_engine::DefPath,
-                 matrix: &[Configuration],
-                 dir: &Path| {
-        let natives: Vec<_> = matrix
-            .iter()
-            .filter(|c| !matches!(c.engine, Engine::Heap { .. }))
-            .cloned()
-            .collect();
-        let fixture = crate::fixture(source).unwrap();
-        natives
-            .iter()
-            .enumerate()
-            .flat_map(|(index, configuration)| {
-                hirsel_driver::native::runner_oracle_in(
-                    validated,
-                    entry,
-                    std::slice::from_ref(configuration),
-                    toolchain,
-                    dir,
-                    &fixture,
-                    index == 0,
-                )
-                .into_iter()
-                .map(|(name, outcome)| (name, Class::of(configuration), outcome))
-            })
-            .collect()
-    };
+    let probe =
+        |validated: &hirsel_engine::ValidatedNativeInput,
+         entry: &hirsel_engine::DefPath,
+         matrix: &[Configuration],
+         dir: &Path,
+         callees: std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>| {
+            let natives: Vec<_> = matrix
+                .iter()
+                .filter(|c| !matches!(c.engine, Engine::Heap { .. }))
+                .cloned()
+                .collect();
+            let fixture = hirsel_driver::native::Fixture {
+                callees,
+                ..crate::fixture(source).unwrap()
+            };
+            natives
+                .iter()
+                .enumerate()
+                .flat_map(|(index, configuration)| {
+                    hirsel_driver::native::runner_oracle_in(
+                        validated,
+                        entry,
+                        std::slice::from_ref(configuration),
+                        toolchain,
+                        dir,
+                        &fixture,
+                        index == 0,
+                    )
+                    .into_iter()
+                    .map(|(name, outcome)| (name, Class::of(configuration), outcome))
+                })
+                .collect()
+        };
     if source.lines().any(|line| line.trim() == "// expect: test") {
         return visit_test_suite(
             id,
@@ -866,7 +875,13 @@ pub fn oracle_source(
                 for c in &mut configurations {
                     c.options.launch.test_seed = test.seed;
                 }
-                probe(validated, &test.entry, &configurations, test_dir)
+                probe(
+                    validated,
+                    &test.entry,
+                    &configurations,
+                    test_dir,
+                    Default::default(),
+                )
             },
         );
     }
@@ -886,11 +901,12 @@ pub fn oracle_source(
             input: validated,
             entry,
             reference,
+            callees,
             ..
         }) => CaseResult {
             id: id.to_string(),
             snapshot: None,
-            outcomes: probe(&validated, &entry, matrix, dir),
+            outcomes: probe(&validated, &entry, matrix, dir, callees),
             reference: Some(reference),
             wall: Default::default(),
         },

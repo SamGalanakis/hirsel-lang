@@ -77,3 +77,4 @@ conformance/OWN/OWN-4-inline-element-take-run.hir
 conformance/DROP/DROP-2-variant-payload-part-take-run.hir
 native-tests/regressions/http2-drain-frames.hir
 conformance/LANG/LANG-13-joined-view-consumers-run.hir
+conformance/RUN/RUN-8-safe-place-run.hir

@@ -125,7 +125,7 @@ pub use release::{
 pub use roots::ROOT_OVERFLOW;
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 32;
+pub const ABI_VERSION: u32 = 33;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library
@@ -242,6 +242,30 @@ pub extern "C" fn hirsel_rt_v2_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn hirsel_rt_v2_invariant_fault() -> ! {
     fault("compiled implementation invariant")
+}
+
+/// End a run whose unchecked integer sum violates its MEM-9 precondition.
+///
+/// # Safety
+/// `ctx` is live and `site` belongs to its program's source table.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_unchecked_add_overflow(ctx: *mut TaskCtx, site: u64) -> ! {
+    // SAFETY: caller contract; release the role before abandoning this fiber.
+    let role = unsafe { tasks::role::Guard::new(ctx) };
+    let site = isolate::source_site(ctx, site);
+    let message = format!(
+        "undefined behaviour detected: int.unchecked_add at line {}: mathematical sum must fit the destination integer type",
+        site.line
+    );
+    let diagnostic = hirsel_run_schema::ExecutionDiagnostic {
+        rule: "undefined behaviour detected".into(),
+        site,
+        message,
+    };
+    drop(role);
+    // SAFETY: this entry transfers every owned local into the stop, and compiled
+    // callers hold plain values only. The launcher owns the abandoned storage.
+    unsafe { stop::raise(ctx, stop::Stop::UndefinedBehavior(diagnostic)) }
 }
 
 #[cfg(test)]

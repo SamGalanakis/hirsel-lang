@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 31;
+pub const ABI_VERSION: u32 = 33;
 /// Caller-owned streaming SipHash state (six u64 words).
 pub const HASH_STATE_BYTES: u64 = 48;
 pub const HASH_STATE_ALIGN: u32 = 8;
@@ -512,6 +512,8 @@ pub enum RuntimeEntry {
     WorkerCollect,
     /// A C callback thunk returns to C: its Hirsel code gives back its compute permit.
     CallbackLeave,
+    /// A failed unchecked-add contract: ends the run with a MEM-9 diagnostic.
+    UncheckedAddOverflow,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -583,7 +585,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 76] = [
+    pub const ALL: [RuntimeEntry; 77] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -660,6 +662,7 @@ impl RuntimeEntry {
         Self::WorkerRetire,
         Self::WorkerCollect,
         Self::CallbackLeave,
+        Self::UncheckedAddOverflow,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -1067,6 +1070,11 @@ impl RuntimeEntry {
                 VOID,
                 const { &[CTX, p("start", U64)] },
             ),
+            Self::UncheckedAddOverflow => (
+                "hirsel_rt_v2_unchecked_add_overflow",
+                VOID,
+                const { &[CTX, p("site", U64)] },
+            ),
             Self::InvariantFault => ("hirsel_rt_v2_invariant_fault", VOID, const { &[] }),
             Self::DiagPanic => ("hirsel_rt_v2_diag_panic", VOID, const { &[] }),
             Self::ForeignEnter => (
@@ -1245,4 +1253,5 @@ snapshot_enum!(RuntimeEntry {
     WorkerRetire,
     WorkerCollect,
     CallbackLeave,
+    UncheckedAddOverflow,
 });

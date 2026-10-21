@@ -2,6 +2,3 @@
 # A case with a row runs both backends on every run, so no row goes unjudged.
 # case<TAB>configuration<TAB>class<TAB>reason
 # Known main failure (tools/known-failures.tsv), owner native-bugs-6.
-# RUN-8's Unsafe callee calls int.unchecked_add, which has no native entry (native-runner-entry, 2026-10-20).
-conformance/RUN/RUN-8-safe-place-run.hir	x86_64/regions/elide/reuse/flat-walk/cranelift/whole/diagnostic	native-unavailable	ready: operation int.unchecked_add has no native entry
-conformance/RUN/RUN-8-safe-place-run.hir	x86_64/regions/elide/reuse/flat-walk/llvm-O0/whole/diagnostic	native-unavailable	ready: operation int.unchecked_add has no native entry

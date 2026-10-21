@@ -1080,7 +1080,8 @@ pub struct SwitchArm {
 
 /// A failure successor: its cleanup entry, the rule it starts (None when it
 /// propagates a callee's failure), its source anchor and the native token
-/// disposal list that runs alongside the original cleanup.
+/// disposal list that runs alongside the original cleanup. A MEM-9 precondition
+/// edge instead ends the run with an UndefinedBehavior diagnostic before cleanup.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FailureEdge {
     pub cleanup: EdgeId,

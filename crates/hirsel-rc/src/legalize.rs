@@ -71,6 +71,8 @@ enum ScalarOp {
     Convert(ConvertMode),
     /// `narrow`: `try_narrow`'s conversion and a SEM-1 check of its flag.
     Narrow,
+    /// MEM-9: a failed unchecked precondition stops with a UB diagnostic.
+    UncheckedAdd,
     /// The named `Add`, `Sub` and `Mul` of `int`.
     Arith(BinaryOp, ArithMode),
     /// The exact unary float and integer operations.
@@ -133,6 +135,7 @@ fn scalar_op(definition: &DefPath) -> Option<ScalarOp> {
             "truncate" => S::Convert(ConvertMode::Truncate),
             "try_narrow" => S::Convert(ConvertMode::TryNarrow),
             "narrow" => S::Narrow,
+            "unchecked_add" => S::UncheckedAdd,
             "wrapping_add" => S::Arith(BinaryOp::Add, ArithMode::Wrapping),
             "wrapping_sub" => S::Arith(BinaryOp::Sub, ArithMode::Wrapping),
             "wrapping_mul" => S::Arith(BinaryOp::Mul, ArithMode::Wrapping),
@@ -371,6 +374,39 @@ impl Lowering<'_> {
                 );
                 self.option(b, &site, fits, true, value, normal, failure)?;
             }
+            (ScalarOp::UncheckedAdd, &[x, y]) => {
+                let overflow = self.bool_value()?;
+                let fits = self.bool_value()?;
+                code(
+                    self,
+                    Inst::IntArith {
+                        result,
+                        flag: Some(overflow),
+                        op: BinaryOp::Add,
+                        mode: ArithMode::Checked,
+                        left: x,
+                        right: y,
+                    },
+                );
+                code(
+                    self,
+                    Inst::Unary {
+                        result: fits,
+                        op: hirsel_lir::ir::UnaryOp::Not,
+                        operand: overflow,
+                        failure,
+                    },
+                );
+                let failure = self.like(failure, Some("MEM-9"));
+                code(
+                    self,
+                    Inst::Check {
+                        condition: fits,
+                        failure,
+                    },
+                );
+                self.ed.unit.terminators[b.index()] = done;
+            }
             (ScalarOp::Arith(op, ArithMode::Checked), &[x, y]) => {
                 let value = self.payload_value(result, OPTION_SOME)?;
                 let overflow = self.bool_value()?;
@@ -466,6 +502,20 @@ impl Lowering<'_> {
             .unwrap_or(&[])
             .to_vec();
         arguments.sort_by_key(|a| a.parameter);
+        if op == ScalarOp::UncheckedAdd {
+            let Some(permit) = arguments.first() else {
+                return Err(PassError::Malformed(
+                    "unchecked_add without its Unsafe permit".into(),
+                ));
+            };
+            if !matches!(permit.value, ArgumentValue::Value(v) if self.value_type(v).repr == ValueRepr::Handle)
+            {
+                return Err(PassError::Malformed(
+                    "unchecked_add without an Unsafe handle".into(),
+                ));
+            }
+            arguments.remove(0);
+        }
         arguments
             .iter()
             .map(|a| match a.value {

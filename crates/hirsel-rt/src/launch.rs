@@ -2520,9 +2520,15 @@ pub(crate) unsafe fn execute(
             stopped_output(sinks, &echo_replay);
             write_observation(&record)?;
         }
+        hirsel_run_schema::RunOutcome::UndefinedBehavior(diagnostic) => {
+            stopped_output(sinks, &echo_replay);
+            if report_failures {
+                let _ = writeln!(sinks.report.clone(), "{diagnostic}");
+            }
+            write_observation(&record)?;
+        }
         hirsel_run_schema::RunOutcome::Tooling(reason) => return Err(reason.clone()),
         hirsel_run_schema::RunOutcome::ToolingLimit(_)
-        | hirsel_run_schema::RunOutcome::UndefinedBehavior(_)
         | hirsel_run_schema::RunOutcome::Trapped(_) => {
             crate::fault("an interpreter-only outcome in native execution")
         }
