@@ -3,7 +3,7 @@
 //! interner, so this is the body's own view of them, which replaces iterating
 //! a per-body store.
 use hirsel_types::{CheckedBody, GenericArgument, TypeId, TypeInterner};
-use std::collections::HashSet;
+type HashSet<T> = std::collections::HashSet<T, hirsel_intern::IdHasher>;
 
 /// Every row id the checked tables of `body` name, in table order.
 pub fn body_roots(body: &CheckedBody) -> Vec<TypeId> {
@@ -56,6 +56,9 @@ impl BodyRows {
     }
     /// Add `root` and the rows it reaches that are not yet known.
     pub fn note(&mut self, t: &TypeInterner, root: TypeId) {
+        if self.seen.contains(&root) {
+            return;
+        }
         let mut pending = vec![root];
         while let Some(id) = pending.pop() {
             let Some(row) = t.get(id) else { continue };
@@ -78,5 +81,53 @@ impl BodyRows {
     }
     pub fn contains(&self, id: TypeId) -> bool {
         self.seen.contains(&id)
+    }
+}
+
+/// Facts indexed by the dense expression ordinals of one item. Ported from
+/// rust-analyzer's la-arena `ArenaMap` (lib/la-arena/src/map.rs:9-11,56-69).
+/// Global session ids are deliberately not indexes into this body-local map.
+#[derive(Clone, Debug)]
+pub struct ExprRows<T>(Vec<Option<T>>);
+impl<T> Default for ExprRows<T> {
+    fn default() -> Self {
+        Self(vec![])
+    }
+}
+impl<T> ExprRows<T> {
+    pub fn get(&self, expression: &hirsel_syntax::ExprId) -> Option<&T> {
+        self.0.get(expression.0 as usize)?.as_ref()
+    }
+    pub fn entry(&mut self, expression: hirsel_syntax::ExprId) -> &mut Option<T> {
+        let index = expression.0 as usize;
+        if self.0.len() <= index {
+            self.0.resize_with(index + 1, || None);
+        }
+        &mut self.0[index]
+    }
+}
+impl<T> FromIterator<(hirsel_syntax::ExprId, T)> for ExprRows<T> {
+    fn from_iter<I: IntoIterator<Item = (hirsel_syntax::ExprId, T)>>(rows: I) -> Self {
+        let mut out = Self::default();
+        for (expression, value) in rows {
+            *out.entry(expression) = Some(value);
+        }
+        out
+    }
+}
+#[cfg(test)]
+mod expression_rows_tests {
+    use super::*;
+    use hirsel_syntax::ExprId;
+    #[test]
+    fn source_first_rows_and_elaboration_last_rows_keep_their_duplicate_policy() {
+        let mut rows = ExprRows::default();
+        rows.entry(ExprId(3)).get_or_insert(7);
+        rows.entry(ExprId(3)).get_or_insert(9);
+        assert_eq!(rows.get(&ExprId(3)), Some(&7));
+        assert_eq!(rows.get(&ExprId(2)), None);
+        assert_eq!(rows.get(&ExprId(400)), None);
+        let rows: ExprRows<_> = [(ExprId(3), 7), (ExprId(3), 9)].into_iter().collect();
+        assert_eq!(rows.get(&ExprId(3)), Some(&9));
     }
 }

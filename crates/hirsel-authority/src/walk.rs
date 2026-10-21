@@ -127,7 +127,7 @@ pub(super) struct Checker<'a> {
     out: AuthorityOutput,
     /// Some signature read failed: its own diagnostics stand for the body.
     failed_read: bool,
-    elaborations: BTreeMap<ExprId, usize>,
+    elaborations: hirsel_modes::rows::ExprRows<usize>,
     resolved: BTreeMap<ExprId, ResolvedName>,
     source_rows: super::source_rows::SourceRows,
     closures: super::closure_rows::ClosureRows,
@@ -1873,11 +1873,12 @@ impl<'a> Checker<'a> {
         let (falls, continues) = self.loop_control(body, target, 0);
         let incoming = self.identities.clone();
         loop {
-            let before: BTreeMap<_, _> = self
-                .binding_types
-                .iter()
-                .map(|(key, ty)| (key.clone(), (*ty, self.expired_type(*ty))))
-                .collect();
+            // As in Salsa's shallow verification (maybe_changed_after.rs:358-387),
+            // skip derived work only while all inputs of that work are unchanged.
+            // Rows already supplies persistent snapshots; expiration additionally
+            // depends on the complete invalidation map, not just a binding's id.
+            let before = self.binding_types.clone();
+            let invalid = self.invalid.clone();
             let identities = self.identities.clone();
             let identity_changes = self.identity_changes.clone();
             self.expr(body, None);
@@ -1888,12 +1889,16 @@ impl<'a> Checker<'a> {
             if let Some(condition) = condition {
                 self.expr(condition, None);
             }
+            let same_invalid = invalid == self.invalid;
             let unchanged = identities == self.identities
                 && identity_changes == self.identity_changes
                 && before.len() == self.binding_types.len()
-                && before.iter().all(|(key, (old, expired))| {
+                && before.iter().all(|(key, old)| {
                     self.binding_types.get(key).is_some_and(|new| {
-                        *expired == self.expired_type(*new) && self.t.semantic_eq(*old, *new)
+                        self.t.semantic_eq(*old, *new)
+                            && ((*old == *new && same_invalid)
+                                || self.ended_in(*old, &invalid).is_some()
+                                    == self.expired_type(*new))
                     })
                 });
             if unchanged {

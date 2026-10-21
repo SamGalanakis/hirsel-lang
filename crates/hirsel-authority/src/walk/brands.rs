@@ -741,13 +741,19 @@ impl Checker<'_> {
     }
     /// Where an origin named anywhere in this value's type ended.
     pub(super) fn ended(&self, root: TypeId) -> Option<Span> {
+        self.ended_in(root, &self.invalid)
+    }
+    pub(super) fn ended_in(&self, root: TypeId, invalid: &HashMap<TypeId, Span>) -> Option<Span> {
+        if invalid.is_empty() {
+            return None;
+        }
         let mut todo = vec![root];
         let mut seen = HashSet::default();
         while let Some(ty) = todo.pop() {
             if !seen.insert(ty) {
                 continue;
             }
-            if let Some(span) = self.invalid.get(&ty) {
+            if let Some(span) = invalid.get(&ty) {
                 return Some(*span);
             }
             if let Some(row) = self.t.get(ty) {

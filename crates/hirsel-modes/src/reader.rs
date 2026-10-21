@@ -2,16 +2,15 @@
 //! `ContextMemo` proof makes or replays on a hit, goes through one `Reader`,
 //! which asks the provider once per definition and queues each first read for
 //! the pass to record (its dependency, diagnostics or failure).
-use hirsel_syntax::DefId;
+use hirsel_syntax::{DefId, DefMap};
 use hirsel_types::{QueryError, Signature, SignatureProvider, SignatureRef};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct Reader<'p> {
     provider: &'p mut dyn SignatureProvider,
     own: (DefId, SignatureRef),
-    cache: HashMap<DefId, Result<SignatureRef, QueryError>>,
+    cache: DefMap<Result<SignatureRef, QueryError>>,
     /// First reads the pass has not recorded yet, in read order.
     pending: Vec<(DefId, Result<SignatureRef, QueryError>)>,
 }
@@ -20,7 +19,7 @@ impl<'p> Reader<'p> {
         RefCell::new(Self {
             provider,
             own: (own.definition, Arc::new(own.clone())),
-            cache: HashMap::new(),
+            cache: DefMap::default(),
             pending: vec![],
         })
     }

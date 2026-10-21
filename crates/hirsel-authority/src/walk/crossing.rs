@@ -134,12 +134,13 @@ impl Checker<'_> {
         self.scoped_authority(summary)
     }
     pub(super) fn raw_authority(&mut self, store: &TypeInterner, id: TypeId) -> AuthoritySummary {
-        let roles = self.signature.metadata.roles.clone();
-        let declarations = self.declarations();
-        structural_authority(store, id, &roles, &declarations, &mut |_, path| {
-            Ok::<_, hirsel_types::QueryError>(path.and_then(|path| self.read(path)))
-        })
-        .unwrap()
+        debug_assert!(std::ptr::eq(store, self.t));
+        let result = self
+            .memo
+            .authority(id, &self.signature.metadata.roles)
+            .unwrap();
+        self.record_reads();
+        result
     }
     pub(super) fn contains_resource(&mut self, root: TypeId) -> bool {
         let store = self.t;
