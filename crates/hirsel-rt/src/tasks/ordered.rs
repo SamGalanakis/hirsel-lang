@@ -3,6 +3,7 @@
 //! This module does not select a physical worker or run a scheduling point.
 
 pub(crate) mod driver;
+pub(crate) mod engine;
 
 use std::cell::RefCell;
 
@@ -96,7 +97,22 @@ pub(crate) struct Outcome {
     pending: RefCell<Option<crate::channels::PendingSend>>,
 }
 
+#[derive(Clone)]
+pub(super) struct Returned {
+    pub(super) status: u32,
+    pub(super) image: Vec<u8>,
+    pub(super) chain: Vec<crate::failure::Chained>,
+}
+
 impl Outcome {
+    fn returned(&self) -> Returned {
+        Returned {
+            status: self.status,
+            image: self.image.clone(),
+            chain: self.chain.clone(),
+        }
+    }
+
     fn image(status: u32, image: Vec<u8>) -> Self {
         Self {
             status,

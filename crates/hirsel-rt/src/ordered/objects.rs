@@ -97,6 +97,19 @@ impl Registry {
         obtains: BTreeSet<TypeId>,
     ) {
         self.carries.register(ty, object.clone());
+        self.bind_erased(kind, word, object, obtains);
+    }
+
+    /// Native creation ABIs may erase their generic handle type. Register the
+    /// object under all admitted types of its known family, without inventing
+    /// a layout index for the erased type.
+    pub fn bind_erased(
+        &mut self,
+        kind: Kind,
+        word: u64,
+        object: ObjectId,
+        obtains: BTreeSet<TypeId>,
+    ) {
         for &ty in self.families.get(&kind.code()).into_iter().flatten() {
             self.carries.register(ty, object.clone());
         }

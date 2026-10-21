@@ -28,9 +28,14 @@ enum Execution {
 /// budget and canonical-event adapters must be installed before admission can
 /// select this driver; constructing this metadata alone activates no workers.
 pub(crate) struct Driver {
-    pub(super) frontier: Frontier<Command, Outcome>,
+    pub(super) frontier: Option<Frontier<Command, Outcome>>,
     pub(super) objects: Registry,
     execution: BTreeMap<TaskId, Execution>,
+    pub(super) submitted: BTreeMap<TaskId, u64>,
+    pub(super) recorded: BTreeMap<TaskId, u64>,
+    pub(super) waiting: BTreeMap<TaskId, u64>,
+    pub(super) returned: BTreeMap<TaskId, super::Returned>,
+    pub(super) host_poll: bool,
 }
 
 impl Driver {
@@ -38,16 +43,21 @@ impl Driver {
         let mut frontier = Frontier::new(root, policy, settled);
         frontier.carries = objects.carries.clone();
         Self {
-            frontier,
+            frontier: Some(frontier),
             objects,
             execution: BTreeMap::from([(root, Execution::Saved { head_only: false })]),
+            submitted: BTreeMap::new(),
+            recorded: BTreeMap::new(),
+            waiting: BTreeMap::new(),
+            returned: BTreeMap::new(),
+            host_poll: false,
         }
     }
 
     /// A committed spawn joins both the logical queue and physical candidates.
     /// A reserved spawn is not an enqueue and cannot become a speculative turn.
     pub(crate) fn enqueue(&mut self, task: TaskId, held: Held) {
-        self.frontier.enqueue(task, held);
+        self.frontier.as_mut().unwrap().enqueue(task, held);
         assert!(
             self.execution
                 .insert(task, Execution::Saved { head_only: false })
@@ -59,16 +69,19 @@ impl Driver {
     /// Selected frames are omitted from later scans until claimed and saved.
     /// During a deferred poll no new turn may be selected before wake merge.
     pub(crate) fn select(&mut self) -> Vec<TaskId> {
-        let Some(head) = self.frontier.head() else {
+        let Some(frontier) = &self.frontier else {
             return Vec::new();
         };
-        let order: Vec<_> = std::iter::once(head).chain(self.frontier.queue()).collect();
+        let Some(head) = frontier.head() else {
+            return Vec::new();
+        };
+        let order: Vec<_> = std::iter::once(head).chain(frontier.queue()).collect();
         let mut ready = Vec::new();
         for task in order {
             let Some(Execution::Saved { head_only }) = self.execution.get(&task).copied() else {
                 continue;
             };
-            let state = self.frontier.state(task);
+            let state = frontier.state(task);
             if matches!(state, State::Parked | State::Holding | State::Done)
                 || (task != head && (head_only || !matches!(state, State::Queued | State::Ahead)))
             {
@@ -86,14 +99,23 @@ impl Driver {
         let execution = self.execution.get_mut(&task).expect("a dispatched task");
         assert_eq!(*execution, Execution::Selected);
         *execution = Execution::Running;
-        if matches!(self.frontier.state(task), State::Queued | State::Ahead) {
-            self.frontier.start(task, worker);
+        let frontier = self.frontier.as_mut().expect("restored frontier");
+        if matches!(frontier.state(task), State::Queued | State::Ahead) {
+            frontier.start(task, worker);
         } else {
             assert_eq!(
-                self.frontier.head(),
+                frontier.head(),
                 Some(task),
                 "only a head resumes a pending boundary"
             );
+        }
+    }
+
+    pub(super) fn enter(&mut self, task: TaskId, worker: u16) {
+        match self.execution[&task] {
+            Execution::Selected => self.claimed(task, worker),
+            Execution::Running => {}
+            _ => panic!("a native boundary without dispatch ownership"),
         }
     }
 
@@ -192,7 +214,12 @@ mod tests {
             },
             Registry::default(),
         );
-        driver.frontier.held.insert(0, Held::empty());
+        driver
+            .frontier
+            .as_mut()
+            .unwrap()
+            .held
+            .insert(0, Held::empty());
         driver.enqueue(1, Held::empty());
         driver.enqueue(2, Held::empty());
         driver
@@ -204,7 +231,7 @@ mod tests {
             payload: Command::AtomicLoad { word: 0, bytes: 8 },
         };
         assert_eq!(
-            driver.frontier.apply_head(
+            driver.frontier.as_mut().unwrap().apply_head(
                 Stretch::new(Budgets {
                     fuel: false,
                     memory: false
@@ -313,7 +340,7 @@ mod tests {
             driver.select().is_empty(),
             "host poll has not returned its wake list"
         );
-        driver.frontier.complete_poll(Vec::new());
+        driver.frontier.as_mut().unwrap().complete_poll(Vec::new());
         assert_eq!(driver.select(), vec![1]);
         assert!(driver.select().is_empty());
     }

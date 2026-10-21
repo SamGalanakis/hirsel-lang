@@ -3504,6 +3504,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "atomic_create");
     // SAFETY: caller contract.
+    if ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, ordered::engine::atomic_create(ctx, out, value, size)) };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     unsafe {
         out.write(scheduler(ctx).sync.create_image(value, size));
@@ -3529,6 +3533,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "atomic_load");
     // SAFETY: caller contract.
+    if ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, ordered::engine::atomic_load(ctx, a.read(), slot, size)) };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     unsafe {
         scheduler(ctx).sync.read(a.read(), slot, size);
@@ -3565,6 +3573,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "atomic_store");
     // SAFETY: caller contract.
+    if ordered::engine::on(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::engine::atomic_store(ctx, a.read(), value, size),
+            )
+        };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     unsafe {
         scheduler(ctx).sync.write(a.read(), value, size);

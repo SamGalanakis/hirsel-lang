@@ -93,8 +93,9 @@ the same reserve/init path. Native adapters cover atomic/mutex creation, channel
 open, sender duplication and mutex cause; cause chains are owned outcomes for
 the operation's task, not mutations of a different committing task's context.
 Mutex wrappers still belong to their owner's allocation/budget path.
-These adapters are not yet installed in the fiber entry path. Drops, task
-operations and host operations still need native boundary adapters.
+Atomic create/load/store adapters are installed behind the ordered selector.
+The other object adapters still need their native entry branches; drops, task
+operations and host operations also need native boundary adapters.
 
 Native object retirement can return an owned `Progress::Poll` continuation.
 The caller restores policy metadata before accessing host readiness; wake merge
@@ -107,8 +108,15 @@ requires both a physical save and head promotion for full logs or allocation
 pauses. Scheduler.logical has an Ordered variant whose idle callback updates
 this metadata under the generic saved-flag publication guard. A real eight-worker
 control cycles the root through 256 saved-stack resumptions without duplicate
-notifications. Native operation/budget boundaries and production admission still
-need installation; that control is not a parallel ordered corpus or speed gate.
+notifications. Atomic create/load/store entries now have an ordered submission branch. A
+command owns its image, an unaccepted full-log command remains on its owner's
+stack, and recorded outcomes are delivered to the owner's continuation by
+ordinal. Bounded object commit temporarily removes the frontier from its driver
+slot, restoring it before host polling or suspension; during a home poll other
+boundaries wait. The test-only admission path accepts no budget, root, task or
+host effects. The remaining native boundaries, budget hooks and production
+admission still need installation. These controls are not a parallel ordered
+corpus or speed gate.
 
 ## Integration status
 
