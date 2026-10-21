@@ -894,6 +894,21 @@ total 2.50h
 ```
 <!-- /tour -->
 
+## Binary pipes and borrowed buffers
+
+Use `input.read_all` or bounded `bufio.stdin_read` for binary stdin, and
+`out.write(stdout, bytes)` for binary stdout. These preserve NUL and invalid UTF-8;
+`out.print` is for text. Grant `stdin.bytes@1` and `stdout.bytes@1` explicitly.
+The [ZIP inspector](../examples/zipinspect/README.md) bounds its input and emits a
+member unchanged through a binary pipe, without a source sidecar.
+
+For streaming inspection, refill with `bufio.file_read_more`, inspect
+`bufio.peek(reader, max)` and finish using that borrowed view before calling
+`bufio.consume(mut reader, count)`. `peek` neither refills nor advances. A reader's
+capacity bounds one refill; the caller must bound total input. See the
+[log digest](../examples/logdigest/README.md) for counters across chunk boundaries
+and a watcher canceled by a graceful-stop signal.
+
 ## Standard library: JSON
 
 `std@1` is ordinary Hirsel source. JSON numbers retain their decimal spelling;
@@ -903,6 +918,15 @@ objects retain insertion order and duplicate keys are rejected. Construct or ins
 Nested record fields use their type's snake-case converter name (for example,
 `Summary` calls `summary_to_json`); see [derived bodies](spec/std-library.md#derived-bodies). A raw literal such
 as `r#"{"n": 1}"#` writes JSON text without escaping its quotes.
+
+For typed input without a `json.Value` tree, declare both
+`<type>_from_json_reader` with `comptime derive.from_json_reader(shape(T))` and
+`<type>_from_json_bytes` with `comptime derive.from_json_bytes(shape(T))`.
+Direct output uses `<type>_json_into` with `comptime derive.json_into(shape(T))`,
+writing into a `List[u8]` with depth `0` at the root. Nested nominal types need
+their corresponding hooks. `time.Date` already supplies checked ISO-date hooks.
+The [snapshot library](../examples/snapshift/README.md) shows all declarations;
+the [API index](api.md#derive) gives their complete signatures.
 
 <!-- tour: conformance/LANG/LANG-8-tour-06-json-run.hir -->
 [Runnable source](../conformance/LANG/LANG-8-tour-06-json-run.hir)

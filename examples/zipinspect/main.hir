@@ -1,0 +1,90 @@
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Input(
+  bufio.ReadError[InputError]
+) | Archive(zip.ZipError) | Output(OutputError) | Usage | TooLarge | Missing
+
+// A bounded binary pipe: list entries, or emit exactly one entry's bytes.
+fn inspect(data: Bytes, output: Stdout, name: Option[String]) -> Result[(), AppError] {
+  let entries = zip.entries(data)?
+  if list.len(entries) > 1024 {
+    return Error(TooLarge())
+  }
+  match name {
+    None() => {
+      for entry in entries {
+        out.print(output, f"{entry.size}\t{entry.name}\n")?
+      }
+    },
+    Some(wanted) => {
+      for entry in entries {
+        if entry.name == wanted {
+          let body = zip.read(data, entry, 1048576)?
+          out.write(output, body)?
+          return Ok(())
+        }
+      }
+      return Error(Missing())
+    },
+  }
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) > 1 {
+    return Error(Usage())
+  }
+  let name: Option[String] = if arg.len(args) == 1 {
+    Some(arg.text(args, 0)?)
+  } else {
+    None()
+  }
+  let stdin = io.stdin(rt)?
+  let mut reader = bufio.new(4096)
+  let mut data: List[u8] = []
+  // Read one extra chunk so a truncated-at-limit archive cannot look complete.
+  while bufio.stdin_read(stdin, mut reader, mut data, 4096)? > 0 {
+    if list.len(data) > 1048576 {
+      return Error(TooLarge())
+    }
+  }
+  inspect(bytes.from_list(take data), io.stdout(rt)?, name)
+}
+
+@test
+fn empty_archive(t: Test) -> Result[(), zip.ZipError] {
+  let data = b"PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+  test.check(t, list.len(zip.entries(data)?) == 0)
+  Ok(())
+}
+
+@test
+fn malformed_archive(t: Test) {
+  test.check(
+    t,
+    match zip.entries(b"not a zip\0\xff") {
+      Error(_) => true,
+      Ok(_) => false,
+    }
+  )
+}
+
+@test
+fn independent_stored_vector(t: Test) -> Result[(), AppError] {
+  // Python zipfile, ZIP_STORED: binary member bytes are not decoded as UTF-8.
+  let data = fixture()
+  let entries = zip.entries(data)?
+  test.check(t, list.len(entries) == 1)
+  test.check(t, entries[0].name == "raw.bin")
+  test.check(t, zip.read(data, entries[0], 4)? == b"\0\xff\r\n")
+  test.check(
+    t,
+    match zip.read(data, entries[0], 3) {
+      Error(TooLarge()) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}
+
+fn fixture() -> Bytes {
+  b"\x50\x4b\x03\x04\x14\x00\x00\x00\x00\x00\x00\x00\x21\x50\xa2\x7c\xa7\xca\x04\x00\x00\x00\x04\x00\x00\x00\x07\x00\x00\x00\x72\x61\x77\x2e\x62\x69\x6e\x00\xff\x0d\x0a\x50\x4b\x01\x02\x14\x03\x14\x00\x00\x00\x00\x00\x00\x00\x21\x50\xa2\x7c\xa7\xca\x04\x00\x00\x00\x04\x00\x00\x00\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80\x01\x00\x00\x00\x00\x72\x61\x77\x2e\x62\x69\x6e\x50\x4b\x05\x06\x00\x00\x00\x00\x01\x00\x01\x00\x35\x00\x00\x00\x29\x00\x00\x00\x00\x00"
+}

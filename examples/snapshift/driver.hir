@@ -1,0 +1,17 @@
+pub type AppError = Grant(GrantError) | Input(bufio.ReadError[InputError]) | Transform(
+  TransformError
+) | Output(OutputError) | TooLarge
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let stdin = io.stdin(rt)?
+  let mut reader = bufio.new(4096)
+  let mut data: List[u8] = []
+  while bufio.stdin_read(stdin, mut reader, mut data, 4096)? > 0 {
+    if list.len(data) > 65536 {
+      return Error(TooLarge())
+    }
+  }
+  let output = transform(bytes.from_list(take data))?
+  out.write(io.stdout(rt)?, output)?
+  Ok(())
+}

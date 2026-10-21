@@ -1,0 +1,7 @@
+{
+  "io": {
+    "stdin": "stdin.bytes@1",
+    "stdout": "stdout.bytes@1",
+    "dirs": []
+  }
+}

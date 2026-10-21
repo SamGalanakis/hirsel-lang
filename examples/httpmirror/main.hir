@@ -1,0 +1,105 @@
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Http(http.HttpError) | Files(
+  FileError
+) | Output(OutputError) | Usage | LocalOnly
+
+// One bounded response, explicit directory authority, no redirects or decompression.
+fn mirror(n: Net, d: Dir, url: String, destination: Path) -> Result[u64, AppError] {
+  if !string.starts_with(url, "http://127.0.0.1:18766/") {
+    return Error(LocalOnly())
+  }
+  let mut config = http.default_config()
+  config.max_redirects = 0
+  config.max_body_bytes = 65536
+  config.status_as_error = true
+  config.decompress = false
+  let response = http.fetch(n, config, Get(), url, [], None())?
+  let size = bytes.len(response.body)
+  file.write_bytes(d, destination, unique response.body)?
+  Ok(size)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) != 2 {
+    return Error(Usage())
+  }
+  let d = io.dir(rt, path.of("data"))?
+  let size = mirror(io.net(rt)?, d, arg.text(args, 0)?, arg.path(args, 1)?)?
+  out.print(io.stdout(rt)?, f"mirrored {size} bytes\n")?
+  Ok(())
+}
+
+fn peer(take data: Bytes) -> NetPeer {
+  NetPeer(
+    address: "127.0.0.1",
+    port: 18766,
+    resolves_to: [],
+    tls: Plain(),
+    connections: [Open([Send(take data), Close()])]
+  )
+}
+
+@test
+fn binary_response(t: Test) -> Result[(), AppError] {
+  let n = test.net(
+    t,
+    [
+      peer(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\0\xff\r\n"
+      )
+    ],
+    []
+  )
+  let d = test.dir(t, [])
+  test.check(t, mirror(n, d, "http://127.0.0.1:18766/raw", path.of("raw.bin"))? == 4)
+  test.check(t, file.read_bytes(d, path.of("raw.bin"))? == b"\0\xff\r\n")
+  Ok(())
+}
+
+@test
+fn status_preserves_existing_file(t: Test) -> Result[(), AppError] {
+  let n = test.net(
+    t,
+    [peer(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")],
+    []
+  )
+  let d = test.dir(t, [(path.of("saved"), b"previous")])
+  test.check(
+    t,
+    match mirror(n, d, "http://127.0.0.1:18766/missing", path.of("saved")) {
+      Error(Http(_)) => true,
+      _ => false,
+    }
+  )
+  test.check(t, file.read_bytes(d, path.of("saved"))? == b"previous")
+  Ok(())
+}
+
+@test
+fn confined_destination(t: Test) {
+  let n = test.net(
+    t,
+    [peer(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx")],
+    []
+  )
+  let d = test.dir(t, [])
+  test.check(
+    t,
+    match mirror(n, d, "http://127.0.0.1:18766/raw", path.of("../outside")) {
+      Error(Files(_)) => true,
+      _ => false,
+    }
+  )
+}
+
+@test
+fn local_only(t: Test) {
+  let n = test.net(t, [], [])
+  let d = test.dir(t, [])
+  test.check(
+    t,
+    match mirror(n, d, "https://example.com/raw", path.of("raw")) {
+      Error(LocalOnly()) => true,
+      _ => false,
+    }
+  )
+}

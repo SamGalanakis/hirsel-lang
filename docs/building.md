@@ -47,6 +47,17 @@ installed toolchain's std manifest by its resolved path. The default package has
 `main` entry taking `Io` and prints with an f-string; `--lib` omits the entry and
 writes a public greeting function with a test. Non-empty directories are refused.
 
+The generated std dependency path is absolute to the creating toolchain. When
+checking an example into this repository, use `../../stdlib/std@1/hirsel.json`
+from its manifest so another checkout selects its matching std. Keep absolute
+paths for a package tied to an installed toolchain.
+
+`test` and `doc` accept a library manifest without `entry`; `check`, `build` and
+`run` require a launch manifest with an entry. To add a CLI without turning a
+library into an application, keep a second launch manifest listing the library
+sources plus a driver. [snapshift](../examples/snapshift/README.md) shows both
+manifests and direct typed JSON decoding with a checked Date.
+
 ## Document a package
 
 ```sh

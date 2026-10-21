@@ -1,6 +1,7 @@
 # Small Hirsel tools
 
-Every tool selects `std@1` through its `hirsel.json`. From the repository root:
+Each package selects `std@1` through its `hirsel.json`; a standalone source without
+a sidecar selects its toolchain's std. From the repository root:
 
 ```sh
 hirsel run examples/wordscan/hirsel.json --grants '{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}'
@@ -119,3 +120,20 @@ For a new single-source example, register its tests with `Example::new` and
 explicit `include_str!` inputs for both source and manifest in the Rust harness.
 That carries the files into remote Buck2 tests; a dynamically constructed
 `repository_manifest` path alone does not register test data.
+
+## Four first-contact workflow examples
+
+| Program | Workflow |
+| --- | --- |
+| [zipinspect](zipinspect/README.md) | Bounded ZIP directory inspection and raw binary member output; standalone source without a sidecar. |
+| [snapshift](snapshift/README.md) | Library plus CLI driver: direct typed JSON decode, checked Date and direct compact output. |
+| [httpmirror](httpmirror/README.md) | Bounded loopback HTTP response saved under a confined directory grant. |
+| [logdigest](logdigest/README.md) | Borrowed bufio chunks, severity counters and a watcher with graceful stop. |
+
+All four started with `hirsel new`. Each has explicit grants and package tests.
+`python3 examples/verify-dogfood6.py --hirsel /absolute/path/to/hirsel --tool NAME`
+checks one tool's formatting, launch, successful and failing records, byte-exact
+replay on all three engines and fresh LLVM/Cranelift runs. Add `--output DIR` to
+retain fixtures, tapes, stdout/stderr bytes, exact commands and exit statuses.
+The four `dogfood6_` CLI registrations also assert nonzero language test counts
+on the interpreter and both native backends. Tapes live outside directory grants.

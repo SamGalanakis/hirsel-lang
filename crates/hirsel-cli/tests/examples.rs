@@ -2998,3 +2998,116 @@ fn ledger_service_survives_faults_replays_and_trials_a_changed_transfer() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Each registration executes its own package tests on all three engines, then
+// checks real host inputs and exact stdout/stderr/terminal outcomes on replay.
+fn dogfood6_example(
+    name: &str,
+    sources: &[(&str, &str)],
+    manifest: &str,
+    grants: &str,
+    run: Option<&str>,
+    count: u64,
+) {
+    let example = Example::new(name, sources, manifest);
+    std::fs::write(example.dir.join("grants.json"), grants).unwrap();
+    if let Some(run) = run {
+        let mut launch: serde_json::Value = serde_json::from_str(run).unwrap();
+        let package: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(example.dir.join("hirsel.json")).unwrap())
+                .unwrap();
+        launch["dependencies"] = package["dependencies"].clone();
+        std::fs::write(example.dir.join("run.json"), launch.to_string()).unwrap();
+    }
+    check_package_tests(name, &example.dir.join("hirsel.json"), count);
+    let script = example.dir.join("verify.py");
+    std::fs::write(
+        &script,
+        include_str!("../../../examples/verify-dogfood6.py"),
+    )
+    .unwrap();
+    let output = Command::new("python3")
+        .arg(script)
+        .args([
+            "--hirsel",
+            env!("CARGO_BIN_EXE_hirsel"),
+            "--tool",
+            name,
+            "--root",
+        ])
+        .arg(&example.dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{name}: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn dogfood6_zipinspect() {
+    dogfood6_example(
+        "zipinspect",
+        &[(
+            "main.hir",
+            include_str!("../../../examples/zipinspect/main.hir"),
+        )],
+        include_str!("../../../examples/zipinspect/hirsel.json"),
+        include_str!("../../../examples/zipinspect/grants.json"),
+        None,
+        3,
+    );
+}
+
+#[test]
+fn dogfood6_snapshift() {
+    dogfood6_example(
+        "snapshift",
+        &[
+            (
+                "main.hir",
+                include_str!("../../../examples/snapshift/main.hir"),
+            ),
+            (
+                "driver.hir",
+                include_str!("../../../examples/snapshift/driver.hir"),
+            ),
+        ],
+        include_str!("../../../examples/snapshift/hirsel.json"),
+        include_str!("../../../examples/snapshift/grants.json"),
+        Some(include_str!("../../../examples/snapshift/run.json")),
+        3,
+    );
+}
+
+#[test]
+fn dogfood6_httpmirror() {
+    dogfood6_example(
+        "httpmirror",
+        &[(
+            "main.hir",
+            include_str!("../../../examples/httpmirror/main.hir"),
+        )],
+        include_str!("../../../examples/httpmirror/hirsel.json"),
+        include_str!("../../../examples/httpmirror/grants.json"),
+        None,
+        4,
+    );
+}
+
+#[test]
+fn dogfood6_logdigest() {
+    dogfood6_example(
+        "logdigest",
+        &[(
+            "main.hir",
+            include_str!("../../../examples/logdigest/main.hir"),
+        )],
+        include_str!("../../../examples/logdigest/hirsel.json"),
+        include_str!("../../../examples/logdigest/grants.json"),
+        None,
+        3,
+    );
+}

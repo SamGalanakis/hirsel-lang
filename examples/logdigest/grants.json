@@ -1,0 +1,27 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {
+        "path": "data",
+        "host": "data",
+        "access": "read"
+      }
+    ],
+    "tasks": "tasks.cooperative@1",
+    "signals": {
+      "provider": "signals.script@1",
+      "kinds": [
+        "interrupt",
+        "terminate"
+      ],
+      "script": [
+        "terminate"
+      ]
+    }
+  },
+  "args": [
+    "app.log",
+    "--follow"
+  ]
+}

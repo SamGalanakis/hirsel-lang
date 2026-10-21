@@ -1,0 +1,187 @@
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Files(FileError) | Read(
+  bufio.ReadError[FileError]
+) | Output(OutputError) | Signal(SignalError) | Usage | TooLarge
+
+type Counts {
+  lines: u64,
+  errors: u64,
+  warnings: u64,
+}
+
+type Scan {
+  counts: Counts,
+  column: u64,
+  error_prefix: bool,
+  warn_prefix: bool,
+}
+
+fn finish_line(mut state: Scan) {
+  state.counts.lines += 1
+  if state.error_prefix && state.column >= 6 {
+    state.counts.errors += 1
+  }
+  if state.warn_prefix && state.column >= 5 {
+    state.counts.warnings += 1
+  }
+  state.column = 0
+  state.error_prefix = true
+  state.warn_prefix = true
+}
+
+// Inspect the borrowed chunk fully before the caller advances its Reader.
+fn feed(mut state: Scan, chunk: Bytes) {
+  for byte in chunk {
+    if byte == b'\n' {
+      finish_line(mut state)
+    } else {
+      if state.column < 6 && byte != b"ERROR "[state.column] {
+        state.error_prefix = false
+      }
+      if state.column < 5 && byte != b"WARN "[state.column] {
+        state.warn_prefix = false
+      }
+      state.column += 1
+    }
+  }
+}
+
+fn summarize(d: Dir, p: Path) -> Result[Counts, AppError] {
+  let mut f = file.open(d, p)?
+  let mut reader = bufio.new(4096)
+  let mut state = Scan(
+    counts: Counts(lines: 0, errors: 0, warnings: 0),
+    column: 0,
+    error_prefix: true,
+    warn_prefix: true
+  )
+  let mut total = 0u64
+  while bufio.file_read_more(d, mut f, mut reader, 4096)? > 0 {
+    let chunk = bufio.peek(reader, 4096)
+    let count = bytes.len(chunk)
+    total += count
+    if total > 1048576 {
+      return Error(TooLarge())
+    }
+    feed(mut state, chunk)
+    bufio.consume(mut reader, count)
+  }
+  if state.column > 0 {
+    finish_line(mut state)
+  }
+  Ok(state.counts)
+}
+
+fn emit(output: Stdout, counts: Counts) -> Result[(), AppError] {
+  out.print(
+    output,
+    f"lines={counts.lines} errors={counts.errors} warnings={counts.warnings}\n"
+  )?
+  Ok(())
+}
+
+fn follow(d: Dir, p: Path, output: Stdout) -> Result[(), AppError] {
+  // Watch first, so a write racing with the initial scan is observed.
+  let mut watch = file.watch(d, path.of(""), false)?
+  while true {
+    emit(output, summarize(d, p)?)?
+    let _ = watcher.next(d, mut watch)?
+  }
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) < 1 || arg.len(args) > 2 {
+    return Error(Usage())
+  }
+  let d = io.dir(rt, path.of("data"))?
+  let p = arg.path(args, 0)?
+  let output = io.stdout(rt)?
+  if arg.len(args) == 1 {
+    return emit(output, summarize(d, p)?)
+  }
+  if arg.text(args, 1)? != "--follow" {
+    return Error(Usage())
+  }
+  let signals = io.signals(rt)?
+  let tasks = io.tasks(rt)?
+  let outcome = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[(), AppError] {
+      let mut set: TaskSet[unique Result[(), AppError]] of s = task.set(s)
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> unique Result[(), AppError] {
+            unique follow(d, p, output)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> unique Result[(), AppError] {
+            let _ = signal.wait(signals, [Interrupt(), Terminate()])?
+            Ok(())
+          }
+        )
+      )
+      let (_, outcome) = task.select(s, take set)
+      take outcome
+    }
+  )
+  outcome?
+  out.print(output, "stopped\n")?
+  Ok(())
+}
+
+@test
+fn chunk_boundaries(t: Test) {
+  let mut state = Scan(
+    counts: Counts(lines: 0, errors: 0, warnings: 0),
+    column: 0,
+    error_prefix: true,
+    warn_prefix: true
+  )
+  feed(mut state, b"ERR")
+  feed(mut state, b"OR broken\nWAR")
+  feed(mut state, b"N slow\nINFO ok\n")
+  test.check(
+    t,
+    state.counts.lines == 3 && state.counts.errors == 1 && state.counts.warnings == 1
+  )
+}
+
+@test
+fn final_partial_and_empty(t: Test) -> Result[(), AppError] {
+  let d = test.dir(
+    t,
+    [(path.of("log"), b"ERROR broken\nWARN slow"), (path.of("empty"), b"")]
+  )
+  let counts = summarize(d, path.of("log"))?
+  test.check(t, counts.lines == 2 && counts.errors == 1 && counts.warnings == 1)
+  test.check(t, summarize(d, path.of("empty"))?.lines == 0)
+  Ok(())
+}
+
+@test
+fn confined_and_missing(t: Test) {
+  let d = test.dir(t, [])
+  test.check(
+    t,
+    match summarize(d, path.of("../outside")) {
+      Error(Files(_)) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match summarize(d, path.of("missing")) {
+      Error(Files(NotFound())) => true,
+      _ => false,
+    }
+  )
+}

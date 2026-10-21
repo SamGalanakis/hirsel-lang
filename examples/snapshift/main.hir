@@ -1,0 +1,93 @@
+/// A compact snapshot retains its capture date and only active records.
+pub type Item {
+  name: String,
+  active: bool,
+}
+
+pub type Snapshot {
+  captured: time.Date,
+  items: List[Item],
+}
+
+fn item_from_json_reader(mut cursor: json.Reader) -> Result[Item, String] uses {} = comptime derive.from_json_reader(
+  shape(Item)
+)
+
+fn snapshot_from_json_reader(mut cursor: json.Reader) -> Result[Snapshot, String] uses {} = comptime derive.from_json_reader(
+  shape(Snapshot)
+)
+
+fn snapshot_from_json_bytes(data: Bytes) -> Result[Snapshot, String] uses {} = comptime derive.from_json_bytes(
+  shape(Snapshot)
+)
+
+fn item_json_into(value: Item, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Item))
+
+fn snapshot_json_into(value: Snapshot, mut out: List[u8], depth: u64) -> Result[
+  (),
+  json.JsonError
+] uses {} = comptime derive.json_into(shape(Snapshot))
+
+pub type TransformError = Decode(String) | Encode(json.JsonError) | TooLarge
+
+/// Decode directly from bytes, preserve input order and Date, emit compact JSON.
+pub fn transform(data: Bytes) -> Result[unique Bytes, TransformError] {
+  if bytes.len(data) > 65536 {
+    return Error(TooLarge())
+  }
+  let snapshot = snapshot_from_json_bytes(data) ? Decode
+  let mut active: List[Item] = []
+  for item in snapshot.items {
+    if item.active {
+      list.push(mut active, unique item)
+    }
+  }
+  let filtered = Snapshot(captured: snapshot.captured, items: take active)
+  let mut out: List[u8] = []
+  snapshot_json_into(filtered, mut out, 0) ? Encode
+  list.push(mut out, b'\n')
+  Ok(unique bytes.from_list(take out))
+}
+
+@test
+fn dated_snapshot(t: Test) -> Result[(), TransformError] {
+  let data = b"{\"captured\":\"2024-02-29\",\"items\":[{\"name\":\"wool\",\"active\":true},{\"name\":\"old\",\"active\":false}]}"
+  test.check(
+    t,
+    transform(data)? == b"{\"captured\":\"2024-02-29\",\"items\":[{\"name\":\"wool\",\"active\":true}]}\n"
+  )
+  Ok(())
+}
+
+@test
+fn invalid_date_and_duplicate(t: Test) {
+  test.check(
+    t,
+    match transform(b"{\"captured\":\"2023-02-29\",\"items\":[]}") {
+      Error(Decode(_)) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match transform(b"{\"captured\":\"2024-02-29\",\"items\":[],\"items\":[]}") {
+      Error(Decode(_)) => true,
+      _ => false,
+    }
+  )
+}
+
+@test
+fn escaped_name_and_unknown_field(t: Test) -> Result[(), TransformError] {
+  let output = transform(
+    b"{\"future\":0,\"captured\":\"2020-01-01\",\"items\":[{\"name\":\"a\\nb\",\"active\":true}]}"
+  )?
+  test.check(
+    t,
+    output == b"{\"captured\":\"2020-01-01\",\"items\":[{\"name\":\"a\\nb\",\"active\":true}]}\n"
+  )
+  Ok(())
+}
