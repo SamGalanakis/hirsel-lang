@@ -9,6 +9,8 @@ pub(crate) mod lifecycle;
 pub(crate) mod sets;
 #[cfg(test)]
 mod terminal_tests;
+#[cfg(test)]
+mod timer_tests;
 
 use std::cell::RefCell;
 

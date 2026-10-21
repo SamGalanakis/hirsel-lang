@@ -2276,6 +2276,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_enter_until");
     // SAFETY: caller contract.
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::lifecycle::scope_enter_until(ctx, out, deadline),
+            )
+        };
+    }
     let [clock, at] = unsafe { deadline.read() };
     crate::free::enter(ctx, Phase::Done);
     let (index, generation) = open_scope(
@@ -2362,6 +2370,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit_until(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_exit_until");
+    if ordered::engine::on(ctx) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::lifecycle::scope_exit_until(ctx, scope, error, caller_site, out),
+            )
+        };
+    }
     // SAFETY: caller contract.
     let (status, expired) = unsafe { exit_scope(&mut *ctx, scope, error, caller_site) };
     // SAFETY: caller contract.

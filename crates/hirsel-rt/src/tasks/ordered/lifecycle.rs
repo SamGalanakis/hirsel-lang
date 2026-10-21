@@ -97,6 +97,41 @@ pub(crate) unsafe fn scope_enter(ctx: *mut TaskCtx, out: *mut u64) -> Stopped<u8
 }
 
 /// # Safety
+/// As for TaskScopeEnterUntil; the timer adapter is bound on the home thread.
+pub(crate) unsafe fn scope_enter_until(
+    ctx: *mut TaskCtx,
+    out: *mut u64,
+    deadline: *const [u64; 2],
+) -> Stopped<u8> {
+    let [clock, at] = unsafe { deadline.read() };
+    let ((index, generation), progress) = engine::head_effect(ctx, "task.scope_enter", || {
+        (
+            open_scope(
+                ctx,
+                Some(ScopeDeadline {
+                    token: None,
+                    expired: false,
+                }),
+            ),
+            Next::Keep,
+        )
+    })?;
+    assert!(matches!(progress, Progress::Absorbed(_)));
+    // No Frontier/Scheduler borrow spans this home bridge. The row remains
+    // owned by this head and cannot be observed by a retirement poll yet.
+    match unsafe { crate::host_waits::arm(ctx, index, clock, at) }? {
+        Some(token) => scheduler(ctx).scope(index).deadline.as_mut().unwrap().token = Some(token),
+        None => scheduler(ctx).expire(index),
+    }
+    let word = handle(index, generation);
+    engine::driver(ctx).objects.inert(Kind::Scope, word);
+    let (_, progress) = engine::head_continuation(ctx, || ((), Next::Yield))?;
+    engine::continue_at_head(ctx, progress)?;
+    unsafe { out.write(word) };
+    Ok(STATUS_OK)
+}
+
+/// # Safety
 /// As for TaskSpawn. The owned environment remains unstarted during its scan.
 pub(crate) unsafe fn spawn(
     ctx: *mut TaskCtx,
@@ -424,20 +459,39 @@ pub(crate) unsafe fn join(
 }
 
 /// # Safety
-/// As for TaskScopeExit; ordered deadlines are not admitted yet.
+/// As for TaskScopeExit.
 pub(crate) unsafe fn scope_exit(
     ctx: *mut TaskCtx,
     scope: *const u64,
     error: u8,
     caller_site: u64,
 ) -> Stopped<u8> {
+    unsafe { exit_scope(ctx, scope, error, caller_site) }.map(|(status, _)| status)
+}
+
+/// # Safety
+/// As for TaskScopeExitUntil; the owner's output is never written remotely.
+pub(crate) unsafe fn scope_exit_until(
+    ctx: *mut TaskCtx,
+    scope: *const u64,
+    error: u8,
+    caller_site: u64,
+    out: *mut u8,
+) -> Stopped<u8> {
+    let (status, expired) = unsafe { exit_scope(ctx, scope, error, caller_site) }?;
+    unsafe { out.write(u8::from(expired)) };
+    Ok(status)
+}
+
+unsafe fn exit_scope(
+    ctx: *mut TaskCtx,
+    scope: *const u64,
+    error: u8,
+    caller_site: u64,
+) -> Stopped<(u8, bool)> {
     let ((scope, waited), progress) = engine::head_effect(ctx, "task.scope_exit", || {
         let s = scheduler(ctx);
         let scope = s.scope_handle(unsafe { scope.read() });
-        assert!(
-            s.scope(scope).deadline.is_none(),
-            "ordered deadline is not admitted"
-        );
         let me = s.current;
         assert_eq!(s.task(me).scopes.pop(), Some(scope));
         s.cancel_epoch.changed();
@@ -476,7 +530,7 @@ pub(crate) unsafe fn scope_exit(
             }?;
         }
     }
-    engine::head_continuation(ctx, || {
+    let (deadline, _) = engine::head_continuation(ctx, || {
         let s = scheduler(ctx);
         let me = s.current;
         let own = s.task(me).path.clone();
@@ -488,15 +542,25 @@ pub(crate) unsafe fn scope_exit(
             }
             s.vacate_task(child);
         }
-        s.scopes[scope as usize] = None;
+        let deadline = s.scopes[scope as usize].take().and_then(|row| row.deadline);
         s.vacant_scopes.push(scope);
-        ((), Next::Keep)
+        (deadline, Next::Keep)
     })?;
-    Ok(if unsafe { (*ctx).failure.active() } {
-        STATUS_FAILURE
-    } else {
-        STATUS_OK
-    })
+    if let Some(ScopeDeadline {
+        token: Some(token), ..
+    }) = &deadline
+    {
+        unsafe { crate::host_waits::disarm(ctx, *token) };
+    }
+    let expired = deadline.is_some_and(|d| d.expired);
+    Ok((
+        if unsafe { (*ctx).failure.active() } {
+            STATUS_FAILURE
+        } else {
+            STATUS_OK
+        },
+        expired,
+    ))
 }
 
 /// # Safety

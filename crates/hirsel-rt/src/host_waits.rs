@@ -387,11 +387,9 @@ pub(crate) unsafe fn arm(
     clock: u64,
     at: u64,
 ) -> Stopped<Option<u64>> {
-    // SAFETY: caller contract.
-    let armed = unsafe { arm_here(ctx, scope, clock, at) };
-    // SAFETY: as above.
-    unsafe { count(ctx) };
-    armed
+    // The adapter and wait table are home-affine at width > 1. The bridge
+    // also refreshes the run's armed/parked count before returning.
+    unsafe { at_home(ctx, || arm_here(ctx, scope, clock, at)) }?
 }
 
 unsafe fn arm_here(ctx: *mut TaskCtx, scope: u32, clock: u64, at: u64) -> Stopped<Option<u64>> {
