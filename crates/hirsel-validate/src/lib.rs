@@ -178,10 +178,7 @@ pub fn validate(
 ) -> Validation {
     // Opt-in per-definition profiling, independent of the driver's phase
     // accounting (including V invoked by import and compile-time execution).
-    static PROFILE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let started = PROFILE
-        .get_or_init(|| std::env::var_os("HIRSEL_VALIDATE_PROFILE").is_some())
-        .then(std::time::Instant::now);
+    let started = profile_start();
     let reader = Reader::new(signatures);
     let validation = validate_input(definition, t, &reader);
     reader.finish(reads);
@@ -195,6 +192,13 @@ pub fn validate(
         );
     }
     validation
+}
+
+fn profile_start() -> Option<std::time::Instant> {
+    static PROFILE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    PROFILE
+        .get_or_init(|| std::env::var_os("HIRSEL_VALIDATE_PROFILE").is_some())
+        .then(std::time::Instant::now)
 }
 
 fn invalid_signature(path: &DefPath) -> Violation {

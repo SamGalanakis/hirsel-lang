@@ -2059,20 +2059,23 @@ pub(super) fn mutation_verdicts() -> String {
                 ));
             }
         };
+        let mut first_reads = vec![];
         let first = validate(
             &tabled(&f.definition),
             interner(),
             &f.signatures,
-            &mut vec![],
+            &mut first_reads,
         );
+        let mut second_reads = vec![];
         let second = validate(
             &tabled(&f.definition),
             interner(),
             &f.signatures,
-            &mut vec![],
+            &mut second_reads,
         );
         assert_eq!(first, second);
-        writeln!(verdicts, "{first:?}").unwrap();
+        assert_eq!(first_reads, second_reads);
+        writeln!(verdicts, "{first:?}; reads={first_reads:?}").unwrap();
     }
     verdicts
 }

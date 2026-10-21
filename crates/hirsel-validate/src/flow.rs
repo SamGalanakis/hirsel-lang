@@ -1508,6 +1508,7 @@ impl Checker<'_> {
         report: bool,
         proof: Option<hirsel_types::ParamId>,
     ) {
+        let started = super::profile_start();
         let mut model = Model::new(self);
         model.unique_proof = proof
             .and_then(|p| self.body.parameters.get(p.0 as usize))
@@ -1623,6 +1624,15 @@ impl Checker<'_> {
             for mut state in classes.into_iter().flatten() {
                 self.transfer(&model, &mut state, BlockId(b as u32), report);
             }
+        }
+        if let Some(started) = started {
+            eprintln!(
+                "hirsel-validate-flow-profile\t{}\t{}\t{:?}\t{}",
+                self.definition.path,
+                self.site.body.0,
+                proof,
+                started.elapsed().as_nanos()
+            );
         }
     }
 
@@ -3537,16 +3547,7 @@ impl Checker<'_> {
             {
                 state.places.set(i, LIVE);
                 state.defused.set(i, 1);
-                state.origins.identities[i].clear();
-                state.origins.parts[i].clear();
-                state.origins.owners[i].clear();
-                state.origins.proofs[i].clear();
-                state.origins.retained.update(i, BTreeSet::clear);
-                state
-                    .origins
-                    .environments
-                    .update(i, super::flow_origins::Environment::clear);
-                state.origins.expired[i].clear();
+                state.origins.clear_value(i);
             }
         }
         if model.places[index].projection.is_empty() {

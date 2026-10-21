@@ -57,13 +57,17 @@ fn verdicts() -> String {
     let fixtures = fixtures();
     let fixture_count = fixtures.len();
     for (name, f) in fixtures {
+        let mut reads = vec![];
         let verdict = hirsel_validate::validate(
             &tabled(&f.definition),
             interner(),
             &f.signatures,
-            &mut vec![],
+            &mut reads,
         );
-        out += &format!("{name}: {}\n", without_ids(&format!("{verdict:?}")));
+        out += &format!(
+            "{name}: {}\n",
+            without_ids(&format!("{verdict:?}; reads={reads:?}"))
+        );
     }
     let mutations = crate::checks::mutation_verdicts();
     let mutation_count = mutations.lines().count();

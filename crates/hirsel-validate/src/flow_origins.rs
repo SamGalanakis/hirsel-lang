@@ -164,9 +164,6 @@ impl Environment {
             self.0.entry(target).or_default().join(dependencies);
         }
     }
-    pub fn clear(&mut self) {
-        self.0.clear();
-    }
     pub fn replace(
         &mut self,
         prefix: &[EnvironmentField],
@@ -314,6 +311,29 @@ impl OriginState {
             .union_since(&base.bindings, &other.bindings, |a, b| {
                 a.extend(b.iter().cloned())
             });
+    }
+
+    /// Clearing a value must not materialize empty snapshot rows or clone a
+    /// shared collection only to discard it. Presence inside parts/proofs is
+    /// still significant; only the whole value is being overwritten here.
+    pub fn clear_value(&mut self, index: usize) {
+        if !self.identities[index].is_empty() {
+            self.identities.set(index, Origins::default());
+        }
+        if !self.parts[index].is_empty() {
+            self.parts.set(index, Parts::default());
+        }
+        if !self.owners[index].is_empty() {
+            self.owners.set(index, Origins::default());
+        }
+        if !self.proofs[index].is_empty() {
+            self.proofs.set(index, BTreeMap::new());
+        }
+        self.retained.set(index, BTreeSet::new());
+        self.environments.set(index, Environment::default());
+        if !self.expired[index].is_empty() {
+            self.expired.set(index, BTreeSet::new());
+        }
     }
 
     pub fn expire(&mut self, owner: &Origin) {
@@ -765,6 +785,54 @@ pub(super) fn join_captures(target: &mut Vec<CapturedOrigin>, incoming: &[Captur
 mod environment_tests {
     use super::*;
     use crate::support::lexical;
+    #[test]
+    fn clearing_value_facts_keeps_name_history_and_past_snapshots() {
+        let origin = Origin {
+            root: OriginRoot::Local(lexical(), hirsel_types::LocalId(1)),
+            fields: vec![].into(),
+        };
+        let mut state = OriginState::new(64);
+        let identities = BTreeSet::from([origin.clone()]);
+        state.identities[7] = identities.clone().into();
+        // Even an explicit empty part/proof entry differs from an absent one.
+        state.parts[7] = BTreeMap::from([(vec![hirsel_types::FieldId(0)], BTreeSet::new())]).into();
+        state.proofs[7] = BTreeMap::from([(origin.root.clone(), BTreeSet::new())]);
+        state.owners[7] = identities.clone().into();
+        state.retained.set(7, identities.clone());
+        state
+            .environments
+            .set(7, Environment::closure(identities.clone(), BTreeSet::new()));
+        state.bindings.insert(origin.root.clone(), identities);
+        state
+            .locations
+            .insert(origin.root.clone(), BTreeSet::from([(7, None)]));
+        state.expire(&origin);
+        let before = state.clone();
+        state.clear_value(7);
+        assert!(state.identities[7].is_empty());
+        assert!(state.parts[7].is_empty());
+        assert!(state.owners[7].is_empty());
+        assert!(state.proofs[7].is_empty());
+        assert!(state.retained[7].is_empty());
+        assert!(state.environments[7] == Environment::default());
+        assert!(state.expired[7].is_empty());
+        assert!(state.bindings == before.bindings);
+        assert!(state.locations == before.locations);
+        assert!(state.dead == before.dead);
+        assert!(!before.identities[7].is_empty());
+        assert!(!before.parts[7].is_empty());
+        assert!(!before.proofs[7].is_empty());
+        assert!(!before.expired[7].is_empty());
+        assert_eq!(before.retained.holders(&origin.root), vec![7]);
+        assert!(state.retained.holders(&origin.root).is_empty());
+        assert!(state.environments.holders(&origin.root).is_empty());
+        let before = work::read(Counter::ValidateCopiedRows);
+        let mut empty = state.clone();
+        empty.clear_value(7);
+        empty.clear_value(31);
+        assert_eq!(work::read(Counter::ValidateCopiedRows), before);
+    }
+
     #[test]
     fn call_names_snapshot_filters_ended_bindings_without_changing_past_proofs() {
         let root = OriginRoot::Local(lexical(), hirsel_types::LocalId(1));
