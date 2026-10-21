@@ -960,7 +960,9 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
                 );
                 if source == generated {
                     let scalar = control.check_definition(&path("chosen")).unwrap();
-                    let worker = candidate.check_definition(&path("chosen")).unwrap();
+                    let worker = candidate
+                        .dependency_reads(&path("chosen"), QueryKind::CheckedSummary)
+                        .expect("compact checked summary retains adapter detail");
                     assert!(
                         scalar
                             .dependencies
@@ -968,7 +970,7 @@ fn frozen_frontier_staged_rounds_evaluate_on_workers() {
                             .any(|d| d.definition == path("make"))
                     );
                     assert_eq!(
-                        worker.dependencies, scalar.dependencies,
+                        worker.signatures, scalar.dependencies,
                         "checked dependencies jobs={jobs}"
                     );
                 }
@@ -1240,6 +1242,86 @@ fn frozen_frontier_generic_generator_failures_keep_selecting_site_labels() {
                     let actual = frontier_text(&mut candidate, paths, jobs);
                     assert_eq!(actual, expected, "jobs={jobs} warm={warm} rule={rule}");
                 }
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_releases_completed_typed_bodies_before_next_root() {
+    use std::sync::{
+        Arc, Mutex, Weak,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct ObservedModes {
+        inner: Arc<dyn ModesPhase>,
+        bodies: Mutex<Vec<Weak<TypedBody>>>,
+        peak: AtomicUsize,
+    }
+    impl ModesPhase for ObservedModes {
+        fn check_modes(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: Arc<TypedBody>,
+            signature: &hirsel_types::Signature,
+            products: &mut PhaseProducts,
+            provider: &mut dyn hirsel_types::SignatureProvider,
+        ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
+            let output = self
+                .inner
+                .check_modes(t, m, body, signature, products, provider)?;
+            let mut bodies = self.bodies.lock().unwrap();
+            bodies.retain(|body| body.strong_count() != 0);
+            bodies.push(Arc::downgrade(&output.value.typed));
+            self.peak.fetch_max(bodies.len(), Ordering::Relaxed);
+            Ok(output)
+        }
+    }
+    with_compiler_stack(|| {
+        for jobs in [1, 2, 8] {
+            let mut adapters = compiler_adapters();
+            let observed = Arc::new(ObservedModes {
+                inner: adapters.modes.take().unwrap(),
+                bodies: Mutex::new(vec![]),
+                peak: AtomicUsize::new(0),
+            });
+            adapters.modes = Some(observed.clone());
+            let mut candidate = QueryEngine::new(default_environment(), adapters);
+            let source: String = (0..64)
+                .map(|i| format!("const task{i}:u64=comptime {i}u64\n"))
+                .collect();
+            let file = candidate.sources.add("bounded-s1.hir", source).unwrap();
+            candidate.parse_file(file, &default_context()).unwrap();
+            let paths: Vec<_> = (0..64).rev().map(|i| path(&format!("task{i}"))).collect();
+            let outcomes = candidate
+                .materialize_value_outcomes(paths.clone(), hirsel_intern::jobs::Jobs::new(jobs));
+            assert!(outcomes.iter().all(|outcome| outcome.result.is_ok()));
+            assert_eq!(
+                outcomes.iter().map(|o| &o.definition).collect::<Vec<_>>(),
+                paths.iter().collect::<Vec<_>>()
+            );
+            let peak = observed.peak.load(Ordering::Relaxed);
+            assert!(
+                peak <= jobs,
+                "jobs={jobs}: {peak} typed bodies accumulated across64 S1 roots"
+            );
+            assert!(
+                observed
+                    .bodies
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|body| body.strong_count() == 0)
+            );
+            for path in paths {
+                assert!(
+                    candidate
+                        .definition_summary(hirsel_syntax::DefId::intern(&path))
+                        .is_ok()
+                );
+                assert_eq!(candidate.recompute_count(&path, QueryKind::Check), 1);
+                assert_eq!(candidate.recompute_count(&path, QueryKind::Modes), 1);
             }
         }
     });

@@ -28,7 +28,7 @@ pub(crate) struct FrozenSource<'a> {
     pub(crate) resolver: Option<&'a dyn ResolverPhase>,
     pub(crate) checker: Option<&'a dyn CheckerPhase>,
     pub(crate) mode_phase: Option<&'a dyn ModesPhase>,
-    pub(crate) completed: Mutex<Vec<(parallel::Completed, Reads)>>,
+    pub(crate) completed: Mutex<Vec<(parallel::CompactCompleted, ContentHash, Reads)>>,
 }
 /// Mirror the live generation recorder's adapter detail, including repeated
 /// signature requests in order. Canonical Reads alone cannot reconstruct the
@@ -405,10 +405,23 @@ impl TirSource for FrozenSource<'_> {
                 };
             }
         };
+        let text = done.text;
+        let done = parallel::CompactCompleted::capture(
+            done,
+            &context,
+            self.inputs.snapshot.types().clone(),
+            &mut parallel::FrozenReadSource {
+                declarations: &self.declarations,
+                citations: &self.citations,
+                candidates,
+                environment: self.environment,
+            },
+            false,
+        );
         self.completed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((done, reads.clone()));
+            .push((done, text, reads.clone()));
         DependencyProduct {
             result: result.map(|output| {
                 Arc::new(TaskBody {
@@ -754,12 +767,12 @@ impl QueryEngine {
             .into_inner()
             .unwrap_or_else(|e| e.into_inner());
         let mut bodies = bodies;
-        bodies.sort_by(|(left, _), (right, _)| left.definition.cmp(&right.definition));
-        for (body, reads) in bodies {
-            if self.key_text(&body.definition, QueryKind::Modes).ok() == Some(body.text)
-                && self.execution_valid(&body.definition, &reads)
+        bodies.sort_by(|(left, _, _), (right, _, _)| left.definition().cmp(right.definition()));
+        for (body, text, reads) in bodies {
+            if self.key_text(body.definition(), QueryKind::Modes).ok() == Some(text)
+                && self.execution_valid(body.definition(), &reads)
             {
-                let _ = self.merge_completed(body);
+                let _ = self.merge_compact_completed(body);
             }
         }
         // A declaration demand suspends evaluation before V. Install only
