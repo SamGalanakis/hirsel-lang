@@ -67,7 +67,7 @@ const PHASES: [&str; 20] = [
     "lex",
     "declarations",
 ];
-const COUNTS: [&str; 43] = [
+const COUNTS: [&str; 49] = [
     "definitions",
     "units",
     "V runs",
@@ -111,6 +111,12 @@ const COUNTS: [&str; 43] = [
     "S1 discarded roots",
     "S1 registration rounds",
     "S1 scalar roots",
+    "native Value structural bytes peak",
+    "native active estimated bytes peak",
+    "native admission budget bytes",
+    "native effective workers peak",
+    "native worker stack reservation bytes peak",
+    "native retained Ready structural bytes peak",
 ];
 
 fn build(source: &std::path::Path, timings: &str) -> std::process::Output {
