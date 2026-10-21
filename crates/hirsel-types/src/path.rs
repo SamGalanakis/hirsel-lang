@@ -1,5 +1,6 @@
 //! Prefix-shared paths: each extension retains one node and cloning is constant size.
 use std::{
+    alloc::Layout,
     cmp::Ordering,
     fmt,
     hash::{Hash, Hasher},
@@ -61,6 +62,20 @@ impl<T> SharedPath<T> {
     /// Identity only for deduplicating retained nodes within this process.
     pub fn node_identity(&self) -> Option<usize> {
         self.tail.as_ref().map(|n| Arc::as_ptr(n) as usize)
+    }
+    /// Allocation bytes of this path's tail node, including the Arc counters and
+    /// alignment. Prefix nodes and allocations owned by T are counted separately.
+    /// Empty paths allocate nothing. Use node_identity to deduplicate shared nodes.
+    pub fn node_allocation_bytes(&self) -> usize {
+        if self.is_empty() {
+            return 0;
+        }
+        Layout::new::<[usize; 2]>()
+            .extend(Layout::new::<Node<T>>())
+            .expect("an allocated Arc node has a valid layout")
+            .0
+            .pad_to_align()
+            .size()
     }
     pub fn get(&self, index: usize) -> Option<&T> {
         if index >= self.len() {
@@ -299,6 +314,33 @@ mod tests {
             }
             assert_eq!(interner.nodes.len(), count);
         }
+    }
+    #[test]
+    fn node_allocation_accounts_for_headers_alignment_and_shared_prefixes() {
+        #[derive(Clone)]
+        #[repr(align(64))]
+        struct Aligned;
+        #[repr(C)]
+        struct ArcNode<T> {
+            strong: usize,
+            weak: usize,
+            value: Node<T>,
+        }
+        let empty = SharedPath::<Aligned>::new();
+        assert_eq!(empty.node_allocation_bytes(), 0);
+        let mut path = empty;
+        path.push(Aligned);
+        let prefix = path.clone();
+        path.push(Aligned);
+        assert_eq!(path.node_allocation_bytes(), size_of::<ArcNode<Aligned>>());
+        assert!(path.node_allocation_bytes() > size_of::<Node<Aligned>>());
+        assert_eq!(path.node_allocation_bytes() % align_of::<Aligned>(), 0);
+        assert_eq!(
+            path.prefix().unwrap().node_identity(),
+            prefix.node_identity()
+        );
+        assert_ne!(path.node_identity(), prefix.node_identity());
+        assert_eq!(path.node_allocation_bytes(), prefix.node_allocation_bytes());
     }
     #[test]
     fn unshared_deep_paths_drop_without_host_recursion() {

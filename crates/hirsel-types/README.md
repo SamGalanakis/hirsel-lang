@@ -531,3 +531,7 @@ spelling, and successive nominal representation expansion. Import those modules
 directly. Core definitions, canonical CT spelling, graph transport, nominal proof
 memoization and basic property/crossing queries remain here. Cleanup-bound graph
 normalization remains with the shared property normalizer.
+
+`SharedPath::node_allocation_bytes` reports the current tail allocation including
+Arc counters and alignment, or zero for an empty path. Walk `prefix` and deduplicate
+`node_identity` for retained-byte accounting; payload-owned buffers are separate.
