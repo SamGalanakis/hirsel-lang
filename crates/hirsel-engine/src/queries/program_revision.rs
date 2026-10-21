@@ -1,7 +1,6 @@
 //! Rooted semantic dependencies, independent of native artifacts and instances.
 use super::*;
 use hirsel_run_schema::{ProgramNode, ProgramRevision};
-use hirsel_syntax::TokenKind;
 use hirsel_types::{DependencyRead, SignatureKind};
 
 include!(concat!(env!("OUT_DIR"), "/semantic_runtime.rs"));
@@ -278,52 +277,9 @@ impl QueryEngine {
     }
 
     pub(crate) fn semantic_tokens(&self, syntax: &ItemSyntax) -> Result<Vec<Vec<u8>>, QueryError> {
-        let item = &syntax.item;
-        let mut content = vec![b"hirsel.semantic-source.v1".to_vec()];
-        let mut newline = false;
-        let start = item.origin.tokens.start as usize;
-        let tokens = syntax
-            .tree
-            .tokens
-            .get(start..item.origin.tokens.end as usize)
-            .ok_or_else(|| operational("invalid source token range"))?;
-        // PS-19: an analysis annotation is not program content. By token
-        // range: an adapted item (a FACT-2 predicate) shares its owner's tokens.
-        let annotations: Vec<_> = syntax
-            .tree
-            .analyses
-            .iter()
-            .map(|a| a.origin.tokens.start as usize..a.origin.tokens.end as usize)
-            .collect();
-        for (index, token) in tokens.iter().enumerate() {
-            if annotations.iter().any(|r| r.contains(&(start + index))) {
-                continue;
-            }
-            let spelling = self
-                .sources
-                .slice(token.span)
-                .ok_or_else(|| operational("missing token source"))?;
-            match token.kind {
-                TokenKind::Trivia(_) => {
-                    newline |= spelling.contains('\n');
-                }
-                TokenKind::Eof => {}
-                TokenKind::Invalid => return Err(operational("invalid source token")),
-                _ => {
-                    // Newline termination matters (LANG-1), including boundaries
-                    // inside comments. Collapse runs; positions and comment/space
-                    // spelling never become semantic content.
-                    if newline && content.len() > 1 {
-                        content.push(vec![0]);
-                    }
-                    newline = false;
-                    let mut field = vec![1];
-                    field.extend_from_slice(spelling.as_bytes());
-                    content.push(field);
-                }
-            }
-        }
-        Ok(content)
+        // LANG-1 END is meaningful only through the parsed structure. Raw
+        // newline/semicolon tokens differ after fmt even when the AST does not.
+        hirsel_fmt::semantic_item(syntax).ok_or_else(|| operational("invalid semantic source item"))
     }
 }
 

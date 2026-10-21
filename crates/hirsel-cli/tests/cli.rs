@@ -40,6 +40,8 @@ mod ready_together;
 mod remote;
 #[path = "cli/replay.rs"]
 mod replay;
+#[path = "cli/replay_format.rs"]
+mod replay_format;
 #[path = "cli/resident.rs"]
 mod resident;
 #[path = "cli/runners.rs"]

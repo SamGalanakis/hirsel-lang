@@ -104,6 +104,37 @@ fn file_order_positions_comments_and_compiler_provenance_do_not_change_revision(
 }
 
 #[test]
+fn parsed_statement_boundaries_preserve_revision_across_formatting() {
+    with_compiler_stack(|| {
+        let source =
+            "fn helper()->u64{let n=1u64;n}\npub fn main()->Result[(),()]{let _=helper();Ok(())}\n";
+        let mut resident = engine(source);
+        let entry = entry_path(&default_context());
+        let before = resident.definition_items(&entry).unwrap()[0].clone();
+        let first = revision(&mut resident);
+        for text in [
+            "fn helper() -> u64 {\n  let n = 1u64\n  n\n}\n\npub fn main() -> Result[(), ()] {\n  let _ = helper()\n  Ok(())\n}\n",
+            "// moved entry\npub fn main()->Result[(),()]{let _=helper();Ok(())}\n\nfn helper()->u64{/* a\ncomment */let n=1u64;/* explanation */n}\n",
+            "fn helper()->u64{\r\nlet n=1u64\r\nn\r\n}\r\npub fn main()->Result[(),()]{\r\nlet _=helper()\r\nOk(())\r\n}\r\n",
+        ] {
+            assert_eq!(first, revision(&mut engine(text)), "{text}");
+            parse(&mut resident, "program.hir", text);
+            let after = resident.definition_items(&entry).unwrap()[0].clone();
+            assert_eq!(before.owner(), after.owner());
+            assert_ne!(before.text_hash, after.text_hash);
+            assert_eq!(first, revision(&mut resident), "resident: {text}");
+        }
+        // A newline can change the parsed program. Ignoring all trivia or all
+        // semicolons would conflate a discarded expression with a block tail.
+        let tail = "fn helper(){()}\npub fn main()->Result[(),()]{helper();Ok(())}\n";
+        assert_ne!(
+            revision(&mut engine(tail)),
+            revision(&mut engine(&tail.replace("{()}", "{();}")))
+        );
+    });
+}
+
+#[test]
 fn unrelated_source_edits_do_not_change_the_selected_closure() {
     with_compiler_stack(|| {
         let source = format!("{PROGRAM}fn unused() -> u64 {{ 1u64 }}\n");

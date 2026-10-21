@@ -343,7 +343,9 @@ program revision, every definition hash, TIR digest, obligation id and checksum,
 program's interpreted and native runs the same; the export differs only in its annotations
 section. An item begins after its leading annotations, so a diagnostic over the whole item
 is placed as without them, and a recursive type group's key in its members' signatures is
-over the members' tokens, never their text. (Native objects identify each item's source
+over the members' tokens, never their text. Semantic source revision fields use parsed
+item structure without annotations or trivia, so equivalent END spelling after formatting
+also preserves replay binding. (Native objects identify each item's source
 text in their failure-site codes, so any byte of an item, a comment as much as an
 annotation, moves their bytes but not what they do.) No compiler path reads a findings
 sidecar, so a finding never rejects a program, admits one or licenses a check removal. The

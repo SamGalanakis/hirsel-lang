@@ -303,6 +303,13 @@ component names, ordered length-framed content and sorted unique edges identify 
 transitive private implementations, constants, core and runtime selection, cycles
 included. Missing or conflicting components refuse; unreachable nodes, source positions,
 compiler and native artifact choices and instance numbering are excluded.
+Source content encodes parsed item structure: comments, spacing, CRLF and equivalent
+explicit/implicit statement terminators preserve the revision. Formatting or relocating a
+declaration therefore keeps replay binding. A newline or semicolon that changes the parsed
+structure (including discarding a block tail) changes the revision. Private bodies,
+constants, implicit finalizers and selected dependency/entry changes remain bound, as do
+the validated run's grants and provider contracts. Failure locations resolve against the
+current source map; generated bodies keep their generated-source provenance.
 
 **Validated records.** The validated record states the effective grants, provider contracts
 and normalized snapshots; a recording embeds those canonical bytes and their digest. Its

@@ -46,6 +46,40 @@ pub fn format(file: &SyntaxFile, sources: &SourceMap) -> FormatResult {
     }
 }
 
+/// Canonical parsed item content for semantic revision keys. Reuse the AST
+/// printer, excluding analysis annotations, trivia-protecting parentheses and
+/// layout. Hard lines encode parsed statement boundaries; soft lines are only
+/// layout. Literal spellings, names, contracts and finalizers remain content.
+///
+/// Like rustc's span-disabled stable AST hashing (rustc a7c37f9f,
+/// compiler/rustc_middle/src/ich.rs:50-55,106-108), source positions are absent.
+/// Hirsel also normalizes explicit/implicit END through the parsed structure.
+pub fn semantic_item(syntax: &ItemSyntax) -> Option<Vec<Vec<u8>>> {
+    fn fields(doc: &doc::Doc, out: &mut Vec<Vec<u8>>) {
+        use doc::Doc;
+        match doc {
+            Doc::Token(text) => {
+                let mut field = vec![1];
+                field.extend_from_slice(text.as_bytes());
+                out.push(field);
+            }
+            Doc::Line => out.push(vec![0]),
+            Doc::Concat(parts) => {
+                for part in parts {
+                    fields(part, out);
+                }
+            }
+            Doc::Nest(inner) | Doc::Group(inner) => fields(inner, out),
+            Doc::Space | Doc::Soft | Doc::EmptySoft => {}
+        }
+    }
+    let mut printer = printer::Printer::new(syntax);
+    printer.semantic();
+    let mut out = vec![b"hirsel.semantic-source.v2".to_vec()];
+    fields(&printer.item()?, &mut out);
+    Some(out)
+}
+
 fn damaged(file: &SyntaxFile) -> bool {
     file.tape().any(|t| matches!(t.kind, TokenKind::Invalid))
         || file.items.iter().any(|item| {

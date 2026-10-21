@@ -25,6 +25,7 @@ pub(crate) struct Printer<'a> {
     conditions: std::collections::BTreeMap<ExprId, LetCondition>,
     /// The item's analysis annotations by site, in source order (PS-17).
     analyses: std::collections::BTreeMap<AnalysisSite, Vec<&'a AnalysisAnnotation>>,
+    semantic: bool,
 }
 impl<'a> Printer<'a> {
     pub fn new(syntax: &'a ItemSyntax) -> Self {
@@ -50,9 +51,17 @@ impl<'a> Printer<'a> {
             repeats,
             conditions,
             analyses,
+            semantic: false,
         }
     }
+    pub(crate) fn semantic(&mut self) {
+        self.semantic = true;
+        self.analyses.clear();
+    }
     fn comment_group(&self, origin: Origin) -> bool {
+        if self.semantic {
+            return false;
+        }
         fn comment(t: &Token) -> bool {
             matches!(
                 t.kind,
@@ -340,7 +349,7 @@ impl<'a> Printer<'a> {
             _ => Some(false),
         }
     }
-    fn item(&self) -> Printed {
+    pub(crate) fn item(&self) -> Printed {
         let item = self.item;
         let mut ds = self.analyses(true, AnalysisSite::Item, Line);
         for a in &item.attributes {
@@ -1070,8 +1079,9 @@ impl<'a> Printer<'a> {
                 cat(ds)
             }
             ExprKind::Closure { signature, body } => {
-                let trailing = crate::trivia::trailing_uses(self.tree, e.origin, *body)
-                    .is_some_and(|(_, _, preserve)| preserve);
+                let trailing = !self.semantic
+                    && crate::trivia::trailing_uses(self.tree, e.origin, *body)
+                        .is_some_and(|(_, _, preserve)| preserve);
                 if trailing {
                     let mut header = signature.clone();
                     header.uses = None;

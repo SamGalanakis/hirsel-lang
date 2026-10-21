@@ -171,9 +171,49 @@ fn adversarial_comment_newline_and_projection_boundaries_roundtrip() {
             first.source
         );
         assert_eq!(before_comments, comments(&reparsed, &new_sources));
+        let semantic = |file: &SyntaxFile| {
+            file.items
+                .iter()
+                .map(|item| hirsel_fmt::semantic_item(item).expect("valid parsed item"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(semantic(&original), semantic(&reparsed), "{source}");
         let second = hirsel_fmt::format(&reparsed, &new_sources);
         assert!(!second.unchanged);
         assert_eq!(first.source, second.source);
+    }
+}
+
+#[test]
+fn semantic_content_ignores_comment_protection_and_analysis_but_keeps_structure() {
+    let content = |source: &str| {
+        let (file, _, errors) = parse(source);
+        assert!(!errors, "{source}");
+        hirsel_fmt::semantic_item(&file.items[0]).unwrap()
+    };
+    for (plain, annotated) in [
+        (
+            "fn main() { a + b }",
+            "@analysis(a) fn main() { (a /*\nblock */ + b) }",
+        ),
+        (
+            "fn main() { f(fn() uses {} { x }) }",
+            "fn main() { f(fn() { /* body */ x } uses {}) }",
+        ),
+        ("type Alias = T", "type Alias = (T // alias\n)"),
+        (
+            "fn main(x: u64) {}",
+            "fn main(@analysis(unit: m) x: u64) {}",
+        ),
+    ] {
+        assert_eq!(content(plain), content(annotated), "{annotated}");
+    }
+    for (first, second) in [
+        ("fn main() { x }", "fn main() { x; }"),
+        ("fn main() { return x }", "fn main() { return\n x }"),
+        ("fn main() { a - b }", "fn main() { a\n -b }"),
+    ] {
+        assert_ne!(content(first), content(second), "{second}");
     }
 }
 
