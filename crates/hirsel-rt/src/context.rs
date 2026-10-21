@@ -983,10 +983,16 @@ pub(crate) unsafe fn detach(ctx: *mut TaskCtx) {
 pub(crate) unsafe fn reclaim(run: *mut RunShared) {
     // SAFETY: caller contract.
     unsafe {
+        // This Arc outlives execs and the run. A status reader must not see
+        // reclamation complete while their task-local owners still exist.
+        let holders = crate::pool::holders(&*run);
         crate::pool::forget(&mut *run);
         let (root, home) = ((*run).root_ctx, (*run).home);
         drop(Box::from_raw(run));
         drop(Box::from_raw(root));
         drop(Box::from_raw(home));
+        if let Some(holders) = holders {
+            holders.reclaimed();
+        }
     }
 }

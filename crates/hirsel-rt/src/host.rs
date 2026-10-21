@@ -318,8 +318,9 @@ pub struct RunStatus {
     pub home_busy: bool,
     /// `wait` returned the run's outcome.
     pub finished: bool,
-    /// The workers still inside the run's code when `wait` returned; the last to leave frees
-    /// the run.
+    /// The workers still retaining a stopped run after `wait` returned,
+    /// including its last owner's storage reclamation. Zero means reclamation
+    /// has completed.
     pub reclamation_pending: u32,
     /// Compute permits still held by a stopped run's workers. The process pool
     /// keeps accounting them until those workers leave; a new run cannot replace them.

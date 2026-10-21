@@ -348,6 +348,8 @@ pub(crate) struct Holders {
     count: AtomicU32,
     /// The launcher left the run to its threads (`detach`).
     detached: AtomicBool,
+    /// The final owner has destroyed the detached run's storage.
+    reclaimed: AtomicBool,
     workers: Mutex<Vec<std::sync::Weak<Exec>>>,
 }
 
@@ -363,7 +365,21 @@ impl Holders {
             .count() as u32
     }
     pub(crate) fn left(&self) -> u32 {
-        self.count.load(Ordering::SeqCst)
+        let count = self.count.load(Ordering::SeqCst);
+        // The last thread decrements count before reclaiming. Retain its
+        // reclamation credit until task contexts and recorder owners drop.
+        if count == 0
+            && self.detached.load(Ordering::Acquire)
+            && !self.reclaimed.load(Ordering::Acquire)
+        {
+            1
+        } else {
+            count
+        }
+    }
+
+    pub(crate) fn reclaimed(&self) {
+        self.reclaimed.store(true, Ordering::Release);
     }
 }
 
@@ -728,6 +744,7 @@ unsafe fn init_execs(ctx: *mut TaskCtx) -> &'static mut Execs {
                 holders: Arc::new(Holders {
                     count: AtomicU32::new(1),
                     detached: AtomicBool::new(false),
+                    reclaimed: AtomicBool::new(false),
                     workers: Mutex::new(Vec::new()),
                 }),
                 cursor: AtomicUsize::new(0),
@@ -1645,6 +1662,23 @@ pub(crate) fn forget(run: &mut RunShared) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_detached_run_stays_pending_until_its_storage_is_reclaimed() {
+        let holders = Holders {
+            count: AtomicU32::new(1),
+            detached: AtomicBool::new(true),
+            reclaimed: AtomicBool::new(false),
+            workers: Mutex::new(Vec::new()),
+        };
+        assert_eq!(holders.left(), 1);
+        // The last worker has left code, but still owns the final drop of
+        // task contexts, recorder owners, stacks and heaps.
+        holders.count.fetch_sub(1, Ordering::AcqRel);
+        assert_eq!(holders.left(), 1);
+        holders.reclaimed();
+        assert_eq!(holders.left(), 0);
+    }
 
     #[test]
     fn the_extern_row_reports_means_and_zero_when_nothing_was_counted() {
