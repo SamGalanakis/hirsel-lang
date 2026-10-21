@@ -24,6 +24,8 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import corpus
+sys.path.insert(0, str(corpus.ROOT / 'bench/micro'))
+from measure import timing_lock
 
 
 def write_json(path, value):
@@ -367,7 +369,12 @@ def main():
     args.work = args.work.resolve()
     args.work.mkdir(parents=True, exist_ok=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    result = globals()[args.mode](args) if args.single else campaign(args)
+    if args.mode == 'measure' and not args.single:
+        # Use the corpus suite's CPU31 convention, before taking a capped slot.
+        with timing_lock(31), timing_lock(7):
+            result = campaign(args)
+    else:
+        result = globals()[args.mode](args) if args.single else campaign(args)
     write_json(args.output, result)
 
 

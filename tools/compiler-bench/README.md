@@ -231,7 +231,9 @@ Each program holds one capped slot for its resident session and releases it
 before the next program. Scale sizes stop at a resource limit. The std image
 command is outside the resident protocol and is reported as excluded.
 
-`measure` runs ten seeded interleaved rounds on tasks and syn10k. The server
+`measure --native` runs ten seeded interleaved rounds on tasks and syn10k.
+Set `LLVM_SYS_211_PREFIX`, `HIRSEL_LINK_KIT`, and `HIRSEL_RUNTIME_ARCHIVES`
+to this tree's Buck2 native tool inputs, as the main compiler suite does. The server
 uses CPU31 and the client CPU7. `perf stat` counts cycles and instructions in
 both processes, and a control/ack pipe enables the server counters only for
 the request. The report retains each sample and medians; compare times only
