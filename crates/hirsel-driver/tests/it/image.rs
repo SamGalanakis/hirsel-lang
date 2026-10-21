@@ -911,7 +911,7 @@ fn frozen_lowering_frontier_replays_imaged_helper_output_and_receipts() {
         let f = Fixture::new();
         let image = library_image(
             &f,
-            "pub fn value(x:u64)->u64{x+1u64}\npub const BASE:u64=comptime value(1u64)\n",
+            "const LEAF:u64=1u64\nconst CHAIN:u64=comptime LEAF\npub fn value(x:u64)->u64{x+comptime CHAIN}\npub const BASE:u64=comptime value(1u64)\n",
         )
         .unwrap();
         let client = f.program("worker_image", CLIENT, &f.0.join("lib.json"), "lib");
@@ -920,19 +920,70 @@ fn frozen_lowering_frontier_replays_imaged_helper_output_and_receipts() {
             modules: vec!["lib".into()],
             name: "value".into(),
         });
-        for jobs in [1, 2, 8] {
+        for (jobs, fallback) in [1, 2, 8]
+            .into_iter()
+            .flat_map(|jobs| [false, true].map(|fallback| (jobs, fallback)))
+        {
             let mut cached = load(&client, &StdImages::of(vec![image.clone()]));
             let mut fresh = load(&client, &StdImages::none());
             assert!(cached.engine.imaged(&package("lib")));
             let expected = fresh.engine.lower_to_tir(&path).unwrap();
+            let expected_depth = fresh
+                .engine
+                .lower_definition_outcomes(vec![path.clone()], hirsel_intern::jobs::Jobs::new(jobs))
+                .remove(0)
+                .depth
+                .unwrap();
+            assert!(
+                expected_depth.height > 0,
+                "fixture must exercise real transparent requests"
+            );
+            // A missing worker adapter forces the scalar path; image lowering
+            // still succeeds before consulting that adapter.
+            let lowering = fallback.then(|| cached.engine.adapters.lowering.take().unwrap());
             let outcomes = cached.engine.lower_definition_outcomes(
                 vec![path.clone(), path.clone()],
                 hirsel_intern::jobs::Jobs::new(jobs),
             );
+            if fallback {
+                cached.engine.adapters.lowering = lowering;
+            }
             for outcome in outcomes {
                 assert_eq!(outcome.definition, path);
                 assert_eq!(outcome.phase, Some(QueryKind::Lower));
                 assert!(outcome.limit.is_none());
+                assert_eq!(
+                    placed(
+                        &cached.engine.sources,
+                        format!("{:?}", outcome.depth.as_ref().unwrap())
+                    ),
+                    placed(&fresh.engine.sources, format!("{expected_depth:?}"))
+                );
+                let depth = outcome.depth.as_ref().unwrap();
+                for stack in 0..=depth.limit() {
+                    let coordinator = memo::S1Coordinator::<u32>::new();
+                    let mut actual_worker = coordinator.worker();
+                    for frame in 0..stack {
+                        assert_eq!(
+                            actual_worker.enter(frame, hirsel_span::Span::default()),
+                            memo::Entered::Run
+                        );
+                    }
+                    assert_eq!(
+                        placed(
+                            &cached.engine.sources,
+                            format!("{:?}", actual_worker.replay_requests(depth))
+                        ),
+                        placed(
+                            &fresh.engine.sources,
+                            format!(
+                                "{:?}",
+                                expected_depth.first[stack as usize].map_or(Ok(()), Err)
+                            )
+                        ),
+                        "jobs={jobs} fallback={fallback} stack={stack}"
+                    );
+                }
                 let actual = outcome.result.unwrap();
                 assert_eq!(actual.dependencies, expected.dependencies);
                 assert_eq!(actual.diagnostics, expected.diagnostics);

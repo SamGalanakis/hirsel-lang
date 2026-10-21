@@ -746,14 +746,28 @@ impl QueryEngine {
         self.execution_stack.push(ReadsBuilder::new());
         let mut result = match kind {
             RootKind::Constant => self.materialize_value(path).map(RootValue::Constant),
-            RootKind::Lower => self.lower_to_tir(path).map(|output| {
-                let depth = self
-                    .lowered
-                    .get(&DefId::intern(path))
-                    .and_then(|entry| entry.depth.clone())
-                    .unwrap_or_else(|| DepthEvidence::leaf(self.depth_limit()));
-                RootValue::Lowered(output, depth)
-            }),
+            RootKind::Lower => {
+                // An image shortcut replays its stored execution, but has no
+                // resident memo whose root input or V origin we can inherit.
+                // Match worker admission at this outcome boundary.
+                let mut root_reads = ReadsBuilder::new();
+                if let Some(hash) = self.implementation_hash(path) {
+                    root_reads.record(
+                        ReadKey::ExecutedBody(DefId::intern(path)),
+                        memos::optional(Some(hash)),
+                    );
+                }
+                if self.verify == Verify::On {
+                    let snapshot = self.signature_inputs();
+                    FrozenProvider::new(&snapshot, path.0.package.clone(), &mut root_reads)
+                        .validation_universe();
+                }
+                self.merge_execution(&root_reads.finish().expect("one root snapshot"));
+                self.s1.begin_requests();
+                let result = self.lower_to_tir(path);
+                let depth = self.s1.finish_requests(self.depth_limit());
+                result.map(|output| RootValue::Lowered(output, depth))
+            }
         };
         let reads = self
             .execution_stack

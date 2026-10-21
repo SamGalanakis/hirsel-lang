@@ -1518,6 +1518,11 @@ fn frozen_lowering_frontier_keeps_lower_warnings_and_current_hit_metadata() {
                     expected.diagnostics[0].severity,
                     hirsel_diag::Severity::Warning
                 );
+                let expected_depth = control
+                    .lower_definition_outcomes(vec![path("A")], hirsel_intern::jobs::Jobs::new(1))
+                    .remove(0)
+                    .depth
+                    .unwrap();
                 let scalar_reads = control.memo_reads(&path("A"), QueryKind::Lower).unwrap();
                 let (mut candidate, guard) = make();
                 if warm {
@@ -1538,6 +1543,19 @@ fn frozen_lowering_frontier_keeps_lower_warnings_and_current_hit_metadata() {
                 for outcome in outcomes {
                     assert_eq!(outcome.phase, Some(QueryKind::Lower));
                     assert!(outcome.limit.is_none());
+                    let depth = outcome
+                        .depth
+                        .as_ref()
+                        .expect("successful lower returns depth");
+                    assert_eq!(
+                        placed_evidence(&candidate.sources, format!("{depth:?}")),
+                        placed_evidence(&control.sources, format!("{expected_depth:?}")),
+                        "jobs={jobs} warm={warm}"
+                    );
+                    assert!(
+                        depth.first.iter().any(Option::is_some),
+                        "constant requests must survive in lower depth evidence"
+                    );
                     let output = outcome.result.unwrap();
                     assert_eq!(output.dependencies, expected.dependencies);
                     assert_eq!(
