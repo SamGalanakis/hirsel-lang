@@ -2,6 +2,7 @@
 //! 3131751e crates/ide/src/lib.rs:192-202,238-252; head CAS follows TS-Go
 //! 89d5d5b internal/project/session.go:1393-1425 with generations and receipts.
 mod edits;
+pub mod protocol;
 pub use edits::{ByteEdit, EditError};
 use hirsel_engine::loader_inputs::{
     CaptureInputs, FrozenInputs, InputLimit, InputLimits, InputUnavailable, LoaderInputs,
@@ -788,9 +789,9 @@ impl CandidateWorkspace {
         );
         Ok(CandidateLease { waiter })
     }
-    /// Serial library runner: a caller may drive one queued computation here;
-    /// competing calls return Pending. No cwd/environment/command dispatch.
-    pub fn result(&self, lease: &CandidateLease) -> Result<CandidateResult, RequestError> {
+    /// Observe only; a protocol reader must not drive compiler work while it
+    /// owns control-message admission. A separate serial worker calls result.
+    pub fn poll(&self, lease: &CandidateLease) -> Result<CandidateResult, RequestError> {
         let w = &self.inner;
         let waiter = &lease.waiter;
         if !waiter.owner.ptr_eq(&Arc::downgrade(w)) {
@@ -821,6 +822,15 @@ impl CandidateWorkspace {
         if let Some(snapshot) = completed {
             return self.publish(waiter, snapshot);
         }
+        Ok(CandidateResult::Pending)
+    }
+    /// Drive at most one computation; competing calls return Pending.
+    pub fn result(&self, lease: &CandidateLease) -> Result<CandidateResult, RequestError> {
+        if let ready @ CandidateResult::Ready(_) = self.poll(lease)? {
+            return Ok(ready);
+        }
+        let w = &self.inner;
+        let waiter = &lease.waiter;
         if w.active
             .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
@@ -844,7 +854,10 @@ impl CandidateWorkspace {
         let snapshot =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.compute(&waiter.work)))
                 .unwrap_or_else(|_| self.control_snapshot(IncompleteReason::ToolFailure));
-        let snapshot = Arc::new(snapshot?);
+        let snapshot = Arc::new(match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(_) => self.control_snapshot(IncompleteReason::ResourceLimit)?,
+        });
         // Snapshot publication is terminal for each waiter under its own lock.
         let waiters: Vec<_> = waiter
             .work
