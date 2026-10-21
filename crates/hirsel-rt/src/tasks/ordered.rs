@@ -170,6 +170,8 @@ pub(crate) struct Outcome {
     /// (for example a cancellation's linked descendants). Never re-sample at
     /// retirement or retain a native task row in this optional evidence.
     canonical: Option<events::Subevents>,
+    /// Exact parent cancellation read at spawn installation, including None.
+    inheritance: Option<Option<u32>>,
     pending: RefCell<Option<crate::channels::PendingSend>>,
 }
 
@@ -195,6 +197,7 @@ impl Outcome {
             image,
             chain: Vec::new(),
             canonical: None,
+            inheritance: None,
             pending: RefCell::new(None),
         }
     }
@@ -354,9 +357,11 @@ impl Backend<Command> for Objects<'_> {
                         .borrow_mut()
                         .take()
                         .expect("spawn committed once");
-                    let (word, held) = spawn.install(s);
+                    let (word, held, inherited) = spawn.install(s);
                     self.spawned.push((word, held));
-                    (Outcome::image(0, word.to_ne_bytes().to_vec()), Next::Yield)
+                    let mut outcome = Outcome::image(0, word.to_ne_bytes().to_vec());
+                    outcome.inheritance = Some(inherited);
+                    (outcome, Next::Yield)
                 }
                 Command::RootRelease { .. } => unreachable!("handled without a scheduler borrow"),
                 Command::Head { .. } => panic!("strict head effect requires its owner callback"),
@@ -557,6 +562,7 @@ impl Backend<Command> for Objects<'_> {
                             image: image.clone(),
                             chain: Vec::new(),
                             canonical: events::value_subevent(observed, status),
+                            inheritance: None,
                             pending: RefCell::new(pending),
                         },
                         Next::Yield,

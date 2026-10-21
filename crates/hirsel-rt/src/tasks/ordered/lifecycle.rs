@@ -26,7 +26,10 @@ pub(crate) struct Spawn {
 }
 
 impl Spawn {
-    pub(super) fn install(mut self, s: &mut Scheduler) -> (u64, crate::ordered::footprint::Held) {
+    pub(super) fn install(
+        mut self,
+        s: &mut Scheduler,
+    ) -> (u64, crate::ordered::footprint::Held, Option<u32>) {
         let parent = self.owner as u32;
         assert_eq!(s.task(parent).generation, (self.owner >> 32) as u32);
         let scope = s.scope_handle(self.scope);
@@ -38,10 +41,8 @@ impl Spawn {
             "retire spawns in owner order"
         );
         s.task(parent).spawned = ordinal.checked_add(1).expect("spawn path ordinal overflow");
-        self.task.canceled = s
-            .canceled_task(parent, self.shield)
-            .map(|_| CANCEL_PARENT)
-            .into();
+        let inherited = s.canceled_task(parent, self.shield);
+        self.task.canceled = inherited.map(|_| CANCEL_PARENT).into();
         self.task.priority = s.schedule.admit();
         let word = handle(self.index, self.task.generation);
         assert!(
@@ -56,7 +57,7 @@ impl Spawn {
         {
             metrics.spawn(started.elapsed());
         }
-        (word, self.held)
+        (word, self.held, inherited)
     }
 }
 

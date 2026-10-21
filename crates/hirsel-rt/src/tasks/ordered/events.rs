@@ -131,6 +131,7 @@ pub(super) enum CanonicalOutcome {
     Alias(ObjectId),
     Scalar(Vec<u8>),
     Value { status: u32, payload: Vec<u8> },
+    Spawned { scope: ObjectId, path: Vec<u32> },
     Unit,
 }
 
@@ -195,6 +196,7 @@ pub(super) struct Log {
     /// Generation-qualified native words are lookup keys only. Keep bindings
     /// after close so delayed evidence cannot be confused with a reused row.
     sets: BTreeMap<u64, ObjectId>,
+    scopes: BTreeMap<u64, ObjectId>,
     tasks: BTreeMap<u64, ObjectId>,
     values: BTreeMap<u32, super::values::Program>,
     canonical: Vec<CanonicalEvent>,
@@ -676,6 +678,75 @@ pub(super) fn record(
         };
         let log = driver.events.as_ref().unwrap();
         match &op.payload {
+            Command::ScopeEnter { .. } => {
+                let object = ObjectId {
+                    creator: path.clone(),
+                    ordinal: log.ordinals.get(&path).copied().unwrap_or(0),
+                };
+                return Some(vec![(
+                    CanonicalItem::Object(object.clone()),
+                    CanonicalOutcome::Created(object),
+                )]);
+            }
+            Command::TaskSpawn { .. } => {
+                let word = u64::from_ne_bytes(
+                    result
+                        .image
+                        .as_slice()
+                        .try_into()
+                        .expect("spawn returns task word"),
+                );
+                let child = s.tasks[word as u32 as usize]
+                    .as_ref()
+                    .expect("installed child");
+                assert_eq!(child.generation, (word >> 32) as u32);
+                let index = child.scope.expect("child scope");
+                let scope = s.scopes[index as usize].as_ref().expect("installed scope");
+                let scope = log
+                    .scopes
+                    .get(&super::super::handle(index, scope.generation))?
+                    .clone();
+                let object = ObjectId {
+                    creator: path.clone(),
+                    ordinal: log.ordinals.get(&path).copied().unwrap_or(0),
+                };
+                let inherited = result
+                    .inheritance
+                    .expect("spawn fixed its parent cancellation read");
+                return Some(vec![
+                    (
+                        CanonicalItem::Object(object.clone()),
+                        CanonicalOutcome::Spawned {
+                            scope: scope.clone(),
+                            path: child.path.clone(),
+                        },
+                    ),
+                    (
+                        CanonicalItem::Object(scope),
+                        CanonicalOutcome::Alias(object),
+                    ),
+                    (
+                        CanonicalItem::Cancellation(path.clone()),
+                        CanonicalOutcome::Scalar(
+                            inherited
+                                .map_or(0, |cause| cause + 1)
+                                .to_le_bytes()
+                                .to_vec(),
+                        ),
+                    ),
+                    (
+                        CanonicalItem::Cancellation(child.path.clone()),
+                        CanonicalOutcome::Scalar(
+                            child
+                                .canceled
+                                .cause()
+                                .map_or(0, |cause| cause + 1)
+                                .to_le_bytes()
+                                .to_vec(),
+                        ),
+                    ),
+                ]);
+            }
             Command::TaskSetCreate { .. } => {
                 let object = ObjectId {
                     creator: path.clone(),
@@ -793,12 +864,28 @@ pub(super) fn record(
             log.tasks.insert(word, object.clone()).is_none(),
             "one identity per task generation"
         );
-        // Spawn remains unsupported until its inheritance/topology events are
-        // complete. Its task creation still precedes all later member events.
+    }
+    if let Some((
+        Operation {
+            payload: Command::ScopeEnter {
+                index, generation, ..
+            },
+            ..
+        },
+        _,
+    )) = operation
+    {
         assert!(
-            log.versions
-                .insert(CanonicalItem::Object(object), 1)
-                .is_none()
+            log.scopes
+                .insert(
+                    super::super::handle(*index, *generation),
+                    ObjectId {
+                        creator: path.clone(),
+                        ordinal
+                    }
+                )
+                .is_none(),
+            "one identity per scope generation"
         );
     }
     if let Some((
@@ -833,7 +920,10 @@ pub(super) fn record(
             *version = version
                 .checked_add(1)
                 .expect("canonical object version overflow");
-            if matches!(outcome, CanonicalOutcome::Created(_)) {
+            if matches!(
+                outcome,
+                CanonicalOutcome::Created(_) | CanonicalOutcome::Spawned { .. }
+            ) {
                 assert_eq!(*version, 1, "creation is the first object subevent");
             }
             log.canonical.push(CanonicalEvent {
@@ -1232,7 +1322,7 @@ mod tests {
                             "unclassified task lifecycle still rejects the complete trace"
                         );
                         let events = &log.canonical;
-                        assert_eq!(events.len(), 9);
+                        assert_eq!(events.len(), 14);
                         let set_id = CanonicalItem::Object(ObjectId {
                             creator: vec![],
                             ordinal: 1,
@@ -1259,15 +1349,15 @@ mod tests {
                             .iter()
                             .filter(|row| row.item == CanonicalItem::Object(child_id.clone()))
                             .collect();
-                        assert_eq!(member_rows.len(), 2);
+                        assert_eq!(member_rows.len(), 3);
                         assert_eq!(
                             member_rows
                                 .iter()
                                 .map(|row| (row.version, row.subevent))
                                 .collect::<Vec<_>>(),
-                            [(2, 1), (3, 1)]
+                            [(1, 0), (2, 1), (3, 1)]
                         );
-                        assert_eq!(member_rows[1].outcome, CanonicalOutcome::Alias(child_id));
+                        assert_eq!(member_rows[2].outcome, CanonicalOutcome::Alias(child_id));
                         *seen.lock().unwrap() = events.clone();
                         assert_eq!(
                             hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
@@ -1807,6 +1897,176 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn native_scope_and_spawn_events_use_creator_identities_and_effect_time_inheritance() {
+        use crate::tasks::*;
+        use std::sync::{Arc, Mutex};
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&layout as *const crate::Layout];
+        for shield in [0, 1] {
+            let mut reference = None;
+            for width in [1, 2, 4, 8] {
+                for reorder in [
+                    hirsel_run_config::Reorder::Off,
+                    hirsel_run_config::Reorder::Auto,
+                ] {
+                    let output = Arc::new(Mutex::new(Vec::new()));
+                    let seen = output.clone();
+                    let mut run = crate::host::BodyRun::new(width, true);
+                    run.config.layouts = layouts.as_ptr();
+                    run.config.layout_count = 1;
+                    unsafe { run.use_physical_dispatch() };
+                    let outcome = run.run(
+                        |ctx| unsafe {
+                            let mut policy = Policy::admit(&Default::default(), None);
+                            policy.reorder = reorder;
+                            super::super::engine::enable(ctx, policy);
+                            enable(ctx);
+                        },
+                        move |ctx| unsafe {
+                            {
+                                let _role = role::Guard::new(ctx);
+                                let s = scheduler(ctx);
+                                s.tasks.resize_with(width as usize + 1, || None);
+                                s.scopes.resize_with(width as usize, || None);
+                            }
+                            let mut scope = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_scope_enter(
+                                    ctx,
+                                    std::ptr::null_mut(),
+                                    &mut scope,
+                                    &0
+                                ),
+                                crate::STATUS_OK
+                            );
+                            {
+                                let _role = role::Guard::new(ctx);
+                                (*ctx).shield = shield;
+                                scheduler(ctx).cancel(0, CANCEL_REQUESTED);
+                            }
+                            let env = crate::alloc::hirsel_rt_v2_alloc(
+                                ctx,
+                                2,
+                                8,
+                                8,
+                                crate::alloc::DOMAIN_HEAP,
+                                0,
+                            );
+                            crate::alloc::payload(env).cast::<u64>().write(0);
+                            let mut child = 0;
+                            assert_eq!(
+                                hirsel_rt_v2_task_spawn(
+                                    ctx,
+                                    0,
+                                    0,
+                                    std::ptr::null_mut(),
+                                    &mut child,
+                                    &scope,
+                                    held_set_member,
+                                    env,
+                                    0
+                                ),
+                                crate::STATUS_OK
+                            );
+                            {
+                                let _role = role::Guard::new(ctx);
+                                let s = scheduler(ctx);
+                                // Deliberately mutate after the effect: emitted
+                                // inheritance must retain its original observation.
+                                s.task(0).canceled.cancel(CANCEL_DEADLINE);
+                                let Logical::Ordered(driver) = &s.logical else {
+                                    unreachable!()
+                                };
+                                let rows: Vec<_> = driver
+                                    .events
+                                    .as_ref()
+                                    .unwrap()
+                                    .canonical
+                                    .iter()
+                                    .filter(|row| row.task.is_empty())
+                                    .cloned()
+                                    .collect();
+                                assert_eq!(rows.len(), 5);
+                                let scope_id = ObjectId {
+                                    creator: vec![],
+                                    ordinal: 0,
+                                };
+                                let child_id = ObjectId {
+                                    creator: vec![],
+                                    ordinal: 1,
+                                };
+                                assert_eq!(
+                                    rows[0].outcome,
+                                    CanonicalOutcome::Created(scope_id.clone())
+                                );
+                                assert_eq!(rows[1].item, CanonicalItem::Object(child_id.clone()));
+                                assert_eq!(rows[1].version, 1);
+                                assert_eq!(
+                                    rows[1].outcome,
+                                    CanonicalOutcome::Spawned {
+                                        scope: scope_id.clone(),
+                                        path: vec![0]
+                                    }
+                                );
+                                assert_eq!(
+                                    (rows[2].item.clone(), rows[2].version),
+                                    (CanonicalItem::Object(scope_id), 2)
+                                );
+                                assert_eq!(rows[2].outcome, CanonicalOutcome::Alias(child_id));
+                                assert_eq!(rows[3].item, CanonicalItem::Cancellation(vec![]));
+                                assert_eq!(rows[4].item, CanonicalItem::Cancellation(vec![0]));
+                                assert_eq!(
+                                    rows[3].outcome,
+                                    CanonicalOutcome::Scalar(
+                                        if shield == 0 { CANCEL_REQUESTED + 1 } else { 0 }
+                                            .to_le_bytes()
+                                            .to_vec()
+                                    )
+                                );
+                                assert_eq!(
+                                    rows[4].outcome,
+                                    CanonicalOutcome::Scalar(
+                                        if shield == 0 { CANCEL_PARENT + 1 } else { 0 }
+                                            .to_le_bytes()
+                                            .to_vec()
+                                    )
+                                );
+                                *seen.lock().unwrap() = rows;
+                            }
+                            assert_eq!(
+                                hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                                crate::STATUS_OK
+                            );
+                            crate::STATUS_OK
+                        },
+                    );
+                    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+                    let rows = output.lock().unwrap().clone();
+                    if let Some(reference) = &reference {
+                        assert_eq!(&rows, reference);
+                    } else {
+                        reference = Some(rows);
+                    }
+                }
+            }
+        }
+    }
+
     #[derive(Default)]
     struct AheadProbe {
         issued: std::sync::atomic::AtomicBool,
@@ -1843,8 +2103,14 @@ mod tests {
             unreachable!()
         };
         assert!(
-            driver.events.as_ref().unwrap().canonical.is_empty(),
-            "unretired ops emit no canonical events"
+            driver
+                .events
+                .as_ref()
+                .unwrap()
+                .canonical
+                .iter()
+                .all(|row| !row.op.starts_with("atomic.")),
+            "unretired atomic ops emit no canonical events"
         );
         probe.early.store(initialized, Ordering::Release);
         crate::STATUS_OK
@@ -1962,9 +2228,14 @@ mod tests {
                             log.canonical().is_err(),
                             "task operations are still unclassified"
                         );
-                        assert_eq!(log.canonical.len(), 3);
+                        let atomics: Vec<_> = log
+                            .canonical
+                            .iter()
+                            .filter(|row| row.op.starts_with("atomic."))
+                            .collect();
+                        assert_eq!(atomics.len(), 3);
                         assert_eq!(
-                            log.canonical
+                            atomics
                                 .iter()
                                 .map(|event| event.version)
                                 .collect::<Vec<_>>(),
