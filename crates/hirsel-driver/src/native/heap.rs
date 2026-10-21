@@ -2504,3 +2504,6 @@ mod mount_rights {
         }
     }
 }
+
+#[cfg(test)]
+mod scoped_document;

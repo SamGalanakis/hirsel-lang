@@ -1,0 +1,10 @@
+// rule: CLO-2
+// expect: accept
+fn example(selected: fn() -> u64, other: fn() -> u64) -> Result[u64, json.JsonError] uses {selected, other} {
+  json_document.with_document(
+    "null",
+    fn(doc: json_document.Document) -> u64 {
+      other()
+    }
+  )
+}

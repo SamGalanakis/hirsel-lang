@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// stdout: body
+// stdout: drop
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "drop\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let trace = Trace(stdout: io.stdout(rt)?)
+  let bytes: unique Bytes = unique b"shared"
+  let root = shared.freeze(take bytes)
+  let malformed = json_document.with_document(
+    "[null,",
+    fn(doc: json_document.Document) -> u64 {
+      let _ = out.print(trace.stdout, "unexpected\n")
+      0
+    }
+  )
+  failure.check(malformed == Error(Syntax(6)), TextInvariant())
+  let valid = json_document.with_document(
+    "\"x\"",
+    fn(doc: json_document.Document) -> Result[String, u64] {
+      failure.check(
+        shared.with(
+          root,
+          fn(value: Bytes) -> u64 {
+            bytes.len(value)
+          }
+        ) == 6,
+        TextInvariant()
+      )
+      let _ = out.print(trace.stdout, "body\n")
+      let Some(owned) = json_document.text_owned(doc, 0) else {
+        return Error(2)
+      }
+      failure.check(owned == "x", TextInvariant())
+      Error(7)
+    }
+  )
+  failure.check(valid == Ok(Error(7)), TextInvariant())
+  Ok(())
+}

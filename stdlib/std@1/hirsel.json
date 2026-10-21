@@ -1175,6 +1175,12 @@
       "module": [
         "ed25519"
       ]
+    },
+    {
+      "path": "json_document.hir",
+      "module": [
+        "json_document"
+      ]
     }
   ],
   "dependencies": []

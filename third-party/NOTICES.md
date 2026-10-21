@@ -9,6 +9,7 @@ bundle’s `notices/` directory; see `tools/toolchain-dist/README.md`.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| Goose | `stdlib/json.goose:906–1104` dense pool, child/sibling traversal and iterative parser frame structure; `test/stdlib/stdlib_json.goose:145–218` vectors read alongside Hirsel semantic oracles | `stdlib/std@1/json_document.hir`, scoped JSON conformance | aardappel/goose `8511ae34bdc9aabf77baaab80b4d659ea87835e2` | Apache-2.0 (structure reference) |
 | rr | `src/TraceStream.cc:408-557` binary event/stream framing structure | ordinary and durable tape codec | rr-debugger/rr `50d54f2f541d79b508044fefdb2574fe2ec746f7` | MIT (structure reference) |
 | SQLite | `src/wal.c:47-68,990-1022` frame header/payload/checksum structure | shared tape envelope | sqlite/sqlite `049891534ddad2583a33750c05433fcce3648b9c` | Public domain (structure reference) |
 | crc32c | `src/lib.rs:49-70`, `src/sw.rs:42-70`, `src/hw_x86_64.rs:49-90` dispatch, slicing-by-8 and hardware CRC structure; published CRC vectors | `hirsel-run-schema/src/tape.rs` | zowens/crc32c `c92fcff3c76aed4f1083894f243981c0df278f7f` | MIT (license in `third-party/LICENSE.crc32c`) |

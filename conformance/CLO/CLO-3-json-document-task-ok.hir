@@ -1,0 +1,22 @@
+// rule: CLO-3
+// expect: accept
+fn example(s: Scope) -> Result[(), json.JsonError] {
+  json_document.with_document(
+    "\"hello\"",
+    fn(doc: json_document.Document) {
+      let Some(owned) = json_document.text_owned(doc, 0) else {
+        return
+      }
+      // Task transfer additionally requires a unique or Shared payload.
+      let sendable = string.concat(owned, "")
+      let child = task.async(
+        s,
+        fn() {
+          let moved = take sendable
+          let _ = string.byte_len(moved)
+        }
+      )
+      task.detach(s, take child)
+    }
+  )
+}

@@ -1,0 +1,119 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), OutputError] {
+  let escaped = json_document.with_document(
+    "{\"x\":\"a\\nb\",\"\\u006b\":1e+09,\"a\":[null,false,true]}",
+    fn(doc: json_document.Document) -> String {
+      failure.check(json_document.kind(doc, 0) == Some(Object()), TextInvariant())
+      failure.check(json_document.count(doc, 0) == Some(3), TextInvariant())
+      let Some(x) = json_document.member(doc, 0, "x") else {
+        failure.check(false, TextInvariant())
+        return ""
+      }
+      failure.check(json_document.key_bytes(doc, x) == Some(b"x"), TextInvariant())
+      failure.check(json_document.text_bytes(doc, x) == Some(b"a\nb"), TextInvariant())
+      failure.check(json_document.first_child(doc, x) == None(), TextInvariant())
+      failure.check(json_document.count(doc, x) == None(), TextInvariant())
+      failure.check(json_document.number_bytes(doc, x) == None(), TextInvariant())
+      let Some(k) = json_document.member(doc, 0, "k") else {
+        failure.check(false, TextInvariant())
+        return ""
+      }
+      failure.check(
+        json_document.number_bytes(doc, k) == Some(b"1e+09"),
+        TextInvariant()
+      )
+      failure.check(json_document.key_bytes(doc, k) == Some(b"k"), TextInvariant())
+      failure.check(json_document.member(doc, 0, "missing") == None(), TextInvariant())
+      let Some(a) = json_document.member(doc, 0, "a") else {
+        failure.check(false, TextInvariant())
+        return ""
+      }
+      let Some(n) = json_document.first_child(doc, a) else {
+        failure.check(false, TextInvariant())
+        return ""
+      }
+      let Some(b) = json_document.next_sibling(doc, n) else {
+        failure.check(false, TextInvariant())
+        return ""
+      }
+      failure.check(json_document.bool_value(doc, b) == Some(false), TextInvariant())
+      let Some(c) = json_document.next_sibling(doc, b) else {
+        failure.check(false, TextInvariant())
+        return ""
+      }
+      failure.check(json_document.bool_value(doc, c) == Some(true), TextInvariant())
+      failure.check(json_document.next_sibling(doc, c) == None(), TextInvariant())
+      let Some(owned) = json_document.to_owned(doc, a) else {
+        failure.check(false, TextInvariant())
+        return ""
+      }
+      failure.check(json.stringify(owned) == Ok("[null,false,true]"), TextInvariant())
+      let Some(s) = json_document.text_owned(doc, x) else {
+        failure.check(false, TextInvariant())
+        return ""
+      }
+      take s
+    }
+  )
+  failure.check(escaped == Ok("a\nb"), TextInvariant())
+  let backing = "prefix{\"é\":\"\\uD83D\\uDE00\"}suffix"
+  let Some(start) = string.position(backing, 6) else {
+    return Ok(())
+  }
+  let Some(end) = string.position(backing, string.byte_len(backing) - 6) else {
+    return Ok(())
+  }
+  let input = string.slice(backing, start, end)
+  let observed = json_document.with_document(
+    copy input,
+    fn(doc: json_document.Document) -> String {
+      let Some(at) = json_document.member(doc, 0, "é") else {
+        failure.check(false, TextInvariant())
+        return ""
+      }
+      let Some(s) = json_document.text_owned(doc, at) else {
+        failure.check(false, TextInvariant())
+        return ""
+      }
+      take s
+    }
+  )
+  failure.check(observed == Ok("😀"), TextInvariant())
+  let mut builder: List[u8] = []
+  text.append(mut builder, "[")
+  for i in 0u64..48u64 {
+    if i != 0 {
+      text.append(mut builder, ",")
+    }
+    text.append(mut builder, "\"long\\ntext\\tdecode\"")
+  }
+  text.append(mut builder, "]")
+  let growth = text.finish_valid(take builder)
+  let encoded = json_document.with_document(
+    copy growth,
+    fn(doc: json_document.Document) -> String {
+      failure.check(json_document.count(doc, 0) == Some(48), TextInvariant())
+      let mut cursor = json_document.first_child(doc, 0)
+      let mut seen: u64 = 0
+      while true {
+        let Some(at) = cursor else {
+          break
+        }
+        failure.check(
+          json_document.text_bytes(doc, at) == Some(b"long\ntext\tdecode"),
+          TextInvariant()
+        )
+        cursor = json_document.next_sibling(doc, at)
+        seen += 1
+      }
+      failure.check(seen == 48, TextInvariant())
+      match json_document.stringify(doc) {
+        Ok(s) => take s,
+        Error(_) => "",
+      }
+    }
+  )
+  failure.check(encoded == Ok(growth), TextInvariant())
+  Ok(())
+}

@@ -1,0 +1,786 @@
+// Dense scoped JSON, following Goose 8511ae34 stdlib/json.goose:906–1104.
+// Tokens, error precedence and writing follow json.hir's lossless UTF-8 policy.
+// Object duplicate checks scan siblings (quadratic in member count).
+pub type Kind = Null | Bool | Number | Text | Array | Object
+
+// Ten inline u64 fields. Links and spans never own storage.
+type Node {
+  kind: u64,
+  next: u64,
+  first: u64,
+  count: u64,
+  key_source: u64,
+  key_start: u64,
+  key_length: u64,
+  value_source: u64,
+  value_start: u64,
+  value_length: u64,
+}
+
+type Span {
+  source: u64,
+  start: u64,
+  length: u64,
+}
+
+type Frame {
+  node: u64,
+  last: u64,
+  state: u64,
+}
+
+pub opaque type Document: copyable + inert + noalloc_drop uses {} {
+  input: String,
+  decoded: Bytes,
+  nodes: List[Node],
+}
+
+const ABSENT: u64 = 18446744073709551615
+
+fn empty_node(tag: u64) -> Node uses {} {
+  Node(
+    kind: tag,
+    next: ABSENT,
+    first: ABSENT,
+    count: 0,
+    key_source: 0,
+    key_start: 0,
+    key_length: 0,
+    value_source: 0,
+    value_start: 0,
+    value_length: 0
+  )
+}
+
+@noalloc
+fn json_peek(data: Bytes, pos: u64) -> u8 uses {} {
+  if pos < core@1/bytes.len(data) {
+    data[pos]
+  } else {
+    0
+  }
+}
+
+// Adapted serde_json src/de.rs parse_whitespace,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
+@noalloc
+fn json_whitespace(data: Bytes, mut pos: u64) -> () uses {} {
+  while pos < core@1/bytes.len(data) {
+    let c = data[pos]
+    if c != 32 && c != 9 && c != 10 && c != 13 {
+      break
+    }
+    pos += 1
+  }
+}
+
+// Adapted serde_json src/de.rs parse_integer/parse_decimal/parse_exponent,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8 (MIT/Apache-2.0).
+// Scan grammar only: no float conversion, overflow, or loss of number spelling.
+@noalloc
+fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), json.JsonError] uses {} {
+  if json_peek(data, pos) == 45 {
+    pos += 1
+  }
+  let first = json_peek(data, pos)
+  if first == 48 {
+    pos += 1
+    if std@1/ascii.is_digit(json_peek(data, pos)) {
+      return Error(Syntax(pos))
+    }
+  } else if std@1/ascii.is_digit(first) {
+    while std@1/ascii.is_digit(json_peek(data, pos)) {
+      pos += 1
+    }
+  } else {
+    return Error(Syntax(pos))
+  }
+  if json_peek(data, pos) == 46 {
+    pos += 1
+    if !std@1/ascii.is_digit(json_peek(data, pos)) {
+      return Error(Syntax(pos))
+    }
+    while std@1/ascii.is_digit(json_peek(data, pos)) {
+      pos += 1
+    }
+  }
+  if json_peek(data, pos) == 101 || json_peek(data, pos) == 69 {
+    pos += 1
+    if json_peek(data, pos) == 43 || json_peek(data, pos) == 45 {
+      pos += 1
+    }
+    if !std@1/ascii.is_digit(json_peek(data, pos)) {
+      return Error(Syntax(pos))
+    }
+    while std@1/ascii.is_digit(json_peek(data, pos)) {
+      pos += 1
+    }
+  }
+  Ok(())
+}
+
+@noalloc
+fn json_hex4(data: Bytes, mut pos: u64) -> Result[u64, json.JsonError] uses {} {
+  let mut n: u64 = 0
+  let mut i: u64 = 0
+  while i < 4 {
+    let c = json_peek(data, pos)
+    let Some(digit) = std@1/ascii.digit_value_radix(c, 16) else {
+      return Error(Syntax(pos))
+    }
+    let d: u64 = core@1/int.widen(digit)
+    n = n * 16 + d
+    pos += 1
+    i += 1
+  }
+  Ok(n)
+}
+
+@noalloc
+// Adapted serde_json src/de.rs parse_ident,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
+fn json_keyword(data: Bytes, mut pos: u64, word: String) -> Result[(), json.JsonError] uses {} {
+  let bytes = core@1/string.as_bytes(word)
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(bytes) {
+    if pos == core@1/bytes.len(data) || data[pos] != bytes[i] {
+      return Error(Syntax(pos))
+    }
+    pos += 1
+    i += 1
+  }
+  Ok(())
+}
+
+fn quoted(data: Bytes, mut pos: u64, mut output: List[u8]) -> Result[
+  Span,
+  json.JsonError
+] uses {} {
+  if json_peek(data, pos) != 34 {
+    return Error(Syntax(pos))
+  }
+  pos += 1
+  let plain_start = pos
+  while pos < core@1/bytes.len(data) && data[pos] >= 32 && data[pos] != 34 && data[pos] != 92 {
+    pos += 1
+  }
+  if pos < core@1/bytes.len(data) && data[pos] == 34 {
+    let length = pos - plain_start
+    pos += 1
+    return Ok(Span(source: 1, start: plain_start, length: length))
+  }
+  let decoded_start = core@1/list.len(output)
+  core@1/bytes.append(mut output, core@1/bytes.slice(data, plain_start, pos))
+  while pos < core@1/bytes.len(data) {
+    let c = data[pos]
+    pos += 1
+    if c == 34 {
+      return Ok(
+        Span(
+          source: 2,
+          start: decoded_start,
+          length: core@1/list.len(output) - decoded_start
+        )
+      )
+    }
+    if c < 32 {
+      return Error(Syntax(pos - 1))
+    }
+    if c != 92 {
+      let start = pos - 1
+      while pos < core@1/bytes.len(data) {
+        let next = data[pos]
+        if next < 32 || next == 34 || next == 92 {
+          break
+        }
+        pos += 1
+      }
+      core@1/bytes.append(mut output, core@1/bytes.slice(data, start, pos))
+    } else {
+      if pos == core@1/bytes.len(data) {
+        return Error(Syntax(pos))
+      }
+      let e = data[pos]
+      pos += 1
+      if e == 34 || e == 92 || e == 47 {
+        core@1/list.push(mut output, e)
+      } else if e == 98 {
+        core@1/list.push(mut output, 8)
+      } else if e == 102 {
+        core@1/list.push(mut output, 12)
+      } else if e == 110 {
+        core@1/list.push(mut output, 10)
+      } else if e == 114 {
+        core@1/list.push(mut output, 13)
+      } else if e == 116 {
+        core@1/list.push(mut output, 9)
+      } else if e == 117 {
+        let mut n = json_hex4(data, mut pos)?
+        if n >= 56320 && n <= 57343 {
+          return Error(Syntax(pos - 4))
+        }
+        if n >= 55296 && n <= 56319 {
+          if json_peek(data, pos) != 92 {
+            return Error(Syntax(pos))
+          }
+          pos += 1
+          if json_peek(data, pos) != 117 {
+            return Error(Syntax(pos))
+          }
+          pos += 1
+          let low = json_hex4(data, mut pos)?
+          if low < 56320 || low > 57343 {
+            return Error(Syntax(pos - 4))
+          }
+          n = 65536 + (n - 55296) * 1024 + low - 56320
+        }
+        // The surrogate checks above leave a scalar value.
+        match core@1/char.from_u32(core@1/int.narrow(n)) {
+          Some(scalar) => char.format_into(scalar, mut output),
+          None() => core@1/failure.check(false, TextInvariant()),
+        }
+      } else {
+        return Error(Syntax(pos - 1))
+      }
+    }
+  }
+  Error(Syntax(pos))
+}
+
+fn span_equal(data: Bytes, decoded: List[u8], a: Span, b: Span) -> bool uses {} {
+  if a.length != b.length {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < a.length {
+    let x = if a.source == 1 {
+      data[a.start + i]
+    } else {
+      decoded[a.start + i]
+    }
+    let y = if b.source == 1 {
+      data[b.start + i]
+    } else {
+      decoded[b.start + i]
+    }
+    if x != y {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+fn parse_nodes(data: Bytes, mut decoded: List[u8], mut nodes: List[Node]) -> Result[
+  (),
+  json.JsonError
+] uses {} {
+  let mut pos: u64 = 0
+  let mut frames: List[Frame] = []
+  while true {
+    json_whitespace(data, mut pos)
+    let mut key = Span(source: 0, start: 0, length: 0)
+    let open = core@1/list.len(frames)
+    if open != 0 {
+      let top = open - 1
+      let frame = frames[top]
+      let parent = nodes[frame.node]
+      let close: u8 = if parent.kind == 4 {
+        93
+      } else {
+        125
+      }
+      if frame.state == 1 {
+        if json_peek(data, pos) == close {
+          pos += 1
+          let _ = core@1/list.pop(mut frames)
+          continue
+        }
+        if json_peek(data, pos) != 44 {
+          return Error(Syntax(pos))
+        }
+        pos += 1
+        json_whitespace(data, mut pos)
+      } else if json_peek(data, pos) == close {
+        pos += 1
+        let _ = core@1/list.pop(mut frames)
+        continue
+      }
+      if parent.kind == 5 {
+        let key_at = pos
+        key = quoted(data, mut pos, mut decoded)?
+        let mut sibling = parent.first
+        let mut seen: u64 = 0
+        while seen < parent.count {
+          let prior = nodes[sibling]
+          let prior_key = Span(
+            source: prior.key_source,
+            start: prior.key_start,
+            length: prior.key_length
+          )
+          if span_equal(data, decoded, prior_key, key) {
+            return Error(DuplicateKey(key_at))
+          }
+          sibling = prior.next
+          seen += 1
+        }
+        json_whitespace(data, mut pos)
+        if json_peek(data, pos) != 58 {
+          return Error(Syntax(pos))
+        }
+        pos += 1
+        json_whitespace(data, mut pos)
+      }
+    } else if core@1/list.len(nodes) != 0 {
+      if pos != core@1/bytes.len(data) {
+        return Error(Syntax(pos))
+      }
+      return Ok(())
+    }
+    let c = json_peek(data, pos)
+    let mut node = empty_node(0)
+    let mut container = false
+    if c == 110 {
+      json_keyword(data, mut pos, "null")?
+    } else if c == 116 || c == 102 {
+      node.kind = 1
+      if c == 116 {
+        json_keyword(data, mut pos, "true")?
+        node.count = 1
+      } else {
+        json_keyword(data, mut pos, "false")?
+      }
+    } else if c == 34 {
+      let value = quoted(data, mut pos, mut decoded)?
+      node.kind = 3
+      node.value_source = value.source
+      node.value_start = value.start
+      node.value_length = value.length
+    } else if c == 45 || std@1/ascii.is_digit(c) {
+      let start = pos
+      json_number_end(data, mut pos)?
+      node.kind = 2
+      node.value_source = 1
+      node.value_start = start
+      node.value_length = pos - start
+    } else if c == 91 || c == 123 {
+      if open == json.MAX_NESTING {
+        return Error(Nesting(pos))
+      }
+      node.kind = if c == 91 {
+        4
+      } else {
+        5
+      }
+      container = true
+      pos += 1
+    } else {
+      return Error(Syntax(pos))
+    }
+    node.key_source = key.source
+    node.key_start = key.start
+    node.key_length = key.length
+    let index = core@1/list.len(nodes)
+    core@1/list.push(mut nodes, node)
+    if open != 0 {
+      let top = open - 1
+      let parent = frames[top].node
+      let last = frames[top].last
+      if last == ABSENT {
+        nodes[parent].first = index
+      } else {
+        nodes[last].next = index
+      }
+      nodes[parent].count += 1
+      frames[top].last = index
+      frames[top].state = 1
+    }
+    if container {
+      core@1/list.push(mut frames, Frame(node: index, last: ABSENT, state: 0))
+    }
+  }
+  Ok(())
+}
+
+// The fixed callback result is global; no parser owner can escape through R.
+pub fn with_document[R](take input: String, body: fn(doc: Document) -> R) -> Result[
+  R,
+  json.JsonError
+] uses {body} {
+  let mut decoded: List[u8] = []
+  let mut nodes: List[Node] = []
+  parse_nodes(core@1/string.as_bytes(input), mut decoded, mut nodes)?
+  let doc = Document(
+    input: take input,
+    decoded: core@1/bytes.from_list(take decoded),
+    nodes: take nodes
+  )
+  Ok(body(doc))
+}
+
+pub fn root(doc: Document) -> u64 uses {} {
+  0
+}
+
+pub fn kind(doc: Document, at: u64) -> Option[Kind] uses {} {
+  if at >= core@1/list.len(doc.nodes) {
+    return None
+  }
+  match doc.nodes[at].kind {
+    0 => Some(Null()),
+    1 => Some(Bool()),
+    2 => Some(Number()),
+    3 => Some(Text()),
+    4 => Some(Array()),
+    5 => Some(Object()),
+    _ => None,
+  }
+}
+
+pub fn first_child(doc: Document, at: u64) -> Option[u64] uses {} {
+  if at >= core@1/list.len(doc.nodes) {
+    return None
+  }
+  let node = doc.nodes[at]
+  if node.kind != 4 && node.kind != 5 {
+    return None
+  }
+  if node.first == ABSENT || node.first >= core@1/list.len(doc.nodes) {
+    return None
+  }
+  Some(node.first)
+}
+
+pub fn next_sibling(doc: Document, at: u64) -> Option[u64] uses {} {
+  if at >= core@1/list.len(doc.nodes) {
+    return None
+  }
+  let next = doc.nodes[at].next
+  if next == ABSENT || next >= core@1/list.len(doc.nodes) {
+    return None
+  }
+  Some(next)
+}
+
+pub fn bool_value(doc: Document, at: u64) -> Option[bool] uses {} {
+  if at >= core@1/list.len(doc.nodes) {
+    return None
+  }
+  let node = doc.nodes[at]
+  if node.kind != 1 || node.count > 1 {
+    return None
+  }
+  Some(node.count == 1)
+}
+
+pub fn count(doc: Document, at: u64) -> Option[u64] uses {} {
+  if at >= core@1/list.len(doc.nodes) {
+    return None
+  }
+  let node = doc.nodes[at]
+  if node.kind != 4 && node.kind != 5 {
+    return None
+  }
+  Some(node.count)
+}
+
+fn span_bytes(doc: Document, source: u64, start: u64, length: u64) -> Option[Bytes] in doc uses {} {
+  if source == 1 {
+    let data = core@1/string.as_bytes(doc.input)
+    if start > core@1/bytes.len(data) || length > core@1/bytes.len(data) - start {
+      return None
+    }
+    Some(core@1/bytes.slice(data, start, start + length))
+  } else if source == 2 {
+    if start > core@1/bytes.len(doc.decoded) || length > core@1/bytes.len(doc.decoded) - start {
+      return None
+    }
+    Some(core@1/bytes.slice(doc.decoded, start, start + length))
+  } else {
+    None
+  }
+}
+
+pub fn text_bytes(doc: Document, at: u64) -> Option[Bytes] in doc uses {} {
+  if at >= core@1/list.len(doc.nodes) {
+    return None
+  }
+  let node = doc.nodes[at]
+  if node.kind != 3 {
+    return None
+  }
+  span_bytes(doc, node.value_source, node.value_start, node.value_length)
+}
+
+pub fn number_bytes(doc: Document, at: u64) -> Option[Bytes] in doc uses {} {
+  if at >= core@1/list.len(doc.nodes) {
+    return None
+  }
+  let node = doc.nodes[at]
+  if node.kind != 2 {
+    return None
+  }
+  span_bytes(doc, node.value_source, node.value_start, node.value_length)
+}
+
+pub fn key_bytes(doc: Document, at: u64) -> Option[Bytes] in doc uses {} {
+  if at >= core@1/list.len(doc.nodes) {
+    return None
+  }
+  let node = doc.nodes[at]
+  span_bytes(doc, node.key_source, node.key_start, node.key_length)
+}
+
+pub fn member(doc: Document, at: u64, key: String) -> Option[u64] uses {} {
+  if kind(doc, at) != Some(Object()) {
+    return None
+  }
+  let sought = core@1/string.as_bytes(key)
+  let mut cursor = first_child(doc, at)
+  let mut remaining = doc.nodes[at].count
+  while remaining != 0 {
+    let Some(i) = cursor else {
+      return None
+    }
+    let Some(candidate) = key_bytes(doc, i) else {
+      return None
+    }
+    if candidate == sought {
+      return Some(i)
+    }
+    cursor = next_sibling(doc, i)
+    remaining -= 1
+  }
+  None
+}
+
+fn detach(data: Bytes) -> String uses {} {
+  let mut out: List[u8] = []
+  core@1/bytes.append(mut out, data)
+  text.finish_valid(take out)
+}
+
+pub fn text_owned(doc: Document, at: u64) -> Option[String] uses {} {
+  let Some(data) = text_bytes(doc, at) else {
+    return None
+  }
+  Some(detach(data))
+}
+
+// Copies only the selected subtree into the existing independently owned DOM.
+pub fn to_owned(doc: Document, at: u64) -> Option[json.Value] uses {} {
+  let Some(tag) = kind(doc, at) else {
+    return None
+  }
+  let value: json.Value = match tag {
+    Null() => Null(),
+    Bool() => {
+      let Some(value) = bool_value(doc, at) else {
+        return None
+      }
+      Bool(value)
+    },
+    Number() => {
+      let Some(value) = number_bytes(doc, at) else {
+        return None
+      }
+      Number(detach(value))
+    },
+    Text() => {
+      let Some(value) = text_owned(doc, at) else {
+        return None
+      }
+      Text(take value)
+    },
+    Array() => {
+      let mut values: List[json.Value] = []
+      let mut cursor = first_child(doc, at)
+      let mut remaining = doc.nodes[at].count
+      while remaining != 0 {
+        let Some(child) = cursor else {
+          return None
+        }
+        let Some(value) = to_owned(doc, child) else {
+          return None
+        }
+        core@1/list.push(mut values, take value)
+        cursor = next_sibling(doc, child)
+        remaining -= 1
+      }
+      Array(take values)
+    },
+    Object() => {
+      let mut values: Map[String, json.Value] = core@1/map.empty()
+      let mut cursor = first_child(doc, at)
+      let mut remaining = doc.nodes[at].count
+      while remaining != 0 {
+        let Some(child) = cursor else {
+          return None
+        }
+        let Some(key) = key_bytes(doc, child) else {
+          return None
+        }
+        let Some(value) = to_owned(doc, child) else {
+          return None
+        }
+        core@1/map.insert(mut values, detach(key), take value)
+        cursor = next_sibling(doc, child)
+        remaining -= 1
+      }
+      Object(take values)
+    },
+  }
+  Some(take value)
+}
+
+// Compact escaping is the owned writer algorithm over decoded bytes.
+@preserves_unique(builder)
+fn write_bytes(data: Bytes, mut builder: List[u8]) -> () uses {} {
+  core@1/list.reserve(
+    mut builder,
+    core@1/list.len(builder) + core@1/bytes.len(data) + 2
+  )
+  core@1/list.push(mut builder, 34)
+  let hex: Bytes = b"0123456789abcdef"
+  let mut at: u64 = 0
+  while at < core@1/bytes.len(data) {
+    let c = data[at]
+    at += 1
+    if c == 34 || c == 92 {
+      core@1/list.push(mut builder, 92)
+      core@1/list.push(mut builder, c)
+    } else if c < 32 {
+      let short: u8 = if c == 8 {
+        98
+      } else if c == 9 {
+        116
+      } else if c == 10 {
+        110
+      } else if c == 12 {
+        102
+      } else if c == 13 {
+        114
+      } else {
+        0
+      }
+      core@1/list.push(mut builder, 92)
+      if short != 0 {
+        core@1/list.push(mut builder, short)
+      } else {
+        core@1/list.push(mut builder, 117)
+        core@1/list.push(mut builder, 48)
+        core@1/list.push(mut builder, 48)
+        core@1/list.push(mut builder, hex[core@1/int.widen(c >> 4)])
+        core@1/list.push(mut builder, hex[core@1/int.widen(c & 15)])
+      }
+    } else {
+      let start = at - 1
+      while at < core@1/bytes.len(data) {
+        let next = data[at]
+        if next < 32 || next == 34 || next == 92 {
+          break
+        }
+        at += 1
+      }
+      core@1/bytes.append(mut builder, core@1/bytes.slice(data, start, at))
+    }
+  }
+  core@1/list.push(mut builder, 34)
+}
+
+// Walk the ordered tree directly, keeping only bounded container cursors.
+pub fn stringify(doc: Document) -> Result[unique String, json.JsonError] uses {} {
+  let mut output: List[u8] = []
+  let mut frames: List[Frame] = []
+  let mut current: u64 = 0
+  let mut writing = true
+  while writing {
+    let node = doc.nodes[current]
+    if core@1/list.len(frames) != 0 {
+      let top = core@1/list.len(frames) - 1
+      let frame = frames[top]
+      if frame.state != 0 {
+        core@1/list.push(mut output, 44)
+      }
+      frames[top].state += 1
+      frames[top].last = node.next
+      if doc.nodes[frame.node].kind == 5 {
+        let Some(key) = key_bytes(doc, current) else {
+          core@1/failure.check(false, TextInvariant())
+          return Error(InvalidNumber())
+        }
+        write_bytes(key, mut output)
+        core@1/list.push(mut output, 58)
+      }
+    }
+    if node.kind == 0 {
+      core@1/bytes.append(mut output, b"null")
+    } else if node.kind == 1 {
+      if node.count == 0 {
+        core@1/bytes.append(mut output, b"false")
+      } else {
+        core@1/bytes.append(mut output, b"true")
+      }
+    } else if node.kind == 2 || node.kind == 3 {
+      let Some(value) = span_bytes(
+        doc,
+        node.value_source,
+        node.value_start,
+        node.value_length
+      ) else {
+        core@1/failure.check(false, TextInvariant())
+        return Error(InvalidNumber())
+      }
+      if node.kind == 2 {
+        core@1/bytes.append(mut output, value)
+      } else {
+        write_bytes(value, mut output)
+      }
+    } else {
+      core@1/list.push(
+        mut output,
+        if node.kind == 4 {
+          91
+        } else {
+          123
+        }
+      )
+      if node.count != 0 {
+        core@1/list.push(mut frames, Frame(node: current, last: ABSENT, state: 0))
+        current = node.first
+        continue
+      }
+      core@1/list.push(
+        mut output,
+        if node.kind == 4 {
+          93
+        } else {
+          125
+        }
+      )
+    }
+    while true {
+      if core@1/list.len(frames) == 0 {
+        writing = false
+        break
+      }
+      let top = core@1/list.len(frames) - 1
+      let frame = frames[top]
+      let parent = doc.nodes[frame.node]
+      if frame.state < parent.count {
+        current = frame.last
+        break
+      }
+      core@1/list.push(
+        mut output,
+        if parent.kind == 4 {
+          93
+        } else {
+          125
+        }
+      )
+      let _ = core@1/list.pop(mut frames)
+    }
+  }
+  Ok(text.finish_valid(take output))
+}

@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// Expressibility gate for an ordinary opaque scoped document.
+pub opaque type Document: copyable + inert + noalloc_drop uses {} {
+  input: String,
+  decoded: Bytes,
+}
+
+pub fn with_document[R](take input: String, body: fn(doc: Document) -> R) -> Result[
+  R,
+  json.JsonError
+] uses {body} {
+  let doc = Document(input: take input, decoded: bytes.from_list([]))
+  Ok(body(doc))
+}
+
+pub fn text_bytes(doc: Document) -> Option[Bytes] in doc uses {} {
+  Some(string.as_bytes(doc.input))
+}
+
+pub fn text_owned(doc: Document) -> String uses {} {
+  let mut out: List[u8] = []
+  match text_bytes(doc) {
+    Some(view) => bytes.append(mut out, view),
+    None() => (),
+  }
+  text.finish_valid(take out)
+}
+
+pub fn main() -> Result[(), OutputError] {
+  let scalar = with_document(
+    "hello",
+    fn(doc: Document) -> u64 {
+      5
+    }
+  )
+  failure.check(scalar == Ok(5), TextInvariant())
+  let owned = with_document(
+    "hello",
+    fn(doc: Document) -> String {
+      text_owned(doc)
+    }
+  )
+  failure.check(owned == Ok("hello"), TextInvariant())
+  Ok(())
+}

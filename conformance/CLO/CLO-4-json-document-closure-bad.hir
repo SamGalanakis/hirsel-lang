@@ -1,0 +1,13 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 8
+// twin: SEM/SEM-3-json-document-scope-gate-run.hir
+fn example() -> Result[fn() -> Option[Bytes] in env, json.JsonError] {
+  json_document.with_document(
+    "\"hello\"",
+    fn(doc: json_document.Document) -> fn() -> Option[Bytes] in env {
+      fn() -> Option[Bytes] in env {
+        json_document.text_bytes(doc, 0)
+      }
+    }
+  )
+}

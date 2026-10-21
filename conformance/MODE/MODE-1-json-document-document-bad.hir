@@ -1,0 +1,11 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 8
+// twin: SEM/SEM-3-json-document-scope-gate-run.hir
+fn example() -> Result[json_document.Document, json.JsonError] {
+  json_document.with_document(
+    "\"hello\"",
+    fn(doc: json_document.Document) -> json_document.Document {
+      doc
+    }
+  )
+}

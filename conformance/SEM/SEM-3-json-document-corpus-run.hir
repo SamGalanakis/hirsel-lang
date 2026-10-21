@@ -1,0 +1,84 @@
+// rule: SEM-3
+// expect: run
+// Hirsel corpus corrects Goose's number, surrogate, duplicate and depth policies.
+pub fn main() -> Result[(), OutputError] {
+  let cases: List[(String, String)] = [
+    ("  null \r\n", "null"),
+    ("[]", "[]"),
+    ("{}", "{}"),
+    ("\"\"", "\"\""),
+    ("true", "true"),
+    ("false", "false"),
+    ("[null,true,false]", "[null,true,false]"),
+    ("{\"z\":0,\"a\":1,\"m\":2}", "{\"z\":0,\"a\":1,\"m\":2}"),
+    ("9007199254740993", "9007199254740993"),
+    ("-0", "-0"),
+    ("1.2300E+004", "1.2300E+004"),
+    ("1e999999999999999999999999999999999", "1e999999999999999999999999999999999"),
+    ("-1e-99999999999999999999999999999", "-1e-99999999999999999999999999999"),
+    ("\"\\u0000\\b\\f\\n\\r\\t\\\"\\\\\\/\"", "\"\\u0000\\b\\f\\n\\r\\t\\\"\\\\/\""),
+    ("\"\\uD83D\\uDE00\"", "\"😀\""),
+    ("\"\\udbff\\udfff\"", "\"􏿿\""),
+    ("\"\\u007f\\u0080\\u07ff\\u0800\\uffff\"", "\"\u{7f}߿ࠀ￿\""),
+    ("\"é😀\"", "\"é😀\""),
+    ("{\"é\":{\"a\":[0,-12,1.5]},\"b\":[]}", "{\"é\":{\"a\":[0,-12,1.5]},\"b\":[]}"),
+    ("[0e1]", "[0e1]"),
+    ("[20e1]", "[20e1]"),
+    ("[1E22]", "[1E22]"),
+    ("[1,null,null,null,2]", "[1,null,null,null,2]"),
+    ("[\"\\u0060\\u012a\\u12AB\"]", "[\"`Īካ\"]"),
+    ("[\"\\uD801\\udc37\"]", "[\"𐐷\"]"),
+    ("[\"\\uDBFF\\uDFFF\"]", "[\"􏿿\"]"),
+    ("[\"\\u0012\"]", "[\"\\u0012\"]"),
+    ("{}", "{}"),
+    (
+      "{\"x\":[{\"id\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}], \"id\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "{\"x\":[{\"id\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}],\"id\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+    ),
+    ("[\"a\"]\n", "[\"a\"]"),
+    (
+      "{\"k23\":23,\"k22\":22,\"k21\":21,\"k20\":20,\"k19\":19,\"k18\":18,\"k17\":17,\"k16\":16,\"k15\":15,\"k14\":14,\"k13\":13,\"k12\":12,\"k11\":11,\"k10\":10,\"k9\":9,\"k8\":8,\"k7\":7,\"k6\":6,\"k5\":5,\"k4\":4,\"k3\":3,\"k2\":2,\"k1\":1,\"k0\":0}",
+      "{\"k23\":23,\"k22\":22,\"k21\":21,\"k20\":20,\"k19\":19,\"k18\":18,\"k17\":17,\"k16\":16,\"k15\":15,\"k14\":14,\"k13\":13,\"k12\":12,\"k11\":11,\"k10\":10,\"k9\":9,\"k8\":8,\"k7\":7,\"k6\":6,\"k5\":5,\"k4\":4,\"k3\":3,\"k2\":2,\"k1\":1,\"k0\":0}"
+    )
+  ]
+  for (input, expected) in cases {
+    let observed = json_document.with_document(
+      copy input,
+      fn(doc: json_document.Document) -> String {
+        // Repeated reads reuse the one parsed document.
+        let first = json_document.kind(doc, json_document.root(doc))
+        failure.check(first == json_document.kind(doc, 0), TextInvariant())
+        failure.check(
+          json_document.kind(doc, 18446744073709551615) == None(),
+          TextInvariant()
+        )
+        failure.check(
+          json_document.text_bytes(doc, 18446744073709551615) == None(),
+          TextInvariant()
+        )
+        failure.check(
+          json_document.to_owned(doc, 18446744073709551615) == None(),
+          TextInvariant()
+        )
+        match json_document.stringify(doc) {
+          Ok(s) => take s,
+          Error(_) => {
+            failure.check(false, TextInvariant())
+            ""
+          },
+        }
+      }
+    )
+    failure.check(observed == Ok(expected), TextInvariant())
+    let owned = match json.parse(copy input) {
+      Ok(v) => v,
+      Error(_) => {
+        failure.check(false, TextInvariant())
+        let v: json.Value = Null()
+        v
+      },
+    }
+    failure.check(json.stringify(owned) == observed, TextInvariant())
+  }
+  Ok(())
+}

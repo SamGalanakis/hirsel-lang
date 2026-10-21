@@ -1,0 +1,33 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), OutputError] {
+  let inputs: List[String] = [
+    "null",
+    "true",
+    "false",
+    "[]",
+    "{}",
+    "0",
+    "-0",
+    "1e+09",
+    "\"hi\"",
+    "[1,2,3]",
+    "{\"x\":[true,null],\"y\":\"a\\nb\"}"
+  ]
+  for input in inputs {
+    let observed = json_document.with_document(
+      copy input,
+      fn(doc: json_document.Document) -> String {
+        match json_document.stringify(doc) {
+          Ok(value) => take value,
+          Error(_) => {
+            failure.check(false, TextInvariant())
+            ""
+          },
+        }
+      }
+    )
+    failure.check(observed == Ok(input), TextInvariant())
+  }
+  Ok(())
+}

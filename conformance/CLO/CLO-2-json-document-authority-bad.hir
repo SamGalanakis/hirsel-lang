@@ -1,0 +1,11 @@
+// rule: CLO-2
+// expect: reject CLO-2 at line 5
+// twin: CLO/CLO-2-json-document-authority-ok.hir
+fn example(selected: fn() -> u64, other: fn() -> u64) -> Result[u64, json.JsonError] uses {selected} {
+  json_document.with_document(
+    "null",
+    fn(doc: json_document.Document) -> u64 {
+      other()
+    }
+  )
+}

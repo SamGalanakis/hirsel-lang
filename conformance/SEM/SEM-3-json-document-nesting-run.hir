@@ -1,0 +1,49 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), OutputError] {
+  let mut out: List[u8] = []
+  for _ in 0u64..128u64 {
+    list.push(mut out, 91)
+  }
+  list.push(mut out, 48)
+  for _ in 0u64..128u64 {
+    list.push(mut out, 93)
+  }
+  let input = text.finish_valid(take out)
+  let observed = json_document.with_document(
+    copy input,
+    fn(doc: json_document.Document) -> String {
+      let mut cursor = 0u64
+      for _ in 0u64..128u64 {
+        let Some(child) = json_document.first_child(doc, cursor) else {
+          failure.check(false, TextInvariant())
+          return ""
+        }
+        cursor = child
+      }
+      failure.check(
+        json_document.number_bytes(doc, cursor) == Some(b"0"),
+        TextInvariant()
+      )
+      match json_document.stringify(doc) {
+        Ok(s) => take s,
+        Error(_) => "",
+      }
+    }
+  )
+  failure.check(observed == Ok(copy input), TextInvariant())
+  let over = string.concat("[", string.concat(input, "]"))
+  let rejected = json_document.with_document(
+    copy over,
+    fn(doc: json_document.Document) -> u64 {
+      failure.check(false, TextInvariant())
+      0
+    }
+  )
+  failure.check(rejected == Error(Nesting(128)), TextInvariant())
+  match json.parse(take over) {
+    Error(Nesting(128)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

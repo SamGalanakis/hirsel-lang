@@ -1,0 +1,38 @@
+// rule: SEM-3
+// expect: fail SEM-1 at line 34
+// stdout: body
+// stdout: drop
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "drop\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let trace = Trace(stdout: io.stdout(rt)?)
+  let bytes: unique Bytes = unique b"shared"
+  let root = shared.freeze(take bytes)
+  let _ = json_document.with_document(
+    "\"escaped\\nx\"",
+    fn(doc: json_document.Document) -> u64 {
+      failure.check(
+        shared.with(
+          root,
+          fn(value: Bytes) -> u64 {
+            bytes.len(value)
+          }
+        ) == 6,
+        TextInvariant()
+      )
+      let _ = out.print(trace.stdout, "body\n")
+      let Some(owned) = json_document.text_owned(doc, 0) else {
+        return 2
+      }
+      let _ = string.byte_len(owned)
+      let zero: u64 = 0
+      1u64 / zero
+    }
+  )
+  Ok(())
+}

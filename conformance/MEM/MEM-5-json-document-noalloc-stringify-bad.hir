@@ -1,0 +1,7 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 6
+// twin: SEM/SEM-3-json-document-scope-gate-run.hir
+@noalloc
+fn example(doc: json_document.Document) -> Result[String, json.JsonError] uses {} {
+  json_document.stringify(doc)
+}

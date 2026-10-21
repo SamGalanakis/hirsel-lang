@@ -1,0 +1,37 @@
+// rule: SEM-3
+// expect: run
+type InsideMarker {
+  a: u64,
+  b: u64,
+  c: u64,
+  d: u64,
+  e: u64,
+  f: u64,
+  g: u64,
+}
+
+pub fn main() -> Result[(), u64] {
+  let mut builder: List[u8] = []
+  for _ in 0u64..128u64 {
+    text.append(mut builder, "padding padding padding padding ")
+  }
+  text.append(mut builder, "\"x\"")
+  let backing = text.finish_valid(take builder)
+  let Some(start) = string.position(backing, string.byte_len(backing) - 3) else {
+    return Error(1)
+  }
+  let Some(end) = string.position(backing, string.byte_len(backing)) else {
+    return Error(2)
+  }
+  let input = string.slice(backing, start, end)
+  let observed = json_document.with_document(
+    take input,
+    fn(doc: json_document.Document) -> u64 {
+      let marker = box InsideMarker(a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7)
+      failure.check(json_document.text_bytes(doc, 0) == Some(b"x"), TextInvariant())
+      marker.a
+    }
+  )
+  failure.check(observed == Ok(1), TextInvariant())
+  Ok(())
+}

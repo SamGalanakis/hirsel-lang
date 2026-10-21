@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 12
+// twin: SEM/SEM-3-json-document-scope-gate-run.hir
+fn relay[T](take x: T) -> T {
+  x
+}
+
+fn example() -> Result[Option[Bytes], json.JsonError] {
+  json_document.with_document(
+    "\"hello\"",
+    fn(doc: json_document.Document) -> Option[Bytes] {
+      relay(json_document.text_bytes(doc, 0))
+    }
+  )
+}

@@ -1,0 +1,73 @@
+// Byte oracle: compare owned/scoped output in every one of the ten passes.
+fn document(n: u64) -> String {
+  let mut out: List[u8] = []
+  text.append(mut out, "[")
+  for i in 0u64..n {
+    if i > 0u64 {
+      text.append(mut out, ",")
+    }
+    text.append(
+      mut out,
+      f"{{\"id\":{i},\"name\":\"user{i}\",\"score\":{i * 7u64 % 1000u64}.5,\"tags\":[\"a\",\"bb\",\"ccc\"],\"active\":true,\"ref\":null}}"
+    )
+  }
+  text.append(mut out, "]")
+  text.finish_valid(take out)
+}
+
+fn run(n: u64, salt: u64) -> u64 {
+  let doc = document(n + salt)
+  let mut total: u64 = 0
+  for _ in 0u64..10u64 {
+    let value = match json.parse(copy doc) {
+      Ok(v) => take v,
+      Error(_) => return 0,
+    }
+    let text = match json.stringify(value) {
+      Ok(t) => take t,
+      Error(_) => return 1,
+    }
+    let scoped = match json_document.with_document(
+      copy doc,
+      fn(parsed: json_document.Document) -> Result[String, json.JsonError] {
+        json_document.stringify(parsed)
+      }
+    ) {
+      Ok(Ok(t)) => take t,
+      _ => return 2,
+    }
+    failure.check(text == scoped, TextInvariant())
+    total += string.byte_len(text)
+  }
+  total
+}
+
+fn arg_u64(args: Args, index: u64, default: u64) -> u64 {
+  if arg.len(args) <= index {
+    return default
+  }
+  match arg.text(args, index) {
+    Ok(t) => match u64.parse(t) {
+      Ok(n) => n,
+      Error(_) => default,
+    },
+    Error(_) => default,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  let n = arg_u64(args, 0, 1000)
+  let rounds = arg_u64(args, 1, 1)
+  let mut sum: u64 = 0
+  for r in 0u64..rounds {
+    sum = int.wrapping_add(sum, run(n, r))
+  }
+  let output = match io.stdout(rt) {
+    Ok(o) => o,
+    Error(_) => return Error("no stdout"),
+  }
+  match out.print(output, f"{sum}\n") {
+    Ok(()) => Ok(()),
+    Error(_) => Error("cannot write output"),
+  }
+}

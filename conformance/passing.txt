@@ -403,6 +403,8 @@ conformance/CLO/CLO-2-inferred-resource-callback-value-ok.hir
 conformance/CLO/CLO-2-inferred-resource-callback-value-run.hir
 conformance/CLO/CLO-2-iter-mut-handback-unsendable-annotated-ok.hir
 conformance/CLO/CLO-2-iter-mut-handback-unsendable-inferred-bad.hir
+conformance/CLO/CLO-2-json-document-authority-bad.hir
+conformance/CLO/CLO-2-json-document-authority-ok.hir
 conformance/CLO/CLO-2-known-pure-function-value-ok.hir
 conformance/CLO/CLO-2-mut-handback-erased-state-annotated-run.hir
 conformance/CLO/CLO-2-mut-handback-erased-state-bad.hir
@@ -462,6 +464,8 @@ conformance/CLO/CLO-3-counted-child-borrow-ok.hir
 conformance/CLO/CLO-3-inferred-task-result-error.hir
 conformance/CLO/CLO-3-isolate-counted-borrow-bad.hir
 conformance/CLO/CLO-3-isolate-counted-borrow-ok.hir
+conformance/CLO/CLO-3-json-document-task-bad.hir
+conformance/CLO/CLO-3-json-document-task-ok.hir
 conformance/CLO/CLO-3-local-receiver-capture-bad.hir
 conformance/CLO/CLO-3-once-holder-destructure-relay.hir
 conformance/CLO/CLO-3-receiver-capture-bad.hir
@@ -527,6 +531,7 @@ conformance/CLO/CLO-4-generic-callable-uses-bad.hir
 conformance/CLO/CLO-4-generic-callable-uses-ok.hir
 conformance/CLO/CLO-4-global-function-share-ok.hir
 conformance/CLO/CLO-4-iter-called-closure-part-run.hir
+conformance/CLO/CLO-4-json-document-closure-bad.hir
 conformance/CLO/CLO-4-kept-heap-capture-run.hir
 conformance/CLO/CLO-4-lexical-generic-uses-bad.hir
 conformance/CLO/CLO-4-lexical-generic-uses-ok.hir
@@ -2486,6 +2491,9 @@ conformance/MEM/MEM-5-inferred-literal-noalloc-part-run.hir
 conformance/MEM/MEM-5-inline-generic-ok.hir
 conformance/MEM/MEM-5-iterator-construction-bad.hir
 conformance/MEM/MEM-5-iterator-construction-ok.hir
+conformance/MEM/MEM-5-json-document-noalloc-extract-bad.hir
+conformance/MEM/MEM-5-json-document-noalloc-parse-bad.hir
+conformance/MEM/MEM-5-json-document-noalloc-stringify-bad.hir
 conformance/MEM/MEM-5-json-parse-accept.hir
 conformance/MEM/MEM-5-json-parse-reject.hir
 conformance/MEM/MEM-5-json-stringify-accept.hir
@@ -2839,6 +2847,13 @@ conformance/MODE/MODE-1-heap-getter-global.hir
 conformance/MODE/MODE-1-independent-unique-taken-result-ok.hir
 conformance/MODE/MODE-1-inferred-global-receiver-write-bad.hir
 conformance/MODE/MODE-1-inferred-local-receiver-write-run.hir
+conformance/MODE/MODE-1-json-document-copy-bad.hir
+conformance/MODE/MODE-1-json-document-direct-bad.hir
+conformance/MODE/MODE-1-json-document-document-bad.hir
+conformance/MODE/MODE-1-json-document-generic-bad.hir
+conformance/MODE/MODE-1-json-document-nested-bad.hir
+conformance/MODE/MODE-1-json-document-record-bad.hir
+conformance/MODE/MODE-1-json-document-tuple-bad.hir
 conformance/MODE/MODE-1-last-use-closure-view-dead-ok.hir
 conformance/MODE/MODE-1-last-use-closure-view-used-bad.hir
 conformance/MODE/MODE-1-last-use-early-return-drop-bad.hir
@@ -5282,6 +5297,17 @@ conformance/SEM/SEM-3-html-escape-run.hir
 conformance/SEM/SEM-3-invalid-utf8-returned.hir
 conformance/SEM/SEM-3-json-corpus-run.hir
 conformance/SEM/SEM-3-json-direct-run.hir
+conformance/SEM/SEM-3-json-document-access-run.hir
+conformance/SEM/SEM-3-json-document-backing-run.hir
+conformance/SEM/SEM-3-json-document-callback-failure-run.hir
+conformance/SEM/SEM-3-json-document-corpus-run.hir
+conformance/SEM/SEM-3-json-document-effects-run.hir
+conformance/SEM/SEM-3-json-document-invalid-run.hir
+conformance/SEM/SEM-3-json-document-nesting-run.hir
+conformance/SEM/SEM-3-json-document-retention-run.hir
+conformance/SEM/SEM-3-json-document-reuse-run.hir
+conformance/SEM/SEM-3-json-document-run.hir
+conformance/SEM/SEM-3-json-document-scope-gate-run.hir
 conformance/SEM/SEM-3-json-empty-run.hir
 conformance/SEM/SEM-3-json-import-001-run.hir
 conformance/SEM/SEM-3-json-import-002-run.hir

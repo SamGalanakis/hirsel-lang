@@ -1,0 +1,39 @@
+// rule: SEM-3
+// expect: run
+// One parse, ten independent rounds of lookup and borrowed reads.
+pub fn main() -> Result[(), u64] {
+  let input = "{\"name\":\"hello\",\"n\":1e+09,\"items\":[null,true,false]}"
+  let observed = json_document.with_document(
+    copy input,
+    fn(doc: json_document.Document) -> u64 {
+      let mut checksum: u64 = 0
+      for _ in 0u64..10u64 {
+        let Some(name) = json_document.member(doc, 0, "name") else {
+          return 0
+        }
+        let Some(text) = json_document.text_bytes(doc, name) else {
+          return 0
+        }
+        let Some(number) = json_document.member(doc, 0, "n") else {
+          return 0
+        }
+        let Some(lexeme) = json_document.number_bytes(doc, number) else {
+          return 0
+        }
+        let Some(items) = json_document.member(doc, 0, "items") else {
+          return 0
+        }
+        let Some(count) = json_document.count(doc, items) else {
+          return 0
+        }
+        checksum += bytes.len(text) + bytes.len(lexeme) + count
+      }
+      let first = json_document.stringify(doc)
+      let second = json_document.stringify(doc)
+      failure.check(first == second && first == Ok(input), TextInvariant())
+      checksum
+    }
+  )
+  failure.check(observed == Ok(130), TextInvariant())
+  Ok(())
+}

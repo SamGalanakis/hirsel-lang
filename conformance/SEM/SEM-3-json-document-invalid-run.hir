@@ -1,0 +1,88 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), OutputError] {
+  let inputs: List[String] = [
+    "NaN",
+    "Infinity",
+    "-Infinity",
+    "+",
+    ".",
+    "-",
+    "00",
+    "0x80",
+    "\\0",
+    ".0",
+    "0.",
+    "1.",
+    "1.a",
+    "1.e1",
+    "1e",
+    "1e+",
+    "1a",
+    "[1,]",
+    "{\"a\":1,}",
+    "[",
+    "{",
+    "tru",
+    "null true",
+    "\"",
+    "\"lol",
+    "\"lol\"a",
+    "\"\\uD83C\\uFFFF\"",
+    "\"\n\"",
+    "\"\u{1f}\"",
+    "\"\\uD800\"",
+    "\"\\uDC00\"",
+    "\"\\uD800\\n\"",
+    "\"\\uD800\\uD800\"",
+    "\"\\uZZZZ\"",
+    "\"\\x00\"",
+    "{\"a\" 1}",
+    "{1:2}",
+    "[1 2]",
+    "[false,]",
+    "[1,{\"a\":[\"owned\",{\"b\":true}]}, invalid]"
+  ]
+  for input in inputs {
+    let expected = match json.parse(copy input) {
+      Error(e) => e,
+      Ok(_) => {
+        failure.check(false, TextInvariant())
+        Syntax(0)
+      },
+    }
+    let observed = json_document.with_document(
+      copy input,
+      fn(doc: json_document.Document) -> u64 {
+        failure.check(false, TextInvariant())
+        0
+      }
+    )
+    failure.check(observed == Error(expected), TextInvariant())
+  }
+  let exact: List[(String, json.JsonError)] = [
+    ("{\"x\":1,\"x\":2}", DuplicateKey(7)),
+    ("{\"x\":1,\"x\" ?}", DuplicateKey(7)),
+    ("{\"x\":1,\"\\u0078\":2}", DuplicateKey(7)),
+    ("[1,\"é\",?]", Syntax(8)),
+    ("", Syntax(0)),
+    ("01", Syntax(1)),
+    ("[0x]", Syntax(2)),
+    ("{\"x\":1,\"\\u00G8\":2}", Syntax(12))
+  ]
+  for (input, expected) in exact {
+    let observed = json_document.with_document(
+      copy input,
+      fn(doc: json_document.Document) -> u64 {
+        failure.check(false, TextInvariant())
+        0
+      }
+    )
+    failure.check(observed == Error(expected), TextInvariant())
+    match json.parse(copy input) {
+      Error(e) => failure.check(e == expected, TextInvariant()),
+      Ok(_) => failure.check(false, TextInvariant()),
+    }
+  }
+  Ok(())
+}

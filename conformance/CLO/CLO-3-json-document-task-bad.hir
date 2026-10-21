@@ -1,0 +1,17 @@
+// rule: CLO-3
+// expect: reject CLO-3 at line 10
+// twin: CLO/CLO-3-json-document-task-ok.hir
+fn example(s: Scope) -> Result[(), json.JsonError] {
+  json_document.with_document(
+    "\"hello\"",
+    fn(doc: json_document.Document) {
+      let child = task.async(
+        s,
+        fn() {
+          let _ = json_document.text_bytes(doc, 0)
+        }
+      )
+      task.detach(s, take child)
+    }
+  )
+}
