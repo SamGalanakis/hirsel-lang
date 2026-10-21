@@ -57,7 +57,9 @@ pub const KIND_BUG: u32 = 1;
 /// The rule a bounded arena's exhaustion fails with (MEM-6).
 pub const BOUNDED_RULE: &str = "MEM-6";
 
-/// Whether the explicit every-stage harness policy enables backend verification.
+/// The harness environment default for every-stage validation. Drivers with an
+/// explicit policy pass `EmitInputs::verify_backend` directly; shipped builds skip
+/// backend IR verification unless that policy requests it.
 pub fn validate_stages() -> bool {
     std::env::var_os("HIRSEL_VALIDATE_STAGES").is_some_and(|value| value == "1")
 }

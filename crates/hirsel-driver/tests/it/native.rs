@@ -1173,6 +1173,10 @@ fn template_owners_and_objects_are_identical_at_one_and_eight_workers() {
         for (name, source) in [
             ("generic", GENERIC),
             ("list", LIST_READ),
+            (
+                "root",
+                "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let mut xs: List[u64] = []; list.push(mut xs, 7u64); let _ = out.print(io.stdout(rt)?, if xs[0u64] == 7u64 { \"seven\\n\" } else { \"bad\\n\" }); Ok(()) }",
+            ),
             ("finalizer", FINALIZER),
         ] {
             let checked = checked(source);
@@ -1208,6 +1212,15 @@ fn template_owners_and_objects_are_identical_at_one_and_eight_workers() {
                 let parallel = emit(8);
                 assert_eq!(serial, parallel, "{name}: {backend:?} {opt:?}");
                 assert_eq!(serial.len(), ready.units.len());
+                if name == "root" && backend == Backend::Llvm {
+                    assert!(
+                        serial
+                            .iter()
+                            .flat_map(|o| &o.exports)
+                            .any(|e| e.name.contains(".roots")),
+                        "mutable library root adapter was not exercised"
+                    );
+                }
                 for unit in &ready.units {
                     let header = &unit.unit().header;
                     if header.origin != UnitOrigin::Library
