@@ -3146,6 +3146,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
             )
         };
     }
+    if free::enabled(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                free::sets::release(ctx, scope.read(), set.read(), true, caller_site),
+            )
+        };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Entered);
     // SAFETY: caller contract.
     let set = unsafe { release_members(ctx, scope, set, true) };
@@ -3181,6 +3190,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach_all(
         return unsafe {
             crate::stop::check(ctx, ordered::sets::release(ctx, scope, set, false, 0))
         };
+    }
+    if free::enabled(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                free::sets::release(ctx, scope.read(), set.read(), false, 0),
+            )
+        };
+        return STATUS_OK;
     }
     crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller contract.

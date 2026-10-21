@@ -5,6 +5,8 @@
 use super::super::*;
 
 #[cfg(test)]
+mod release_tests;
+#[cfg(test)]
 mod tests;
 
 /// # Safety
@@ -169,4 +171,142 @@ pub(crate) unsafe fn close(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     })?;
     drop(row);
     Ok(())
+}
+
+/// Reserve linked-child promotion and row recycling before the Done section.
+/// The simulation follows the same unlink/promote order as retire_task (the
+/// Tokio cancellation-token tree structure), including a parent retired before
+/// one of its descendants. No real parent link changes during preparation.
+fn prepare_retirement(s: &mut Scheduler, retiring: &[u32]) {
+    if retiring.is_empty() {
+        return;
+    }
+    s.vacant_tasks.reserve(retiring.len());
+    let mut parents: Vec<_> = s
+        .tasks
+        .iter()
+        .map(|row| {
+            row.as_ref()
+                .and_then(|row| row.parent.map(|(parent, _)| parent))
+        })
+        .collect();
+    let mut links: Vec<_> = s
+        .tasks
+        .iter()
+        .map(|row| {
+            row.as_ref()
+                .map_or_else(Vec::new, |row| row.children.clone())
+        })
+        .collect();
+    let mut maximum: Vec<_> = links.iter().map(Vec::len).collect();
+    for &child in retiring {
+        if let Some(parent) = parents[child as usize] {
+            let promoted = std::mem::take(&mut links[child as usize]);
+            links[parent as usize].retain(|&id| id != child);
+            for &id in &promoted {
+                parents[id as usize] = Some(parent);
+            }
+            links[parent as usize].extend(promoted);
+            maximum[parent as usize] = maximum[parent as usize].max(links[parent as usize].len());
+        }
+    }
+    for (index, maximum) in maximum.into_iter().enumerate() {
+        if let Some(row) = s.tasks[index].as_mut() {
+            row.children.reserve(maximum - row.children.len());
+        }
+    }
+}
+
+/// # Safety
+/// As for TaskDetachAll/TaskCancelAll. The caller owns the set and every
+/// unawaited handle; no table reference survives a call to a child rest.
+pub(crate) unsafe fn release(
+    ctx: *mut TaskCtx,
+    scope: u64,
+    word: u64,
+    cancel: bool,
+    caller_site: u64,
+) -> Stopped<()> {
+    super::record::begin(ctx);
+    let s = scheduler(ctx) as *mut Scheduler;
+    let scope = unsafe { (*s).scope_handle(scope) };
+    let set = unsafe { (*s).set_handle(word, scope) };
+    let members: Vec<_> = unsafe { (*s).set(set).members.iter().flatten().copied().collect() };
+    if members.is_empty() {
+        unsafe { (*s).vacant_sets.reserve(1) };
+        let row = super::record::publish(ctx, Phase::Done, |_| unsafe {
+            let row = (&mut (*s).sets)[set as usize].take().unwrap();
+            (*s).vacant_sets.push(set);
+            row
+        })?;
+        drop(row);
+        return unsafe { try_yield(&mut *ctx) };
+    }
+    let children: Vec<_> = members
+        .iter()
+        .map(|&word| unsafe { (*s).task_handle(word, scope) })
+        .collect();
+    let cancellations: Vec<_> = if cancel {
+        children
+            .iter()
+            .map(|&child| (child, unsafe { (*s).prepare_cancel(child) }))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    unsafe { (*s).woken.reserve((*s).tasks.len()) };
+    super::record::publish(ctx, Phase::Entered, |_| unsafe {
+        for (child, targets) in &cancellations {
+            (*s).cancel_prepared(*child, CANCEL_REQUESTED, targets);
+        }
+        for &child in &children {
+            (*s).task(child).detached = true;
+        }
+    })?;
+    drop(cancellations);
+    drop(children);
+    for &word in &members {
+        // A preceding called rest may have completed/vacated another member.
+        // Native handles are generation-qualified; never reuse its old index.
+        let s = scheduler(ctx);
+        if let Some(child) = s.member(word)
+            && readiness::saved(s, child)
+            && s.task(child).state == State::Holding
+        {
+            s.task(child).slot = None;
+            unsafe { hand_off(&mut *ctx, child) };
+        }
+    }
+    if cancel && !unsafe { poll_drained(scheduler(ctx), set) } {
+        unsafe { try_block(&mut *ctx, Wait::Drain { set }, false, caller_site) }?;
+    }
+    let s = scheduler(ctx) as *mut Scheduler;
+    let retiring: Vec<_> = members
+        .iter()
+        .filter_map(|&word| unsafe {
+            let child = (*s).member(word)?;
+            let row = (*s).task(child);
+            (row.state == State::Done && row.failure.is_none() && readiness::saved(&*s, child))
+                .then_some(child)
+        })
+        .collect();
+    let mut retired = Vec::with_capacity(retiring.len());
+    unsafe {
+        prepare_retirement(&mut *s, &retiring);
+        (*s).vacant_sets.reserve(1);
+    }
+    let set_row = super::record::publish(ctx, Phase::Done, |_| unsafe {
+        for &child in &retiring {
+            (*s).scope(scope).children.retain(|&id| id != child);
+            retired.push((*s).retire_task(child));
+        }
+        let row = (&mut (*s).sets)[set as usize].take().unwrap();
+        (*s).vacant_sets.push(set);
+        row
+    })?;
+    drop(set_row);
+    drop(retired);
+    drop(retiring);
+    drop(members);
+    unsafe { try_yield(&mut *ctx) }
 }
