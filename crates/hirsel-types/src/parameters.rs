@@ -493,17 +493,19 @@ pub fn instantiate_relation(
     (relation, selected)
 }
 
+#[cfg(test)]
+thread_local! { static COPIED_IDENTITY_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 fn instantiate_source_arguments(
     store: &TypeInterner,
     root: TypeId,
     arguments: &BTreeMap<ParameterRef, OriginArgument>,
     sources: bool,
 ) -> Result<TypeId, GraphError> {
-    let identities = arguments
-        .iter()
-        .map(|(p, a)| (*p, a.identity.clone()))
-        .collect();
-    let root = instantiate_origin_identities(store, root, &identities)?;
+    // Rust alloc/collections/btree/map.rs:727-741: borrow the selected value
+    // from the retained argument map rather than cloning a projected map.
+    let root =
+        instantiate_origin_identities(store, root, |p| arguments.get(&p).map(|a| &a.identity))?;
     rewrite_parameter_graph_for(store, root, BRANDS | RELATIONS, |_, t, depth| {
         let mut alternatives = Vec::new();
         for origin in &t.brand.alternatives {
@@ -543,16 +545,20 @@ fn instantiate_source_arguments(
 
 /// Identity-only refinement for an inferred type occurrence. Locality must not
 /// change merely because a previously free identity becomes concrete.
-fn instantiate_origin_identities(
+fn instantiate_origin_identities<'a>(
     store: &TypeInterner,
     root: TypeId,
-    arguments: &BTreeMap<ParameterRef, Origin>,
+    arguments: impl Fn(ParameterRef) -> Option<&'a Origin>,
 ) -> Result<TypeId, GraphError> {
-    fn origin(o: &mut Origin, depth: u32, arguments: &BTreeMap<ParameterRef, Origin>) {
+    fn origin<'a>(
+        o: &mut Origin,
+        depth: u32,
+        arguments: &impl Fn(ParameterRef) -> Option<&'a Origin>,
+    ) {
         let OriginRoot::Parameter(p) = o.root else {
             return;
         };
-        if let Some(actual) = free_parameter(p, depth).and_then(|p| arguments.get(&p)) {
+        if let Some(actual) = free_parameter(p, depth).and_then(arguments) {
             let fields = std::mem::take(&mut o.fields);
             *o = actual.clone();
             o.fields.extend(fields);
@@ -560,7 +566,7 @@ fn instantiate_origin_identities(
     }
     rewrite_parameter_graph_for(store, root, BRANDS, |_, t, depth| {
         for o in &mut t.brand.alternatives {
-            origin(o, depth, arguments);
+            origin(o, depth, &arguments);
         }
         t.brand.alternatives.sort();
         t.brand.alternatives.dedup();
@@ -645,7 +651,7 @@ pub fn refine_inferred_value_contract(
         }
         Ok(())
     })?;
-    instantiate_origin_identities(store, root, &origins)
+    instantiate_origin_identities(store, root, |p| origins.get(&p))
 }
 
 /// Instantiate the held/allowed authority in callback types from the actual
@@ -1108,5 +1114,84 @@ mod feature_oracle_tests {
             FORCE_FULL_REWRITE.with(|force| force.set(false));
             assert_eq!(pruned, original, "root {root:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod borrowed_identity_tests {
+    use super::*;
+    use crate::declarations::tests::path;
+    #[test]
+    fn source_instantiation_borrows_identity_inputs_and_preserves_source_and_brand_paths() {
+        let t = TypeInterner::new(None);
+        let scalar = t.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+        let arguments: BTreeMap<_, _> = (0..64)
+            .map(|i| {
+                let identity = Origin {
+                    root: OriginRoot::Definition(path(&format!("actual_{i}"))),
+                    fields: vec![FieldId(1)].into(),
+                };
+                (
+                    ParameterRef::bound(ParamId(i)),
+                    OriginArgument {
+                        identity: identity.clone(),
+                        brand: Brand {
+                            alternatives: vec![identity].into(),
+                        },
+                        relation: Relation::place(Origin {
+                            root: OriginRoot::Definition(path(&format!("home_{i}"))),
+                            fields: vec![].into(),
+                        }),
+                    },
+                )
+            })
+            .collect();
+        let actuals = (0..64)
+            .map(|i| (ParameterRef::bound(ParamId(i)), scalar))
+            .collect();
+        let retained = arguments.clone();
+        let p = ParameterRef::bound(ParamId(0));
+        let mut row = t.row(scalar).clone();
+        row.brand.alternatives = vec![Origin {
+            root: OriginRoot::Parameter(p),
+            fields: vec![FieldId(2)].into(),
+        }]
+        .into();
+        row.modes.relation = Relation::place(Origin {
+            root: OriginRoot::Parameter(p),
+            fields: vec![FieldId(4)].into(),
+        });
+        row.modes.sendability = Sendability::Sendable;
+        let root = t.intern(row);
+        let before = COPIED_IDENTITY_ROWS.with(std::cell::Cell::get);
+        for _ in 0..8 {
+            assert_eq!(
+                instantiate_parameter_sources(&t, scalar, &arguments, &actuals),
+                Ok(scalar)
+            );
+            let replaced = instantiate_parameter_sources(&t, root, &arguments, &actuals).unwrap();
+            let row = t.row(replaced);
+            let mut identity = arguments[&p].identity.clone();
+            identity.fields.push(FieldId(2));
+            assert_eq!(row.brand.alternatives.as_slice(), &[identity]);
+            let home = Origin {
+                root: OriginRoot::Definition(path("home_0")),
+                fields: vec![FieldId(4)].into(),
+            };
+            assert_eq!(row.modes.relation, Relation::place(home.clone()));
+            assert_eq!(row.modes.sendability, Sendability::NotSendable);
+            let origins = instantiate_parameter_origins(&t, root, &arguments).unwrap();
+            assert_eq!(t.row(origins).modes.sendability, Sendability::Sendable);
+        }
+        assert_eq!(arguments, retained);
+        assert_eq!(
+            instantiate_parameter_sources(&t, scalar, &arguments, &[(p, TypeId::DANGLING)].into()),
+            Err(GraphError::MissingType(TypeId::DANGLING))
+        );
+        assert_eq!(
+            COPIED_IDENTITY_ROWS.with(std::cell::Cell::get) - before,
+            0,
+            "select identities from retained arguments without constructing another map"
+        );
     }
 }
