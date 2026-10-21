@@ -42,13 +42,15 @@ pub(crate) fn with_seed(writable: Arc<dyn ObjectStore>, partition: &str) -> Arc<
 }
 
 /// Compile the package's non-generic runtime closure for the host into every
-/// backend/optimization partition. No program is linked or run. Generic instances
-/// reached from those roots are included and counted separately.
+/// backend/optimization partition. Modules seed sequentially in fresh engines,
+/// bounding memory by a module's reachable closure. Units and generic_units count
+/// visits across module batches; objects counts freshly emitted owners. No program
+/// is linked or run.
 pub fn seed_objects(manifest: &Path, output: &Path) -> Result<SeedReport, String> {
     let mut package = crate::COMPILER
         .load_package_declarations(manifest)
         .map_err(|e| e.to_string())?;
-    let mut roots = Vec::new();
+    let mut roots = std::collections::BTreeMap::<_, Vec<_>>::new();
     for (file, context) in package.files.clone() {
         if context.package != package.package {
             continue;
@@ -66,55 +68,81 @@ pub fn seed_objects(manifest: &Path, output: &Path) -> Result<SeedReport, String
             } = &item.item.kind
                 && signature.generics.is_empty()
             {
-                roots.push(item.item.definition.clone());
+                roots
+                    .entry(context.modules.clone())
+                    .or_default()
+                    .push(item.item.definition.clone());
             }
         }
     }
-    roots.sort();
-    roots.dedup();
+    for group in roots.values_mut() {
+        group.sort();
+        group.dedup();
+    }
     if roots.is_empty() {
         return Err("no non-generic runtime functions to seed".into());
     }
-    let input = package
-        .engine
-        .native_input_for(&roots)
-        .map_err(|e| format!("{e:?}"))?;
+    // Declaration-only engines always free their tables. No module batch keeps
+    // TIR, native layouts or placement state from an earlier batch alive.
+    drop(package);
     let target = if cfg!(target_arch = "aarch64") {
         TargetSpec::aarch64_unknown_linux_gnu()
     } else {
         TargetSpec::x86_64_unknown_linux_gnu()
     };
-    let program = super::adapt::program(&input);
-    let manifest = super::adapt::manifest(input.snapshot()).map_err(|e| e.to_string())?;
     let mut report = SeedReport {
-        roots: roots.len(),
+        roots: roots.values().map(Vec::len).sum(),
         ..Default::default()
     };
     // Seed with one worker: toolchain building must not multiply the memory of
     // unrelated LLVM modules. Consumers choose their own worker count.
-    for backend in [Backend::Cranelift, Backend::Llvm] {
-        for opt in [OptLevel::None, OptLevel::Default, OptLevel::Speed] {
-            let partition = hirsel_lir::objects::partition(
-                &target.triple,
-                backend.name(),
-                &format!("{opt:?}").to_lowercase(),
-            );
-            let store = Arc::new(DirObjects::new(output.join(partition)));
-            let mut options = Options::new(target.clone());
-            options.validation = Validation::Ready;
-            options.objects = Some(UnitObjects {
-                store,
-                backend,
-                opt,
-                debug: opt == OptLevel::None,
-                fuel: false,
-                jobs: hirsel_intern::jobs::Jobs::ONE,
-            });
-            let ready = super::stages::build_program(&program, manifest.clone(), &options)
-                .map_err(|e| e.to_string())?;
-            report.units = ready.summaries.len();
-            report.generic_units = ready.unit_objects.as_ref().map_or(0, |o| o.generic_units);
-            report.objects += ready.unit_objects.as_ref().map_or(0, |o| o.objects.len());
+    for (batch, (module, group)) in roots.iter().enumerate() {
+        eprintln!(
+            "seeding native objects {}/{}: {} ({} roots)",
+            batch + 1,
+            roots.len(),
+            module.join("."),
+            group.len(),
+        );
+        let mut package = crate::COMPILER
+            .load_package_declarations(manifest)
+            .map_err(|e| e.to_string())?;
+        let input = package
+            .engine
+            .native_input_for(group)
+            .map_err(|e| format!("{e:?}"))?;
+        let program = super::adapt::program(&input);
+        let operations = super::adapt::manifest(input.snapshot()).map_err(|e| e.to_string())?;
+        for backend in [Backend::Cranelift, Backend::Llvm] {
+            for opt in [OptLevel::None, OptLevel::Default, OptLevel::Speed] {
+                let partition = hirsel_lir::objects::partition(
+                    &target.triple,
+                    backend.name(),
+                    &format!("{opt:?}").to_lowercase(),
+                );
+                let store = Arc::new(DirObjects::new(output.join(partition)));
+                let mut options = Options::new(target.clone());
+                options.validation = Validation::Ready;
+                options.objects = Some(UnitObjects {
+                    store,
+                    backend,
+                    opt,
+                    debug: opt == OptLevel::None,
+                    fuel: false,
+                    jobs: hirsel_intern::jobs::Jobs::ONE,
+                });
+                let ready = super::stages::build_program(&program, operations.clone(), &options)
+                    .map_err(|e| e.to_string())?;
+                if backend == Backend::Cranelift && opt == OptLevel::None {
+                    report.units += ready.summaries.len();
+                    report.generic_units +=
+                        ready.unit_objects.as_ref().map_or(0, |o| o.generic_units);
+                }
+                report.objects += ready
+                    .unit_objects
+                    .as_ref()
+                    .map_or(0, |o| o.objects.len() - o.hits);
+            }
         }
     }
     Ok(report)
@@ -124,6 +152,40 @@ pub fn seed_objects(manifest: &Path, output: &Path) -> Result<SeedReport, String
 mod tests {
     use super::*;
     use hirsel_lir::objects::NoObjects;
+
+    // A contract helper's closure is addressed and called in the same singleton
+    // object. An untyped LLVM address declaration conflicts with the bound call.
+    #[test]
+    fn a_seeded_store_delete_has_one_consistent_entry_abi() {
+        hirsel_engine::with_compiler_stack(|| {
+            let manifest =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stdlib/std@1/hirsel.json");
+            let mut package = crate::COMPILER
+                .load_package_declarations(&manifest)
+                .unwrap();
+            let root = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+                package: package.package.clone(),
+                modules: vec!["store".into()],
+                name: "tx_delete".into(),
+            });
+            let input = package.engine.native_input_for(&[root]).unwrap();
+            for backend in [Backend::Cranelift, Backend::Llvm] {
+                for opt in [OptLevel::None, OptLevel::Default, OptLevel::Speed] {
+                    let mut options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
+                    options.objects = Some(UnitObjects {
+                        store: Arc::new(NoObjects),
+                        backend,
+                        opt,
+                        debug: opt == OptLevel::None,
+                        fuel: false,
+                        jobs: hirsel_intern::jobs::Jobs::ONE,
+                    });
+                    super::super::build(&input, &options)
+                        .unwrap_or_else(|e| panic!("{backend:?} {opt:?}: {e}"));
+                }
+            }
+        });
+    }
 
     /// Installed products must be reusable by a distinct consumer on its first build,
     /// without changing process environment or sharing a compiler session.

@@ -109,7 +109,19 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let name = symbol_name(&symbol.definition, symbol.instance.as_ref());
                 let abi = fn_abi(self.inputs.layouts, c.abi, self.definition())?;
                 self.import_function(&name, &symbol.definition, Some(abi_digest(abi)));
-                self.module.function_address(&name)
+                // A bound call may name this same entry later in the unit. Declare
+                // its actual ABI now, as Cranelift does, rather than introducing
+                // an untyped address placeholder that conflicts with that call.
+                Signature::of(self.module, self.inputs.layouts, abi, self.definition())?
+                    .declare(
+                        self.module,
+                        self.inputs.layouts,
+                        &name,
+                        self.definition(),
+                        false,
+                        Aliasing::of(self.inputs.callbacks),
+                    )?
+                    .value
             }
             None => self.module.const_zero(self.module.ptr_type()),
         };

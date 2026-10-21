@@ -512,7 +512,17 @@ impl<'context> Module<'context> {
             // SAFETY: `existing` is a live function of this module.
             let existing_ty = unsafe { LLVMGlobalGetValueType(existing) };
             if existing_ty != fn_ty.raw {
-                return Err(format!("`{name}` is declared with two different types"));
+                // SAFETY: both types belong to this live context; LLVM allocates
+                // each printed message, which take_message disposes.
+                let (existing, requested) = unsafe {
+                    (
+                        take_message(LLVMPrintTypeToString(existing_ty)),
+                        take_message(LLVMPrintTypeToString(fn_ty.raw)),
+                    )
+                };
+                return Err(format!(
+                    "`{name}` is declared with two different types: {existing}; requested {requested}"
+                ));
             }
             return Ok(Function {
                 value: value(existing),
