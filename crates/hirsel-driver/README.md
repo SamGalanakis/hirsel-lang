@@ -251,3 +251,8 @@ run's streams (`SCM_RIGHTS`); the server replies with the child's process ID and
 then its raw wait status, and a timeout kills the child's process group.
 `runner_oracle_in` holds a configuration's executable and image to byte-identical
 output, status and observation record, and cross-replays their tapes.
+
+Native placement, RC insertion and elision, reuse and cleanup use one per-unit
+lowering function. Object workers, heap inspection and dumps all use it;
+production validates Ready once, and harnesses also check intermediate stages.
+Finalizer facts come from the plan, so no stage retains every unit's RC output.

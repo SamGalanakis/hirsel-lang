@@ -360,6 +360,79 @@ pub(crate) fn checkpoint<S: Stage>(
     }
 }
 
+/// Lower one imported unit through placement, RC, reuse and Ready. Production
+/// validates Ready once; harnesses use the identical passes with stage checkpoints.
+pub(crate) fn lower_unit(
+    unit: LirUnit<hirsel_lir::stage::Value>,
+    id: hirsel_rc::instance::InstanceId,
+    options: &Options,
+    instances: &hirsel_rc::instance::Instances,
+    finalizers: &Finalizers,
+    inputs: &Inputs<'_>,
+    validation: &hirsel_lir::validate::ValidationContext<'_>,
+) -> Result<ValidatedUnit<Ready>, NativeError> {
+    let table = inputs.layouts;
+    let definition = unit.header.definition.clone();
+    let fail = |stage, message: String| NativeError::of(stage, &definition, message);
+    timings::count(Count::Units);
+    let value = checkpoint(
+        StageName::Import,
+        unit,
+        inputs,
+        validation,
+        options.validation,
+    )?;
+    let placement = hirsel_rc::placement::Options::for_instance(options.regions, instances, id);
+    let placed = timed(Phase::Place, || {
+        hirsel_rc::placement::place(value, table, &placement)
+    })
+    .map_err(|e| fail(StageName::Placement, e.to_string()))?;
+    let placed = checkpoint(
+        StageName::Placement,
+        placed,
+        inputs,
+        validation,
+        options.validation,
+    )?;
+    let proofs = Proofs::for_instance(instances, id);
+    let mut unit = timed(Phase::Rc, || {
+        hirsel_rc::insert::insert(placed, table, &proofs)
+    })
+    .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
+    if options.elide {
+        unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
+            .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
+    }
+    let rc = checkpoint(
+        StageName::Perceus,
+        unit,
+        inputs,
+        validation,
+        options.validation,
+    )?;
+    let reuse = hirsel_rc::reuse::Options {
+        reuse: options.reuse,
+    };
+    let reused = timed(Phase::Reuse, || {
+        hirsel_rc::reuse::reuse_indexed(rc, &reuse, validation.index())
+    })
+    .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
+    let reused = checkpoint(
+        StageName::Reuse,
+        reused,
+        inputs,
+        validation,
+        options.validation,
+    )?;
+    let ready = timed(Phase::Ready, || {
+        hirsel_rc::ready::ready_indexed(reused, finalizers, validation.index())
+    })
+    .map_err(|e| fail(StageName::Ready, e.to_string()))?;
+    let ready = seal(StageName::Ready, || validation.validate(ready, inputs))?;
+    super::emit::check_unit_runtime_calls(ready.unit(), table, inputs.manifest)?;
+    Ok(ready)
+}
+
 /// Lower a validated snapshot to a Ready program for `options.target`.
 pub fn build(
     validated: &ValidatedNativeInput,
@@ -436,78 +509,35 @@ pub fn build_program(
     }
     let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
     preflight(&validation)?;
-    let mut rc = Vec::with_capacity(lowered.units.len());
-    for (index, unit) in value_units.into_iter().enumerate() {
-        let id = lowered.unit_origins[index];
-        let definition = unit.header.definition.clone();
-        let fail = |stage, message: String| NativeError::of(stage, &definition, message);
-        timings::count(Count::Units);
-        let value = checkpoint(
-            StageName::Import,
-            unit,
-            &inputs,
-            &validation,
-            options.validation,
-        )?;
-        let placement = hirsel_rc::placement::Options::for_instance(options.regions, instances, id);
-        let placed = timed(Phase::Place, || {
-            hirsel_rc::placement::place(value, table, &placement)
-        })
-        .map_err(|e| fail(StageName::Placement, e.to_string()))?;
-        let placed = checkpoint(
-            StageName::Placement,
-            placed,
-            &inputs,
-            &validation,
-            options.validation,
-        )?;
-        let proofs = Proofs::for_instance(instances, id);
-        let mut unit = timed(Phase::Rc, || {
-            hirsel_rc::insert::insert(placed, table, &proofs)
-        })
-        .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
-        // Elision only cancels a copy against the release after it, so one
-        // validation of its output also judges insertion's.
-        if options.elide {
-            unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
-                .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
-        }
-        rc.push(checkpoint(
-            StageName::Perceus,
-            unit,
-            &inputs,
-            &validation,
-            options.validation,
-        )?);
-    }
-    // Cleanup reads only the plan's finalizer facts: no unit waits for another's RC output.
     let finalizers = Finalizers::planned(instances, table);
-    let mut units = Vec::with_capacity(rc.len());
-    for unit in rc {
-        let definition = unit.header.definition.clone();
-        let fail = |stage, message: String| NativeError::of(stage, &definition, message);
-        let reuse = hirsel_rc::reuse::Options {
-            reuse: options.reuse,
-        };
-        let reused = timed(Phase::Reuse, || {
-            hirsel_rc::reuse::reuse_indexed(unit, &reuse, validation.index())
-        })
-        .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
-        let reused = checkpoint(
-            StageName::Reuse,
-            reused,
-            &inputs,
-            &validation,
-            options.validation,
-        )?;
-        let ready = timed(Phase::Ready, || {
-            hirsel_rc::ready::ready_indexed(reused, &finalizers, validation.index())
-        })
-        .map_err(|e| fail(StageName::Ready, e.to_string()))?;
-        units.push(seal(StageName::Ready, || {
-            validation.validate(ready, &inputs)
-        })?);
-    }
+    let tasks = value_units.into_iter().zip(&lowered.unit_origins).collect();
+    // Inspection and heap builds use the same complete per-unit pipeline as object
+    // builds. With one worker map runs inline; no stage collects whole-program RC.
+    let units = hirsel_intern::jobs::map(
+        hirsel_intern::jobs::Jobs::ONE,
+        tasks,
+        |(unit, _)| unit.instructions.len() as u64,
+        |(unit, &id)| {
+            let inputs = Inputs {
+                discharge: Some(&lowered.native_discharge),
+                operations: &operations,
+                target,
+                layouts: table,
+                manifest: &manifest,
+            };
+            lower_unit(
+                unit,
+                id,
+                options,
+                instances,
+                &finalizers,
+                &inputs,
+                &validation,
+            )
+        },
+    )
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
     let functions = instances
         .ids()
         .filter(|id| instances.roles[id.index()] == InstanceRole::Function)
@@ -796,4 +826,104 @@ fn callbacks<S>(unit: &hirsel_lir::ir::LirUnit<S>) -> impl Iterator<Item = DefPa
         }
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_pipeline_is_identical_at_every_worker_count_and_validation_policy() {
+        hirsel_engine::with_compiler_stack(|| {
+            let mut engine = hirsel_engine::QueryEngine::new(
+                hirsel_engine::default_environment(),
+                crate::compiler_adapters(),
+            );
+            let source = r#"
+fn helper(x: u64) -> u64 { x + 1u64 }
+fn main() -> u64 {
+    let built: String = "value"
+    let s: Shared[String] = shared.freeze(take built)
+    let t = copy s
+    match shared.thaw(take t) {
+        Ok(text) => helper(1u64),
+        Error(root) => helper(2u64),
+    }
+}
+"#;
+            let file = engine.sources.add("pipeline.hir", source.into()).unwrap();
+            let checked =
+                hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
+                    .unwrap();
+            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+            let exported = engine.export_native_input().unwrap();
+            let validated = engine.import_native_input(exported).unwrap();
+            let program = adapt::program(&validated);
+            let target = TargetSpec::x86_64_unknown_linux_gnu();
+            let lowered = hirsel_rc::import::lower(&program, &target).unwrap();
+            assert!(lowered.units.len() > 1);
+            let manifest = adapt::manifest(validated.snapshot()).unwrap();
+            let operations = program.operation_registry();
+            let inputs = Inputs {
+                discharge: Some(&lowered.native_discharge),
+                operations: &operations,
+                target: &target,
+                layouts: &lowered.table,
+                manifest: &manifest,
+            };
+            let context = hirsel_lir::validate::ValidationContext::new(&inputs);
+            preflight(&context).unwrap();
+            let finalizers = Finalizers::planned(&lowered.instances, &lowered.table);
+            let mut expected = None;
+            for policy in [Validation::EveryStage, Validation::Ready] {
+                let mut options = Options::new(target.clone());
+                options.validation = policy;
+                for jobs in [1, 2, 8] {
+                    let tasks = lowered
+                        .units
+                        .iter()
+                        .cloned()
+                        .zip(lowered.unit_origins.iter().copied())
+                        .collect();
+                    let results = hirsel_intern::jobs::map(
+                        hirsel_intern::jobs::Jobs::new(jobs),
+                        tasks,
+                        |(u, _)| u.instructions.len() as u64,
+                        |(unit, id)| {
+                            let inputs = Inputs {
+                                discharge: Some(&lowered.native_discharge),
+                                operations: &operations,
+                                target: &target,
+                                layouts: &lowered.table,
+                                manifest: &manifest,
+                            };
+                            lower_unit(
+                                unit,
+                                id,
+                                &options,
+                                &lowered.instances,
+                                &finalizers,
+                                &inputs,
+                                &context,
+                            )
+                            .map(|unit| {
+                                (
+                                    hirsel_codec::to_text(unit.unit()),
+                                    unit.receipt().raw().clone(),
+                                )
+                            })
+                        },
+                    )
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                    if let Some(expected) = &expected {
+                        assert_eq!(expected, &results, "jobs={jobs}, policy={policy:?}");
+                    } else {
+                        expected = Some(results);
+                    }
+                }
+            }
+        });
+    }
 }
