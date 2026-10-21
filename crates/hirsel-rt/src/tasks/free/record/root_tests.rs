@@ -1,5 +1,8 @@
 use super::*;
+use crate::tasks::free::replay::Replay;
 use crate::tasks::*;
+use hirsel_free::projection::Projection;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[test]
 fn recorded_entries_apply_nested_releases_in_their_phase_tail() {
@@ -373,5 +376,185 @@ fn recorded_child_end_finishes_its_nested_root_tail_before_exposing_the_result()
                 hirsel_free::projection::Projection::new("returned", &cut.progress, &trace)
             );
         }
+    }
+}
+
+#[test]
+fn native_replay_applies_nested_root_tails_at_an_entered_only_cut() {
+    let scalar = crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size: 8,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 1,
+        flags: crate::LAYOUT_FROZEN,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: 0,
+    };
+    let nested = crate::Step {
+        kind: crate::STEP_RELEASE_ROOT,
+        field: 0,
+        variant: 0,
+        span: 0,
+        offset: 0,
+        stride: 0,
+        count: 0,
+        count_offset: 0,
+        layout: std::ptr::null(),
+    };
+    let outer = crate::Layout {
+        steps: &nested,
+        step_count: 1,
+        ..scalar
+    };
+    let layouts = [&raw const scalar, &raw const outer];
+    for durable in [false, true] {
+        for bound in [3, 100] {
+            let recording = super::super::record::Recording::new(b"root tail replay", durable);
+            let install = recording.clone();
+            let cutter = recording.clone();
+            let mut run = crate::host::BodyRun::new(8, false);
+            run.free = true;
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 2;
+            run.config.count_max = bound;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe {
+                    super::super::enable(ctx);
+                    install.root(ctx);
+                },
+                move |ctx| unsafe {
+                    let _role = role::Guard::new(ctx);
+                    let inner = pending_nested_roots(ctx);
+                    // Force the exact flush between the native entry's primary
+                    // decrements and traversal, as the cutter may do live.
+                    super::super::record::begin(ctx);
+                    let mut tail = crate::roots::PhaseRoots::prepare(ctx);
+                    let mut task = (*ctx).recording.take().unwrap();
+                    let mut worker = cutter
+                        .recorder
+                        .worker(crate::pool::recorder_slot())
+                        .unwrap();
+                    cutter
+                        .recorder
+                        .phase_if(
+                            &mut worker,
+                            &mut task.log,
+                            Progress::new(1, Phase::Entered),
+                            || tail.apply(ctx),
+                            |_| (),
+                        )
+                        .unwrap()
+                        .unwrap();
+                    drop(worker);
+                    (*ctx).recording = Some(task);
+                    cutter.recorder.flush().unwrap().unwrap();
+                    assert_eq!(crate::roots::count(&*ctx, inner), 2);
+                    tail.finish(ctx);
+                    super::super::record::publish(ctx, Phase::Done, |_| ()).unwrap();
+                    assert_eq!(crate::roots::count(&*ctx, inner), 1);
+                    crate::roots::hirsel_rt_v2_root_release(ctx, inner);
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            recording.recorder.stop("returned", None).unwrap().unwrap();
+            let trace = recording.trace();
+            let bytes = Arc::try_unwrap(recording)
+                .ok()
+                .unwrap()
+                .recorder
+                .into_sink()
+                .bytes;
+            let flush = (1..bytes.len())
+                .find(|&end| {
+                    hirsel_free::tape::parse(&bytes[..end]).is_ok_and(|tape| {
+                        tape.cut.get(&Vec::new()) == Some(&Progress::new(1, Phase::Entered))
+                    })
+                })
+                .unwrap();
+            for end in [flush, flush + 1, bytes.len()] {
+                let full = end == bytes.len();
+                let parsed = hirsel_free::tape::parse(&bytes[..end]).unwrap();
+                let expected = Projection::new(
+                    if full { "returned" } else { "truncated" },
+                    &parsed.cut,
+                    &trace,
+                );
+                for width in [2, 8] {
+                    let replay = Replay::new(&bytes[..end]).unwrap();
+                    let install = replay.clone();
+                    let checked = Arc::new(AtomicBool::new(false));
+                    let observed = checked.clone();
+                    let mut run = crate::host::BodyRun::new(width, false);
+                    run.free = true;
+                    run.config.layouts = layouts.as_ptr();
+                    run.config.layout_count = 2;
+                    run.config.count_max = bound;
+                    unsafe { run.use_physical_dispatch() };
+                    let outcome = run.run(
+                        move |ctx| unsafe { install.root(ctx) },
+                        move |ctx| unsafe {
+                            let _role = role::Guard::new(ctx);
+                            let inner = pending_nested_roots(ctx);
+                            let mut word = 0;
+                            let result = super::super::record::atomic_create(
+                                ctx,
+                                &mut word,
+                                (&0u64 as *const u64).cast(),
+                                8,
+                            );
+                            // Runtime-owner check before propagating the cut:
+                            // no user continuation or object action is admitted.
+                            assert!(!(*ctx).roots.has_pending(), "entry applies pending roots");
+                            assert_eq!(
+                                crate::roots::count(&*ctx, inner),
+                                1,
+                                "entry admits its nested tail"
+                            );
+                            assert_eq!(word == 0, !full);
+                            observed.store(true, Ordering::Release);
+                            crate::roots::hirsel_rt_v2_root_release(ctx, inner);
+                            crate::stop::check(ctx, result);
+                            super::super::try_yield(&mut *ctx).unwrap();
+                            panic!("replay passed the root-tail cut");
+                        },
+                    );
+                    assert!(
+                        matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
+                        "{outcome:?}"
+                    );
+                    assert!(checked.load(Ordering::Acquire));
+                    assert_eq!(replay.finish().unwrap(), expected);
+                }
+            }
+        }
+    }
+}
+
+unsafe fn pending_nested_roots(ctx: *mut TaskCtx) -> *mut crate::Header {
+    unsafe {
+        let inner = crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+        crate::alloc::payload(inner).cast::<u64>().write(11);
+        crate::roots::hirsel_rt_v2_root_dup(ctx, inner);
+        let outer = crate::alloc::hirsel_rt_v2_alloc(ctx, 3, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+        crate::alloc::payload(outer)
+            .cast::<*mut crate::Header>()
+            .write(inner);
+        for _ in 0..5 {
+            crate::roots::hirsel_rt_v2_root_dup(ctx, outer);
+        }
+        for _ in 0..6 {
+            crate::roots::hirsel_rt_v2_root_release(ctx, outer);
+        }
+        assert!((*ctx).roots.has_pending());
+        assert_eq!(crate::roots::count(&*ctx, inner), 2);
+        inner
     }
 }

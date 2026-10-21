@@ -24,8 +24,9 @@ impl Replay {
 
     /// # Safety
     /// Admission only, before any task runs. This initial replay slice admits
-    /// scalar atomics and administrative task-tree operations only; no host
-    /// requests or shared-object/cancellation outcome substitution yet.
+    /// scalar atomics, administrative task-tree operations and pending Shared
+    /// root tails only; no host requests or shared-object/cancellation outcome
+    /// substitution yet.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
@@ -139,6 +140,21 @@ impl Token {
     /// No action runs past its admitted phase. Rejection returns through its
     /// runtime owner so temporary cell accesses drop normally before stopping.
     pub(super) fn publish<T>(
+        &self,
+        ctx: *mut TaskCtx,
+        phase: Phase,
+        action: impl FnOnce() -> T,
+    ) -> Stopped<T> {
+        // Immediate ops still have an entry when roots are pending. Admit
+        // its deterministic nested tail even if this cut rejects Done, just
+        // as record::publish_with_replay does on the recording path.
+        if phase == Phase::Done && unsafe { (*ctx).roots.has_pending() } {
+            self.publish_phase(ctx, Phase::Entered, || ())?;
+        }
+        self.publish_phase(ctx, phase, action)
+    }
+
+    fn publish_phase<T>(
         &self,
         ctx: *mut TaskCtx,
         phase: Phase,
