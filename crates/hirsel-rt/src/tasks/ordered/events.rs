@@ -42,7 +42,6 @@ pub(super) struct Boundary {
 pub(super) enum CanonicalItem {
     Object(ObjectId),
     Cancellation(Vec<u32>),
-    Task(Vec<u32>),
 }
 
 /// The actual completion returned by an owned host request. It is retained
@@ -99,7 +98,6 @@ pub(super) struct CanonicalEvent {
 pub(super) enum CanonicalOutcome {
     Created(ObjectId),
     Alias(ObjectId),
-    Task(Vec<u32>),
     Scalar(Vec<u8>),
     Unit,
 }
@@ -160,6 +158,7 @@ pub(super) struct Log {
     /// Generation-qualified native words are lookup keys only. Keep bindings
     /// after close so delayed evidence cannot be confused with a reused row.
     sets: BTreeMap<u64, ObjectId>,
+    tasks: BTreeMap<u64, ObjectId>,
     canonical: Vec<CanonicalEvent>,
     unsupported: Vec<Unsupported>,
 }
@@ -351,14 +350,10 @@ pub(super) fn record(
             }
             Command::TaskSetAdd { set, child, .. } => {
                 let object = log.sets.get(set)?.clone();
-                let row = s.task(*child as u32);
-                assert_eq!(row.generation, (*child >> 32) as u32);
+                let child = log.tasks.get(child)?.clone();
                 return Some(vec![
                     (CanonicalItem::Object(object), CanonicalOutcome::Unit),
-                    (
-                        CanonicalItem::Task(row.path.clone()),
-                        CanonicalOutcome::Unit,
-                    ),
+                    (CanonicalItem::Object(child), CanonicalOutcome::Unit),
                 ]);
             }
             Command::TaskSetClose { set } => {
@@ -388,17 +383,15 @@ pub(super) fn record(
                 let set = u64::from_ne_bytes(result.image[..8].try_into().unwrap());
                 let child = u64::from_ne_bytes(result.image[8..].try_into().unwrap());
                 let object = log.sets.get(&set)?.clone();
-                let row = s.task(child as u32);
-                assert_eq!(row.generation, (child >> 32) as u32);
-                let child = row.path.clone();
+                let child = log.tasks.get(&child)?.clone();
                 return Some(vec![
                     (
                         CanonicalItem::Object(object),
-                        CanonicalOutcome::Task(child.clone()),
+                        CanonicalOutcome::Alias(child.clone()),
                     ),
                     (
-                        CanonicalItem::Task(child.clone()),
-                        CanonicalOutcome::Task(child),
+                        CanonicalItem::Object(child.clone()),
+                        CanonicalOutcome::Alias(child),
                     ),
                 ]);
             }
@@ -430,16 +423,46 @@ pub(super) fn record(
     };
     let log = driver.events.as_mut().unwrap();
     let next = log.ordinals.entry(path.clone()).or_default();
-    let ordinal = if operation.is_some() {
+    let ordinal = if let Some((op, _)) = operation {
         let ordinal = *next;
         *next = next.checked_add(1).expect("operation ordinal overflow");
-        log.last_ops
-            .insert(path.clone(), operation.unwrap().0.descriptor.name);
+        log.last_ops.insert(path.clone(), op.descriptor.name);
         ordinal
     } else {
         next.checked_sub(1)
             .expect("a continuation follows an operation")
     };
+    if let Some((
+        Operation {
+            payload: Command::TaskSpawn { .. },
+            ..
+        },
+        result,
+    )) = operation
+    {
+        let word = u64::from_ne_bytes(
+            result
+                .image
+                .as_slice()
+                .try_into()
+                .expect("spawn returns one task word"),
+        );
+        let object = ObjectId {
+            creator: path.clone(),
+            ordinal,
+        };
+        assert!(
+            log.tasks.insert(word, object.clone()).is_none(),
+            "one identity per task generation"
+        );
+        // Spawn remains unsupported until its inheritance/topology events are
+        // complete. Its task creation still precedes all later member events.
+        assert!(
+            log.versions
+                .insert(CanonicalItem::Object(object), 1)
+                .is_none()
+        );
+    }
     if let Some((
         Operation {
             payload: Command::TaskSetCreate {
@@ -672,11 +695,18 @@ mod tests {
                         );
                         assert_eq!(set_rows[1].outcome, CanonicalOutcome::Scalar(vec![0]));
                         assert_eq!(set_rows[3].outcome, CanonicalOutcome::Scalar(vec![1]));
-                        assert_eq!(set_rows[4].outcome, CanonicalOutcome::Task(vec![0]));
+                        let child_id = ObjectId {
+                            creator: vec![],
+                            ordinal: 2,
+                        };
+                        assert_eq!(
+                            set_rows[4].outcome,
+                            CanonicalOutcome::Alias(child_id.clone())
+                        );
                         assert_eq!(set_rows[5].outcome, CanonicalOutcome::Scalar(vec![0]));
                         let member_rows: Vec<_> = events
                             .iter()
-                            .filter(|row| row.item == CanonicalItem::Task(vec![0]))
+                            .filter(|row| row.item == CanonicalItem::Object(child_id.clone()))
                             .collect();
                         assert_eq!(member_rows.len(), 2);
                         assert_eq!(
@@ -684,9 +714,9 @@ mod tests {
                                 .iter()
                                 .map(|row| (row.version, row.subevent))
                                 .collect::<Vec<_>>(),
-                            [(1, 1), (2, 1)]
+                            [(2, 1), (3, 1)]
                         );
-                        assert_eq!(member_rows[1].outcome, CanonicalOutcome::Task(vec![0]));
+                        assert_eq!(member_rows[1].outcome, CanonicalOutcome::Alias(child_id));
                         *seen.lock().unwrap() = events.clone();
                         assert_eq!(
                             hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
@@ -1003,7 +1033,7 @@ mod tests {
                     .unwrap()
                     .to_vec();
                 assert_eq!(events.len(), 6);
-                for (ordinal, chunk) in events.chunks_exact(3).enumerate() {
+                for (ordinal, chunk) in events.as_chunks::<3>().0.iter().enumerate() {
                     for (subevent, (row, (path, cause))) in chunk
                         .iter()
                         .zip([
