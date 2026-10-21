@@ -125,6 +125,192 @@ struct ModeRecord {
     output: Result<QueryOutput<Body>, QueryError>,
     detail: DependencyReads,
 }
+impl ModeRecord {
+    fn valid(&self, syntax: &ItemSyntax) -> bool {
+        let valid = |checked: &CheckedBody, plans: &hirsel_check_protocol::body::Plans| {
+            valid_body_indices(syntax, checked, plans)
+        };
+        if self
+            .checked
+            .as_ref()
+            .is_some_and(|c| !valid(&c.checked, &c.plans))
+        {
+            return false;
+        }
+        match &self.output {
+            Ok(output) => {
+                let body = &output.value;
+                self.checked.is_some()
+                    && valid(&body.checked, &body.plans)
+                    && body
+                        .results
+                        .iter()
+                        .all(|(site, _)| valid_site(syntax, *site))
+                    && body
+                        .calls
+                        .iter()
+                        .all(|(id, _)| valid_expression(syntax, *id))
+                    && valid_ownership(syntax, &body.ownership)
+            }
+            Err(error) => error.cacheable(),
+        }
+    }
+}
+fn valid_expression(syntax: &ItemSyntax, id: hirsel_syntax::ExprId) -> bool {
+    (id.0 as usize) < syntax.tree.expressions.len()
+}
+fn valid_site(syntax: &ItemSyntax, site: hirsel_types::NameSite) -> bool {
+    use hirsel_types::NameSite;
+    match site {
+        NameSite::Expression(id) => valid_expression(syntax, id),
+        NameSite::Statement(id) => (id.0 as usize) < syntax.tree.statements.len(),
+        NameSite::Pattern(id) => (id.0 as usize) < syntax.tree.patterns.len(),
+        NameSite::Type(id) => (id.0 as usize) < syntax.tree.types.len(),
+        NameSite::Item => true,
+    }
+}
+/// These are source arena positions, never process IDs. Check the lexical
+/// owner first: even an in-range row from another item has no meaning here.
+fn valid_body_indices(
+    syntax: &ItemSyntax,
+    checked: &CheckedBody,
+    plans: &hirsel_check_protocol::body::Plans,
+) -> bool {
+    use hirsel_types::{CallTarget, NameSite, SourceProjectionKind, SourceRoot};
+    let expression = |id| valid_expression(syntax, id);
+    let site = |id| valid_site(syntax, id);
+    let pattern = |id| site(NameSite::Pattern(id));
+    let target = |target: &CallTarget| match target {
+        CallTarget::Value(id) => expression(*id),
+        _ => true,
+    };
+    let resolution = &checked.resolution;
+    checked.lexical == syntax.owner()
+        && checked
+            .expressions
+            .iter()
+            .all(|row| expression(row.expression))
+        && checked.calls.iter().all(|row| {
+            expression(row.expression)
+                && target(&row.target)
+                && row.arguments.iter().all(|arg| expression(arg.expression))
+        })
+        && checked.tails.iter().all(|row| {
+            expression(row.call)
+                && row
+                    .owned_loop_arguments
+                    .iter()
+                    .all(|(_, id)| expression(*id))
+        })
+        && checked
+            .instantiations
+            .iter()
+            .all(|row| expression(row.expression))
+        && checked
+            .closures
+            .iter()
+            .all(|row| expression(row.expression))
+        && checked
+            .bindings
+            .iter()
+            .all(|row| site(row.owner) && site(row.site))
+        && checked
+            .patterns
+            .iter()
+            .all(|row| pattern(row.pattern) && row.subpatterns().all(pattern))
+        && checked.places.iter().all(|row| {
+            expression(row.expression)
+                && match row.root {
+                    SourceRoot::Value(id) => expression(id),
+                    SourceRoot::Binding { owner, .. } => site(owner),
+                    _ => true,
+                }
+                && row.projections.iter().all(|projection| {
+                    expression(projection.expression)
+                        && match projection.kind {
+                            SourceProjectionKind::Index(id) => expression(id),
+                            _ => true,
+                        }
+                })
+        })
+        && resolution.contextual.iter().all(|(id, _)| site(*id))
+        && resolution.paths.iter().all(|(id, _)| site(*id))
+        && resolution
+            .local_functions
+            .iter()
+            .all(|(id, _)| site(NameSite::Statement(*id)))
+        && resolution.deferred.iter().all(|row| site(row.site))
+        && resolution.generics.iter().all(|row| site(row.owner))
+        && resolution
+            .reference_scopes
+            .iter()
+            .all(|(a, b)| site(*a) && site(*b))
+        && resolution.expressions.iter().all(|(id, _)| expression(*id))
+        && resolution
+            .types
+            .iter()
+            .all(|(id, _)| site(NameSite::Type(*id)))
+        && resolution.bindings.iter().all(|(id, _, _)| pattern(*id))
+        && plans.resource_patterns.iter().all(|(id, _)| pattern(*id))
+        && plans.pattern_literals.iter().all(|(id, _)| pattern(*id))
+        && plans
+            .tries
+            .iter()
+            .all(|row| expression(row.expression) && row.mapper.as_ref().is_none_or(target))
+        && plans.loops.iter().all(|row| {
+            site(NameSite::Statement(row.statement()))
+                && row.cursor().is_none_or(|cursor| expression(cursor.source))
+        })
+        && plans.functions.iter().all(|row| site(row.owner))
+        && plans
+            .shapes
+            .iter()
+            .all(|(a, b, _)| expression(*a) && site(NameSite::Type(*b)))
+        && plans.contracts.iter().all(|row| {
+            site(row.owner)
+                && expression(row.expression)
+                && row.snapshots.iter().copied().all(expression)
+                && row.parameters.iter().all(|p| match p {
+                    hirsel_check_protocol::body::ContractParameter::Snapshot(id) => expression(*id),
+                    _ => true,
+                })
+        })
+        && plans.facts.iter().all(|row| expression(row.expression))
+}
+fn valid_ownership(syntax: &ItemSyntax, facts: &OwnershipFacts) -> bool {
+    let expression = |id| valid_expression(syntax, id);
+    let site = |id| valid_site(syntax, id);
+    facts.field_loans.iter().all(|(id, _)| expression(*id))
+        && facts.composed_arguments.iter().copied().all(expression)
+        && facts
+            .captures
+            .iter()
+            .all(|row| expression(row.expression) && site(row.owner))
+        && facts
+            .call_arguments
+            .iter()
+            .all(|(a, b, _)| expression(*a) && expression(*b))
+        && facts
+            .identity_joins
+            .iter()
+            .all(|(a, b, _)| site(*a) && site(*b))
+        && facts
+            .identity_fields
+            .iter()
+            .all(|(a, b, _, _)| site(*a) && site(*b))
+        && facts
+            .physical_projections
+            .iter()
+            .all(|(id, _)| expression(*id))
+        && facts.unique.iter().all(|row| expression(row.expression))
+        && facts
+            .guarded_patterns
+            .iter()
+            .all(|row| site(hirsel_types::NameSite::Pattern(row.pattern)))
+        && facts.allocating_mutations.iter().copied().all(expression)
+        && facts.replacements.iter().all(|(id, _, _)| expression(*id))
+}
+
 #[derive(Serialize, Deserialize)]
 struct LowerRecord {
     output: QueryOutput<hirsel_tir::DefinitionRef>,
@@ -244,11 +430,13 @@ impl EncodedWriter {
             }
         }
         let mut entry = StoredEntry::load(&*self.store, &self.key);
-        entry.insert(Variant {
+        let mut variant = Variant {
             reads: reads.clone(),
             payload: payload.into(),
-        });
-        self.store.put(&self.key, &entry.encode());
+        };
+        variant.bind_payload();
+        entry.insert(variant);
+        self.store.put(&self.key, &entry.encode_for(&self.key));
         Ok(())
     }
 }
@@ -306,8 +494,17 @@ impl QueryEngine {
     fn encode_record<T: Serialize>(&self, record: &T) -> Option<Vec<u8>> {
         encode_record(self.types.clone(), &self.items, record)
     }
-    fn decode_record<T: serde::de::DeserializeOwned>(&self, bytes: &[u8]) -> Option<T> {
-        let envelope: Envelope = bincode::deserialize(bytes).ok()?;
+    fn decode_record<T: serde::de::DeserializeOwned + Serialize>(&self, bytes: &[u8]) -> Option<T> {
+        use bincode::Options;
+        let envelope: Envelope = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_limit(bytes.len() as u64)
+            .reject_trailing_bytes()
+            .deserialize(bytes)
+            .ok()?;
+        if !envelope.table.valid_indices() {
+            return None;
+        }
         let anchors = envelope
             .anchors
             .iter()
@@ -320,20 +517,37 @@ impl QueryEngine {
             })
             .collect::<Option<Vec<Anchor>>>()?;
         let ids = hirsel_types::decode_table(&self.types, &envelope.table);
-        hirsel_types::with_table_decoding(&ids, || {
+        let record: T = hirsel_types::with_table_decoding(&ids, || {
             hirsel_span::with_anchor_codec(&mut AnchorCodec::Decode(anchors), || {
-                bincode::deserialize(&envelope.payload)
+                bincode::DefaultOptions::new()
+                    .with_fixint_encoding()
+                    .with_limit(envelope.payload.len() as u64)
+                    .reject_trailing_bytes()
+                    .deserialize(&envelope.payload)
             })
         })
-        .ok()
+        .ok()?;
+        // The compatibility decoder represents an invalid type position as
+        // DANGLING for V. Front records must reject it before any consumer can
+        // index types; collecting through serde covers all nested payload IDs.
+        let (encoded, roots) = hirsel_types::with_table_collection(|| {
+            bincode::serialize_into(std::io::sink(), &record)
+        });
+        encoded.ok()?;
+        roots
+            .iter()
+            .all(|id| self.types.get(*id).is_some())
+            .then_some(record)
     }
     fn stored_variant(&mut self, path: &DefPath, kind: QueryKind) -> Option<Variant> {
         let _time = timings::phase(Phase::StoreLookup);
         let store = self.result_store.clone()?;
         let key = self.store_key(path, kind)?;
-        let hit = StoredEntry::load(&*store, &key)
-            .hit(|read| self.observe(path, read))
-            .cloned();
+        let mut entry = StoredEntry::load(&*store, &key);
+        entry
+            .variants
+            .retain_mut(|variant| variant.unbind_payload().is_some());
+        let hit = entry.hit(|read| self.observe(path, read)).cloned();
         if hit.is_none() {
             timings::count(Count::StoreMisses);
         }
@@ -407,6 +621,10 @@ impl QueryEngine {
         }
         let variant = self.stored_variant(path, QueryKind::Modes)?;
         let record: ModeRecord = self.decode_record(&variant.payload)?;
+        let syntax = self.snapshot(path).ok()?;
+        if !record.valid(&syntax) {
+            return None;
+        }
         if self.verify_store == crate::store::VerifyStore::Recompute {
             self.pending_store_checks.insert(
                 (DefId::intern(path), QueryKind::Modes),
@@ -414,7 +632,6 @@ impl QueryEngine {
             );
             return None;
         }
-        let syntax = self.snapshot(path).ok()?;
         let output = record.output.map(|o| QueryOutput {
             value: o.value.restore(syntax),
             diagnostics: o.diagnostics,
@@ -542,6 +759,9 @@ impl QueryEngine {
             return None;
         }
         let mut record: LowerRecord = self.decode_record(&variant.payload)?;
+        if record.output.value.path != DefId::intern(path) {
+            return None;
+        }
         if crate::comptime::has_staged_reads(&record.output.value) {
             return None;
         }
@@ -665,5 +885,174 @@ impl QueryEngine {
                 verdict,
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod malformed_tests {
+    use super::*;
+
+    fn fixture() -> (QueryEngine, Arc<ItemSyntax>) {
+        let mut engine = QueryEngine::new(crate::default_environment(), PhaseAdapters::default())
+            .with_result_store(Arc::new(crate::store::MemStore::default()));
+        let file = engine
+            .sources
+            .add("cache-record.hir", "fn main() { true }".into())
+            .unwrap();
+        let tokens = hirsel_lexer::lex(file, &engine.sources).tokens;
+        let context = crate::default_context();
+        let mut parsed = hirsel_parser::parse(file, tokens, &context, &mut engine.sources);
+        assert!(parsed.diagnostics.is_empty());
+        engine.index(&mut parsed.syntax, &context).unwrap();
+        (engine, parsed.syntax.items[0].clone())
+    }
+    fn record(engine: &QueryEngine, syntax: &ItemSyntax) -> ModeRecord {
+        let unit = engine.types.intern(hirsel_types::Type::unit());
+        let boolean = engine.types.intern(hirsel_types::Type::boolean());
+        let checked = CheckedBody {
+            lexical: syntax.owner(),
+            places: vec![],
+            calls: vec![],
+            tails: vec![],
+            bindings: vec![],
+            patterns: vec![],
+            resolution: Default::default(),
+            expressions: vec![hirsel_types::Elaboration {
+                expression: hirsel_syntax::ExprId(0),
+                ty: boolean,
+                usage: hirsel_types::UseKind::Copy,
+                instantiated_arguments: vec![],
+            }],
+            instantiations: vec![],
+            closures: vec![],
+        };
+        ModeRecord {
+            checked: Some(CheckedRecord {
+                checked: checked.clone(),
+                plans: Default::default(),
+                unit,
+                boolean,
+                diagnostics: vec![],
+                dependencies: vec![],
+                detail: Default::default(),
+            }),
+            phases: vec![],
+            detail: Default::default(),
+            output: Ok(QueryOutput {
+                value: Body {
+                    checked,
+                    plans: Default::default(),
+                    unit,
+                    boolean,
+                    ownership: Default::default(),
+                    plain: vec![],
+                    silent: vec![],
+                    results: vec![],
+                    calls: vec![],
+                },
+                diagnostics: vec![],
+                dependencies: vec![],
+            }),
+        }
+    }
+    #[test]
+    fn structurally_invalid_records_miss_before_adoption_or_verification() {
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..7 {
+                let (mut engine, syntax) = fixture();
+                let mut record = record(&engine, &syntax);
+                match fault {
+                    0 => (),
+                    1 => {
+                        record.output.as_mut().unwrap().value.checked.expressions[0]
+                            .expression
+                            .0 = u32::MAX
+                    }
+                    2 => record.checked.as_mut().unwrap().checked.lexical.occurrence += 1,
+                    3 => record.checked = None,
+                    4 => record.output.as_mut().unwrap().value.unit = TypeId::DANGLING,
+                    5 => record.output.as_mut().unwrap().value.results.push((
+                        hirsel_types::NameSite::Pattern(hirsel_syntax::PatternId(u32::MAX)),
+                        record.checked.as_ref().unwrap().unit,
+                    )),
+                    6 => record
+                        .output
+                        .as_mut()
+                        .unwrap()
+                        .value
+                        .checked
+                        .resolution
+                        .expressions
+                        .push((
+                            hirsel_syntax::ExprId(u32::MAX),
+                            hirsel_types::ResolvedName::Primitive(hirsel_types::Primitive::Bool),
+                        )),
+                    _ => unreachable!(),
+                }
+                let path = &syntax.item.definition;
+                // Encode through the genuine writer, with valid key, checksum
+                // and reads. These exercise semantic guards, not just framing.
+                engine
+                    .write_record(path, QueryKind::Modes, &Reads::empty(), &record)
+                    .unwrap();
+                engine.verify_store = verify;
+                let hit = engine.load_mode(path);
+                if fault == 0 {
+                    assert_eq!(hit.is_some(), verify == crate::store::VerifyStore::Off);
+                    assert_eq!(
+                        engine.pending_store_checks.len(),
+                        usize::from(verify == crate::store::VerifyStore::Recompute)
+                    );
+                } else {
+                    assert!(hit.is_none(), "fault {fault}");
+                    assert_eq!(engine.store_adoptions(), 0);
+                    assert!(engine.checked.is_empty());
+                    assert!(engine.pending_store_checks.is_empty());
+                }
+            }
+        }
+    }
+    #[test]
+    fn canonical_type_and_anchor_domains_and_exact_payload_consumption_are_checked() {
+        let (engine, syntax) = fixture();
+        let unit = engine.types.intern(hirsel_types::Type::unit());
+        let bytes = engine.encode_record(&unit).unwrap();
+        assert_eq!(engine.decode_record::<TypeId>(&bytes), Some(unit));
+        let mut envelope: Envelope = bincode::deserialize(&bytes).unwrap();
+        envelope.payload = u32::MAX.to_le_bytes().to_vec();
+        assert!(
+            engine
+                .decode_record::<TypeId>(&bincode::serialize(&envelope).unwrap())
+                .is_none()
+        );
+        let bad = engine
+            .types
+            .intern(hirsel_types::Type::with_kind(hirsel_types::TypeKind::Box(
+                TypeId::DANGLING,
+            )));
+        let bytes = engine.encode_record(&bad).unwrap();
+        assert!(engine.decode_record::<TypeId>(&bytes).is_none());
+        let bytes = engine.encode_record(&syntax.item.origin.span).unwrap();
+        let mut envelope: Envelope = bincode::deserialize(&bytes).unwrap();
+        envelope.payload[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(
+            engine
+                .decode_record::<Span>(&bincode::serialize(&envelope).unwrap())
+                .is_none()
+        );
+        let mut envelope: Envelope =
+            bincode::deserialize(&engine.encode_record(&unit).unwrap()).unwrap();
+        envelope.payload.push(0);
+        assert!(
+            engine
+                .decode_record::<TypeId>(&bincode::serialize(&envelope).unwrap())
+                .is_none()
+        );
+        let mut bytes = engine.encode_record(&unit).unwrap();
+        bytes.push(0);
+        assert!(engine.decode_record::<TypeId>(&bytes).is_none());
     }
 }

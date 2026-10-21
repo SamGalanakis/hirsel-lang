@@ -22,6 +22,17 @@ impl TypeTable {
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
+    /// Every encoded edge names a row of this canonical table. Validate before
+    /// interning untrusted front-end records; image/V decoders may deliberately
+    /// retain dangling edges to diagnose them instead.
+    pub fn valid_indices(&self) -> bool {
+        self.rows.iter().all(|row| {
+            row.kind
+                .graph_edges()
+                .iter()
+                .all(|edge| (edge.ty.raw_index() as usize) < self.rows.len())
+        })
+    }
 }
 
 /// The closure of `roots`: every row reachable from them, in first-encounter

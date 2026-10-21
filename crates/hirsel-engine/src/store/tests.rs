@@ -260,3 +260,43 @@ fn dir_concurrent_handles_publish_complete_records_during_eviction() {
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn bound_entries_reject_wrong_keys_schema_truncation_and_damaged_records() {
+    let store = MemStore::default();
+    let mut entry = Entry::default();
+    let mut v = variant("sig", "checked output");
+    v.bind_payload();
+    entry.insert(v);
+    let bytes = entry.encode_for(&key("a"));
+    store.put(&key("a"), &bytes);
+    assert_eq!(Entry::load(&store, &key("a")), entry);
+    store.put(&key("b"), &bytes); // completely valid bytes, another owner/phase
+    assert!(Entry::load(&store, &key("b")).variants.is_empty());
+    for end in 0..bytes.len() {
+        store.put(&key("a"), &bytes[..end]);
+        assert!(
+            Entry::load(&store, &key("a")).variants.is_empty(),
+            "cut {end}"
+        );
+    }
+    for index in 0..bytes.len() {
+        let mut damaged = bytes.clone();
+        damaged[index] ^= 1;
+        store.put(&key("a"), &damaged);
+        assert!(
+            Entry::load(&store, &key("a")).variants.is_empty(),
+            "byte {index}"
+        );
+    }
+    let mut obsolete = unframe(&bytes).unwrap().to_vec();
+    obsolete[3] = b'9';
+    store.put(&key("a"), &frame(&obsolete));
+    assert!(Entry::load(&store, &key("a")).variants.is_empty());
+    // An otherwise valid frame whose read metadata was lost cannot make its
+    // payload unconditional. The immutable per-payload witness still rejects.
+    entry.variants[0].reads = Reads::empty();
+    store.put(&key("a"), &entry.encode_for(&key("a")));
+    let mut loaded = Entry::load(&store, &key("a"));
+    assert!(loaded.variants[0].unbind_payload().is_none());
+}

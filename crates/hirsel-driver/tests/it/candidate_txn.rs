@@ -572,126 +572,246 @@ fn candidate_public_history_agrees_with_independent_byte_map_model() {
         model::Promotion::Conflict(_)
     ));
 }
-/// Exercise the real eligible-store loader, including a producer with V off.
-/// Malformed records must miss; swapping complete sibling records must not
-/// substitute a verdict or a source map for a different input key.
+/// Exercise eligible-store adoption with a producer that ran V off. Every
+/// fault must recompute to the independent cold products, never a ToolFailure.
 #[test]
 fn candidate_store_adoption_and_faults_equal_cache_free_checks() {
-    use hirsel_engine::store::{EntryKey, MemStore, ResultStore};
+    if let Some(runs) = hirsel_intern::under_salts(
+        "candidate_txn::candidate_store_adoption_and_faults_equal_cache_free_checks",
+        &[0, 1, 7],
+        || store_fault_checks(true),
+    ) {
+        assert!(runs.iter().all(|run| run == &runs[0]));
+    }
+}
+#[test]
+fn ordinary_store_adoption_and_faults_equal_cache_free_checks() {
+    if let Some(runs) = hirsel_intern::under_salts(
+        "candidate_txn::ordinary_store_adoption_and_faults_equal_cache_free_checks",
+        &[0, 1, 7],
+        || store_fault_checks(false),
+    ) {
+        assert!(runs.iter().all(|run| run == &runs[0]));
+    }
+}
+fn store_fault_checks(candidate: bool) -> String {
+    use hirsel_engine::store::{EntryKey, MemStore, ResultStore, VerifyStore};
     use std::sync::{Mutex, atomic::AtomicUsize};
     #[derive(Default)]
     struct FaultStore {
         backing: MemStore,
         mode: AtomicUsize,
-        records: Mutex<Vec<Arc<[u8]>>>,
+        substitutions: AtomicUsize,
+        records: Mutex<Vec<(EntryKey, Arc<[u8]>)>>,
     }
     impl ResultStore for FaultStore {
         fn get(&self, key: &EntryKey) -> Option<Arc<[u8]>> {
             let bytes = self.backing.get(key)?;
             match self.mode.load(Ordering::Acquire) {
                 1 => Some(Arc::from(&b"corrupt candidate store frame"[..])),
-                2 => self
-                    .records
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .find(|other| other.as_ref() != bytes.as_ref())
-                    .cloned()
-                    .or(Some(bytes)),
+                2 => {
+                    let other = self
+                        .records
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .find(|(other, _)| other != key)
+                        .map(|(_, bytes)| bytes.clone());
+                    if other.is_some() {
+                        self.substitutions.fetch_add(1, Ordering::Relaxed);
+                    }
+                    other.or(Some(bytes))
+                }
+                3 => Some(Arc::from(&bytes[..bytes.len() / 2])),
+                4 => {
+                    let mut damaged = bytes.to_vec();
+                    *damaged.last_mut().unwrap() ^= 1;
+                    Some(damaged.into())
+                }
+                5 => {
+                    let mut damaged = bytes.to_vec();
+                    damaged[0] ^= 1;
+                    Some(damaged.into())
+                }
+                6 => {
+                    let mut entry = hirsel_engine::store::Entry::load(&self.backing, key);
+                    for variant in &mut entry.variants {
+                        variant.reads = hirsel_engine::memo::Reads::empty();
+                    }
+                    Some(entry.encode_for(key).into())
+                }
+                7 => {
+                    let mut damaged = bytes.to_vec();
+                    damaged[51] = b'9'; // obsolete entry schema, otherwise valid frame
+                    let digest =
+                        ContentHash::of_parts("hirsel.result.payload.v1", [&damaged[48..]]);
+                    damaged[16..48].copy_from_slice(&digest.0);
+                    Some(damaged.into())
+                }
                 _ => Some(bytes),
             }
         }
         fn put(&self, key: &EntryKey, bytes: &[u8]) {
             self.backing.put(key, bytes);
-            self.records.lock().unwrap().push(Arc::from(bytes));
+            if self.mode.load(Ordering::Acquire) == 0 {
+                self.records.lock().unwrap().push((*key, Arc::from(bytes)));
+            }
         }
         fn name(&self) -> &'static str {
             "candidate-test-fault-store"
         }
     }
-    let text = "fn helper()->u8{1u8}\nconst VALUE:u8=comptime helper()\npub fn main()->u8{VALUE}\n";
-    let f = Fixture::new(text);
-    let store = Arc::new(FaultStore::default());
-    let config = CompileConfig {
-        jobs: hirsel_intern::jobs::Jobs::new(1),
-        store: store.clone(),
-        ..CompileConfig::for_memory_cap(None)
-    };
-    hirsel_engine::with_compiler_stack(|| {
-        let compiler = hirsel_driver::COMPILER
-            .clone()
-            .with_config(CompileConfig {
-                verify: Verify::Off,
-                ..config.clone()
-            })
-            .with_owned_engines();
-        let mut program = compiler
-            .load_program_source_with_images(&f.entry(), None, &hirsel_engine::StdImages::none())
-            .unwrap();
-        assert!(
-            program
-                .check(LoweringPolicy::Comptime)
-                .unwrap()
-                .diagnostics
-                .is_empty()
-        );
-    });
-    assert!(!store.backing.is_empty());
-    let cold = workspace();
-    let cold_base = cold.capture(&f.entry()).unwrap();
-    let expected = result(&cold, &submit(&cold, &cold_base, 1, text));
-    for fault in [0, 1, 2, 0] {
-        store.mode.store(fault, Ordering::Release);
-        let w = CandidateWorkspace::new(
-            config.clone(),
-            vec![],
-            hirsel_interp::Limits::default(),
-            Limits {
-                retain_canonical_export: true,
-                ..Limits::default()
-            },
-        )
-        .unwrap();
-        let base = w.capture(&f.entry()).unwrap();
-        let candidate = submit(&w, &base, 1, text);
-        let actual = result(&w, &candidate);
-        if fault == 2 && actual.completion == Completion::Incomplete(IncompleteReason::ToolFailure)
-        {
-            assert_eq!(actual.verdict, Verdict::Undecided);
-            assert!(actual.checked_products.is_none());
-            assert_eq!(
-                w.promote(
-                    CandidateId {
-                        client: 2,
-                        nonce: 1
-                    },
-                    &candidate,
-                    base.token()
-                )
-                .unwrap(),
-                Promotion::Ineligible
-            );
-            continue; // injected wrong-key payload is explicitly refused, never accepted
-        }
-        assert_eq!(
-            actual.verdict, expected.verdict,
-            "fault{fault}: {:?}",
-            actual.loader_error
-        );
-        assert_eq!(actual.completion, expected.completion);
-        let actual = actual.checked_products.as_ref().unwrap();
-        let expected = expected.checked_products.as_ref().unwrap();
-        assert_eq!(actual.canonical, expected.canonical, "fault{fault}");
-        assert_eq!(actual.digest, expected.digest, "fault{fault}");
-        assert_eq!(actual.reads, expected.reads, "fault{fault}");
-        if fault == 0 {
-            assert!(
-                w.counters().store_adoptions > 0,
-                "eligible store was not used"
-            );
-        }
-        assert_eq!(w.counters().dropped_engines, 1);
+    fn diagnostics(output: &hirsel_engine::CheckOutput) -> Vec<(String, serde_json::Value)> {
+        output
+            .diagnostics
+            .iter()
+            .map(|d| (d.render_human(&output.sources), d.to_json(&output.sources)))
+            .collect()
     }
+    fn ordinary(
+        f: &Fixture,
+        config: CompileConfig,
+    ) -> (
+        hirsel_engine::CheckOutput,
+        hirsel_engine::CheckedProducts,
+        u64,
+    ) {
+        hirsel_engine::with_compiler_stack(|| {
+            let compiler = hirsel_driver::COMPILER
+                .clone()
+                .with_config(config)
+                .with_owned_engines();
+            let mut program = compiler
+                .load_program_source_with_images(
+                    &f.entry(),
+                    None,
+                    &hirsel_engine::StdImages::none(),
+                )
+                .unwrap();
+            let output = program.check(LoweringPolicy::Comptime).unwrap();
+            let products = program.engine.checked_products(&program.entry).unwrap();
+            (output, products, program.engine.store_adoptions())
+        })
+    }
+    let mut transcript = String::new();
+    for text in [
+        "fn helper()->u8{1u8}\nconst VALUE:u8=comptime helper()\npub fn main()->u8{VALUE}\n",
+        "fn helper()->u8{1u8}\nconst VALUE:u8=comptime helper()\npub fn main()->u8{false}\n",
+    ] {
+        let f = Fixture::new(text);
+        let cold = workspace();
+        let cold_base = cold.capture(&f.entry()).unwrap();
+        let expected = result(&cold, &submit(&cold, &cold_base, 1, text));
+        assert_eq!(expected.completion, Completion::Complete);
+        let expected_products = expected.checked_products.as_ref().unwrap();
+        transcript.push_str(&format!(
+            "{:?}\n{}\n",
+            expected.verdict,
+            expected_products.canonical.as_deref().unwrap()
+        ));
+        for jobs in [1, 2, 8] {
+            let store = Arc::new(FaultStore::default());
+            let config = CompileConfig {
+                jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                store: store.clone(),
+                ..CompileConfig::for_memory_cap(None)
+            };
+            let (_, cold_products, _) = ordinary(
+                &f,
+                CompileConfig {
+                    store: Arc::new(hirsel_engine::store::NoneStore),
+                    ..config.clone()
+                },
+            );
+            assert_eq!(cold_products.canonical, expected_products.canonical);
+            assert_eq!(cold_products.reads, expected_products.reads);
+            // V-off producer does not certify the fresh consumer's TIR.
+            ordinary(
+                &f,
+                CompileConfig {
+                    verify: Verify::Off,
+                    ..config.clone()
+                },
+            );
+            assert!(!store.backing.is_empty());
+            for verify_store in [VerifyStore::Off, VerifyStore::Recompute] {
+                for fault in [0, 1, 2, 3, 4, 5, 6, 7, 0] {
+                    store.mode.store(fault, Ordering::Release);
+                    let config = CompileConfig {
+                        verify_store,
+                        ..config.clone()
+                    };
+                    let (output, actual, adoptions) = if candidate {
+                        let w = CandidateWorkspace::new(
+                            config,
+                            vec![],
+                            hirsel_interp::Limits::default(),
+                            Limits {
+                                retain_canonical_export: true,
+                                ..Limits::default()
+                            },
+                        )
+                        .unwrap();
+                        let base = w.capture(&f.entry()).unwrap();
+                        let candidate = submit(&w, &base, 1, text);
+                        let actual = result(&w, &candidate);
+                        assert_eq!(
+                            actual.completion,
+                            Completion::Complete,
+                            "fault {fault}: {:?}",
+                            actual.loader_error
+                        );
+                        assert_eq!(actual.verdict, expected.verdict);
+                        assert!(actual.incomplete.is_none());
+                        let promoted = w
+                            .promote(
+                                CandidateId {
+                                    client: 2,
+                                    nonce: 1,
+                                },
+                                &candidate,
+                                base.token(),
+                            )
+                            .unwrap();
+                        if actual.verdict == Verdict::Pass {
+                            assert!(matches!(promoted, Promotion::Promoted(_)));
+                        } else {
+                            assert_eq!(promoted, Promotion::Ineligible);
+                        }
+                        assert_eq!(w.counters().dropped_engines, 1);
+                        (
+                            (*actual.output).clone(),
+                            (**actual.checked_products.as_ref().unwrap()).clone(),
+                            w.counters().store_adoptions,
+                        )
+                    } else {
+                        ordinary(&f, config)
+                    };
+                    assert_eq!(
+                        diagnostics(&output),
+                        diagnostics(&expected.output),
+                        "jobs {jobs}, fault {fault}"
+                    );
+                    assert_eq!(
+                        actual.canonical, expected_products.canonical,
+                        "jobs {jobs}, fault {fault}"
+                    );
+                    assert_eq!(actual.digest, expected_products.digest);
+                    assert_eq!(actual.reads, expected_products.reads);
+                    if fault == 0 && verify_store == VerifyStore::Off {
+                        assert!(adoptions > 0, "eligible store was not used, jobs {jobs}");
+                    }
+                    if fault != 0 {
+                        assert_eq!(adoptions, 0, "malformed record adopted, fault {fault}");
+                    }
+                    if fault == 2 {
+                        assert!(store.substitutions.load(Ordering::Relaxed) > 0);
+                    }
+                }
+            }
+        }
+    }
+    transcript
 }
 #[test]
 fn candidate_eight_results_release_unused_reserves_and_old_observations_have_backpressure() {

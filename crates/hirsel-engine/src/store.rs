@@ -80,6 +80,41 @@ pub struct Variant {
     pub payload: Arc<[u8]>,
 }
 
+fn payload_reads_hash(reads: &Reads) -> ContentHash {
+    // Reads' in-memory ordering is by interned identity. Persisted witnesses
+    // sort the canonical key bytes, so another process/salt verifies the same
+    // complete set without depending on its DefId assignment order.
+    let mut rows: Vec<Vec<u8>> = reads
+        .iter()
+        .map(|(key, value)| {
+            let mut bytes = Vec::new();
+            key.encode(&mut bytes);
+            bytes.extend(value.0);
+            bytes
+        })
+        .collect();
+    rows.sort();
+    ContentHash::of_parts("hirsel.result.reads.v1", rows.iter().map(Vec::as_slice))
+}
+
+impl Variant {
+    /// Bind a front-end payload to the complete read set. This witness stays
+    /// with the payload even if a provider loses or swaps the entry's reads.
+    pub(crate) fn bind_payload(&mut self) {
+        let mut bytes = b"HRP1".to_vec();
+        bytes.extend(payload_reads_hash(&self.reads).0);
+        bytes.extend(self.payload.iter());
+        self.payload = bytes.into();
+    }
+    pub(crate) fn unbind_payload(&mut self) -> Option<()> {
+        let bytes = self.payload.strip_prefix(b"HRP1")?;
+        self.payload = bytes
+            .strip_prefix(payload_reads_hash(&self.reads).0.as_slice())?
+            .into();
+        Some(())
+    }
+}
+
 const ENTRY_MAGIC: &[u8; 4] = b"HRE2";
 
 impl Entry {
@@ -130,11 +165,25 @@ impl Entry {
         }
         input.is_empty().then_some(Entry { variants })
     }
+    /// Bind the complete entry (including every read) to its requested key.
+    /// Rustc's cache uses an expected tag and exact length before adopting a
+    /// query (rustc_middle/src/query/on_disk_cache.rs:468-485). Here the existing
+    /// checksum frame additionally detects damaged reads and payload bytes.
+    pub fn encode_for(&self, key: &EntryKey) -> Vec<u8> {
+        let mut bytes = b"HRE3".to_vec();
+        bytes.extend(key.0.0);
+        bytes.extend(self.encode());
+        frame(&bytes)
+    }
     /// Reads `key`'s entry from `store`; an undecodable entry is a miss.
     pub fn load(store: &dyn ResultStore, key: &EntryKey) -> Entry {
         store
             .get(key)
-            .and_then(|bytes| Entry::decode(&bytes))
+            .and_then(|bytes| {
+                let payload = unframe(&bytes)?.strip_prefix(b"HRE3")?;
+                let payload = payload.strip_prefix(key.0.0.as_slice())?;
+                Entry::decode(payload)
+            })
             .unwrap_or_default()
     }
 }
