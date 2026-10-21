@@ -48,3 +48,4 @@ mod string_splitn_5;
 mod utf8_stream_5;
 
 mod base64_stream_5;
+mod hex_builder_5;

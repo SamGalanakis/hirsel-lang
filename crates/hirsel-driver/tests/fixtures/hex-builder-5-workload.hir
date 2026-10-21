@@ -1,0 +1,17 @@
+// Replaced constants/call are supplied by the bounded Rust measurement harness.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let mut input: List[u8] = []
+  for i in 0u64..$SIZE {
+    let byte: u8 = int.truncate(i * 37 + 11)
+    list.push(mut input, byte)
+  }
+  let data = bytes.from_list(take input)
+  let mut out: List[u8] = []
+  std@1/text.append(mut out, "hex: ")
+  for i in 0u64..$CHUNKS {
+    $APPEND
+  }
+  let encoded_output = std@1/text.finish_valid(take out)
+  let _ = out.write(io.stdout(rt)?, string.as_bytes(encoded_output))
+  Ok(())
+}

@@ -2994,6 +2994,22 @@ error precedence instead of Zig's up-front whole-buffer length checks.
 ## Hexadecimal codec
 
 `hex.encode(data: Bytes) -> unique String` emits lowercase hexadecimal.
+`hex.encode_into(data: Bytes, mut out: List[u8]) -> () uses {}` appends the same
+lowercase ASCII bytes after the existing prefix, without an intermediate String.
+It borrows `data`, preserves the builder's uniqueness, and leaves existing bytes
+unchanged (including a prefix that is not UTF-8). It checks doubling and the sum
+with the prefix for `u64` overflow (`TextInvariant`) before reserving total
+capacity through `list.reserve`. Allocation/resource failures use the ordinary
+builder failure and cleanup rules; there is no transactional rollback contract.
+Repeated calls and sliced Bytes inputs follow the normal borrowing rules.
+
+```hirsel
+let mut out: List[u8] = []
+std@1/text.append(mut out, "digest: ")
+std@1/hex.encode_into(b"\x00\xff", mut out)
+let encoded = std@1/text.finish_valid(take out) // "digest: 00ff"
+```
+
 `hex.decode(text: String) -> Result[unique Bytes, hex.DecodeError]` accepts both ASCII
 letter cases, with `DecodeError = InvalidDigit(u64) | OddLength`. Offsets are
 input byte offsets. Decoding checks digits in order; an invalid final byte

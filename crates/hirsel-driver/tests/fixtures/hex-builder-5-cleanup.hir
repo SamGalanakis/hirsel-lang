@@ -1,0 +1,21 @@
+resource type Watch {
+  value: List[u8],
+}
+@noalloc drop(w) {
+  failure.check(list.len(w.value) >= 1, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut out: List[u8] = [42u8]
+  std@1/hex.encode_into(b"\x00\xff", mut out)
+  let snapshot = copy out
+  std@1/hex.encode_into(b"a", mut out)
+  failure.check(bytes.from_list(take snapshot) == b"*00ff", TextInvariant())
+  failure.check(bytes.from_list(take out) == b"*00ff61", TextInvariant())
+  let watch = Watch(value: [7u8])
+  let mut owned: List[u8] = [9u8]
+  std@1/hex.encode_into(b"\x80", mut owned)
+  let encoded_output: unique Bytes = bytes.from_list(take owned)
+  failure.check(encoded_output == b"\x0980", TextInvariant())
+  Ok(())
+}

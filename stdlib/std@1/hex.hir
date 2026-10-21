@@ -1,21 +1,42 @@
-// Go encoding/hex Encode/Decode, adapted under BSD-3-Clause; see NOTICES.
+// Go ebe2feefc400 src/encoding/hex/hex.go:45-61 Encode/AppendEncode,
+// and Decode, adapted under BSD-3-Clause; see NOTICES.
 @serializable
 pub type DecodeError = InvalidDigit(u64) | OddLength
 
 pub fn encode(data: Bytes) -> unique String uses {} {
-  let digits = core@1/string.as_bytes("0123456789abcdef")
   let len = core@1/bytes.len(data)
   core@1/failure.check(len <= 9223372036854775807u64, TextInvariant())
   let mut out: List[u8] = []
+  append_digits(data, mut out)
+  text.finish_valid(take out)
+}
+
+// Go AppendEncode: check the complete size, reserve, then encode into the tail.
+// reserve takes total capacity, not an additional byte count.
+@preserves_unique(out)
+pub fn encode_into(data: Bytes, mut out: List[u8]) -> () uses {} {
+  let len = core@1/bytes.len(data)
+  core@1/failure.check(len <= 9223372036854775807u64, TextInvariant())
+  let additional = len * 2
+  let prefix = core@1/list.len(out)
+  core@1/failure.check(prefix <= 18446744073709551615u64 - additional, TextInvariant())
+  core@1/list.reserve(mut out, prefix + additional)
+  append_digits(data, mut out)
+}
+
+@preserves_unique(out)
+fn append_digits(data: Bytes, mut out: List[u8]) -> () uses {} {
+  let digits = core@1/string.as_bytes("0123456789abcdef")
+  let len = core@1/bytes.len(data)
   let mut i: u64 = 0
   while i < len {
-    let high: u64 = core@1/int.widen(data[i] / 16u8)
-    let low: u64 = core@1/int.widen(data[i] % 16u8)
+    let byte = data[i]
+    let high: u64 = core@1/int.widen(byte >> 4)
+    let low: u64 = core@1/int.widen(byte & 15u8)
     core@1/list.push(mut out, digits[high])
     core@1/list.push(mut out, digits[low])
     i += 1
   }
-  text.finish_valid(take out)
 }
 
 pub fn decode(text: String) -> Result[unique Bytes, DecodeError] uses {} {
