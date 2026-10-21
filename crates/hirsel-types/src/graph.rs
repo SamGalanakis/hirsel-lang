@@ -288,6 +288,10 @@ pub fn substitute(
     ty: TypeId,
     s: &Substitution<'_>,
 ) -> Result<TypeId, GraphError> {
+    // rustc type_ir/flags.rs:5-23: no generic transport for closed graphs.
+    if !crate::parameters::needs_substitution(t, ty, s.roles.result_type.is_some()) {
+        return Ok(ty);
+    }
     m.substitute(ty, s, || {
         Importer {
             t,
@@ -337,6 +341,9 @@ pub(crate) fn expand(
     arguments: &[GenericArgument],
     roles: &NominalRoles,
 ) -> Result<TypeId, GraphError> {
+    if !crate::parameters::needs_substitution(t, representation, roles.result_type.is_some()) {
+        return Ok(representation);
+    }
     let authorities = vec![AuthoritySummary::Unknown; arguments.len()];
     Importer {
         t,
@@ -519,6 +526,15 @@ impl Importer<'_> {
         Ok(())
     }
     fn ty(&mut self, id: TypeId, nested: u32) -> Result<TypeId, GraphError> {
+        // Skip only structurally closed subgraphs. Role-bearing callable
+        // error channels and all generic/authority normalization remain live.
+        if !crate::parameters::needs_substitution(
+            self.t,
+            id,
+            self.substitution.roles.result_type.is_some(),
+        ) {
+            return Ok(id);
+        }
         let key = (id, nested);
         if let Some(id) = self.memo.get(&key) {
             return Ok(*id);

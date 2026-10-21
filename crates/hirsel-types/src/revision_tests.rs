@@ -1847,3 +1847,153 @@ fn substitution_of_root_evidence_retains_unchanged_child_arrays() {
         );
     }
 }
+
+#[test]
+fn closed_generic_transport_does_not_reintern_unchanged_subgraphs() {
+    let t = TypeInterner::new(None);
+    let mut root = t.intern(scalar());
+    for _ in 0..128 {
+        root = t.intern(Type::with_kind(TypeKind::Tuple(vec![root, root].into())));
+    }
+    let roles = NominalRoles {
+        result_type: Some(path("Result")),
+        ..Default::default()
+    };
+    let before = t.stats().hits;
+    for _ in 0..5 {
+        assert_eq!(
+            substitute(
+                &t,
+                &TypeMemo::new(),
+                root,
+                &Substitution {
+                    binder: Some(GenericBinder::Bound(0)),
+                    roles: &roles,
+                    ..Default::default()
+                }
+            ),
+            Ok(root)
+        );
+    }
+    assert_eq!(
+        t.stats().hits,
+        before,
+        "closed transport must not rebuild or reintern every unchanged child"
+    );
+}
+
+#[test]
+fn substitution_pruning_matches_full_transport_for_binders_roles_and_errors() {
+    let t = TypeInterner::new(None);
+    let byte = t.intern(scalar());
+    let parameter = t.intern(Type::with_kind(TypeKind::Parameter(
+        TypeParameterRef::bound(TypeParamId(0)),
+    )));
+    let outer = t.intern(Type::with_kind(TypeKind::Parameter(
+        TypeParameterRef::Bound {
+            depth: 1,
+            parameter: TypeParamId(0),
+        },
+    )));
+    let body = t.intern(Type::with_kind(TypeKind::Parameter(
+        TypeParameterRef::body(site(NameSite::Item), TypeParamId(0)),
+    )));
+    let mut summary = scalar();
+    summary.drop_allocation = DropAllocation::DependsOn(vec![].into());
+    summary.modes.sendability = Sendability::DependsOn(vec![].into());
+    let summary = t.intern(summary);
+    let mut authority = scalar();
+    authority.erased_captures = Some(ErasedCaptures::Known(AuthoritySummary::Known(
+        vec![AuthorityTerm::TypeParameter(TypeParameterRef::bound(
+            TypeParamId(0),
+        ))]
+        .into(),
+    )));
+    let authority = t.intern(authority);
+    let sized = t.intern(Type::with_kind(TypeKind::Builtin {
+        kind: BuiltinType::Inline,
+        arguments: vec![
+            GenericArgument::Type(byte),
+            GenericArgument::Size(Size::Parameter(SizeParameterRef::bound(SizeParamId(0)))),
+        ]
+        .into(),
+    }));
+    let malformed = t.intern(Type::with_kind(TypeKind::Builtin {
+        kind: BuiltinType::Inline,
+        arguments: vec![
+            GenericArgument::Size(Size::Parameter(SizeParameterRef::bound(SizeParamId(0)))),
+            GenericArgument::Type(TypeId::DANGLING),
+        ]
+        .into(),
+    }));
+    let result = t.intern(Type::with_kind(TypeKind::Named {
+        definition: DefId::intern(&path("Result")),
+        arguments: vec![GenericArgument::Type(byte), GenericArgument::Type(summary)].into(),
+    }));
+    let mut roots = vec![
+        byte,
+        parameter,
+        outer,
+        body,
+        summary,
+        authority,
+        sized,
+        malformed,
+        result,
+        TypeId::DANGLING,
+    ];
+    for child in [
+        byte, parameter, outer, body, summary, authority, sized, result,
+    ] {
+        let callable = t.intern(function(child, vec![]));
+        roots.extend([
+            callable,
+            t.intern(Type::with_kind(TypeKind::Tuple(
+                vec![child, callable].into(),
+            ))),
+        ]);
+    }
+    roots.push(t.intern(Type::with_kind(TypeKind::Error)));
+    roots.push(t.intern_graph(1, |ids| vec![Type::with_kind(TypeKind::Box(ids[0]))])[0]);
+    for root in roots {
+        for roles in [
+            NominalRoles::default(),
+            NominalRoles {
+                result_type: Some(path("Result")),
+                ..Default::default()
+            },
+        ] {
+            for binder in [
+                GenericBinder::Bound(0),
+                GenericBinder::Bound(1),
+                GenericBinder::Body(site(NameSite::Item)),
+            ] {
+                for arguments in [
+                    vec![],
+                    vec![GenericArgument::Type(byte)],
+                    vec![GenericArgument::Size(Size::Constant(3))],
+                ] {
+                    let s = Substitution {
+                        binder: Some(binder),
+                        arguments: &arguments,
+                        authorities: &[AuthoritySummary::inert()],
+                        roles: &roles,
+                    };
+                    let pruned = substitute(&t, &TypeMemo::new(), root, &s);
+                    let original = crate::parameters::with_full_rewrites(|| {
+                        substitute(&t, &TypeMemo::new(), root, &s)
+                    });
+                    assert_eq!(
+                        pruned, original,
+                        "substitute {root:?} {binder:?} {arguments:?}"
+                    );
+                    let pruned = crate::graph::expand(&t, root, &arguments, &roles);
+                    let original = crate::parameters::with_full_rewrites(|| {
+                        crate::graph::expand(&t, root, &arguments, &roles)
+                    });
+                    assert_eq!(pruned, original, "expand {root:?} {arguments:?}");
+                }
+            }
+        }
+    }
+}

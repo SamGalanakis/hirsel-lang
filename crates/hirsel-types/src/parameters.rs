@@ -214,7 +214,28 @@ const BRANDS: u8 = 1;
 const RELATIONS: u8 = 2;
 const AUTHORITIES: u8 = 4;
 const CAPTURES: u8 = 8;
+const GENERICS: u8 = 16;
+const CALLABLES: u8 = 32;
 const ALL_FEATURES: u8 = u8::MAX;
+
+/// Generic transport changes type/size references, their derived summaries,
+/// and a callable's role-derived error channel, never concrete child graphs.
+pub(crate) fn needs_substitution(store: &TypeInterner, root: TypeId, result_role: bool) -> bool {
+    let mask = GENERICS | AUTHORITIES | if result_role { CALLABLES } else { 0 };
+    rewrite_features(store, root) & mask != 0
+}
+
+#[cfg(test)]
+pub(crate) fn with_full_rewrites<T>(f: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            FORCE_FULL_REWRITE.with(|force| force.set(self.0));
+        }
+    }
+    let _reset = Reset(FORCE_FULL_REWRITE.with(|force| force.replace(true)));
+    f()
+}
 
 /// Pure reachability summaries, like rustc15c1044 type_ir/flags.rs:5-23
 /// and middle/ty/erase_regions.rs:26-34: skip a rewrite when its input
@@ -258,6 +279,17 @@ fn rewrite_features(store: &TypeInterner, root: TypeId) -> u8 {
             continue;
         }
         let mut flags = 0;
+        if matches!(row.drop_allocation, DropAllocation::DependsOn(_))
+            || matches!(row.modes.sendability, Sendability::DependsOn(_))
+            || matches!(row.kind, TypeKind::Parameter(_))
+        {
+            flags |= GENERICS;
+        }
+        if matches!(&row.kind, TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. }
+            if arguments.iter().any(|a| matches!(a, GenericArgument::Size(Size::Parameter(_)))))
+        {
+            flags |= GENERICS;
+        }
         if !row.brand.alternatives.is_empty() {
             flags |= BRANDS;
         }
@@ -269,10 +301,11 @@ fn rewrite_features(store: &TypeInterner, root: TypeId) -> u8 {
             Some(ErasedCaptures::Known(authority)) if known(authority) => flags |= AUTHORITIES,
             _ => (),
         }
-        if let TypeKind::Function(f) = &row.kind
-            && (known(&f.authority) || matches!(&f.uses, Uses::Only(authority) if known(authority)))
-        {
-            flags |= AUTHORITIES;
+        if let TypeKind::Function(f) = &row.kind {
+            flags |= CALLABLES;
+            if known(&f.authority) || matches!(&f.uses, Uses::Only(authority) if known(authority)) {
+                flags |= AUTHORITIES;
+            }
         }
         for edge in row.kind.graph_edges() {
             flags |= cached(edge.ty).expect("child summary before parent");
