@@ -58,6 +58,20 @@ else
     mv -T "$HIRSEL_TEST_TMPDIR.$$" "$HIRSEL_TEST_TMPDIR" 2>/dev/null || rm -f "$HIRSEL_TEST_TMPDIR.$$"
   done
 fi
+# Every action owns its writable caches, including on a host with a populated
+# home. Share them among its test threads/CLI children, never between actions.
+# mktemp creates a unique mode-0700 directory (Go os.MkdirTemp's ownership
+# pattern); the launcher stays alive so its exit trap also runs on test failure.
+action_cache="$(mktemp -d "$scratch/action-XXXXXXXXXX")"
+action_cache="$(cd "$action_cache" && pwd)"
+trap 'rm -rf "$action_cache"' 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+export XDG_CACHE_HOME="$action_cache/cache"
+export HIRSEL_RESULTS_DIR="$action_cache/results"
+export HIRSEL_NATIVE_CACHE="$action_cache/runtime"
+mkdir -m 700 "$XDG_CACHE_HOME"
 LLVM_SYS_211_PREFIX="$(cd "$LLVM_SYS_211_PREFIX" && pwd)"
 export LLVM_SYS_211_PREFIX
 if [ -n "${HIRSEL_NATIVE_ENVIRONMENT:-}" ]; then
@@ -217,7 +231,7 @@ for argument in "$@"; do
 done
 inventory=false
 if "$full_gate" && "$ignored" && [ -n "$test_binary" ]; then inventory=true; fi
-if [ -z "$shard" ] && ! "$inventory"; then exec "$harness" "$@"; fi
+if [ -z "$shard" ] && ! "$inventory"; then "$harness" "$@"; exit $?; fi
 set -f # Rust case names and declared patterns are words, never shell globs.
 list_cases() (
   remaining=$#
@@ -311,4 +325,4 @@ while [ "$remaining" -gt 0 ]; do
       fi ;;
   esac
 done
-exec "$harness" "$@"
+"$harness" "$@"

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-LAUNCHER = ROOT / 'tools/buck2/test_launcher.sh'
+LAUNCHER = Path(os.environ.get('HIRSEL_TEST_LAUNCHER', ROOT / 'tools/buck2/test_launcher.sh')).resolve()
 CASES = {
     'pool::full_gate_heap': True,
     'host::full_gate_arm': True,
@@ -270,6 +270,83 @@ class LauncherMemory(LauncherFixture):
         self.assertEqual(self.limits('1048576K'), ['1048576', hard, '1048576K'])
         self.assertEqual(self.limits('512M'), ['524288', hard, '512M'])
         self.assertEqual(self.limits('2G'), ['2097152', hard, '2G'])
+
+
+class LauncherCache(LauncherFixture):
+    def launch_probe(self, body, *, env=None, args=()):
+        probe = self.root / 'probe'
+        probe.write_text('#!/usr/bin/env python3\n' + body)
+        probe.chmod(0o755)
+        return subprocess.run(['sh', str(LAUNCHER), 'probe', *args], cwd=self.root,
+                              env=self.env if env is None else env,
+                              capture_output=True, text=True)
+
+    def test_unset_empty_and_unwritable_cache_variables_are_action_owned(self):
+        shared = self.root / 'shared'
+        shared.mkdir()
+        blocked = self.root / 'blocked'
+        blocked.write_text('not a directory')
+        for value in (None, '', str(blocked), str(shared)):
+            env = self.env.copy()
+            for key in ('HOME', 'XDG_CACHE_HOME'):
+                env.pop(key, None)
+                if value is not None:
+                    env[key] = value
+            env['HIRSEL_RESULTS_DIR'] = str(shared / 'results')
+            env['HIRSEL_NATIVE_CACHE'] = str(shared / 'runtime')
+            run = self.launch_probe('''
+import json, os
+from pathlib import Path
+cache = Path(os.environ['XDG_CACHE_HOME'])
+assert cache.is_absolute() and cache.is_dir()
+assert cache.stat().st_mode & 0o777 == 0o700
+for key in ('XDG_CACHE_HOME', 'HIRSEL_RESULTS_DIR', 'HIRSEL_NATIVE_CACHE'):
+    path = Path(os.environ[key]); path.mkdir(parents=True, exist_ok=True)
+    (path / 'written').write_text('owned')
+print(json.dumps(dict(cache=str(cache), results=os.environ['HIRSEL_RESULTS_DIR'], runtime=os.environ['HIRSEL_NATIVE_CACHE'])))
+''', env=env)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            paths = json.loads(run.stdout)
+            action = Path(paths['cache']).parent
+            self.assertEqual(Path(paths['results']).parent, action)
+            self.assertEqual(Path(paths['runtime']).parent, action)
+            self.assertFalse(action.exists())
+            self.assertEqual(list(shared.iterdir()), [])
+            self.assertEqual(blocked.read_text(), 'not a directory')
+
+    def test_failure_and_filtered_empty_shard_clean_up_and_preserve_exit(self):
+        for args, env in [((), {}), (('only-this',), dict(TEST_TOTAL_SHARDS='2', TEST_SHARD_INDEX='1'))]:
+            run = self.launch_probe("import os, sys\nif '--list' in sys.argv:\n    print('only-this: test'); sys.exit(0)\nprint(os.environ['XDG_CACHE_HOME'])\nsys.exit(17)\n",
+                                    args=args, env=self.env | env)
+            if not args:
+                self.assertEqual(run.returncode, 17, run.stderr)
+                self.assertFalse(Path(run.stdout.strip()).parent.exists())
+            else:
+                self.assertEqual(run.returncode, 0, run.stderr)
+            scratch = Path(os.readlink(self.root / 'tmp'))
+            self.assertEqual(list(scratch.glob('action-*')), [])
+
+    def test_parallel_launchers_never_share_a_cache(self):
+        probe = self.root / 'probe'
+        probe.write_text('''#!/usr/bin/env python3
+import os
+from pathlib import Path
+cache=Path(os.environ['XDG_CACHE_HOME'])
+(cache / 'owner').write_text(str(os.getpid()))
+print(cache)
+''')
+        probe.chmod(0o755)
+        runs = [subprocess.Popen(['sh', str(LAUNCHER), 'probe'], cwd=self.root,
+                                 env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                for _ in range(8)]
+        caches = []
+        for run in runs:
+            stdout, stderr = run.communicate()
+            self.assertEqual(run.returncode, 0, stderr)
+            cache = Path(stdout.strip())
+            caches.append(cache)
+            self.assertFalse(cache.parent.exists())
+        self.assertEqual(len(set(caches)), len(caches))
 
 
 class LauncherBinaries(unittest.TestCase):

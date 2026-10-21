@@ -141,3 +141,183 @@ pub fn main(rt:Io)->Result[(),GrantError] {
     }
     std::fs::remove_dir_all(cache).unwrap();
 }
+
+/// A std-free package isolates cache selection from installed-seed behavior.
+struct HermeticCacheFixture(std::path::PathBuf);
+impl HermeticCacheFixture {
+    fn new() -> Self {
+        let source = super::file("pub fn main()->Result[(),()] { Ok(()) }\n");
+        let root = source.with_extension("cache-environment");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::rename(source, root.join("main.hir")).unwrap();
+        std::fs::write(
+            root.join("hirsel.json"),
+            serde_json::json!({
+                "schema":1,"package":{"name":"tiny","version":"0"},
+                "entry":{"module":[],"name":"main"},
+                "sources":[{"path":"main.hir","module":[]}],"dependencies":[]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        Self(root)
+    }
+    fn command(&self) -> Command {
+        let mut command =
+            Command::new(std::fs::canonicalize(env!("CARGO_BIN_EXE_hirsel")).unwrap());
+        for name in [
+            "HOME",
+            "XDG_CACHE_HOME",
+            "HIRSEL_OBJECTS",
+            "HIRSEL_RESULTS",
+            "HIRSEL_RESULTS_DIR",
+            "HIRSEL_VERIFY_CACHE",
+            "HIRSEL_VALIDATE_STAGES",
+        ] {
+            command.env_remove(name);
+        }
+        command
+            .current_dir(&self.0)
+            .env("HIRSEL_DAEMON", "off")
+            .env("HIRSEL_STD_OBJECTS", "none")
+            .args(["build", "--debug", "--timings=json"])
+            .arg(self.0.join("hirsel.json"))
+            .arg("-o")
+            .arg(self.0.join("app"));
+        command
+    }
+    fn build(&self, command: &mut Command) -> (serde_json::Value, Vec<u8>) {
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{command:?}: {output:?}");
+        let stderr = std::str::from_utf8(&output.stderr).unwrap();
+        let report = serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
+        let run = Command::new(self.0.join("app"))
+            .env_clear()
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{run:?}");
+        assert!(run.stdout.is_empty() && run.stderr.is_empty(), "{run:?}");
+        (report, std::fs::read(self.0.join("app")).unwrap())
+    }
+}
+impl Drop for HermeticCacheFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn native_cache_without_home_recomputes_and_explicit_dir_requires_a_location() {
+    let fixture = HermeticCacheFixture::new();
+    let (no_home, bytes) = fixture.build(&mut fixture.command());
+    assert_eq!(no_home["counts"]["object hits"], 0);
+    assert!(no_home["counts"]["units"].as_u64().unwrap() > 0);
+    for value in ["", "relative"] {
+        let (report, fresh) = fixture.build(
+            fixture
+                .command()
+                .env("HOME", value)
+                .env("XDG_CACHE_HOME", value),
+        );
+        assert_eq!(report["counts"]["object hits"], 0);
+        assert_eq!(report["counts"]["store hits"], 0);
+        assert_eq!(bytes, fresh);
+        let explicit = fixture
+            .command()
+            .env("HOME", value)
+            .env("XDG_CACHE_HOME", value)
+            .env("HIRSEL_OBJECTS", "dir@1")
+            .output()
+            .unwrap();
+        assert!(!explicit.status.success(), "{explicit:?}");
+        assert!(
+            String::from_utf8_lossy(&explicit.stderr).contains("dir@1: no cache directory"),
+            "{explicit:?}"
+        );
+    }
+    let explicit = fixture
+        .command()
+        .env("HIRSEL_OBJECTS", "dir@1")
+        .output()
+        .unwrap();
+    assert!(!explicit.status.success());
+    assert!(String::from_utf8_lossy(&explicit.stderr).contains("dir@1: no cache directory"));
+    assert!(!fixture.0.join(".cache").exists());
+    assert!(!fixture.0.join("relative").exists());
+}
+
+#[test]
+fn native_private_cache_reuses_units_and_unwritable_dir_never_reports_a_hit() {
+    let fixture = HermeticCacheFixture::new();
+    let cache = fixture.0.join("cache");
+    let (cold, bytes) = fixture.build(
+        fixture
+            .command()
+            .env("XDG_CACHE_HOME", &cache)
+            .env("HIRSEL_RESULTS_DIR", ""),
+    );
+    assert!(cold["counts"]["object misses"].as_u64().unwrap() > 0);
+    let (warm, cached) = fixture.build(
+        fixture
+            .command()
+            .env("XDG_CACHE_HOME", &cache)
+            .env("HIRSEL_RESULTS_DIR", ""),
+    );
+    assert!(warm["counts"]["object hits"].as_u64().unwrap() > 0);
+    assert_eq!(warm["counts"]["units"], 0);
+    assert_eq!(bytes, cached);
+    assert!(cache.join("hirsel/results-v2").is_dir());
+    let (_, fresh) = fixture.build(&mut fixture.command());
+    assert_eq!(bytes, fresh);
+    // ENOTDIR works even when the harness runs as root; chmod(0) would not.
+    let blocked = fixture.0.join("blocked");
+    std::fs::write(&blocked, "not a directory").unwrap();
+    for _ in 0..2 {
+        let (report, fresh) = fixture.build(
+            fixture
+                .command()
+                .env("XDG_CACHE_HOME", &blocked)
+                .env("HIRSEL_OBJECTS", "dir@1")
+                .env("HIRSEL_RESULTS", "dir@1"),
+        );
+        assert_eq!(report["counts"]["object hits"], 0);
+        assert_eq!(report["counts"]["store hits"], 0);
+        assert!(report["counts"]["units"].as_u64().unwrap() > 0);
+        assert_eq!(bytes, fresh);
+    }
+    assert_eq!(std::fs::read_to_string(blocked).unwrap(), "not a directory");
+}
+
+#[test]
+fn native_empty_xdg_uses_home_and_relocated_compiler_needs_no_home() {
+    let fixture = HermeticCacheFixture::new();
+    let home = fixture.0.join("home");
+    let (_, bytes) = fixture.build(
+        fixture
+            .command()
+            .env("HOME", &home)
+            .env("XDG_CACHE_HOME", ""),
+    );
+    let (warm, cached) = fixture.build(fixture.command().env("HOME", &home));
+    assert!(warm["counts"]["object hits"].as_u64().unwrap() > 0);
+    assert_eq!(bytes, cached);
+    assert!(home.join(".cache/hirsel").is_dir());
+    // Copy the compiler into a relocated bundle. This package is std-free:
+    // neither an image nor a seed may hide a writable-cache dependency.
+    let bundle = fixture.0.join("bundle");
+    std::fs::create_dir(&bundle).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_hirsel"), bundle.join("hirsel")).unwrap();
+    let command = fixture.command();
+    let mut moved = Command::new(bundle.join("hirsel"));
+    moved.args(command.get_args()).current_dir(&fixture.0);
+    for (key, value) in command.get_envs() {
+        if let Some(value) = value {
+            moved.env(key, value);
+        } else {
+            moved.env_remove(key);
+        }
+    }
+    let (report, relocated) = fixture.build(&mut moved);
+    assert_eq!(report["counts"]["object hits"], 0);
+    assert_eq!(bytes, relocated);
+}

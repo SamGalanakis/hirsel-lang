@@ -183,7 +183,16 @@ impl DirObjects {
         let base = std::env::var_os("XDG_CACHE_HOME")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .filter(|v| !v.is_empty())
+                    .map(|h| PathBuf::from(h).join(".cache"))
+            })?;
+        // Like Go's os.UserCacheDir: an absent or relative location is not
+        // authority to write a cache into the current working directory.
+        if !base.is_absolute() {
+            return None;
+        }
         Some(Self::new(
             base.join("hirsel")
                 .join(format!("objects-v{FORMAT}"))
@@ -458,7 +467,7 @@ pub fn objects_by_name(
         "dir@1" => Arc::new(match root {
             Some(root) => DirObjects::new(root.join(partition)),
             None => DirObjects::default_location(partition)
-                .ok_or("dir@1: no cache directory (set XDG_CACHE_HOME or HOME)")?,
+                .ok_or("dir@1: no cache directory (set an absolute XDG_CACHE_HOME or HOME, or select none@1)")?,
         }),
         "sim@1" => Arc::new(SimObjects::default()),
         other => return Err(format!("unknown object store `{other}`")),

@@ -334,6 +334,8 @@ pub(crate) fn unframe(bytes: &[u8]) -> Option<&[u8]> {
 
 /// The store a run-config provider name selects: `none@1`, `mem@1`,
 /// `dir@1` (at `root`, else the default cache directory) or `sim@1`.
+/// An explicit `dir@1` without a location is an error. The compiler's optional
+/// environment-selected result cache treats an unavailable provider as off.
 pub fn store_by_name(
     name: &str,
     root: Option<std::path::PathBuf>,
@@ -344,7 +346,7 @@ pub fn store_by_name(
         "dir@1" => Arc::new(match root {
             Some(root) => DirStore::new(root),
             None => DirStore::default_location()
-                .ok_or("dir@1: no cache directory (set XDG_CACHE_HOME or HOME)")?,
+                .ok_or("dir@1: no cache directory (set an absolute XDG_CACHE_HOME or HOME, or select none@1)")?,
         }),
         "sim@1" => Arc::new(SimStore::default()),
         other => return Err(format!("unknown result store `{other}`")),

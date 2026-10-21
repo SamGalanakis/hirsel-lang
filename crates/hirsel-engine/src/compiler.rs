@@ -103,7 +103,9 @@ impl Compiler {
             }
             if let Ok(store) = crate::store::store_by_name(
                 &name,
-                std::env::var_os("HIRSEL_RESULTS_DIR").map(Into::into),
+                std::env::var_os("HIRSEL_RESULTS_DIR")
+                    .filter(|v| !v.is_empty())
+                    .map(Into::into),
             ) {
                 engine = engine.with_result_store(store);
             }

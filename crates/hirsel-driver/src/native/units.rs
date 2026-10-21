@@ -86,7 +86,14 @@ pub(crate) fn selected(
     debug: bool,
     fuel: bool,
 ) -> Result<Option<UnitObjects>, NativeError> {
-    let name = std::env::var_os("HIRSEL_OBJECTS").unwrap_or_else(|| "dir@1".into());
+    // Writable storage is optional for an implicit default. Keep explicit
+    // provider selection strict and retain read-only installed-seed lookup.
+    let default = if hirsel_lir::objects::DirObjects::default_location("").is_some() {
+        "dir@1"
+    } else {
+        "none@1"
+    };
+    let name = std::env::var_os("HIRSEL_OBJECTS").unwrap_or_else(|| default.into());
     let name = name.to_string_lossy();
     let store = UnitObjects::by_name(&name, target, backend, opt)
         .map_err(|e| NativeError::new(StageName::Emission, format!("HIRSEL_OBJECTS: {e}")))?;

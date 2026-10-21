@@ -969,6 +969,9 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_script_test", name="gate-distribution-notices", script="tools/tests/distribution_notices.py", full=False,
                             data=["tools/tests/distribution_notices.py"],
                             files_env={"HIRSEL_DISTRIBUTION_NOTICES": "//tools/toolchain-dist:notices.py"}))
+    out.append("\n" + call("hirsel_script_test", name="test-buck2-launcher", script="tools/tests/buck2_launcher.py", full=False,
+                            data=["tools/tests/buck2_launcher.py"],
+                            files_env={"HIRSEL_TEST_LAUNCHER": "//tools/buck2:test_launcher.sh"}))
     # summerwind/h2spec v2.6.0, the latest release (tools/h2spec/run).
     out.append("\n" + call("http_file", name="h2spec-release",
                             urls=["https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz"],

@@ -858,6 +858,27 @@ first publication of each store handle collects old entries; later publications
 collect every 64 MiB (or the configured cap, if smaller), bounding slack per
 active writer. Result records use `HIRSEL_RESULTS=dir@1` by default, with a
 2 GiB cap and the same collection policy; `HIRSEL_RESULTS=none@1` disables them.
+Empty `XDG_CACHE_HOME` falls back to a nonempty `HOME`. Implicit cache
+locations must be absolute; empty or relative variables never place a cache in
+the working directory. If neither location is available, an ordinary native
+build uses no writable object store and recomputes misses; the optional result
+cache is off. The installed read-only std seed remains eligible.
+`HIRSEL_OBJECTS=dir@1` explicitly requests a directory and refuses a missing
+location with a diagnostic naming `XDG_CACHE_HOME` and `HOME`. Disk providers
+retain their best-effort I/O contract: unreadable entries are misses, failed
+writes are discarded, and an unwritable directory cannot produce a hit for a
+result that was never stored. There is no shared temporary-cache fallback.
+`HIRSEL_RESULTS_DIR` selects an explicit result directory (empty means unset);
+library hosts selecting `store_by_name("dir@1", ...)` receive an error when no
+location is available. The compiler's optional environment-selected result
+provider treats that unavailability as off.
+
+Buck2's test launcher gives each action a private cache shared only by that
+action's threads and children, overriding inherited `XDG_CACHE_HOME`,
+`HIRSEL_RESULTS_DIR` and `HIRSEL_NATIVE_CACHE`. It removes that directory when
+the action exits, including test failures. Ordinary CLI commands continue to
+reuse the user's cache across invocations.
+
 Fresh user caches contain no other program's results. Only the installed
 read-only std products can serve another program's first build.
 

@@ -50,7 +50,16 @@ impl DirStore {
         let base = std::env::var_os("XDG_CACHE_HOME")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .filter(|v| !v.is_empty())
+                    .map(|h| PathBuf::from(h).join(".cache"))
+            })?;
+        // Like Go's os.UserCacheDir: an absent or relative location is not
+        // authority to write a cache into the current working directory.
+        if !base.is_absolute() {
+            return None;
+        }
         Some(Self::new(
             base.join("hirsel").join(format!("results-v{FORMAT}")),
         ))
