@@ -332,6 +332,10 @@ pub(crate) struct ReservedChannel {
     receiver: ReservedEndpoint,
 }
 impl ReservedChannel {
+    pub(crate) fn channel(&self) -> u32 {
+        self.channel
+    }
+
     pub(crate) fn words(&self) -> (u64, u64) {
         (self.sender.word(), self.receiver.word())
     }

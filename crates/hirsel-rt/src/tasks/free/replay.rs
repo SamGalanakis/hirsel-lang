@@ -30,8 +30,9 @@ impl Replay {
     /// scalar atomics, administrative task-tree operations, pending Shared
     /// root tails, thaw outcomes, explicit task.canceled checks and deadline
     /// scopes with settled children, task-set selection, serial gates and
-    /// scalar mutex create/take/put only; no host requests, mutex destruction,
-    /// channel replay or cancellation-ended waits yet.
+    /// scalar mutex create/take/put and channel open/send/receive only; no
+    /// host requests, mutex destruction, endpoint aliases/closes or general
+    /// cancellation-ended waits yet.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
@@ -284,9 +285,33 @@ impl Object {
             .with(|session| session.touch(&self.token.path, 0, self.handle, outcome))
             .map_err(|error| Stop::Diverged(error.0))
     }
+
+    pub(super) fn receive(&self, outcome: &str) -> Stopped<()> {
+        self.token
+            .shared
+            .with(|session| session.receive(&self.token.path, self.handle, outcome))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
 }
 
 impl Token {
+    pub(super) fn admit_done(&self, ctx: *mut TaskCtx) -> Stopped<()> {
+        self.entry(ctx, Phase::Done)?;
+        if !self
+            .shared
+            .with(|session| session.admits(&self.path, Phase::Done))
+        {
+            self.publish(ctx, Phase::Entered, || ())?;
+            return Err(Stop::Requested);
+        }
+        Ok(())
+    }
+
+    pub(super) fn cancel_peek(&self, live: Option<u32>) -> Option<u32> {
+        self.shared
+            .with(|session| session.cancel_peek(&self.path, live))
+    }
+
     /// No action runs past its admitted phase. Rejection returns through its
     /// runtime owner so temporary cell accesses drop normally before stopping.
     pub(super) fn publish<T>(

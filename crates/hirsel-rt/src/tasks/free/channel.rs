@@ -27,20 +27,28 @@ pub(crate) unsafe fn open(
     let element = unsafe { crate::channels::Element::new(descriptor, layout, none) };
     let cell = crate::channels::Channels::prepare_open(element, unsafe { &*layout });
     let reservation = unsafe { (*s).channels.reserve_open() };
+    let channel = reservation.channel();
     let (sender, receiver) = reservation.words();
     super::record::begin(ctx);
     let object = super::record::object(ctx);
+    let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
     if let Some(object) = &object {
         cell.object.set(object.clone()).unwrap();
     }
-    super::record::publish(ctx, Phase::Done, |writer| unsafe {
+    let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
+        if let Some(replay) = &replay {
+            replay.create()?;
+        }
         (*s).channels.initialize_open_cell(reservation, cell);
         out.write(sender);
         out.add(1).write(receiver);
         if let Some(writer) = writer {
             writer.create(object.unwrap());
         }
-    })?;
+        Ok(())
+    });
+    drop(replay);
+    publication??;
     unsafe { try_yield(&mut *ctx) }
 }
 
@@ -85,34 +93,49 @@ pub(crate) unsafe fn send(
     out: *mut u32,
 ) -> Stopped<()> {
     super::record::begin(ctx);
-    let channel = scheduler(ctx).channels.channel(sender, true);
-    let cell = scheduler(ctx).channels.payload(channel);
+    let s = scheduler(ctx) as *mut Scheduler;
+    let channel = unsafe { (*s).channels.channel(sender, true) };
+    unsafe { super::replay::wait_object(ctx, (crate::free::CHANNEL, u64::from(channel))) }?;
+    let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
+    let cell = unsafe { (*s).channels.payload(channel) };
     unsafe { role::release(ctx) };
     let mut state = cell.lock();
     cell.prepare_send(&mut state);
     // Send deliberately does not observe cancellation (CONC-3).
-    let publication = super::record::publish(ctx, Phase::Done, |writer| {
-        let status = unsafe { cell.send(&mut state, message, false) }.0;
-        let version = cell.next_event();
-        if let Some(writer) = writer {
-            writer.touch(
-                cell.object.get().expect("a recorded channel identity"),
-                version,
-                0,
-                if status == crate::channels::DONE {
+    let publication = super::record::publish_with_replay(
+        ctx,
+        Phase::Done,
+        replay.as_ref().map(|object| object.token()),
+        |writer| {
+            let status = unsafe { cell.send(&mut state, message, false) }.0;
+            let version = cell.next_event();
+            if let Some(writer) = writer {
+                writer.touch(
+                    cell.object.get().expect("a recorded channel identity"),
+                    version,
+                    0,
+                    if status == crate::channels::DONE {
+                        "send"
+                    } else {
+                        "send closed"
+                    },
+                );
+            } else if let Some(replay) = &replay {
+                replay.touch(if status == crate::channels::DONE {
                     "send"
                 } else {
                     "send closed"
-                },
-            );
-        }
-        unsafe { out.write(status) };
-        status
-    });
+                })?;
+            }
+            unsafe { out.write(status) };
+            Ok(status)
+        },
+    );
     drop(state);
     drop(cell);
+    drop(replay);
     unsafe { role::enter(ctx) };
-    if publication? == crate::channels::DONE {
+    if publication?? == crate::channels::DONE {
         scheduler(ctx).channels.touch(channel);
     }
     unsafe { try_yield(&mut *ctx) }
@@ -128,70 +151,103 @@ pub(crate) unsafe fn receive(
     caller_site: u64,
 ) -> Stopped<()> {
     super::record::begin(ctx);
-    let channel = scheduler(ctx).channels.channel(receiver, false);
+    let s = scheduler(ctx) as *mut Scheduler;
+    let channel = unsafe { (*s).channels.channel(receiver, false) };
     let mut entered = false;
     loop {
         // Cancellation flags and the shield snapshot remain stable while
         // this role is held. Senders drop the object lock before reentering
         // the role, so acquiring this lock cannot invert their lock order.
-        let cause = unsafe { canceled(ctx) };
         let shielded = unsafe { (*ctx).shield } != 0;
+        let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
+        if let Some(replay) = &replay {
+            replay.token().admit_done(ctx)?;
+        }
+        let live = unsafe { canceled(ctx) };
+        let cause = replay
+            .as_ref()
+            .filter(|_| !shielded)
+            .map(|object| object.token().cancel_peek(live))
+            .unwrap_or(live);
         let canceled_outcome = cause.map(|cause| format!("canceled {cause}"));
-        let cell = scheduler(ctx).channels.payload(channel);
+        let cell = unsafe { (*s).channels.payload(channel) };
         let mut state = cell.lock();
         let mut result = None;
         let publication = if cause.is_some() || cell.ready(&state) {
-            super::record::publish(ctx, Phase::Done, |writer| {
-                let (status, outcome) = if let Some(cause) = cause {
-                    (
-                        crate::channels::CANCELED + cause,
-                        canceled_outcome.as_deref().unwrap(),
-                    )
-                } else {
-                    match unsafe { cell.receive(&mut state, message) } {
-                        Ok(true) => (crate::channels::DONE, "msg"),
-                        Err(status) => (status, "closed"),
-                        Ok(false) => unreachable!("the receiver owns this channel's ready message"),
+            super::record::publish_with_replay(
+                ctx,
+                Phase::Done,
+                replay.as_ref().map(|object| object.token()),
+                |writer| {
+                    let (status, outcome) = if let Some(cause) = cause {
+                        (
+                            crate::channels::CANCELED + cause,
+                            canceled_outcome.as_deref().unwrap(),
+                        )
+                    } else {
+                        match unsafe { cell.receive(&mut state, message) } {
+                            Ok(true) => (crate::channels::DONE, "msg"),
+                            Err(status) => (status, "closed"),
+                            Ok(false) => {
+                                unreachable!("the receiver owns this channel's ready message")
+                            }
+                        }
+                    };
+                    if let Some(writer) = writer {
+                        if !shielded {
+                            writer.cancel(cause);
+                        }
+                        writer.receive(
+                            cell.object
+                                .get()
+                                .expect("a recorded channel identity")
+                                .clone(),
+                            outcome,
+                        );
+                    } else if let Some(replay) = &replay {
+                        if !shielded {
+                            assert_eq!(replay.token().cancel(cause)?, cause);
+                        }
+                        replay.receive(outcome)?;
                     }
-                };
-                if let Some(writer) = writer {
-                    if !shielded {
-                        writer.cancel(cause);
-                    }
-                    writer.receive(
-                        cell.object
-                            .get()
-                            .expect("a recorded channel identity")
-                            .clone(),
-                        outcome,
-                    );
-                }
-                unsafe { out.write(status) };
-                result = Some(status);
-            })
+                    unsafe { out.write(status) };
+                    result = Some(status);
+                    Ok(())
+                },
+            )
         } else if !entered {
-            super::record::publish(ctx, Phase::Entered, |_| ())
+            super::record::publish_with_replay(
+                ctx,
+                Phase::Entered,
+                replay.as_ref().map(|object| object.token()),
+                |_| Ok(()),
+            )
         } else {
-            Ok(())
+            Ok(Ok(()))
         };
         drop(state);
         drop(cell);
         drop(canceled_outcome);
-        publication?;
+        let replaying = replay.is_some();
+        drop(replay);
+        publication??;
         if result.is_some() {
             return unsafe { try_yield(&mut *ctx) };
         }
         entered = true;
+        let wait = if replaying {
+            let s = scheduler(ctx);
+            let me = s.current;
+            if !s.retrying.contains(&me) {
+                s.retrying.push(me);
+            }
+            Wait::Retry { cancelable: false }
+        } else {
+            Wait::ReceiveReady { channel }
+        };
         // No object lock, Arc, recorder borrow, or frame slot is retained by
         // the poll. A send racing this park is caught by its first idle poll.
-        unsafe {
-            try_block(
-                &mut *ctx,
-                Wait::ReceiveReady { channel },
-                false,
-                caller_site,
-            )
-        }?;
+        unsafe { try_block(&mut *ctx, wait, false, caller_site) }?;
     }
 }
 

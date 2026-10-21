@@ -1,9 +1,145 @@
 use super::*;
 use crate::tasks::free::record;
+use crate::tasks::free::replay::Replay;
 use hirsel_free::projection::{Event, Projection};
 use hirsel_free::session::Session;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+#[test]
+fn native_scalar_channel_replay_consumes_send_and_receive_history() {
+    let layout = layout();
+    let layouts = [&raw const layout];
+    for durable in [false, true] {
+        let recording = record::Recording::new(b"native scalar channel replay", durable);
+        let install = recording.clone();
+        let cutter = recording.clone();
+        let mut run = crate::host::BodyRun::new(8, false);
+        run.free = true;
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 1;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                install.root(ctx);
+            },
+            move |ctx| unsafe {
+                let mut endpoints = [0; 2];
+                let none = [0u64; 2];
+                hirsel_rt_v2_channel_open(
+                    ctx,
+                    std::ptr::null_mut(),
+                    endpoints.as_mut_ptr(),
+                    &0,
+                    none.as_ptr().cast(),
+                    2,
+                );
+                cutter.recorder.flush().unwrap().unwrap();
+                let mut message = [1u64, 7];
+                let mut status = 99;
+                hirsel_rt_v2_channel_send(
+                    ctx,
+                    &mut status,
+                    &mut endpoints[0],
+                    message.as_mut_ptr().cast(),
+                );
+                assert_eq!(status, crate::channels::DONE);
+                assert_eq!(message, none);
+                hirsel_rt_v2_channel_receive(
+                    ctx,
+                    0,
+                    0,
+                    &mut status,
+                    &mut endpoints[1],
+                    message.as_mut_ptr().cast(),
+                );
+                assert_eq!(status, crate::channels::DONE);
+                assert_eq!(message, [1, 7]);
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        recording.recorder.stop("returned", None).unwrap().unwrap();
+        let trace = recording.trace();
+        let bytes = Arc::try_unwrap(recording)
+            .ok()
+            .unwrap()
+            .recorder
+            .into_sink()
+            .bytes;
+        let flush = (1..bytes.len())
+            .find(|&end| {
+                hirsel_free::tape::parse(&bytes[..end]).is_ok_and(|tape| {
+                    tape.cut.get(&Vec::new())
+                        == Some(&hirsel_free::phase::Progress::new(1, Phase::Done))
+                })
+            })
+            .unwrap();
+        for end in [bytes.len(), flush, flush + 1] {
+            let parsed = hirsel_free::tape::parse(&bytes[..end]).unwrap();
+            let full = end == bytes.len();
+            let expected = Projection::new(
+                if full { "returned" } else { "truncated" },
+                &parsed.cut,
+                &trace,
+            );
+            for width in [2, 8] {
+                let replay = Replay::new(&bytes[..end]).unwrap();
+                let install = replay.clone();
+                let stage = Arc::new(AtomicU32::new(0));
+                let observed = stage.clone();
+                let mut run = crate::host::BodyRun::new(width, false);
+                run.free = true;
+                run.config.layouts = layouts.as_ptr();
+                run.config.layout_count = 1;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe { install.root(ctx) },
+                    move |ctx| unsafe {
+                        let mut endpoints = [0; 2];
+                        let none = [0u64; 2];
+                        hirsel_rt_v2_channel_open(
+                            ctx,
+                            std::ptr::null_mut(),
+                            endpoints.as_mut_ptr(),
+                            &0,
+                            none.as_ptr().cast(),
+                            2,
+                        );
+                        observed.store(1, Ordering::Release);
+                        let mut message = [1u64, 7];
+                        let mut status = 99;
+                        hirsel_rt_v2_channel_send(
+                            ctx,
+                            &mut status,
+                            &mut endpoints[0],
+                            message.as_mut_ptr().cast(),
+                        );
+                        assert_eq!(status, crate::channels::DONE);
+                        assert_eq!(message, none);
+                        observed.store(2, Ordering::Release);
+                        hirsel_rt_v2_channel_receive(
+                            ctx,
+                            0,
+                            0,
+                            &mut status,
+                            &mut endpoints[1],
+                            message.as_mut_ptr().cast(),
+                        );
+                        panic!("channel replay passed its cut");
+                    },
+                );
+                assert!(
+                    matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
+                    "{outcome:?}"
+                );
+                assert_eq!(stage.load(Ordering::Acquire), if full { 2 } else { 0 });
+                assert_eq!(replay.finish().unwrap(), expected);
+            }
+        }
+    }
+}
 
 const OPS: u64 = 32;
 
