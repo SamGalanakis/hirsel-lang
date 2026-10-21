@@ -101,6 +101,43 @@ pub(super) enum CanonicalOutcome {
     Unit,
 }
 
+pub(super) type Subevents = Vec<(CanonicalItem, CanonicalOutcome)>;
+
+/// Use the scheduler's prepared linked-child walk, exactly as ordinary cancel
+/// does. Capture every actual target's first-wins cause before any scheduling
+/// point, including descendants not named by the issuing operation's handles.
+/// Paths sort the subevents independently of table slots and child-link order.
+pub(super) fn cancel_observed(
+    s: &mut super::super::Scheduler,
+    task: u32,
+    cause: u32,
+) -> Option<Subevents> {
+    if !matches!(&s.logical, Logical::Ordered(driver) if driver.events.is_some()) {
+        s.cancel(task, cause);
+        return None;
+    }
+    let targets = s.prepare_cancel(task);
+    s.cancel_prepared(task, cause, &targets);
+    let mut events: Subevents = targets
+        .into_iter()
+        .map(|target| {
+            let row = s.task(target);
+            (
+                CanonicalItem::Cancellation(row.path.clone()),
+                CanonicalOutcome::Scalar(
+                    row.canceled
+                        .cause()
+                        .map_or(0, |cause| cause + 1)
+                        .to_le_bytes()
+                        .to_vec(),
+                ),
+            )
+        })
+        .collect();
+    events.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    Some(events)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Unsupported {
     pub task: Vec<u32>,
@@ -272,6 +309,9 @@ pub(super) fn record(
         },
     };
     let canonical = operation.and_then(|(op, result)| {
+        if let Some(events) = &result.canonical {
+            return Some(events.clone());
+        }
         if matches!(
             op.payload,
             Command::Head {
@@ -283,10 +323,10 @@ pub(super) fn record(
                 4,
                 "cancellation has a captured u32 result"
             );
-            return Some((
+            return Some(vec![(
                 CanonicalItem::Cancellation(path.clone()),
                 CanonicalOutcome::Scalar(result.image.clone()),
-            ));
+            )]);
         }
         let items: std::collections::BTreeSet<_> = op
             .footprint
@@ -304,7 +344,7 @@ pub(super) fn record(
             _ => return None,
         };
         assert_eq!(result.status, 0);
-        Some((CanonicalItem::Object(item.clone()), outcome))
+        Some(vec![(CanonicalItem::Object(item.clone()), outcome)])
     });
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
@@ -321,27 +361,31 @@ pub(super) fn record(
         next.checked_sub(1)
             .expect("a continuation follows an operation")
     };
-    if let (Some((item, outcome)), Some((op, _))) = (canonical, operation) {
-        let version = log.versions.entry(item.clone()).or_default();
-        *version = version
-            .checked_add(1)
-            .expect("canonical object version overflow");
-        if matches!(outcome, CanonicalOutcome::Created(_)) {
-            assert_eq!(*version, 1, "creation is the first object subevent");
+    if let (Some(events), Some((op, _))) = (canonical, operation) {
+        for (subevent, (item, outcome)) in events.into_iter().enumerate() {
+            let version = log.versions.entry(item.clone()).or_default();
+            *version = version
+                .checked_add(1)
+                .expect("canonical object version overflow");
+            if matches!(outcome, CanonicalOutcome::Created(_)) {
+                assert_eq!(*version, 1, "creation is the first object subevent");
+            }
+            log.canonical.push(CanonicalEvent {
+                task: path.clone(),
+                ordinal,
+                subevent: subevent
+                    .try_into()
+                    .expect("canonical subevent index fits u32"),
+                op: op.descriptor.name,
+                transition: transition.clone(),
+                item,
+                version: *version,
+                outcome,
+                retirement: retirement.index,
+                before: retirement.before.clone(),
+                credit: retirement.credit,
+            });
         }
-        log.canonical.push(CanonicalEvent {
-            task: path.clone(),
-            ordinal,
-            subevent: 0,
-            op: op.descriptor.name,
-            transition: transition.clone(),
-            item,
-            version: *version,
-            outcome,
-            retirement: retirement.index,
-            before: retirement.before.clone(),
-            credit: retirement.credit,
-        });
     } else {
         log.unsupported.push(Unsupported {
             task: path.clone(),
@@ -365,6 +409,163 @@ pub(super) fn record(
 mod tests {
     use super::*;
     use crate::ordered::Policy;
+
+    #[test]
+    fn cancel_subevents_keep_descendant_causes_in_path_order_across_native_row_orders() {
+        use crate::budget::stretch::{Budgets, Settled};
+        use crate::ordered::Backend;
+        use crate::tasks::{Scheduler, Scope, Task, handle, scheduler};
+        let mut reference = None;
+        for (order, observing) in [
+            ([1, 2, 3, 4], true),
+            ([4, 3, 1, 2], true),
+            ([1, 2, 3, 4], false),
+        ] {
+            let mut ctx = std::ptr::null_mut();
+            assert_eq!(
+                unsafe { crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx) },
+                0
+            );
+            let s = scheduler(ctx);
+            let root = handle(0, s.task(0).generation);
+            s.logical = Logical::Ordered(super::super::driver::Driver::new(
+                root,
+                Policy::admit(&Default::default(), None),
+                Settled {
+                    level: 0,
+                    limit: u64::MAX,
+                    fuel: u64::MAX,
+                },
+                Default::default(),
+            ));
+            if observing {
+                enable(ctx);
+            }
+            let s = scheduler(ctx);
+            s.tasks.resize_with(5, || None);
+            let [target, first, second, unrelated] = order;
+            for (index, path) in [
+                (target, vec![0]),
+                (first, vec![0, 0]),
+                (second, vec![0, 1]),
+                (unrelated, vec![1]),
+            ] {
+                s.tasks[index as usize] = Some(Task::new(
+                    index + 7,
+                    std::ptr::null_mut(),
+                    Some(0),
+                    path,
+                    None,
+                ));
+            }
+            s.scopes.push(Some(Scope {
+                generation: 1,
+                owner: 0,
+                children: order.to_vec(),
+                canceled: Default::default(),
+                deadline: None,
+                completions: Default::default(),
+            }));
+            s.link_child(0, target);
+            s.link_child(0, unrelated);
+            // Reverse links deliberately disagree with canonical path order.
+            s.link_child(target, second);
+            s.link_child(target, first);
+            s.task(second)
+                .canceled
+                .cancel(crate::tasks::CANCEL_DEADLINE);
+            let word = handle(target, s.task(target).generation);
+            let op = Command::TaskCancel {
+                scope: handle(0, 1),
+                child: word,
+            }
+            .operation(Default::default());
+            let mut ignored_record = |_, _, _: &Outcome, _| {};
+            let mut objects = unsafe { super::super::Objects::deferred(ctx, &mut ignored_record) };
+            let stretch = Stretch::new(Budgets {
+                fuel: false,
+                memory: false,
+            });
+            for retirement in 0..2 {
+                let receipt = objects.commit(root, &op, false);
+                if observing {
+                    assert_eq!(
+                        super::super::engine::driver(ctx)
+                            .events
+                            .as_ref()
+                            .unwrap()
+                            .canonical
+                            .len(),
+                        retirement as usize * 3,
+                        "commit alone emits no event"
+                    );
+                    assert!(receipt.result.canonical.is_some());
+                } else {
+                    assert!(
+                        receipt.result.canonical.is_none(),
+                        "disabled trace retains no snapshot"
+                    );
+                }
+                // Simulate row reuse after the effect. Recording must use the
+                // immutable snapshot rather than consulting a native target.
+                let old_path = std::mem::replace(&mut scheduler(ctx).task(first).path, vec![99]);
+                objects.record_retirement(
+                    root,
+                    &op,
+                    &receipt.result,
+                    Retirement {
+                        index: retirement,
+                        before: &stretch,
+                        transition: &receipt.next,
+                        credit: 0,
+                    },
+                );
+                scheduler(ctx).task(first).path = old_path;
+            }
+            assert_eq!(scheduler(ctx).task(unrelated).canceled.cause(), None);
+            if observing {
+                let events = super::super::engine::driver(ctx)
+                    .events
+                    .as_ref()
+                    .unwrap()
+                    .canonical()
+                    .unwrap()
+                    .to_vec();
+                assert_eq!(events.len(), 6);
+                for (ordinal, chunk) in events.chunks_exact(3).enumerate() {
+                    for (subevent, (row, (path, cause))) in chunk
+                        .iter()
+                        .zip([
+                            (vec![0], crate::tasks::CANCEL_REQUESTED),
+                            (vec![0, 0], crate::tasks::CANCEL_PARENT),
+                            (vec![0, 1], crate::tasks::CANCEL_DEADLINE),
+                        ])
+                        .enumerate()
+                    {
+                        assert_eq!(row.item, CanonicalItem::Cancellation(path));
+                        assert_eq!(
+                            row.outcome,
+                            CanonicalOutcome::Scalar((cause + 1).to_le_bytes().to_vec())
+                        );
+                        assert_eq!(row.ordinal, ordinal as u64);
+                        assert_eq!(row.subevent, subevent as u32);
+                        assert_eq!(row.version, ordinal as u64 + 1);
+                    }
+                }
+                if let Some(reference) = &reference {
+                    assert_eq!(&events, reference);
+                } else {
+                    reference = Some(events);
+                }
+            }
+            // Synthetic rows have no physical contexts or ownership to destroy.
+            let s: &mut Scheduler = scheduler(ctx);
+            s.tasks.truncate(1);
+            s.task(0).children.clear();
+            s.scopes.clear();
+            unsafe { crate::context::hirsel_rt_v2_ctx_destroy(ctx) };
+        }
+    }
 
     #[test]
     fn native_retirements_keep_owned_evidence_and_continuations_keep_the_ordinal() {

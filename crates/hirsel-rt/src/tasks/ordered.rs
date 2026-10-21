@@ -165,6 +165,10 @@ pub(crate) struct Outcome {
     /// A cause is applied only to the command's owner continuation, never to
     /// the worker/ctx that happened to commit a different task's logged op.
     pub(crate) chain: Vec<crate::failure::Chained>,
+    /// Results fixed by an effect whose touched items are discovered at commit
+    /// (for example a cancellation's linked descendants). Never re-sample at
+    /// retirement or retain a native task row in this optional evidence.
+    canonical: Option<events::Subevents>,
     pending: RefCell<Option<crate::channels::PendingSend>>,
 }
 
@@ -189,6 +193,7 @@ impl Outcome {
             status,
             image,
             chain: Vec::new(),
+            canonical: None,
             pending: RefCell::new(None),
         }
     }
@@ -416,8 +421,10 @@ impl Backend<Command> for Objects<'_> {
                     assert!(!early, "cancellation only retires");
                     let scope = s.scope_handle(*scope);
                     let child = s.task_handle(*child, scope);
-                    s.cancel(child, super::CANCEL_REQUESTED);
-                    (Outcome::image(0, Vec::new()), Next::Yield)
+                    let canonical = events::cancel_observed(s, child, super::CANCEL_REQUESTED);
+                    let mut outcome = Outcome::image(0, Vec::new());
+                    outcome.canonical = canonical;
+                    (outcome, Next::Yield)
                 }
                 Command::TaskDetach { scope, child: word } => {
                     assert!(!early, "detach only retires");
@@ -535,6 +542,7 @@ impl Backend<Command> for Objects<'_> {
                             status,
                             image: image.clone(),
                             chain: Vec::new(),
+                            canonical: None,
                             pending: RefCell::new(pending),
                         },
                         Next::Yield,
