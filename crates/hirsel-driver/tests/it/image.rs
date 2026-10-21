@@ -661,3 +661,32 @@ fn imaged_snapshot_reuses_signature_verdicts() {
         assert_eq!(outputs, ["seeded"]);
     }
 }
+
+/// Asking directly for syntax must materialize its image source. A content-key
+/// read alone is syntax-free, so explicit parse/resolve demands own this step.
+#[test]
+fn explicit_image_syntax_requests_materialize_the_source() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let image = library_image(&f, LIBRARY).unwrap();
+        let library = f.0.join("lib.json");
+        let client = f.program("client", CLIENT, &library, "lib");
+        let path = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+            package: package("lib"),
+            modules: vec!["lib".into()],
+            name: "value".into(),
+        });
+        for resolve in [false, true] {
+            let mut cached = load(&client, &StdImages::of(vec![image.clone()]));
+            assert!(cached.engine.imaged(&package("lib")));
+            if resolve {
+                cached.engine.resolve_definition(&path).unwrap();
+            } else {
+                let syntax = cached.engine.parse_definition(&path).unwrap();
+                assert_eq!(syntax.value.item.definition, path);
+            }
+            // A syntax demand does not retire its still-current image.
+            assert!(cached.engine.imaged(&package("lib")));
+        }
+    });
+}

@@ -1027,6 +1027,7 @@ impl QueryEngine {
         Ok(output(self.snapshot(definition)?))
     }
     fn syntax_view(&mut self, definition: &DefPath, kind: QueryKind) -> Result<(), QueryError> {
+        self.materialize(definition)?;
         let key = self.key_text(definition, kind)?;
         let identity = (definition.clone(), kind);
         if self.syntax_keys.get(&identity) != Some(&key) {
