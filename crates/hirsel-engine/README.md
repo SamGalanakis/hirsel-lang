@@ -422,6 +422,10 @@ query engine. The snapshot carries the native GEN-5 `InstanceGraph` and one
 `SourceAudit` per executable definition (noalloc, cleanup and invocation promises);
 import recollects both. Forged flags, graphs, audit records, materializations or
 stale bodies fail closed, and a growing native instance graph is unavailable.
+Import compares current query products directly, without exporting another
+snapshot or comparing syntax trees deeply. Source owners must retain the current
+item's Arc; TIR verdicts are reused only for the exact accepted Arc and current
+validator reads. An equal detached TIR copy is independently validated.
 The snapshot also carries the CT-5 `InstanceBodies` table, recomputed on import
 and checked by `hirsel_validate::validate_instance_bodies`.
 

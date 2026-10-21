@@ -10,6 +10,65 @@ fn engine(text: &str) -> QueryEngine {
     engine
 }
 const PROGRAM: &str = "pub type E = Error()\npub opaque type Hidden: () uses {} { value: u64 }\nconst answer: u64 = 42u64\npub fn main() -> Result[(), E] { let n = answer; Ok(()) }\n";
+
+#[test]
+fn native_import_reuses_exact_verdicts_and_validates_detached_tir() {
+    let run = || {
+        with_compiler_stack(|| {
+            use hirsel_intern::timings::{self, Count};
+            let mut engine = engine(PROGRAM);
+            let base = engine.export_native_input().unwrap();
+            let path = entry_path(&default_context());
+            timings::enable();
+            let runs = || {
+                timings::report()
+                    .counts
+                    .into_iter()
+                    .find(|(kind, _)| *kind == Count::VRuns)
+                    .unwrap()
+                    .1
+            };
+            let before = runs();
+            engine.import_native_input(base.clone()).unwrap();
+            engine.import_native_input(base.clone()).unwrap();
+            assert_eq!(
+                runs(),
+                before,
+                "exact accepted TIR should reuse its verdict"
+            );
+
+            let mut detached = base.clone();
+            detached.definitions.insert(
+                path.clone(),
+                Arc::new(base.definitions[&path].as_ref().clone()),
+            );
+            engine.import_native_input(detached).unwrap();
+            assert!(
+                runs() > before,
+                "detached TIR requires independent validation"
+            );
+
+            let mut forged = base.clone();
+            Arc::make_mut(forged.definitions.get_mut(&path).unwrap()).bodies[0]
+                .entry
+                .0 = 999;
+            assert!(engine.import_native_input(forged).is_err());
+            let mut forged = base;
+            forged.foreign_unreplayable = !forged.foreign_unreplayable;
+            assert!(engine.import_native_input(forged).is_err());
+            "checked".to_owned()
+        })
+    };
+    // Keep process-wide V counters independent of other harness tests.
+    if let Some(outputs) = hirsel_intern::under_salts(
+        "native_input::native_import_reuses_exact_verdicts_and_validates_detached_tir",
+        &[1],
+        run,
+    ) {
+        assert_eq!(outputs, ["checked"]);
+    }
+}
+
 #[test]
 fn native_snapshot_owns_declarations_materializations_sources_and_program_selection() {
     let mut engine = engine(PROGRAM);
