@@ -316,4 +316,82 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn saved_home_and_pool_callbacks_reacquire_the_single_compute_permit() {
+        const CHILD: &str = "HIRSEL_F1_CALLBACK_PERMIT";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "tasks::free::foreign::tests::saved_home_and_pool_callbacks_reacquire_the_single_compute_permit", "--nocapture"])
+                .env(CHILD, "1").output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            return;
+        }
+        crate::pool::set_compute_grant(1);
+        for width in [2, 8] {
+            for (recorded, durable) in [(false, false), (true, false), (true, true)] {
+                let recording = recorded
+                    .then(|| super::super::record::Recording::new(b"callback permit", durable));
+                let install = recording.clone();
+                let mut run = crate::host::BodyRun::new(width, true);
+                run.free = true;
+                unsafe { run.use_physical_dispatch() };
+                let outcome = run.run(
+                    move |ctx| unsafe {
+                        super::super::enable(ctx);
+                        if let Some(recording) = &install {
+                            recording.root(ctx);
+                        }
+                    },
+                    move |ctx| unsafe {
+                        for dispatch in [
+                            FOREIGN_THREADS_HOME | FOREIGN_BLOCKING,
+                            FOREIGN_THREADS_ANY | FOREIGN_BLOCKING,
+                            FOREIGN_THREADS_SERIAL
+                                | FOREIGN_BLOCKING
+                                | (7 << FOREIGN_PACKAGE_SHIFT),
+                        ] {
+                            let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                            hirsel_rt_v2_foreign_enter(
+                                ctx,
+                                0,
+                                interval.as_mut_ptr().cast(),
+                                dispatch,
+                            );
+                            assert_eq!(crate::pool::compute_permits().1, 0, "C holds no permit");
+                            assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                            assert_eq!(crate::pool::compute_permits().1, 1);
+                            let thread = std::thread::current().id();
+                            save_callback(ctx);
+                            assert_eq!(std::thread::current().id(), thread);
+                            assert_eq!(
+                                crate::pool::compute_permits().1,
+                                1,
+                                "a resumed callback holds its permit"
+                            );
+                            // A nested callback borrows the outer callback's
+                            // permit and must not release it on return.
+                            assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                            hirsel_rt_v2_callback_leave(ctx);
+                            assert_eq!(crate::pool::compute_permits().1, 1);
+                            let mut canceled = 99;
+                            hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0);
+                            assert_eq!(canceled, 0);
+                            hirsel_rt_v2_callback_leave(ctx);
+                            assert_eq!(crate::pool::compute_permits().1, 0);
+                            hirsel_rt_v2_foreign_leave(interval.as_ptr().cast());
+                            assert_eq!(crate::pool::compute_permits().1, 1);
+                        }
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                assert_eq!(crate::pool::compute_permits().1, 0);
+                if let Some(recording) = recording {
+                    recording.recorder.stop("returned", None).unwrap().unwrap();
+                    assert!(std::sync::Arc::try_unwrap(recording).is_ok());
+                }
+            }
+        }
+    }
 }

@@ -446,7 +446,9 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
         wake(&execs.home);
         return;
     }
-    let permit = matches!(exec.kind, Kind::Compute(_));
+    // The exclusive saved image includes callback depth: Home/Pool C entry
+    // needs no permit, but a callback continuation must reacquire its own.
+    let permit = super::resumes_into_hirsel(ctx, exec);
     if permit
         && execs
             .permits

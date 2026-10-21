@@ -799,9 +799,14 @@ pub(crate) fn target(ctx: *mut TaskCtx, owner: Owner, last: Option<u16>) -> Opti
     (to != me).then_some(to)
 }
 
-/// Whether the posted task resumes into Hirsel code on `to`: a compute worker's or a home
-/// thread's of a width-1 run take a permit, home at width > 1 and pool threads none.
+/// Whether the posted task resumes into Hirsel code on `to`. Compute workers
+/// and width-1 home execution take a permit. A saved callback also takes one
+/// on Home or Pool; initial dispatch into C (callback depth zero) takes none.
 pub(crate) fn resumes_into_hirsel(ctx: *mut TaskCtx, to: *const Exec) -> bool {
+    // SAFETY: the caller owns this running or exclusively saved task.
+    if unsafe { (*ctx).callback_depth } != 0 {
+        return true;
+    }
     // SAFETY: `to` is one of the run's live execs.
     match unsafe { (*to).kind } {
         Kind::Compute(_) => true,
