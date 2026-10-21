@@ -115,7 +115,8 @@ fn ordered_handle_metadata_keeps_families_and_recursive_obtainable_layouts() {
         let receiver = t.builtin(BuiltinType::Receiver, vec![GenericArgument::Type(node)]);
         t.record(&[receiver])
     });
-    let mut t = Ty::default();
+    // Owner shapes and request types belong to the same compile session.
+    let mut t = ty();
     let scalar = t.p(Primitive::U64);
     let atomic = t.builtin(BuiltinType::Atomic, vec![GenericArgument::Type(scalar)]);
     let receiver = t.builtin(BuiltinType::Receiver, vec![GenericArgument::Type(atomic)]);
@@ -190,6 +191,135 @@ fn ordered_handle_layout_keys_follow_typed_and_obtainable_references() {
         base, shifted,
         "handle scan references contain program-local ids"
     );
+}
+
+/// All owner shapes and requests must share the compile session's interner.
+/// A separate `Ty::default()` can read unrelated rows with the same local ids.
+fn receiver_graph(target: &TargetSpec, order: &[usize]) -> (LayoutTable, [LayoutId; 4], LayoutId) {
+    let mut owners = Owners::default();
+    for (name, payload) in [
+        ("ReceiverSelf", Some("ReceiverSelf")),
+        ("ReceiverLeft", Some("ReceiverRight")),
+        ("ReceiverRight", Some("ReceiverLeft")),
+        ("ReceiverAcyclic", None),
+    ] {
+        owner(&mut owners, name, OwnerSpec::default(), |t| {
+            let payload = match payload {
+                Some(name) => t.named(&path(name), vec![]),
+                None => t.p(Primitive::U64),
+            };
+            let receiver = t.builtin(BuiltinType::Receiver, vec![GenericArgument::Type(payload)]);
+            t.record(&[receiver])
+        });
+    }
+    let mut t = ty();
+    let requests = [
+        "ReceiverSelf",
+        "ReceiverLeft",
+        "ReceiverRight",
+        "ReceiverAcyclic",
+    ]
+    .map(|name| t.named(&path(name), vec![]));
+    let mut builder = LayoutBuilder::new(target, &owners);
+    let mut roots = [LayoutId(0); 4];
+    for &i in order {
+        roots[i] = builder.layout(&t.store, requests[i]).unwrap();
+    }
+    let scalar = t.p(Primitive::U64);
+    let scalar = builder.layout(&t.store, scalar).unwrap();
+    (checked(builder), roots, scalar)
+}
+
+#[test]
+fn recursive_receiver_graphs_keep_obtains_keys_and_linked_operands_in_every_request_order() {
+    use hirsel_lir::handle_scan::{Program, TYPED_HANDLE, WORDS};
+
+    for target in TargetSpec::executed() {
+        let (base, roots, _) = receiver_graph(&target, &[0, 1, 2, 3]);
+        let keys = hirsel_lir::LayoutKeys::new(&base);
+        let expected_keys = roots.map(|id| keys.key(id));
+        for order in permutations(roots.len()) {
+            let (table, roots, scalar) = receiver_graph(&target, &order);
+            let keys = hirsel_lir::LayoutKeys::new(&table);
+            assert_eq!(roots.map(|id| keys.key(id)), expected_keys);
+            assert_eq!(canonical(&table), canonical(&base));
+            for (root, payload) in roots
+                .into_iter()
+                .zip([roots[0], roots[2], roots[1], scalar])
+            {
+                assert_eq!(hirsel_lir::LayoutKeys::rooted(&table, root), keys.key(root));
+                let receiver = rec(&table, root).fields[0].layout;
+                let expected = vec![ScanStep::Handle {
+                    offset: 0,
+                    kind: HandleKind::Receiver,
+                    ty: Some(receiver),
+                    obtains: Some(payload),
+                }];
+                assert_eq!(
+                    rec(&table, root).scan,
+                    expected,
+                    "order {order:?}, root {root:?}"
+                );
+                assert_eq!(rec(&table, receiver).scan, expected);
+                // Linking must patch both recursive operands; a missing target
+                // cannot certify a complete descriptor.
+                let program = Program::lower(rec(&table, root));
+                assert!(program.referenced().any(|id| id == payload));
+                assert!(
+                    program
+                        .linked(|id| (id != payload).then_some(id.0 + 17))
+                        .is_none()
+                );
+                let words = program.linked(|id| Some(id.0 + 17)).unwrap();
+                assert_eq!(
+                    &words[..5],
+                    &[
+                        TYPED_HANDLE,
+                        0,
+                        HandleKind::Receiver.code(),
+                        u64::from(receiver.0 + 17),
+                        u64::from(payload.0 + 17)
+                    ]
+                );
+                assert_eq!(words.len() % WORDS, 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn recursive_receiver_validator_rejects_missing_wrong_and_dangling_obtains() {
+    for target in TargetSpec::executed() {
+        let (table, roots, scalar) = receiver_graph(&target, &[0, 1, 2, 3]);
+        for root in roots {
+            let receiver = rec(&table, root).fields[0].layout;
+            for (id, replacement, obligation) in [
+                (root, None, Obligation::Scan),
+                (receiver, None, Obligation::Scan),
+                // A valid but incorrect target must fail independently of
+                // reference-range checks, against the field's own scan.
+                (
+                    root,
+                    Some(if root == roots[3] { roots[0] } else { scalar }),
+                    Obligation::Scan,
+                ),
+                (root, Some(LayoutId(u32::MAX)), Obligation::Reference),
+            ] {
+                let mut mutated = table.clone();
+                let ScanStep::Handle { obtains, .. } = &mut mutated.layouts[id.0 as usize].scan[0]
+                else {
+                    panic!("expected receiver scan")
+                };
+                assert_ne!(*obtains, replacement);
+                *obtains = replacement;
+                let violations = validate_table(&mutated, &target).expect_err("invalid obtains");
+                assert!(
+                    violations.iter().any(|v| v.obligation == obligation),
+                    "{violations:#?}"
+                );
+            }
+        }
+    }
 }
 
 fn offsets(r: &LayoutRecord) -> Vec<u64> {
