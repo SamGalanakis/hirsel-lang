@@ -61,7 +61,7 @@ pub fn run_path_native_with_config(
     )
 }
 
-/// `run_path_native_with_config` with `backend`: LLVM builds at O3, Cranelift
+/// `run_path_native_with_config` with `backend`: LLVM builds at O2, Cranelift
 /// unoptimized, for a fast debug loop.
 pub fn run_path_native_backend(
     path: &Path,
@@ -219,7 +219,7 @@ fn run(
     let result = (|| {
         let toolchain = Toolchain::in_tree(&cache, &[&target])?;
         let opt = match backend {
-            super::Backend::Llvm => OptLevel::Speed,
+            super::Backend::Llvm => OptLevel::Default,
             super::Backend::Cranelift => OptLevel::None,
         };
         let objects = super::link::emit_backend_objects(

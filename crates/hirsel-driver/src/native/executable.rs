@@ -10,13 +10,14 @@ pub enum BuildProfile {
     #[default]
     Default,
     Release,
+    /// Explicit whole-module LLVM optimization (`--lto`).
+    ReleaseLto,
     Debug,
 }
 impl BuildProfile {
     fn opt(self) -> OptLevel {
         match self {
-            Self::Default => OptLevel::Default,
-            Self::Release => OptLevel::Speed,
+            Self::Default | Self::Release | Self::ReleaseLto => OptLevel::Default,
             Self::Debug => OptLevel::None,
         }
     }
@@ -84,7 +85,9 @@ pub fn build_path_native_backend(
     fuel: bool,
     verify: hirsel_engine::Verify,
 ) -> Result<Result<Vec<String>, NativeError>, ToolError> {
-    if profile == BuildProfile::Release && backend == super::Backend::Cranelift {
+    if matches!(profile, BuildProfile::Release | BuildProfile::ReleaseLto)
+        && backend == super::Backend::Cranelift
+    {
         return Ok(Err(NativeError::new(
             StageName::Emission,
             "release builds use LLVM; select LLVM or a non-release profile",

@@ -52,7 +52,8 @@ through this same renderer.
 
 ```sh
 hirsel build hello.hir -o hello                 # LLVM O2, production runtime
-hirsel build app/manifest.json --release -o app # LLVM O3
+hirsel build app/manifest.json --release -o app # LLVM O2
+hirsel build app/manifest.json --release --lto -o app-lto # whole-module LLVM O2
 hirsel build hello.hir --debug -o hello-debug   # Cranelift, with DWARF source line tables
 hirsel build hello.hir --debug --backend llvm -o hello-llvm-debug  # LLVM O0
 hirsel build hello.hir --target aarch64-linux -o hello-arm64
@@ -60,9 +61,11 @@ hirsel build hello.hir --target aarch64-linux -o hello-arm64
 
 The edit loop's commands, `build --debug` and `run --native`, compile with
 Cranelift unless `--backend llvm` asks for LLVM; default and release builds use
-LLVM. Combining `--release` with `--backend cranelift` is refused. The backends' own
+LLVM O2. `--lto` explicitly requests whole-module LLVM O2;
+it cannot be combined with `--debug` or `--backend cranelift`. Combining
+`--release` with `--backend cranelift` is refused. The backends' own
 IR verifiers (LLVM's module verifier, Cranelift's `enable_verifier`) run only with
-every-stage validation (`--validate-stages`, or `HIRSEL_VALIDATE_STAGES=1`) and in
+every-stage validation (`HIRSEL_VALIDATE_STAGES=1`) and in
 compilers built with debug assertions, as every test build is.
 
 ### What a native build needs

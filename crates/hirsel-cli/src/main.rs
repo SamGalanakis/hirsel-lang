@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | serve [--no-verify] <source|manifest.json> --host <json>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | serve [--no-verify] <source|manifest.json> --host <json>";
 
 mod allocator;
 mod execution_policy;
@@ -391,6 +391,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             let mut selected = None;
             let mut proofs = Proofs::default();
             let mut fuel = false;
+            let mut lto = false;
             while let Some(arg) = args.next()? {
                 match arg {
                     Long("proofs") if proofs.sidecar.is_none() => {
@@ -398,6 +399,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     }
                     Long("trust") => proofs.trust(args.value()?)?,
                     Long("fuel") if !fuel => fuel = true,
+                    Long("lto") if !lto => lto = true,
                     Long("release") if profile.is_none() => profile = Some(BuildProfile::Release),
                     Long("debug") if profile.is_none() => profile = Some(BuildProfile::Debug),
                     Long("backend") if selected.is_none() => {
@@ -418,10 +420,23 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     arg => return Err(arg.unexpected()),
                 }
             }
-            if profile == Some(BuildProfile::Release) && selected == Some(Backend::Cranelift) {
-                return Err(
-                    "release builds use LLVM; remove --backend cranelift or --release".into(),
-                );
+            if lto {
+                if profile == Some(BuildProfile::Debug) {
+                    return Err("--lto requires LLVM optimization; remove --debug".into());
+                }
+                profile = Some(BuildProfile::ReleaseLto);
+            }
+            if matches!(
+                profile,
+                Some(BuildProfile::Release | BuildProfile::ReleaseLto)
+            ) && selected == Some(Backend::Cranelift)
+            {
+                return Err(if lto {
+                    "--lto requires LLVM; remove --backend cranelift or --lto"
+                } else {
+                    "release builds use LLVM; remove --backend cranelift or --release"
+                }
+                .into());
             }
             Command::Build {
                 source: source.ok_or("build requires a source or manifest")?,
