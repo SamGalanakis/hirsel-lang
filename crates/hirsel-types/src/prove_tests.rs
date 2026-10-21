@@ -290,3 +290,93 @@ fn nested_instantiation_rows_prove_in_linear_work() {
         );
     }
 }
+
+#[test]
+fn representation_proof_keys_share_occurrences_without_losing_copy_or_crossing_modes() {
+    let t = TypeInterner::new(None);
+    let byte = t.intern(row(TypeKind::Primitive(Primitive::U8)));
+    let mut first = row(TypeKind::Named {
+        definition: def("Bits"),
+        arguments: vec![GenericArgument::Type(byte)].into(),
+    });
+    first.modes.multiplicity = Multiplicity::Once;
+    first.brand.alternatives = vec![Origin {
+        root: OriginRoot::Local(LexicalOwner::first(&path("a")), LocalId(0)),
+        fields: vec![FieldId(0)].into(),
+    }]
+    .into();
+    let mut second = first.clone();
+    second.modes.multiplicity = Multiplicity::Many;
+    second.modes.relation = Relation::place(Origin {
+        root: OriginRoot::Local(LexicalOwner::first(&path("b")), LocalId(1)),
+        fields: vec![].into(),
+    });
+    second.brand.alternatives = vec![Origin {
+        root: OriginRoot::Local(LexicalOwner::first(&path("b")), LocalId(1)),
+        fields: vec![FieldId(2)].into(),
+    }]
+    .into();
+    let (first, second) = (t.intern(first), t.intern(second));
+    let declarations = GenericDeclarations::default();
+    let signature = declaration("Bits", Some(byte), vec![Bound::Plain, Bound::Data]);
+    let mut lookup = |d| Ok((d == def("Bits")).then(|| signature.clone()));
+    let mut memo = ContextMemo::new(&t, &declarations, &mut lookup);
+    assert!(memo.plain(first).unwrap());
+    let before = memo.hits();
+    assert!(memo.plain(second).unwrap());
+    assert!(
+        memo.hits() > before,
+        "mode/brand-only occurrences must reuse the representation proof"
+    );
+    assert!(memo.data(first).unwrap());
+    let before = memo.hits();
+    assert!(memo.data(second).unwrap());
+    assert!(memo.hits() > before);
+    assert_eq!(
+        memo.prove(first, Bound::Copyable, crate::properties::STRUCTURAL)
+            .unwrap(),
+        Sendability::NotSendable
+    );
+    assert_eq!(
+        memo.prove(second, Bound::Copyable, crate::properties::STRUCTURAL)
+            .unwrap(),
+        Sendability::Sendable
+    );
+    assert_eq!(
+        memo.prove(second, Bound::Sendable, crate::properties::STRUCTURAL)
+            .unwrap(),
+        Sendability::NotSendable
+    );
+    // Sharing representation keys must never turn an aliased counted value into
+    // a unique crossing proof, or discharge another value's root locality.
+    for unique in [false, true] {
+        for scoped in [false, true] {
+            let mut value = row(TypeKind::Primitive(Primitive::Bytes));
+            value.modes.uniqueness = if unique {
+                Uniqueness::Unique
+            } else {
+                Uniqueness::Aliased
+            };
+            if scoped {
+                value.modes.relation = t.row(second).modes.relation.clone();
+            }
+            let value = t.intern(value);
+            for bound in [Bound::Plain, Bound::Copyable, Bound::Sendable, Bound::Flat] {
+                for flags in every_flag() {
+                    let fresh = prove(
+                        &t,
+                        value,
+                        bound,
+                        &declarations,
+                        flags.check_root_locality,
+                        flags.use_evidence,
+                        flags.shared_storage,
+                        flags.handles,
+                        &mut |_| Ok(None),
+                    );
+                    assert_eq!(memo.prove(value, bound, flags), fresh);
+                }
+            }
+        }
+    }
+}

@@ -371,6 +371,16 @@ impl<'q> ContextMemo<'q> {
         bound: Bound,
         flags: ProofFlags,
     ) -> Result<Sendability, QueryError> {
+        // Like rustc15c1044 erase_regions.rs:19-34,47-54, erase only inputs
+        // irrelevant to this judgment. Copyable/Sendable keep exact modes.
+        // Plain ignores occurrence modes and brands, including nested rows.
+        // Keep exact generic declarations, roles and private views in this
+        // query; canonicalize only the pure part of the proof key.
+        let ty = if bound == Bound::Plain {
+            self.t.strip_modes(ty)
+        } else {
+            ty
+        };
         // A Sendable proof that exempts its root's own lifetime treats that
         // row differently wherever it recurs.
         let sensitive = bound == Bound::Sendable
@@ -915,6 +925,9 @@ impl<'q> ContextMemo<'q> {
 
     /// Data/Key structural equality proof (`structural_equality`), recorded.
     fn prove_bound(&mut self, ty: TypeId, bound: Bound) -> Result<bool, QueryError> {
+        // Data/Key are representation properties; current value modes and
+        // brands do not change their structural equality judgment.
+        let ty = self.t.strip_modes(ty);
         let key = (ty, bound);
         if let Some(entry) = self.equality.get(&key).cloned() {
             self.replay(&entry.reads);
