@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1975 exported definitions; 821 variants.
+1983 exported definitions; 825 variants.
 
 ## Types and roots
 
@@ -4483,6 +4483,43 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
 
 
+## ed25519
+
+<a id="def-std_401_2fed25519_2fPrivateKey"></a>
+
+- `pub type ed25519.PrivateKey { seed: Bytes, }`
+
+A 32-byte Ed25519 seed; the public key is recomputed when signing.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fed25519_2fPublicKey"></a>
+
+- `pub type ed25519.PublicKey { bytes: Bytes, }`
+
+An encoded 32-byte Ed25519 public key. Verification rejects malformed bytes.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fed25519_2fpublic_5fkey"></a>
+
+- `pub fn ed25519.public_key(seed: Bytes) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fed25519_2fsign"></a>
+
+- `pub fn ed25519.sign(seed: Bytes, message: Bytes) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fed25519_2fverify"></a>
+
+- `pub fn ed25519.verify(public: Bytes, message: Bytes, signature: Bytes) -> bool uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool)
+
+
 ## env
 
 <a id="def-core_401_2fenv_2fget"></a>
@@ -8251,7 +8288,7 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_4
 
 <a id="def-std_401_2fjwt_2fJwtError"></a>
 
-- `pub type jwt.JwtError = Malformed | Json(json.JsonError) | UnsupportedAlgorithm(String) | Critical | Signature | Expired | NotYetValid | Audience | Issuer | MissingExpiration | InvalidClaim( String ) | Clock(ClockError)`
+- `pub type jwt.JwtError = InvalidKey | Malformed | Json(json.JsonError) | UnsupportedAlgorithm( String ) | Critical | Signature | Expired | NotYetValid | Audience | Issuer | MissingExpiration | InvalidClaim( String ) | Clock(ClockError)`
 
 References: [`core@1/ClockError`](#def-core_401_2fClockError), [`core@1/String`](#def-core_401_2fString), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
 
@@ -8288,6 +8325,12 @@ Variant of jwt.JwtError.
 Variant of jwt.JwtError.
 
 References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fjwt_2fJwtError_23InvalidKey"></a>
+
+- `InvalidKey -> jwt.JwtError`
+
+Variant of jwt.JwtError.
 
 <a id="def-std_401_2fjwt_2fJwtError_23Issuer"></a>
 
@@ -8329,7 +8372,7 @@ Variant of jwt.JwtError.
 
 <a id="def-std_401_2fjwt_2fJwtError_23UnsupportedAlgorithm"></a>
 
-- `UnsupportedAlgorithm(String) -> jwt.JwtError`
+- `UnsupportedAlgorithm( String ) -> jwt.JwtError`
 
 Variant of jwt.JwtError.
 
@@ -8337,11 +8380,27 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fjwt_2fKey"></a>
 
-- `pub type jwt.Key = HS256(Bytes) | HS384(Bytes) | HS512(Bytes)`
+- `pub type jwt.Key = HS256(Bytes) | HS384(Bytes) | HS512(Bytes) | EdDSA(ed25519.PublicKey) | EdDSAPrivate( ed25519.PrivateKey )`
 
 A verification or signing key and the algorithm it is for.
 
-References: [`core@1/Bytes`](#def-core_401_2fBytes)
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/ed25519/PrivateKey`](#def-std_401_2fed25519_2fPrivateKey), [`std@1/ed25519/PublicKey`](#def-std_401_2fed25519_2fPublicKey)
+
+<a id="def-std_401_2fjwt_2fKey_23EdDSA"></a>
+
+- `EdDSA(ed25519.PublicKey) -> jwt.Key`
+
+Variant of jwt.Key.
+
+References: [`std@1/ed25519/PublicKey`](#def-std_401_2fed25519_2fPublicKey)
+
+<a id="def-std_401_2fjwt_2fKey_23EdDSAPrivate"></a>
+
+- `EdDSAPrivate( ed25519.PrivateKey ) -> jwt.Key`
+
+Variant of jwt.Key.
+
+References: [`std@1/ed25519/PrivateKey`](#def-std_401_2fed25519_2fPrivateKey)
 
 <a id="def-std_401_2fjwt_2fKey_23HS256"></a>
 
@@ -8400,7 +8459,8 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 
 Signs `claims`, a JSON object, under the header `{"alg":...,"typ":"JWT"}`:
 `header.claims.signature`, each segment unpadded base64url. A claims value that is
-not an object is `InvalidClaim("claims")`.
+not an object is `InvalidClaim("claims")`. EdDSA needs `EdDSAPrivate` with a
+32-byte seed; a public key or malformed seed is `InvalidKey()`.
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/jwt/JwtError`](#def-std_401_2fjwt_2fJwtError), [`std@1/jwt/Key`](#def-std_401_2fjwt_2fKey)
 
@@ -8430,8 +8490,9 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 
 Verifies `token` with `key` at `now` (Unix seconds) and returns its claims: the
 header's `alg` must be the key's (`UnsupportedAlgorithm(alg)` otherwise), a `crit`
-header is `Critical()`, the MAC must match in constant time (`Signature()`), and
-then the claims must pass `validate`.
+header is `Critical()`, the MAC or Ed25519 signature must match (`Signature()`), and
+then the claims must pass `validate`. EdDSA uses the public key; a private key
+or malformed key is `InvalidKey()`.
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/i64`](#def-core_401_2fi64), [`std@1/json/Value`](#def-std_401_2fjson_2fValue), [`std@1/jwt/JwtError`](#def-std_401_2fjwt_2fJwtError), [`std@1/jwt/Key`](#def-std_401_2fjwt_2fKey), [`std@1/jwt/Validation`](#def-std_401_2fjwt_2fValidation)
 
@@ -17162,6 +17223,31 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 <a id="def-core_401_2fwrite_5fhalf_2fwrite_5fall"></a>
 
 - `@noalloc fn write_half.write_all(n: Net, mut w: WriteHalf of n, data: Bytes) -> Result[(), NetError]`
+
+
+## x25519
+
+<a id="def-std_401_2fx25519_2fSharedError"></a>
+
+- `pub type x25519.SharedError = LowOrderPoint()`
+
+<a id="def-std_401_2fx25519_2fSharedError_23LowOrderPoint"></a>
+
+- `LowOrderPoint() -> x25519.SharedError`
+
+Variant of x25519.SharedError.
+
+<a id="def-std_401_2fx25519_2fpublic_5fkey"></a>
+
+- `pub fn x25519.public_key(secret: Bytes) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fx25519_2fshared_5fsecret"></a>
+
+- `pub fn x25519.shared_secret(secret: Bytes, peer: Bytes) -> Result[unique Bytes, SharedError] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/x25519/SharedError`](#def-std_401_2fx25519_2fSharedError)
 
 
 ## x509
