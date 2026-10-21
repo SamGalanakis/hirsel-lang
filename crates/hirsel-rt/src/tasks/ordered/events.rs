@@ -66,7 +66,9 @@ pub(super) fn record(
     // lives in with_frontier's local, before restoration. Do not re-enter.
     let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
     let Logical::Ordered(driver) = &s.logical else {
-        unreachable!()
+        // Standalone native-adapter tests can drive their own Frontier
+        // without installing a logical policy or evidence collector.
+        return;
     };
     if driver.events.is_none() {
         return;
