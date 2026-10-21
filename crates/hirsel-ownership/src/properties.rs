@@ -16,27 +16,28 @@ pub(super) struct Signatures<'q> {
     pub m: &'q TypeMemo,
     reader: &'q RefCell<Reader<'q>>,
     memo: ContextMemo<'q>,
-    /// The memo of the flow pass, whose proofs read only signatures an
-    /// earlier read retained.
-    cached_memo: RefCell<ContextMemo<'q>>,
+    /// Flow can reach nested declarations that classification did not need.
+    /// Its memo reads through the same recording Reader as classification.
+    flow_memo: RefCell<ContextMemo<'q>>,
 }
 impl<'q> Signatures<'q> {
     pub fn new(
         m: &'q TypeMemo,
         reader: &'q RefCell<Reader<'q>>,
         memo: ContextMemo<'q>,
-        cached_memo: ContextMemo<'q>,
+        flow_memo: ContextMemo<'q>,
     ) -> Self {
         Self {
             m,
             reader,
             memo,
-            cached_memo: RefCell::new(cached_memo),
+            flow_memo: RefCell::new(flow_memo),
         }
     }
-    /// A flow proof: its lookups see only retained signatures.
-    pub fn prove_cached<T>(&self, proof: impl FnOnce(&mut ContextMemo<'q>) -> T) -> T {
-        let memo = &mut self.cached_memo.borrow_mut();
+    /// A flow proof, including any newly needed declaration reads. The caller
+    /// records the Reader's pending reads after each flow graph, even on error.
+    pub fn prove_flow<T>(&self, proof: impl FnOnce(&mut ContextMemo<'q>) -> T) -> T {
+        let memo = &mut self.flow_memo.borrow_mut();
         let hits = memo.hits();
         let result = proof(memo);
         hirsel_modes::proofs::count_memo(hits, memo.hits());
@@ -790,8 +791,8 @@ mod limit_tests {
             let mut read = |d: DefId| reader.borrow_mut().read(d).map(Some);
             let mut cached = |d: DefId| Ok(reader.borrow().cached(d));
             let memo = ContextMemo::new(f.types, &generics, &mut read);
-            let cached_memo = ContextMemo::new(f.types, &generics, &mut cached);
-            let mut signatures = Signatures::new(&f.memo, &reader, memo, cached_memo);
+            let flow_memo = ContextMemo::new(f.types, &generics, &mut cached);
+            let mut signatures = Signatures::new(&f.memo, &reader, memo, flow_memo);
             assert_eq!(
                 physical_layout(
                     &mut Layouts::default(),

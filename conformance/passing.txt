@@ -672,6 +672,8 @@ conformance/CONC/CONC-5-owned-payload-mutexes-run.hir
 conformance/CONC/CONC-5-payload-unique-bad.hir
 conformance/CONC/CONC-5-payload-unique-ok.hir
 conformance/CONC/CONC-5-result-local-unique-payload-ok.hir
+conformance/CONC/CONC-5-result-nested-payload-bad.hir
+conformance/CONC/CONC-5-result-nested-payload-ok.hir
 conformance/CONC/CONC-5-result-sendable-bad.hir
 conformance/CONC/CONC-5-result-sendable-ok.hir
 conformance/CONC/CONC-5-result-shared-payload-bad.hir

@@ -90,15 +90,15 @@ pub fn check_ownership_with_clauses(
                 .push((*owner, origin.clone(), ordinal));
         }
     }
-    // One reader and one memo serve every proof of this query; a memo hit
-    // replays its reads through the reader, which records first reads.
+    // Both proof memos read through one recording Reader. Flow refinements
+    // can need a nested declaration that classification never reached.
     let generics = body.resolution.generic_declarations.clone();
     let reader = hirsel_modes::reader::Reader::new(&mut *provider, signature);
     let mut read = |d: DefId| reader.borrow_mut().read(d).map(Some);
-    let mut cached = |d: DefId| Ok(reader.borrow().cached(d));
+    let mut flow_read = |d: DefId| reader.borrow_mut().read(d).map(Some);
     let memo = ContextMemo::new(t, &generics, &mut read);
-    let cached_memo = ContextMemo::new(t, &generics, &mut cached);
-    let mut signatures = properties::Signatures::new(m, &reader, memo, cached_memo);
+    let flow_memo = ContextMemo::new(t, &generics, &mut flow_read);
+    let mut signatures = properties::Signatures::new(m, &reader, memo, flow_memo);
     let mut graphs = cfg::build(
         t, syntax, signature, body, captures, clauses, results, &rows,
     )?;
@@ -198,7 +198,7 @@ pub fn check_ownership_with_clauses(
             let mut proof_storage = initial_storage.clone();
             let mut proof_facts = facts.clone();
             let mut proof_diagnostics = Vec::new();
-            flow::check(
+            let checked = flow::check(
                 t,
                 syntax,
                 signature,
@@ -218,7 +218,9 @@ pub fn check_ownership_with_clauses(
                 &frame_results,
                 &introductions,
                 Some(parameter),
-            )?;
+            );
+            signatures.record(&mut body.resolution.reads);
+            checked?;
             diagnostics.extend(
                 proof_diagnostics
                     .into_iter()
@@ -256,7 +258,9 @@ pub fn check_ownership_with_clauses(
             &frame_results,
             &introductions,
             None,
-        )?;
+        );
+        signatures.record(&mut body.resolution.reads);
+        let checked = checked?;
         initial_storage.postcondition_inputs(
             t,
             syntax,

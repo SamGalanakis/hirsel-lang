@@ -2112,7 +2112,7 @@ impl Checker<'_, '_> {
         let root = self.intern(row);
         value.modes.sendability = self
             .signatures
-            .prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, root))
+            .prove_flow(|memo| hirsel_modes::proofs::content_sendability(memo, root))
             .unwrap_or_else(|error| {
                 *self.proof_error.borrow_mut() = Some(error);
                 Sendability::NotSendable
@@ -2356,8 +2356,11 @@ impl Checker<'_, '_> {
             self.intern(row)
         };
         self.signatures
-            .prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, root))
-            .unwrap_or(Sendability::NotSendable)
+            .prove_flow(|memo| hirsel_modes::proofs::content_sendability(memo, root))
+            .unwrap_or_else(|error| {
+                *self.proof_error.borrow_mut() = Some(error);
+                Sendability::NotSendable
+            })
     }
     /// MODE-4: a global construction whose every part currently crosses
     /// crosses too, as V proves a construction field by field. The typed row
@@ -3741,12 +3744,12 @@ impl Checker<'_, '_> {
             captured.modes = part.modes.clone();
             let captured = self.intern(captured);
             let proof = if usage == UseKind::Copy {
-                self.signatures.prove_cached(|memo| {
+                self.signatures.prove_flow(|memo| {
                     hirsel_modes::proofs::sendability_after_sharing(memo, captured)
                 })
             } else {
                 self.signatures
-                    .prove_cached(|memo| hirsel_modes::proofs::content_sendability(memo, captured))
+                    .prove_flow(|memo| hirsel_modes::proofs::content_sendability(memo, captured))
             }
             .unwrap_or_else(|error| {
                 *self.proof_error.borrow_mut() = Some(error);
@@ -3787,10 +3790,13 @@ impl Checker<'_, '_> {
                         let root = self.intern(ty.clone());
                         ty.modes.sendability = self
                             .signatures
-                            .prove_cached(|memo| {
+                            .prove_flow(|memo| {
                                 hirsel_modes::proofs::sendability_after_sharing(memo, root)
                             })
-                            .unwrap_or(Sendability::NotSendable);
+                            .unwrap_or_else(|error| {
+                                *self.proof_error.borrow_mut() = Some(error);
+                                Sendability::NotSendable
+                            });
                     }
                 }
                 // CLO-1: the body knows a borrowed capture as a borrowed
