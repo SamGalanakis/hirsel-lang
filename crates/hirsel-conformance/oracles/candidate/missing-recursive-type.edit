@@ -1,0 +1,8 @@
+// o2: a genuinely missing recursive peer appears inside an existing file
+=== main.hir
+pub type Tree = Leaf | Node(box Missing)
+pub fn main()->u64{1}
++++ main.hir
+pub type Tree = Leaf | Node(box Missing)
+pub fn main()->u64{1}
+pub type Missing { tree: Tree }

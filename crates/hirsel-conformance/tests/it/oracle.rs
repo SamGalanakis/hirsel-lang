@@ -540,11 +540,19 @@ fn candidate_transactions_match_independent_cold_trees() {
         "duplicate-remove-file",
         "edit-above-item",
         "opaque-representation",
+        "candidate/recursive-type",
+        "candidate/mutual-type",
+        "candidate/missing-recursive-type",
     ];
     let mut completed = 0;
     for name in names {
+        let relative = if name.contains('/') {
+            name.to_owned()
+        } else {
+            format!("o2/{name}")
+        };
         let scenario = Scenario::read(
-            &root.join(SCENARIOS).join("o2").join(format!("{name}.edit")),
+            &root.join(SCENARIOS).join(format!("{relative}.edit")),
             &root,
         )
         .unwrap();
@@ -596,7 +604,7 @@ fn candidate_transactions_jobs_salts_in_separate_processes() {
                 String::from_utf8_lossy(&output.stderr)
             );
             let counts = std::fs::read_to_string(cell.join("counts.txt")).unwrap();
-            assert!(counts.starts_with("completed=19 "), "{counts}");
+            assert!(counts.starts_with("completed=22 "), "{counts}");
             cells += 1;
         }
     }

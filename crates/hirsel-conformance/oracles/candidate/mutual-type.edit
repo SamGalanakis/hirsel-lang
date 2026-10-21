@@ -1,0 +1,8 @@
+// o2: recursive peer membership is covered when a member changes
+=== main.hir
+pub type Tree = Leaf | Node(box Entry)
+pub type Entry { left: Tree, key: u64, right: Tree }
+pub fn main()->u64{1}
+~~~ main.hir
+- key: u64
++ key: u32

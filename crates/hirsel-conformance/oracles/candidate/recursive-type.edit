@@ -1,0 +1,7 @@
+// o2: recursive self header reads describe only published inputs
+=== main.hir
+pub type Value = Null | Text(String) | Array(List[Value])
+pub fn main()->u64{1}
+~~~ main.hir
+- main()->u64{1}
++ main()->u64{2}

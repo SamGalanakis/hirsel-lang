@@ -243,12 +243,18 @@ pub fn matrix_cell(root: &Path, config: &Config, work: &Path, exe: &Path) -> Res
         "duplicate-remove-file",
         "edit-above-item",
         "opaque-representation",
+        "candidate/recursive-type",
+        "candidate/mutual-type",
+        "candidate/missing-recursive-type",
     ];
     for name in names {
-        let scenario = Scenario::read(
-            &root.join(SCENARIOS).join("o2").join(format!("{name}.edit")),
-            root,
-        )?;
+        let relative = if name.contains('/') {
+            name.to_owned()
+        } else {
+            format!("o2/{name}")
+        };
+        let scenario =
+            Scenario::read(&root.join(SCENARIOS).join(format!("{relative}.edit")), root)?;
         let before = work.join(name).join("base");
         let after = work.join(name).join("cold");
         let artifact_dir = work.join(name).join("oracle");
