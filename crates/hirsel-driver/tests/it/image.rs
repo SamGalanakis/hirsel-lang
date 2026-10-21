@@ -848,3 +848,38 @@ fn frozen_s1_products_do_not_export_root_validation_universe_receipts() {
         );
     });
 }
+
+#[test]
+fn image_releases_unrecorded_files_after_parallel_constant_publication() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let library = f.library("pub fn first()->u32{1u32}\n");
+        std::fs::write(
+            f.0.join("later.hir"),
+            "pub const VALUE:u32=comptime 42u32\n",
+        )
+        .unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&library).unwrap()).unwrap();
+        manifest["sources"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"path":"later.hir","module":["later"]}));
+        std::fs::write(&library, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let main = "pub fn main()->Result[(),()]{Ok(())}\n";
+        let imager = f.program("imager", main, &library, "lib");
+        let bytes = image(&f, &mut load(&imager, &StdImages::none()), "lib").unwrap();
+        let stored = StdImage::from_bytes(bytes).unwrap();
+        let client = f.program("client", main, &library, "lib");
+        let mut program = load(&client, &StdImages::of(vec![stored]));
+        let path = DefPath(hirsel_syntax::ItemPath {
+            package: package("lib"),
+            modules: vec!["later".into()],
+            name: "VALUE".into(),
+        });
+        assert_eq!(
+            program.engine.materialize_constant(&path).unwrap(),
+            hirsel_tir::Constant::Integer(42)
+        );
+    });
+}

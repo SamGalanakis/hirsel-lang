@@ -471,6 +471,27 @@ impl QueryEngine {
             .filter(|p| p.0.package == build.package && !build.seen.contains(*p))
             .cloned()
             .collect();
+        // P/S1 has checked all files already, but these paths have not had
+        // records written yet. Whole-universe optional products are omitted
+        // just as image_record_of does for recorded paths; they cannot become
+        // closure-local image proofs merely by surviving in resident tables.
+        for path in &paths {
+            let id = DefId::intern(path);
+            if self
+                .lowered
+                .get(&id)
+                .is_some_and(|entry| has_universe_input(entry.reads()))
+            {
+                self.forget(&MemoKey::new(QueryKind::Lower, id));
+            }
+            if self
+                .constant_values
+                .get(path)
+                .is_some_and(|value| has_universe_input(&value.executed))
+            {
+                self.constant_values.remove(path);
+            }
+        }
         build.closed &= self.release_bodies(&paths, &build.closure);
     }
 
