@@ -198,11 +198,13 @@ pub enum Count {
     S1LockWaitNs,
     /// Nanoseconds parked on S1 dependencies (sum over workers).
     S1ParkNs,
+    /// Memos invalidated by a changed package-view universe input.
+    InvalidatedValidationUniverse,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 33] = [
+    pub const ALL: [Count; 34] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -236,6 +238,7 @@ impl Count {
         Count::S1Duplicates,
         Count::S1LockWaitNs,
         Count::S1ParkNs,
+        Count::InvalidatedValidationUniverse,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -273,6 +276,7 @@ impl Count {
             Count::S1Duplicates => "S1 duplicates",
             Count::S1LockWaitNs => "S1 lock wait ns",
             Count::S1ParkNs => "S1 park ns",
+            Count::InvalidatedValidationUniverse => "invalidated by validation universe",
         }
     }
 }

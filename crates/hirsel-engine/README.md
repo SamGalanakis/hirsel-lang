@@ -877,3 +877,15 @@ Replaced or invalidated producers take ordinary signature demand; private views
 are always selected again from the current owner representation. Snapshot reuse
 never changes the memo touch counter. Compact program products have a separate
 heap-accounting row and are retired by pending generation-stamped changes.
+
+`SignatureSnapshot::validation_input_digest(package)` identifies the originating
+package's complete base V universe, including valid views, its first heap and
+its errors. View identities use V's independent digests, with canonical DefPath
+ordering; each immutable universe computes this aggregate once. An unchanged
+error digest alone cannot prove a private evaluation overlay valid.
+`FrozenProvider::validation_universe` records a package-qualified
+`ReadKey::ValidationUniverse` so execution-read unions preserve private context.
+The appended durable read tag encodes the package spelling, never its session ID.
+Signature changes mark its live subscribers through a separate small graph index;
+body-only changes do not mark this broad input. This global input has Low
+durability and cannot establish a dependency image's closure-local receipt.

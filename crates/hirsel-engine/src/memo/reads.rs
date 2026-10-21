@@ -149,6 +149,9 @@ pub enum ReadKey {
     FirstHeap,
     /// The query environment's hash.
     Environment,
+    /// All V input views in the originating package's private universe.
+    /// The package is explicit because execution-read unions cross packages.
+    ValidationUniverse(PackageKey),
 }
 
 /// The kind of a read, for counters and durability rules.
@@ -167,9 +170,10 @@ pub enum ReadKind {
     UniverseErrors,
     FirstHeap,
     Environment,
+    ValidationUniverse,
 }
 impl ReadKind {
-    pub const ALL: [ReadKind; 13] = [
+    pub const ALL: [ReadKind; 14] = [
         ReadKind::Signature,
         ReadKind::FailedSignature,
         ReadKind::Lookup,
@@ -183,6 +187,7 @@ impl ReadKind {
         ReadKind::UniverseErrors,
         ReadKind::FirstHeap,
         ReadKind::Environment,
+        ReadKind::ValidationUniverse,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -199,6 +204,7 @@ impl ReadKind {
             ReadKind::UniverseErrors => "universe errors",
             ReadKind::FirstHeap => "first heap",
             ReadKind::Environment => "environment",
+            ReadKind::ValidationUniverse => "validation universe",
         }
     }
 }
@@ -219,6 +225,7 @@ impl ReadKey {
             ReadKey::UniverseErrors => ReadKind::UniverseErrors,
             ReadKey::FirstHeap => ReadKind::FirstHeap,
             ReadKey::Environment => ReadKind::Environment,
+            ReadKey::ValidationUniverse(_) => ReadKind::ValidationUniverse,
         }
     }
     /// The definition this read names, if any.
@@ -282,6 +289,7 @@ impl ReadKey {
                 text(out, p.0.as_str());
                 text(out, m.0.as_str());
             }
+            ReadKey::ValidationUniverse(package) => text(out, package.0.as_str()),
             ReadKey::UniverseErrors | ReadKey::FirstHeap | ReadKey::Environment => {}
         }
     }
@@ -524,6 +532,9 @@ fn decode_key(input: &mut &[u8]) -> Option<ReadKey> {
         ReadKind::UniverseErrors => ReadKey::UniverseErrors,
         ReadKind::FirstHeap => ReadKey::FirstHeap,
         ReadKind::Environment => ReadKey::Environment,
+        ReadKind::ValidationUniverse => {
+            ReadKey::ValidationUniverse(PackageKey(Symbol::intern(take_text(input)?)))
+        }
     })
 }
 
@@ -601,6 +612,10 @@ mod tests {
             ),
             (ReadKey::Environment, h("5")),
             (ReadKey::UniverseErrors, h("6")),
+            (
+                ReadKey::ValidationUniverse(PackageKey::of(&context.package)),
+                h("7"),
+            ),
         ])
         .unwrap();
         let mut bytes = vec![];

@@ -365,6 +365,15 @@ impl SignatureSnapshot {
             None => &*state.views,
         }
     }
+    /// The complete input of a package's base V universe. Artifact overlays
+    /// record this before replacing an owner, preserving their source context.
+    pub fn validation_input_digest(&self, package: &PackageId) -> ContentHash {
+        let state = self.validation_state();
+        match state.packages.get(package) {
+            Some(views) => views.input_digest(),
+            None => state.views.input_digest(),
+        }
+    }
     /// `package`'s universe with `signature` in place of its declared view:
     /// compile-time evaluation validates a materialized owner against it.
     pub fn validation_with(&self, package: &PackageId, signature: SignatureRef) -> PackageViews {

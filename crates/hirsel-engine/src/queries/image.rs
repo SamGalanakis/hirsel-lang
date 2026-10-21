@@ -693,6 +693,10 @@ fn inside(closure: &BTreeSet<PackageId>) -> impl Fn(&PackageId) -> bool {
 /// Every read names only packages `inside` accepts.
 fn reads_closed(reads: &crate::memo::Reads, inside: &impl Fn(&PackageId) -> bool) -> bool {
     reads.iter().all(|(read, _)| match read {
+        // The base universe token includes every currently selected package.
+        // A dependency image cannot claim this input is closure-local merely
+        // because the originating evaluator belongs to the dependency.
+        ReadKey::ValidationUniverse(_) => false,
         ReadKey::Lookup(l) => {
             inside(&l.package.id()) && l.qualifier.is_none_or(|q| inside(&q.id()))
         }

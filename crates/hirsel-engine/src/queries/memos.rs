@@ -298,6 +298,11 @@ impl QueryEngine {
     /// The durability of what a read observes: std and core are High,
     /// dependency packages Medium, the program's own package Low.
     pub(crate) fn durability_of(&self, read: &ReadKey) -> Durability {
+        // A package's V universe can contain root-package inputs even when
+        // the artifact itself belongs to a stable dependency package.
+        if matches!(read, ReadKey::ValidationUniverse(_)) {
+            return Durability::Low;
+        }
         match read.package() {
             None => Durability::High,
             Some(p) => {
@@ -437,6 +442,9 @@ impl QueryEngine {
                 .validation(&owner.0.package)
                 .view(d)
                 .map_or_else(ContentHash::default, |(_, digest)| digest.0),
+            ReadKey::ValidationUniverse(package) => self
+                .signature_snapshot()
+                .validation_input_digest(&package.id()),
             ReadKey::UniverseErrors => {
                 self.signature_snapshot()
                     .validation(&owner.0.package)

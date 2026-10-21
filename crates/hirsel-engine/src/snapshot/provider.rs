@@ -5,7 +5,7 @@
 //! with the value it observed, so the memo the task produces can be verified
 //! by comparing observed values alone (design §1(b), "Typed reads").
 use super::SignatureSnapshot;
-use crate::memo::{LookupKey, LookupSource, ReadKey, ReadsBuilder};
+use crate::memo::{LookupKey, LookupSource, PackageKey, ReadKey, ReadsBuilder};
 use hirsel_syntax::{ContentHash, DefId, FileContext, PackageId, Path};
 use hirsel_types::{LookupOutput, QueryError, SignatureProvider, SignatureRef};
 use hirsel_validate::SignatureLookup;
@@ -99,6 +99,17 @@ impl<'a> FrozenProvider<'a> {
         self.reads.record(
             ReadKey::ValidationView(d),
             digest.map_or_else(ContentHash::default, |digest| digest.0),
+        );
+        digest
+    }
+    /// Every view in the originating package's base V universe. This is a
+    /// separate receipt from its errors: an unchanged error-free base can
+    /// have a different verdict when an evaluation replaces its owner.
+    pub fn validation_universe(&mut self) -> ContentHash {
+        let digest = self.snapshot.validation_input_digest(&self.owner);
+        self.reads.record(
+            ReadKey::ValidationUniverse(PackageKey::of(&self.owner)),
+            digest,
         );
         digest
     }

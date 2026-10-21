@@ -116,6 +116,9 @@ pub struct MemoGraph {
     last_changed: [Revision; 3],
     records: HashMap<MemoKey, Record>,
     subscribers: HashMap<ReadKey, HashSet<MemoKey>>,
+    /// Broad V inputs, indexed separately so a changed signature does not
+    /// scan every unrelated signature/body read merely to mark their users.
+    validation_contexts: HashSet<ReadKey>,
     by_def: HashMap<DefId, HashSet<MemoKey>, IdHasher>,
     dirty: HashMap<MemoKey, Invalidation>,
     stats: MemoStats,
@@ -128,6 +131,7 @@ impl Default for MemoGraph {
             last_changed: [Revision::FIRST; 3],
             records: HashMap::new(),
             subscribers: HashMap::new(),
+            validation_contexts: HashSet::new(),
             by_def: HashMap::default(),
             dirty: HashMap::new(),
             stats: MemoStats::default(),
@@ -166,6 +170,10 @@ impl MemoGraph {
     /// The memos that read `key`, in unspecified order.
     pub fn subscribers(&self, key: &ReadKey) -> impl Iterator<Item = &MemoKey> {
         self.subscribers.get(key).into_iter().flatten()
+    }
+    /// Contextual V read keys that currently have subscribers.
+    pub fn validation_context_reads(&self) -> impl Iterator<Item = ReadKey> + '_ {
+        self.validation_contexts.iter().copied()
     }
     /// The memos keyed on `def`.
     pub fn memos_of(&self, def: DefId) -> impl Iterator<Item = &MemoKey> {
@@ -294,6 +302,12 @@ impl MemoGraph {
         self.unsubscribe(&key);
         for (read, _) in reads.iter() {
             self.subscribers.entry(*read).or_default().insert(key);
+            if matches!(
+                read,
+                ReadKey::ValidationUniverse(_) | ReadKey::UniverseErrors | ReadKey::FirstHeap
+            ) {
+                self.validation_contexts.insert(*read);
+            }
         }
         self.by_def.entry(key.def).or_default().insert(key);
         self.records.insert(
@@ -323,6 +337,12 @@ impl MemoGraph {
         self.unsubscribe(&key);
         for (read, _) in reads.iter() {
             self.subscribers.entry(*read).or_default().insert(key);
+            if matches!(
+                read,
+                ReadKey::ValidationUniverse(_) | ReadKey::UniverseErrors | ReadKey::FirstHeap
+            ) {
+                self.validation_contexts.insert(*read);
+            }
         }
         self.by_def.entry(key.def).or_default().insert(key);
         self.records.insert(
@@ -379,6 +399,7 @@ impl MemoGraph {
                     set.remove(key);
                     if set.is_empty() {
                         self.subscribers.remove(read);
+                        self.validation_contexts.remove(read);
                     }
                 }
             }
@@ -389,7 +410,8 @@ impl MemoGraph {
     pub fn heap_bytes(&self) -> usize {
         let entry = std::mem::size_of::<MemoKey>() + std::mem::size_of::<Record>();
         let read = std::mem::size_of::<(ReadKey, ContentHash)>();
-        self.records.len() * entry
+        self.validation_contexts.capacity() * std::mem::size_of::<ReadKey>()
+            + self.records.len() * entry
             + self
                 .records
                 .values()
@@ -419,6 +441,7 @@ pub fn invalidation_count(kind: ReadKind) -> Count {
         ReadKind::UniverseErrors => Count::InvalidatedUniverseErrors,
         ReadKind::FirstHeap => Count::InvalidatedFirstHeap,
         ReadKind::Environment => Count::InvalidatedEnvironment,
+        ReadKind::ValidationUniverse => Count::InvalidatedValidationUniverse,
     }
 }
 

@@ -101,6 +101,36 @@ impl QueryEngine {
         self.front_changes.acknowledge(observed, definitions);
     }
     pub(super) fn apply_changes(&mut self, changes: &crate::memo::ChangeSet) {
+        let signatures: BTreeSet<_> = changes
+            .reads
+            .iter()
+            .filter_map(|(read, _)| match read {
+                ReadKey::Signature(definition) | ReadKey::FailedSignature(definition) => {
+                    Some(*definition)
+                }
+                _ => None,
+            })
+            .collect();
+        let expanded;
+        let changes = if signatures.is_empty() {
+            changes
+        } else {
+            // Body-only changes deliberately do not mark broad V inputs.
+            // Header/candidate/signature changes can affect every overlay's
+            // verdict, even when the base universe remains error-free.
+            let mut next = changes.clone();
+            for definition in signatures {
+                next.read(
+                    ReadKey::ValidationView(definition),
+                    self.durability_of(&ReadKey::Signature(definition)),
+                );
+            }
+            for read in self.graph.validation_context_reads() {
+                next.read(read, crate::memo::Durability::Low);
+            }
+            expanded = next;
+            &expanded
+        };
         if !self.front_changes.active {
             self.graph.apply(changes);
             return;
@@ -132,6 +162,61 @@ mod tests {
             name: name.into(),
         }))
     }
+    #[test]
+    fn validation_context_subscribers_are_marked_by_signatures_but_not_body_edits() {
+        use crate::memo::{ChangeSet, Durability, PackageKey, ReadKind};
+        let mut engine = QueryEngine::new(default_environment(), PhaseAdapters::default());
+        let (source, dependent, ordinary) =
+            (owner("source"), owner("dependent"), owner("ordinary"));
+        engine.front_changes.activate();
+        let context = ReadKey::ValidationUniverse(PackageKey::of(&dependent.path().0.package));
+        let key = MemoKey::new(QueryKind::Lower, dependent);
+        let other = MemoKey::new(QueryKind::Lower, ordinary);
+        let digest = ContentHash::of_bytes(b"old universe");
+        engine.graph.adopt(
+            key,
+            Arc::new(Reads::from_vec(vec![(context, digest)]).unwrap()),
+            Durability::Low,
+        );
+        engine.graph.adopt(
+            other,
+            Arc::new(Reads::from_vec(vec![(ReadKey::Signature(ordinary), digest)]).unwrap()),
+            Durability::Low,
+        );
+        let mut body = ChangeSet::default();
+        body.read(ReadKey::ExecutedBody(source), Durability::Low);
+        engine.apply_changes(&body);
+        assert!(!engine.graph.is_dirty(&key));
+        assert!(engine.front_changes.snapshot().affected.is_empty());
+        let mut signature = ChangeSet::default();
+        signature.read(ReadKey::Signature(source), Durability::Low);
+        engine.apply_changes(&signature);
+        assert!(engine.graph.is_dirty(&key));
+        assert!(!engine.graph.is_dirty(&other));
+        assert_eq!(
+            engine.front_changes.snapshot().affected,
+            BTreeSet::from([dependent])
+        );
+        assert_eq!(
+            engine.graph.stats().invalidated[ReadKind::ValidationUniverse as usize],
+            1
+        );
+        engine.graph.remove(&key);
+        assert!(engine.graph.validation_context_reads().next().is_none());
+        engine.graph.adopt(
+            key,
+            Arc::new(Reads::from_vec(vec![(context, digest)]).unwrap()),
+            Durability::Low,
+        );
+        engine
+            .graph
+            .adopt(key, Arc::new(Reads::empty()), Durability::Low);
+        assert!(
+            engine.graph.validation_context_reads().next().is_none(),
+            "replacing a memo retires its contextual key"
+        );
+    }
+
     #[test]
     fn acknowledgment_cannot_consume_a_newer_publication_or_other_file() {
         let (a, b) = (owner("a"), owner("b"));
