@@ -544,6 +544,10 @@ impl QueryEngine {
             return Ok(());
         };
         let saved = (self.last_phase, self.unavailable);
+        let changes = self
+            .front_changes
+            .is_active()
+            .then(|| self.invalidate_front_products());
         let outcome = self.front_outcome(
             definition.clone(),
             entry.result(),
@@ -551,6 +555,9 @@ impl QueryEngine {
             Some(entry.memo.reads.clone()),
         );
         let outcome = self.compact_front_outcome(outcome, true);
+        if let Some(changes) = changes {
+            self.retain_front_completion(&outcome, &changes);
+        }
         (self.last_phase, self.unavailable) = saved;
         outcome.result.map(|_| ())
     }

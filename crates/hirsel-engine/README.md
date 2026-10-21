@@ -908,16 +908,22 @@ for P/S1 work that has not refreshed yet. Overlapping changed inputs combine
 their memo mark requests before applying them, retaining first-read provenance
 and text-mark priority without changing memo-touch accounting.
 
-Program checking admits consecutive constants with complete static source-call
-closures to immutable S1 workers after GEN-5, using the same path at every jobs
-count. Staged, generated, indirect, generic and unavailable dependencies remain
-serial boundaries. Eligibility reads coherent compact products without query
-fallback. Captured per-root phase, limit and reads are restored in source order;
-successful values still pass through ordinary lowering and V, and earlier
-lowering diagnostics survive a later failure. Unchanged lower products skip S1
-materialization. Image release omits optional whole-universe lower/constant
-products from unrecorded files before proving the retained package closure.
-This admission does not yet bound S1 completion queues or body holds.
+Program checking lowers compile-time roots and selected generated instances through
+ordered compact S1 prefixes after GEN-5, using the same worker path at every jobs
+count. Static and dynamic source-publication boundaries settle in source order.
+Workers drop root TIR before queuing diagnostics, ordered dependencies, complete
+reads, depth and stopping-phase evidence. Current successful facts retain body-free
+Lower receipts; failed or limited products take the ordinary retry path. Ordinary
+P2 artifact demands retain scalar store and precise validation-read handling.
+
+S1 body publication refreshes the complete compact P outcome before dropping its
+body. A pending notification revalidates earlier P products against their own text
+and complete reads, preserving unchanged summary/lint inputs while Lower products
+retire according to their separate execution and validation dependencies.
+`recompute_count` counts admitted logical misses. `lower_adapter_calls` counts actual
+scalar and worker Lower adapter calls, including discarded speculative work;
+`lower_evaluation` is a separate operation.
+
 Image construction withholds production worker admission while producing
 portable receipts; the prior admission purpose is restored on success or error.
 This preserves imported constants without body recomputation while whole-universe

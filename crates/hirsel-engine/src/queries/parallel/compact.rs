@@ -289,6 +289,12 @@ impl CompactCompleted {
 
 impl QueryEngine {
     pub(crate) fn merge_compact_completed(&mut self, done: CompactCompleted) -> PublishedResult {
+        // Retire older aggregate products before installing the task's fresh
+        // lint/lowering inputs. Standalone query users need no aggregate.
+        let changes = self
+            .front_changes
+            .is_active()
+            .then(|| self.invalidate_front_products());
         let CompactCompleted {
             text,
             resolution,
@@ -407,6 +413,9 @@ impl QueryEngine {
         self.unavailable = matches!(outcome.result, Err(QueryError::NotImplemented))
             .then_some(outcome.phase)
             .flatten();
+        if let Some(changes) = changes {
+            self.retain_front_completion(&outcome, &changes);
+        }
         outcome
     }
 

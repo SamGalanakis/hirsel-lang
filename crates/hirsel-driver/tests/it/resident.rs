@@ -985,7 +985,8 @@ fn program_constant_frontiers_evaluate_on_workers_and_reuse_published_values() {
 
 #[test]
 fn constant_frontier_keeps_earlier_lower_warnings_when_a_later_root_stops() {
-    struct Sequence(Arc<dyn LoweringPhase>, bool);
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Sequence(Arc<dyn LoweringPhase>, bool, Arc<AtomicUsize>);
     impl LoweringPhase for Sequence {
         fn lower(
             &self,
@@ -995,6 +996,9 @@ fn constant_frontier_keeps_earlier_lower_warnings_when_a_later_root_stops() {
             comptime: &Comptime,
             signature: &Signature,
         ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+            if signature.definition.path().0.name == "B" {
+                self.2.fetch_add(1, Ordering::Relaxed);
+            }
             if self.1 && signature.definition.path().0.name == "B" {
                 return Err(QueryError::NotImplemented);
             }
@@ -1037,9 +1041,11 @@ fn constant_frontier_keeps_earlier_lower_warnings_when_a_later_root_stops() {
     with_compiler_stack(|| {
         for stopped in [false, true] {
             let mut adapters = compiler_adapters();
+            let lowerings = Arc::new(AtomicUsize::new(0));
             adapters.lowering = Some(Arc::new(Sequence(
                 adapters.lowering.take().unwrap(),
                 stopped,
+                lowerings.clone(),
             )));
             let mut candidate = QueryEngine::new(default_environment(), adapters);
             let file = candidate
@@ -1068,6 +1074,17 @@ fn constant_frontier_keeps_earlier_lower_warnings_when_a_later_root_stops() {
                 } else {
                     CheckCompletion::Complete
                 }
+            );
+            // A noncacheable stop is retried without losing the earlier
+            // warning or admitting the later dynamic declaration.
+            let again = check_progress(&mut candidate, file, &default_context()).unwrap();
+            assert_eq!(diagnostics(&again), diagnostics(&output));
+            assert_eq!(again.completion, output.completion);
+            assert!(lowerings.load(Ordering::Relaxed) > 0);
+            assert_eq!(
+                candidate.lower_adapter_calls(&path("B")),
+                lowerings.load(Ordering::Relaxed) as u64,
+                "every Lower invocation counts, including nonretained failures"
             );
         }
     });
@@ -1969,6 +1986,207 @@ fn sum(p:Point)->u64 uses {} = comptime gen(shape(Point))
         for _ in 0..2 {
             assert_eq!(candidate.semantic_program_revision(&root).unwrap(), cold);
             assert_eq!(candidate.lower_hold_stats().bytes, 0);
+        }
+    });
+}
+
+#[test]
+fn program_dynamic_lower_frontiers_use_workers_and_retain_compact_results() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct WorkerOnly {
+        inner: Arc<dyn LoweringPhase>,
+        parallel: bool,
+        roots: AtomicUsize,
+        lowerings: AtomicUsize,
+    }
+    impl LoweringPhase for WorkerOnly {
+        fn lower(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            comptime: &Comptime,
+            signature: &Signature,
+        ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+            if body.typed.syntax.item.definition.0.name == "VALUE" {
+                self.lowerings.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.lower(t, m, body, comptime, signature)
+        }
+        fn lower_evaluation(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
+            signature: &Signature,
+            expression: hirsel_syntax::ExprId,
+            result: hirsel_types::TypeId,
+            constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
+        ) -> Result<hirsel_tir::Definition, QueryError> {
+            if body.typed.syntax.item.definition.0.name == "VALUE" {
+                if self.parallel {
+                    assert_eq!(
+                        std::thread::current().name(),
+                        Some("hirsel-job"),
+                        "dynamic production root evaluated on caller"
+                    );
+                }
+                self.roots.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner
+                .lower_evaluation(t, m, body, staged, signature, expression, result, constants)
+        }
+        fn entry_body(&self) -> hirsel_tir::BodyId {
+            self.inner.entry_body()
+        }
+    }
+    with_compiler_stack(|| {
+        let sources = [
+            "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst VALUE:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst GOOD:u64=comptime 7\n",
+            "type Point{x:u64}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String]{Ok(codegen.body(\"fn(p:standalone@0/Point)->u64 uses {} {12u64}\"))}\nfn width[T](p:T)->u64 uses {} = comptime gen(shape(T))\nconst VALUE:u64=comptime width(Point(x:1))\nconst GOOD:u64=comptime 7\n",
+        ];
+        for jobs in [2, 1, 8] {
+            for source in sources {
+                let second = source
+                    .lines()
+                    .find(|line| line.starts_with("const VALUE:"))
+                    .unwrap()
+                    .replace("VALUE:", "SECOND:");
+                let source = source.replace("const GOOD:", &format!("{second}\nconst GOOD:"));
+                let mut adapters = compiler_adapters();
+                let guard = Arc::new(WorkerOnly {
+                    inner: adapters.lowering.take().unwrap(),
+                    parallel: jobs > 1,
+                    roots: AtomicUsize::new(0),
+                    lowerings: AtomicUsize::new(0),
+                });
+                adapters.lowering = Some(guard.clone());
+                let mut candidate =
+                    QueryEngine::new(default_environment(), adapters).with_config(CompileConfig {
+                        jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                        hold_bytes: 0,
+                        ..CompileConfig::for_memory_cap(None)
+                    });
+                for text in [
+                    source.to_string(),
+                    source.replace("comptime 7", "comptime 9"),
+                ] {
+                    let file = candidate
+                        .sources
+                        .add("dynamic-frontier.hir", text.clone())
+                        .unwrap();
+                    let actual = check_progress(&mut candidate, file, &default_context()).unwrap();
+                    let mut reference = engine(Arc::new(store::NoneStore));
+                    let reference_file =
+                        reference.sources.add("dynamic-frontier.hir", text).unwrap();
+                    reference
+                        .parse_file(reference_file, &default_context())
+                        .unwrap();
+                    // Establish expected dynamic products through scalar body
+                    // demands, with the same complete production phases.
+                    drop(reference.lower_to_tir(&path("VALUE")).unwrap());
+                    drop(reference.lower_to_tir(&path("SECOND")).unwrap());
+                    drop(reference.lower_to_tir(&path("GOOD")).unwrap());
+                    let expected =
+                        check_progress(&mut reference, reference_file, &default_context()).unwrap();
+                    assert!(
+                        expected.diagnostics.is_empty(),
+                        "{:?}",
+                        diagnostics(&expected)
+                    );
+                    assert_eq!(diagnostics(&actual), diagnostics(&expected));
+                    assert_eq!(actual.completion, expected.completion);
+                    assert!(guard.roots.load(Ordering::Relaxed) > 0);
+                    assert!(guard.lowerings.load(Ordering::Relaxed) > 0);
+                    assert_eq!(
+                        candidate.lower_adapter_calls(&path("VALUE")),
+                        guard.lowerings.load(Ordering::Relaxed) as u64,
+                        "successful Lower work must be counted independently of retention"
+                    );
+                    let before = candidate.memo_stats().recomputed.clone();
+                    let modes_before: std::collections::BTreeMap<_, _> = candidate
+                        .recomputed(QueryKind::Modes)
+                        .into_iter()
+                        .map(|path| {
+                            let count = candidate.recompute_count(&path, QueryKind::Modes);
+                            (path, count)
+                        })
+                        .collect();
+                    let root_evaluations = guard.roots.load(Ordering::Relaxed);
+                    let again = check_progress(&mut candidate, file, &default_context()).unwrap();
+                    assert_eq!(diagnostics(&again), diagnostics(&actual));
+                    assert_eq!(
+                        candidate.memo_stats().recomputed,
+                        before,
+                        "unchanged compact production results must be reused; jobs={jobs}, repeated={:?}",
+                        modes_before
+                            .iter()
+                            .filter_map(|(path, before)| {
+                                let delta =
+                                    candidate.recompute_count(path, QueryKind::Modes) - before;
+                                (delta != 0).then_some((path, delta))
+                            })
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(guard.roots.load(Ordering::Relaxed), root_evaluations);
+                    assert!(
+                        candidate
+                            .memo_reads(&path("VALUE"), QueryKind::Lower)
+                            .is_some()
+                    );
+                    assert_eq!(candidate.lower_hold_stats().bytes, 0);
+                    assert_eq!(
+                        candidate.export_tir(&path("VALUE")).unwrap(),
+                        reference.export_tir(&path("VALUE")).unwrap()
+                    );
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn dynamic_lower_facts_without_validation_cannot_survive_verification_enablement() {
+    with_compiler_stack(|| {
+        let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime {let xs:Inline[u8,3]=[1,2,3];scaled(xs)}\n";
+        for jobs in [1, 2, 8] {
+            let config = CompileConfig {
+                jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                hold_bytes: 0,
+                verify: Verify::Off,
+                ..CompileConfig::for_memory_cap(None)
+            };
+            let mut adapters = compiler_adapters();
+            adapters.lowering = Some(Arc::new(ForgedLowering));
+            let mut candidate =
+                QueryEngine::new(default_environment(), adapters).with_config(config.clone());
+            let file = candidate
+                .sources
+                .add("dynamic-verification.hir", source.into())
+                .unwrap();
+            let unchecked = check_progress(&mut candidate, file, &default_context()).unwrap();
+            assert!(unchecked.diagnostics.is_empty());
+            assert_eq!(unchecked.completion, CheckCompletion::Complete);
+            candidate.verify = Verify::On;
+            assert!(
+                matches!(
+                    check_progress(&mut candidate, file, &default_context()),
+                    Err(QueryError::Operational(_))
+                ),
+                "jobs={jobs}: invalid TIR accepted after enabling V"
+            );
+            let mut valid = engine(Arc::new(store::NoneStore)).with_config(CompileConfig {
+                verify: Verify::On,
+                ..config
+            });
+            let file = valid
+                .sources
+                .add("dynamic-verification.hir", source.into())
+                .unwrap();
+            let accepted = check_progress(&mut valid, file, &default_context()).unwrap();
+            assert!(accepted.diagnostics.is_empty());
+            assert_eq!(accepted.completion, CheckCompletion::Complete);
         }
     });
 }

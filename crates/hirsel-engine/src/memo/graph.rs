@@ -174,6 +174,11 @@ impl MemoGraph {
     pub fn stats(&self) -> &MemoStats {
         &self.stats
     }
+    /// Count completed worker work independently of memo publication. Failed
+    /// computations can be counted without retaining a value or subscriptions.
+    pub(crate) fn record_recompute(&mut self, kind: QueryKind) {
+        *self.stats.recomputed.entry(kind).or_default() += 1;
+    }
     pub fn len(&self) -> usize {
         self.records.len()
     }
@@ -322,7 +327,7 @@ impl MemoGraph {
         unchanged: bool,
     ) -> Memo<T> {
         self.stats.touched += 1;
-        *self.stats.recomputed.entry(key.kind).or_default() += 1;
+        self.record_recompute(key.kind);
         let changed_at = match self.records.get(&key) {
             Some(previous) if unchanged => previous.changed_at,
             _ => self.revision,
@@ -492,6 +497,30 @@ mod tests {
     }
     fn reads(list: &[(ReadKey, &str)]) -> Arc<Reads> {
         Arc::new(Reads::from_vec(list.iter().map(|(k, v)| (*k, h(v))).collect()).unwrap())
+    }
+
+    #[test]
+    fn worker_recomputations_do_not_require_retained_values_or_touch_subscriptions() {
+        let mut graph = MemoGraph::default();
+        let key = MemoKey::new(QueryKind::Lower, def("root"));
+        // A failed, nonretained completion still performed real Lower work.
+        graph.record_recompute(QueryKind::Lower);
+        assert_eq!(graph.stats().recomputed[&QueryKind::Lower], 1);
+        assert_eq!(graph.stats().touched, 0);
+        assert!(graph.is_empty());
+        // A later successful completion can publish facts separately, once.
+        graph.record_recompute(QueryKind::Lower);
+        let memo = graph.adopt_value(
+            key,
+            h("body"),
+            Ok(Arc::new(())),
+            reads(&[(ReadKey::Signature(def("callee")), "signature")]),
+            Durability::Low,
+        );
+        assert_eq!(graph.stats().recomputed[&QueryKind::Lower], 2);
+        assert_eq!(graph.stats().touched, 1);
+        assert_eq!(graph.check(&memo), Verdict::Valid);
+        assert_eq!(graph.stats().recomputed[&QueryKind::Lower], 2);
     }
 
     #[test]

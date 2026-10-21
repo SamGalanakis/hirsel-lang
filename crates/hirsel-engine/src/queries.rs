@@ -232,6 +232,7 @@ pub struct QueryEngine {
     pub(crate) memo: Arc<hirsel_types::TypeMemo>,
     signature_stack: Vec<DefPath>,
     recomputes: BTreeMap<(DefPath, QueryKind), usize>,
+    scalar_lower_calls: hirsel_syntax::DefMap<u64>,
     s1_lower_work: hirsel_syntax::DefMap<S1LowerWork>,
     /// The std image whose package's checked products this engine reads.
     image: Option<image::AdoptedImage>,
@@ -309,6 +310,10 @@ impl Drop for QueryEngine {
         released("engine: staged values", take(&mut self.staged_values));
         released("engine: generated", take(&mut self.generated));
         released("engine: recomputes", take(&mut self.recomputes));
+        released(
+            "engine: scalar lower calls",
+            take(&mut self.scalar_lower_calls),
+        );
         released("engine: S1 lower work", take(&mut self.s1_lower_work));
         released("engine: image", take(&mut self.image));
         released("engine: constant values", take(&mut self.constant_values));
@@ -505,6 +510,7 @@ impl QueryEngine {
             memo: Arc::new(hirsel_types::TypeMemo::new()),
             signature_stack: vec![],
             recomputes: BTreeMap::new(),
+            scalar_lower_calls: Default::default(),
             s1_lower_work: Default::default(),
             image: None,
             unavailable: None,
@@ -1868,13 +1874,16 @@ impl QueryEngine {
         self.s1.begin_requests();
         let prepared = self.prepare_comptime(&modes.value, &signature.value);
         let result = prepared.and_then(|comptime| match self.adapters.lowering.clone() {
-            Some(adapter) => adapter.lower(
-                &self.types,
-                &self.memo,
-                &modes.value,
-                &comptime,
-                &signature.value,
-            ),
+            Some(adapter) => {
+                *self.scalar_lower_calls.entry(id).or_default() += 1;
+                adapter.lower(
+                    &self.types,
+                    &self.memo,
+                    &modes.value,
+                    &comptime,
+                    &signature.value,
+                )
+            }
             None => self.missing(QueryKind::Lower),
         });
         let mut result = result.map(shared_output);

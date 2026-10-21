@@ -34,6 +34,9 @@ struct Pending {
     affected: bool,
 }
 impl FrontTracker {
+    pub(super) fn is_active(&self) -> bool {
+        self.active
+    }
     fn activate(&mut self) -> bool {
         let was_active = self.active;
         self.active = true;

@@ -74,7 +74,48 @@ impl QueryEngine {
             self.front_products.verify = Some(self.verify);
         }
         for (definition, generation) in changes.generations() {
+            if self.front_products.invalidated.get(&definition) == Some(&generation) {
+                continue;
+            }
+            // S1 can already have settled the phase memo that caused this
+            // notification. Revalidate its complete earlier P product before
+            // dropping compact lint/lowering inputs with the old generation.
+            // Lower products have their own execution/V reads and still retire.
+            let previous = self.front_products.outcomes.get(&definition).cloned();
+            let previous = previous.and_then(|mut outcome| {
+                let published = outcome.result.as_mut().ok()?;
+                published.summary =
+                    self.revalidate_front_summary(&published.summary, &outcome.reads)?;
+                Some((
+                    outcome,
+                    self.front_products.checked.get(&definition).cloned(),
+                    self.front_products.dead_arms.get(&definition).cloned(),
+                    self.front_products
+                        .lowering_inputs
+                        .get(&definition)
+                        .cloned(),
+                ))
+            });
             self.front_products.invalidate(definition, generation);
+            if let Some((outcome, checked, dead_arms, lowering_inputs)) = previous {
+                if let Ok(published) = &outcome.result {
+                    self.front_products
+                        .selection
+                        .insert(definition, published.summary.clone());
+                }
+                self.front_products.outcomes.insert(definition, outcome);
+                if let Some(checked) = checked {
+                    self.front_products.checked.insert(definition, checked);
+                }
+                if let Some(dead_arms) = dead_arms {
+                    self.front_products.dead_arms.insert(definition, dead_arms);
+                }
+                if let Some(lowering_inputs) = lowering_inputs {
+                    self.front_products
+                        .lowering_inputs
+                        .insert(definition, lowering_inputs);
+                }
+            }
         }
         let removed: Vec<_> = changes.removed.iter().copied().collect();
         self.acknowledge_frontier(&changes, &removed);
@@ -121,9 +162,9 @@ impl QueryEngine {
                 })
     }
 
-    /// Conservative first production frontier: every call has a published
-    /// static target, no generic/staged/generated requirement can publish new
-    /// declarations from a later speculative root. Dynamic roots stay serial.
+    /// Classify source publication barriers without demanding bodies. A static
+    /// prefix settles before staged/generic roots can publish declarations;
+    /// consecutive dynamic roots still share the compact worker schedule.
     pub(crate) fn static_constant_frontier(&mut self, root: &DefPath) -> bool {
         if self.adapters.phases.is_none() || self.portable_products {
             return false;
@@ -171,7 +212,7 @@ impl QueryEngine {
                 return false;
             }
             // Indirect, intrinsic and constructor calls absent from the
-            // symbolic static-call list remain on the existing scalar path.
+            // symbolic static-call list require a dynamic publication barrier.
             if syntax.tree.expressions.iter().any(|expression| {
                 matches!(expression.kind, hirsel_syntax::ExprKind::Call { .. })
                     && !summary
@@ -206,11 +247,56 @@ impl QueryEngine {
         true
     }
 
-    /// S1 admission for consecutive ordinary constants, after GEN-5. Cached
-    /// lower products need no materialization query. Per-root failure metadata
-    /// is restored at the original input position; successful values are then
-    /// consumed by ordinary lowering, preserving its diagnostics and V path.
-    pub(crate) fn front_constants(
+    /// Consume complete dynamic lower facts after GEN-5. Cached roots remain
+    /// ordered boundaries: preceding misses settle before their receipts are
+    /// rechecked against any newly published declarations.
+    pub(crate) fn front_lowerings(
+        &mut self,
+        definitions: Vec<DefPath>,
+        jobs: hirsel_intern::jobs::Jobs,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<(), QueryError> {
+        // Image writers still need closure-local scalar evidence. Fake phase
+        // adapters keep the scalar contract without a complete frozen source.
+        if self.portable_products || self.adapters.phases.is_none() {
+            for definition in definitions {
+                diagnostics.extend(self.front_lower(&definition)?);
+            }
+            return Ok(());
+        }
+        let mut pending = vec![];
+        let mut static_prefix = None;
+        for definition in definitions {
+            self.invalidate_front_products();
+            let static_root = self.static_constant_frontier(&definition);
+            if static_prefix.is_some_and(|previous| previous != static_root) {
+                self.front_lower_frontier(std::mem::take(&mut pending), jobs, diagnostics)?;
+            }
+            static_prefix = Some(static_root);
+            if self
+                .front_products
+                .lowered
+                .contains_key(&DefId::intern(&definition))
+            {
+                self.front_lower_frontier(std::mem::take(&mut pending), jobs, diagnostics)?;
+                self.invalidate_front_products();
+                if self
+                    .front_products
+                    .lowered
+                    .contains_key(&DefId::intern(&definition))
+                {
+                    diagnostics.extend(self.front_lower(&definition)?);
+                } else {
+                    self.front_lower_frontier(vec![definition], jobs, diagnostics)?;
+                }
+            } else {
+                pending.push(definition);
+            }
+        }
+        self.front_lower_frontier(pending, jobs, diagnostics)
+    }
+
+    fn front_lower_frontier(
         &mut self,
         definitions: Vec<DefPath>,
         jobs: hirsel_intern::jobs::Jobs,
@@ -219,33 +305,36 @@ impl QueryEngine {
         if definitions.is_empty() {
             return Ok(());
         }
-        self.invalidate_front_products();
-        let missing = definitions
-            .iter()
-            .filter(|path| {
-                !self
-                    .front_products
-                    .lowered
-                    .contains_key(&DefId::intern(path))
-            })
-            .cloned()
-            .collect();
-        let mut outcomes: std::collections::BTreeMap<_, _> = self
-            .materialize_value_outcomes(missing, jobs)
-            .into_iter()
-            .map(|outcome| (outcome.definition.clone(), outcome))
-            .collect();
-        for definition in definitions {
-            if let Some(outcome) = outcomes.remove(&definition) {
-                self.last_phase = outcome.phase;
-                self.unavailable = matches!(outcome.result, Err(QueryError::NotImplemented))
-                    .then_some(outcome.phase)
-                    .flatten();
-                self.last_comptime_limit = outcome.limit;
-                self.merge_execution(&outcome.reads);
-                outcome.result?;
+        let outcomes = self.check_lower_definition_prefix(definitions, jobs);
+        let changes = self.invalidate_front_products();
+        for outcome in outcomes {
+            if outcome.worker_recomputed {
+                // This counts the admitted logical miss, independently of
+                // whether its facts survive. Scalar fallbacks already count
+                // through start(); discarded speculative attempts are separate.
+                self.record_worker_lower_recompute(&outcome.definition);
             }
-            diagnostics.extend(self.front_lower(&definition)?);
+            let cacheable = self.retain_lower_facts(&outcome);
+            self.last_phase = outcome.phase;
+            self.unavailable = matches!(outcome.result, Err(QueryError::NotImplemented))
+                .then_some(outcome.phase)
+                .flatten();
+            self.last_comptime_limit = outcome.limit;
+            self.merge_execution(&outcome.reads);
+            let result = outcome.result.map(|output| output.diagnostics);
+            if cacheable {
+                let id = DefId::intern(&outcome.definition);
+                self.front_products.lowered.insert(
+                    id,
+                    LowerProduct {
+                        result: result.clone(),
+                        phase: outcome.phase,
+                        reads: outcome.reads,
+                    },
+                );
+                self.acknowledge_frontier(&changes, &[id]);
+            }
+            diagnostics.extend(result?);
         }
         Ok(())
     }
@@ -367,6 +456,27 @@ impl QueryEngine {
                 .flatten();
         }
         outputs
+    }
+
+    /// S1 body tasks publish the same complete diagnostic/summary product as
+    /// P. Keep their refreshed result when its summary is current, so a later
+    /// unchanged P request does not demand a deliberately released body.
+    pub(crate) fn retain_front_completion(
+        &mut self,
+        outcome: &PublishedResult,
+        changes: &crate::queries::FrontChanges,
+    ) {
+        let id = DefId::intern(&outcome.definition);
+        if let Ok(published) = &outcome.result
+            && !outcome.reads.is_empty()
+            && self.current_front_summary(&published.summary)
+        {
+            self.front_products.outcomes.insert(id, outcome.clone());
+            self.front_products
+                .selection
+                .insert(id, published.summary.clone());
+            self.acknowledge_frontier(changes, &[id]);
+        }
     }
 }
 #[cfg(test)]
