@@ -532,3 +532,82 @@ fn deferred_snapshot_extensions_preserve_unconsumed_seed_receipts() {
         }
     });
 }
+#[test]
+fn front_changes_survive_early_query_recomputation_and_selective_acknowledgment() {
+    with_compiler_stack(|| {
+        use std::collections::BTreeSet;
+        let source = "fn a() -> u8 { 1u8 }\nfn b() { let _ = a() }\nfn c() -> u64 { 7 }\n";
+        let mut engine = engine(Arc::new(store::NoneStore));
+        assert!(checked(&mut engine, source).diagnostics.is_empty());
+        let initial = engine.frontier_changes();
+        let all: Vec<_> = initial.changed.union(&initial.affected).copied().collect();
+        engine.acknowledge_frontier(&initial, &all);
+        let settled = engine.frontier_changes();
+        assert!(
+            settled.changed.is_empty() && settled.removed.is_empty() && settled.affected.is_empty()
+        );
+
+        let edited = source.replace("fn a() -> u8 { 1u8 }", "fn a() -> u8 { 2u8 }");
+        let file = engine.sources.add("resident.hir", edited.clone()).unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let before = engine.memo_stats().touched;
+        let body = engine.frontier_changes();
+        assert_eq!(
+            engine.memo_stats().touched,
+            before,
+            "collecting a body-only frontier reads no body memos"
+        );
+        assert_eq!(
+            body.changed,
+            BTreeSet::from([hirsel_syntax::DefId::intern(&path("a"))])
+        );
+        assert!(
+            !body
+                .affected
+                .contains(&hirsel_syntax::DefId::intern(&path("c")))
+        );
+
+        let changed_signature = edited.replace("fn a() -> u8 { 2u8 }", "fn a() -> u16 { 2u16 }");
+        let file = engine
+            .sources
+            .add("resident.hir", changed_signature.clone())
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        engine.mode_definition(&path("b")).unwrap();
+        // This query has already cleared b's graph dirty mark. Its aggregate
+        // still needs the newly computed diagnostics and compact products.
+        engine.acknowledge_frontier(&body, &all);
+        let signature = engine.frontier_changes();
+        let b = hirsel_syntax::DefId::intern(&path("b"));
+        assert!(signature.affected.contains(&b));
+        assert!(
+            signature
+                .changed
+                .contains(&hirsel_syntax::DefId::intern(&path("a")))
+        );
+        assert!(
+            !signature
+                .affected
+                .contains(&hirsel_syntax::DefId::intern(&path("c")))
+        );
+        engine.acknowledge_frontier(&signature, &[b]);
+        let partial = engine.frontier_changes();
+        assert!(!partial.affected.contains(&b));
+        assert!(!partial.changed.is_empty());
+
+        let file = engine
+            .sources
+            .add(
+                "resident.hir",
+                changed_signature.replace("fn b() { let _ = a() }\n", ""),
+            )
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let removed = engine.frontier_changes();
+        assert!(removed.removed.contains(&b));
+        engine.acknowledge_frontier(&signature, &[b]);
+        assert!(engine.frontier_changes().removed.contains(&b));
+        engine.acknowledge_frontier(&removed, &[b]);
+        assert!(!engine.frontier_changes().removed.contains(&b));
+    });
+}

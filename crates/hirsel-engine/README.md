@@ -844,3 +844,11 @@ returns a validated snapshot. Independent representation digests are computed
 per demanded view; validation checks the actual frozen views and all contextual
 receipts. Unconsumed receipt candidates survive deferred snapshot extensions,
 and initialization releases the preceding universe after reusing its receipts.
+
+`frontier_changes` starts change tracking for a retained program aggregate. Its
+first call returns indexed definitions outside prechecked images; subsequent
+calls retain direct changes, removals and actual reverse subscribers until
+`acknowledge_frontier` accepts their observed per-definition generations.
+A query that recomputes a memo early cannot erase the aggregate notification,
+and an older acknowledgment cannot erase a newer S1 publication. Tracking is
+inactive in scalar-only sessions. The driver still owns compact aggregation.

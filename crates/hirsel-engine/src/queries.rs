@@ -1,6 +1,8 @@
 use crate::memo::{MemoGraph, MemoKey, ReadKey, Reads, ReadsBuilder};
 use crate::*;
 mod arm_fixes;
+mod frontier;
+pub use frontier::FrontChanges;
 mod parallel;
 pub(crate) mod s1;
 pub use parallel::ModeResult;
@@ -156,6 +158,7 @@ pub struct QueryEngine {
     pub(crate) checked_summaries: Table<Arc<CheckedSummary>>,
     /// The memo records, the reverse subscriber index and the dirty marks.
     pub(crate) graph: MemoGraph,
+    front_changes: frontier::FrontTracker,
     /// Each indexed definition's inputs as last indexed (S0's diff).
     inputs: hirsel_syntax::DefMap<memos::DefInputs>,
     /// The environment and limits the memos were last checked under.
@@ -244,6 +247,10 @@ impl Drop for QueryEngine {
         released("engine: resolutions", take(&mut self.resolutions));
         released("engine: signatures", take(&mut self.signatures));
         released("engine: memo graph", take(&mut self.graph));
+        released(
+            "engine: pending front changes",
+            take(&mut self.front_changes),
+        );
         released("engine: inputs", take(&mut self.inputs));
         released("engine: syntax keys", take(&mut self.syntax_keys));
         released("engine: items", take(&mut self.items));
@@ -410,6 +417,7 @@ impl QueryEngine {
             summaries: Default::default(),
             checked_summaries: Default::default(),
             graph: MemoGraph::default(),
+            front_changes: Default::default(),
             inputs: Default::default(),
             environment_seen: None,
             vanished: BTreeSet::new(),

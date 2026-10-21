@@ -531,6 +531,7 @@ impl QueryEngine {
             if now == before {
                 continue;
             }
+            self.front_changes.changed(id, now.is_some());
             let durability = self.durability_of(&ReadKey::DeclarationCandidates(id));
             let mut read = |k| changes.read(k, durability);
             match (&before, &now) {
@@ -608,7 +609,7 @@ impl QueryEngine {
         if any_names_changed {
             self.mark_lookups(&mut changes);
         }
-        self.graph.apply(&changes);
+        self.apply_changes(&changes);
     }
 
     /// A name appeared, disappeared or changed kind or visibility: every
@@ -665,7 +666,7 @@ impl QueryEngine {
                     }
                 }
             }
-            self.graph.apply(&changes);
+            self.apply_changes(&changes);
         }
     }
     /// A signature memo's observed value without computing it: its
@@ -690,7 +691,7 @@ impl QueryEngine {
             if self.environment_seen.is_some() {
                 let mut changes = ChangeSet::default();
                 changes.read(ReadKey::Environment, Durability::High);
-                self.graph.apply(&changes);
+                self.apply_changes(&changes);
             }
             self.environment_seen = Some(now);
         }
@@ -702,6 +703,10 @@ impl QueryEngine {
         let mut changes = ChangeSet::default();
         for path in paths {
             let id = DefId::intern(path);
+            self.front_changes.changed(
+                id,
+                self.declared(path) || self.staged_constants.contains_key(path),
+            );
             let d = self.durability_of(&ReadKey::Signature(id));
             for k in [
                 ReadKey::Signature(id),
@@ -713,7 +718,7 @@ impl QueryEngine {
             }
         }
         self.mark_lookups(&mut changes);
-        self.graph.apply(&changes);
+        self.apply_changes(&changes);
         self.settle_signatures();
     }
 
@@ -729,6 +734,7 @@ impl QueryEngine {
             if !self.inputs.contains_key(&id) || !self.vanished.insert(id) {
                 continue;
             }
+            self.front_changes.changed(id, false);
             any = true;
             let durability = self.durability_of(&ReadKey::DeclarationCandidates(id));
             for k in [
@@ -749,7 +755,7 @@ impl QueryEngine {
         }
         if any {
             self.mark_lookups(&mut changes);
-            self.graph.apply(&changes);
+            self.apply_changes(&changes);
         }
     }
 
