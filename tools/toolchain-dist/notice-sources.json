@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "root": "root//:hirsel-cli-bin-hirsel",
+  "scope": "Standard Linux release bundle: compiler link inputs (Rust and bundled C/assembly, before dead-code elimination), Rust standard library, std sources and compiled std objects. Build scripts and proc-macro executables are build tools, not linked libraries. Upstream library notices can conservatively cover other targets.",
+  "bundle_entries": [
+    "hirsel",
+    "hirsel-std.image",
+    "hirsel-std.objects",
+    "stdlib"
+  ],
+  "rust_lock": "tools/buck2/toolchain-lock.json",
+  "rust_tree": "tools/buck2/toolchains/rust-files",
+  "adapted_source_notices": [
+    "third-party/NOTICES.md",
+    "third-party/LICENSE.crc32c",
+    "native-tests/library/vectors/LICENSE.cpython",
+    "native-tests/library/vectors/LICENSE.wycheproof",
+    "native-tests/library/vectors/LICENSE.xsum",
+    "native-tests/library/vectors/dectest/CPYTHON-LICENSE.txt"
+  ],
+  "required_texts": {
+    "libmimalloc-sys-0.1.49": [
+      "LICENSE.txt",
+      "c_src/mimalloc/v3/LICENSE"
+    ],
+    "ring-0.17.14": [
+      "LICENSE",
+      "LICENSE-BoringSSL",
+      "LICENSE-other-bits",
+      "third_party/fiat/LICENSE",
+      "src/polyfill/once_cell/LICENSE-APACHE",
+      "src/polyfill/once_cell/LICENSE-MIT"
+    ]
+  },
+  "external": [
+    {
+      "component": "LLVM 21.1.8 and its shared-library dependencies",
+      "status": "Required externally; not copied by hirsel-toolchain. Native --unpack retains Debian usr/share/doc/*/copyright.",
+      "pins": [
+        "tools/native-toolchain/llvm-21.lock",
+        "tools/buck2/llvm-runtime-lock.json"
+      ]
+    },
+    {
+      "component": "Native runtime archives and link kit (glibc startup/nonshared objects, LLVM libunwind and compiler-rt)",
+      "status": "Selected through HIRSEL_RUNTIME_ARCHIVES and HIRSEL_LINK_KIT; not copied by hirsel-toolchain. Adding these to the release bundle requires extending this inventory; unexpected top-level bundle entries are refused.",
+      "pins": [
+        "Cargo.lock",
+        "tools/native-toolchain/native.lock.json"
+      ]
+    },
+    {
+      "component": "Host loader, libc, libm, libgcc_s and other DT_NEEDED libraries",
+      "status": "System dependencies, not copied into the standard bundle."
+    }
+  ],
+  "archive_omissions": {
+    "cranelift-assembler-x64-0.136.3": {
+      "donor": "cranelift-codegen-0.136.3",
+      "path": "LICENSE",
+      "revision": "f96eabaa11a06086e4fb779ed1c1688481067ab9",
+      "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+      "upstream": "https://github.com/bytecodealliance/wasmtime/blob/f96eabaa11a06086e4fb779ed1c1688481067ab9/LICENSE",
+      "reason": "Published archive omits license text; upstream root license is identical to the same-revision locked donor archive text."
+    },
+    "cranelift-bitset-0.136.3": {
+      "donor": "cranelift-codegen-0.136.3",
+      "path": "LICENSE",
+      "revision": "f96eabaa11a06086e4fb779ed1c1688481067ab9",
+      "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+      "upstream": "https://github.com/bytecodealliance/wasmtime/blob/f96eabaa11a06086e4fb779ed1c1688481067ab9/LICENSE",
+      "reason": "Published archive omits license text; upstream root license is identical to the same-revision locked donor archive text."
+    },
+    "wasmtime-internal-core-49.0.3": {
+      "donor": "cranelift-codegen-0.136.3",
+      "path": "LICENSE",
+      "revision": "f96eabaa11a06086e4fb779ed1c1688481067ab9",
+      "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+      "upstream": "https://github.com/bytecodealliance/wasmtime/blob/f96eabaa11a06086e4fb779ed1c1688481067ab9/LICENSE",
+      "reason": "Published archive omits license text; upstream root license is identical to the same-revision locked donor archive text."
+    }
+  }
+}

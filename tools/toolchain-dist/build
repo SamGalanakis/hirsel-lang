@@ -16,6 +16,8 @@ from pathlib import Path
 import shutil
 import subprocess
 
+import notices
+
 ROOT = Path(__file__).resolve().parents[2]
 BUCK = ROOT / '.buck2/bin/buck2'
 PROFILE = Path(__file__).with_name('profile.profdata')
@@ -30,6 +32,11 @@ def build(mode, output):
 
 
 def manifest(output, mode):
+    try:
+        notices.collect(output, mode)
+    except Exception:
+        shutil.rmtree(output)
+        raise
     def command(*args):
         return subprocess.check_output(args, cwd=ROOT, text=True).strip()
     def digest(path):
@@ -40,7 +47,8 @@ def manifest(output, mode):
                   profile='dist', pgo=mode, lto='fat', codegen_units=1,
                   training='compiler-bench examples + syn3k: check, debug Cranelift, release LLVM',
                   hirsel_sha256=digest(output / 'hirsel'),
-                  precheck_sha256=digest(output / 'hirsel-std.precheck'))
+                  std_image_sha256=digest(output / 'hirsel-std.image'),
+                  notices_sha256=digest(output / 'notices/manifest.json'))
     if mode == 'use':
         record['profdata_sha256'] = digest(output / 'hirsel.profdata')
     (output / 'hirsel-build.json').write_text(json.dumps(record, indent=2) + '\n')

@@ -3,6 +3,10 @@
 Hirsel adapts code and test vectors from the sources below. Each is used under
 the license named in its row; the license texts follow once each.
 
+This is the adapted-source inventory. Release packaging separately derives the
+linked dependency inventory and retains upstream license texts under the
+bundle’s `notices/` directory; see `tools/toolchain-dist/README.md`.
+
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
 | rr | `src/TraceStream.cc:408-557` binary event/stream framing structure | ordinary and durable tape codec | rr-debugger/rr `50d54f2f541d79b508044fefdb2574fe2ec746f7` | MIT (structure reference) |

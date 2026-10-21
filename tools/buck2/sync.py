@@ -966,6 +966,9 @@ def first_party(meta: dict) -> str:
                             full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
                             runtime_archives=RUNTIME_ARCHIVES,
                             data=Raw('glob(["bench/langarena/*.hir", "bench/langarena/*.py", "bench/langarena/*.js", "bench/micro/measure.py", "stdlib/**"])')))
+    out.append("\n" + call("hirsel_script_test", name="gate-distribution-notices", script="tools/tests/distribution_notices.py", full=False,
+                            data=["tools/tests/distribution_notices.py"],
+                            files_env={"HIRSEL_DISTRIBUTION_NOTICES": "//tools/toolchain-dist:notices.py"}))
     # summerwind/h2spec v2.6.0, the latest release (tools/h2spec/run).
     out.append("\n" + call("http_file", name="h2spec-release",
                             urls=["https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz"],
