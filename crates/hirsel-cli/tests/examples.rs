@@ -168,6 +168,31 @@ impl Fixture {
             .unwrap()
         })
     }
+    /// W1: the shipped optimized runtime, on both emitters, with every
+    /// suspension changing the task's compute worker.
+    fn migrated(&self, backend: &str, expected: &str) {
+        let executable = self.0.join(format!("migrate-{backend}"));
+        let built = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["build", "--backend", backend])
+            .arg(self.0.join("hirsel.json"))
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{backend}: {built:?}");
+        let root = self.0.join(format!("migrate-root-{backend}"));
+        std::fs::create_dir(&root).unwrap();
+        let ran = Command::new(executable)
+            .env_clear()
+            .env("HIRSEL_RT_ROOT", root)
+            .env("HIRSEL_RT_MIGRATE", "1")
+            .output()
+            .unwrap();
+        assert!(ran.status.success(), "{backend}: {ran:?}");
+        assert_eq!(ran.stdout, expected.as_bytes(), "{backend}: {ran:?}");
+        assert!(ran.stderr.is_empty(), "{backend}: {ran:?}");
+    }
+
     fn native_files(&self, args: &[&str], files: &[(&str, &str)], expected: &str) {
         let executable = self.native_executable();
         let root = self.0.join("native/root");
@@ -206,6 +231,15 @@ macro_rules! example {
                 0,
             );
             fixture.run(true, None, $expected, 0);
+        }
+        mod $name {
+            #[test]
+            fn migration() {
+                let fixture = super::Fixture::new(stringify!($name), $source);
+                for backend in ["llvm", "cranelift"] {
+                    fixture.migrated(backend, $expected);
+                }
+            }
         }
     };
 }
