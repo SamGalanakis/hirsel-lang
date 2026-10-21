@@ -358,12 +358,49 @@ fn a_package_reports_identically_as_a_dependency_and_as_the_program() {
                 "a.hir",
                 "fn reader() -> u64 {\n  C\n}\n\nconst C: u64 = reader()\n",
             )],
+            // A failed S1 evaluation in one file does not withhold another
+            // file's source diagnostics or its own compile-time failure.
+            &[
+                (
+                    "a.hir",
+                    "pub fn value() -> u64 { comptime (1u64 / 0u64) }\n",
+                ),
+                ("b.hir", "pub fn bad() -> u64 { true }\n"),
+                (
+                    "c.hir",
+                    "pub fn value() -> u64 { comptime (2u64 / 0u64) }\n",
+                ),
+            ],
         ] {
             let f = Fixture::new();
             let program = library_diagnostics(&f, files, false);
             let dependency = library_diagnostics(&f, files, true);
             assert!(program != ["Complete"], "{files:?}");
             assert_eq!(dependency, program, "{files:?}");
+        }
+    });
+}
+
+#[test]
+fn program_growth_is_decided_before_any_files_comptime_lowering() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let files = [
+            (
+                "a.hir",
+                "pub fn value() -> u64 { comptime (1u64 / 0u64) }\n",
+            ),
+            (
+                "b.hir",
+                "fn grow[T: copyable](x: T) { grow((copy x, copy x)) }\n",
+            ),
+        ];
+        for as_dependency in [false, true] {
+            let diagnostics = library_diagnostics(&f, &files, as_dependency);
+            assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+            assert_eq!(diagnostics[0], "Complete");
+            assert!(diagnostics[1].contains("GEN-5"), "{diagnostics:?}");
+            assert!(!diagnostics[1].contains("CT-4"), "{diagnostics:?}");
         }
     });
 }

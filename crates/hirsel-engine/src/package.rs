@@ -138,7 +138,7 @@ impl LoadedProgram {
         self.check_with(lowering, |_, _| Ok(()))
     }
     /// `check`, calling `checked` with each file that checked from source
-    /// complete and with no diagnostics, as soon as it has.
+    /// complete and with no diagnostics, in source order after S1/P2.
     fn check_with(
         &mut self,
         lowering: LoweringPolicy,
@@ -177,23 +177,17 @@ impl LoadedProgram {
                 LoweringPolicy::Comptime
             }
         };
-        for (file, context) in &self.files {
-            if self.engine.imaged(&context.package) {
-                continue;
-            }
-            let parallel =
-                hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Parallel);
-            let output = crate::tools::check_file_lowering(
-                &mut self.engine,
-                *file,
-                context,
-                policy(&context.package),
-            )?;
-            drop(parallel);
+        let files: Vec<_> = self
+            .files
+            .iter()
+            .filter(|(_, context)| !self.engine.imaged(&context.package))
+            .map(|(file, context)| (*file, context, policy(&context.package)))
+            .collect();
+        for (file, output) in crate::tools::check_files(&mut self.engine, &files)? {
             if output.completion != CheckCompletion::Complete {
                 completion = output.completion;
             } else if output.diagnostics.is_empty() {
-                checked(&mut self.engine, *file)?;
+                checked(&mut self.engine, file)?;
             }
             diagnostics.extend(output.diagnostics);
         }
@@ -267,9 +261,8 @@ impl LoadedProgram {
     }
     /// The std image of `package`, a dependency of this program, which must
     /// check complete with no diagnostics at all (`StdImage`). Each
-    /// definition's record is computed as soon as its source checks and goes
-    /// to `spill`, and the source's checked bodies are then released, so the
-    /// build holds one source's products at a time, not the package's.
+    /// definition's record goes to `spill` in source order after the program
+    /// check, and its source's checked bodies are then released.
     pub fn image(
         &mut self,
         package: &PackageId,
@@ -294,9 +287,8 @@ impl LoadedProgram {
                 Some(build) if build.has_file(file) => {
                     let paths = engine.file_definitions(file);
                     engine.image_definitions(build, paths)?;
-                    // The first source's GEN-5 verdict checked every body of the
-                    // program. The package's other bodies are checked again with
-                    // their own sources rather than all held until then.
+                    // GEN-5 has consumed every body's summary. Release the
+                    // other sources' products before writing their records.
                     if !released {
                         released = true;
                         engine.release_unrecorded(build);
