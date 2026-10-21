@@ -196,3 +196,27 @@ fn an_ordinary_release_of_a_root_is_refused_in_diagnostic_mode() {
         "an ordinary count operation reached a Shared root",
     );
 }
+
+#[test]
+fn freeze_still_rejects_a_genuinely_shared_ordinary_block() {
+    let name = "freeze_still_rejects_a_genuinely_shared_ordinary_block";
+    if in_child(name) {
+        let ctx = bounded(0);
+        let leaf = leaf(8);
+        let value = layout(8, 1, None, vec![release_step(0, 0)]);
+        let root_layout = frozen(vec![
+            Step {
+                layout: value,
+                ..step(STEP_THAW, 0, 0)
+            },
+            release_step(0, 0),
+        ]);
+        let shared = alloc_block(ctx.0, leaf, 8);
+        unsafe { hirsel_rt::count::hirsel_rt_v2_dup(ctx.0, shared) };
+        let root = alloc_block(ctx.0, root_layout, 8);
+        write_ref(root, 0, shared);
+        unsafe { hirsel_rt::shared::hirsel_rt_v2_freeze(ctx.0, root) };
+        return;
+    }
+    assert_child_aborts(name, "a freeze reached a block with more than one holder");
+}

@@ -1,26 +1,32 @@
 //! Deep copy (`unique x`, `copy_to`, a deep LIR `UniqueCopy`): every headered block
-//! reachable from a root block or an inline value's holder slots is copied once
-//! into the explicit heap/arena destination, so sharing
-//! inside the copied graph is preserved. A copy-on-write
+//! reachable from a root block or an inline value's holder slots is copied per holder
+//! into the explicit heap/arena destination. Every ordinary counted block in the
+//! result has one holder, including repeated empty containers and byte intervals.
+//! Source sharing is preserved in the source; nested Shared roots keep their roots.
+//! A copy-on-write
 //! detach (a shallow `UniqueCopy`, OWN-4) copies the root block alone and gives each counted
 //! child one more holder.
+//!
+//! Prior art: Rust a7c37f9f0ee5, library/alloc/src/rcs/rc.rs:2223-2270
+//! (`make_mut`) detaches shared storage before permitting a unique write;
+//! :2676-2682 (`clone`) only adds a shallow credit. Hirsel's deep MODE-2
+//! guarantee requires detaching every ordinary holder, while Shared roots
+//! remain boundaries. The language cannot build an ordinary counted cycle.
 //!
 //! Children are found through each block's own descriptor: its `RELEASE` steps are exactly
 //! its counted holders (`TAG` and a niche's `NONNULL` select the active variant's, `LOOP` and `COLUMN` reach
 //! elements).
 //! A whole-block copy keeps its class capacity and bytes. A String/Bytes interval
-//! gets a fresh byte sequence holding only its viewed bytes; equal intervals share
-//! their copy, while different intervals of one owner copy independently. Each counted slot is rewritten
+//! gets a fresh byte sequence holding only its viewed bytes; each holder gets its
+//! own copy, even when two intervals are equal. Each counted slot is rewritten
 //! to the child's copy, so every copy holds exactly the credits its slots name. Immortal and
 //! static blocks are copied like any other: the copy is unique, so a `unique` parameter
 //! writes it in place without a test (MODE-2), which a shared static block would not survive.
 //! A `Shared` root is never copied: the copy holds one more root of the same graph (MEM-11).
 //! A `FINALIZE` or `CLOSE_HANDLE`
 //! step is an invariant fault: resources and handles are noncopyable, which the validators
-//! enforce. The walk keeps its state in runtime-owned scratch (a visited map and two explicit
-//! stacks) and never recurses, so its native stack is constant whatever the graph's depth
-//! (MEM-3). The scratch allocates only for a graph of more than a few blocks or a block with
-//! counted children; a root whose layout holds no counted child (a String, Bytes or a List
+//! enforce. The walk keeps its state in runtime-owned scratch (two explicit stacks) and never recurses, so its native stack is constant whatever the graph's depth
+//! (MEM-3). The scratch allocates only for a block with counted children; a root whose layout holds no counted child (a String, Bytes or a List
 //! of plain elements) is copied as one allocation and its bytes, with no walk.
 //!
 //! Into a bounded arena (MEM-6) the copy is charged before anything is copied: every block
@@ -221,40 +227,12 @@ unsafe fn keyed_index(layout: *const Layout, payload: *mut u8, slot: *mut u8) ->
     unsafe { (*layout).flags & LAYOUT_KEYED != 0 && slot != payload }
 }
 
-/// Blocks inline in [`Copies`] before it spills to a map.
-const INLINE_COPIES: usize = 8;
-
-/// The deep copy walk's visited map, original to copy: a small graph's lives inline, so a
-/// copy of a few blocks allocates nothing for it.
+/// A source block and, for String/Bytes, its compact interval. The charge walk
+/// memoizes subtree sizes; the copy walk intentionally copies every holder.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 struct CopyKey {
     block: usize,
     view: Option<(u64, u64)>,
-}
-
-#[derive(Default)]
-struct Copies {
-    inline: [(CopyKey, usize); INLINE_COPIES],
-    len: usize,
-    spilled: HashMap<CopyKey, *mut Header>,
-}
-
-impl Copies {
-    fn get(&self, key: CopyKey) -> Option<*mut Header> {
-        match self.inline[..self.len].iter().find(|(o, _)| *o == key) {
-            Some(&(_, copy)) => Some(ptr::with_exposed_provenance_mut(copy)),
-            None => self.spilled.get(&key).copied(),
-        }
-    }
-
-    fn insert(&mut self, key: CopyKey, copy: *mut Header) {
-        if self.len < INLINE_COPIES {
-            self.inline[self.len] = (key, copy.expose_provenance());
-            self.len += 1;
-        } else {
-            self.spilled.insert(key, copy);
-        }
-    }
 }
 
 /// An interval needing compact storage, or None for a whole byte sequence. Flat
@@ -328,8 +306,9 @@ unsafe fn clone_view(
 }
 
 /// The deep copy walk: each slot of `root` naming a counted block is rewritten to that
-/// block's copy (made once), and then every copy's slots in turn. A block reached again gains
-/// one holder instead of a second copy, so sharing inside the graph is kept. Into a bounded
+/// fresh copy, and then every copy's slots in turn. Each incoming holder gets its
+/// own copy (MODE-2), so a diamond becomes a tree without changing the source.
+/// Ordinary shallow copies and nested Shared roots still acquire holder credits. Into a bounded
 /// arena, the first block copied is tracked when `first` says so; every other sequence, Map
 /// or Set block is unless it is a Map's or Set's index or an untracked-below block holds it,
 /// directly or not, or `track` is false for the root's. A tracked copy whose layout has a drop
@@ -350,7 +329,6 @@ unsafe fn copy_graph(
             ctx.heap().measurement.deep_copies += 1;
         }
         let diagnostic = ctx.heap().diagnostic;
-        let mut copies = Copies::default();
         // Each copy with holders still to walk, and whether the sequences below it are tracked.
         let pending: RefCell<Vec<(*mut Header, bool)>> = RefCell::new(Vec::new());
         // The copy whose holder slots are being walked, if any: a Map's or Set's index is not
@@ -371,57 +349,43 @@ unsafe fn copy_graph(
                 return;
             }
             let key = view_key(&*raw, slot, slice);
-            let target = match copies.get(key) {
-                Some(target) => {
-                    // Another holder of a block already copied.
-                    crate::count::hirsel_rt_v2_dup(raw, target);
-                    target
-                }
+            let flags = if key.view.is_some() {
+                LAYOUT_SEQUENCE
+            } else {
+                (*(*raw).descriptor((*child).index())).flags
+            };
+            let parent = walked.get();
+            let index = !parent.is_null()
+                && keyed_index((*raw).descriptor((*parent).index()), payload(parent), slot);
+            let below = below.get() && !index;
+            let tracked = match first.take() {
+                Some(root) => root && arena,
                 None => {
-                    let flags = if key.view.is_some() {
-                        LAYOUT_SEQUENCE
-                    } else {
-                        (*(*raw).descriptor((*child).index())).flags
-                    };
-                    let parent = walked.get();
-                    let index = !parent.is_null()
-                        && keyed_index((*raw).descriptor((*parent).index()), payload(parent), slot);
-                    let below = below.get() && !index;
-                    let tracked = match first.take() {
-                        Some(root) => root && arena,
-                        None => {
-                            below
-                                && flags
-                                    & (LAYOUT_SEQUENCE
-                                        | LAYOUT_KEYED
-                                        | LAYOUT_COLUMNS
-                                        | LAYOUT_SEQUENTIAL)
-                                    != 0
-                        }
-                    };
-                    let target = match key.view {
-                        Some((start, length)) => {
-                            clone_view(&mut *raw, child, start, length, destination, tracked)
-                        }
-                        None => clone_block(&mut *raw, child, destination, tracked),
-                    };
-                    if tracked && (*(*raw).descriptor((*target).index())).step_count != 0 {
-                        crate::region::hirsel_rt_v2_region_schedule(
-                            raw,
-                            destination,
-                            (*target).index(),
-                            payload(target),
-                        );
-                    }
-                    copies.insert(key, target);
-                    // A copy whose layout holds nothing has no holders to walk.
-                    if (*(*raw).descriptor((*target).index())).step_count != 0 {
-                        let tracks = below && flags & LAYOUT_UNTRACKED_BELOW == 0;
-                        pending.borrow_mut().push((target, tracks));
-                    }
-                    target
+                    below
+                        && flags
+                            & (LAYOUT_SEQUENCE | LAYOUT_KEYED | LAYOUT_COLUMNS | LAYOUT_SEQUENTIAL)
+                            != 0
                 }
             };
+            let target = match key.view {
+                Some((start, length)) => {
+                    clone_view(&mut *raw, child, start, length, destination, tracked)
+                }
+                None => clone_block(&mut *raw, child, destination, tracked),
+            };
+            if tracked && (*(*raw).descriptor((*target).index())).step_count != 0 {
+                crate::region::hirsel_rt_v2_region_schedule(
+                    raw,
+                    destination,
+                    (*target).index(),
+                    payload(target),
+                );
+            }
+            // A copy whose layout holds nothing has no holders to walk.
+            if (*(*raw).descriptor((*target).index())).step_count != 0 {
+                let tracks = below && flags & LAYOUT_UNTRACKED_BELOW == 0;
+                pending.borrow_mut().push((target, tracks));
+            }
             slot.cast::<*mut Header>().write_unaligned(target);
             if key.view.is_some() {
                 slot.add(8).cast::<u64>().write_unaligned(8);
@@ -562,8 +526,8 @@ unsafe fn charge_copy(
 }
 
 /// `unique x`: a deep copy of the graph of counted heap blocks reachable from `block`, written
-/// to `out_block` with one holder. Sharing inside the graph is preserved (each block is copied
-/// once and every slot naming it names its copy), immortal and static blocks included.
+/// to `out_block` with one holder per copied block, immortal and static blocks included.
+/// Repeated ordinary holders are copied independently; nested Shared roots stay shared.
 /// A null destination selects the heap; otherwise every copied block belongs to
 /// that active arena. Returns 0, or [`STATUS_EXHAUSTED`] when a bounded destination's budget
 /// does not cover the copy; host exhaustion terminates environmentally. `site` is reserved,
@@ -633,7 +597,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
 /// `unique x` of an inline value (an aggregate, variant or inline array holding blocks):
 /// `value` is a bit copy of the source, whose holder slots (read through `layout`'s
 /// program) still name the source's blocks without a credit; each is rewritten in place to a
-/// deep copy at `destination`, as `unique_copy` makes them, one visited map serving the whole value. Returns
+/// deep copy at `destination`, as `unique_copy` makes them, independently per holder. Returns
 /// 0, or [`STATUS_EXHAUSTED`] as `unique_copy` does; host exhaustion terminates environmentally.
 ///
 /// # Safety

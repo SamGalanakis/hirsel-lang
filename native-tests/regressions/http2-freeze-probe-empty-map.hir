@@ -1,0 +1,15 @@
+// expect: test
+// Permanent minimal holder-tree control for the HTTP/2 Session freeze regression.
+@test
+fn probe(t: Test) {
+  let original: Map[u32, u64] = core@1/map.empty()
+  let endpoint = unique original
+  let frozen = shared.freeze(take endpoint)
+  test.check(
+    t,
+    match shared.thaw(take frozen) {
+      Ok(value) => true,
+      Error(value) => false,
+    }
+  )
+}

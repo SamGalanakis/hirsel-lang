@@ -1,0 +1,91 @@
+// expect: test
+// MODE-2/MEM-11: a deep unique copy must detach repeated counted holders,
+// including the static empty HPACK tables used by a fresh Session.
+fn settings() -> Bytes {
+  b"\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\xfa"
+}
+
+@test
+fn session_freeze(t: Test) {
+  let original = std@1/http2.session(Server(), 65536)
+  let owned = unique original
+  let frozen = shared.freeze(take owned)
+  match shared.thaw(take frozen) {
+    Ok(value) => {
+      let mut endpoint = take value
+      test.check(t, std@1/http2.output(mut endpoint) == settings())
+    },
+    Error(value) => test.check(t, false),
+  }
+}
+
+@test
+fn drained_session(t: Test) {
+  let mut original = std@1/http2.session(Server(), 65536)
+  let _ = std@1/http2.output(mut original)
+  let frozen = shared.freeze(unique original)
+  match shared.thaw(take frozen) {
+    Ok(value) => {
+      let mut endpoint = take value
+      test.check(t, std@1/http2.output(mut endpoint) == b"")
+    },
+    Error(value) => test.check(t, false),
+  }
+}
+
+fn fields() -> List[std@1/hpack.Field] {
+  [
+    std@1/hpack.Field(name: b":method", value: b"GET", sensitive: false),
+    std@1/hpack.Field(name: b":scheme", value: b"https", sensitive: false),
+    std@1/hpack.Field(name: b":path", value: b"/", sensitive: false),
+    std@1/hpack.Field(name: b":authority", value: b"localhost", sensitive: false)
+  ]
+}
+
+@test
+fn populated_and_aliased_sessions(t: Test) {
+  let mut original = std@1/http2.session(Client(), 65536)
+  test.check(t, std@1/http2.open(mut original, fields(), true) == Ok(1))
+  let alias = copy original
+  let pair = (take original, take alias)
+  let frozen = shared.freeze(unique pair)
+  match shared.thaw(take frozen) {
+    Ok(value) => {
+      let (left, right) = take value
+      let mut a = take left
+      let mut b = take right
+      test.check(t, std@1/http2.output(mut a) == std@1/http2.output(mut b))
+      test.check(t, std@1/http2.open(mut a, fields(), true) == Ok(3))
+      test.check(t, std@1/http2.open(mut b, fields(), true) == Ok(3))
+    },
+    Error(value) => test.check(t, false),
+  }
+}
+
+@test
+fn multiple_roots_refuse_thaw(t: Test) {
+  let mut frozen = shared.freeze(unique std@1/http2.session(Server(), 65536))
+  {
+    let alias = copy frozen
+    frozen = match shared.thaw(take frozen) {
+      Error(value) => take value,
+      Ok(value) => {
+        test.check(t, false)
+        shared.freeze(take value)
+      },
+    }
+    shared.with(
+      alias,
+      fn(s: std@1/http2.Session) {
+        ()
+      }
+    )
+  }
+  test.check(
+    t,
+    match shared.thaw(take frozen) {
+      Ok(value) => true,
+      Error(value) => false,
+    }
+  )
+}

@@ -111,3 +111,5 @@ conformance/DROP/DROP-2-variant-payload-part-take-run.hir
 native-tests/regressions/http2-drain-frames.hir
 conformance/LANG/LANG-13-joined-view-consumers-run.hir
 conformance/LANG/LANG-13-or-pattern-after-guard-run.hir
+
+native-tests/regressions/http2-session-freeze.hir

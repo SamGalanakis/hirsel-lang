@@ -1,0 +1,36 @@
+// expect: test
+// Deep unique producers must satisfy the same holder-tree contract.
+@test
+fn copy_to_detaches(t: Test) {
+  let xs: List[u64] = [1u64, 2u64]
+  let pair = (copy xs, copy xs)
+  let fresh = copy_to(heap, pair)
+  let (left, right) = take fresh
+  let mut changed = take left
+  list.push(mut changed, 3u64)
+  test.check(t, list.len(changed) == 3 && list.len(right) == 2)
+  test.check(t, list.len(xs) == 2)
+}
+
+@test
+fn map_owned_key_detaches(t: Test) {
+  let xs: List[u64] = [1u64, 2u64]
+  let key = (copy xs, copy xs)
+  let mut entries: unique Map[(List[u64], List[u64]), u64] = core@1/map.empty()
+  core@1/map.upsert_with(
+    mut entries,
+    key,
+    fn() -> unique u64 uses {} {
+      7u64
+    },
+    fn(mut value: unique u64) -> () uses {} {
+      ()
+    }
+  )
+  let frozen = shared.freeze(take entries)
+  match shared.thaw(take frozen) {
+    Ok(value) => test.check(t, map.len(value) == 1),
+    Error(value) => test.check(t, false),
+  }
+  test.check(t, list.len(xs) == 2)
+}

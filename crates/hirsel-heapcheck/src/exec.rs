@@ -7058,16 +7058,15 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
 
     /// A partial String/Bytes view owns a fresh byte sequence containing exactly its
-    /// interval. Whole-block holders retain the graph copy's existing identity rules.
+    /// interval. Each holder owns its copy, even for equal intervals.
     fn copy_view_intervals(
         &mut self,
         f: &Frame,
         destination: (Option<Placement>, bool),
         layout: LayoutId,
         image: &mut Extent,
-        copies: &mut BTreeMap<AllocId, Ptr>,
-        views: &mut BTreeMap<(AllocId, u64, u64), Ptr>,
-    ) -> Checked<()> {
+    ) -> Checked<std::collections::BTreeSet<u64>> {
+        let mut copied = std::collections::BTreeSet::new();
         for offset in self.scan_cell_offsets_kind(image, layout, true, true)? {
             let Some(old) = image.cells.get(&offset).and_then(|c| self.block_target(c)) else {
                 return fail(V::ForgedPointer, "slice copy has no owner");
@@ -7083,10 +7082,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             {
                 continue;
             }
-            let key = (old.alloc, start, length);
-            let copy = if let Some(copy) = views.get(&key) {
-                *copy
-            } else {
+            let copy = {
                 let at = old
                     .offset
                     .checked_add(8)
@@ -7122,8 +7118,6 @@ impl<'p, S: Stage> Machine<'p, S> {
                     .get_mut(copy.alloc)
                     .extent
                     .write_bytes(0, &stored);
-                copies.insert(copy.alloc, copy);
-                views.insert(key, copy);
                 copy
             };
             image.put_cell(
@@ -7136,23 +7130,88 @@ impl<'p, S: Stage> Machine<'p, S> {
                 },
             );
             image.write_bytes(offset + 8, &8u64.to_le_bytes());
+            copied.insert(offset);
+        }
+        Ok(copied)
+    }
+
+    /// Copy one ordinary block per incoming holder, stopping at Shared roots.
+    /// The pending images keep this independent ledger walk iterative (MEM-3).
+    fn copy_tree_block(
+        &mut self,
+        f: &Frame,
+        destination: (Option<Placement>, bool, Option<bool>),
+        p: Ptr,
+        pending: &mut Vec<(Ptr, bool)>,
+    ) -> Checked<Ptr> {
+        let (placement, below, tracked) = destination;
+        let a = self.ledger.check(p)?;
+        if matches!(a.count, Some(Count::Root(_))) {
+            self.dup(p)?;
+            return Ok(p);
+        }
+        if !a.extent.resources.is_empty() {
+            return fail(V::TypeConfusion, "unique copy of a resource");
+        }
+        let (layout, size) = (a.layout.expect("live"), a.extent.len());
+        let image = a.extent.copy(0, size, None);
+        let sequence = matches!(
+            self.record(layout)?.kind,
+            LayoutKind::Sequence { .. }
+                | LayoutKind::SoaColumns { .. }
+                | LayoutKind::Sequential { .. }
+        ) || hirsel_lir::layout::keyed(&self.program.layouts, layout);
+        let copy = self.place_sized(f, placement, layout, size)?;
+        self.ledger.get_mut(copy.alloc).extent.place(0, image);
+        if tracked.unwrap_or(below && sequence) {
+            let a = self.ledger.get_mut(copy.alloc);
+            if a.count != Some(Count::Immortal) || !matches!(a.owner, Owner::Region(_)) {
+                return fail(V::Malformed, "a tracked copy outside an arena");
+            }
+            a.count = Some(Count::Arena { shared: false });
+        }
+        pending.push((copy, below && !self.untracked_below(layout)?));
+        Ok(Ptr {
+            offset: p.offset,
+            ..copy
+        })
+    }
+
+    fn copy_tree_image(
+        &mut self,
+        f: &Frame,
+        destination: (Option<Placement>, bool),
+        layout: LayoutId,
+        image: &mut Extent,
+        pending: &mut Vec<(Ptr, bool)>,
+    ) -> Checked<()> {
+        let (placement, below) = destination;
+        let intervals = self.copy_view_intervals(f, destination, layout, image)?;
+        let keyed = hirsel_lir::layout::keyed(&self.program.layouts, layout);
+        for offset in self.copy_owner_offsets(image, layout)? {
+            if intervals.contains(&offset) {
+                continue;
+            }
+            let Some(old) = image.cells.get(&offset).and_then(|c| self.block_target(c)) else {
+                return fail(V::ForgedPointer, "unique copy has no owner");
+            };
+            let tracks = below && (!keyed || offset == 0);
+            let new = self.copy_tree_block(f, (placement, tracks, None), old, pending)?;
+            image.set_cell(
+                offset,
+                Cell::Data {
+                    ptr: new,
+                    counted: true,
+                    borrow: None,
+                },
+            );
         }
         Ok(())
     }
 
-    /// Deep-copy every headered block reachable from `val` into its destination
-    /// through holder cells, each once, so sharing inside the graph is kept.
-    /// Static and immortal blocks are copied too: the copy is unique, so a
-    /// `unique` parameter writes it in place (MODE-2).
-    ///
-    /// An inline value (`Val::Image`) is copied in place: its holder cells
-    /// name deep copies with a credit each, sharing kept across the value.
-    ///
-    /// Into an arena, the root copy is a tracked arena block when `tracked`
-    /// says so, and every other List, Array, Map or Set block copy is unless
-    /// it is a Map's or Set's index or a SortedMap, Slots or environment holds
-    /// it, directly or not, on the path that first reached it (MEM-6,
-    /// `copy.rs::copy_graph`); `layout` is `val`'s.
+    /// A unique result exclusively owns each ordinary counted block (MODE-2).
+    /// Copy source diamonds per holder; preserve ordinary copy, shallow detach,
+    /// nested roots, destination tracking and the independent precharge walk.
     fn deep_copy(
         &mut self,
         f: &Frame,
@@ -7161,24 +7220,37 @@ impl<'p, S: Stage> Machine<'p, S> {
         layout: LayoutId,
         val: Val,
     ) -> Checked<Val> {
-        // Only a bounded arena tracks its Lists, as the runtime's copies do.
         let arena = match placement {
             Some(Placement::Fixed(StorageOwner::Arena(arena))) => self
                 .arena_of(f, arena)?
                 .is_some_and(|region| self.ledger.regions[region].budget.is_some()),
             _ => false,
         };
-        let mut callable = None;
-        let (root, mut image) = match val {
+        let mut pending = Vec::new();
+        let result = match val {
+            Val::Ptr(root) => Val::Ptr(self.copy_tree_block(
+                f,
+                (placement, arena, Some(tracked && arena)),
+                root,
+                &mut pending,
+            )?),
             Val::Callable {
                 code,
                 env: Some(root),
-            } => {
-                callable = Some(code);
-                (Some(root), None)
+            } => Val::Callable {
+                code,
+                env: Some(self.copy_tree_block(
+                    f,
+                    (placement, arena, Some(tracked && arena)),
+                    root,
+                    &mut pending,
+                )?),
+            },
+            Val::Image(mut image) => {
+                let below = arena && !self.untracked_below(layout)?;
+                self.copy_tree_image(f, (placement, below), layout, &mut image, &mut pending)?;
+                Val::Image(image)
             }
-            Val::Ptr(root) => (Some(root), None),
-            Val::Image(image) => (None, Some(image)),
             Val::Unit
             | Val::Bits { .. }
             | Val::Handle(_)
@@ -7186,171 +7258,16 @@ impl<'p, S: Stage> Machine<'p, S> {
             | Val::Callable { env: None, .. } => return Ok(val),
             _ => return fail(V::Unsupported, "unique copy of a non-block value"),
         };
-        let mut copies: BTreeMap<AllocId, Ptr> = BTreeMap::new();
-        let mut views = BTreeMap::new();
-        if let Some(image) = &mut image {
-            self.copy_view_intervals(
-                f,
-                (placement, arena && !self.untracked_below(layout)?),
-                layout,
-                image,
-                &mut copies,
-                &mut views,
-            )?;
-        }
-        // `Shared` roots the graph reaches, which gain a root per new holder
-        // instead of a copy: copying never traverses a frozen graph (MEM-11).
-        let mut kept: std::collections::BTreeSet<AllocId> = Default::default();
-        // Each block to copy, whether the sequences it reaches are tracked,
-        // and whether it is tracked itself.
-        let mut pending: Vec<(Ptr, bool, Option<bool>)> = root
-            .into_iter()
-            .map(|p| (p, arena, Some(tracked && arena)))
-            .collect();
-        if let Some(image) = &image {
-            let below = arena && !self.untracked_below(layout)?;
-            pending.extend(
-                image
-                    .cells
-                    .values()
-                    .filter_map(|c| self.block_target(c))
-                    .map(|p| (p, below, None)),
+        while let Some((copy, below)) = pending.pop() {
+            let a = self.ledger.get(copy.alloc);
+            let (layout, mut image) = (
+                a.layout.expect("live"),
+                a.extent.copy(0, a.extent.len(), None),
             );
-        }
-        while let Some((p, below, track)) = pending.pop() {
-            if copies.contains_key(&p.alloc) {
-                continue;
-            }
-            let a = self.ledger.check(p)?;
-            if matches!(a.count, Some(Count::Root(_))) {
-                copies.insert(p.alloc, Ptr { offset: 0, ..p });
-                kept.insert(p.alloc);
-                continue;
-            }
-            if !a.extent.resources.is_empty() {
-                return fail(V::TypeConfusion, "unique copy of a resource");
-            }
-            let (layout, size) = (a.layout.expect("live"), a.extent.len());
-            let mut image = a.extent.copy(0, size, None);
-            self.copy_view_intervals(
-                f,
-                (placement, below && !self.untracked_below(layout)?),
-                layout,
-                &mut image,
-                &mut copies,
-                &mut views,
-            )?;
-            let sequence = matches!(
-                self.record(layout)?.kind,
-                LayoutKind::Sequence { .. }
-                    | LayoutKind::SoaColumns { .. }
-                    | LayoutKind::Sequential { .. }
-            ) || hirsel_lir::layout::keyed(&self.program.layouts, layout);
-            let tracks = below && !self.untracked_below(layout)?;
-            // A Map's or Set's index is never tracked.
-            let keyed = hirsel_lir::layout::keyed(&self.program.layouts, layout);
-            pending.extend(
-                image
-                    .cells
-                    .iter()
-                    .filter_map(|(o, c)| {
-                        self.holder_target(c)
-                            .map(|c| (c, tracks && (!keyed || *o == 0), None))
-                    })
-                    .collect::<Vec<_>>(),
-            );
-            let copy = self.place_sized(f, placement, layout, size)?;
+            self.copy_tree_image(f, (placement, below), layout, &mut image, &mut pending)?;
             self.ledger.get_mut(copy.alloc).extent.place(0, image);
-            if track.unwrap_or(below && sequence) {
-                let a = self.ledger.get_mut(copy.alloc);
-                if a.count != Some(Count::Immortal) || !matches!(a.owner, Owner::Region(_)) {
-                    return fail(V::Malformed, "a tracked copy outside an arena");
-                }
-                a.count = Some(Count::Arena { shared: false });
-            }
-            copies.insert(p.alloc, copy);
         }
-        // Every holder cell of a copy names the copy of its target with a
-        // credit; a copy held more than once gains one count per extra holder.
-        let mut extra: Vec<Ptr> = Vec::new();
-        for (_, copy) in copies.iter().filter(|(old, _)| !kept.contains(old)) {
-            let cells: Vec<(u64, Ptr)> = self
-                .ledger
-                .get(copy.alloc)
-                .extent
-                .cells
-                .iter()
-                .filter_map(|(o, c)| self.holder_target(c).map(|p| (*o, p)))
-                .collect();
-            for (offset, old) in cells {
-                let new = copies[&old.alloc];
-                self.ledger.get_mut(copy.alloc).extent.set_cell(
-                    offset,
-                    Cell::Data {
-                        ptr: Ptr {
-                            offset: old.offset,
-                            ..new
-                        },
-                        counted: true,
-                        borrow: None,
-                    },
-                );
-                extra.push(new);
-            }
-        }
-        if let Some(image) = &mut image {
-            let cells: Vec<(u64, Ptr)> = image
-                .cells
-                .iter()
-                .filter_map(|(o, c)| self.block_target(c).map(|p| (*o, p)))
-                .collect();
-            for (offset, old) in cells {
-                let new = copies[&old.alloc];
-                image.cells.insert(
-                    offset,
-                    Cell::Data {
-                        ptr: Ptr {
-                            offset: old.offset,
-                            ..new
-                        },
-                        counted: true,
-                        borrow: None,
-                    },
-                );
-                extra.push(new);
-            }
-        }
-        // Each copy starts with one holder: the root's is the result, every
-        // other one's is its first holder cell. A kept root gains one per holder.
-        let mut seen: std::collections::BTreeSet<AllocId> =
-            root.iter().map(|r| copies[&r.alloc].alloc).collect();
-        if let Some(r) = root
-            && kept.contains(&r.alloc)
-        {
-            self.dup(r)?;
-        }
-        for p in extra {
-            if kept.contains(&p.alloc) || !seen.insert(p.alloc) {
-                self.dup(p)?;
-            }
-        }
-        Ok(match (root, image) {
-            (Some(root), _) => {
-                let copy = Ptr {
-                    offset: root.offset,
-                    ..copies[&root.alloc]
-                };
-                match callable {
-                    Some(code) => Val::Callable {
-                        code,
-                        env: Some(copy),
-                    },
-                    None => Val::Ptr(copy),
-                }
-            }
-            (None, Some(image)) => Val::Image(image),
-            (None, None) => unreachable!("a root or an image"),
-        })
+        Ok(result)
     }
 
     /// Each kept field of a reuse, as the construction wrote it at `at`, must

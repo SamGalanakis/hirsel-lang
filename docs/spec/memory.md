@@ -236,7 +236,10 @@ leaves it only as plain values, `unique` copies or copied nested roots. Dropping
 root frees the whole value. A value's roots are held until its cleanup point, as specified
 by [DROP-2](failure.md#drop-2-resources) (S-14). `shared.thaw(take s) -> Result[unique T,
 Shared[T]]` returns the value with ordinary counts restored when `s` is the last root, and
-gives `s` back otherwise. Freeze and thaw each walk the value and are allocation sites.
+gives `s` back otherwise. Freeze and thaw each walk the value and are allocation sites. A deep `unique`
+copy gives each ordinary counted holder its own storage, including equal empty
+containers and equal byte intervals. Repeated source holders therefore become a
+tree in the copy; nested `Shared` roots keep their independent root counts.
 
 A copied `Shared` root acquires an independent share and is global everywhere,
 including when read from a borrowed parameter, capture or field. An uncopied borrowed root

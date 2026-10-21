@@ -6,13 +6,13 @@
   },
   "sources": [
     {
-      "path": "http2-session-freeze.hir",
+      "path": "http2-freeze-probe-hpack.hir",
       "module": []
     }
   ],
   "dependencies": [
     {
-      "manifest": "../../../stdlib/std@1/hirsel.json",
+      "manifest": "../../stdlib/std@1/hirsel.json",
       "package": {
         "name": "std",
         "version": "1"
@@ -22,6 +22,6 @@
   ],
   "entry": {
     "module": [],
-    "name": "session_freeze"
+    "name": "probe"
   }
 }

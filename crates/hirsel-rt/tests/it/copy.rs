@@ -1,4 +1,4 @@
-//! Deep unique copy (`hirsel_rt_v2_unique_copy`): sharing inside the copied graph is kept,
+//! Deep unique copy (`hirsel_rt_v2_unique_copy`): every copied ordinary block has one holder,
 //! immortal blocks are copied like any other, the native stack stays constant over a deep chain,
 //! and a resource is an invariant fault; an inline value's holders are copied in place. A
 //! copy-on-write detach (`hirsel_rt_v2_detach`)
@@ -52,7 +52,7 @@ fn pair() -> &'static Layout {
 }
 
 #[test]
-fn a_diamond_keeps_its_sharing_and_every_copy_is_fresh() {
+fn a_source_diamond_becomes_an_exclusive_tree_and_every_copy_is_fresh() {
     let ctx = Ctx::diagnostic();
     let leaf = leaf(8);
     let pair = pair();
@@ -70,12 +70,16 @@ fn a_diamond_keeps_its_sharing_and_every_copy_is_fresh() {
     assert_eq!(layout_of(copied), layout_of(root));
     assert_eq!(read_u64(copied, 16), 7);
     let (left, right) = (child(copied, 0), child(copied, 8));
-    assert_eq!(left, right, "both slots name one copy of the shared leaf");
+    assert_ne!(
+        left, right,
+        "each copied holder must own its block exclusively"
+    );
+    assert_eq!((read_u64(right, 0), count(right)), (42, 1));
     assert_ne!(left, shared);
     assert_eq!(read_u64(left, 0), 42);
-    assert_eq!((count(copied), count(left)), (1, 2));
+    assert_eq!((count(copied), count(left)), (1, 1));
     assert_eq!(count(shared), 2, "the original keeps its holders");
-    assert_eq!(ctx.stats().live_blocks, live + 2);
+    assert_eq!(ctx.stats().live_blocks, live + 3);
 
     release(ctx.0, copied);
     assert_eq!(ctx.stats().live_blocks, live);
@@ -83,10 +87,10 @@ fn a_diamond_keeps_its_sharing_and_every_copy_is_fresh() {
     assert_eq!(ctx.stats().live_blocks, 0);
 }
 
-/// The visited map keeps its first blocks inline; a block first copied after it has spilled
-/// is still copied once, whichever store finds it.
+/// Repeated source holders far below the root must be detached too, without
+/// changing the source's three credits.
 #[test]
-fn sharing_found_past_the_inline_visited_map_is_kept() {
+fn repeated_holders_deep_in_a_graph_get_independent_copies() {
     let ctx = Ctx::diagnostic();
     let (leaf, pair) = (leaf(8), pair());
     let shared = alloc_block(ctx.0, leaf, 8);
@@ -122,11 +126,15 @@ fn sharing_found_past_the_inline_visited_map_is_kept() {
     let copy_of_shared = child(p10, 8);
     assert_ne!(copy_of_shared, shared);
     assert_eq!(read_u64(copy_of_shared, 0), 9);
-    assert_eq!(child(p11, 8), copy_of_shared);
-    assert_eq!(child(p11, 0), copy_of_shared);
-    assert_eq!(count(copy_of_shared), 3);
-    // The pairs, their own leaves and one shared leaf.
-    assert_eq!(ctx.stats().live_blocks, live + 2 * links as u64 - 1);
+    assert_ne!(child(p11, 8), copy_of_shared);
+    assert_ne!(child(p11, 0), copy_of_shared);
+    assert_ne!(child(p11, 0), child(p11, 8));
+    for leaf in [copy_of_shared, child(p11, 0), child(p11, 8)] {
+        assert_eq!((read_u64(leaf, 0), count(leaf)), (9, 1));
+    }
+    assert_eq!(count(shared), 3, "source diamond is unchanged");
+    // The pairs, their own leaves and three independent copies of shared.
+    assert_eq!(ctx.stats().live_blocks, live + 2 * links as u64 + 1);
     release(ctx.0, copied);
     release(ctx.0, root);
     assert_eq!(ctx.stats().live_blocks, 0);
@@ -225,8 +233,10 @@ fn tags_and_element_loops_select_the_holders_copied() {
     unsafe { hirsel_rt_v2_dup(ctx.0, some) };
     let copied = copy(ctx.0, items);
     let (a, b, c) = (child(copied, 8), child(copied, 16), child(copied, 24));
-    assert_eq!(a, c);
+    assert_ne!(a, c);
     assert_ne!(a, some);
+    assert_ne!(child(a, 8), child(c, 8));
+    assert_eq!((count(a), count(c), count(some)), (1, 1, 2));
     assert_ne!(child(a, 8), child(some, 8));
     assert_eq!(
         read_u64(b, 8),
@@ -358,7 +368,7 @@ fn a_detach_copies_the_block_alone_and_shares_each_active_child() {
 }
 
 #[test]
-fn an_inline_value_s_holders_are_copied_in_place_keeping_their_sharing() {
+fn an_inline_value_s_holders_are_copied_independently() {
     pair();
     let ctx = Ctx::diagnostic();
     let leaf = leaf(8);
@@ -378,9 +388,13 @@ fn an_inline_value_s_holders_are_copied_in_place_keeping_their_sharing() {
     };
     assert_eq!(status, 0);
     let (left, right) = (value[0] as *mut Header, value[1] as *mut Header);
-    assert_eq!(left, right, "both slots name one copy of the shared leaf");
+    assert_ne!(
+        left, right,
+        "each copied holder must own its block exclusively"
+    );
+    assert_eq!((read_u64(right, 0), count(right)), (42, 1));
     assert_ne!(left, shared);
-    assert_eq!((read_u64(left, 0), count(left), value[2]), (42, 2, 7));
+    assert_eq!((read_u64(left, 0), count(left), value[2]), (42, 1, 7));
     assert_eq!(count(shared), 2, "the source keeps its holders");
     release(ctx.0, left);
     release(ctx.0, right);
@@ -508,7 +522,7 @@ fn graph_copies_use_the_destination_and_outlive_source_arenas() {
             );
             assert_eq!(count(first), COUNT_IMMORTAL);
             assert_eq!(count(child(second, 0)), COUNT_IMMORTAL);
-            assert_eq!(child(second, 0), child(second, 8));
+            assert_ne!(child(second, 0), child(second, 8));
             assert_ne!(child(first, 0), child(second, 0));
             assert_eq!(
                 ctx.stats().live_blocks,
@@ -521,8 +535,8 @@ fn graph_copies_use_the_destination_and_outlive_source_arenas() {
             assert_eq!(hirsel_rt_v2_region_exit(ctx.0, outer.as_mut_ptr(), 0, 0), 0);
             assert_eq!(read_u64(escaped, 16), 7);
             assert_eq!(read_u64(child(escaped, 0), 0), 42);
-            assert_eq!(child(escaped, 0), child(escaped, 8));
-            assert_eq!(count(child(escaped, 0)), 2);
+            assert_ne!(child(escaped, 0), child(escaped, 8));
+            assert_eq!(count(child(escaped, 0)), 1);
             release(ctx.0, escaped);
             assert_eq!(ctx.stats().live_blocks, 0);
             assert_eq!(ctx.stats().active_regions, 0);
@@ -573,7 +587,11 @@ fn a_bounded_copy_charges_every_reference_before_copying() {
             let remaining = (*arena.as_ptr()).remaining;
             if copied {
                 assert_eq!((status, remaining), (0, 0));
-                assert_eq!(child(out, 0), child(out, 8), "the copy keeps its sharing");
+                assert_ne!(
+                    child(out, 0),
+                    child(out, 8),
+                    "the unique copy detaches every holder"
+                );
             } else {
                 assert_eq!((status, remaining), (hirsel_rt::STATUS_EXHAUSTED, 39));
                 assert!(out.is_null());
@@ -684,7 +702,7 @@ fn a_short_byte_view_copies_only_its_interval() {
 }
 
 #[test]
-fn copied_views_distinguish_intervals_and_share_only_equal_intervals() {
+fn copied_views_distinguish_intervals_and_detach_equal_intervals() {
     let steps = (0..4)
         .rev()
         .map(|i| {
@@ -726,9 +744,9 @@ fn copied_views_distinguish_intervals_and_share_only_equal_intervals() {
         },
         0
     );
-    assert_eq!(values[0].owner, values[2].owner);
+    assert_ne!(values[0].owner, values[2].owner);
     assert_ne!(values[0].owner, values[1].owner);
-    assert_eq!(count(values[0].owner), 2);
+    assert_eq!(count(values[0].owner), 1);
     for (view, expected) in
         values
             .iter()
@@ -894,4 +912,33 @@ fn single_utf8_view_copies_keep_aliases_and_precharge_bounded_arenas() {
             assert_eq!(ctx.stats().live_blocks, 0);
         }
     }
+}
+
+#[test]
+fn a_unique_copy_preserves_nested_shared_root_boundaries() {
+    let root_layout = with_flags(leaf(8), hirsel_rt::LAYOUT_FROZEN);
+    let pair = layout(
+        16,
+        2,
+        None,
+        vec![
+            step(hirsel_rt::STEP_RELEASE_ROOT, 1, 8),
+            step(hirsel_rt::STEP_RELEASE_ROOT, 0, 0),
+        ],
+    );
+    let ctx = Ctx::diagnostic();
+    let nested = alloc_block(ctx.0, root_layout, 8);
+    write_u64(nested, 0, 42);
+    unsafe { hirsel_rt::roots::hirsel_rt_v2_root_dup(ctx.0, nested) };
+    let source = alloc_block(ctx.0, pair, 16);
+    write_ref(source, 0, nested);
+    write_ref(source, 8, nested);
+    let copied = copy(ctx.0, source);
+    assert_ne!(copied, source);
+    assert_eq!((child(copied, 0), child(copied, 8)), (nested, nested));
+    assert_eq!(unsafe { hirsel_rt::roots::count(&*ctx.0, nested) }, 4);
+    release(ctx.0, copied);
+    assert_eq!(unsafe { hirsel_rt::roots::count(&*ctx.0, nested) }, 2);
+    release(ctx.0, source);
+    assert_eq!(ctx.stats().live_blocks, 0);
 }
