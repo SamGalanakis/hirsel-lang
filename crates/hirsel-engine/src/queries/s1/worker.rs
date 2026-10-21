@@ -79,7 +79,10 @@ pub(crate) trait TirSource: Sync {
     fn cached_constant(&self, _: &DefPath) -> Option<EvaluatedConstant> {
         None
     }
-    fn cached_lowering(&self, _: &DefPath) -> Option<(DefinitionRef, Reads, DepthEvidence<Span>)> {
+    fn cached_lowering(
+        &self,
+        _: &DefPath,
+    ) -> Option<(QueryOutput<DefinitionRef>, Reads, DepthEvidence<Span>)> {
         None
     }
     fn constant_instance(
@@ -182,6 +185,8 @@ struct Lowered {
     reads: Reads,
     depth: DepthEvidence<Span>,
     registrations: Vec<StagedRegistration>,
+    diagnostics: Vec<Diagnostic>,
+    dependencies: Vec<SignatureDependency>,
 }
 
 pub(crate) struct TaskWorker<'a, S: TirSource + ?Sized> {
@@ -245,6 +250,24 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         // complete read/depth/registration replay; helper TIR is task-local.
         self.lowered.clear();
         product
+    }
+    pub(super) fn lower_root(
+        &mut self,
+        path: &DefPath,
+    ) -> DependencyProduct<(QueryOutput<DefinitionRef>, DepthEvidence<Span>)> {
+        self.limit = None;
+        self.phase = Some(QueryKind::Lower);
+        self.stack.begin_requests();
+        let product = self.capture(|worker| {
+            worker.implementation(path);
+            worker.lower_output(path)
+        });
+        let depth = self.stack.finish_requests(self.depth_limit());
+        self.lowered.clear();
+        DependencyProduct {
+            result: product.result.map(|output| (output, depth)),
+            reads: product.reads,
+        }
     }
     fn merge(&mut self, reads: &Reads) {
         for frame in &mut self.reads {
@@ -810,13 +833,16 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         }
     }
     pub(super) fn lower(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
-        if let Some((definition, reads, depth)) = self.source.cached_lowering(path) {
+        self.lower_output(path).map(|output| output.value)
+    }
+    fn lower_output(&mut self, path: &DefPath) -> Result<QueryOutput<DefinitionRef>, QueryError> {
+        if let Some((output, reads, depth)) = self.source.cached_lowering(path) {
             self.merge(&reads);
-            self.validate_lowered(path, &definition)?;
+            self.validate_lowered(path, &output.value)?;
             self.stack
                 .replay_requests(&depth)
                 .map_err(|site| self.overflow(site))?;
-            return Ok(definition);
+            return Ok(output);
         }
         if let Some(hit) = self.lowered.get(path).cloned() {
             self.stack
@@ -824,7 +850,11 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 .map_err(|site| self.overflow(site))?;
             self.merge(&hit.reads);
             self.registrations.extend(hit.registrations.iter().cloned());
-            return Ok(hit.definition.clone());
+            return Ok(QueryOutput {
+                value: hit.definition.clone(),
+                diagnostics: hit.diagnostics.clone(),
+                dependencies: hit.dependencies.clone(),
+            });
         }
         self.stack.begin_requests();
         let registration_start = self.registrations.len();
@@ -850,25 +880,34 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 prepare_values(&types, &body.analyzed.value, &staged, &signature, worker)?
             };
             let inputs = worker.source.inputs();
-            let definition = inputs
-                .lowering
-                .lower(
-                    &types,
-                    &inputs.memo,
-                    &body.analyzed.value,
-                    &Comptime {
-                        materialized,
-                        staged,
-                    },
-                    &signature,
-                )?
-                .value;
-            worker.validate_lowered(path, &definition)?;
-            Ok(Arc::new(definition))
+            let output = inputs.lowering.lower(
+                &types,
+                &inputs.memo,
+                &body.analyzed.value,
+                &Comptime {
+                    materialized,
+                    staged,
+                },
+                &signature,
+            )?;
+            worker.validate_lowered(path, &output.value)?;
+            if has_errors(&output.diagnostics) {
+                return Err(QueryError::Diagnostics(output.diagnostics));
+            }
+            let mut dependencies = body.dependencies.clone();
+            dependencies.extend(body.dependencies.iter().cloned());
+            for dependency in &output.dependencies {
+                worker.record(
+                    ReadKey::Signature(DefId::intern(&dependency.definition)),
+                    dependency.fingerprint,
+                );
+            }
+            dependencies.extend(output.dependencies);
+            Ok((Arc::new(output.value), output.diagnostics, dependencies))
         });
         let depth = self.stack.finish_requests(self.depth_limit());
         self.merge(&product.reads);
-        let definition = product.result?;
+        let (definition, diagnostics, dependencies) = product.result?;
         self.lowered.insert(
             path.clone(),
             Arc::new(Lowered {
@@ -876,9 +915,15 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 reads: product.reads,
                 depth,
                 registrations: self.registrations[registration_start..].to_vec(),
+                diagnostics: diagnostics.clone(),
+                dependencies: dependencies.clone(),
             }),
         );
-        Ok(definition)
+        Ok(QueryOutput {
+            value: definition,
+            diagnostics,
+            dependencies,
+        })
     }
 }
 impl<S: TirSource + ?Sized> ComptimeValueSource for TaskWorker<'_, S> {

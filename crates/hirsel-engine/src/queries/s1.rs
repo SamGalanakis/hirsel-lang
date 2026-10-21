@@ -4,6 +4,7 @@
 //! returns products for its caller to merge, including when evaluation fails.
 use super::*;
 mod source;
+pub use source::LoweringResult;
 mod worker;
 use hirsel_tir::{DefinitionRef, MaterializedRef, TirProvider};
 use hirsel_types::GenericArgument;

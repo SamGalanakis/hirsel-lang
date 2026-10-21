@@ -904,3 +904,74 @@ fn image_releases_unrecorded_files_after_parallel_constant_publication() {
         );
     });
 }
+
+#[test]
+fn frozen_lowering_frontier_replays_imaged_helper_output_and_receipts() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let image = library_image(
+            &f,
+            "pub fn value(x:u64)->u64{x+1u64}\npub const BASE:u64=comptime value(1u64)\n",
+        )
+        .unwrap();
+        let client = f.program("worker_image", CLIENT, &f.0.join("lib.json"), "lib");
+        let path = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+            package: package("lib"),
+            modules: vec!["lib".into()],
+            name: "value".into(),
+        });
+        for jobs in [1, 2, 8] {
+            let mut cached = load(&client, &StdImages::of(vec![image.clone()]));
+            let mut fresh = load(&client, &StdImages::none());
+            assert!(cached.engine.imaged(&package("lib")));
+            let expected = fresh.engine.lower_to_tir(&path).unwrap();
+            let outcomes = cached.engine.lower_definition_outcomes(
+                vec![path.clone(), path.clone()],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            for outcome in outcomes {
+                assert_eq!(outcome.definition, path);
+                assert_eq!(outcome.phase, Some(QueryKind::Lower));
+                assert!(outcome.limit.is_none());
+                let actual = outcome.result.unwrap();
+                assert_eq!(actual.dependencies, expected.dependencies);
+                assert_eq!(actual.diagnostics, expected.diagnostics);
+                let actual_text = canonical_ids(
+                    cached.engine.types(),
+                    || serde_json::to_vec(actual.value.as_ref()).unwrap(),
+                    format!("{:?}", actual.value),
+                );
+                let expected_text = canonical_ids(
+                    fresh.engine.types(),
+                    || serde_json::to_vec(expected.value.as_ref()).unwrap(),
+                    format!("{:?}", expected.value),
+                );
+                assert_eq!(
+                    placed(&cached.engine.sources, actual_text),
+                    placed(&fresh.engine.sources, expected_text)
+                );
+                assert!(!outcome.reads.is_empty());
+                assert!(outcome.reads.iter().any(|(key, _)| *key
+                    == memo::ReadKey::ExecutedBody(hirsel_syntax::DefId::intern(&path))));
+                assert!(
+                    outcome
+                        .reads
+                        .iter()
+                        .any(|(key, _)| matches!(key, memo::ReadKey::ValidationUniverse(_)))
+                );
+            }
+            for kind in [
+                QueryKind::Resolve,
+                QueryKind::Check,
+                QueryKind::Modes,
+                QueryKind::Lower,
+            ] {
+                assert_eq!(
+                    cached.engine.recompute_count(&path, kind),
+                    0,
+                    "jobs={jobs} {kind:?}"
+                );
+            }
+        }
+    });
+}

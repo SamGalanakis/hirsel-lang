@@ -1326,3 +1326,247 @@ fn frozen_frontier_releases_completed_typed_bodies_before_next_root() {
         }
     });
 }
+
+#[test]
+fn frozen_lowering_frontier_matches_scalar_for_nonconstant_comptime_and_edits() {
+    fn text(
+        engine: &QueryEngine,
+        value: Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError>,
+    ) -> Result<(String, String, Vec<SignatureDependency>), String> {
+        value
+            .map(|output| {
+                let cx = hirsel_proof_export::Cx::new(
+                    std::rc::Rc::new(|_| hirsel_proof_export::Location::unknown()),
+                    engine.types().clone(),
+                );
+                (
+                    hirsel_codec::to_text_with(
+                        &hirsel_proof_export::DefinitionSection {
+                            path: output.value.path.path().clone(),
+                            locations: vec![],
+                            tir: (*output.value).clone(),
+                            tir_digest: hirsel_syntax::ContentHash::default(),
+                            references: output.dependencies.clone(),
+                            operations: vec![],
+                            obligations: vec![],
+                        },
+                        cx,
+                    )
+                    .0,
+                    placed_evidence(&engine.sources, format!("{:?}", output.diagnostics)),
+                    output.dependencies,
+                )
+            })
+            .map_err(|error| placed_evidence(&engine.sources, format!("{error:?}")))
+    }
+    with_compiler_stack(|| {
+        let source = "const SEED:u32=7u32\nfn helper()->u32{SEED}\nfn A()->u32{comptime helper()}\nfn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nfn B()->u64{comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}}\nfn BAD()->u32{comptime missing()}\n";
+        let paths = vec![path("B"), path("A"), path("BAD"), path("A")];
+        for jobs in [1, 2, 8] {
+            let mut candidate = engine(source);
+            for revision in [
+                source.to_owned(),
+                source.replace("7u32", "23u32"),
+                source.replace("missing()", "helper()"),
+                source.to_owned(),
+            ] {
+                let file = candidate
+                    .sources
+                    .add("comptime.hir", revision.clone())
+                    .unwrap();
+                candidate.parse_file(file, &default_context()).unwrap();
+                let mut control = engine(&revision);
+                let expected: Vec<_> = paths
+                    .iter()
+                    .map(|path| {
+                        let value = control.lower_to_tir(path);
+                        text(&control, value)
+                    })
+                    .collect();
+                assert!(
+                    expected[0].is_ok() && expected[1].is_ok(),
+                    "expected accepted nonconstant roots: {expected:?}"
+                );
+                let actual = candidate
+                    .lower_definition_outcomes(paths.clone(), hirsel_intern::jobs::Jobs::new(jobs));
+                assert_eq!(
+                    actual
+                        .iter()
+                        .map(|outcome| &outcome.definition)
+                        .collect::<Vec<_>>(),
+                    paths.iter().collect::<Vec<_>>()
+                );
+                for outcome in &actual {
+                    assert!(!outcome.reads.is_empty());
+                    assert!(outcome.limit.is_none());
+                    assert_eq!(
+                        outcome.phase,
+                        Some(if outcome.result.is_ok() {
+                            QueryKind::Lower
+                        } else {
+                            QueryKind::Resolve
+                        })
+                    );
+                    if outcome.definition == path("A") {
+                        for name in ["A", "helper", "SEED"] {
+                            assert!(
+                                outcome.reads.iter().any(|(key, _)| *key
+                                    == memo::ReadKey::ExecutedBody(hirsel_syntax::DefId::intern(
+                                        &path(name)
+                                    ))),
+                                "missing execution read {name}"
+                            );
+                        }
+                    }
+                }
+                let actual: Vec<_> = actual
+                    .into_iter()
+                    .map(|outcome| text(&candidate, outcome.result))
+                    .collect();
+                assert_eq!(actual, expected, "jobs={jobs} source={revision}");
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_lowering_frontier_keeps_lower_warnings_and_current_hit_metadata() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    struct WarningLower {
+        inner: Arc<dyn LoweringPhase>,
+        guard: Arc<AtomicBool>,
+    }
+    impl LoweringPhase for WarningLower {
+        fn lower(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            comptime: &Comptime,
+            signature: &hirsel_types::Signature,
+        ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+            if self.guard.load(Ordering::Relaxed) {
+                assert_eq!(
+                    std::thread::current().name(),
+                    Some("hirsel-job"),
+                    "nonconstant root fell back to caller lowering"
+                );
+            }
+            let mut output = self.inner.lower(t, m, body, comptime, signature)?;
+            let mut warning = hirsel_diag::Diagnostic::error(
+                hirsel_diag::RuleId::of("LANG-1"),
+                body.typed.syntax.item.name_span,
+                "lowering fixture warning",
+            );
+            warning.severity = hirsel_diag::Severity::Warning;
+            output.diagnostics.push(warning);
+            Ok(output)
+        }
+        fn lower_evaluation(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
+            signature: &hirsel_types::Signature,
+            expression: hirsel_syntax::ExprId,
+            result: hirsel_types::TypeId,
+            constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
+        ) -> Result<hirsel_tir::Definition, QueryError> {
+            if self.guard.load(Ordering::Relaxed) {
+                assert_eq!(
+                    std::thread::current().name(),
+                    Some("hirsel-job"),
+                    "nonconstant evaluation fell back to caller"
+                );
+            }
+            self.inner
+                .lower_evaluation(t, m, body, staged, signature, expression, result, constants)
+        }
+        fn entry_body(&self) -> hirsel_tir::BodyId {
+            self.inner.entry_body()
+        }
+    }
+    let make = || {
+        let mut adapters = compiler_adapters();
+        let guard = Arc::new(AtomicBool::new(false));
+        adapters.lowering = Some(Arc::new(WarningLower {
+            inner: adapters.lowering.take().unwrap(),
+            guard: guard.clone(),
+        }));
+        let mut engine = QueryEngine::new(default_environment(), adapters);
+        let file = engine
+            .sources
+            .add(
+                "comptime.hir",
+                "const SEED:u32=7u32\nfn A()->u32{comptime SEED}\n".into(),
+            )
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        (engine, guard)
+    };
+    with_compiler_stack(|| {
+        for jobs in [1, 2, 8] {
+            for warm in [false, true] {
+                let (mut control, _) = make();
+                let expected = control.lower_to_tir(&path("A")).unwrap();
+                assert_eq!(expected.diagnostics.len(), 1);
+                assert_eq!(
+                    expected.diagnostics[0].severity,
+                    hirsel_diag::Severity::Warning
+                );
+                let scalar_reads = control.memo_reads(&path("A"), QueryKind::Lower).unwrap();
+                let (mut candidate, guard) = make();
+                if warm {
+                    assert_eq!(
+                        candidate
+                            .lower_to_tir(&path("A"))
+                            .unwrap()
+                            .diagnostics
+                            .len(),
+                        1
+                    );
+                }
+                guard.store(jobs > 1, Ordering::Relaxed);
+                let outcomes = candidate.lower_definition_outcomes(
+                    vec![path("A"), path("A")],
+                    hirsel_intern::jobs::Jobs::new(jobs),
+                );
+                for outcome in outcomes {
+                    assert_eq!(outcome.phase, Some(QueryKind::Lower));
+                    assert!(outcome.limit.is_none());
+                    let output = outcome.result.unwrap();
+                    assert_eq!(output.dependencies, expected.dependencies);
+                    assert_eq!(
+                        placed_evidence(&candidate.sources, format!("{:?}", output.diagnostics)),
+                        placed_evidence(&control.sources, format!("{:?}", expected.diagnostics))
+                    );
+                    for (key, value) in scalar_reads.iter() {
+                        if matches!(
+                            key,
+                            memo::ReadKey::ValidationView(_)
+                                | memo::ReadKey::UniverseErrors
+                                | memo::ReadKey::FirstHeap
+                        ) {
+                            continue;
+                        }
+                        assert_eq!(
+                            outcome.reads.get(key),
+                            Some(*value),
+                            "jobs={jobs} warm={warm} missing {key:?}"
+                        );
+                    }
+                    assert!(
+                        outcome
+                            .reads
+                            .iter()
+                            .any(|(key, _)| matches!(key, memo::ReadKey::ValidationUniverse(_)))
+                    );
+                }
+            }
+        }
+    });
+}

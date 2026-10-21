@@ -7,6 +7,35 @@ use crate::memo::{DepthEvidence, MemoGraph};
 use crate::snapshot::SourceContext;
 use std::sync::Mutex;
 
+/// One lowering root with its captured operational provenance and complete
+/// execution reads. Publication of its TIR remains the caller's policy.
+#[derive(Clone, Debug)]
+pub struct LoweringResult {
+    pub definition: DefPath,
+    pub result: Result<QueryOutput<DefinitionRef>, QueryError>,
+    pub phase: Option<QueryKind>,
+    pub limit: Option<hirsel_tir::ToolingLimit>,
+    pub reads: Arc<Reads>,
+    pub depth: Option<DepthEvidence<Span>>,
+}
+#[derive(Clone, Copy)]
+enum RootKind {
+    Constant,
+    Lower,
+}
+#[derive(Clone)]
+enum RootValue {
+    Constant(hirsel_tir::Materialized),
+    Lowered(QueryOutput<DefinitionRef>, DepthEvidence<Span>),
+}
+#[derive(Clone)]
+struct RootOutcome {
+    definition: DefPath,
+    result: Result<RootValue, QueryError>,
+    phase: Option<QueryKind>,
+    limit: Option<hirsel_tir::ToolingLimit>,
+    reads: Arc<Reads>,
+}
 pub(crate) struct FrozenSource<'a> {
     pub(crate) inputs: TaskInputs,
     pub(crate) items: &'a BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
@@ -464,7 +493,7 @@ impl TirSource for FrozenSource<'_> {
     fn cached_lowering(
         &self,
         path: &DefPath,
-    ) -> Option<(DefinitionRef, Reads, DepthEvidence<Span>)> {
+    ) -> Option<(QueryOutput<DefinitionRef>, Reads, DepthEvidence<Span>)> {
         if let Some(entry) = self
             .lowered
             .get(&DefId::intern(path))
@@ -476,7 +505,7 @@ impl TirSource for FrozenSource<'_> {
                 DepthEvidence::leaf(crate::memo::dependency_limit(self.inputs.limits.call_depth))
             });
             if depth.limit() == crate::memo::dependency_limit(self.inputs.limits.call_depth) {
-                return Some((output.value.clone(), entry.reads().clone(), depth));
+                return Some(((*output).clone(), entry.reads().clone(), depth));
             }
         }
         let record = self.image(path)?.record(DefId::intern(path))?;
@@ -487,7 +516,11 @@ impl TirSource for FrozenSource<'_> {
             return None;
         }
         Some((
-            lowering.definition.clone(),
+            QueryOutput {
+                value: lowering.definition.clone(),
+                diagnostics: vec![],
+                dependencies: lowering.dependencies.clone(),
+            },
             lowering.execution.clone(),
             lowering.depth.clone(),
         ))
@@ -625,9 +658,8 @@ impl QueryEngine {
 
 impl QueryEngine {
     /// Materialize a constant frontier in parallel, returning results in input
-    /// order. Ordinary roots use frozen workers; roots demanding new syntax or
-    /// generated registrations are retried from their root on the serial
-    /// coordinator until those source callbacks are available in workers.
+    /// order. Frozen workers resume staged/generated registration rounds;
+    /// unavailable syntax or inconsistent receipts retain whole-root retry.
     /// Every returned worker product is checked against current reads before
     /// publication, including after a preceding root changed registrations.
     pub fn materialize_values(
@@ -646,11 +678,56 @@ impl QueryEngine {
         definitions: Vec<DefPath>,
         jobs: hirsel_intern::jobs::Jobs,
     ) -> Vec<MaterializationResult> {
+        self.s1_root_outcomes(definitions, jobs, RootKind::Constant)
+            .into_iter()
+            .map(|outcome| MaterializationResult {
+                definition: outcome.definition,
+                result: outcome.result.map(|value| match value {
+                    RootValue::Constant(value) => value,
+                    _ => unreachable!("constant task"),
+                }),
+                phase: outcome.phase,
+                limit: outcome.limit,
+                reads: outcome.reads,
+            })
+            .collect()
+    }
+    /// Lower independent roots on the same frozen S1 schedule. Compile-time
+    /// values, staged declarations and generated instances use the same rounds
+    /// and ordered failure publication as constant materialization.
+    pub fn lower_definition_outcomes(
+        &mut self,
+        definitions: Vec<DefPath>,
+        jobs: hirsel_intern::jobs::Jobs,
+    ) -> Vec<LoweringResult> {
+        self.s1_root_outcomes(definitions, jobs, RootKind::Lower)
+            .into_iter()
+            .map(|outcome| {
+                let (result, depth) = match outcome.result {
+                    Ok(RootValue::Lowered(output, depth)) => (Ok(output), Some(depth)),
+                    Err(error) => (Err(error), None),
+                    _ => unreachable!("lower task"),
+                };
+                LoweringResult {
+                    definition: outcome.definition,
+                    result,
+                    depth,
+                    phase: outcome.phase,
+                    limit: outcome.limit,
+                    reads: outcome.reads,
+                }
+            })
+            .collect()
+    }
+    fn s1_root_outcomes(
+        &mut self,
+        definitions: Vec<DefPath>,
+        jobs: hirsel_intern::jobs::Jobs,
+        kind: RootKind,
+    ) -> Vec<RootOutcome> {
         let mut selections = BTreeMap::new();
         loop {
-            if let Some(results) =
-                self.materialize_values_round(&definitions, jobs, &mut selections)
-            {
+            if let Some(results) = self.s1_roots_round(&definitions, jobs, kind, &mut selections) {
                 if let Some(last) = results.last() {
                     self.last_phase = last.phase;
                     self.last_comptime_limit = last.limit.clone();
@@ -662,12 +739,22 @@ impl QueryEngine {
             }
         }
     }
-    fn scalar_materialization_outcome(&mut self, path: &DefPath) -> MaterializationResult {
+    fn scalar_root_outcome(&mut self, path: &DefPath, kind: RootKind) -> RootOutcome {
         self.last_phase = None;
         self.unavailable = None;
         self.last_comptime_limit = None;
         self.execution_stack.push(ReadsBuilder::new());
-        let mut result = self.materialize_value(path);
+        let mut result = match kind {
+            RootKind::Constant => self.materialize_value(path).map(RootValue::Constant),
+            RootKind::Lower => self.lower_to_tir(path).map(|output| {
+                let depth = self
+                    .lowered
+                    .get(&DefId::intern(path))
+                    .and_then(|entry| entry.depth.clone())
+                    .unwrap_or_else(|| DepthEvidence::leaf(self.depth_limit()));
+                RootValue::Lowered(output, depth)
+            }),
+        };
         let reads = self
             .execution_stack
             .pop()
@@ -686,7 +773,7 @@ impl QueryEngine {
         } else {
             self.unavailable.or(self.last_phase)
         };
-        MaterializationResult {
+        RootOutcome {
             definition: path.clone(),
             result,
             phase,
@@ -694,21 +781,23 @@ impl QueryEngine {
             reads: Arc::new(reads),
         }
     }
-    fn materialize_values_round(
+    fn s1_roots_round(
         &mut self,
         definitions: &[DefPath],
         jobs: hirsel_intern::jobs::Jobs,
+        kind: RootKind,
         selections: &mut BTreeMap<DefPath, hirsel_diag::Label>,
-    ) -> Option<Vec<MaterializationResult>> {
+    ) -> Option<Vec<RootOutcome>> {
         if definitions.is_empty() {
             return Some(vec![]);
         }
         self.note_environment();
         self.prepare_materialization_environment();
-        let mut results: Vec<Option<MaterializationResult>> = vec![None; definitions.len()];
+        let mut results: Vec<Option<RootOutcome>> = vec![None; definitions.len()];
         let mut tasks = vec![];
         for (index, definition) in definitions.iter().enumerate() {
-            if let Some(value) = self.constant_values.get(definition).cloned()
+            if matches!(kind, RootKind::Constant)
+                && let Some(value) = self.constant_values.get(definition).cloned()
                 && (self.verify == Verify::Off
                     || value
                         .executed
@@ -716,9 +805,9 @@ impl QueryEngine {
                         .any(|(key, _)| matches!(key, ReadKey::ValidationUniverse(_))))
                 && self.execution_valid(definition, &value.executed)
             {
-                results[index] = Some(MaterializationResult {
+                results[index] = Some(RootOutcome {
                     definition: definition.clone(),
-                    result: Ok(value.value),
+                    result: Ok(RootValue::Constant(value.value)),
                     phase: Some(QueryKind::Lower),
                     limit: None,
                     reads: Arc::new(value.executed),
@@ -738,7 +827,7 @@ impl QueryEngine {
                 return Some(
                     definitions
                         .iter()
-                        .map(|path| self.scalar_materialization_outcome(path))
+                        .map(|path| self.scalar_root_outcome(path, kind))
                         .collect(),
                 );
             }
@@ -749,7 +838,24 @@ impl QueryEngine {
             |_| 1,
             || TaskWorker::new(&source, &shared),
             |worker, (index, path)| {
-                let product = worker.root(&path);
+                let product = match kind {
+                    RootKind::Constant => {
+                        let product = worker.root(&path);
+                        DependencyProduct {
+                            result: product.result.map(RootValue::Constant),
+                            reads: product.reads,
+                        }
+                    }
+                    RootKind::Lower => {
+                        let product = worker.lower_root(&path);
+                        DependencyProduct {
+                            result: product
+                                .result
+                                .map(|(output, depth)| RootValue::Lowered(output, depth)),
+                            reads: product.reads,
+                        }
+                    }
+                };
                 (
                     index,
                     path,
@@ -910,7 +1016,7 @@ impl QueryEngine {
                 // A prior root may have changed registrations since preflight.
                 // Recheck the hit at its sequential position and clear a limit
                 // from an earlier root exactly as scalar materialization does.
-                results[index] = Some(self.scalar_materialization_outcome(path));
+                results[index] = Some(self.scalar_root_outcome(path, kind));
                 continue;
             };
             if pending.is_empty() && self.execution_valid(path, &product.reads) {
@@ -919,7 +1025,7 @@ impl QueryEngine {
                     self.install_staged(registration);
                 }
                 self.last_comptime_limit = limit;
-                results[index] = Some(MaterializationResult {
+                results[index] = Some(RootOutcome {
                     definition: path.clone(),
                     result: product.result,
                     phase,
@@ -929,7 +1035,7 @@ impl QueryEngine {
             } else {
                 // No suspended failure becomes a cached language verdict. A
                 // whole-root retry preserves the requester's original stack.
-                results[index] = Some(self.scalar_materialization_outcome(path));
+                results[index] = Some(self.scalar_root_outcome(path, kind));
             }
             // A registration's first scalar check owns its selecting label;
             // later hits return the underlying cached diagnostics. Worker
