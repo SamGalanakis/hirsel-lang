@@ -14,6 +14,22 @@ pub struct CheckedProducts {
     pub type_rows: u64,
     pub type_bytes: u64,
 }
+impl CheckedProducts {
+    /// Exact owner/read keys ordered by persisted bytes, independent of intern
+    /// assignment and scheduling. Includes private views and negative reads.
+    pub fn canonical_reads(&self) -> BTreeMap<(Vec<u8>, Vec<u8>), ContentHash> {
+        self.reads
+            .iter()
+            .flat_map(|(owner, reads)| {
+                let mut bytes = Vec::new();
+                crate::memo::encode_def_path(&mut bytes, owner);
+                reads
+                    .iter()
+                    .map(move |(key, value)| ((bytes.clone(), key.clone()), *value))
+            })
+            .collect()
+    }
+}
 impl QueryEngine {
     /// Does not lower additional runtime definitions. Compacted artifacts
     /// already required by this check may be reconstructed through the normal

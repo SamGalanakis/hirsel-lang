@@ -351,6 +351,31 @@ fn token_json(t: &BaseToken) -> Value {
 fn base_json(id: u64, b: &BaseLease) -> Value {
     json!({"base":id,"token":token_json(b.token()),"sources":b.sources().map(|(key,text,digest)|json!({"file":key.0,"expected":hex(digest),"bytes":text.len()})).collect::<Vec<_>>()})
 }
+fn identity_json(identity: &CheckedIdentity) -> Value {
+    json!({"inputs":hex(identity.inputs),"compiler_environment":hex(identity.compiler_environment),
+        "packages":identity.scope.packages,"policy":{"verify":"On","lowering":"Comptime"},
+        "checked_products":hex(identity.products)})
+}
+/// Version-1 additive checked-read difference wire form.
+pub fn dependency_json(delta: &DependencyDelta) -> Value {
+    match delta {
+        // Preserve the existing v1 Unknown string; Known is an additive object.
+        DependencyDelta::Unknown { .. } => Value::String(format!("{delta:?}")),
+        DependencyDelta::Known {
+            parent,
+            child,
+            reads,
+        } => json!({
+            "kind":"Known","format":"hirsel.checked-read-delta.v1",
+            "parent":identity_json(parent),"child":identity_json(child),
+            "reads":reads.iter().map(|read| json!({
+                "owner":read.owner.iter().map(|b|format!("{b:02x}")).collect::<String>(),
+                "key":read.key.iter().map(|b|format!("{b:02x}")).collect::<String>(),
+                "before":read.before.map(hex),"after":read.after.map(hex),
+            })).collect::<Vec<_>>()
+        }),
+    }
+}
 fn receipt_json(r: &CheckReceipt) -> Value {
     let diagnostics: Vec<_> = r
         .output
@@ -363,7 +388,7 @@ fn receipt_json(r: &CheckReceipt) -> Value {
         "policy":{"verify":"On","lowering":"Comptime"},"completion":format!("{:?}",r.completion),
         "verdict":format!("{:?}",r.verdict),"incomplete":r.incomplete.as_ref().map(|p|json!({"packages":p.uncompleted_packages,"phase":p.phase.map(|v|format!("{v:?}"))})),
         "diagnostics":diagnostics,"diagnostics_human":r.output.diagnostics.iter().map(|d|d.render_human(&r.output.sources)).collect::<Vec<_>>(),"loader_error":r.loader_error,"failure_class":r.failure_class.map(|v|format!("{v:?}")),
-        "checked_products":r.checked_products.as_ref().map(|p|hex(p.digest)),"dependencies":format!("{:?}",r.dependencies),
+        "checked_products":r.checked_products.as_ref().map(|p|hex(p.digest)),"dependencies":dependency_json(&r.dependencies),
         "head":match &r.head { HeadFreshness::CurrentAt(g)=>json!({"current_at":g}), HeadFreshness::Stale(t)=>json!({"stale":token_json(t)}) },
         "disk":format!("{:?}",r.disk)})
 }

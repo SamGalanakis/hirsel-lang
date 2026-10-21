@@ -1071,3 +1071,231 @@ fn candidate_recursive_source_missing_name_becomes_available_in_a_sibling() {
     assert_eq!(result(&w, &absent).verdict, Verdict::Reject);
     assert_eq!(std::fs::read_to_string(fixture.entry()).unwrap(), source);
 }
+
+fn cold_products(entry: &std::path::Path, jobs: usize) -> hirsel_engine::CheckedProducts {
+    hirsel_engine::with_compiler_stack(|| {
+        let compiler = hirsel_driver::COMPILER
+            .clone()
+            .with_config(CompileConfig {
+                jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                ..CompileConfig::for_memory_cap(None)
+            })
+            .with_owned_engines();
+        let mut program = compiler
+            .load_program_source_with_images(entry, None, &hirsel_engine::StdImages::none())
+            .unwrap();
+        let output = program.check(LoweringPolicy::Comptime).unwrap();
+        assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
+        program.engine.checked_products(&program.entry).unwrap()
+    })
+}
+fn assert_read_difference(parent: &CheckReceipt, child: &CheckReceipt) {
+    let DependencyDelta::Known {
+        parent: a,
+        child: b,
+        reads,
+    } = &child.dependencies
+    else {
+        panic!("missing checked difference: {:?}", child.dependencies)
+    };
+    assert_eq!(a.inputs, parent.candidate_inputs);
+    assert_eq!(b.inputs, child.candidate_inputs);
+    assert_eq!(a.products, parent.checked_products.as_ref().unwrap().digest);
+    assert_eq!(b.products, child.checked_products.as_ref().unwrap().digest);
+    assert_eq!(a.compiler_environment, parent.compiler_environment);
+    assert_eq!(b.compiler_environment, child.compiler_environment);
+    assert_eq!(a.scope, parent.scope);
+    assert_eq!(b.scope, child.scope);
+    let oracle = model::read_difference(
+        &parent.checked_products.as_ref().unwrap().canonical_reads(),
+        &child.checked_products.as_ref().unwrap().canonical_reads(),
+    );
+    let actual: Vec<_> = reads
+        .iter()
+        .map(|r| ((r.owner.clone(), r.key.clone()), r.before, r.after))
+        .collect();
+    assert_eq!(actual, oracle);
+}
+
+#[test]
+fn candidate_checked_read_delta_parent_evidence_coalescing_and_release() {
+    let text_a = "pub fn main()->u64{1}\n";
+    let text_b = "fn helper()->u64{2}\npub fn main()->u64{helper()}\n";
+    let text_c = "pub fn main()->u64{false}\n";
+    let f = Fixture::new(text_a);
+    let w = workspace();
+    let base_a = w.capture(&f.entry()).unwrap();
+    let seed = submit(&w, &base_a, 1, text_a);
+    let ra = result(&w, &seed);
+    assert!(matches!(ra.dependencies, DependencyDelta::Unknown { .. }));
+    // A prior completed receipt never changes when unchanged checking certifies its base.
+    assert!(matches!(
+        result(&w, &seed).dependencies,
+        DependencyDelta::Unknown { .. }
+    ));
+    let b = submit(&w, &base_a, 2, text_b);
+    let rb = result(&w, &b);
+    assert_read_difference(&ra, &rb);
+    assert!(matches!(
+        w.promote(
+            CandidateId {
+                client: 9,
+                nonce: 1
+            },
+            &b,
+            base_a.token()
+        )
+        .unwrap(),
+        Promotion::Promoted(_)
+    ));
+    let base_b = w.head_lease().unwrap();
+    let child_a = submit(&w, &base_a, 3, text_c);
+    let child_b = submit(&w, &base_b, 4, text_c);
+    let before = w.counters().frozen_loads;
+    drop(base_a);
+    drop(base_b);
+    drop(b);
+    drop(seed);
+    let rc_a = result(&w, &child_a);
+    let rc_b = result(&w, &child_b);
+    assert_eq!(rc_a.completion, Completion::Complete);
+    assert_eq!(rc_a.verdict, Verdict::Reject);
+    assert_eq!(w.counters().frozen_loads, before + 1);
+    assert!(Arc::ptr_eq(
+        rc_a.checked_products.as_ref().unwrap(),
+        rc_b.checked_products.as_ref().unwrap()
+    ));
+    assert_read_difference(&ra, &rc_a);
+    assert_read_difference(&rb, &rc_b);
+    assert_ne!(rc_a.dependencies, rc_b.dependencies);
+    assert_eq!(
+        w.promote(
+            CandidateId {
+                client: 9,
+                nonce: 2
+            },
+            &child_b,
+            &rc_b.base
+        )
+        .unwrap(),
+        Promotion::Ineligible
+    );
+    let before = w.counters();
+    for _ in 0..3 {
+        assert!(matches!(
+            w.poll(&child_b).unwrap(),
+            CandidateResult::Ready(_)
+        ));
+        assert_eq!(result(&w, &child_b).dependencies, rc_b.dependencies);
+    }
+    assert_eq!(w.counters().frozen_loads, before.frozen_loads);
+    assert_eq!(w.counters().recomputations, before.recomputations);
+}
+
+#[test]
+fn candidate_checked_read_delta_exact_jobs_salts_and_cold_reads() {
+    // Salt children consume one immutable parent-created tree: identities and
+    // protocol bytes are compared without path/digest normalization.
+    let salted = std::env::var_os("HIRSEL_ID_SALT").is_some();
+    let pid = if salted {
+        unsafe { libc::getppid() as u32 }
+    } else {
+        std::process::id()
+    };
+    let root = std::env::temp_dir().join(format!("hirsel-read-delta-matrix-{pid}"));
+    let programs = [
+        "pub opaque type Secret: data uses {} { level:u64, }\nfn view(x:Secret)->u64{x.level}\npub fn main()->u64{1}\n",
+        "pub opaque type Secret: data uses {} { level:u32, }\nfn view(x:Secret)->u32{x.level}\npub fn main()->u64{1}\n",
+        "pub type Tree = Leaf | Node(box Missing)\npub fn main()->u64{1}\n",
+        "pub type Tree = Leaf | Node(box Missing)\npub type Missing { tree: Tree }\npub fn main()->u64{1}\n",
+    ];
+    if !salted {
+        std::fs::create_dir(&root).unwrap();
+        for (i, source) in programs.iter().enumerate() {
+            let dir = root.join(i.to_string());
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join("main.hir"), source).unwrap();
+            std::fs::write(dir.join("main.hir.json"), r#"{"schema":1,"package":{"name":"standalone","version":"0"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        }
+    }
+    if let Some(runs) = hirsel_intern::under_salts(
+        "candidate_txn::candidate_checked_read_delta_exact_jobs_salts_and_cold_reads",
+        &[0, 1, 7],
+        || {
+            let mut baseline = None;
+            for jobs in [1, 2, 8] {
+                let mut transcript = String::new();
+                for (a, b) in [(0, 1), (1, 0), (2, 3), (3, 2)] {
+                    let w = CandidateWorkspace::new(
+                        CompileConfig {
+                            jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                            ..CompileConfig::for_memory_cap(None)
+                        },
+                        vec![],
+                        hirsel_interp::Limits::default(),
+                        Limits::default(),
+                    )
+                    .unwrap();
+                    let entry = root.join(a.to_string()).join("main.hir");
+                    let base = w.capture(&entry).unwrap();
+                    let unchanged = submit(&w, &base, 1, programs[a]);
+                    let parent = result(&w, &unchanged);
+                    let candidate = submit(&w, &base, 2, programs[b]);
+                    let child = result(&w, &candidate);
+                    assert_eq!(parent.completion, Completion::Complete);
+                    assert_eq!(child.completion, Completion::Complete);
+                    assert_read_difference(&parent, &child);
+                    let cold_a = cold_products(&entry, jobs);
+                    let cold_b = cold_products(&root.join(b.to_string()).join("main.hir"), jobs);
+                    assert_eq!(
+                        parent.checked_products.as_ref().unwrap().reads,
+                        cold_a.reads
+                    );
+                    assert_eq!(child.checked_products.as_ref().unwrap().reads, cold_b.reads);
+                    assert_eq!(
+                        child.checked_products.as_ref().unwrap().digest,
+                        cold_b.digest
+                    );
+                    let DependencyDelta::Known { reads, .. } = &child.dependencies else {
+                        unreachable!()
+                    };
+                    assert!(!reads.is_empty());
+                    if a == 2 {
+                        assert_eq!(parent.verdict, Verdict::Reject);
+                        assert_eq!(child.verdict, Verdict::Pass);
+                        assert!(reads.iter().any(|r| r.before.is_none()));
+                        assert!(reads.iter().any(|r| r.key.first()
+                            == Some(&(hirsel_engine::memo::ReadKind::Lookup as u8))
+                            && r.key.windows(b"Missing".len()).any(|w| w == b"Missing")
+                            && r.before.is_some()
+                            && r.after.is_some()));
+                    }
+                    if a == 3 {
+                        assert!(reads.iter().any(|r| r.after.is_none()));
+                    }
+                    if a == 0 {
+                        // Actual private representation/view keys changed, not only text reads.
+                        use hirsel_engine::memo::ReadKind;
+                        assert!(reads.iter().any(|r| {
+                            matches!(r.key.first(), Some(tag) if *tag == ReadKind::Representation as u8 || *tag == ReadKind::ValidationView as u8)
+                                && r.before.is_some() && r.after.is_some()
+                        }));
+                    }
+                    transcript
+                        .push_str(&protocol::dependency_json(&child.dependencies).to_string());
+                    transcript.push('\n');
+                    assert_eq!(w.counters().frozen_loads, 2);
+                }
+                if let Some(expected) = &baseline {
+                    assert_eq!(&transcript, expected);
+                } else {
+                    baseline = Some(transcript);
+                }
+            }
+            baseline.unwrap()
+        },
+    ) {
+        assert!(runs.iter().all(|r| r == &runs[0]));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

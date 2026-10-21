@@ -92,7 +92,33 @@ pub enum Verdict {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DependencyDelta {
-    Unknown { reason: String },
+    Unknown {
+        reason: String,
+    },
+    Known {
+        parent: CheckedIdentity,
+        child: CheckedIdentity,
+        /// Sorted by exact canonical (owner, key) bytes. Equal values are omitted.
+        reads: Arc<[ReadChange]>,
+    },
+}
+/// Both ends are complete checks, including complete language rejections.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckedIdentity {
+    pub inputs: ContentHash,
+    pub compiler_environment: ContentHash,
+    pub scope: CheckedScope,
+    pub products: ContentHash,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadChange {
+    /// Existing encode_def_path bytes, including package and private owner.
+    pub owner: Vec<u8>,
+    /// Exact ReadKey::encode bytes, including negative and private-view keys.
+    pub key: Vec<u8>,
+    /// None -> Some is added; Some -> None removed; unequal Some -> Some changed.
+    pub before: Option<ContentHash>,
+    pub after: Option<ContentHash>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HeadFreshness {
@@ -133,6 +159,7 @@ pub struct CheckReceipt {
     pub disk: DiskFreshness,
     _charge: Arc<Charge>,
     _observation_charge: Option<Arc<Charge>>,
+    _dependency_charge: Option<Arc<Charge>>,
 }
 #[derive(Clone, Debug)]
 pub enum CandidateResult {
@@ -251,7 +278,15 @@ impl Budget {
         }))
     }
 }
+struct CheckedEvidence {
+    _metadata_charge: Arc<Charge>,
+    identity: CheckedIdentity,
+    products: Arc<CheckedProducts>,
+    // Keep the original charge even after the receipt/work/base handle drops.
+    _charge: Arc<Charge>,
+}
 struct Inputs {
+    checked: Mutex<Option<Arc<CheckedEvidence>>>,
     token: BaseToken,
     frozen: FrozenInputs,
     sources: Arc<BTreeMap<SourceKey, Source>>,
@@ -338,6 +373,7 @@ struct Snapshot {
 struct Waiter {
     id: CandidateId,
     parent: BaseToken,
+    parent_inputs: Arc<Inputs>,
     work: Arc<Work>,
     state: Mutex<WaiterState>,
     owner: Weak<Workspace>,
@@ -549,6 +585,7 @@ impl CandidateWorkspace {
                 .checked_add(1)
                 .ok_or(CaptureError::ResourceLimit)?;
             let inputs = Arc::new(Inputs {
+                checked: Mutex::new(None),
                 token: BaseToken {
                     workspace: w.id,
                     generation,
@@ -715,6 +752,7 @@ impl CandidateWorkspace {
                     )
                     .ok_or(RequestError::ResourceLimit)?;
                 let inputs = Arc::new(Inputs {
+                    checked: Mutex::new(None),
                     token: BaseToken {
                         workspace: w.id,
                         generation: request.base.generation,
@@ -756,6 +794,7 @@ impl CandidateWorkspace {
         let waiter = Arc::new(Waiter {
             id: request.id,
             parent: request.base.clone(),
+            parent_inputs: base.inputs.clone(),
             work,
             state: Mutex::new(WaiterState::Pending),
             owner: Arc::downgrade(w),
@@ -963,6 +1002,7 @@ impl CandidateWorkspace {
                     inputs: candidate.token.inputs,
                 };
                 state.head = Some(Arc::new(Inputs {
+                    checked: Mutex::new(self.checked_evidence(receipt)),
                     token: token.clone(),
                     frozen: candidate.frozen.clone(),
                     sources: candidate.sources.clone(),
@@ -1059,6 +1099,32 @@ impl CandidateWorkspace {
         waiter: &Arc<Waiter>,
         snapshot: Arc<Snapshot>,
     ) -> Result<CandidateResult, RequestError> {
+        let parent = waiter.parent_inputs.checked.lock().unwrap().clone();
+        let child_identity = snapshot.products.as_ref().map(|products| CheckedIdentity {
+            inputs: waiter.work.inputs.token.inputs,
+            compiler_environment: self.inner.environment,
+            scope: waiter.work.inputs.scope.clone(),
+            products: products.digest,
+        });
+        let (dependencies, dependency_charge) = match (&parent, &child_identity, &snapshot.products)
+        {
+            (Some(parent), Some(child), Some(products))
+                if snapshot.completion == Completion::Complete =>
+            {
+                self.read_delta(parent, child, products, snapshot._charge.bytes)?
+            }
+            _ => (
+                DependencyDelta::Unknown {
+                    reason: if snapshot.completion == Completion::Complete {
+                        "complete checked parent evidence unavailable"
+                    } else {
+                        "incomplete computation"
+                    }
+                    .into(),
+                },
+                None,
+            ),
+        };
         let receipt = Arc::new(CheckReceipt {
             id: waiter.id,
             base: waiter.parent.clone(),
@@ -1075,9 +1141,8 @@ impl CandidateWorkspace {
             loader_error: snapshot.loader_error.clone(),
             failure_class: snapshot.failure_class,
             checked_products: snapshot.products.clone(),
-            dependencies: DependencyDelta::Unknown {
-                reason: "serial inputs do not retain a base dependency graph; checking delta is unknown, not execution/test impact".into(),
-            },
+            dependencies,
+            _dependency_charge: dependency_charge,
             head: HeadFreshness::CurrentAt(waiter.parent.generation),
             disk: DiskFreshness::Unobserved,
             _charge: snapshot._charge.clone(),
@@ -1099,9 +1164,83 @@ impl CandidateWorkspace {
             WaiterState::Pending => {
                 *state = WaiterState::Complete(receipt.clone());
                 drop(state);
+                // Explicit unchanged-base requests certify this exact capture without
+                // an implicit second compilation. Existing receipts remain immutable.
+                if receipt.completion == Completion::Complete
+                    && waiter.work.inputs.token.inputs == waiter.parent.inputs
+                    && waiter.work.inputs.frozen == waiter.parent_inputs.frozen
+                {
+                    let mut checked = waiter.parent_inputs.checked.lock().unwrap();
+                    if checked.is_none() {
+                        *checked = self.checked_evidence(&receipt);
+                    }
+                }
                 Ok(CandidateResult::Ready(self.observe(&receipt)?))
             }
         }
+    }
+    fn checked_evidence(&self, receipt: &CheckReceipt) -> Option<Arc<CheckedEvidence>> {
+        let products = receipt.checked_products.as_ref()?;
+        let bytes = 256
+            + receipt
+                .scope
+                .packages
+                .iter()
+                .map(|p| p.name.len() + p.version.len() + 128)
+                .sum::<usize>();
+        // Optional precision must not change successful promotion rules under
+        // pressure. If its metadata cannot be retained, that base stays Unknown.
+        let metadata_charge = self.inner.budget.reserve(bytes)?;
+        Some(Arc::new(CheckedEvidence {
+            _metadata_charge: metadata_charge,
+            identity: checked_identity(receipt),
+            products: products.clone(),
+            _charge: receipt._charge.clone(),
+        }))
+    }
+    fn read_delta(
+        &self,
+        parent: &CheckedEvidence,
+        child: &CheckedIdentity,
+        products: &CheckedProducts,
+        product_bytes: usize,
+    ) -> Result<(DependencyDelta, Option<Arc<Charge>>), RequestError> {
+        let before = parent.products.canonical_reads();
+        let after = products.canonical_reads();
+        // Count retained bytes before copying keys. Temporary canonical indexes
+        // have the same bounded source as the already charged product read sets.
+        let mut count = 0;
+        let mut bytes = 512 + identity_bytes(&parent.identity) + identity_bytes(child);
+        visit_read_changes(&before, &after, |owner, key, _, _| {
+            count += 1;
+            bytes =
+                bytes.saturating_add(owner.len() + key.len() + std::mem::size_of::<ReadChange>());
+        });
+        if product_bytes.saturating_add(bytes) > self.inner.limits.result_bytes {
+            return Err(RequestError::ResourceLimit);
+        }
+        let charge = self
+            .inner
+            .budget
+            .reserve(bytes)
+            .ok_or(RequestError::ResourceLimit)?;
+        let mut reads = Vec::with_capacity(count);
+        visit_read_changes(&before, &after, |owner, key, before, after| {
+            reads.push(ReadChange {
+                owner: owner.to_vec(),
+                key: key.to_vec(),
+                before,
+                after,
+            });
+        });
+        Ok((
+            DependencyDelta::Known {
+                parent: parent.identity.clone(),
+                child: child.clone(),
+                reads: reads.into(),
+            },
+            Some(charge),
+        ))
     }
     fn control_receipt(
         &self,
@@ -1130,6 +1269,7 @@ impl CandidateWorkspace {
             head: HeadFreshness::CurrentAt(waiter.parent.generation),
             disk: DiskFreshness::Unobserved,
             _charge: waiter._charge.clone(),
+            _dependency_charge: None,
             _observation_charge: Some(
                 self.inner
                     .budget
@@ -1309,6 +1449,59 @@ impl CandidateWorkspace {
         Ok(snapshot)
     }
 }
+fn checked_identity(receipt: &CheckReceipt) -> CheckedIdentity {
+    CheckedIdentity {
+        inputs: receipt.candidate_inputs,
+        compiler_environment: receipt.compiler_environment,
+        scope: receipt.scope.clone(),
+        products: receipt.checked_products.as_ref().unwrap().digest,
+    }
+}
+fn identity_bytes(identity: &CheckedIdentity) -> usize {
+    256 + identity
+        .scope
+        .packages
+        .iter()
+        .map(|p| p.name.len() + p.version.len() + 128)
+        .sum::<usize>()
+}
+// Rust std a7c37f9f library/alloc/src/collections/btree/merge_iter.rs:47-84:
+// ordered merge, equal keys paired once. Unlike set difference, compare values
+// too and retain both ends. Hirsel keys must be canonical bytes, not intern IDs.
+fn visit_read_changes(
+    before: &BTreeMap<(Vec<u8>, Vec<u8>), ContentHash>,
+    after: &BTreeMap<(Vec<u8>, Vec<u8>), ContentHash>,
+    mut visit: impl FnMut(&[u8], &[u8], Option<ContentHash>, Option<ContentHash>),
+) {
+    let mut a = before.iter().peekable();
+    let mut b = after.iter().peekable();
+    loop {
+        let order = match (a.peek(), b.peek()) {
+            (Some((ka, _)), Some((kb, _))) => ka.cmp(kb),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => break,
+        };
+        let (key, old, new) = match order {
+            std::cmp::Ordering::Less => {
+                let (key, value) = a.next().unwrap();
+                (key, Some(*value), None)
+            }
+            std::cmp::Ordering::Greater => {
+                let (key, value) = b.next().unwrap();
+                (key, None, Some(*value))
+            }
+            std::cmp::Ordering::Equal => {
+                let (key, old) = a.next().unwrap();
+                let (_, new) = b.next().unwrap();
+                (key, Some(*old), Some(*new))
+            }
+        };
+        if old != new {
+            visit(&key.0, &key.1, old, new);
+        }
+    }
+}
 fn source_map_bytes(sources: &hirsel_span::SourceMap) -> usize {
     let files: BTreeSet<_> = sources.anchors().map(|(_, file, _)| file).collect();
     sources.anchors().count() * 64
@@ -1325,7 +1518,12 @@ fn source_map_bytes(sources: &hirsel_span::SourceMap) -> usize {
             .sum::<usize>()
 }
 fn receipt_metadata_bytes(receipt: &CheckReceipt) -> usize {
-    1024 + receipt.loader_error.as_ref().map_or(0, String::len)
+    1024 + match &receipt.dependencies {
+        DependencyDelta::Known { parent, child, .. } => {
+            identity_bytes(parent) + identity_bytes(child)
+        }
+        DependencyDelta::Unknown { reason } => reason.len(),
+    } + receipt.loader_error.as_ref().map_or(0, String::len)
         + receipt
             .scope
             .packages
@@ -1485,6 +1683,107 @@ mod tests {
         .unwrap()
     }
     #[test]
+    fn candidate_delta_ordered_merge_ports_std_difference_vectors() {
+        // Rust a7c37f9f btree/set/tests.rs:123-135, both directions;
+        // extend equal keys with changed values and a distinct owner.
+        for (a, b) in [
+            (vec![], vec![]),
+            (vec![1, 12], vec![]),
+            (vec![], vec![1, 2, 3, 9]),
+            (vec![1, 3, 5, 9, 11], vec![3, 9]),
+            (vec![1, 3, 5, 9, 11], vec![3, 6, 9]),
+            (vec![1, 3, 5, 9, 11], vec![0, 1]),
+            (vec![1, 3, 5, 9, 11], vec![11, 12]),
+        ] {
+            let before: BTreeMap<_, _> = a
+                .into_iter()
+                .map(|n| ((vec![0], vec![n]), ContentHash::of_bytes(&[n])))
+                .collect();
+            let after: BTreeMap<_, _> = b
+                .into_iter()
+                .map(|n| ((vec![0], vec![n]), ContentHash::of_bytes(&[n + 1])))
+                .collect();
+            for (a, b) in [(&before, &after), (&after, &before)] {
+                let mut actual = vec![];
+                visit_read_changes(a, b, |owner, key, before, after| {
+                    actual.push(((owner.to_vec(), key.to_vec()), before, after))
+                });
+                let keys: BTreeSet<_> = a.keys().chain(b.keys()).collect();
+                let expected: Vec<_> = keys
+                    .into_iter()
+                    .filter_map(|k| {
+                        let (old, new) = (a.get(k).copied(), b.get(k).copied());
+                        (old != new).then(|| (k.clone(), old, new))
+                    })
+                    .collect();
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+    #[test]
+    fn candidate_delta_budget_refusal_retries_without_check_or_unaccounted_parent() {
+        let f = Fixture::new();
+        let w = workspace();
+        let base = w.capture(&f.0.join("main.hir")).unwrap();
+        let seed = submit(&w, &base, 1);
+        let CandidateResult::Ready(first) = w.result(&seed).unwrap() else {
+            panic!()
+        };
+        assert!(matches!(
+            first.dependencies,
+            DependencyDelta::Unknown { .. }
+        ));
+        let next = submit(&w, &base, 2);
+        let before = w.counters();
+        let pressure = w
+            .inner
+            .budget
+            .reserve(w.inner.limits.bytes - before.retained_bytes)
+            .unwrap();
+        assert_eq!(w.result(&next).unwrap_err(), RequestError::ResourceLimit);
+        assert_eq!(
+            w.promote(
+                CandidateId {
+                    client: 9,
+                    nonce: 1
+                },
+                &next,
+                base.token()
+            )
+            .unwrap(),
+            Promotion::ResourceLimit
+        );
+        drop(pressure);
+        let CandidateResult::Ready(receipt) = w.result(&next).unwrap() else {
+            panic!()
+        };
+        let DependencyDelta::Known { reads, .. } = &receipt.dependencies else {
+            panic!()
+        };
+        assert!(reads.is_empty());
+        assert_eq!(w.counters().frozen_loads, before.frozen_loads);
+        let parent = base.inputs.checked.lock().unwrap().clone().unwrap();
+        assert!(matches!(
+            w.read_delta(
+                &parent,
+                &parent.identity,
+                &parent.products,
+                w.inner.limits.result_bytes
+            ),
+            Err(RequestError::ResourceLimit)
+        ));
+        let evidence_bytes = parent._charge.bytes;
+        drop(parent);
+        drop(base);
+        drop(first);
+        drop(seed);
+        drop(next);
+        drop(receipt);
+        // The selected head owns complete evidence and its original charge.
+        assert!(w.counters().retained_bytes >= evidence_bytes);
+        assert!(w.counters().retained_bytes <= w.inner.limits.bytes);
+    }
+    #[test]
     fn candidate_capture_racing_manifest_never_publishes_mixed_inputs() {
         let f = Fixture::new();
         let manifest = f.0.join("hirsel.json");
@@ -1516,6 +1815,14 @@ mod tests {
         let f = Fixture::new();
         let w = workspace();
         let base = w.capture(&f.0.join("main.hir")).unwrap();
+        let seed = submit(&w, &base, 3);
+        let CandidateResult::Ready(seed_receipt) = w.result(&seed).unwrap() else {
+            panic!()
+        };
+        assert_eq!(seed_receipt.completion, Completion::Complete);
+        drop(seed_receipt);
+        drop(seed);
+        assert!(base.inputs.checked.lock().unwrap().is_some());
         *w.inner.before_check.lock().unwrap() = Some(|program| {
             program.engine.adapters.modes = None;
         });
@@ -1536,6 +1843,10 @@ mod tests {
             })
         );
         assert!(receipt.checked_products.is_none());
+        assert!(matches!(
+            receipt.dependencies,
+            DependencyDelta::Unknown { .. }
+        ));
         assert!(receipt.output.sources.anchors().next().is_some());
         assert!(matches!(
             w.promote(
@@ -1559,7 +1870,7 @@ mod tests {
         assert!(retry.incomplete.is_none());
         assert_eq!(
             w.counters().frozen_loads,
-            2,
+            3,
             "missing-phase outcome was cached"
         );
     }

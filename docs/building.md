@@ -160,7 +160,28 @@ rejects. A selected priority affects queued admission only.
 still the exact head generation. It selects an in-memory head and writes no
 source files. `head` returns another owned base handle; `release` drops a base
 or candidate handle. `counters` reports actual loads, recomputations, retained
-bytes and queue/compute time. Dependency deltas remain explicitly unknown.
+bytes and queue/compute time.
+
+`dependencies` preserves the version-1 `Unknown` string when either complete
+checked endpoint is unavailable, including fresh captures and incomplete child
+checks. A promoted head retains its checked evidence. An explicit unchanged-base
+submission also certifies that exact base for subsequent receipts (even when the
+complete check rejects the language program). No implicit base check runs.
+A completed receipt never changes retroactively when evidence arrives later.
+
+When both endpoints are available, `dependencies` is an additive JSON object
+with `kind: "Known"` and `format: "hirsel.checked-read-delta.v1"`. `parent` and
+`child` each bind the complete input digest, compiler/environment, package scope,
+Verify/Comptime policy and checked-product digest. `reads` is sorted by exact
+canonical owner bytes then read-key bytes; both are lowercase hex using the
+existing persisted DefPath/ReadKey encodings. `before`/`after` are exact observed
+value digests: null/value means added, value/null removed, unequal values changed.
+Equal reads are omitted. Negative lookups and private-view reads participate.
+This is a checked-read difference, neither minimal invalidation nor execution or
+test impact. Absolute child products may coalesce across parents; deltas are
+computed per receipt. Retained evidence and differences count against existing
+workspace/result quotas; refusal preserves promotion eligibility rules. If evidence
+metadata cannot be retained under quota, the promoted base stays `Unknown`.
 
 The enabled policy is serial frozen-input checking: one active candidate uses
 the host's compiler worker budget, with at most 64 owned handles, 1024 new-work
