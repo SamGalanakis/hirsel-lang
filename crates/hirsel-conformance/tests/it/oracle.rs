@@ -47,7 +47,7 @@ fn scenarios(oracle: &str) -> Vec<Scenario> {
 fn o1_cells_agree_with_the_baseline_including_native_artifacts() {
     let work = work("o1");
     let output = Command::new(env!("CARGO_BIN_EXE_oracle"))
-        .args(["o1", "--native", "--json", "--allow-todo", "--work"])
+        .args(["o1", "--native", "--json", "--work"])
         .arg(&work)
         .args(["--root"])
         .arg(root())
@@ -58,7 +58,8 @@ fn o1_cells_agree_with_the_baseline_including_native_artifacts() {
     assert!(output.status.success(), "{stderr}");
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["fail"], 0, "{stderr}");
-    assert!(report["pass"].as_u64().unwrap() >= 2, "{stderr}");
+    assert_eq!(report["todo"], 0, "{stderr}");
+    assert_eq!(report["pass"], 11, "{stderr}");
     let baseline = work.join("0/baseline");
     for artifact in [
         "diagnostics",
@@ -103,7 +104,45 @@ fn o2_warm_runs_equal_cold_after_every_scripted_edit() {
         &work,
     );
     holds(&report);
+    assert!(report.passed(false), "{}", report.text());
     assert_eq!(report.checks.len(), 3 * selected.len(), "{}", report.text());
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+#[test]
+fn o2_reflected_private_field_edit_matches_cold() {
+    let work = work("o2-reflected-field");
+    let mut scenario = Scenario::read(
+        &root()
+            .join(SCENARIOS)
+            .join("o2/reflected-opaque-field.edit"),
+        &root(),
+    )
+    .unwrap();
+    // The reflected result alone is enough: no I/O or loop participates.
+    let main = "const FIELDS: List[FieldShape] = comptime field_types(shape(Secret))\n\npub fn main() -> List[FieldShape] { FIELDS }\n";
+    scenario.before.insert("main.hir".into(), main.into());
+    scenario.after.insert("main.hir".into(), main.into());
+    let report = o2::run(
+        Path::new(env!("CARGO_BIN_EXE_oracle")),
+        &root(),
+        &[scenario],
+        &work,
+    );
+    if !report.failures().is_empty() {
+        let base = work.join("reflected-opaque-field");
+        let cold = std::fs::read_to_string(base.join("cold/tir")).unwrap();
+        let resident = std::fs::read_to_string(base.join("resident/tir")).unwrap();
+        let differences: Vec<_> = cold
+            .lines()
+            .zip(resident.lines())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .take(10)
+            .collect();
+        eprintln!("reflected-field TIR differences: {differences:#?}");
+    }
+    assert!(report.passed(false), "{}", report.text());
     let _ = std::fs::remove_dir_all(&work);
 }
 
@@ -154,7 +193,7 @@ fn o4_store_hits_equal_cold_runs() {
     holds(&report);
     assert_eq!(
         report.count(|v| *v == Verdict::Pass),
-        2,
+        4,
         "{}",
         report.text()
     );

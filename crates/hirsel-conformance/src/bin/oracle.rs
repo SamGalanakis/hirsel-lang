@@ -156,6 +156,10 @@ fn produce(options: Options) -> ExitCode {
         eprintln!("produce requires --out DIR and a program\n{USAGE}");
         return ExitCode::from(2);
     };
+    // Salt before opening an image: decoding one can assign session ids.
+    if let Some(seed) = options.config.salt {
+        hirsel_intern::salt_ids(seed);
+    }
     match oracle::produce(&program, &options.config, &oracle::fresh_images()) {
         Ok(artifacts) => match write_artifacts(&out, &artifacts) {
             Ok(()) => ExitCode::SUCCESS,

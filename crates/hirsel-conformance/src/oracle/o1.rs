@@ -101,6 +101,8 @@ pub fn produce_in_child(
     let _ = std::fs::remove_dir_all(out);
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let output = Command::new(exe)
+        // Native workers select the same budget as the front CompileConfig.
+        .env("HIRSEL_JOBS", config.jobs.to_string())
         .arg("produce")
         .args(config.args())
         .arg("--out")

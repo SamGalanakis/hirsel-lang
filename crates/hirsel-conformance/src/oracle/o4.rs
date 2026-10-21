@@ -13,9 +13,11 @@
 //! the switch to their targets.
 use super::{
     Config, Report, Switch, Verdict, difference, fresh_images, o1::produce_in_child, produce,
-    switches,
+    produce_with_store, switches,
 };
+use hirsel_engine::store::MemStore;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub fn run(exe: &Path, root: &Path, programs: &[PathBuf], work: &Path) -> Report {
     let mut report = Report::new("O4");
@@ -34,8 +36,9 @@ pub fn run(exe: &Path, root: &Path, programs: &[PathBuf], work: &Path) -> Report
             }
         };
         let shared = fresh_images();
-        let hit =
-            produce(program, &config, &shared).and_then(|_| produce(program, &config, &shared));
+        let store = Arc::new(MemStore::default());
+        let hit = produce_with_store(program, &config, &shared, store.clone())
+            .and_then(|_| produce_with_store(program, &config, &shared, store));
         report.add(
             format!("{name} [mem hit]"),
             match hit {

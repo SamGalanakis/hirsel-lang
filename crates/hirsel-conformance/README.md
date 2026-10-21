@@ -546,7 +546,7 @@ tools/capped "$oracle" o4 --path conformance/PROG/ --limit 20
   (default 1,2,8) × `--salts` (default 1,2,3; `none` is unsalted).
 - **O2** runs each edit scenario of `oracles/o2/`: a cold run of the edited
   tree against warm runs that saw the tree before the edit: `mem` (one shared
-  store; today a shared `PackageCache`, which reuses dependency packages only),
+  `mem@1` result store across fresh sessions),
   `resident` (one `Session`) and `disk` (two processes over one `dir@1` store).
   Scenarios that copy std (`// with: std`) check std from source: about 270 s
   and 2.5 GB today, so the crate's test leaves them to an explicit `--scenario`.
@@ -555,8 +555,10 @@ tools/capped "$oracle" o4 --path conformance/PROG/ --limit 20
   names `recomputed` do. V's recomputes, reasons by read kind and
   `SessionStats.touched` are TODO.
 - **O4** compares a corpus file served from a warm store with a cold run: a
-  shared in-process store today, then two processes over a `dir@1` store under
-  `VerifyStore::Recompute`, and the CLI's `--verify-cache`.
+  shared in-process result store, then two processes over a `dir@1` store under
+  `VerifyStore::Recompute`. The CLI `--verify-cache` cell remains a TODO until
+  that flag is available; `HIRSEL_VERIFY_CACHE` is currently its environment
+  selector.
 
 A scenario file (format in `src/oracle/edits.rs`) holds the tree before the
 edit as `=== <path>` sections and the edit as `+++` (replace or add), `---`

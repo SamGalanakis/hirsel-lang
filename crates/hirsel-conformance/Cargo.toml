@@ -14,6 +14,7 @@ hirsel-cli-args = { path = "../hirsel-cli-args" }
 hirsel-diag = { path = "../hirsel-diag" }
 hirsel-driver = { path = "../hirsel-driver" }
 hirsel-engine = { path = "../hirsel-engine" }
+hirsel-intern = { path = "../hirsel-intern", features = ["id-salt"] }
 hirsel-proof-export = { path = "../hirsel-proof-export" }
 serde_json = "1"
 hirsel-span = { path = "../hirsel-span" }
