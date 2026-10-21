@@ -40,7 +40,7 @@ pub(crate) struct Free {
 /// The run's free-mode state, when it has one.
 fn free(ctx: *mut TaskCtx) -> Option<&'static mut Free> {
     // SAFETY: the context is live for the whole run and reached by its running task only.
-    unsafe { (*ctx).run().free.as_deref_mut() }
+    unsafe { (*(*(*ctx).run_ptr()).free.get()).as_deref_mut() }
 }
 
 /// Install F0's test channel on `ctx` when the environment sets it: the session, and a seeded
@@ -55,7 +55,7 @@ pub(crate) fn install(ctx: &mut TaskCtx, binding: &[u8]) -> Result<(), String> {
         hirsel_kernels::schedule::Algorithm::Random,
         hook.seed,
     );
-    ctx.run().free = Some(Box::new(Free { hook, session }));
+    unsafe { (*(*ctx.run_ptr()).free.get()) = Some(Box::new(Free { hook, session })) };
     Ok(())
 }
 
@@ -63,7 +63,7 @@ pub(crate) fn install(ctx: &mut TaskCtx, binding: &[u8]) -> Result<(), String> {
 /// checks and writes its projection.
 pub(crate) fn finish(ctx: &mut TaskCtx, outcome: &hirsel_run_schema::RunOutcome) {
     use hirsel_run_schema::RunOutcome as O;
-    let Some(free) = ctx.run().free.take() else {
+    let Some(free) = unsafe { &mut (*(*ctx.run_ptr()).free.get()) }.take() else {
         return;
     };
     let name = match outcome {
@@ -81,7 +81,7 @@ pub(crate) fn finish(ctx: &mut TaskCtx, outcome: &hirsel_run_schema::RunOutcome)
 /// A replay that cannot follow its tape: report it, then stop the run Diverged.
 fn diverged(ctx: *mut TaskCtx, error: Diverged) -> ! {
     // SAFETY: the context is live.
-    if let Some(free) = unsafe { (*ctx).run().free.take() } {
+    if let Some(free) = unsafe { (*(*(*ctx).run_ptr()).free.get()).take() } {
         let _ = std::fs::write(&free.hook.report, format!("diverged {}\n", error.0));
     }
     // SAFETY: the context is live; a test-channel divergence may leave this op's locals.

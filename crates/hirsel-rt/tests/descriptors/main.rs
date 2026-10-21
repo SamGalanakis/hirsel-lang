@@ -41,6 +41,24 @@ fn every_semantic_entry_acquires_the_scheduler_role_directly() {
     assert!(checked >= 150, "only checked {checked} semantic entries");
 }
 
+#[test]
+fn parallel_services_never_borrow_the_whole_run_exclusively() {
+    let graph = source();
+    for (symbol, key) in graph.entries() {
+        if !matches!(
+            entry_descriptor(symbol).unwrap().locality,
+            Locality::Local | Locality::Immutable | Locality::Concurrent
+        ) {
+            continue;
+        }
+        assert_eq!(
+            graph.reaches(key, |target| target == "TaskCtx::run"),
+            None,
+            "{symbol} can exclusively borrow RunShared during another worker's shared read"
+        );
+    }
+}
+
 /// The runtime's call graph, parsed once on a thread with room for syn's recursion over the
 /// largest runtime files.
 fn source() -> &'static graph::Graph {

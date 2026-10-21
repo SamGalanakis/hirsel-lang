@@ -73,7 +73,7 @@ fn path(ctx: &TaskCtx) -> Vec<u32> {
 /// Begin the next pure segment after a runtime operation, or at task entry.
 pub(crate) fn resume(ctx: *mut TaskCtx) {
     // SAFETY: callers have a live context and retain no borrow across a switch.
-    if let Some(profile) = unsafe { &mut (*ctx).run().mc_profile } {
+    if let Some(profile) = unsafe { &mut (*(*(*ctx).run_ptr()).mc_profile.get()) }.as_mut() {
         profile.active = Some(Instant::now());
     }
 }
@@ -91,9 +91,7 @@ impl Operation {
         let resume = if context.run_ref().mc_profile.is_some() {
             let end = Instant::now();
             let path = path(context);
-            context
-                .run()
-                .mc_profile
+            unsafe { &mut (*(*context.run_ptr()).mc_profile.get()) }
                 .as_mut()
                 .unwrap()
                 .end(path, operation, end)
@@ -115,8 +113,7 @@ pub(crate) fn finish(ctx: &mut TaskCtx) {
     if ctx.run_ref().mc_profile.is_some() {
         let end = Instant::now();
         let path = path(ctx);
-        ctx.run()
-            .mc_profile
+        unsafe { &mut (*(*ctx.run_ptr()).mc_profile.get()) }
             .as_mut()
             .unwrap()
             .end(path, "run.end", end);

@@ -686,7 +686,7 @@ pub(crate) fn scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
     }
     // SAFETY: the context and its run are live for the whole run, and the scheduler is only
     // reached through them, by the one running task; no reference is kept across a switch.
-    match unsafe { (*(*ctx).run_ptr()).tasks.as_deref_mut() } {
+    match unsafe { (&mut *(*(*ctx).run_ptr()).tasks.get()).as_deref_mut() } {
         Some(s) => s,
         None => create_scheduler(ctx),
     }
@@ -699,8 +699,8 @@ fn create_scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
     // SAFETY: as for `scheduler`.
     unsafe {
         let run = (*ctx).run_ptr();
-        let schedule = std::mem::take(&mut (*run).schedule);
-        (*run).tasks.insert(Box::new(Scheduler::new(schedule, ctx)))
+        let schedule = (*run).schedule.clone();
+        (*(*run).tasks.get()).insert(Box::new(Scheduler::new(schedule, ctx)))
     }
 }
 
@@ -1109,8 +1109,7 @@ pub(crate) unsafe fn resume_row(
     // SAFETY: caller contract; the thread resuming it is the only one running the run.
     let (s, metrics) = unsafe {
         (
-            (*run)
-                .tasks
+            (*(*run).tasks.get())
                 .as_deref_mut()
                 .unwrap_or_else(|| fault("a handoff in a run without tasks")),
             (*run).worker_metrics.as_deref(),
@@ -1319,7 +1318,8 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
         // SAFETY: the context is live and `task` is parked.
         if unsafe { poll(ctx, task, &ready) }? {
             #[cfg(feature = "measurement")]
-            if let Some(profile) = unsafe { &mut (*ctx).run().mc_profile } {
+            if let Some(profile) = unsafe { &mut (*(*(*ctx).run_ptr()).mc_profile.get()) }.as_mut()
+            {
                 profile.ready(scheduler(ctx).task(task).path.clone());
             }
             scheduler(ctx).unpark(task);
@@ -1744,7 +1744,7 @@ unsafe fn hand_off(ctx: &mut TaskCtx, child: u32) {
     row.state = State::Ready;
     row.handoff = Some(current);
     #[cfg(feature = "measurement")]
-    if let Some(profile) = &mut ctx.run().mc_profile {
+    if let Some(profile) = &mut unsafe { &mut (*(*ctx.run_ptr()).mc_profile.get()) } {
         profile.ready(row.path.clone());
     }
     unsafe { switch_to(ctx, child) };
@@ -1846,7 +1846,7 @@ unsafe fn completed(ctx: &mut TaskCtx, index: u32, status: u8) -> Stopped<u32> {
     }
     #[cfg(feature = "measurement")]
     if let Some(next) = handoff
-        && let Some(profile) = &mut ctx.run().mc_profile
+        && let Some(profile) = &mut unsafe { &mut (*(*ctx.run_ptr()).mc_profile.get()) }
     {
         profile.ready(s.task(next).path.clone());
     }
@@ -2178,7 +2178,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
         let s = scheduler(ctx);
         s.runnable.push_back(index);
         #[cfg(feature = "measurement")]
-        if let Some(profile) = unsafe { &mut (*ctx).run().mc_profile } {
+        if let Some(profile) = unsafe { &mut (*(*(*ctx).run_ptr()).mc_profile.get()) }.as_mut() {
             profile.ready(s.task(index).path.clone());
         }
     }
@@ -2779,7 +2779,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_canceled(
 pub(crate) unsafe fn canceled(ctx: *mut TaskCtx) -> Option<u32> {
     // SAFETY: the context is live.
     let shield = unsafe { (*ctx).shield };
-    unsafe { (*ctx).run().tasks.as_deref_mut() }.and_then(|s| s.canceled(shield))
+    unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut() }.and_then(|s| s.canceled(shield))
 }
 
 /// The running task's cancellation at a check: live its own; in a free-mode replay, unless
@@ -3231,7 +3231,7 @@ fn mutex_release_op(ctx: *mut TaskCtx, word: u64, outcome: &str) {
 pub(crate) fn end_run(ctx: &mut TaskCtx) {
     let wide = crate::pool::wide(ctx.run_ref());
     // The run's code ran on one thread last, so its other threads are idle: they leave.
-    crate::pool::shutdown(ctx.run());
+    crate::pool::shutdown(ctx.run_ref());
     if let Some(metrics) = ctx.run_ref().worker_metrics.clone() {
         metrics.stack_rss(stack_rss(ctx));
     }

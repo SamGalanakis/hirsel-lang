@@ -66,10 +66,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_exit_report(
     node: *const Node,
 ) {
     unsafe {
-        if (*ctx).run().entry_result.is_some() {
+        if (*(*(*ctx).run_ptr()).entry_result.get()).is_some() {
             crate::fault("an entry registered two returned Results");
         }
-        (*ctx).run().entry_result = Some(Returned {
+        (*(*(*ctx).run_ptr()).entry_result.get()) = Some(Returned {
             value,
             layout,
             payload_offset,

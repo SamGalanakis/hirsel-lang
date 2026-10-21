@@ -13,6 +13,7 @@ use crate::count::finite_count_max;
 use crate::failure::FailureState;
 use crate::finalize::CloseThunk;
 use crate::region::{REGION_POOL_IDLE_CAP, RegionPool};
+use crate::tasks::role::cell::RoleCell;
 use crate::{ABI_VERSION, fault};
 
 /// `Config::flags`: diagnostic mode (descriptor, header and state checks; payload poisoning).
@@ -232,28 +233,28 @@ pub(crate) struct RunShared {
     pub(crate) count_max: u32,
     pub(crate) close_handle: Option<CloseThunk>,
     pub(crate) hash_seed: u64,
-    io_data: *mut std::ffi::c_void,
+    io_data: std::sync::atomic::AtomicPtr<std::ffi::c_void>,
     /// The bound Io binding's Path identities and launch arguments (`crate::paths`).
     pub(crate) names: Option<std::sync::Arc<crate::paths::Names>>,
     pub(crate) region_owners:
         std::sync::Mutex<std::collections::BTreeMap<usize, crate::region::OwnerRecord>>,
-    pub(crate) entry_result: Option<crate::exit_report::Returned>,
+    pub(crate) entry_result: RoleCell<Option<crate::exit_report::Returned>>,
     /// The run's tasks, from its first scope (CONC-2).
-    pub(crate) tasks: Option<Box<crate::tasks::Scheduler>>,
+    pub(crate) tasks: RoleCell<Option<Box<crate::tasks::Scheduler>>>,
     /// Where a stop of a width-1 run returns (`crate::stop`).
-    pub(crate) driver: crate::stop::Driver,
+    pub(crate) driver: RoleCell<crate::stop::Driver>,
     /// The root run's execution of runner calls and the callee runs they start (RUN-10).
-    pub(crate) runners: Option<Box<crate::runners::Execution>>,
+    pub(crate) runners: RoleCell<Option<Box<crate::runners::Execution>>>,
     /// A callee run's execution root, whose launcher a stop returns to; null for a root.
     pub(crate) root: *mut RunShared,
     /// The run's stop word and what its host asks of it (`crate::stop`).
     pub(crate) control: std::sync::Arc<crate::stop::Control>,
     /// The Io binding's parked requests and armed deadlines, mirrored where every worker reads
     /// it (`crate::host_waits`).
-    pub(crate) io_facade: Option<Box<crate::io::Binding>>,
+    pub(crate) io_facade: RoleCell<Option<Box<crate::io::Binding>>>,
     pub(crate) host_waits: std::sync::atomic::AtomicU32,
     /// The root task's entry, words and stack, owned by the run (`crate::stop`).
-    pub(crate) launch: Option<Box<crate::stop::LaunchFrame>>,
+    pub(crate) launch: RoleCell<Option<Box<crate::stop::LaunchFrame>>>,
     /// The run's root context and its first worker (the home thread's), which a detached
     /// run's last thread frees ([`reclaim`]).
     root_ctx: *mut TaskCtx,
@@ -263,7 +264,7 @@ pub(crate) struct RunShared {
     /// The scheduler policy the run's tasks start with (`inputs.scheduler`).
     pub(crate) schedule: hirsel_kernels::schedule::Schedule,
     /// Free mode's session and test channel (`crate::free`).
-    pub(crate) free: Option<Box<crate::free::Free>>,
+    pub(crate) free: RoleCell<Option<Box<crate::free::Free>>>,
     /// The admitted tasks.free@1 policy, independently of recording.
     pub(crate) free_mode: bool,
     /// The exact counts of roots past the finite maximum (`crate::roots`).
@@ -274,17 +275,17 @@ pub(crate) struct RunShared {
     pub(crate) fuel: crate::budget::FuelPool,
     /// The home thread and blocking-pool threads, from the first pool dispatch
     /// (`crate::pool`).
-    pub(crate) execs: Option<Box<crate::pool::Execs>>,
+    pub(crate) execs: RoleCell<Option<Box<crate::pool::Execs>>>,
     /// The extern row's headroom counters, when metrics are enabled (`crate::pool`).
     pub(crate) extern_metrics: Option<std::sync::Arc<crate::pool::ExternMetrics>>,
     /// The scheduling rows' headroom counters, when metrics are enabled (`crate::pool`).
     pub(crate) worker_metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
     #[cfg(feature = "measurement")]
-    pub(crate) measurement_output: Option<std::fs::File>,
+    pub(crate) measurement_output: RoleCell<Option<std::fs::File>>,
     #[cfg(feature = "measurement")]
-    pub(crate) mc_profile: Option<crate::tasks::profile::Profile>,
+    pub(crate) mc_profile: RoleCell<Option<crate::tasks::profile::Profile>>,
     #[cfg(feature = "measurement")]
-    pub(crate) profile_output: Option<std::fs::File>,
+    pub(crate) profile_output: RoleCell<Option<std::fs::File>>,
 }
 
 impl RunShared {
@@ -356,16 +357,20 @@ impl TaskCtx {
                 .return_segment(segment, |id| &raw mut (*(*run).heaps.heap(id)).regions)
         }
     }
-    /// The run this task belongs to.
+    /// Exclusive access during admission or after every worker has quiesced.
+    /// Runtime entries must use `run_ref` and project role-owned fields through
+    /// `RoleCell::get`; owning the scheduler role alone does not permit an
+    /// exclusive borrow of the whole run while other services read it.
     #[inline(always)]
     pub(crate) fn run(&mut self) -> &mut RunShared {
-        // SAFETY: the run outlives each of its tasks.
+        // SAFETY: callers establish admission or quiescence as described above;
+        // the run outlives each of its tasks.
         unsafe { &mut *self.run }
     }
     /// The run this task belongs to, read only.
     #[inline(always)]
     pub(crate) fn run_ref(&self) -> &RunShared {
-        // SAFETY: as for `run`.
+        // SAFETY: the run outlives this task; live mutations use interior mutability.
         unsafe { &*self.run }
     }
     /// The run's state, without borrowing the task's context.
@@ -496,7 +501,9 @@ impl TaskCtx {
     /// The adapter outlives every release on this run. Close-handle may run only
     /// while the adapter is bound. No simultaneous access to the adapter is allowed.
     pub unsafe fn bind_io_data(&mut self, data: *mut std::ffi::c_void) {
-        self.run().io_data = data;
+        self.run_ref()
+            .io_data
+            .store(data, std::sync::atomic::Ordering::Release);
     }
     /// Apply the run's budgets (`budgets.limits@2`) before its entry runs, after its workers
     /// start. At width 1 without a host's stop handle the fuel pool hands the whole budget out
@@ -521,7 +528,9 @@ impl TaskCtx {
     }
     /// Retrieve the explicitly bound adapter; there is no ambient fallback.
     pub(crate) fn io_data(&self) -> *mut std::ffi::c_void {
-        self.run_ref().io_data
+        self.run_ref()
+            .io_data
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Read the diagnostic side state of a block owned by this context.
@@ -608,7 +617,7 @@ impl TaskCtx {
                 .measurement
                 .write(&mut output)
                 .unwrap_or_else(|_| crate::environmental("could not write the measurement report"));
-            if let Some(profile) = &self.run_ref().mc_profile {
+            if let Some(profile) = self.run_ref().mc_profile.as_ref() {
                 profile.write(output).unwrap_or_else(|_| {
                     crate::environmental("could not write the segment profile")
                 });
@@ -673,7 +682,7 @@ impl TaskCtx {
         if crate::pool::wide(self.run_ref()) {
             // Every thread of the run is idle: they leave, and the root, switched out where it
             // last ran, goes back to the home worker.
-            crate::pool::shutdown(self.run());
+            crate::pool::shutdown(self.run_ref());
             self.home_again();
         } else {
             self.rebind();
@@ -770,36 +779,36 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         count_max,
         close_handle: config.close_handle,
         hash_seed: config.hash_seed,
-        io_data: ptr::null_mut(),
+        io_data: Default::default(),
         names: None,
         region_owners: Default::default(),
-        entry_result: None,
-        tasks: None,
-        driver: crate::stop::Driver::default(),
-        runners: None,
+        entry_result: RoleCell::new(None),
+        tasks: RoleCell::new(None),
+        driver: RoleCell::new(crate::stop::Driver::default()),
+        runners: RoleCell::new(None),
         root: ptr::null_mut(),
         control: Default::default(),
-        io_facade: None,
+        io_facade: RoleCell::new(None),
         host_waits: Default::default(),
-        launch: None,
+        launch: RoleCell::new(None),
         root_ctx: ptr::null_mut(),
         home: ptr::null_mut(),
         failure_table: None,
         schedule: Default::default(),
-        free: None,
+        free: RoleCell::new(None),
         free_mode: false,
         root_overflow: Default::default(),
         heaps,
         fuel: Default::default(),
-        execs: None,
+        execs: RoleCell::new(None),
         extern_metrics: None,
         worker_metrics: None,
         #[cfg(feature = "measurement")]
-        measurement_output: None,
+        measurement_output: RoleCell::new(None),
         #[cfg(feature = "measurement")]
-        mc_profile: None,
+        mc_profile: RoleCell::new(None),
         #[cfg(feature = "measurement")]
-        profile_output: None,
+        profile_output: RoleCell::new(None),
     }));
     // SAFETY: the run was just created; its root context owns it and the worker.
     let worker = unsafe { Worker::create(run) };
@@ -923,7 +932,7 @@ pub(crate) unsafe fn detach(ctx: *mut TaskCtx) {
     // SAFETY: caller contract.
     unsafe {
         let run = (*ctx).run;
-        if !crate::pool::detach(&mut *run) {
+        if !crate::pool::detach(&*run) {
             reclaim(run);
         }
     }

@@ -2580,7 +2580,7 @@ impl Binding {
     pub(crate) unsafe fn bridge(ctx: *mut crate::TaskCtx) {
         unsafe {
             let run = (*ctx).run_ptr();
-            if (*ctx).io_data().is_null() || (*run).io_facade.is_some() {
+            if (*ctx).io_data().is_null() || (*(*run).io_facade.get()).is_some() {
                 return;
             }
             let home = Self::raw(ctx);
@@ -2593,7 +2593,7 @@ impl Binding {
                 waits: std::mem::take(&mut home.waits),
             });
             (*ctx).bind_io_data((&mut *facade as *mut Self).cast());
-            (*run).io_facade = Some(facade);
+            (*(*run).io_facade.get()) = Some(facade);
         }
     }
 

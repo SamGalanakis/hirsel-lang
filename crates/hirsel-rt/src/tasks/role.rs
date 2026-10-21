@@ -12,6 +12,8 @@ use std::sync::{Condvar, Mutex};
 
 use crate::TaskCtx;
 
+pub(crate) mod cell;
+
 #[derive(Default)]
 pub(crate) struct Role {
     enabled: AtomicBool,
@@ -70,8 +72,7 @@ pub(crate) unsafe fn claim(run: *mut crate::context::RunShared, task: u32) -> *m
         if role.enabled.load(Ordering::Acquire) {
             role.acquire(claim);
         }
-        let ctx = (*run)
-            .tasks
+        let ctx = (*(*run).tasks.get())
             .as_deref_mut()
             .expect("a run with tasks")
             .task(task)
@@ -101,7 +102,7 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx) {
     // SAFETY: the role exclusively owns the scheduler. This intentionally
     // avoids scheduler(), which itself checks the running task's stop word.
     unsafe {
-        if let Some(scheduler) = (*(*ctx).run_ptr()).tasks.as_deref_mut() {
+        if let Some(scheduler) = (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut() {
             scheduler.current = (*ctx).task_id;
         }
     }

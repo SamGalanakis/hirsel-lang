@@ -2236,7 +2236,7 @@ pub(crate) unsafe fn execute(
         #[cfg(feature = "measurement")]
         {
             if measurement_segments {
-                (*ctx).run().mc_profile = Some(Default::default());
+                *(*(*ctx).run_ptr()).mc_profile.get() = Some(Default::default());
                 crate::tasks::profile::resume(ctx);
             }
         }

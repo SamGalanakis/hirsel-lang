@@ -30,11 +30,22 @@ invalidate a save address. Runtime calls into compiled task, root and finalizer
 code release the role and reset nested entry depth until the call returns.
 The diagnostic region-owner map has its own mutex.
 
+Mutable run fields use `RoleCell<T>`, which contains an `UnsafeCell<T>`.
+Runtime entries project through
+`RoleCell::get` while holding the role, without borrowing the whole run
+exclusively. Such field borrows must end before a role handoff. The remaining
+`TaskCtx::run` callers are restricted to admission and quiescent teardown.
+`Execs` is shared during execution: topology and thread handles are published under the compute lock,
+the idle stack has its own lock, and shutdown drops
+those locks before joining. The Io binding pointer uses release/acquire
+publication. These projections remove whole-run aliasing; they do not replace
+the role or prove individual concurrent service implementations safe.
+
 ## Integration status
 
 This is a protocol and guarded migration substrate, not an enabled concurrent
 native ordered executor. The default remains W1's cooperative run token.
-Concurrent drivers must first finish the RunShared interior-mutability audit,
+Concurrent drivers must first validate their service lifetimes and field access,
 install saved-fiber dispatch and supply capture/type metadata, operation logs,
 physical-allocation hooks, root-release positions and canonical event emission.
 The width-1 canonical emitter remains an unfinished R5 dependency.

@@ -247,7 +247,7 @@ impl Drop for Execution {
 /// `ctx` is the live root context of a run that runs nothing yet.
 pub unsafe fn configure(ctx: *mut TaskCtx, config: Config) {
     // SAFETY: caller contract.
-    unsafe { (*ctx).run().runners = Some(Box::new(Execution::new(config, ctx))) };
+    unsafe { *(*ctx).run().runners = Some(Box::new(Execution::new(config, ctx))) };
 }
 
 /// The run state of the execution `ctx`'s run belongs to: its root's.
@@ -269,8 +269,7 @@ fn execution(ctx: *mut TaskCtx) -> &'static mut Execution {
     // SAFETY: the execution lives as long as the root run, and only the running task reaches
     // it; no reference is kept across a switch.
     unsafe {
-        (*root_run(ctx))
-            .runners
+        (*(*root_run(ctx)).runners.get())
             .get_or_insert_with(|| Box::new(Execution::new(Config::default(), ctx)))
     }
 }
@@ -1500,7 +1499,7 @@ mod permit_tests {
                     callee: None,
                 });
             }
-            (*root).run().runners = Some(Box::new(execution));
+            *(*root).run().runners = Some(Box::new(execution));
             crate::pool::enter_root(root).unwrap();
             let mut active = 0;
             for target in [1, 2, 1, 0, 2, 0] {

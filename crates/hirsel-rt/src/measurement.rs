@@ -156,10 +156,10 @@ impl TaskCtx {
     /// Retain the output descriptor pinned and checked by the host adapter before
     /// entry. Only instrumented archives have this method; no path is reopened.
     pub fn set_measurement_output(&mut self, file: std::fs::File) {
-        self.run().measurement_output = Some(file);
+        *self.run().measurement_output = Some(file);
     }
     pub fn set_profile_output(&mut self, file: std::fs::File) {
-        self.run().profile_output = Some(file);
+        *self.run().profile_output = Some(file);
     }
     pub fn measurements(&self) -> &Counters {
         &self.heap_ref().measurement.totals

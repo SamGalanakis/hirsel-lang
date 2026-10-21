@@ -358,7 +358,7 @@ pub(crate) fn holders(run: &RunShared) -> Option<Arc<Holders>> {
 pub(crate) struct Execs {
     home: Arc<Exec>,
     /// The home thread's idle fiber at width 1, prepared when home first waits.
-    home_idle: Option<Stack>,
+    home_idle: Mutex<Option<Stack>>,
     compute: Mutex<ComputeWorkers>,
     pool: Mutex<Vec<PoolThread>>,
     pub(crate) permits: Arc<Permits>,
@@ -612,19 +612,29 @@ pub(crate) fn wide(run: &RunShared) -> bool {
 }
 
 /// The run's execs, created with the home thread holding the run's one permit.
-fn execs(ctx: *mut TaskCtx) -> &'static mut Execs {
+fn execs(ctx: *mut TaskCtx) -> &'static Execs {
+    // SAFETY: execution may share Execs, whose live mutations are interior.
+    let existing = unsafe { (*(*(*ctx).run_ptr()).execs.get()).as_deref() };
+    if let Some(execs) = existing {
+        return execs;
+    }
+    // SAFETY: the first initialization is admission or scheduler-role owned.
+    unsafe { init_execs(ctx) }
+}
+
+unsafe fn init_execs(ctx: *mut TaskCtx) -> &'static mut Execs {
     // SAFETY: the context and its run are live for the whole run; the execs are reached by the
     // thread that runs the run's code, one at a time, and their shared parts are behind
     // locks or atomics.
     unsafe {
         let run = (*ctx).run_ptr();
-        (*run).execs.get_or_insert_with(|| {
+        (*(*run).execs.get()).get_or_insert_with(|| {
             if on_pool() {
                 fault("a run's first dispatch came from a pool thread");
             }
             Box::new(Execs {
                 home: Exec::new(Kind::Home, (*ctx).worker_ptr(), false),
-                home_idle: None,
+                home_idle: Mutex::new(None),
                 compute: Mutex::new(ComputeWorkers::default()),
                 pool: Mutex::new(Vec::new()),
                 permits: process_permits(),
@@ -664,7 +674,7 @@ fn pool_exec(execs: &Execs, slot: u16) -> *const Exec {
 /// a width-1 run's first pool dispatch every task is home's.
 pub(crate) fn target(ctx: *mut TaskCtx, owner: Owner, last: Option<u16>) -> Option<*const Exec> {
     // SAFETY: the context is live.
-    let execs = unsafe { (*(*ctx).run_ptr()).execs.as_deref() }?;
+    let execs = unsafe { (*(*(*ctx).run_ptr()).execs.get()).as_deref() }?;
     resize(ctx);
     let compute = execs.compute.lock().unwrap();
     let me = current(execs);
@@ -755,7 +765,7 @@ pub(crate) unsafe fn hand_off(
 ///
 /// # Safety
 /// `me` is the calling thread's exec.
-unsafe fn idle_of(ctx: *mut TaskCtx, execs: &mut Execs, me: *const Exec) -> *mut u8 {
+unsafe fn idle_of(ctx: *mut TaskCtx, execs: &Execs, me: *const Exec) -> *mut u8 {
     // SAFETY: caller contract.
     unsafe {
         if (*me).idle.get().is_null() {
@@ -764,7 +774,7 @@ unsafe fn idle_of(ctx: *mut TaskCtx, execs: &mut Execs, me: *const Exec) -> *mut
             }
             let stack = Stack::new();
             let sp = stack.prepare(home_idle, (*ctx).run_ptr().cast(), std::ptr::null_mut());
-            execs.home_idle = Some(stack);
+            *execs.home_idle.lock().unwrap() = Some(stack);
             (*me).idle.set(sp);
         }
         (*me).idle.get()
@@ -806,13 +816,13 @@ unsafe fn post_deferred(run: *mut RunShared, exec: &Exec) {
     };
     // SAFETY: the run's execs outlive every post.
     unsafe {
-        if let Some(execs) = (*run).execs.as_deref() {
+        if let Some(execs) = (*(*run).execs.get()).as_deref() {
             execs.permits.release(exec);
         }
         crate::stop::set_running(std::ptr::null_mut());
         crate::foreign::restore(crate::foreign::ForeignScope::NONE);
         let queued = (*run).extern_metrics.as_ref().map(|_| Instant::now());
-        let execs = (*run).execs.as_deref().unwrap();
+        let execs = (*(*run).execs.get()).as_deref().unwrap();
         // Clear before publishing: the receiver can immediately bounce a task
         // back, whose fresh busy=true must never be erased by this sender.
         // The snapshot lock prevents the launcher from seeing the transit gap.
@@ -829,7 +839,7 @@ unsafe fn post_deferred(run: *mut RunShared, exec: &Exec) {
 unsafe fn resume(run: *mut RunShared, exec: &Exec, task: u32, permit: bool) {
     // SAFETY: the run is live; its execs and tasks outlive every resume.
     unsafe {
-        if permit && let Some(execs) = (*run).execs.as_deref() {
+        if permit && let Some(execs) = (*(*run).execs.get()).as_deref() {
             if execs
                 .permits
                 .acquire(
@@ -967,12 +977,15 @@ fn worker_main(run: RunPtr, exec: Arc<Exec>, holders: Arc<Holders>) {
 pub(crate) unsafe fn start(ctx: *mut TaskCtx, width: u32, migrate: bool) {
     // SAFETY: caller contract.
     let run = unsafe { (*ctx).run_ptr() };
-    let execs = execs(ctx);
+    let execs = unsafe { init_execs(ctx) };
     if !execs.compute.lock().unwrap().active.is_empty() || !execs.pool.lock().unwrap().is_empty() {
         fault("a run's workers started twice");
     }
     execs.home.held.store(false, Ordering::Release);
     execs.migrate = migrate;
+    // Live topology and thread handles are published under the compute lock.
+    // No exclusive Execs borrow crosses the first thread spawn.
+    let execs: &Execs = execs;
     unsafe { (&(*run).control).width.store(width, Ordering::Release) };
     grow(run, execs, &mut execs.compute.lock().unwrap(), width);
     // SAFETY: as above.
@@ -1011,7 +1024,7 @@ fn grow(run: *mut RunShared, execs: &Execs, compute: &mut ComputeWorkers, width:
 /// retired execs alive until shutdown, so a task's last-worker pointer stays valid.
 fn resize(ctx: *mut TaskCtx) {
     let run = unsafe { (*ctx).run_ptr() };
-    let execs = unsafe { (*run).execs.as_deref().unwrap() };
+    let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
     let width = unsafe { (&(*run).control).width.load(Ordering::Acquire) };
     if width == 0 {
         return;
@@ -1058,8 +1071,8 @@ fn resize(ctx: *mut TaskCtx) {
 /// The run has compute workers and has not started.
 pub(crate) unsafe fn start_root(run: *mut RunShared, task: u32) {
     // SAFETY: caller contract.
-    let execs =
-        unsafe { (*run).execs.as_deref() }.unwrap_or_else(|| fault("a run without workers"));
+    let execs = unsafe { (*(*run).execs.get()).as_deref() }
+        .unwrap_or_else(|| fault("a run without workers"));
     execs.compute.lock().unwrap().active[0].post(Post::Run { task, permit: true }, None);
 }
 
@@ -1073,7 +1086,7 @@ pub(crate) unsafe fn start_root(run: *mut RunShared, task: u32) {
 /// The calling thread is `run`'s home thread, at width > 1, on the launcher's stack.
 pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool) {
     // SAFETY: caller contract.
-    let home = unsafe { Arc::clone(&(*run).execs.as_deref().unwrap().home) };
+    let home = unsafe { Arc::clone(&(*(*run).execs.get()).as_deref().unwrap().home) };
     loop {
         // SAFETY: this is the home thread, idle on its own stack.
         unsafe { post_deferred(run, &home) };
@@ -1099,7 +1112,7 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
     // queued call is withdrawn before home state is destroyed; its caller still
     // owns the borrowed buffers until the completion below wakes it.
     unsafe {
-        (*run).execs.as_deref().unwrap().calls.sweep();
+        (*(*run).execs.get()).as_deref().unwrap().calls.sweep();
     }
     loop {
         let post = home.inbox.lock().unwrap().posts.pop_front();
@@ -1264,7 +1277,7 @@ pub(crate) fn has_slot(ctx: *mut TaskCtx) -> bool {
 /// The calling thread's compute permit goes back: the task it runs enters C.
 pub(crate) fn release_permit(ctx: *mut TaskCtx) {
     // SAFETY: the context is live.
-    if let Some(execs) = unsafe { (*(*ctx).run_ptr()).execs.as_deref() } {
+    if let Some(execs) = unsafe { (*(*(*ctx).run_ptr()).execs.get()).as_deref() } {
         // SAFETY: the current exec is this thread's.
         execs.permits.release(unsafe { &*current(execs) });
     }
@@ -1323,8 +1336,8 @@ pub(crate) fn leave_root(ctx: *mut TaskCtx) {
 /// The run ended and every one of its threads is idle: each leaves and is joined. Their
 /// workers stay, for the caller to read and then retire ([`retire`]); the run's root
 /// context goes back to the home worker, which holds the run's storage for its exit.
-pub(crate) fn shutdown(run: &mut RunShared) {
-    let Some(execs) = run.execs.as_deref_mut() else {
+pub(crate) fn shutdown(run: &RunShared) {
+    let Some(execs) = run.execs.as_deref() else {
         return;
     };
     execs.home.close();
@@ -1332,16 +1345,25 @@ pub(crate) fn shutdown(run: &mut RunShared) {
     for exec in compute.active.iter().chain(&compute.retiring) {
         exec.post(Post::Exit, None);
     }
-    for thread in compute.threads.drain(..) {
+    let compute_threads = std::mem::take(&mut compute.threads);
+    drop(compute);
+    for thread in compute_threads {
         if thread.join().is_err() {
             fault("a compute worker panicked");
         }
     }
-    for thread in execs.pool.get_mut().unwrap() {
-        thread.exec.post(Post::Exit, None);
-        if let Some(handle) = thread.thread.take()
-            && handle.join().is_err()
-        {
+    let pool_threads: Vec<_> = execs
+        .pool
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .filter_map(|thread| {
+            thread.exec.post(Post::Exit, None);
+            thread.thread.take()
+        })
+        .collect();
+    for thread in pool_threads {
+        if thread.join().is_err() {
             fault("a blocking-pool thread panicked");
         }
     }
@@ -1384,14 +1406,14 @@ pub(crate) fn retire(run: &mut RunShared) {
         // SAFETY: the worker's thread left; the task last bound to it was switched out.
         unsafe { Worker::retire(worker) };
     }
-    run.execs = None;
+    *run.execs = None;
 }
 
 /// The launcher leaves a stopped run whose workers still hold it: every thread leaves at its
 /// next post (a busy one once it abandons its task), and the last to leave frees the run,
 /// its root context and its workers ([`crate::context::reclaim`]). False when no thread is
 /// left, so the launcher frees it now.
-pub(crate) fn detach(run: &mut RunShared) -> bool {
+pub(crate) fn detach(run: &RunShared) -> bool {
     let Some(execs) = run.execs.as_deref() else {
         return false;
     };

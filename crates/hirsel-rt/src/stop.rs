@@ -294,7 +294,7 @@ pub(crate) unsafe fn raise(ctx: *mut TaskCtx, stop: Stop) -> ! {
     // launcher (RUN-10).
     let run = unsafe {
         let run = (*ctx).run_ptr();
-        &mut *if (*run).root.is_null() {
+        &*if (*run).root.is_null() {
             run
         } else {
             (*run).root
@@ -418,7 +418,7 @@ unsafe extern "C" fn root_entry(ctx: *mut u8, frame: *mut u8) -> ! {
             crate::free::root_end(ctx);
         }
         if status == crate::STATUS_OK
-            && let Some(returned) = (*ctx).run().entry_result.take()
+            && let Some(returned) = (*(*(*ctx).run_ptr()).entry_result.get()).take()
         {
             if let Some(report) = (*frame).report {
                 crate::tasks::at_home(ctx, &mut || (*report)(&returned));
@@ -441,7 +441,7 @@ unsafe extern "C" fn root_entry(ctx: *mut u8, frame: *mut u8) -> ! {
             crate::pool::abandon(ctx);
         }
         let mut finished = std::ptr::null_mut();
-        fiber::switch(&raw mut finished, (*ctx).run().driver.sp);
+        fiber::switch(&raw mut finished, (*(*(*ctx).run_ptr()).driver.get()).sp);
     }
     crate::fault("a finished root task was resumed")
 }
@@ -463,13 +463,13 @@ pub(crate) unsafe fn run_root(ctx: *mut TaskCtx, frame: Box<LaunchFrame>) -> Sto
     // SAFETY: the context is live; the root fiber returns here when it finishes or stops.
     unsafe {
         let run = (*ctx).run_ptr();
-        if !(*run).driver.sp.is_null() || (*run).launch.is_some() {
+        if !(*(*run).driver.get()).sp.is_null() || (*(*run).launch.get()).is_some() {
             crate::fault("a run context driven twice");
         }
         if crate::pool::wide(&*run) {
             crate::io::Binding::bridge(ctx);
         }
-        let frame: *mut LaunchFrame = &raw mut **(*run).launch.insert(frame);
+        let frame: *mut LaunchFrame = &raw mut **(*(*run).launch.get()).insert(frame);
         let sp = (*frame).stack.prepare(root_entry, ctx.cast(), frame.cast());
         if crate::pool::wide(&*run) {
             crate::tasks::start_root(ctx, sp);
@@ -490,13 +490,13 @@ pub(crate) unsafe fn run_root(ctx: *mut TaskCtx, frame: Box<LaunchFrame>) -> Sto
         crate::pool::enter_root(ctx)?;
         let enclosing_foreign = crate::foreign::save();
         let enclosing = RUNNING.with(|r| r.replace(ctx));
-        fiber::switch(&raw mut (*run).driver.sp, sp);
+        fiber::switch(&raw mut (*(*run).driver.get()).sp, sp);
         // A stop may leave any task of the run bound to the worker.
         (*ctx).rebind();
         crate::pool::leave_root(ctx);
         RUNNING.with(|r| r.set(enclosing));
         crate::foreign::restore(enclosing_foreign);
-        (*run).driver.sp = std::ptr::null_mut();
+        (*(*run).driver.get()).sp = std::ptr::null_mut();
         if (*frame).done.load(Ordering::Acquire) {
             return Ok((*frame).status);
         }
