@@ -188,11 +188,21 @@ pub enum Count {
     ModeMemoQueries,
     /// Entries those queries reused, interior sub-proofs included.
     ModeMemoHits,
+    /// S1 keys first claimed by a worker.
+    S1Claims,
+    /// S1 requests that park on another worker's key.
+    S1Parks,
+    /// S1 requests run inline to avoid a wait-for cycle.
+    S1Duplicates,
+    /// Nanoseconds acquiring the S1 coordinator's lock (sum over workers).
+    S1LockWaitNs,
+    /// Nanoseconds parked on S1 dependencies (sum over workers).
+    S1ParkNs,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 28] = [
+    pub const ALL: [Count; 33] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -221,6 +231,11 @@ impl Count {
         Count::InvalidatedEnvironment,
         Count::ModeMemoQueries,
         Count::ModeMemoHits,
+        Count::S1Claims,
+        Count::S1Parks,
+        Count::S1Duplicates,
+        Count::S1LockWaitNs,
+        Count::S1ParkNs,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -253,6 +268,11 @@ impl Count {
             Count::InvalidatedEnvironment => "invalidated by environment",
             Count::ModeMemoQueries => "mode memo queries",
             Count::ModeMemoHits => "mode memo hits",
+            Count::S1Claims => "S1 claims",
+            Count::S1Parks => "S1 parks",
+            Count::S1Duplicates => "S1 duplicates",
+            Count::S1LockWaitNs => "S1 lock wait ns",
+            Count::S1ParkNs => "S1 park ns",
         }
     }
 }

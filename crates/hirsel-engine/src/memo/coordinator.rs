@@ -41,6 +41,7 @@
 //! cycle follows tsrs's rule that a diagnostic must not depend on what the
 //! checker visited before (/tmp/ref-tsrs/notes/fix-history-dependent-diagnostics.md).
 use super::depth::DepthEvidence;
+use hirsel_intern::timings::{self, Count};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -153,8 +154,9 @@ impl<K: Clone + Eq + Hash> S1Coordinator<K> {
     fn lock(&self) -> MutexGuard<'_, State<K>> {
         let start = Instant::now();
         let guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        self.lock_wait_ns
-            .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        let elapsed = start.elapsed().as_nanos() as u64;
+        self.lock_wait_ns.fetch_add(elapsed, Ordering::Relaxed);
+        timings::count_by(Count::S1LockWaitNs, elapsed);
         guard
     }
     fn release(&self, key: &K, worker: WorkerId) {
@@ -254,6 +256,7 @@ impl<K: Clone + Eq + Hash, S: Copy> S1Worker<K, S> {
             let Some(&owner) = state.running.get(&key) else {
                 state.running.insert(key.clone(), self.id);
                 coordinator.claims.fetch_add(1, Ordering::Relaxed);
+                timings::count(Count::S1Claims);
                 break true;
             };
             if owner == self.id {
@@ -271,18 +274,20 @@ impl<K: Clone + Eq + Hash, S: Copy> S1Worker<K, S> {
             };
             if deadlock {
                 coordinator.duplicates.fetch_add(1, Ordering::Relaxed);
+                timings::count(Count::S1Duplicates);
                 break false;
             }
             state.waits.insert(self.id, owner);
             coordinator.parks.fetch_add(1, Ordering::Relaxed);
+            timings::count(Count::S1Parks);
             let parked = Instant::now();
             state = coordinator
                 .finished
                 .wait(state)
                 .unwrap_or_else(|e| e.into_inner());
-            coordinator
-                .park_ns
-                .fetch_add(parked.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            let elapsed = parked.elapsed().as_nanos() as u64;
+            coordinator.park_ns.fetch_add(elapsed, Ordering::Relaxed);
+            timings::count_by(Count::S1ParkNs, elapsed);
             state.waits.remove(&self.id);
             if state.running.get(&key) != Some(&owner) {
                 return Entered::Settled;
