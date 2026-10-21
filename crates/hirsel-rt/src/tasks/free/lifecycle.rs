@@ -4,6 +4,118 @@
 use super::super::*;
 
 /// # Safety
+/// As for ordinary TaskScopeExit. This policy does not yet admit timers.
+pub(crate) unsafe fn scope_exit(
+    ctx: *mut TaskCtx,
+    word: u64,
+    error: u8,
+    caller_site: u64,
+) -> Stopped<u8> {
+    super::record::begin(ctx);
+    let s = scheduler(ctx) as *mut Scheduler;
+    let scope = unsafe { (*s).scope_handle(word) };
+    let me = unsafe { (*s).current };
+    assert!(
+        unsafe { (*s).scope(scope).deadline.is_none() },
+        "native Free deadlines are not admitted"
+    );
+    let failing = error != 0 || unsafe { (*ctx).failure.active() };
+    let mut cancellations = Vec::new();
+    if failing {
+        for child in unsafe { (*s).scope(scope).children.clone() } {
+            cancellations.push((child, unsafe { (*s).prepare_cancel(child) }));
+        }
+    }
+    super::record::publish(ctx, Phase::Entered, |_| unsafe {
+        assert_eq!((*s).task(me).scopes.pop(), Some(scope));
+        (*s).cancel_epoch.changed();
+        for (child, targets) in &cancellations {
+            (*s).cancel_prepared(*child, CANCEL_PARENT, targets);
+        }
+    })?;
+    drop(cancellations);
+    let ready = unsafe {
+        let children = (*s).scope(scope).children.clone();
+        children.iter().all(|&child| {
+            readiness::saved(&*s, child)
+                && matches!(
+                    (&(*s).tasks)[child as usize].as_ref().unwrap().state,
+                    State::Holding | State::Done
+                )
+        })
+    };
+    if !ready {
+        unsafe { try_block(&mut *ctx, Wait::Exit { scope }, false, caller_site) }?;
+    }
+    let children = scheduler(ctx).scope(scope).children.clone();
+    for &child in children.iter().rev() {
+        if scheduler(ctx).task(child).state == State::Holding {
+            scheduler(ctx).task(child).slot = None;
+            unsafe { hand_off(&mut *ctx, child) };
+        }
+    }
+    let s = scheduler(ctx) as *mut Scheduler;
+    let own_path = unsafe { (*s).task(me).path.clone() };
+    let mut retired = Vec::with_capacity(children.len());
+    unsafe {
+        (*s).vacant_tasks.reserve(children.len());
+        (*s).vacant_scopes.reserve(1);
+        // Simulate reverse retirement's child promotion counts before the
+        // section. Each actual parent precedes its descendants in spawn order.
+        let mut counts: Vec<_> = (*s)
+            .tasks
+            .iter()
+            .map(|row| row.as_ref().map_or(0, |row| row.children.len()))
+            .collect();
+        let mut capacity = counts.clone();
+        for &child in children.iter().rev() {
+            let (state, parent) = {
+                let row = (*s).task(child);
+                (row.state, row.parent)
+            };
+            assert_eq!(state, State::Done);
+            assert!(readiness::saved(&*s, child));
+            if let Some((parent, _)) = parent {
+                counts[parent as usize] = counts[parent as usize] - 1 + counts[child as usize];
+                capacity[parent as usize] = capacity[parent as usize].max(counts[parent as usize]);
+            }
+        }
+        for (index, maximum) in capacity.into_iter().enumerate() {
+            if let Some(row) = (&mut (*s).tasks)[index].as_mut() {
+                row.children.reserve(maximum - row.children.len());
+            }
+        }
+    }
+    let retired_scope = super::record::publish(ctx, Phase::Done, |_| unsafe {
+        let s = &mut *s;
+        for &child in children.iter().rev() {
+            let chain = s.task(child).failure.take();
+            retired.push((s.retire_task(child), chain));
+        }
+        let row = s.scopes[scope as usize].take().expect("an exiting scope");
+        s.vacant_scopes.push(scope);
+        row
+    })?;
+    drop(retired_scope);
+    // Failure order is by spawn path, independent of reverse row retirement.
+    for (row, chain) in retired {
+        if let Some(chain) = chain {
+            unsafe { (*ctx).failure.merge_chain(&own_path, chain) };
+        }
+        drop(row);
+    }
+    drop(children);
+    drop(own_path);
+    let status = if unsafe { (*ctx).failure.active() } {
+        STATUS_FAILURE
+    } else {
+        STATUS_OK
+    };
+    unsafe { try_yield(&mut *ctx) }?;
+    Ok(status)
+}
+
+/// # Safety
 /// As for TaskJoin: handles are live and slot is this owner's None image.
 pub(crate) unsafe fn join(
     ctx: *mut TaskCtx,
@@ -309,6 +421,126 @@ mod tests {
     use crate::tasks::free::record;
 
     #[test]
+    fn a_recorded_scope_exit_discards_holding_results_in_reverse_spawn_order() {
+        use std::sync::{Arc, Mutex};
+        unsafe extern "C" fn result(
+            ctx: *mut TaskCtx,
+            environment: *mut Header,
+            _: u64,
+            _: u64,
+        ) -> u8 {
+            let (id, order) = unsafe {
+                environment
+                    .add(1)
+                    .cast::<(u64, Arc<Mutex<Vec<u64>>>)>()
+                    .read()
+            };
+            let mut image = [1u64, id];
+            let none = [0u64; 2];
+            unsafe {
+                hirsel_rt_v2_task_finish(ctx, image.as_mut_ptr().cast(), none.as_ptr().cast(), 16)
+            };
+            assert_eq!(
+                image,
+                [1, id],
+                "scope exit retains the discarded value for its owner's cleanup"
+            );
+            order.lock().unwrap().push(id);
+            STATUS_OK
+        }
+        for durable in [false, true] {
+            let recording = record::Recording::new(b"native nonempty scope exit", durable);
+            let install = recording.clone();
+            let layout = crate::Layout {
+                magic: crate::LAYOUT_MAGIC,
+                version: crate::LAYOUT_VERSION,
+                size: std::mem::size_of::<(u64, Arc<Mutex<Vec<u64>>>)>() as u64,
+                align: 8,
+                finalizer: None,
+                steps: std::ptr::null(),
+                step_count: 0,
+                field_count: 0,
+                flags: 0,
+                logical: 0,
+                logical_count: std::ptr::null(),
+                scan: std::ptr::null(),
+                scan_words: 0,
+            };
+            let layouts = [&raw const layout];
+            let mut run = crate::host::BodyRun::new(4, false);
+            run.free = true;
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            unsafe { run.use_physical_dispatch() };
+            let order = Arc::new(Mutex::new(Vec::new()));
+            let observed = order.clone();
+            let outcome = run.run(
+                move |ctx| unsafe {
+                    super::super::enable(ctx);
+                    install.root(ctx);
+                },
+                move |ctx| unsafe {
+                    let mut scope = 0;
+                    hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
+                    for id in 0..8u64 {
+                        let size = std::mem::size_of::<(u64, Arc<Mutex<Vec<u64>>>)>() as u64;
+                        let environment = crate::alloc::hirsel_rt_v2_alloc(
+                            ctx,
+                            2,
+                            size,
+                            8,
+                            crate::alloc::DOMAIN_HEAP,
+                            0,
+                        );
+                        environment
+                            .add(1)
+                            .cast::<(u64, Arc<Mutex<Vec<u64>>>)>()
+                            .write((id, order.clone()));
+                        let mut child = 0;
+                        hirsel_rt_v2_task_spawn(
+                            ctx,
+                            0,
+                            0,
+                            std::ptr::null_mut(),
+                            &mut child,
+                            &scope,
+                            result,
+                            environment,
+                        );
+                    }
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                        STATUS_OK
+                    );
+                    let _role = role::Guard::new(ctx);
+                    assert!(scheduler(ctx).task(ROOT).scopes.is_empty());
+                    assert!(scheduler(ctx).tasks.iter().skip(1).all(Option::is_none));
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            assert_eq!(outcome.pending, 0);
+            assert_eq!(*observed.lock().unwrap(), (0..8).rev().collect::<Vec<_>>());
+            let cut = recording
+                .recorder
+                .stop("returned", None)
+                .unwrap()
+                .unwrap()
+                .0;
+            assert_eq!(
+                cut.progress[&vec![]],
+                hirsel_free::phase::Progress::new(10, Phase::Done)
+            );
+            for id in 0..8 {
+                assert_eq!(
+                    cut.progress[&vec![id]],
+                    hirsel_free::phase::Progress::new(1, Phase::Done)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_holding_native_result_has_published_its_end_before_its_saved_image_is_observed() {
         #[derive(Default)]
         struct Rest {
@@ -452,6 +684,11 @@ mod tests {
                 assert_eq!(out, [1, 99]);
                 let _role = role::Guard::new(ctx);
                 assert!(scheduler(ctx).tasks[id as usize].is_none());
+                drop(_role);
+                assert_eq!(
+                    hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                    STATUS_OK
+                );
                 STATUS_OK
             },
         );
@@ -487,12 +724,17 @@ mod tests {
             replay.begin(&[0]);
             replay.publish(&[0], Phase::Entered).unwrap();
             replay.publish(&[0], Phase::Done).unwrap();
-            if tape.cut[&Vec::new()].op == 3 {
+            if tape.cut[&Vec::new()].op >= 3 {
                 replay.begin(&[]);
                 replay.publish(&[], Phase::Entered).unwrap();
-                if tape.cut[&Vec::new()].phase == Phase::Done {
+                if tape.cut[&Vec::new()].op > 3 || tape.cut[&Vec::new()].phase == Phase::Done {
                     replay.publish(&[], Phase::Done).unwrap();
                 }
+            }
+            if tape.cut[&Vec::new()].op == 4 {
+                replay.begin(&[]);
+                replay.publish(&[], Phase::Entered).unwrap();
+                replay.publish(&[], Phase::Done).unwrap();
             }
             assert_eq!(
                 replay.finish().unwrap(),

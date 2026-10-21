@@ -2313,6 +2313,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
             )
         };
     }
+    if free::enabled(ctx) {
+        return unsafe {
+            crate::stop::check(
+                ctx,
+                free::lifecycle::scope_exit(ctx, scope.read(), error, caller_site),
+            )
+        };
+    }
     // SAFETY: caller contract.
     unsafe { exit_scope(&mut *ctx, scope, error, caller_site) }.0
 }
