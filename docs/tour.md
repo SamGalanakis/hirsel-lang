@@ -1688,9 +1688,8 @@ hirsel build conformance/LANG/LANG-2-tour-01-values-run.hir -o /tmp/tour-values
 
 Expected stdout is `7` followed by a newline, exit 0, exactly as in the values
 section. The checked-in stdout template grants only stdout. Use `--release`
-for LLVM O3, `--debug` for O0 with source line tables, `--debug --backend
-cranelift` for the fastest compile, or `--target aarch64-linux` for the
-supported cross target. The executable still
+for LLVM O2, add `--lto` for whole-module LLVM, use `--debug` for the fastest compile, with Cranelift and source line
+tables, or `--target aarch64-linux` for the supported cross target. The executable still
 requires explicit launch grants; building it grants no authority.
 
 ## Foreign functions

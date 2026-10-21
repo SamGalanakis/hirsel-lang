@@ -305,3 +305,43 @@ fn measurement_options_apply_only_to_compiling_commands() {
         "{stderr}"
     );
 }
+
+/// Release and explicit whole-module LLVM optimization preserve executable behavior
+/// and reject combinations that cannot run LLVM optimization.
+#[test]
+fn release_and_explicit_lto_preserve_behavior() {
+    let source = super::file(
+        "fn step(x:u64)->u64 { x+1u64 }\npub fn main()->Result[(),()] { failure.check(step(3u64)==4u64, Arithmetic()); Ok(()) }\n",
+    );
+    let exe = source.with_extension("exe");
+    for lto in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .env("HIRSEL_JOBS", "2")
+            .args(["build", "--release", "--timings=json"]);
+        if lto {
+            command.arg("--lto");
+        }
+        let output = command.arg(&source).arg("-o").arg(&exe).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let launched = Command::new(&exe).output().unwrap();
+        assert!(launched.status.success(), "{launched:?}");
+        assert!(
+            launched.stdout.is_empty() && launched.stderr.is_empty(),
+            "{launched:?}"
+        );
+    }
+    for extra in [["--lto", "--debug"], ["--lto", "--backend=cranelift"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("build")
+            .args(extra)
+            .arg(&source)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+    }
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(exe).unwrap();
+}
