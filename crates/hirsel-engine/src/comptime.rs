@@ -548,41 +548,62 @@ fn operational_limit(limit: &hirsel_tir::ToolingLimit) -> QueryError {
     })
 }
 
-struct Evaluation<'a> {
-    root: DefinitionRef,
-    engine: &'a mut QueryEngine,
+/// Serial request adapter for the same read/product bridge S1 workers use.
+/// Only this adapter borrows an engine; evaluation itself sees immutable TIR
+/// plus a task-local dependency source.
+struct EngineDependencies<'a>(&'a mut QueryEngine);
+impl EngineDependencies<'_> {
+    fn recorded<T>(
+        &mut self,
+        request: impl FnOnce(&mut QueryEngine) -> Result<T, QueryError>,
+    ) -> crate::queries::s1::DependencyProduct<T> {
+        self.0.execution_stack.push(ReadsBuilder::new());
+        let result = request(self.0);
+        let reads = self
+            .0
+            .execution_stack
+            .pop()
+            .expect("dependency read frame")
+            .finish();
+        match reads {
+            Ok(reads) => crate::queries::s1::DependencyProduct { result, reads },
+            Err(_) => crate::queries::s1::DependencyProduct {
+                result: Err(QueryError::NotImplemented),
+                reads: Reads::empty(),
+            },
+        }
+    }
 }
-impl TirProvider for Evaluation<'_> {
-    fn constant(&mut self, path: &DefPath) -> Result<hirsel_tir::MaterializedRef, QueryError> {
-        self.engine.materialize_value(path).map(Arc::new)
+impl crate::queries::s1::DependencySource for EngineDependencies<'_> {
+    fn constant(
+        &mut self,
+        path: &DefPath,
+    ) -> crate::queries::s1::DependencyProduct<hirsel_tir::MaterializedRef> {
+        self.recorded(|engine| engine.materialize_value(path).map(Arc::new))
     }
     fn constant_instance(
         &mut self,
         path: &DefPath,
         arguments: &[u64],
-    ) -> Result<hirsel_tir::MaterializedRef, QueryError> {
-        self.engine.constant_instance(path, arguments)
-    }
-    // CT-1 evaluates only the explicitly requested dependency closure.
-    fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
-        Ok(vec![])
+    ) -> crate::queries::s1::DependencyProduct<hirsel_tir::MaterializedRef> {
+        self.recorded(|engine| engine.constant_instance(path, arguments))
     }
     fn instance_body(
         &mut self,
         path: &DefPath,
         arguments: &[hirsel_types::GenericArgument],
-    ) -> Result<Option<DefPath>, QueryError> {
-        self.engine.resolve_instance(path, arguments)
+    ) -> crate::queries::s1::DependencyProduct<Option<DefPath>> {
+        self.recorded(|engine| engine.resolve_instance(path, arguments))
     }
-
-    fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
-        self.engine.read_implementation(path);
-        if path == self.root.path.path() {
-            Ok(self.root.clone())
-        } else {
-            let definition = self.engine.definition(path)?;
-            let signature = self.engine.item_signature(path)?.value;
-            let entry = match &self.engine.adapters.lowering {
+    fn definition(
+        &mut self,
+        path: &DefPath,
+    ) -> crate::queries::s1::DependencyProduct<DefinitionRef> {
+        self.recorded(|engine| {
+            engine.read_implementation(path);
+            let definition = engine.definition(path)?;
+            let signature = engine.item_signature(path)?.value;
+            let entry = match &engine.adapters.lowering {
                 Some(lowering) => lowering.entry_body(),
                 None => return Err(QueryError::NotImplemented),
             };
@@ -594,7 +615,7 @@ impl TirProvider for Evaluation<'_> {
                 ));
             }
             Ok(definition)
-        }
+        })
     }
 }
 impl QueryEngine {
@@ -942,10 +963,12 @@ impl QueryEngine {
             site: file.tree.expressions[expression.0 as usize].origin.span,
             ty,
         };
-        let product = task.run(&mut Evaluation {
-            root: Arc::new(definition),
-            engine: self,
-        });
+        let mut dependencies = EngineDependencies(self);
+        let mut provider =
+            crate::queries::s1::EvaluationProvider::new(Arc::new(definition), &mut dependencies);
+        let product = task.run(&mut provider);
+        let reads = provider.finish()?;
+        self.merge_execution(&reads);
         self.read_representations(&product.reflected);
         if let Some(limit) = product.limit {
             self.last_comptime_limit = Some(limit);

@@ -2,6 +2,7 @@ use crate::memo::{MemoGraph, MemoKey, ReadKey, Reads, ReadsBuilder};
 use crate::*;
 mod arm_fixes;
 mod parallel;
+pub(crate) mod s1;
 pub use parallel::ModeResult;
 mod dead_arms;
 mod definition_hash;
