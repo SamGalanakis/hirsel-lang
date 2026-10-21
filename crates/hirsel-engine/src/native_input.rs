@@ -51,10 +51,15 @@ pub struct NativeInput {
 /// Construction is private to successful revalidation, including current source stages.
 pub struct ValidatedNativeInput {
     input: NativeInput,
+    verify: Verify,
     semantic_program: crate::queries::SemanticProgram,
     escapes: BTreeMap<DefPath, crate::Escape>,
 }
 impl ValidatedNativeInput {
+    /// Policy under which this current snapshot was independently checked.
+    pub fn verification(&self) -> Verify {
+        self.verify
+    }
     /// The same semantic closure as source execution, retained independently of
     /// the importing engine and of native topology/artifact provenance.
     pub fn semantic_program_revision(
@@ -487,6 +492,7 @@ impl QueryEngine {
         let escapes = self.escapes(&semantic_program)?;
         Ok(ValidatedNativeInput {
             input,
+            verify: self.verify,
             semantic_program,
             escapes,
         })

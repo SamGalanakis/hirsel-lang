@@ -229,6 +229,7 @@ pub fn lower_cached(
     discharge: &Discharge,
     cache: &mut dyn ImportCache,
 ) -> Result<Lowered, LowerError> {
+    hirsel_intern::timings::count(hirsel_intern::timings::Count::NativeAppendExpand);
     // Results built only to be appended are built in place (append_into).
     let (fused, origins, source_owners) = crate::append_into::fuse_with_origins(program, discharge);
     let program = &fused;
@@ -267,6 +268,7 @@ pub fn lower_cached(
         if sites.is_none()
             && let Some(hit) = cache.get(program, &instances, id)
         {
+            hirsel_intern::timings::count(hirsel_intern::timings::Count::ImportEffectReplays);
             crate::effects::replay(&hit.effects, &mut layouts, &mut instances, own_environment)
                 .map_err(|e| LowerError::Replay(id, format!("{e:?}")))?;
             hirsel_intern::timings::count(hirsel_intern::timings::Count::ImportHits);
@@ -370,6 +372,7 @@ pub fn lower_cached(
                 .iter()
                 .map(|k| abi_ids.get(k).copied().ok_or_else(|| bind("an FnAbi")))
                 .collect::<Result<Vec<_>, _>>()?;
+            hirsel_intern::timings::count(hirsel_intern::timings::Count::ValueRebinds);
             let unit = hirsel_lir::objects::rebound(hit.unit, &layouts, &abis)
                 .map_err(|e| LowerError::Replay(id, e))?;
             units[id.index()] = Some(unit);

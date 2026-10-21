@@ -157,9 +157,10 @@ impl std::error::Error for NativeError {}
 pub struct ReadyProgram {
     /// Planned provenance: source definitions (including derived forms) name their
     /// source owner; library instances name the common semantic runtime bundle.
-    semantic_owners: BTreeMap<DefPath, Option<DefPath>>,
+    pub(super) semantic_owners: BTreeMap<DefPath, Option<DefPath>>,
     /// The exact planned unit identities checked when binding the semantic input.
-    semantic_units: Option<BTreeSet<(DefPath, ContentHash)>>,
+    pub(super) semantic_units: Option<BTreeSet<(DefPath, ContentHash)>>,
+    pub(super) production: Option<super::plan::Production>,
     /// Validation policy retained for subsequent inspection and emission.
     pub validation: Validation,
     pub operations: hirsel_layout::operation::OperationRegistry,
@@ -507,6 +508,13 @@ pub fn build(
     validated: &ValidatedNativeInput,
     options: &Options,
 ) -> Result<ReadyProgram, NativeError> {
+    super::plan::prepare(validated, options).map(|prepared| prepared.ready)
+}
+
+pub(super) fn build_full(
+    validated: &ValidatedNativeInput,
+    options: &Options,
+) -> Result<ReadyProgram, NativeError> {
     let plan = (
         timings::interval(Interval::Plan),
         timings::phase(Phase::Plan),
@@ -646,6 +654,7 @@ pub fn build_program(
     Ok(ReadyProgram {
         semantic_owners: lowered.semantic_owners.clone(),
         semantic_units: None,
+        production: None,
         validation: options.validation,
         callbacks,
         operations,
@@ -687,6 +696,7 @@ pub fn build_program(
 /// A program whose units the per-unit pipeline lowered or loaded (`Options::objects`),
 /// before it owns the lowering's tables.
 struct BuiltUnits {
+    records: Vec<super::plan::Record>,
     summaries: Vec<hirsel_lir::fragment::UnitSummary>,
     objects: UnitObjectArtifacts,
     keys: hirsel_lir::LayoutKeys,
@@ -746,6 +756,7 @@ fn build_units(
     };
     let lowered_units = super::units::lower(
         &super::units::Program {
+            capture_plan: super::plan::recording(),
             options,
             objects,
             table,
@@ -761,15 +772,28 @@ fn build_units(
         units,
     )?;
     let mut summaries = Vec::with_capacity(lowered_units.len());
+    let mut records = Vec::with_capacity(lowered_units.len());
     let mut artifacts = Vec::with_capacity(lowered_units.len());
     let mut hits = 0;
     for unit in lowered_units {
         let fragment = unit.fragment;
         hits += usize::from(unit.hit);
+        if super::plan::recording() {
+            records.push(super::plan::Record {
+                key: unit.key,
+                calls: unit.calls,
+                digest: super::plan::fragment_digest(
+                    &fragment
+                        .encode(table, &keys)
+                        .map_err(|e| NativeError::new(StageName::Emission, e))?,
+                ),
+            });
+        }
         summaries.push(fragment.summary);
         artifacts.push(fragment.object);
     }
     Ok(BuiltUnits {
+        records,
         summaries,
         objects: UnitObjectArtifacts {
             backend: objects.backend,
@@ -815,6 +839,9 @@ impl BuiltUnits {
         ReadyProgram {
             semantic_owners: lowered.semantic_owners.clone(),
             semantic_units: None,
+            production: Some(super::plan::Production {
+                records: self.records,
+            }),
             validation: options.validation,
             callbacks: self.callbacks,
             operations,

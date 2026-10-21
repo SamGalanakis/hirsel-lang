@@ -17,6 +17,7 @@ mod kit;
 mod link;
 mod observe;
 mod pairwise;
+mod plan;
 mod proofs;
 mod runner;
 mod runtime_cache;

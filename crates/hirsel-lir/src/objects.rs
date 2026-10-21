@@ -49,12 +49,28 @@ impl UnitKey {
 /// Stored unit fragments by `UnitKey`. A `get` that cannot produce intact bytes is a
 /// miss; a `put` that cannot store is dropped. Neither is ever an error the build sees.
 pub trait ObjectStore: Send + Sync {
+    /// An association from an approved local provider. Unknown adapters and
+    /// arbitrary read-only directories cannot turn coherent bytes into producer
+    /// evidence. This retains the trusted-local-directory model; it is not a
+    /// signature or proof of source-to-object correspondence.
+    fn get_produced(&self, _key: &UnitKey) -> Option<ProducedBytes> {
+        None
+    }
     /// Whether writes can be retained; none avoids preparing import-cache entries.
     fn enabled(&self) -> bool {
         true
     }
     fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>>;
     fn put(&self, key: &UnitKey, value: &[u8]);
+}
+
+/// Provider provenance for a local action association, separate from integrity.
+/// Only the built-in providers can construct this token. Adapters may forward it.
+pub struct ProducedBytes(Arc<[u8]>);
+impl ProducedBytes {
+    pub fn bytes(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 /// A writable cache with a read-only toolchain seed as fallback. Hits never copy
@@ -65,6 +81,11 @@ pub struct SeededObjects {
 }
 
 impl ObjectStore for SeededObjects {
+    fn get_produced(&self, key: &UnitKey) -> Option<ProducedBytes> {
+        self.writable
+            .get_produced(key)
+            .or_else(|| self.seed.get_produced(key))
+    }
     fn enabled(&self) -> bool {
         self.writable.enabled() || self.seed.enabled()
     }
@@ -225,6 +246,9 @@ impl DirObjects {
 }
 
 impl ObjectStore for DirObjects {
+    fn get_produced(&self, key: &UnitKey) -> Option<ProducedBytes> {
+        self.get(key).map(ProducedBytes)
+    }
     fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
         let path = self.path(key);
         let bytes = fs::read(&path).ok()?;
@@ -345,6 +369,9 @@ impl SimObjects {
     }
 }
 impl ObjectStore for SimObjects {
+    fn get_produced(&self, key: &UnitKey) -> Option<ProducedBytes> {
+        self.get(key).map(ProducedBytes)
+    }
     fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
         let mut state = self.state();
         let ordinal = state.gets;

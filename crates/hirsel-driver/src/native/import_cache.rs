@@ -258,6 +258,11 @@ fn decode(bytes: &[u8], types: &TypeInterner) -> Option<CachedImport> {
     let ids = hirsel_types::decode_table(types, &table);
     let effects =
         hirsel_types::with_table_decoding(&ids, || serde_json::from_slice(&value)).ok()?;
+    hirsel_intern::timings::count(hirsel_intern::timings::Count::ValueDecodes);
+    hirsel_intern::timings::count_by(
+        hirsel_intern::timings::Count::ValueDecodeBytes,
+        unit.len() as u64,
+    );
     Some(CachedImport {
         unit: hirsel_codec::from_text(&unit).ok()?,
         layouts: layouts.into_iter().map(hirsel_lir::LayoutKey).collect(),

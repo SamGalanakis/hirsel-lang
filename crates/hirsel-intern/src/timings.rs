@@ -246,11 +246,19 @@ pub enum Count {
     NativeStackBytes,
     /// Maximum Ready row bytes retained for uncompleted native consumers.
     NativeReadyBytes,
+    ValueDecodes,
+    ValueDecodeBytes,
+    ValueRebinds,
+    ImportEffectReplays,
+    NativeAppendExpand,
+    ClosureBodyScans,
+    ArenaBodyScans,
+    LateKeys,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 49] = [
+    pub const ALL: [Count; 57] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -300,10 +308,26 @@ impl Count {
         Count::NativeWorkers,
         Count::NativeStackBytes,
         Count::NativeReadyBytes,
+        Count::ValueDecodes,
+        Count::ValueDecodeBytes,
+        Count::ValueRebinds,
+        Count::ImportEffectReplays,
+        Count::NativeAppendExpand,
+        Count::ClosureBodyScans,
+        Count::ArenaBodyScans,
+        Count::LateKeys,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
         match self {
+            Count::ValueDecodes => "native Value decodes",
+            Count::ValueDecodeBytes => "native Value decode bytes",
+            Count::ValueRebinds => "native Value rebinds",
+            Count::ImportEffectReplays => "native effect replays",
+            Count::NativeAppendExpand => "native append/expand",
+            Count::ClosureBodyScans => "closure body scans",
+            Count::ArenaBodyScans => "arena body scans",
+            Count::LateKeys => "native late keys",
             Count::Definitions => "definitions",
             Count::Units => "units",
             Count::VRuns => "V runs",

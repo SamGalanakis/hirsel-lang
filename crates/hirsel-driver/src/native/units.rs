@@ -112,6 +112,7 @@ pub(crate) fn selected(
 
 /// What every unit of one program reads.
 pub(crate) struct Program<'a> {
+    pub capture_plan: bool,
     pub options: &'a Options,
     pub objects: &'a UnitObjects,
     pub table: &'a LayoutTable,
@@ -130,6 +131,8 @@ pub(crate) struct Program<'a> {
 
 /// One unit of a program after `lower`, with its independently retained owner object.
 pub(crate) struct LoweredUnit {
+    pub key: UnitKey,
+    pub calls: Vec<super::plan::Calls>,
     pub fragment: UnitFragment,
     /// The object store held the fragment.
     pub hit: bool,
@@ -294,8 +297,12 @@ pub(crate) fn lower(
                 // harness hits recompute and compare; production keeps the fast hit.
                 if let Some(fragment) = cached
                     && program.options.validation == super::stages::Validation::Ready
+                    && (!program.capture_plan || super::plan::load_calls(program.objects.store.as_ref(), key, stored.as_ref().unwrap()).is_some())
                 {
+                    let calls = if program.capture_plan { super::plan::load_calls(program.objects.store.as_ref(), key, stored.as_ref().unwrap()).unwrap() } else { Vec::new() };
                     return Ok(LoweredUnit {
+                        key: *key,
+                        calls,
                         fragment,
                         hit: true,
                     });
@@ -343,6 +350,7 @@ pub(crate) fn lower(
                     )
                     .map_err(|e| NativeError::of(StageName::Emission, definition, e))
                 };
+                let calls = if program.capture_plan { super::plan::calls(&selected.iter().map(|u| u.unit()).collect::<Vec<_>>(), program.table, program.keys) } else { Vec::new() };
                 let fragment = UnitFragment {
                     summary: summary(own)?,
                     templates: selected[1..]
@@ -369,9 +377,10 @@ pub(crate) fn lower(
                             ),
                         ));
                     }
+                    if program.capture_plan { super::plan::save_calls(program.objects.store.as_ref(), key, &bytes, &calls)?; }
                     program.objects.store.put(key, &bytes);
                 }
-                Ok(LoweredUnit { fragment, hit })
+                Ok(LoweredUnit { key: *key, calls, fragment, hit })
             })();
             bodies.finished(i, &copies[i]);
             result
@@ -391,6 +400,7 @@ fn key(
     index: usize,
     copies: &[ContentHash],
 ) -> Result<UnitKey, NativeError> {
+    timings::count(Count::LateKeys);
     let options = program.options;
     let origin = program.origins[index];
     let proofs = Proofs::for_instance(program.instances, origin);

@@ -63,6 +63,7 @@ fn discover(
     entries: &HashMap<Symbol, (usize, FnAbiId)>,
     seeds: &[(usize, Target)],
 ) -> Vec<Code> {
+    hirsel_intern::timings::count(hirsel_intern::timings::Count::ClosureBodyScans);
     let mut inputs = vec![Vec::new(); u.values.len()];
     let mut constants = vec![Code::Dynamic; u.values.len()];
     let mut mutable = BTreeSet::new();
