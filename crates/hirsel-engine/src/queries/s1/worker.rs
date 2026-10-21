@@ -401,7 +401,11 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         let product = source.body(self, path);
         let body = self.merge_product(product)?;
         self.merge(&body.reads);
-        for dependency in &body.dependencies {
+        self.execution_signatures(&body.dependencies);
+        Ok(body)
+    }
+    fn execution_signatures(&mut self, dependencies: &[SignatureDependency]) {
+        for dependency in dependencies {
             let id = dependency.definition;
             if let Some(signature) = self.source.inputs().snapshot.signature(id) {
                 let fingerprint = signature.ok().map(|signature| signature.fingerprint);
@@ -411,7 +415,6 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 );
             }
         }
-        Ok(body)
     }
     fn depth_limit(&self) -> u32 {
         crate::memo::dependency_limit(self.source.inputs().limits.call_depth)
@@ -948,7 +951,12 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         }
     }
     pub(super) fn lower(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
-        self.lower_output(path).map(|output| output.value)
+        let output = self.lower_output(path)?;
+        // Executing a cached artifact observes its signature dependencies just
+        // as executing a freshly lowered body does. A scalar receipt produced
+        // outside execution need not already carry ExecutedSignature reads.
+        self.execution_signatures(&output.dependencies);
+        Ok(output.value)
     }
     fn lower_output(&mut self, path: &DefPath) -> Result<QueryOutput<DefinitionRef>, QueryError> {
         if let Some((output, reads, depth)) = self.source.cached_lowering(path) {
