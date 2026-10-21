@@ -82,6 +82,11 @@ pub(crate) struct Ring {
 unsafe impl Send for Ring {}
 
 impl Ring {
+    pub(crate) fn reserve_one(&mut self) {
+        if self.capacity == 0 {
+            self.grow();
+        }
+    }
     pub(crate) fn new(size: usize, align: usize) -> Ring {
         let align = align.max(1).next_power_of_two();
         Ring {

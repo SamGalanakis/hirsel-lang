@@ -3538,7 +3538,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
         };
         return STATUS_OK;
     }
-    free::mutex::live(ctx);
+    if free::mutex::live(ctx) {
+        unsafe {
+            crate::stop::check(
+                ctx,
+                free::mutex::create(ctx, out, payload, none, descriptor, wrapper),
+            )
+        };
+        return STATUS_OK;
+    }
     crate::free::enter(ctx, Phase::Done);
     unsafe {
         let layout = (*ctx).descriptor(descriptor);
@@ -3795,6 +3803,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut TaskCtx, m: *const u
     let _segment = profile::Operation::new(ctx, "mutex_cause");
     if ordered::engine::on(ctx) {
         unsafe { crate::stop::check(ctx, ordered::engine::mutex_cause(ctx, mutex_word(m))) };
+        return STATUS_OK;
+    }
+    if free::mutex::live(ctx) {
+        unsafe { crate::stop::check(ctx, free::mutex::cause(ctx, mutex_word(m))) };
         return STATUS_OK;
     }
     // SAFETY: caller contract.

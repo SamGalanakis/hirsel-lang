@@ -36,11 +36,22 @@ impl Permit {
     pub fn available(&self) -> bool {
         self.available || self.dead
     }
+    pub fn ready_for(&self, task: u32) -> bool {
+        self.dead || (self.available && self.waiters.front().is_none_or(|&first| first == task))
+    }
+
+    pub fn observe(&mut self) -> u64 {
+        self.advance();
+        self.version
+    }
     pub fn version(&self) -> u64 {
         self.version
     }
     pub fn waiting(&self) -> usize {
         self.waiters.len()
+    }
+    pub fn reserve_waiter(&mut self) {
+        self.waiters.reserve(1);
     }
 
     fn advance(&mut self) {
@@ -84,10 +95,20 @@ impl Permit {
 
     /// A dead mutex returns its failure to every waiter, without a payload.
     pub fn kill(&mut self) -> Vec<u32> {
+        let mut waiters = Vec::with_capacity(self.waiters.len());
+        self.kill_into(&mut waiters);
+        waiters
+    }
+
+    pub fn kill_into(&mut self, out: &mut Vec<u32>) {
+        assert!(
+            out.capacity() - out.len() >= self.waiters.len(),
+            "wake capacity prepared before the section"
+        );
         assert!(!self.available && !self.dead, "only a held mutex can die");
         self.dead = true;
         self.advance();
-        self.waiters.drain(..).collect()
+        out.extend(self.waiters.drain(..));
     }
 }
 

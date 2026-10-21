@@ -3,20 +3,76 @@
 //! is installed after reacquiring the role, even if the waiter has not parked
 //! yet; park's first saved-frame poll consumes it, avoiding a lost wake.
 //!
-//! Recorded mutex phases are a subsequent admission, not silently unrecorded.
+//! Recording publishes the action and its version inside that same lock.
 
 use super::super::*;
 use hirsel_free::mutex::Acquired;
+
+#[cfg(test)]
+mod record_tests;
 
 pub(crate) fn live(ctx: *mut TaskCtx) -> bool {
     if !super::enabled(ctx) {
         return false;
     }
-    assert!(
-        !super::record::on(ctx),
-        "native mutex recording not admitted"
-    );
     true
+}
+
+fn touched(
+    ctx: *mut TaskCtx,
+    phase: Phase,
+    cell: &crate::sync::MutexCell,
+    state: &mut crate::sync::MutexImage,
+    action: impl FnOnce(&mut crate::sync::MutexImage) -> &'static str,
+) -> Stopped<()> {
+    super::record::publish(ctx, phase, |writer| {
+        let outcome = action(state);
+        if let Some(writer) = writer {
+            writer.touch(
+                cell.object.get().expect("a recorded mutex identity"),
+                state.permit.version(),
+                0,
+                outcome,
+            );
+        }
+    })
+}
+
+/// # Safety
+/// Creation's ABI carrier and descriptor contract; role is held.
+pub(crate) unsafe fn create(
+    ctx: *mut TaskCtx,
+    out: *mut u64,
+    payload: *mut u8,
+    none: *const u8,
+    descriptor: u32,
+    wrapper: u32,
+) -> Stopped<()> {
+    // Allocation and prepared image capacity precede the op section. No
+    // stop-aware scheduler accessor may abandon a Rust-owned prepared cell.
+    let s = scheduler(ctx) as *mut Scheduler;
+    let block = unsafe {
+        crate::alloc::hirsel_rt_v2_alloc(ctx, wrapper, 8, 8, crate::alloc::DOMAIN_HEAP, 0)
+    };
+    let layout = unsafe { (*ctx).descriptor(descriptor) };
+    let element = unsafe { crate::channels::Element::new(descriptor, layout, none) };
+    let cell = crate::sync::Synchronizers::prepare_mutex(element, unsafe { &*layout });
+    let reservation = unsafe { (*s).sync.reserve_mutex() };
+    let word = reservation.word();
+    super::record::begin(ctx);
+    let object = super::record::object(ctx);
+    if let Some(object) = &object {
+        cell.object.set(object.clone()).unwrap();
+    }
+    super::record::publish(ctx, Phase::Done, |writer| unsafe {
+        (*s).sync.initialize_mutex_cell(reservation, cell, payload);
+        block.add(1).cast::<u64>().write(word);
+        out.write(block as u64);
+        if let Some(writer) = writer {
+            writer.create(object.unwrap());
+        }
+    })?;
+    unsafe { try_yield(&mut *ctx) }
 }
 
 fn notify(ctx: *mut TaskCtx, task: u32) {
@@ -35,23 +91,40 @@ pub(crate) unsafe fn take(
     payload: *mut u8,
     out: *mut u32,
 ) -> Stopped<()> {
-    crate::roots::apply_pending(ctx);
+    super::record::begin(ctx);
     let me = scheduler(ctx).current;
     scheduler(ctx).task(me).retried = false;
     let mut queued = false;
+    let mut entered = false;
     loop {
         let cell = scheduler(ctx).sync.mutex(word);
         unsafe { role::release(ctx) };
         let mut state = cell.lock();
-        let result = state.permit.acquire(me, &mut queued);
-        if result == Acquired::Payload {
-            unsafe { cell.take(&mut state, payload) };
-        }
+        let mut result = Acquired::Pending;
+        let publication = if state.permit.ready_for(me) {
+            touched(ctx, Phase::Done, &cell, &mut state, |state| {
+                result = state.permit.acquire(me, &mut queued);
+                if result == Acquired::Payload {
+                    unsafe { cell.take(state, payload) };
+                }
+                "take"
+            })
+        } else if !entered {
+            state.permit.reserve_waiter();
+            super::record::publish(ctx, Phase::Entered, |_| {
+                result = state.permit.acquire(me, &mut queued);
+                assert_eq!(result, Acquired::Pending);
+            })
+        } else {
+            Ok(())
+        };
         drop(state);
         drop(cell);
         unsafe { role::enter(ctx) };
+        publication?;
         match result {
             Acquired::Pending => {
+                entered = true;
                 // Only primitives remain on this frame across the wait. The
                 // returned stop unwinds helpers before the ABI entry raises it.
                 unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
@@ -68,14 +141,19 @@ pub(crate) unsafe fn take(
 /// # Safety
 /// The role is held; payload is a Some carrier held by this task.
 pub(crate) unsafe fn put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stopped<()> {
-    crate::roots::apply_pending(ctx);
+    super::record::begin(ctx);
     let cell = scheduler(ctx).sync.mutex(word);
     unsafe { role::release(ctx) };
     let mut state = cell.lock();
-    let next = unsafe { cell.put(&mut state, payload) };
+    let mut next = None;
+    let publication = touched(ctx, Phase::Done, &cell, &mut state, |state| {
+        next = unsafe { cell.put(state, payload) };
+        "put"
+    });
     drop(state);
     drop(cell);
     unsafe { role::enter(ctx) };
+    publication?;
     if let Some(next) = next {
         notify(ctx, next);
     }
@@ -85,16 +163,48 @@ pub(crate) unsafe fn put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stop
 /// # Safety
 /// A failed mutex body holds the role and owns the empty cell.
 pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64, chain: Vec<Chained>) -> Stopped<()> {
-    crate::roots::apply_pending(ctx);
+    super::record::begin(ctx);
     // Avoid stop-aware scheduler() while this frame owns a failure chain and
     // the detached wake list. The caller already owns the role.
     let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
-    let waiters = s.sync.kill_waiters(word, chain);
+    let cell = s.sync.mutex(word);
+    // The role also protects the failure-chain metadata through this phase.
+    // Acquire the per-object lock before opening it; no syscall or user drop
+    // runs in the action and no scheduler accessor observes a stop there.
+    let mut state = cell.lock();
+    let mut waiters = Vec::with_capacity(state.permit.waiting());
+    touched(ctx, Phase::Done, &cell, &mut state, |state| {
+        state.permit.kill_into(&mut waiters);
+        s.sync.set_dead(word, chain);
+        "kill"
+    })?;
+    drop(state);
+    drop(cell);
     for task in waiters {
         s.task(task).retried = true;
         s.wake(task);
     }
     unsafe { try_yield(&mut *ctx) }
+}
+
+/// # Safety
+/// The role is held and word names a dead mutex.
+pub(crate) unsafe fn cause(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
+    super::record::begin(ctx);
+    let s = scheduler(ctx) as *mut Scheduler;
+    let cell = unsafe { (*s).sync.mutex(word) };
+    let chain = unsafe { (*s).sync.dead(word) }
+        .expect("a dead mutex cause")
+        .clone();
+    let mut state = cell.lock();
+    touched(ctx, Phase::Done, &cell, &mut state, |state| {
+        state.permit.observe();
+        "cause"
+    })?;
+    drop(state);
+    drop(cell);
+    unsafe { (*ctx).failure.append_chain(chain) };
+    Ok(())
 }
 
 #[cfg(test)]
@@ -139,7 +249,7 @@ mod tests {
         }
     }
 
-    fn layout() -> crate::Layout {
+    pub(super) fn layout() -> crate::Layout {
         crate::Layout {
             magic: crate::LAYOUT_MAGIC,
             version: crate::LAYOUT_VERSION,

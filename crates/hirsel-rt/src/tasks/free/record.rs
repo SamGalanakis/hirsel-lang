@@ -3,8 +3,8 @@
 //! records execute inside the same production recorder phase, before its
 //! progress publication. No section or recorder borrow crosses a suspension.
 //!
-//! Admission is still limited to explicit runtime tests: atomic boundaries
-//! and prepared children, without roots, host calls or other semantic ops.
+//! Admission is still limited to explicit runtime tests: atomic and mutex
+//! boundaries and prepared children, without roots, host calls or other ops.
 //! General activation requires every boundary and stop to use this protocol.
 
 use crate::TaskCtx;
@@ -58,6 +58,31 @@ fn phase<T>(
     ctx: *mut TaskCtx,
     action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
 ) -> Stopped<T> {
+    begin(ctx);
+    publish(ctx, Phase::Done, action)
+}
+
+/// Begin a semantic operation once, including when it later parks/retries.
+pub(super) fn begin(ctx: *mut TaskCtx) {
+    entry(ctx);
+    if let Some(task) = unsafe { (*ctx).recording.as_mut() } {
+        assert!(
+            !unsafe { (*ctx).roots.has_pending() },
+            "root phases not admitted"
+        );
+        task.ordinal = task
+            .ordinal
+            .checked_add(1)
+            .expect("native op ordinal overflow");
+    }
+}
+
+/// Publish another phase of the current ordinal; no section escapes action.
+pub(super) fn publish<T>(
+    ctx: *mut TaskCtx,
+    phase: Phase,
+    action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
+) -> Stopped<T> {
     if !on(ctx) {
         // Live free mode has no recorder, section gate, ordinal, or encoder.
         return Ok(action(None));
@@ -74,11 +99,7 @@ fn phase<T>(
         .recorder
         .worker(slot())
         .expect("one section owner per worker");
-    task.ordinal = task
-        .ordinal
-        .checked_add(1)
-        .expect("native op ordinal overflow");
-    let progress = Progress::new(task.ordinal, Phase::Done);
+    let progress = Progress::new(task.ordinal, phase);
     let result = shared
         .recorder
         .phase(&mut worker, &mut task.log, progress, |writer| {
@@ -87,6 +108,13 @@ fn phase<T>(
     drop(worker);
     unsafe { (*ctx).recording = Some(task) };
     result.map_err(|_| Stop::Requested)
+}
+
+pub(super) fn object(ctx: *mut TaskCtx) -> Option<hirsel_free::record::ObjectId> {
+    unsafe { (*ctx).recording.as_ref() }.map(|task| hirsel_free::record::ObjectId::Made {
+        path: task.log.path().to_vec(),
+        op: task.ordinal,
+    })
 }
 
 fn entry(ctx: *mut TaskCtx) {

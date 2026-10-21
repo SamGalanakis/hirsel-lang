@@ -50,6 +50,7 @@ pub(crate) struct Synchronizers {
 
 pub(crate) struct MutexCell {
     pub(crate) element: Element,
+    pub(crate) object: std::sync::OnceLock<hirsel_free::record::ObjectId>,
     state: Mutex<MutexImage>,
 }
 
@@ -152,22 +153,37 @@ impl Synchronizers {
         layout: &Layout,
         slot: *mut u8,
     ) {
+        let cell = Self::prepare_mutex(element, layout);
+        unsafe { self.initialize_mutex_cell(reservation, cell, slot) };
+    }
+
+    pub(crate) fn prepare_mutex(element: Element, layout: &Layout) -> Arc<MutexCell> {
+        let mut image = Ring::new(element.size, layout.align as usize);
+        image.reserve_one();
+        Arc::new(MutexCell {
+            element,
+            object: Default::default(),
+            state: Mutex::new(MutexImage {
+                image,
+                permit: Permit::new(),
+                closed: false,
+            }),
+        })
+    }
+
+    /// # Safety
+    /// The prepared cell's slot is a readable Some carrier of its element.
+    pub(crate) unsafe fn initialize_mutex_cell(
+        &mut self,
+        reservation: Reserved,
+        cell: Arc<MutexCell>,
+        slot: *mut u8,
+    ) {
         let word = reservation.word;
         if word & MUTEX == 0 {
             fault("an atomic reservation initialized as a mutex");
         }
-        let image = Ring::new(element.size, layout.align as usize);
-        self.initialize(
-            reservation,
-            Payload::Mutex(Arc::new(MutexCell {
-                element,
-                state: Mutex::new(MutexImage {
-                    image,
-                    permit: Permit::new(),
-                    closed: false,
-                }),
-            })),
-        );
+        self.initialize(reservation, Payload::Mutex(cell));
         unsafe { self.put(word, slot) };
     }
 
@@ -262,8 +278,12 @@ impl Synchronizers {
 
     pub(crate) fn kill_waiters(&mut self, word: u64, chain: Vec<Chained>) -> Vec<u32> {
         let waiters = self.mutex(word).lock().permit.kill();
-        self.cell(word).dead = Some(chain);
+        self.set_dead(word, chain);
         waiters
+    }
+
+    pub(crate) fn set_dead(&mut self, word: u64, chain: Vec<Chained>) {
+        self.cell(word).dead = Some(chain);
     }
 
     pub(crate) fn mutex(&mut self, word: u64) -> Arc<MutexCell> {
