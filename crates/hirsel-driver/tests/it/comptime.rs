@@ -1870,3 +1870,69 @@ fn frozen_lowering_prefix_generator_rejections_keep_serial_selection_and_limits(
         }
     });
 }
+
+#[test]
+fn frozen_s1_prefix_tir_receipts_and_diagnostics_are_invariant_under_jobs_and_salts() {
+    fn run() -> String {
+        with_compiler_stack(|| {
+            let cases = [
+                "const LEAF:u64=7\nfn helper()->u64{comptime LEAF}\nfn A()->u64{comptime helper()}\nconst B:u64=comptime A()\n",
+                "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst A:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst B:u64=comptime A\n",
+                "type Point{x:u64}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String]{Ok(codegen.body(\"fn(v:standalone@0/Point)->u64 uses {}{12}\"))}\nfn width[T](v:T)->u64 uses {}=comptime gen(shape(T))\nconst A:u64=comptime width(Point(x:1))\nconst B:u64=comptime A\n",
+                "type Seed{x:u64}\nfn gen(s:TypeShape[Seed])->Result[Body[fn()->u64 uses {}],String]{let _=A;Error(\"unreachable\")}\nfn chosen()->u64 uses {}=comptime gen(shape(Seed))\nconst A:u64=comptime chosen()\nconst B:u64=comptime A\n",
+            ];
+            let mut transcript = String::new();
+            for source in cases {
+                let mut expected = None;
+                for jobs in [1, 2, 8] {
+                    for budget in [0, 8192] {
+                        let mut candidate = engine(source).with_config(CompileConfig {
+                            hold_bytes: budget,
+                            retention: memo::Retention::Resident,
+                            ..CompileConfig::for_memory_cap(None)
+                        });
+                        for warm in [false, true] {
+                            let outcomes = candidate.lower_definition_prefix(
+                                vec![path("B"), path("A"), path("B")],
+                                hirsel_intern::jobs::Jobs::new(jobs),
+                            );
+                            let mut current = String::new();
+                            for outcome in outcomes {
+                                let value = lowering_text(&candidate, outcome.result);
+                                current.push_str(&format!("{value:?}\n{:?}\n", outcome.phase));
+                                current.push_str(&placed_evidence(
+                                    &candidate.sources,
+                                    format!(
+                                        "{:?}\n{:?}\n{:?}\n",
+                                        outcome.limit, outcome.depth, outcome.reads
+                                    ),
+                                ));
+                            }
+                            if let Some(expected) = &expected {
+                                assert_eq!(
+                                    &current, expected,
+                                    "jobs={jobs} budget={budget} warm={warm} source={source}"
+                                );
+                            } else {
+                                expected = Some(current);
+                            }
+                        }
+                    }
+                }
+                transcript.push_str(&expected.unwrap());
+            }
+            transcript
+        })
+    }
+    let Some(outputs) = hirsel_intern::under_salts(
+        "comptime::frozen_s1_prefix_tir_receipts_and_diagnostics_are_invariant_under_jobs_and_salts",
+        &[1, 2, 3],
+        run,
+    ) else {
+        return;
+    };
+    assert!(outputs[0].contains("CT-4"));
+    assert!(outputs[0].contains("DefinitionSection") || outputs[0].contains("Definition"));
+    assert!(outputs[0].contains("ValidationUniverse"));
+    assert!(outputs.iter().all(|output| output == &outputs[0]));
+}
