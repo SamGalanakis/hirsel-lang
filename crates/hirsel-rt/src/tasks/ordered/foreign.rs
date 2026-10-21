@@ -328,6 +328,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn foreign_callbacks_gates_pool_exhaustion_and_resize_run_with_one_compute_permit() {
+        // Isolate the process-wide manager grant from unrelated harness tests.
+        const CHILD: &str = "HIRSEL_ORDERED_FOREIGN_ONE_PERMIT";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tasks::ordered::foreign::tests::foreign_callbacks_gates_pool_exhaustion_and_resize_run_with_one_compute_permit",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        crate::pool::set_compute_grant(1);
+        ordered_home_pool_and_nested_callbacks_preserve_effective_thread_and_gate_depth();
+        a_serial_gate_waiter_parks_until_its_older_callback_leaves_the_gate();
+        caller_thread_callbacks_keep_their_exec_through_shrink_and_regrowth();
+        a_full_pool_retires_the_waiter_and_a_returning_foreign_call_wakes_it();
+        a_stop_abandons_a_saved_callback_on_a_pinned_retiring_worker();
+    }
+
     #[derive(Default)]
     struct GateProbe {
         allow: std::sync::atomic::AtomicBool,
