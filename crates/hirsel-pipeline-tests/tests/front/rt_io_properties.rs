@@ -45,10 +45,10 @@ impl Reference {
         mut arguments: Vec<Value>,
         bounded: bool,
     ) -> Result<OperationResult, hirsel_interp::Error> {
-        let types = hirsel_types::TypeInterner::default();
-        let unit = types.intern(hirsel_types::Type::unit());
+        let mut types = hirsel_types::TypeStore::default();
+        let unit = types.push(hirsel_types::Type::unit());
         let result_type = if bounded {
-            types.intern(hirsel_types::Type::with_kind(
+            types.push(hirsel_types::Type::with_kind(
                 hirsel_types::TypeKind::Named {
                     definition: hirsel_syntax::DefPath::core("Bounded"),
                     arguments: vec![hirsel_types::GenericArgument::Type(unit)].into(),
