@@ -281,6 +281,76 @@ impl Operations for HandlesModel {
         }
     }
 }
+
+#[test]
+fn atomic_cells_do_not_alias_a_closed_host_handle() {
+    let mut layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
+    let c = fixtures::common(&mut layouts);
+    let handle = layouts.scalar(ScalarKind::U64);
+    layouts.get_mut(handle).kind = LayoutKind::Handle;
+    let (target, table) = layouts.finish();
+    let mut f = fixtures::F::<Ready>::new("main", c);
+    let open = operation(&mut f.b, "open");
+    let host = f.b.owned(ValueRepr::Handle, handle);
+    f.call(open, &[], Some(host));
+    let consume = operation(&mut f.b, "consume");
+    f.call(
+        consume,
+        &[(Passing::Take, ArgumentValue::Value(host))],
+        None,
+    );
+    let value = f.int(7);
+    let construct = f.b.construct(
+        ConstructorKind::Tuple,
+        c.cell,
+        &[(0, value)],
+        fixtures::HEAP,
+    );
+    let image = f.b.plain(ValueRepr::Aggregate, c.cell);
+    let failure = f.propagates();
+    f.inst(Inst::Construct {
+        result: image,
+        construct,
+        failure,
+    });
+    let create = f.b.operation(OperationId {
+        definition: hirsel_syntax::DefPath::core("$intrinsic.AtomicCreate"),
+        declaration_digest: Default::default(),
+    });
+    let store = f.b.operation(OperationId {
+        definition: hirsel_syntax::DefPath::core("$intrinsic.AtomicStore"),
+        declaration_digest: Default::default(),
+    });
+    // The old model used the bare cell index as its handle: the 42nd cell
+    // was mistaken for host handle 41, which the consume above closed.
+    for _ in 0..42 {
+        let atomic = f.b.plain(ValueRepr::Handle, handle);
+        f.call(
+            create.clone(),
+            &[(Passing::Borrow, ArgumentValue::Value(image))],
+            Some(atomic),
+        );
+        f.call(
+            store.clone(),
+            &[
+                (Passing::Borrow, ArgumentValue::Value(atomic)),
+                (Passing::Borrow, ArgumentValue::Value(image)),
+            ],
+            None,
+        );
+    }
+    f.ret(None);
+    let p = fixtures::program(target, table.clone(), vec![f.finish(&table)]);
+    let run = run(
+        &p,
+        &path("main"),
+        &[],
+        &mut HandlesModel,
+        &Config::default(),
+    );
+    assert!(run.result.is_ok(), "{run:?}");
+}
+
 fn handle_control(kind: HandleControl) -> Program<Ready> {
     let mut layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
     let handle = layouts.scalar(ScalarKind::U64);

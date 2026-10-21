@@ -11,6 +11,9 @@ use super::*;
 
 /// The harness root of mutex cell `index`'s payload carrier.
 const MUTEX_ROOT: u64 = 1 << 60;
+/// Synchronizer words occupy their own namespace, like channel endpoints.
+/// Bare cell indices can alias closed handles returned by host operations.
+const SYNCHRONIZER: u64 = 1 << 61;
 
 #[derive(Clone)]
 struct Cell {
@@ -29,8 +32,11 @@ pub(super) struct Synchronizers {
 
 impl Synchronizers {
     fn cell(&mut self, word: u64) -> Checked<&mut Cell> {
+        if word & SYNCHRONIZER == 0 {
+            return fail(V::Malformed, "a Mutex or Atomic handle of another run");
+        }
         self.cells
-            .get_mut(word as usize)
+            .get_mut((word & !SYNCHRONIZER) as usize)
             .ok_or_else(|| err(V::Malformed, "a Mutex or Atomic handle of another run"))
     }
 }
@@ -205,7 +211,12 @@ impl<S: Stage> Machine<'_, S> {
                 let result = site
                     .result
                     .ok_or_else(|| err(V::Malformed, "a cell creation without a result"))?;
-                self.task_return(f, arguments, Some((result, Val::Handle(word))), normal)
+                self.task_return(
+                    f,
+                    arguments,
+                    Some((result, Val::Handle(SYNCHRONIZER | word))),
+                    normal,
+                )
             }
             "$intrinsic.AtomicCreate" => {
                 let image = self.sync_image(f, arguments, 0)?;
@@ -220,7 +231,12 @@ impl<S: Stage> Machine<'_, S> {
                 let result = site
                     .result
                     .ok_or_else(|| err(V::Malformed, "a cell creation without a result"))?;
-                self.task_return(f, arguments, Some((result, Val::Handle(word))), normal)
+                self.task_return(
+                    f,
+                    arguments,
+                    Some((result, Val::Handle(SYNCHRONIZER | word))),
+                    normal,
+                )
             }
             "$intrinsic.MutexTake" => {
                 let word = self.task_word(f, &Self::task_argument(arguments, 0)?)?;
@@ -228,7 +244,7 @@ impl<S: Stage> Machine<'_, S> {
                 let status = if dead {
                     1
                 } else {
-                    self.carry_out(f, arguments, 1, word)?;
+                    self.carry_out(f, arguments, 1, word & !SYNCHRONIZER)?;
                     0
                 };
                 let result = site
@@ -243,10 +259,13 @@ impl<S: Stage> Machine<'_, S> {
             "$intrinsic.MutexPut" => {
                 let word = self.task_word(f, &Self::task_argument(arguments, 0)?)?;
                 self.scheduler().sync.cell(word)?;
-                if self.roots.contains_key(&(MUTEX_ROOT | word)) {
+                if self
+                    .roots
+                    .contains_key(&(MUTEX_ROOT | (word & !SYNCHRONIZER)))
+                {
                     return fail(V::Malformed, "a mutex payload put back twice");
                 }
-                self.carry_in(f, arguments, 1, word)?;
+                self.carry_in(f, arguments, 1, word & !SYNCHRONIZER)?;
                 self.task_yield()?;
                 self.task_return(f, arguments, None, normal)
             }
