@@ -3,8 +3,9 @@
 //! records under seeded schedules with injected flushes, terminal and durable, then replays
 //! to its live projection under other seeds, and from every cut its report names, truncated
 //! there and torn five bytes past it, to the live projection at that cut.
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 hirsel_guard::install!();
 
@@ -73,25 +74,151 @@ impl Drop for Scratch {
     }
 }
 
-/// One run of `program` under the test channel `hook`; its stdout.
-fn run(engine: &[&str], program: &Path, grants: &str, hook: &str) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+/// One run of `program` under the test channel `hook`. Bound each child so
+/// a stuck replay names its engine, phase/cut and seed before the pool's
+/// whole-harness timeout discards its output. Follow cli/dwarf.rs's watchdog,
+/// using files so detached runners cannot hold a pipe open. Native runners form
+/// their own process groups, so a
+/// timeout stops and collects this child's descendants before killing them.
+fn run(engine: &[&str], program: &Path, grants: &str, hook: &str) -> Output {
+    use std::time::{Duration, Instant};
+    let stdout = program.with_extension("child.stdout");
+    let stderr = program.with_extension("child.stderr");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command
         .arg("run")
         .args(engine)
         .arg(program)
         .arg("--grants")
         .arg(grants)
         .env("HIRSEL_RT_FREE_TEST", hook)
-        .output()
+        .process_group(0)
+        .stdout(std::fs::File::create(&stdout).unwrap())
+        .stderr(std::fs::File::create(&stderr).unwrap());
+    let diagnostics = std::env::var_os("HIRSEL_FREE_PROGRESS").is_some();
+    if diagnostics {
+        eprintln!("free child start {engine:?} {program:?}: {hook}");
+    }
+    let mut child = command.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            timed_out = true;
+            stop_tree(child.id());
+            let _ = child.kill();
+            break child.wait().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let output = Output {
+        status,
+        stdout: std::fs::read(stdout).unwrap(),
+        stderr: std::fs::read(stderr).unwrap(),
+    };
+    assert!(!timed_out, "{command:?} exceeded 120 seconds: {output:?}");
+    if diagnostics {
+        eprintln!("free child ended {engine:?} {program:?}: {}", output.status);
+    }
+    output
+}
+
+/// Linux child-tree traversal follows hirsel-conformance/src/bin/profile.rs's
+/// watchdog. Stop each
+/// parent before reading its children: it cannot reap/reuse their identities
+/// while we address them, and no stopped process can create more descendants.
+/// Read every thread's children (compilers can launch from worker threads).
+fn stop_tree(root: u32) {
+    let mut tree = vec![root];
+    let signal = |pid: u32, kind: &str| {
+        let _ = Command::new("kill")
+            .args([kind, "--", &pid.to_string()])
+            .status();
+    };
+    let mut at = 0;
+    while at < tree.len() {
+        let pid = tree[at];
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
+        let wchan = std::fs::read_to_string(format!("/proc/{pid}/wchan"));
+        signal(pid, "-STOP");
+        if let Ok(threads) = std::fs::read_dir(format!("/proc/{pid}/task")) {
+            for thread in threads.flatten() {
+                if let Ok(children) = std::fs::read_to_string(thread.path().join("children")) {
+                    for child in children.split_whitespace().filter_map(|s| s.parse().ok()) {
+                        if !tree.contains(&child) {
+                            tree.push(child);
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("free child timeout pid {pid}: stat {stat:?}; wchan {wchan:?}");
+        at += 1;
+    }
+    for pid in tree.into_iter().rev() {
+        signal(pid, "-KILL");
+    }
+}
+
+#[test]
+fn watchdog_stops_a_native_descendant_in_its_own_group() {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    let scratch = Scratch::new("watchdog");
+    let pid_file = scratch.path("native.pid");
+    let mut child = Command::new("/bin/sh")
+        .args([
+            "-c",
+            r#"setsid /bin/sh -c 'echo $$ > "$1"; exec sleep 30' sh "$1" & wait"#,
+            "sh",
+        ])
+        .arg(&pid_file)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
         .unwrap();
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    let until = Instant::now() + Duration::from_secs(5);
+    let pid = loop {
+        if let Some(pid) = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+        {
+            break pid;
+        }
+        if Instant::now() >= until {
+            stop_tree(child.id());
+            child.wait().unwrap();
+            panic!("native descendant did not start");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    stop_tree(child.id());
+    assert!(!child.wait().unwrap().success());
+    // The orphan may briefly remain a zombie until the action's init reaps
+    // it; neither a zombie nor an absent process can keep output pipes open.
+    loop {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
+        if stat.as_ref().is_err()
+            || stat.as_ref().is_ok_and(|text| {
+                text.rsplit_once(") ")
+                    .is_some_and(|(_, rest)| rest.starts_with('Z'))
+            })
+        {
+            break;
+        }
+        assert!(Instant::now() < until, "descendant survived: {stat:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// A replay of `tape` under `seed`: the projection it reports.
 fn replayed(engine: &[&str], program: &Path, grants: &str, tape: &Path, seed: u64) -> String {
     let report = tape.with_extension("replayed");
     let _ = std::fs::remove_file(&report);
-    run(
+    let output = run(
         engine,
         program,
         grants,
@@ -101,7 +228,8 @@ fn replayed(engine: &[&str], program: &Path, grants: &str, tape: &Path, seed: u6
             report.display()
         ),
     );
-    let text = std::fs::read_to_string(&report).unwrap_or_default();
+    let text = std::fs::read_to_string(&report)
+        .unwrap_or_else(|e| panic!("replay {engine:?} {tape:?}, seed {seed}: {e}: {output:?}"));
     text.trim_end().to_owned()
 }
 
@@ -121,7 +249,7 @@ fn record(engine: &[&str], name: &str, grants: &str, seed: u64, durable: bool) -
     std::fs::write(&program, source(name)).unwrap();
     let (tape, report) = (scratch.path("tape"), scratch.path("report"));
     let mode = if durable { ",durable=1" } else { "" };
-    let stdout = run(
+    let output = run(
         engine,
         &program,
         grants,
@@ -132,7 +260,8 @@ fn record(engine: &[&str], name: &str, grants: &str, seed: u64, durable: bool) -
         ),
     );
     let what = format!("{name} on {engine:?}, seed {seed}, durable {durable}");
-    let report = std::fs::read_to_string(&report).unwrap_or_else(|e| panic!("{what}: {e}"));
+    let report =
+        std::fs::read_to_string(&report).unwrap_or_else(|e| panic!("{what}: {e}: {output:?}"));
     let cuts = report
         .lines()
         .map(|line| {
@@ -145,7 +274,7 @@ fn record(engine: &[&str], name: &str, grants: &str, seed: u64, durable: bool) -
     Recorded {
         scratch,
         what,
-        stdout,
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         cuts,
     }
 }
