@@ -40,6 +40,202 @@ pub(crate) fn has_staged_reads(definition: &hirsel_tir::Definition) -> bool {
         matches!(value, hirsel_tir::Rvalue::ReadConstant { arguments, .. } if !arguments.is_empty())
     })
 }
+/// The definition-local inputs to lowering an evaluation. Its phase handle,
+/// interner and memo may be shared, while the lowered artifact is task-owned.
+/// It reads no QueryEngine state and publishes no registration.
+pub(crate) struct EvaluationInput<'a> {
+    pub(crate) analyzed: &'a AnalyzedBody,
+    pub(crate) staged: &'a [(ExprId, TypeId)],
+    pub(crate) signature: &'a Signature,
+    pub(crate) expression: ExprId,
+    pub(crate) child: ExprId,
+    pub(crate) ty: TypeId,
+    pub(crate) constants: &'a [(ExprId, Materialized)],
+    pub(crate) sizes: &'a [(SizeParameterRef, u64)],
+}
+
+pub(crate) struct PreparedEvaluation {
+    pub(crate) definition: hirsel_tir::Definition,
+    pub(crate) signature: Signature,
+    pub(crate) ty: TypeId,
+}
+
+impl EvaluationInput<'_> {
+    pub(crate) fn lower(
+        self,
+        types: &hirsel_types::TypeInterner,
+        memo: &hirsel_types::TypeMemo,
+        lowering: &dyn LoweringPhase,
+    ) -> Result<PreparedEvaluation, QueryError> {
+        let mut definition = lowering.lower_evaluation(
+            types,
+            memo,
+            self.analyzed,
+            self.staged,
+            self.signature,
+            self.child,
+            self.ty,
+            self.constants,
+        )?;
+        // This private initializer is a zero-input artifact, not the enclosing
+        // definition's exported body. Its result is H/J's checked expression type.
+        definition.path = DefId::intern(&hirsel_check_protocol::body::comptime_path(
+            self.signature.definition.path(),
+            &self.analyzed.typed.checked,
+            self.expression,
+        ));
+        specialize_sizes(types, memo, &mut definition, self.sizes)?;
+        let ty = definition.bodies[definition.entry.0 as usize].result;
+        let mut artifact = self.signature.clone();
+        artifact.definition = definition.path;
+        artifact.metadata = hirsel_types::SignatureMetadata {
+            roles: self.signature.metadata.roles.clone(),
+            unsafe_ffi: self.signature.metadata.unsafe_ffi,
+            ..Default::default()
+        };
+        artifact.kind = hirsel_types::SignatureKind::Const {
+            ty,
+            generics: Default::default(),
+        };
+
+        Ok(PreparedEvaluation {
+            definition,
+            signature: artifact,
+            ty,
+        })
+    }
+}
+
+/// One checked, validated compile-time artifact's interpreter task. All inputs
+/// are immutable; `provider` owns its dependency requests and read recording.
+/// `runtime` belongs to this worker: nested tasks reuse its recording stack,
+/// while different workers clone RuntimeTypes (sharing only immutable views).
+/// This is the same task at jobs=1 and on a worker; it never borrows an engine.
+/// Like rustc's body-owner tasks (rustc_hir_analysis/src/lib.rs:166-220),
+/// execution returns products for publication by the caller.
+pub(crate) struct EvaluationTask<'a> {
+    pub(crate) sources: &'a hirsel_span::SourceMap,
+    pub(crate) configuration: RunConfiguration,
+    pub(crate) limits: hirsel_interp::Limits,
+    pub(crate) runtime: &'a hirsel_interp::aggregate::RuntimeTypes,
+    pub(crate) site: Span,
+    pub(crate) ty: TypeId,
+}
+
+/// Execution evidence survives failure as well as success. The caller merges
+/// `reflected` with all reads made by the dependency provider before deciding
+/// whether to cache the result; a context-dependent failure stays local.
+pub(crate) struct EvaluationProduct {
+    pub(crate) result: Result<(hirsel_interp::Value, TypeId), QueryError>,
+    pub(crate) reflected: std::collections::BTreeMap<DefPath, ContentHash>,
+    pub(crate) limit: Option<hirsel_tir::ToolingLimit>,
+}
+
+impl EvaluationTask<'_> {
+    pub(crate) fn run(self, provider: &mut dyn TirProvider) -> EvaluationProduct {
+        let mut library =
+            match hirsel_interp::library::Library::new(&self.configuration, Default::default()) {
+                Ok(library) => library,
+                Err(error) => {
+                    return EvaluationProduct {
+                        result: Err(operational(format!("{error:?}"))),
+                        reflected: Default::default(),
+                        limit: None,
+                    };
+                }
+            };
+        self.runtime.serialization.record();
+        let execution = hirsel_interp::run_with_runtime(
+            provider,
+            self.sources,
+            &self.configuration,
+            vec![],
+            self.limits,
+            &mut library,
+            self.runtime,
+        );
+        let reflected = self.runtime.serialization.finish();
+        let mut limit_reached = None;
+        let result = (|| {
+            let execution = execution.map_err(|e| match e.error {
+                hirsel_interp::Error::Query(e) => e,
+                other => operational(format!("{other:?}")),
+            })?;
+            match execution.outcome {
+                Outcome::Returned { value, .. } => Ok((value, self.ty)),
+                Outcome::Failed(failure) => {
+                    let mut diagnostic = Diagnostic::error(
+                        const { hirsel_diag::RuleId::of("CT-1") },
+                        self.site,
+                        "compile-time evaluation failed",
+                    );
+                    diagnostic.secondary.push(hirsel_diag::Label {
+                        span: failure.site,
+                        message: format!("{}: {}", failure.rule, failure.kind),
+                    });
+                    diagnostic.notes.push(format!(
+                        "underlying failure {}: {}",
+                        failure.rule, failure.kind
+                    ));
+                    Err(QueryError::Diagnostics(vec![diagnostic]))
+                }
+                // CT-1 and docs/spec/diagnostics.md own exhausted evaluation steps, including the
+                // configured budget until #7 specifies source-event accounting.
+                Outcome::ToolingLimit(limit)
+                    if limit.kind == hirsel_tir::ToolingLimitKind::Steps =>
+                {
+                    let mut diagnostic = Diagnostic::error(
+                        const { hirsel_diag::RuleId::of("CT-1") },
+                        self.site,
+                        "compile-time evaluation exhausted its step limit",
+                    );
+                    if let Some(site) = limit.site {
+                        diagnostic.secondary.push(hirsel_diag::Label {
+                            span: site,
+                            message: "evaluation stopped here".into(),
+                        });
+                    }
+                    diagnostic
+                        .notes
+                        .push(format!("evaluation step limit: {} (spec #7)", limit.limit));
+                    limit_reached = Some(limit);
+                    Err(QueryError::Diagnostics(vec![diagnostic]))
+                }
+                Outcome::Blocked(_) => Err(operational("compile-time evaluation is Blocked")),
+                Outcome::BudgetExceeded(kind) => Err(operational(format!(
+                    "compile-time evaluation exceeded its {} budget",
+                    kind.name()
+                ))),
+                Outcome::ToolingLimit(limit) => {
+                    let error = operational_limit(&limit);
+                    limit_reached = Some(limit);
+                    Err(error)
+                }
+                Outcome::UndefinedBehavior(detected) => Err(operational(detected.to_string())),
+                Outcome::Trapped(trap) => Err(operational(trap.to_string())),
+                Outcome::Environmental(cause) => {
+                    Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                        operation: "codec-budget".into(),
+                        message: cause.to_string(),
+                    }))
+                }
+            }
+        })();
+        EvaluationProduct {
+            result,
+            reflected,
+            limit: limit_reached,
+        }
+    }
+}
+
+fn operational_limit(limit: &hirsel_tir::ToolingLimit) -> QueryError {
+    QueryError::Operational(hirsel_types::OperationalFailure {
+        operation: "compile-time tooling limit".into(),
+        message: format!("{limit:?}"),
+    })
+}
+
 struct Evaluation<'a> {
     root: DefinitionRef,
     engine: &'a mut QueryEngine,
@@ -479,36 +675,21 @@ impl QueryEngine {
             .lowering
             .clone()
             .ok_or(QueryError::NotImplemented)?;
-        let mut definition = lowering.lower_evaluation(
-            &self.types,
-            &self.memo,
+        let PreparedEvaluation {
+            definition,
+            signature: artifact,
+            ty,
+        } = EvaluationInput {
             analyzed,
             staged,
             signature,
+            expression,
             child,
             ty,
             constants,
-        )?;
-        // This private initializer is a zero-input artifact, not the enclosing
-        // definition's exported body. Its result is H/J's checked expression type.
-        definition.path = DefId::intern(&hirsel_check_protocol::body::comptime_path(
-            signature.definition.path(),
-            &analyzed.typed.checked,
-            expression,
-        ));
-        specialize_sizes(&self.types, &self.memo, &mut definition, sizes)?;
-        let ty = definition.bodies[definition.entry.0 as usize].result;
-        let mut artifact = signature.clone();
-        artifact.definition = definition.path;
-        artifact.metadata = hirsel_types::SignatureMetadata {
-            roles: signature.metadata.roles.clone(),
-            unsafe_ffi: signature.metadata.unsafe_ffi,
-            ..Default::default()
-        };
-        artifact.kind = hirsel_types::SignatureKind::Const {
-            ty: ty,
-            generics: Default::default(),
-        };
+            sizes,
+        }
+        .lower(&self.types, &self.memo, &*lowering)?;
         self.validate_comptime(&definition, artifact)?;
         let sources = self.sources.clone();
         let configuration = RunConfiguration {
@@ -518,87 +699,27 @@ impl QueryEngine {
         };
         let limits = self.comptime_limits;
         let runtime = self.comptime_runtime_types()?;
-        let mut library = hirsel_interp::library::Library::new(&configuration, Default::default())
-            .map_err(|e| operational(format!("{e:?}")))?;
-        runtime.serialization.record();
-        let execution = hirsel_interp::run_with_runtime(
-            &mut Evaluation {
-                root: Arc::new(definition),
-                engine: self,
-            },
-            &sources,
-            &configuration,
-            vec![],
+        let task = EvaluationTask {
+            sources: &sources,
+            configuration,
             limits,
-            &mut library,
-            &runtime,
-        );
-        let reflected = runtime.serialization.finish();
-        self.read_representations(&reflected);
-        let execution = execution.map_err(|e| match e.error {
-            hirsel_interp::Error::Query(e) => e,
-            other => operational(format!("{other:?}")),
-        })?;
-        match execution.outcome {
-            Outcome::Returned { value, .. } => Ok((value, ty)),
-            Outcome::Failed(failure) => {
-                let mut diagnostic = Diagnostic::error(
-                    const { hirsel_diag::RuleId::of("CT-1") },
-                    file.tree.expressions[expression.0 as usize].origin.span,
-                    "compile-time evaluation failed",
-                );
-                diagnostic.secondary.push(hirsel_diag::Label {
-                    span: failure.site,
-                    message: format!("{}: {}", failure.rule, failure.kind),
-                });
-                diagnostic.notes.push(format!(
-                    "underlying failure {}: {}",
-                    failure.rule, failure.kind
-                ));
-                Err(QueryError::Diagnostics(vec![diagnostic]))
-            }
-            // CT-1 and docs/spec/diagnostics.md own exhausted evaluation steps, including the
-            // configured budget until #7 specifies source-event accounting.
-            Outcome::ToolingLimit(limit) if limit.kind == hirsel_tir::ToolingLimitKind::Steps => {
-                let mut diagnostic = Diagnostic::error(
-                    const { hirsel_diag::RuleId::of("CT-1") },
-                    file.tree.expressions[expression.0 as usize].origin.span,
-                    "compile-time evaluation exhausted its step limit",
-                );
-                if let Some(site) = limit.site {
-                    diagnostic.secondary.push(hirsel_diag::Label {
-                        span: site,
-                        message: "evaluation stopped here".into(),
-                    });
-                }
-                diagnostic
-                    .notes
-                    .push(format!("evaluation step limit: {} (spec #7)", limit.limit));
-                self.last_comptime_limit = Some(limit);
-                Err(QueryError::Diagnostics(vec![diagnostic]))
-            }
-            Outcome::Blocked(_) => Err(operational("compile-time evaluation is Blocked")),
-            Outcome::BudgetExceeded(kind) => Err(operational(format!(
-                "compile-time evaluation exceeded its {} budget",
-                kind.name()
-            ))),
-            Outcome::ToolingLimit(limit) => Err(self.comptime_limit(limit)),
-            Outcome::UndefinedBehavior(detected) => Err(operational(detected.to_string())),
-            Outcome::Trapped(trap) => Err(operational(trap.to_string())),
-            Outcome::Environmental(cause) => {
-                Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                    operation: "codec-budget".into(),
-                    message: cause.to_string(),
-                }))
-            }
+            runtime: &runtime,
+            site: file.tree.expressions[expression.0 as usize].origin.span,
+            ty,
+        };
+        let product = task.run(&mut Evaluation {
+            root: Arc::new(definition),
+            engine: self,
+        });
+        self.read_representations(&product.reflected);
+        if let Some(limit) = product.limit {
+            self.last_comptime_limit = Some(limit);
         }
+        product.result
     }
     pub(crate) fn comptime_limit(&mut self, limit: hirsel_tir::ToolingLimit) -> QueryError {
         self.last_comptime_limit = Some(limit.clone());
-        QueryError::Operational(hirsel_types::OperationalFailure {
-            operation: "compile-time tooling limit".into(),
-            message: format!("{limit:?}"),
-        })
+        operational_limit(&limit)
     }
 }
 
@@ -1155,5 +1276,104 @@ impl QueryEngine {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod task_tests {
+    use super::*;
+    use hirsel_interp::aggregate::RuntimeTypes;
+    use std::sync::Barrier;
+
+    /// Fail after a view read, before the entry body exists. Evidence must
+    /// survive provider errors too, and must not consume an outer recording.
+    struct Missing<'a> {
+        runtime: &'a RuntimeTypes,
+        path: DefPath,
+        together: Option<&'a Barrier>,
+    }
+    impl TirProvider for Missing<'_> {
+        fn definition(&mut self, _: &DefPath) -> Result<DefinitionRef, QueryError> {
+            self.runtime.serialization.get(&self.path);
+            if let Some(together) = self.together {
+                together.wait();
+            }
+            Err(QueryError::NotImplemented)
+        }
+        fn constant(&mut self, _: &DefPath) -> Result<hirsel_tir::MaterializedRef, QueryError> {
+            Err(QueryError::NotImplemented)
+        }
+        fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
+            Ok(vec![])
+        }
+    }
+    fn task(runtime: &RuntimeTypes, together: Option<&Barrier>, name: &str) -> EvaluationProduct {
+        let path = DefPath::core(name);
+        let sources = SourceMap::default();
+        let ty = runtime.types.intern(hirsel_types::Type::unit());
+        EvaluationTask {
+            sources: &sources,
+            configuration: RunConfiguration {
+                entry: path.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            limits: Default::default(),
+            runtime,
+            site: Span::default(),
+            ty,
+        }
+        .run(&mut Missing {
+            runtime,
+            path,
+            together,
+        })
+    }
+    #[test]
+    fn failed_evaluation_returns_reads_and_preserves_the_outer_recording() {
+        let runtime = RuntimeTypes::new(hirsel_types::TypeInterner::new(None));
+        let outer = DefPath::core("outer");
+        let inner = DefPath::core("inner");
+        runtime.serialization.record();
+        runtime.serialization.get(&outer);
+        let product = task(&runtime, None, "inner");
+        assert!(matches!(product.result, Err(QueryError::NotImplemented)));
+        assert_eq!(
+            product.reflected.keys().cloned().collect::<Vec<_>>(),
+            [inner.clone()]
+        );
+        assert!(product.limit.is_none());
+        let enclosing = runtime.serialization.finish();
+        assert_eq!(enclosing.len(), 2);
+        assert!(enclosing.contains_key(&outer));
+        assert!(enclosing.contains_key(&inner));
+        assert!(runtime.serialization.finish().is_empty());
+    }
+    #[test]
+    fn simultaneous_workers_keep_their_reflection_reads_separate() {
+        let runtime = RuntimeTypes::new(hirsel_types::TypeInterner::new(None));
+        let together = Barrier::new(2);
+        let products = std::thread::scope(|scope| {
+            let workers: Vec<_> = ["left", "right"]
+                .into_iter()
+                .map(|name| {
+                    let runtime = runtime.clone();
+                    let together = &together;
+                    scope.spawn(move || (name, task(&runtime, Some(together), name)))
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        for (name, product) in products {
+            assert!(matches!(product.result, Err(QueryError::NotImplemented)));
+            assert_eq!(
+                product.reflected.keys().cloned().collect::<Vec<_>>(),
+                [DefPath::core(name)]
+            );
+        }
+        assert!(runtime.serialization.finish().is_empty());
     }
 }
