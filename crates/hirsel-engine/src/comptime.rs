@@ -675,6 +675,15 @@ impl QueryEngine {
         path: &DefPath,
         reference: Span,
     ) -> Result<EvaluatedConstant, QueryError> {
+        let result = self.constant_query(path, reference);
+        let released = self.release_batch_front(path);
+        result.and_then(|output| released.map(|()| output))
+    }
+    fn constant_query(
+        &mut self,
+        path: &DefPath,
+        reference: Span,
+    ) -> Result<EvaluatedConstant, QueryError> {
         if let Some(value) = self.image_constant(path) {
             self.depth_admit(&value.depth, reference)?;
             self.merge_execution(&value.executed);
@@ -1021,6 +1030,21 @@ impl QueryEngine {
         path: &DefPath,
         arguments: &[u64],
     ) -> Result<EvaluatedConstant, QueryError> {
+        let owner = self
+            .staged_constants
+            .get(path)
+            .map(|constant| constant.owner.clone());
+        let result = self.materialize_staged_query(path, arguments);
+        let released = owner
+            .as_ref()
+            .map_or(Ok(()), |owner| self.release_batch_front(owner));
+        result.and_then(|output| released.map(|()| output))
+    }
+    fn materialize_staged_query(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> Result<EvaluatedConstant, QueryError> {
         self.prepare_materialization_environment();
         if self.s1.is_empty() {
             self.last_comptime_limit = None;
@@ -1327,7 +1351,10 @@ impl QueryEngine {
             // published summary, including on repeated size instantiations.
             if !summary.staged.is_empty() && registered.insert(path.clone()) {
                 let analyzed = self.mode_query(&path)?;
-                self.register_staged(&analyzed.value)?;
+                let registered = self.register_staged(&analyzed.value);
+                let released = self.release_batch_front(&path);
+                registered?;
+                released?;
             }
             let frames = &summary.frames;
             let frame_of = |site: NameSite| {

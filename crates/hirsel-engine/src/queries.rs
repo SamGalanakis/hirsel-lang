@@ -1754,62 +1754,8 @@ impl QueryEngine {
         Ok(output)
     }
 }
-impl DefinitionQueries for QueryEngine {
-    fn parse_file(
-        &mut self,
-        file: FileId,
-        context: &FileContext,
-    ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
-        // An unedited source of the adopted image keeps the image.
-        self.materialize_source(file)?;
-        let package_environment = self.package_environment(&context.package);
-        if let Some((old_context, environment, result)) = self.parsed.get(&file) {
-            if old_context == context && environment == &package_environment {
-                return result.clone();
-            }
-        }
-        let mut output = match self.parse_syntax(file, context) {
-            Ok(output) => output,
-            Err(error) => {
-                // A lexing failure, and this fixed implementation limit, are
-                // deterministic for an exact source snapshot. Retain only the
-                // failure, never partial syntax.
-                if matches!(&error, QueryError::Diagnostics(_))
-                    || matches!(&error, QueryError::Operational(failure) if failure.operation == "parser-tooling-limit")
-                {
-                    self.parsed.insert(
-                        file,
-                        (context.clone(), package_environment, Err(error.clone())),
-                    );
-                }
-                return Err(error);
-            }
-        };
-        let result = if has_errors(&output.diagnostics) {
-            Err(QueryError::Diagnostics(output.diagnostics.clone()))
-        } else {
-            self.index(&mut output.value, context).map(|_| output)
-        };
-        self.parsed.insert(
-            file,
-            (context.clone(), package_environment.clone(), result.clone()),
-        );
-        result
-    }
-    fn item_signature(
-        &mut self,
-        definition: &DefPath,
-    ) -> Result<QueryOutput<hirsel_types::SignatureRef>, QueryError> {
-        self.signature_query(definition)
-            .map(|output| (*output).clone())
-    }
-    fn check_definition(
-        &mut self,
-        definition: &DefPath,
-    ) -> Result<QueryOutput<TypedBody>, QueryError> {
-        self.check_query(definition).map(|output| (*output).clone())
-    }
-    fn lower_to_tir(
+impl QueryEngine {
+    fn lower_query(
         &mut self,
         definition: &DefPath,
     ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
@@ -1919,6 +1865,71 @@ impl DefinitionQueries for QueryEngine {
         // Execution closure by union: whoever executes this body reads all it read.
         self.merge_execution(entry.reads());
         entry.output()
+    }
+}
+
+impl DefinitionQueries for QueryEngine {
+    fn parse_file(
+        &mut self,
+        file: FileId,
+        context: &FileContext,
+    ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
+        // An unedited source of the adopted image keeps the image.
+        self.materialize_source(file)?;
+        let package_environment = self.package_environment(&context.package);
+        if let Some((old_context, environment, result)) = self.parsed.get(&file) {
+            if old_context == context && environment == &package_environment {
+                return result.clone();
+            }
+        }
+        let mut output = match self.parse_syntax(file, context) {
+            Ok(output) => output,
+            Err(error) => {
+                // A lexing failure, and this fixed implementation limit, are
+                // deterministic for an exact source snapshot. Retain only the
+                // failure, never partial syntax.
+                if matches!(&error, QueryError::Diagnostics(_))
+                    || matches!(&error, QueryError::Operational(failure) if failure.operation == "parser-tooling-limit")
+                {
+                    self.parsed.insert(
+                        file,
+                        (context.clone(), package_environment, Err(error.clone())),
+                    );
+                }
+                return Err(error);
+            }
+        };
+        let result = if has_errors(&output.diagnostics) {
+            Err(QueryError::Diagnostics(output.diagnostics.clone()))
+        } else {
+            self.index(&mut output.value, context).map(|_| output)
+        };
+        self.parsed.insert(
+            file,
+            (context.clone(), package_environment.clone(), result.clone()),
+        );
+        result
+    }
+    fn item_signature(
+        &mut self,
+        definition: &DefPath,
+    ) -> Result<QueryOutput<hirsel_types::SignatureRef>, QueryError> {
+        self.signature_query(definition)
+            .map(|output| (*output).clone())
+    }
+    fn check_definition(
+        &mut self,
+        definition: &DefPath,
+    ) -> Result<QueryOutput<TypedBody>, QueryError> {
+        self.check_query(definition).map(|output| (*output).clone())
+    }
+    fn lower_to_tir(
+        &mut self,
+        definition: &DefPath,
+    ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
+        let result = self.lower_query(definition);
+        let released = self.release_batch_front(definition);
+        result.and_then(|output| released.map(|()| output))
     }
 }
 impl SignatureProvider for QueryEngine {

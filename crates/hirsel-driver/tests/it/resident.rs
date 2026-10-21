@@ -1534,3 +1534,112 @@ fn configured_compilers_and_sessions_share_providers_and_preserve_edit_results()
         }
     });
 }
+
+#[test]
+fn batch_serial_compile_time_demands_release_bodies_after_each_root() {
+    use std::sync::{Mutex, Weak};
+    struct ObservedModes {
+        inner: Arc<dyn ModesPhase>,
+        bodies: Mutex<Vec<Weak<TypedBody>>>,
+    }
+    impl ModesPhase for ObservedModes {
+        fn check_modes(
+            &self,
+            types: &hirsel_types::TypeInterner,
+            memo: &hirsel_types::TypeMemo,
+            body: Arc<TypedBody>,
+            signature: &Signature,
+            products: &mut PhaseProducts,
+            provider: &mut dyn SignatureProvider,
+        ) -> Result<QueryOutput<AnalyzedBody>, QueryError> {
+            let output = self
+                .inner
+                .check_modes(types, memo, body, signature, products, provider)?;
+            self.bodies
+                .lock()
+                .unwrap()
+                .push(Arc::downgrade(&output.value.typed));
+            Ok(output)
+        }
+    }
+    with_compiler_stack(|| {
+        let mut adapters = compiler_adapters();
+        let observed = Arc::new(ObservedModes {
+            inner: adapters.modes.take().unwrap(),
+            bodies: Mutex::new(vec![]),
+        });
+        adapters.modes = Some(observed.clone());
+        let mut candidate =
+            QueryEngine::new(default_environment(), adapters).with_config(CompileConfig {
+                jobs: hirsel_intern::jobs::Jobs::ONE,
+                hold_bytes: 0,
+                ..CompileConfig::for_memory_cap(None)
+            });
+        let source: String = (0..64)
+            .map(|i| format!("fn h{i}()->u64{{{i}u64}}\nconst C{i}:u64=comptime h{i}()\n"))
+            .collect();
+        let file = candidate
+            .sources
+            .add("serial-held.hir", source.clone())
+            .unwrap();
+        candidate.parse_file(file, &default_context()).unwrap();
+        let owners: Vec<_> = (0..64)
+            .flat_map(|i| [path(&format!("h{i}")), path(&format!("C{i}"))])
+            .collect();
+        assert!(
+            candidate
+                .publish_definitions(
+                    owners,
+                    hirsel_intern::jobs::Jobs::ONE,
+                    memo::Retention::Batch
+                )
+                .iter()
+                .all(|outcome| outcome.result.is_ok())
+        );
+        assert!(
+            observed
+                .bodies
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|body| body.strong_count() == 0)
+        );
+        let mut reference = engine(Arc::new(store::NoneStore));
+        let file = reference.sources.add("serial-held.hir", source).unwrap();
+        reference.parse_file(file, &default_context()).unwrap();
+        for i in 0..64 {
+            let root = path(&format!("C{i}"));
+            let actual = candidate.materialize_constant(&root).unwrap();
+            assert_eq!(actual, reference.materialize_constant(&root).unwrap());
+            let live = observed
+                .bodies
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|body| body.strong_count() != 0)
+                .count();
+            assert_eq!(
+                live, 0,
+                "root {i} left completed typed bodies in engine tables"
+            );
+            for name in [format!("C{i}"), format!("h{i}")] {
+                for kind in [QueryKind::Check, QueryKind::Modes] {
+                    assert!(
+                        candidate.memo_reads(&path(&name), kind).is_none(),
+                        "{name} retained {kind:?}"
+                    );
+                }
+            }
+        }
+        let before = candidate.memo_stats().recomputed.clone();
+        for i in 0..64 {
+            assert_eq!(
+                candidate
+                    .materialize_constant(&path(&format!("C{i}")))
+                    .unwrap(),
+                hirsel_tir::Constant::Integer(i)
+            );
+        }
+        assert_eq!(candidate.memo_stats().recomputed, before);
+    });
+}

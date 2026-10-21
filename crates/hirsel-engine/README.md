@@ -945,3 +945,9 @@ stores override CLI environment selection, including an off provider.
 The default hold budget is min(256 MiB, 10% of HIRSEL_MEMORY_LIMIT); an explicit
 zero budget is preserved. Native object-store selection remains in the driver
 and LIR provider API, outside this front-end config's dependencies.
+
+Serial compile-time constant, staged-value and lowering requests also publish
+compact front facts and release successful checked/analyzed bodies on completion
+under Batch retention. The request's active Arc remains valid through evaluation;
+Resident sessions keep the ordinary body memos. Later explicit body demands use
+the usual miss/recompute path.

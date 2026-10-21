@@ -528,6 +528,28 @@ impl QueryEngine {
         self.retention = retention;
     }
 
+    /// Serial S1 demands also publish compact facts before retiring body
+    /// ownership. The active caller's Arc keeps its in-flight artifact alive.
+    pub(crate) fn release_batch_front(&mut self, definition: &DefPath) -> Result<(), QueryError> {
+        if self.retention != crate::memo::Retention::Batch {
+            return Ok(());
+        }
+        let id = DefId::intern(definition);
+        let Some(entry) = self.modes.get(&id).cloned() else {
+            return Ok(());
+        };
+        let saved = (self.last_phase, self.unavailable);
+        let outcome = self.front_outcome(
+            definition.clone(),
+            entry.result(),
+            Some(QueryKind::Modes),
+            Some(entry.memo.reads.clone()),
+        );
+        let outcome = self.compact_front_outcome(outcome, true);
+        (self.last_phase, self.unavailable) = saved;
+        outcome.result.map(|_| ())
+    }
+
     fn remember_front_facts(&mut self, id: DefId) {
         if let Some(entry) = self.checked.get(&id)
             && entry.consistent
