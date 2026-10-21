@@ -86,7 +86,7 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
             for task in ready {
                 s.unpark(task);
             }
-            if !unsafe { readiness::poll_ordered_after_hosts(s) } {
+            if !unsafe { readiness::poll_ordered_after_hosts(s, crate::pool::has_slot_run(run)) } {
                 let Logical::Ordered(driver) = &mut s.logical else {
                     unreachable!()
                 };

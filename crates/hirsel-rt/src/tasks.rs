@@ -1357,9 +1357,13 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
             Logical::Free(_) => unsafe {
                 free::after_save(s, task, completed, crate::pool::has_slot_run(run))
             },
-            Logical::Ordered(_) => ordered::driver::after_save(s, task, completed, unsafe {
-                (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) != 0
-            }),
+            Logical::Ordered(_) => ordered::driver::after_save(
+                s,
+                task,
+                completed,
+                unsafe { (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) != 0 },
+                unsafe { crate::pool::has_slot_run(run) },
+            ),
         }
     };
     // No Scheduler or Task reference survives a fresh raw table lookup.
@@ -1422,6 +1426,10 @@ pub(crate) unsafe fn to_pool(ctx: &mut TaskCtx, site: u64) -> u16 {
 /// # Safety
 /// `ctx` is the running task's, on pool thread `slot` that owns it.
 pub(crate) unsafe fn from_pool(ctx: &mut TaskCtx, slot: u16) {
+    if ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, ordered::foreign::from_pool(ctx, slot)) };
+        return;
+    }
     if free::enabled(ctx) {
         unsafe { free::foreign::from_pool(ctx, slot) };
         return;

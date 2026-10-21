@@ -117,6 +117,23 @@ pub(crate) unsafe fn to_pool(ctx: *mut TaskCtx, site: u64) -> Stopped<u16> {
     Ok(slot)
 }
 
+/// Release physical pool capacity as soon as C has returned, before waiting
+/// for this task's logical head. Reuse is safe: the old exec cannot accept a
+/// new saved image until this outgoing frame reaches its idle continuation.
+pub(crate) unsafe fn from_pool(ctx: *mut TaskCtx, slot: u16) -> Stopped<()> {
+    let s = scheduler(ctx);
+    let me = s.current;
+    assert_eq!(
+        std::mem::replace(&mut s.task(me).owner, Owner::Any),
+        Owner::Pool(slot)
+    );
+    crate::pool::release(ctx, slot);
+    for task in std::mem::take(&mut scheduler(ctx).pool_waiters) {
+        scheduler(ctx).wake(task);
+    }
+    unsafe { engine::migrate(ctx) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,6 +359,150 @@ mod tests {
         assert!(crate::pool::on_pool());
         unsafe { hirsel_rt_v2_foreign_leave(interval.as_ptr().cast()) };
         STATUS_OK
+    }
+
+    unsafe extern "C" fn last_pool_call(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+        use std::sync::atomic::Ordering;
+        let probe =
+            unsafe { &*(crate::alloc::payload(env).cast::<u64>().read() as *const GateProbe) };
+        let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+        unsafe {
+            hirsel_rt_v2_foreign_enter(
+                ctx,
+                0,
+                interval.as_mut_ptr().cast(),
+                FOREIGN_THREADS_ANY | FOREIGN_BLOCKING,
+            );
+            probe.allow.store(true, Ordering::Release);
+            assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let mut canceled = 0;
+                assert_eq!(
+                    hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
+                    STATUS_OK
+                );
+                engine::at_head(ctx).unwrap();
+                let parked = {
+                    let _role = role::Guard::new(ctx);
+                    matches!(scheduler(ctx).task(0).wait, Some(Wait::Pool))
+                };
+                if parked {
+                    break;
+                }
+                assert!(std::time::Instant::now() < until);
+            }
+            {
+                let _role = role::Guard::new(ctx);
+                assert!(matches!(scheduler(ctx).task(0).wait, Some(Wait::Pool)));
+                assert!(readiness::saved(scheduler(ctx), 0));
+            }
+            probe.entered.store(true, Ordering::Release);
+            hirsel_rt_v2_callback_leave(ctx);
+            hirsel_rt_v2_foreign_leave(interval.as_ptr().cast());
+        }
+        STATUS_OK
+    }
+
+    #[test]
+    fn a_full_pool_retires_the_waiter_and_a_returning_foreign_call_wakes_it() {
+        use std::sync::{Arc, atomic::Ordering};
+        let layout = crate::Layout {
+            magic: crate::LAYOUT_MAGIC,
+            version: crate::LAYOUT_VERSION,
+            size: 8,
+            align: 8,
+            finalizer: None,
+            steps: std::ptr::null(),
+            step_count: 0,
+            field_count: 0,
+            flags: 0,
+            logical: 0,
+            logical_count: std::ptr::null(),
+            scan: std::ptr::null(),
+            scan_words: 0,
+        };
+        let layouts = [&layout as *const crate::Layout];
+        for width in [2, 4, 8] {
+            let probe = Arc::new(GateProbe::default());
+            let seen = probe.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 1;
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+                move |ctx| unsafe {
+                    // Reserve every slot except the one used by the real child
+                    // foreign call. Admission is still the production pool cap.
+                    let reserved: Vec<_> = (0..crate::pool::POOL_THREADS - 1)
+                        .map(|_| crate::pool::claim(ctx).expect("pool capacity"))
+                        .collect();
+                    let mut scope = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                        STATUS_OK
+                    );
+                    let env = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        2,
+                        8,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    crate::alloc::payload(env)
+                        .cast::<u64>()
+                        .write(Arc::as_ptr(&seen) as u64);
+                    let mut child = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_spawn(
+                            ctx,
+                            0,
+                            0,
+                            std::ptr::null_mut(),
+                            &mut child,
+                            &scope,
+                            last_pool_call,
+                            env,
+                            0
+                        ),
+                        STATUS_OK
+                    );
+                    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    while !seen.allow.load(Ordering::Acquire) {
+                        let mut canceled = 0;
+                        assert_eq!(
+                            hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
+                            STATUS_OK
+                        );
+                        assert!(std::time::Instant::now() < until);
+                    }
+                    assert!(!crate::pool::has_slot(ctx));
+                    let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                    hirsel_rt_v2_foreign_enter(
+                        ctx,
+                        0,
+                        interval.as_mut_ptr().cast(),
+                        FOREIGN_THREADS_SERIAL | FOREIGN_BLOCKING | (7 << FOREIGN_PACKAGE_SHIFT),
+                    );
+                    assert!(seen.entered.load(Ordering::Acquire));
+                    assert!(crate::pool::on_pool());
+                    hirsel_rt_v2_foreign_leave(interval.as_ptr().cast());
+                    for slot in reserved {
+                        crate::pool::release(ctx, slot);
+                    }
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                        STATUS_OK
+                    );
+                    assert_eq!(crate::tasks::gate_version(ctx, 7), 2);
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            assert_eq!(outcome.pending, 0);
+        }
     }
 
     #[test]

@@ -224,6 +224,7 @@ pub(crate) fn after_save(
     task: u32,
     completed: bool,
     host_timers: bool,
+    pool_available: bool,
 ) -> Vec<(u32, crate::pool::Owner)> {
     // The generation is part of the logical identity, even if the runtime
     // later recycles this native row index for a different child.
@@ -246,7 +247,7 @@ pub(crate) fn after_save(
         assert_eq!(s.task(task).generation, (retiring >> 32) as u32);
         if !host_timers && super::super::readiness::saved(s, task)
             // SAFETY: generic after_save owns IdleGuard and published saved.
-            && unsafe { super::super::readiness::poll_ordered(s) }
+            && unsafe { super::super::readiness::poll_ordered(s, pool_available) }
         {
             let ready = std::mem::take(&mut s.runnable)
                 .into_iter()
@@ -453,7 +454,7 @@ mod tests {
                     let me = s.current;
                     s.task(me).retried = true;
                     s.park(Wait::Retry { cancelable: false });
-                    assert!(!super::super::super::readiness::poll_ordered(s));
+                    assert!(!super::super::super::readiness::poll_ordered(s, true));
                     assert!(s.task(me).retried, "preflight must not consume the retry");
                     crate::pool::free::suspend_current(ctx, false);
                     let s = scheduler(ctx);

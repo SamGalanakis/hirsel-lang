@@ -131,28 +131,25 @@ unsafe fn poll_free_inner(s: &mut Scheduler, pool_available: Option<bool>) {
 /// the whole retirement pending; it must not select a new head in the meantime.
 /// # Safety
 /// The role owns the table, and no other code accesses a saved frame's slots.
-pub(super) unsafe fn poll_ordered(s: &mut Scheduler) -> bool {
-    unsafe { poll_ordered_inner(s, false) }
+pub(super) unsafe fn poll_ordered(s: &mut Scheduler, pool_available: bool) -> bool {
+    unsafe { poll_ordered_inner(s, false, pool_available) }
 }
 
 /// The home continuation already completed all saved host readiness attempts.
 /// # Safety
 /// As for poll_ordered; no host request effect occurs under this role.
-pub(super) unsafe fn poll_ordered_after_hosts(s: &mut Scheduler) -> bool {
-    unsafe { poll_ordered_inner(s, true) }
+pub(super) unsafe fn poll_ordered_after_hosts(s: &mut Scheduler, pool_available: bool) -> bool {
+    unsafe { poll_ordered_inner(s, true, pool_available) }
 }
 
-unsafe fn poll_ordered_inner(s: &mut Scheduler, hosts_polled: bool) -> bool {
+unsafe fn poll_ordered_inner(s: &mut Scheduler, hosts_polled: bool, pool_available: bool) -> bool {
     s.wake_receivers();
     for &task in &s.woken {
         let Some(row) = s.tasks.get(task as usize).and_then(Option::as_ref) else {
             continue;
         };
         let Some(wait) = row.wait else { continue };
-        if !saved(s, task)
-            || matches!(wait, Wait::Pool)
-            || (!hosts_polled && matches!(wait, Wait::Host { .. }))
-        {
+        if !saved(s, task) || (!hosts_polled && matches!(wait, Wait::Host { .. })) {
             return false;
         }
         if let Wait::Join { child, .. } = wait
@@ -180,7 +177,8 @@ unsafe fn poll_ordered_inner(s: &mut Scheduler, hosts_polled: bool) -> bool {
             continue;
         }
         // SAFETY: preflight checked every slot before the first poll effect.
-        let ready = unsafe { poll(s, task, None) }.expect("runtime-only ordered wait");
+        let ready =
+            unsafe { poll(s, task, Some(pool_available)) }.expect("runtime-only ordered wait");
         s.task(task).woken = false;
         if ready {
             s.unpark(task);
@@ -215,7 +213,7 @@ mod ordered_tests {
         let mut s = table();
         s.woken.reverse();
         // SAFETY: these runtime Retry waits inspect table metadata only.
-        assert!(unsafe { poll_ordered(&mut s) });
+        assert!(unsafe { poll_ordered(&mut s, true) });
         assert_eq!(s.runnable, VecDeque::from([0, 1, 2]));
         assert!(s.woken.is_empty());
         assert!(
@@ -227,17 +225,34 @@ mod ordered_tests {
     }
 
     #[test]
+    fn exhausted_pool_waits_do_not_block_retirement_and_retry_only_after_a_wake() {
+        let mut s = table();
+        s.task(1).wait = Some(Wait::Pool);
+        s.pool_waiters.push(1);
+        assert!(unsafe { poll_ordered(&mut s, false) });
+        assert_eq!(s.runnable, VecDeque::from([0, 2]));
+        assert!(matches!(s.task(1).wait, Some(Wait::Pool)));
+        assert!(!s.task(1).woken);
+        assert_eq!(s.pool_waiters, vec![1]);
+        s.wake(1);
+        assert!(unsafe { poll_ordered(&mut s, true) });
+        assert_eq!(s.runnable, VecDeque::from([0, 2, 1]));
+        assert!(s.task(1).wait.is_none());
+        assert!(s.pool_waiters.is_empty());
+    }
+
+    #[test]
     fn a_service_wait_leaves_all_runtime_poll_effects_pending() {
         let mut s = table();
         s.task(1).wait = Some(Wait::Host { token: 7 });
         // SAFETY: preflight reads table metadata and invokes no service.
-        assert!(!unsafe { poll_ordered(&mut s) });
+        assert!(!unsafe { poll_ordered(&mut s, true) });
         assert!(s.runnable.is_empty());
         assert_eq!(s.woken, vec![0, 1, 2]);
         assert!(s.task(0).retried);
         assert!(s.task(2).retried);
         s.task(1).wait = Some(Wait::Retry { cancelable: false });
-        assert!(unsafe { poll_ordered(&mut s) });
+        assert!(unsafe { poll_ordered(&mut s, true) });
         assert_eq!(s.runnable, VecDeque::from([0, 1, 2]));
     }
 }
