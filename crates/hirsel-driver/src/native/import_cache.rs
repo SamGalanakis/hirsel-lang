@@ -334,6 +334,57 @@ mod tests {
     }
 
     #[test]
+    fn imported_closure_symbols_match_fresh_after_layout_numbering_changes() {
+        hirsel_engine::with_compiler_stack(|| {
+            let target = TargetSpec::x86_64_unknown_linux_gnu();
+            let store = hirsel_lir::objects::SimObjects::default();
+            let source = "type Captured { n:u64 }\nfn compute(x:Captured)->u64 { let f=fn()->u64 { x.n }; f() }\nfn main()->u64 { compute(Captured(n:3u64)) }\n";
+            let donor = program(&format!("fn aaa()->(bool,u32) {{ (true,0u32) }}\n{source}"));
+            let mut cache = Imports::new(&store, &target, donor.types.clone(), false);
+            hirsel_rc::import::lower_cached(
+                &donor,
+                &target,
+                &Default::default(),
+                &Default::default(),
+                &mut cache,
+            )
+            .unwrap();
+            let client = program(source);
+            let fresh = hirsel_rc::import::lower(&client, &target).unwrap();
+            let mut cache = Imports::new(&store, &target, client.types.clone(), false);
+            let cached = hirsel_rc::import::lower_cached(
+                &client,
+                &target,
+                &Default::default(),
+                &Default::default(),
+                &mut cache,
+            )
+            .unwrap();
+            assert!(
+                cache.hits > 0,
+                "the distinct consumer must exercise stored imports"
+            );
+            let symbols = |lowered: &hirsel_rc::import::Lowered| {
+                lowered
+                    .units
+                    .iter()
+                    .map(|u| (u.header.definition.clone(), u.header.instance))
+                    .collect::<std::collections::BTreeSet<_>>()
+            };
+            assert_eq!(
+                symbols(&cached),
+                symbols(&fresh),
+                "closure code identity must not contain another program's layout numbering"
+            );
+            assert_eq!(
+                hirsel_codec::to_text(&cached.table),
+                hirsel_codec::to_text(&fresh.table)
+            );
+            assert_eq!(cached.units, fresh.units);
+        });
+    }
+
+    #[test]
     fn imports_replay_across_sessions_unrelated_layouts_and_body_edits() {
         hirsel_engine::with_compiler_stack(|| {
             let target = TargetSpec::x86_64_unknown_linux_gnu();

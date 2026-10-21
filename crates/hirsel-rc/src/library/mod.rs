@@ -419,9 +419,11 @@ impl Request {
             CallableShape::Definition => None,
             _ => crate::instance::convention(types, self.callable),
         };
-        let environment = self
-            .environment
-            .and_then(|e| layouts.table().record_digest(e));
+        let environment = self.environment.map(|e| {
+            // The imported caller and its replayed library request must agree
+            // even when unrelated layouts precede this environment.
+            hirsel_lir::LayoutKeys::rooted(layouts.table(), e).0
+        });
         InstanceKey::new(
             &self.path,
             0,

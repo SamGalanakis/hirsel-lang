@@ -1039,11 +1039,9 @@ impl Expander<'_, '_, '_> {
             .layouts
             .environment_data(&path, body_id.0, &shape, &movable)
             .map_err(|e| InstanceError::Layout(path.clone(), e))?;
-        let digest = self
-            .layouts
-            .table()
-            .record_digest(environment)
-            .ok_or_else(|| InstanceError::Malformed("environment digest".into()))?;
+        // A closure symbol survives import replay in a different program. Its
+        // environment identity must include child content, never LayoutId numbering.
+        let digest = hirsel_lir::LayoutKeys::rooted(self.layouts.table(), environment).0;
         Ok((environment, digest, views))
     }
 

@@ -199,7 +199,7 @@ mod tests {
             std::fs::create_dir_all(&directory).unwrap();
             std::fs::write(
                 directory.join("library.hir"),
-                "pub fn answer(x:u64)->u64 { x+1u64 }\n",
+                "type Payload { n:u64 }\npub fn aaa()->(bool,u32) { (true,0u32) }\npub fn answer(x:u64)->u64 { let p=Payload(n:x); let get=fn()->u64 { p.n }; get()+1u64 }\n",
             )
             .unwrap();
             let library = directory.join("library.json");
@@ -214,7 +214,7 @@ mod tests {
             .unwrap();
             let output = directory.join("objects");
             let report = seed_objects(&library, &output).unwrap();
-            assert_eq!(report.roots, 1);
+            assert_eq!(report.roots, 2);
             assert!(report.objects >= 6, "{report:?}");
             std::fs::write(directory.join("main.hir"), "pub fn main()->Result[(),()] { failure.check(lib.answer(3u64)==4u64, Arithmetic()); Ok(()) }\n").unwrap();
             let manifest = directory.join("application.json");
