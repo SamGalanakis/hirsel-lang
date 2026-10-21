@@ -17,10 +17,10 @@ system-allocator = []
 memcheck = []
 # ThreadSanitizer fiber annotations, for builds with `-Zsanitizer=thread`.
 tsan = []
-measurement = ["dep:serde_json"]
+measurement = []
 
 [dependencies]
-serde_json = { version = "1", optional = true }
+serde_json = "1"
 hirsel-free = { path = "../hirsel-free" }
 hirsel-kernels = { path = "../hirsel-kernels" }
 hirsel-core-contract = { path = "../hirsel-core-contract" }

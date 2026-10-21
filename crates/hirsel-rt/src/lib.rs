@@ -40,6 +40,7 @@ pub mod isolate;
 pub mod journal;
 pub mod kernels;
 pub mod launch;
+pub mod managed_cores;
 mod mapping;
 pub mod net;
 pub mod net_abi;

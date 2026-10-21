@@ -1580,7 +1580,7 @@ pub(crate) unsafe fn execute(
     sinks: &crate::host::Sinks,
     options: Options,
 ) -> Result<RunOutcome, String> {
-    let (width, migrate) = match options.workers {
+    let (mut width, migrate) = match options.workers {
         Some(workers) => workers,
         None => workers_from_env()?,
     };
@@ -1963,6 +1963,75 @@ pub(crate) unsafe fn execute(
             },
         }
     };
+    // Replay validates placement syntax but never captures topology or opens a sidecar.
+    let managed = if replay.is_none() {
+        requested
+            .as_ref()
+            .map(|run| run.record().placement.clone().unwrap_or_default())
+            .map(|placement| {
+                let reader = hirsel_run_config::managed_cores::LinuxLimits::capture()
+                    .map_err(|e| e.to_string())?;
+                let limits = reader.read().map_err(|e| e.to_string())?;
+                let (process_grant, _, _) = crate::pool::compute_permits();
+                let grant = hirsel_run_config::managed_cores::HostGrant {
+                    max_cores: process_grant.into(),
+                    cpus: limits.admission_affinity.clone(),
+                };
+                let manager = std::sync::Arc::new(crate::managed_cores::ManagedCores::admit(
+                    placement.clone(),
+                    grant,
+                    limits,
+                    std::time::Duration::ZERO,
+                    crate::host::RunControl::from_inner(std::sync::Arc::clone(&options.control)),
+                    // Explicit worker knobs exercise the substrate; production activation
+                    // belongs to the ordered/free differential gate (E1/F1).
+                    options.workers.is_some(),
+                )?);
+                let metrics_pin = placement
+                    .metrics
+                    .as_ref()
+                    .map(|path| {
+                        crate::host_paths::RecorderDestination::pin(std::path::Path::new(path))
+                    })
+                    .transpose()
+                    .map_err(|e| e.to_string())?;
+                let control_pin = placement
+                    .control
+                    .as_ref()
+                    .map(|path| {
+                        crate::host_paths::RecorderDestination::pin(std::path::Path::new(path))
+                    })
+                    .transpose()
+                    .map_err(|e| e.to_string())?;
+                // Check both destinations before either creates or truncates anything.
+                let real_io = real.as_ref().map(|io| io.borrow());
+                let grants = real_io.as_ref().map_or_else(Vec::new, |io| io.mount_pins());
+                if let Some(pin) = &metrics_pin {
+                    pin.check_with_files(&grants, &output_grants)
+                        .map_err(|e| e.to_string())?;
+                }
+                if let Some(pin) = &control_pin {
+                    pin.check_control(&grants, &output_grants)
+                        .map_err(|e| e.to_string())?;
+                }
+                let socket = control_pin
+                    .map(|pin| pin.bind_control(&grants, &output_grants))
+                    .transpose()
+                    .map_err(|e| e.to_string())?;
+                let writer = metrics_pin
+                    .map(|pin| pin.open_with_files(&grants, &output_grants))
+                    .transpose()
+                    .map_err(|e| e.to_string())?;
+                width = options
+                    .control
+                    .width
+                    .load(std::sync::atomic::Ordering::Acquire);
+                Ok::<_, String>((reader, manager, writer, socket))
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let prepare_tool_file = |path: &std::path::Path| {
         if let Some(io) = &real {
             io.borrow()
@@ -2043,7 +2112,18 @@ pub(crate) unsafe fn execute(
         });
     }
     unsafe { &mut *ctx }.run().control = std::sync::Arc::clone(&control);
-    unsafe { &mut *ctx }.run().worker_metrics = options.metrics;
+    let worker_metrics = options.metrics.or_else(|| {
+        managed.as_ref().and_then(|(_, _, writer, socket)| {
+            (writer.is_some() || socket.is_some()).then(Default::default)
+        })
+    });
+    unsafe { &mut *ctx }.run().worker_metrics = worker_metrics.clone();
+    let _managed_service = managed
+        .map(|(reader, manager, writer, socket)| {
+            crate::managed_cores::Service::start(reader, manager, writer, socket, worker_metrics)
+        })
+        .transpose()
+        .map_err(|e| e.to_string())?;
     #[cfg(feature = "measurement")]
     if let Some(file) = measurement {
         unsafe { &mut *ctx }.set_measurement_output(file);
@@ -2070,7 +2150,12 @@ pub(crate) unsafe fn execute(
     // The free-mode test channel decides one worker's interleavings: it runs on one.
     // An execution of several runs (RUN-10) switches between their roots on one thread: a run
     // with runners runs on one worker too.
-    if width > 1 && unsafe { &mut *ctx }.run().free.is_none() && runners.is_empty() {
+    if (width > 1
+        || (options.workers.is_some()
+            && control.width.load(std::sync::atomic::Ordering::Acquire) != 0))
+        && unsafe { &mut *ctx }.run().free.is_none()
+        && runners.is_empty()
+    {
         // SAFETY: the root context, on the admission thread, before the run's code runs.
         unsafe { crate::pool::start(ctx, width, migrate) };
     }

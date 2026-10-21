@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | serve [--no-verify] <source|manifest.json> --host <json>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [-- args...] | build [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precheck <package manifest.json> -o <file> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
 
 mod allocator;
 mod execution_policy;
@@ -24,6 +24,10 @@ fn main() -> ExitCode {
 enum Command {
     Help,
     New(hirsel_cli_args::NewOptions),
+    Ctl {
+        path: OsString,
+        cores: Option<u64>,
+    },
     Test {
         manifest: OsString,
         filters: Vec<String>,
@@ -218,6 +222,27 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
     let command = match args.next()? {
         Some(Long("help")) => Command::Help,
         Some(Value(command)) if command == "help" => Command::Help,
+        Some(Value(command)) if command == "ctl" => {
+            let path = args.value()?;
+            let action = args.value()?;
+            let cores = if action == "cores" {
+                Some(
+                    args.value()?
+                        .to_str()
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .filter(|n| *n > 0)
+                        .ok_or("ctl cores requires a positive integer")?,
+                )
+            } else if action == "metrics" {
+                None
+            } else {
+                return Err("ctl expects cores <n> or metrics".into());
+            };
+            if let Some(arg) = args.next()? {
+                return Err(arg.unexpected());
+            }
+            Command::Ctl { path, cores }
+        }
         Some(Value(command)) if command == "view" => {
             let (mut tape, mut capture, mut output) = (None, None, None);
             let (mut timing, mut source, mut analysis) = (None, None, None);
@@ -890,6 +915,45 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
         return usage();
     }
     let (command, flag, file) = match command {
+        Command::Ctl { path, cores } => {
+            use std::io::{Read, Write};
+            let result = (|| -> Result<(), String> {
+                let mut socket = std::os::unix::net::UnixStream::connect(Path::new(&path))
+                    .map_err(|e| e.to_string())?;
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                    .map_err(|e| e.to_string())?;
+                socket
+                    .set_write_timeout(Some(std::time::Duration::from_secs(2)))
+                    .map_err(|e| e.to_string())?;
+                let request = cores.map_or_else(
+                    || serde_json::json!({"metrics": true}),
+                    |cores| serde_json::json!({"placement": {"cores": cores}}),
+                );
+                let mut bytes = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
+                bytes.push(b'\n');
+                socket.write_all(&bytes).map_err(|e| e.to_string())?;
+                let mut reply = String::new();
+                socket
+                    .take(1024 * 1024)
+                    .read_to_string(&mut reply)
+                    .map_err(|e| e.to_string())?;
+                let value: serde_json::Value =
+                    serde_json::from_str(&reply).map_err(|e| e.to_string())?;
+                println!("{}", reply.trim_end());
+                if value.get("error").is_some() {
+                    return Err("control request refused".into());
+                }
+                Ok(())
+            })();
+            return match result {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("{error}");
+                    1
+                }
+            };
+        }
         Command::Test {
             manifest,
             filters,

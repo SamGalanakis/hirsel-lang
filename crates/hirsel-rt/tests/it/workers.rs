@@ -1046,3 +1046,107 @@ fn free_immediate_ops_keep_their_worker_for_at_most_128_semantic_ops() {
         assert!(metrics.elisions() >= 127);
     }
 }
+
+#[test]
+fn live_width_grows_shrinks_and_returns_tasks_from_retiring_workers() {
+    let _serial = serial();
+    let run = BodyRun::new(1, true);
+    let control = run.control();
+    control.resize(1).unwrap();
+    let counts = Arc::new(Mutex::new(Vec::new()));
+    let output = counts.clone();
+    let result = run.run(
+        |_| {},
+        move |ctx| {
+            for target in [2, 8, 1, 4, 1, 8, 2, 1] {
+                control.resize(target).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    unsafe { yield_now(&mut *ctx) };
+                    if control.worker_width() == target {
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "width {} did not reach {target}",
+                        control.worker_width()
+                    );
+                }
+                ran_here();
+                output.lock().unwrap().push(control.worker_width());
+            }
+            0
+        },
+    );
+    assert_eq!(result.ended, Ok(0));
+    assert_eq!(*counts.lock().unwrap(), [2, 8, 1, 4, 1, 8, 2, 1]);
+    take_threads();
+}
+
+#[test]
+fn repeated_stopped_runs_never_replace_lost_permits_and_only_manager_restores_capacity() {
+    const CHILD: &str = "HIRSEL_K1_LOST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "workers::repeated_stopped_runs_never_replace_lost_permits_and_only_manager_restores_capacity", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        return;
+    }
+    hirsel_rt::pool::set_compute_grant(3);
+    let release = Arc::new(AtomicBool::new(false));
+    let mut stopped = Vec::new();
+    for lost in 1..=3 {
+        let run = BodyRun::new(2, true);
+        let control = run.control();
+        let entered = Arc::new(AtomicBool::new(false));
+        let stopper = std::thread::spawn({
+            let (control, entered) = (control.clone(), entered.clone());
+            move || {
+                eventually("divergent root entry", || entered.load(SeqCst));
+                control.stop();
+            }
+        });
+        let outcome = run.run(|_| {}, {
+            let release = release.clone();
+            move |_| {
+                entered.store(true, SeqCst);
+                while !release.load(SeqCst) {
+                    std::hint::spin_loop();
+                }
+                0
+            }
+        });
+        stopper.join().unwrap();
+        assert_eq!(outcome.ended, Err(Stop::Requested));
+        assert_eq!(hirsel_rt::pool::lost_compute_permits(), lost);
+        assert_eq!(hirsel_rt::pool::compute_permits().1, lost);
+        stopped.push(control);
+    }
+    let entered = Arc::new(AtomicBool::new(false));
+    let fourth = std::thread::spawn({
+        let entered = entered.clone();
+        move || {
+            BodyRun::new(1, false).run(
+                |_| {},
+                move |_| {
+                    entered.store(true, SeqCst);
+                    0
+                },
+            )
+        }
+    });
+    eventually("fourth run awaiting capacity", || {
+        hirsel_rt::pool::compute_permits().2 > 0
+    });
+    assert!(!entered.load(SeqCst));
+    hirsel_rt::pool::set_compute_grant(4);
+    assert_eq!(fourth.join().unwrap().ended, Ok(0));
+    assert_eq!(hirsel_rt::pool::lost_compute_permits(), 3);
+    release.store(true, SeqCst);
+    eventually("all stopped workers reclaimed", || {
+        stopped.iter().all(|c| c.status().reclamation_pending == 0)
+    });
+    assert_eq!(hirsel_rt::pool::lost_compute_permits(), 0);
+    assert_eq!(hirsel_rt::pool::compute_permits().1, 0);
+}

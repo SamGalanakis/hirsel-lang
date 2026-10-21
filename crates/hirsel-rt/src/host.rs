@@ -273,12 +273,34 @@ impl Host {
 #[derive(Clone)]
 pub struct RunControl(std::sync::Arc<crate::stop::Control>);
 impl RunControl {
+    pub(crate) fn from_inner(control: std::sync::Arc<crate::stop::Control>) -> Self {
+        control.host();
+        Self(control)
+    }
     /// Stop the run. The first stop of a run wins, whoever asks: a later one, or a stop the
     /// run raised itself, leaves it as it is. A stopped run ends `Environmental(Stopped)` at
     /// its next operation, scheduling point or fuel refill, never inside a foreign call: one
     /// in C ends when the call returns.
     pub fn stop(&self) {
         self.0.request(crate::stop::Stop::Requested);
+    }
+    /// Request a live worker width. Applies at the next scheduling boundary.
+    /// Managed launchers keep this at one until their executor's differential gate.
+    pub fn resize(&self, width: u32) -> Result<(), String> {
+        if !(1..=crate::pool::MAX_WIDTH).contains(&width) {
+            return Err(format!(
+                "worker width must be 1..{}",
+                crate::pool::MAX_WIDTH
+            ));
+        }
+        self.0
+            .width
+            .store(width, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+    /// Actual live compute workers, including workers draining after shrink.
+    pub fn worker_width(&self) -> u32 {
+        self.0.live_width.load(std::sync::atomic::Ordering::Acquire)
     }
     /// Where the run stands.
     pub fn status(&self) -> RunStatus {
@@ -448,8 +470,25 @@ impl BodyRun {
             (*ctx).run().control = std::sync::Arc::clone(&self.control);
             (*ctx).run().worker_metrics = self.metrics.clone();
             (*ctx).run().free_mode = self.free;
-            if self.width > 1 {
-                crate::pool::start(ctx, self.width, self.migrate);
+            if self.width > 1
+                || self
+                    .control
+                    .width
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    != 0
+            {
+                crate::pool::start(
+                    ctx,
+                    match self
+                        .control
+                        .width
+                        .load(std::sync::atomic::Ordering::Acquire)
+                    {
+                        0 => self.width,
+                        width => width,
+                    },
+                    self.migrate,
+                );
             }
             if self.fuel.is_some() {
                 (*ctx).set_budgets(self.fuel, None);

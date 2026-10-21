@@ -30,6 +30,7 @@
     "meter_ops_per_s": "R4: logical charges + credits / measured seconds",
     "allocations_per_s": "R4: runtime allocations while memory-budgeted / measured seconds",
     "speculation_pauses": "E1/R4: pauses; add speculation_pauses_<cause> for every allowance/envelope cause",
+    "permit_wait_ns": "K1: accumulated compute permit acquisition ns / acquisitions; enabled only with worker metrics",
     "latency_p99_ns": "F1/K1: per-operation latency histogram p99 (never process durations)"
   },
   "comparison": "Recording row: record minus off. Other rows: free minus equal-width tokio. Ratios and instruction verdicts remain per workload, never whole-corpus averages."

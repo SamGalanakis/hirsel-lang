@@ -118,10 +118,13 @@ pub(crate) struct Exec {
     deferred: Cell<Option<(*const Exec, Post)>>,
     worker: Cell<*mut Worker>,
     held: AtomicBool,
+    exited: AtomicBool,
+    lost: AtomicBool,
 }
 
-// SAFETY: the cells are touched only by the exec's own thread (see `Exec`); the inbox is
-// behind its lock.
+// SAFETY: the cells are touched only by the exec's own thread while it runs.
+// After exited is acquired, the run-token holder may retire and clear its worker
+// under the compute lock. The inbox is behind its own lock.
 unsafe impl Send for Exec {}
 // SAFETY: as for `Send`.
 unsafe impl Sync for Exec {}
@@ -140,6 +143,8 @@ impl Exec {
             deferred: Cell::new(None),
             worker: Cell::new(worker),
             held: AtomicBool::new(held),
+            exited: AtomicBool::new(false),
+            lost: AtomicBool::new(false),
         })
     }
 
@@ -201,6 +206,7 @@ struct PermitState {
     limit: u32,
     held: u32,
     waiting: u32,
+    lost: u32,
 }
 
 static PROCESS_PERMITS: std::sync::OnceLock<Arc<Permits>> = std::sync::OnceLock::new();
@@ -231,6 +237,12 @@ pub fn compute_permits() -> (u32, u32, u32) {
     (state.limit, state.held, state.waiting)
 }
 
+/// Permits retained by stopped runs across the entire process. They remain
+/// deducted from capacity, including after those runs' handles are dropped.
+pub fn lost_compute_permits() -> u32 {
+    process_permits().state.lock().unwrap().lost
+}
+
 /// Wake threads waiting for a permit when their run stops. Keeping the lock
 /// through notification prevents a stop from being lost just before a wait.
 pub(crate) fn wake_permits() {
@@ -247,15 +259,22 @@ impl Permits {
                 limit,
                 held: 0,
                 waiting: 0,
+                lost: 0,
             }),
             freed: Condvar::new(),
         }
     }
     /// Whether this thread took a permit (nested callbacks keep the existing one).
-    fn acquire(&self, exec: &Exec, control: Option<&crate::stop::Control>) -> Stopped<bool> {
+    fn acquire(
+        &self,
+        exec: &Exec,
+        control: Option<&crate::stop::Control>,
+        metrics: Option<&WorkerMetrics>,
+    ) -> Stopped<bool> {
         if exec.held.load(Ordering::Relaxed) {
             return Ok(false);
         }
+        let started = metrics.map(|_| Instant::now());
         let mut state = self.state.lock().unwrap();
         loop {
             if let Some(stop) = control.and_then(|c| c.stopped()) {
@@ -270,6 +289,12 @@ impl Permits {
         }
         state.held += 1;
         exec.held.store(true, Ordering::Release);
+        if let (Some(metrics), Some(started)) = (metrics, started) {
+            metrics
+                .permit_wait_ns
+                .fetch_add(nanos(started.elapsed()), Relaxed);
+            metrics.permit_acquires.fetch_add(1, Relaxed);
+        }
         Ok(true)
     }
     fn release(&self, exec: &Exec) {
@@ -278,6 +303,9 @@ impl Permits {
         }
         let mut state = self.state.lock().unwrap();
         state.held -= 1;
+        if exec.lost.swap(false, Ordering::AcqRel) {
+            state.lost -= 1;
+        }
         self.freed.notify_one();
     }
     #[cfg(test)]
@@ -331,8 +359,7 @@ pub(crate) struct Execs {
     home: Arc<Exec>,
     /// The home thread's idle fiber at width 1, prepared when home first waits.
     home_idle: Option<Stack>,
-    compute: Vec<Arc<Exec>>,
-    compute_threads: Vec<std::thread::JoinHandle<()>>,
+    compute: Mutex<ComputeWorkers>,
     pool: Mutex<Vec<PoolThread>>,
     pub(crate) permits: Arc<Permits>,
     holders: Arc<Holders>,
@@ -343,6 +370,15 @@ pub(crate) struct Execs {
     calls: hirsel_free::claim::Requests<()>,
     next_call: AtomicU64,
     activity: Mutex<()>,
+}
+
+/// Active destinations and workers draining after a shrink. Only the run-token
+/// holder changes membership, under this lock; admission can snapshot it safely.
+#[derive(Default)]
+struct ComputeWorkers {
+    active: Vec<Arc<Exec>>,
+    retiring: Vec<Arc<Exec>>,
+    threads: Vec<std::thread::JoinHandle<()>>,
 }
 
 /// The scheduling row's headroom counters (design §5 Headroom, B1's `switch_queue`,
@@ -365,6 +401,8 @@ pub struct WorkerMetrics {
     resident: AtomicU64,
     resident_peak: AtomicU64,
     stack_rss: AtomicU64,
+    permit_wait_ns: AtomicU64,
+    permit_acquires: AtomicU64,
 }
 
 impl Default for WorkerMetrics {
@@ -383,6 +421,8 @@ impl Default for WorkerMetrics {
             resident: AtomicU64::new(0),
             resident_peak: AtomicU64::new(0),
             stack_rss: AtomicU64::new(0),
+            permit_wait_ns: AtomicU64::new(0),
+            permit_acquires: AtomicU64::new(0),
         }
     }
 }
@@ -450,6 +490,10 @@ impl WorkerMetrics {
         let seconds = self.started.elapsed().as_secs_f64();
         [
             ("switches_per_op", ratio(&self.switches, ops)),
+            (
+                "permit_wait_ns",
+                ratio(&self.permit_wait_ns, self.permit_acquires.load(Relaxed)),
+            ),
             ("queue_ops_per_op", ratio(&self.queue_ops, ops)),
             ("spawn_ns", ratio(&self.spawn_ns, self.spawns.load(Relaxed))),
             (
@@ -562,7 +606,9 @@ pub(crate) fn compute_index() -> Option<u16> {
 /// Whether `run` runs its tasks on compute workers beside its home thread (width > 1).
 #[inline]
 pub(crate) fn wide(run: &RunShared) -> bool {
-    run.execs.as_deref().is_some_and(|e| !e.compute.is_empty())
+    run.execs
+        .as_deref()
+        .is_some_and(|e| !e.compute.lock().unwrap().active.is_empty())
 }
 
 /// The run's execs, created with the home thread holding the run's one permit.
@@ -579,8 +625,7 @@ fn execs(ctx: *mut TaskCtx) -> &'static mut Execs {
             Box::new(Execs {
                 home: Exec::new(Kind::Home, (*ctx).worker_ptr(), false),
                 home_idle: None,
-                compute: Vec::new(),
-                compute_threads: Vec::new(),
+                compute: Mutex::new(ComputeWorkers::default()),
                 pool: Mutex::new(Vec::new()),
                 permits: process_permits(),
                 holders: Arc::new(Holders {
@@ -620,28 +665,36 @@ fn pool_exec(execs: &Execs, slot: u16) -> *const Exec {
 pub(crate) fn target(ctx: *mut TaskCtx, owner: Owner, last: Option<u16>) -> Option<*const Exec> {
     // SAFETY: the context is live.
     let execs = unsafe { (*(*ctx).run_ptr()).execs.as_deref() }?;
+    resize(ctx);
+    let compute = execs.compute.lock().unwrap();
     let me = current(execs);
     let to = match owner {
         Owner::Home => Arc::as_ptr(&execs.home),
         Owner::Pool(slot) => pool_exec(execs, slot),
-        Owner::Any if execs.compute.is_empty() => Arc::as_ptr(&execs.home),
+        Owner::Any if compute.active.is_empty() => Arc::as_ptr(&execs.home),
         Owner::Any => {
             // SAFETY: the calling thread's exec lives while it serves the run.
             let here = match unsafe { (*me).kind } {
                 Kind::Compute(index) => Some(index),
                 _ => None,
             };
-            let width = execs.compute.len();
+            let width = compute.active.len();
+            let here = here.filter(|&index| {
+                compute
+                    .active
+                    .get(usize::from(index))
+                    .is_some_and(|e| Arc::as_ptr(e) == me)
+            });
             let index = match (here, last) {
                 (Some(here), Some(last)) if execs.migrate && here == last => {
                     (usize::from(here) + 1) % width
                 }
                 (Some(_), _) => return None,
                 (None, Some(last)) if execs.migrate => (usize::from(last) + 1) % width,
-                (None, Some(last)) => usize::from(last),
+                (None, Some(last)) => usize::from(last) % width,
                 (None, None) => execs.cursor.fetch_add(1, Relaxed) % width,
             };
-            Arc::as_ptr(&execs.compute[index])
+            Arc::as_ptr(&compute.active[index])
         }
     };
     (to != me).then_some(to)
@@ -777,7 +830,15 @@ unsafe fn resume(run: *mut RunShared, exec: &Exec, task: u32, permit: bool) {
     // SAFETY: the run is live; its execs and tasks outlive every resume.
     unsafe {
         if permit && let Some(execs) = (*run).execs.as_deref() {
-            if execs.permits.acquire(exec, Some(&(*run).control)).is_err() {
+            if execs
+                .permits
+                .acquire(
+                    exec,
+                    Some(&(*run).control),
+                    (*run).worker_metrics.as_deref(),
+                )
+                .is_err()
+            {
                 exec.busy.store(false, Ordering::SeqCst);
                 wake(&execs.home);
                 return;
@@ -885,6 +946,10 @@ fn worker_main(run: RunPtr, exec: Arc<Exec>, holders: Arc<Holders>) {
     // SAFETY: this is the exec's own thread, idle between posts.
     while unsafe { serve(run, &exec) } {}
     EXEC.with(|e| e.set(std::ptr::null()));
+    if matches!(exec.kind, Kind::Compute(_)) {
+        unsafe { (&(*run).control).live_width.fetch_sub(1, Ordering::AcqRel) };
+    }
+    exec.exited.store(true, Ordering::Release);
     if holders.count.fetch_sub(1, Ordering::AcqRel) == 1 && holders.detached.load(Ordering::Acquire)
     {
         // SAFETY: the launcher left the run and this is its last thread.
@@ -903,15 +968,23 @@ pub(crate) unsafe fn start(ctx: *mut TaskCtx, width: u32, migrate: bool) {
     // SAFETY: caller contract.
     let run = unsafe { (*ctx).run_ptr() };
     let execs = execs(ctx);
-    if !execs.compute.is_empty() || !execs.pool.lock().unwrap().is_empty() {
+    if !execs.compute.lock().unwrap().active.is_empty() || !execs.pool.lock().unwrap().is_empty() {
         fault("a run's workers started twice");
     }
     execs.home.held.store(false, Ordering::Release);
     execs.migrate = migrate;
-    for index in 0..width as u16 {
-        // SAFETY: the run outlives the worker, which only its thread uses from here on.
+    unsafe { (&(*run).control).width.store(width, Ordering::Release) };
+    grow(run, execs, &mut execs.compute.lock().unwrap(), width);
+    // SAFETY: as above.
+    unsafe { (*run).control.set_home(Arc::clone(&execs.home)) };
+}
+
+/// Grow only under the run token. Worker::create re-adopts orphaned heaps.
+fn grow(run: *mut RunShared, execs: &Execs, compute: &mut ComputeWorkers, width: u32) {
+    for index in compute.active.len()..width as usize {
+        // SAFETY: the run outlives each thread, and this thread holds its run token.
         let worker = unsafe { Worker::create(run) };
-        let exec = Exec::new(Kind::Compute(index), worker, false);
+        let exec = Exec::new(Kind::Compute(index as u16), worker, false);
         execs
             .holders
             .workers
@@ -919,6 +992,7 @@ pub(crate) unsafe fn start(ctx: *mut TaskCtx, width: u32, migrate: bool) {
             .unwrap()
             .push(Arc::downgrade(&exec));
         execs.holders.count.fetch_add(1, Ordering::AcqRel);
+        unsafe { (&(*run).control).live_width.fetch_add(1, Ordering::AcqRel) };
         let thread = std::thread::Builder::new()
             .name(format!("hirsel-worker-{index}"))
             .spawn({
@@ -927,11 +1001,55 @@ pub(crate) unsafe fn start(ctx: *mut TaskCtx, width: u32, migrate: bool) {
                 move || worker_main(run, exec, holders)
             })
             .unwrap_or_else(|_| environmental("a compute worker could not start"));
-        execs.compute.push(exec);
-        execs.compute_threads.push(thread);
+        compute.active.push(exec);
+        compute.threads.push(thread);
     }
-    // SAFETY: as above.
-    unsafe { (*run).control.set_home(Arc::clone(&execs.home)) };
+}
+
+/// Apply a host request at a scheduling boundary. Surplus workers receive Exit
+/// after their outgoing handoff; no C frame or pure segment is preempted. Keep
+/// retired execs alive until shutdown, so a task's last-worker pointer stays valid.
+fn resize(ctx: *mut TaskCtx) {
+    let run = unsafe { (*ctx).run_ptr() };
+    let execs = unsafe { (*run).execs.as_deref().unwrap() };
+    let width = unsafe { (&(*run).control).width.load(Ordering::Acquire) };
+    if width == 0 {
+        return;
+    }
+    let mut compute = execs.compute.lock().unwrap();
+    if compute.active.is_empty() {
+        return;
+    }
+    if compute.active.len() > width as usize {
+        let retiring = compute.active.split_off(width as usize);
+        for exec in &retiring {
+            exec.post(Post::Exit, None);
+        }
+        compute.retiring.extend(retiring);
+    }
+    // A retired worker is joined and orphaned only after leaving its idle fiber.
+    // No wait on a still-running segment and no stop-the-world barrier.
+    let mut i = 0;
+    while i < compute.threads.len() {
+        if compute.threads[i].is_finished() {
+            let thread = compute.threads.swap_remove(i);
+            thread
+                .join()
+                .unwrap_or_else(|_| fault("a retiring worker panicked"));
+        } else {
+            i += 1;
+        }
+    }
+    for exec in &compute.retiring {
+        if !exec.busy() && exec.exited.load(Ordering::Acquire) {
+            let worker = exec.worker.replace(std::ptr::null_mut());
+            if !worker.is_null() {
+                // SAFETY: exited is published after the worker's last access.
+                unsafe { Worker::retire(worker) };
+            }
+        }
+    }
+    grow(run, execs, &mut compute, width);
 }
 
 /// Post the root task `task` (suspended at its row) to the first compute worker.
@@ -942,7 +1060,7 @@ pub(crate) unsafe fn start_root(run: *mut RunShared, task: u32) {
     // SAFETY: caller contract.
     let execs =
         unsafe { (*run).execs.as_deref() }.unwrap_or_else(|| fault("a run without workers"));
-    execs.compute[0].post(Post::Run { task, permit: true }, None);
+    execs.compute.lock().unwrap().active[0].post(Post::Run { task, permit: true }, None);
 }
 
 /// The home thread's service loop at width > 1: it runs home intervals, the Io binding's
@@ -1001,7 +1119,13 @@ pub(crate) fn busy(run: &RunShared) -> u32 {
         return 0;
     };
     let _activity = execs.activity.lock().unwrap();
-    let compute = execs.compute.iter().filter(|exec| exec.busy()).count();
+    let compute = execs.compute.lock().unwrap();
+    let compute = compute
+        .active
+        .iter()
+        .chain(&compute.retiring)
+        .filter(|exec| exec.busy())
+        .count();
     let pool = execs
         .pool
         .lock()
@@ -1068,7 +1192,9 @@ pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -
         return Err(run.control.stopped().unwrap_or(Stop::Requested));
     }
     if held {
-        execs.permits.acquire(exec, Some(&run.control))?;
+        execs
+            .permits
+            .acquire(exec, Some(&run.control), run.worker_metrics.as_deref())?;
     }
     Ok(())
 }
@@ -1159,9 +1285,11 @@ pub(crate) fn acquire_permit(ctx: *mut TaskCtx) -> bool {
             (*run).root
         }
     };
-    let result = execs
-        .permits
-        .acquire(unsafe { &*current(execs) }, Some(&control.control));
+    let result = execs.permits.acquire(
+        unsafe { &*current(execs) },
+        Some(&control.control),
+        control.worker_metrics.as_deref(),
+    );
     // SAFETY: the caller is at a supported code-entry boundary.
     unsafe { crate::stop::check(ctx, result) }
 }
@@ -1170,14 +1298,26 @@ pub(crate) fn acquire_permit(ctx: *mut TaskCtx) -> bool {
 /// returns the permit even when a stop abandons every program frame.
 pub(crate) fn enter_root(ctx: *mut TaskCtx) -> Stopped<()> {
     let execs = execs(ctx);
-    execs
-        .permits
-        .acquire(&execs.home, Some(unsafe { &(*(*ctx).run_ptr()).control }))?;
+    execs.permits.acquire(
+        &execs.home,
+        Some(unsafe { &(*(*ctx).run_ptr()).control }),
+        unsafe { (*(*ctx).run_ptr()).worker_metrics.as_deref() },
+    )?;
+    unsafe {
+        (&(*(*ctx).run_ptr()).control)
+            .live_width
+            .store(1, Ordering::Release)
+    };
     Ok(())
 }
 pub(crate) fn leave_root(ctx: *mut TaskCtx) {
     let execs = execs(ctx);
     execs.permits.release(&execs.home);
+    unsafe {
+        (&(*(*ctx).run_ptr()).control)
+            .live_width
+            .store(0, Ordering::Release)
+    };
 }
 
 /// The run ended and every one of its threads is idle: each leaves and is joined. Their
@@ -1188,10 +1328,11 @@ pub(crate) fn shutdown(run: &mut RunShared) {
         return;
     };
     execs.home.close();
-    for exec in &execs.compute {
+    let mut compute = execs.compute.lock().unwrap();
+    for exec in compute.active.iter().chain(&compute.retiring) {
         exec.post(Post::Exit, None);
     }
-    for thread in execs.compute_threads.drain(..) {
+    for thread in compute.threads.drain(..) {
         if thread.join().is_err() {
             fault("a compute worker panicked");
         }
@@ -1211,10 +1352,13 @@ pub(crate) fn workers(run: &RunShared) -> Vec<*mut Worker> {
     let Some(execs) = run.execs.as_deref() else {
         return Vec::new();
     };
-    execs
-        .compute
+    let compute = execs.compute.lock().unwrap();
+    compute
+        .active
         .iter()
+        .chain(&compute.retiring)
         .map(|exec| exec.worker.get())
+        .filter(|worker| !worker.is_null())
         .chain(
             execs
                 .pool
@@ -1252,13 +1396,29 @@ pub(crate) fn detach(run: &mut RunShared) -> bool {
         return false;
     };
     execs.home.close();
-    for exec in &execs.compute {
+    let compute = execs.compute.lock().unwrap();
+    for exec in compute.active.iter().chain(&compute.retiring) {
         exec.post(Post::Exit, None);
     }
     for thread in execs.pool.lock().unwrap().iter() {
         thread.exec.post(Post::Exit, None);
     }
     let holders = Arc::clone(&execs.holders);
+    drop(compute);
+    {
+        let mut state = execs.permits.state.lock().unwrap();
+        for exec in holders
+            .workers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+        {
+            if exec.held.load(Ordering::Acquire) && !exec.lost.swap(true, Ordering::AcqRel) {
+                state.lost += 1;
+            }
+        }
+    }
     holders.detached.store(true, Ordering::Release);
     holders.count.fetch_sub(1, Ordering::AcqRel) != 1
 }
@@ -1269,17 +1429,19 @@ pub(crate) fn forget(run: &mut RunShared) {
     let Some(mut execs) = run.execs.take() else {
         return;
     };
-    execs.compute_threads.clear();
-    let workers: Vec<_> = execs
-        .compute
+    let compute = execs.compute.get_mut().unwrap();
+    compute.threads.clear();
+    let workers: Vec<_> = compute
+        .active
         .iter()
+        .chain(&compute.retiring)
         .map(|exec| exec.worker.get())
         .chain(execs.pool.get_mut().unwrap().iter_mut().map(|thread| {
             thread.thread.take();
             thread.exec.worker.get()
         }))
         .collect();
-    for worker in workers {
+    for worker in workers.into_iter().filter(|worker| !worker.is_null()) {
         // SAFETY: every thread of the run left.
         unsafe { Worker::retire(worker) };
     }
@@ -1343,8 +1505,8 @@ mod tests {
     fn a_thread_holding_a_permit_takes_none_and_gives_back_only_what_it_holds() {
         let permits = Permits::new(1);
         let exec = Exec::new(Kind::Pool(0), std::ptr::null_mut(), false);
-        assert!(permits.acquire(&exec, None).unwrap());
-        assert!(!permits.acquire(&exec, None).unwrap());
+        assert!(permits.acquire(&exec, None, None).unwrap());
+        assert!(!permits.acquire(&exec, None, None).unwrap());
         assert_eq!(permits.available(), 0);
         permits.release(&exec);
         permits.release(&exec);

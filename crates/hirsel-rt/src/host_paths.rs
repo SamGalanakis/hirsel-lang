@@ -137,17 +137,13 @@ impl RecorderDestination {
             existing,
         })
     }
-    /// Complete the recorder obligation before entry, checking every granted
-    /// mount (including read-only mounts). No destination effects precede refusal.
-    pub fn open(self, grants: &[(&str, &PinnedDirectory)]) -> Result<File, RunRefusal> {
-        self.open_with_files(grants, &[])
-    }
-    /// Include explicitly acquired file-backed sinks, not merely directory grants.
-    pub fn open_with_files(
-        self,
+    /// Validate without creating a file. Control sockets use the same physical
+    /// overlap checks as recorders and metrics, including hard-linked sinks.
+    pub fn check_with_files(
+        &self,
         grants: &[(&str, &PinnedDirectory)],
         files: &[(&str, &File)],
-    ) -> Result<File, RunRefusal> {
+    ) -> Result<(), RunRefusal> {
         if let Some(destination) = &self.existing {
             let destination = identity(destination).map_err(|e| invalid("recorder", e))?;
             for (name, file) in files {
@@ -181,6 +177,97 @@ impl RecorderDestination {
                 });
             }
         }
+        Ok(())
+    }
+
+    pub fn check_control(
+        &self,
+        grants: &[(&str, &PinnedDirectory)],
+        files: &[(&str, &File)],
+    ) -> Result<(), RunRefusal> {
+        self.check_with_files(grants, files)?;
+        if self.existing.is_some() {
+            return Err(invalid("placement.control", "destination already exists"));
+        }
+        Ok(())
+    }
+
+    /// Bind only after all overlap checks, never replacing an existing leaf.
+    /// Rust std's UnixListener bind structure (os/unix/net/listener.rs:73-109),
+    /// with chmod before listen and a pinned parent instead of a racy path lookup.
+    pub fn bind_control(
+        self,
+        grants: &[(&str, &PinnedDirectory)],
+        files: &[(&str, &File)],
+    ) -> Result<ControlSocket, RunRefusal> {
+        self.check_control(grants, files)?;
+        let path = PathBuf::from(format!("/proc/self/fd/{}", self.parent.file.as_raw_fd()))
+            .join(&self.name);
+        let bytes = path.as_os_str().as_bytes();
+        let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        if bytes.len() >= address.sun_path.len() {
+            return Err(invalid("placement.control", "socket path too long"));
+        }
+        address.sun_family = libc::AF_UNIX as _;
+        for (out, byte) in address.sun_path.iter_mut().zip(bytes) {
+            *out = *byte as _;
+        }
+        let fd = unsafe {
+            libc::socket(
+                libc::AF_UNIX,
+                libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+                0,
+            )
+        };
+        if fd < 0 {
+            return Err(invalid(
+                "placement.control",
+                std::io::Error::last_os_error(),
+            ));
+        }
+        let listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+        let length = std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1;
+        if unsafe { libc::bind(fd, (&raw const address).cast(), length as _) } < 0 {
+            return Err(invalid(
+                "placement.control",
+                std::io::Error::last_os_error(),
+            ));
+        }
+        let pin = open_at(
+            self.parent.file.as_raw_fd(),
+            &self.name,
+            libc::O_PATH | libc::O_NOFOLLOW,
+        )
+        .map_err(|e| invalid("placement.control", e))?;
+        let socket = ControlSocket {
+            listener,
+            destination: self,
+            identity: identity(&pin).map_err(|e| invalid("placement.control", e))?,
+        };
+        let path = CString::new(format!("/proc/self/fd/{}", pin.as_raw_fd()))
+            .map_err(|e| invalid("placement.control", e))?;
+        // No connections are accepted before the endpoint is private.
+        if unsafe { libc::chmod(path.as_ptr(), 0o600) } < 0 || unsafe { libc::listen(fd, 16) } < 0 {
+            return Err(invalid(
+                "placement.control",
+                std::io::Error::last_os_error(),
+            ));
+        }
+        Ok(socket)
+    }
+
+    /// Complete the recorder obligation before entry, checking every granted
+    /// mount (including read-only mounts). No destination effects precede refusal.
+    pub fn open(self, grants: &[(&str, &PinnedDirectory)]) -> Result<File, RunRefusal> {
+        self.open_with_files(grants, &[])
+    }
+    /// Include explicitly acquired file-backed sinks, not merely directory grants.
+    pub fn open_with_files(
+        self,
+        grants: &[(&str, &PinnedDirectory)],
+        files: &[(&str, &File)],
+    ) -> Result<File, RunRefusal> {
+        self.check_with_files(grants, files)?;
         let file = match self.existing {
             Some(pin) => {
                 let meta = pin.metadata().map_err(|e| invalid("recorder", e))?;
@@ -203,6 +290,27 @@ impl RecorderDestination {
         };
         file.set_len(0).map_err(|e| invalid("recorder", e))?;
         Ok(file)
+    }
+}
+
+/// A private, admitted Unix control socket. Removes only the inode it created.
+pub struct ControlSocket {
+    pub listener: std::os::unix::net::UnixListener,
+    destination: RecorderDestination,
+    identity: Identity,
+}
+impl Drop for ControlSocket {
+    fn drop(&mut self) {
+        let parent = self.destination.parent.file.as_raw_fd();
+        if let Ok(pin) = open_at(
+            parent,
+            &self.destination.name,
+            libc::O_PATH | libc::O_NOFOLLOW,
+        ) && identity(&pin).ok() == Some(self.identity)
+            && let Ok(name) = CString::new(self.destination.name.as_bytes())
+        {
+            unsafe { libc::unlinkat(parent, name.as_ptr(), 0) };
+        }
     }
 }
 

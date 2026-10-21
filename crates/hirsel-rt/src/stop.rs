@@ -116,6 +116,8 @@ impl Default for Driver {
 /// and ends the run's code there ([`observe`]).
 #[derive(Default)]
 pub(crate) struct Control {
+    pub(crate) width: AtomicU32,
+    pub(crate) live_width: AtomicU32,
     stopped: AtomicBool,
     stop: Mutex<Option<Stop>>,
     /// The home thread's exec, while a run with compute workers runs: a stop wakes its loop.

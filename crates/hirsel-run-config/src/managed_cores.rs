@@ -239,3 +239,48 @@ impl CoreResolver {
         Ok(())
     }
 }
+
+/// A bounded live control transaction. Destination and executor-policy changes
+/// require a fresh admission; only live core/CPU selection is mutable here.
+pub enum ControlRequest {
+    Metrics,
+    Placement {
+        cores: Option<crate::Cores>,
+        cpus: Option<Option<String>>,
+    },
+}
+impl ControlRequest {
+    pub fn from_json(bytes: &[u8]) -> Result<Self, RunRefusal> {
+        crate::integer_tokens(bytes)?;
+        use serde::Deserialize;
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Request {
+            #[serde(default, deserialize_with = "present")]
+            placement: Option<Patch>,
+            #[serde(default, deserialize_with = "present")]
+            metrics: Option<bool>,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Patch {
+            #[serde(default, deserialize_with = "present")]
+            cores: Option<crate::Cores>,
+            #[serde(default, deserialize_with = "present")]
+            cpus: Option<Option<String>>,
+        }
+        // Preserve omitted vs explicit null; Cores itself still refuses null.
+        fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+            d: D,
+        ) -> Result<Option<T>, D::Error> {
+            T::deserialize(d).map(Some)
+        }
+        let request: Request =
+            serde_json::from_slice(bytes).map_err(|e| invalid("control", &e.to_string()))?;
+        match (request.placement, request.metrics) {
+            (None, Some(true)) => Ok(Self::Metrics),
+            (Some(Patch { cores, cpus }), None) => Ok(Self::Placement { cores, cpus }),
+            _ => Err(invalid("control", "expected placement or metrics: true")),
+        }
+    }
+}

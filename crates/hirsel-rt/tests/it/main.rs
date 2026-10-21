@@ -13,6 +13,7 @@ mod finalizers;
 mod handles;
 mod io;
 mod io_properties;
+mod managed_cores;
 mod measurement;
 mod model;
 mod mounts;

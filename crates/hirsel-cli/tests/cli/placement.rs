@@ -10,6 +10,12 @@ fn decode(word: &str) -> Vec<u8> {
 #[test]
 fn cores_shorthand_equals_record_placement_in_source_and_native_headers() {
     let source = file("pub fn main() -> Result[(), ()] { Ok(()) }\n");
+    let status = std::fs::read_to_string("/proc/thread-self/status").unwrap();
+    let cpus = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Cpus_allowed_list:"))
+        .unwrap()
+        .trim();
     for backend in [None, Some("llvm"), Some("cranelift")] {
         let mut headers = vec![];
         for shorthand in [false, true] {
@@ -19,14 +25,7 @@ fn cores_shorthand_equals_record_placement_in_source_and_native_headers() {
             if let Some(backend) = backend {
                 command.args(["--native", "--backend", backend]);
             }
-            command.args([
-                "--grants",
-                if shorthand {
-                    r#"{"placement":{"cores":2,"cpus":"0-3"}}"#
-                } else {
-                    r#"{"placement":{"cores":8,"cpus":"0-3"}}"#
-                },
-            ]);
+            command.arg("--grants").arg(serde_json::json!({"placement": {"cores": if shorthand {2} else {8}, "cpus": cpus}}).to_string());
             if shorthand {
                 command.args(["--cores", "8"]);
             }
@@ -125,6 +124,97 @@ fn cores_overrides_bound_record_and_works_without_explicit_grants() {
         .unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     for path in [source, config, tape] {
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn ctl_sends_a_json_line_and_reports_refusals() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    let path = file("").with_extension("ctl");
+    let listener = UnixListener::bind(&path).unwrap();
+    let server = std::thread::spawn(move || {
+        for (expected, reply) in [
+            (
+                serde_json::json!({"placement":{"cores":6}}),
+                "{\"width\":{\"requested\":6,\"effective\":1,\"pending\":6}}\n",
+            ),
+            (
+                serde_json::json!({"metrics":true}),
+                "{\"error\":\"refused\"}\n",
+            ),
+        ] {
+            let (mut peer, _) = listener.accept().unwrap();
+            let mut request = String::new();
+            BufReader::new(&peer).read_line(&mut request).unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&request).unwrap(),
+                expected
+            );
+            peer.write_all(reply.as_bytes()).unwrap();
+        }
+    });
+    let success = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("ctl")
+        .arg(&path)
+        .args(["cores", "6"])
+        .output()
+        .unwrap();
+    assert!(success.status.success(), "{success:?}");
+    assert!(String::from_utf8_lossy(&success.stdout).contains("pending"));
+    let refused = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("ctl")
+        .arg(&path)
+        .arg("metrics")
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    server.join().unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn native_sidecars_are_admitted_and_replay_opens_neither_path() {
+    let source = file("pub fn main() -> Result[(), ()] { Ok(()) }\n");
+    let metrics = source.with_extension("metrics");
+    let control = source.with_extension("ctl");
+    let tape = source.with_extension("tape");
+    let grants =
+        serde_json::json!({"placement": {"cores": 1, "metrics": metrics, "control": control}})
+            .to_string();
+    let live = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .args(["--native", "--grants", &grants, "--record"])
+        .arg(&tape)
+        .output()
+        .unwrap();
+    assert!(live.status.success(), "{live:?}");
+    assert!(metrics.exists());
+    assert!(
+        !control.exists(),
+        "admission must remove its socket on exit"
+    );
+    std::fs::write(&metrics, "metrics sentinel").unwrap();
+    std::fs::write(&control, "control sentinel").unwrap();
+    let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .args(["--native", "--replay"])
+        .arg(&tape)
+        .output()
+        .unwrap();
+    assert!(replay.status.success(), "{replay:?}");
+    assert_eq!(
+        std::fs::read_to_string(&metrics).unwrap(),
+        "metrics sentinel"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&control).unwrap(),
+        "control sentinel"
+    );
+    for path in [source, metrics, control, tape] {
         std::fs::remove_file(path).unwrap();
     }
 }
