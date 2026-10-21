@@ -2206,3 +2206,178 @@ fn frozen_s1_prefix_resident_and_second_process_store_equal_cold_after_edits() {
         );
     });
 }
+
+#[test]
+fn batch_staged_exports_keep_cached_instances_after_unrelated_edits() {
+    use std::sync::Arc;
+    fn make(jobs: usize) -> QueryEngine {
+        QueryEngine::new(default_environment(), compiler_adapters()).with_config(CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::new(jobs),
+            hold_bytes: 0,
+            retention: memo::Retention::Batch,
+            store: Arc::new(store::NoneStore),
+            ..CompileConfig::for_memory_cap(None)
+        })
+    }
+    fn check(engine: &mut QueryEngine, source: &str) {
+        let file = engine
+            .sources
+            .add("staged-export.hir", source.into())
+            .unwrap();
+        let checked = check_progress(engine, file, &default_context()).unwrap();
+        assert_eq!(checked.completion, CheckCompletion::Complete);
+        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    }
+    with_compiler_stack(|| {
+        let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst VALUE:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst GOOD:u64=comptime 7\n";
+        for jobs in [1, 2, 8] {
+            let mut warm = make(jobs);
+            check(&mut warm, source);
+            for revision in [
+                source.replace("comptime 7", "comptime 9"),
+                source.replace("n*n", "n+n+1"),
+                format!("fn earlier_item(){{}}\n{source}"),
+                source.to_owned(),
+            ] {
+                check(&mut warm, &revision);
+                let mut cold = make(jobs);
+                check(&mut cold, &revision);
+                let expected = cold.export_tir(&path("VALUE")).unwrap();
+                let actual = warm.export_tir(&path("VALUE")).unwrap();
+                assert!(expected.contains("$constant:$comptime:scaled"));
+                assert_eq!(
+                    warm.materialize_constant(&path("VALUE")).unwrap(),
+                    Constant::Integer(if revision.contains("n+n+1") { 5 } else { 4 })
+                );
+                assert!(
+                    actual == expected,
+                    "jobs={jobs}: full export mismatch after {revision}; first differing lines {:?}",
+                    actual.lines().zip(expected.lines()).find(|(a, b)| a != b)
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_lowering_prefix_publishes_exact_staged_instances_through_cache_hits() {
+    fn selected_constants(engine: &mut QueryEngine) -> Vec<(DefPath, String)> {
+        let input = engine
+            .native_input_for(&[path("FIRST"), path("scaled")])
+            .unwrap();
+        input
+            .snapshot()
+            .constants
+            .iter()
+            .filter(|(path, _)| path.0.package == default_context().package)
+            .map(|(path, value)| (path.clone(), materialized_text(engine, value)))
+            .collect()
+    }
+    with_compiler_stack(|| {
+        let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\nconst HELPER:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nconst FIRST:u64=comptime HELPER\nfn BAD()->u64{comptime {let zero=0u64;1u64/zero}}\nfn LATER()->u64{comptime {let xs:Inline[u8,3]=[1,2,3];scaled(xs)}}\n";
+        for jobs in [1, 2, 8] {
+            for bytes in [0, 8192] {
+                for compact in [false, true] {
+                    let mut control = engine(source);
+                    control.lower_to_tir(&path("FIRST")).unwrap();
+                    control.lower_to_tir(&path("BAD")).unwrap_err();
+                    let expected = selected_constants(&mut control);
+                    assert!(
+                        expected.iter().any(|(path, _)| path
+                            .0
+                            .name
+                            .contains("$constant:$comptime:scaled:2:2"))
+                    );
+                    assert!(
+                        !expected.iter().any(|(path, _)| path
+                            .0
+                            .name
+                            .contains("$constant:$comptime:scaled:2:3"))
+                    );
+                    let mut candidate = engine(source).with_config(CompileConfig {
+                        hold_bytes: bytes,
+                        ..CompileConfig::for_memory_cap(None)
+                    });
+                    for warm in [false, true] {
+                        let roots = vec![path("FIRST"), path("FIRST"), path("BAD"), path("LATER")];
+                        let outcomes: Vec<_> = if compact {
+                            candidate
+                                .check_lower_definition_prefix(
+                                    roots,
+                                    hirsel_intern::jobs::Jobs::new(jobs),
+                                )
+                                .into_iter()
+                                .map(|outcome| outcome.result.map(|_| ()))
+                                .collect()
+                        } else {
+                            candidate
+                                .lower_definition_prefix(
+                                    roots,
+                                    hirsel_intern::jobs::Jobs::new(jobs),
+                                )
+                                .into_iter()
+                                .map(|outcome| outcome.result.map(|_| ()))
+                                .collect()
+                        };
+                        assert_eq!(outcomes.len(), 3);
+                        assert!(outcomes[0].is_ok() && outcomes[1].is_ok() && outcomes[2].is_err());
+                        let actual = selected_constants(&mut candidate);
+                        assert_eq!(
+                            actual, expected,
+                            "jobs={jobs} bytes={bytes} compact={compact} warm={warm}: staged values escaped or were dropped"
+                        );
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_lowering_root_work_distinguishes_worker_misses_from_hits_and_scalar_fallback() {
+    with_compiler_stack(|| {
+        let source = "fn ROOT()->u64{7u64}\n";
+        for jobs in [1, 2, 8] {
+            let mut candidate = engine(source);
+            let outputs = candidate.check_lower_definition_prefix(
+                vec![path("ROOT")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(outputs[0].result.is_ok());
+            assert!(
+                outputs[0].worker_recomputed,
+                "jobs={jobs}: cold worker miss"
+            );
+            candidate.lower_to_tir(&path("ROOT")).unwrap();
+            let outputs = candidate.check_lower_definition_prefix(
+                vec![path("ROOT")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(outputs[0].result.is_ok());
+            assert!(
+                !outputs[0].worker_recomputed,
+                "jobs={jobs}: current Lower hit"
+            );
+            candidate.adapters.lowering = None;
+            let outputs = candidate.check_lower_definition_prefix(
+                vec![path("ROOT")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(outputs[0].result.is_ok());
+            assert!(
+                !outputs[0].worker_recomputed,
+                "jobs={jobs}: scalar fallback already counted"
+            );
+            let mut rejected = engine("fn ROOT()->u64{comptime {let zero=0u64;1u64/zero}}\n");
+            let outputs = rejected.check_lower_definition_prefix(
+                vec![path("ROOT")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(outputs[0].result.is_err());
+            assert!(
+                outputs[0].worker_recomputed,
+                "jobs={jobs}: failed worker miss still does work"
+            );
+        }
+    });
+}

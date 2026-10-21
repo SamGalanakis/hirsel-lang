@@ -76,6 +76,16 @@ pub(crate) fn retained_lowering_output_bytes(
     weight.bytes
 }
 
+/// Exact worker staged-use closure. DefIds belong to the session; argument
+/// vector capacities are retained by the lower memo and charged in its hold.
+pub(crate) fn retained_staged_request_bytes(
+    requests: &Vec<(hirsel_syntax::DefId, Vec<u64>)>,
+) -> u64 {
+    let mut weight = Weight::default();
+    weight.vec(requests, |w, (_, arguments)| w.flat_vec(arguments));
+    weight.bytes
+}
+
 /// One scalar Lower cache entry and its exact-artifact V evidence. Compact
 /// receipts outlive eviction independently; table buckets/session interners
 /// belong to the session, as with worker holds.

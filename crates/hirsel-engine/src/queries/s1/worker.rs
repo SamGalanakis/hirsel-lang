@@ -26,7 +26,11 @@ pub(crate) enum Requirement {
     Instance(DefPath, Vec<GenericArgument>),
 }
 
+pub(super) type StagedRequest = (DefId, Vec<u64>);
+
 pub(super) enum SelectionEvent {
+    LowerComputed(DefId),
+    StagedValue(StagedRequest),
     Failed(GeneratedText),
     Checked(DefPath, bool),
 }
@@ -106,6 +110,7 @@ struct ConstantProduct {
     constant: EvaluatedConstant,
     registrations: Vec<StagedRegistration>,
     staged: Option<(DefPath, Vec<u64>)>,
+    requests: Vec<StagedRequest>,
 }
 
 /// Reification sees the same private shape and executed implementation receipt
@@ -136,10 +141,16 @@ impl<S: TirSource + ?Sized> crate::materialized::MaterializationSource
     }
 }
 
+#[derive(Clone)]
+struct GeneratorProduct {
+    text: GeneratedText,
+    requests: Vec<StagedRequest>,
+}
+
 pub(crate) struct TaskShared {
     coordinator: Arc<S1Coordinator<DefPath>>,
     constants: Mutex<BTreeMap<DefPath, ConstantProduct>>,
-    generators: Mutex<BTreeMap<DefPath, GeneratedText>>,
+    generators: Mutex<BTreeMap<DefPath, GeneratorProduct>>,
     /// Aggregate counters; peak is the sum of per-worker insertion peaks.
     lower_holds: Mutex<HoldStats>,
 }
@@ -159,6 +170,7 @@ impl TaskShared {
                 .unwrap_or_else(|error| error.into_inner()),
         )
         .into_values()
+        .map(|product| product.text)
         .collect()
     }
     pub(super) fn into_constants(
@@ -190,6 +202,7 @@ struct Lowered {
     reads: Reads,
     depth: DepthEvidence<Span>,
     registrations: Vec<StagedRegistration>,
+    requests: Vec<StagedRequest>,
     diagnostics: Vec<Diagnostic>,
     dependencies: Vec<SignatureDependency>,
 }
@@ -314,6 +327,19 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             reads: product.reads,
         }
     }
+    fn staged_requests_since(&self, start: usize) -> Vec<StagedRequest> {
+        self.selections[start..]
+            .iter()
+            .filter_map(|event| match event {
+                SelectionEvent::StagedValue(request) => Some(request.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+    fn replay_staged_requests(&mut self, requests: &[StagedRequest]) {
+        self.selections
+            .extend(requests.iter().cloned().map(SelectionEvent::StagedValue));
+    }
     fn merge(&mut self, reads: &Reads) {
         for frame in &mut self.reads {
             frame.merge(reads);
@@ -418,6 +444,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 self.admit(&cached.constant.depth, site)?;
                 self.merge(&cached.constant.executed);
                 self.registrations.extend(cached.registrations);
+                self.replay_staged_requests(&cached.requests);
                 self.stack.requested(&cached.constant.depth, site);
                 return Ok(cached.constant);
             }
@@ -443,6 +470,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 break;
             }
         }
+        let selection_start = self.selections.len();
         let registration_start = self.registrations.len();
         let pending_start = self.pending.len();
         let product = self.capture(|worker| {
@@ -504,6 +532,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                         constant: value.clone(),
                         registrations: self.registrations[registration_start..].to_vec(),
                         staged: None,
+                        requests: self.staged_requests_since(selection_start),
                     },
                 );
         }
@@ -569,12 +598,20 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             ));
             return Err(QueryError::NotImplemented);
         };
+        self.record(
+            ReadKey::Signature(DefId::intern(path)),
+            memos::signature_value(Some(constant.signature.fingerprint)),
+        );
         if constant.inputs.len() != arguments.len() {
             return Err(QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "compile-time evaluation".into(),
                 message: "staged constant arity".into(),
             }));
         }
+        self.selections.push(SelectionEvent::StagedValue((
+            DefId::intern(path),
+            arguments.to_vec(),
+        )));
         let body = self.body(&constant.owner)?;
         let site = body.analyzed.value.typed.syntax.tree.expressions
             [constant.expression.0 as usize]
@@ -593,6 +630,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 self.admit(&cached.constant.depth, site)?;
                 self.merge(&cached.constant.executed);
                 self.registrations.extend(cached.registrations);
+                self.replay_staged_requests(&cached.requests);
                 self.stack.requested(&cached.constant.depth, site);
                 return Ok(cached.constant);
             }
@@ -609,6 +647,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 break;
             }
         }
+        let selection_start = self.selections.len();
         let registration_start = self.registrations.len();
         let pending_start = self.pending.len();
         let product = self.capture(|worker| {
@@ -692,6 +731,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                         constant: value.clone(),
                         registrations: self.registrations[registration_start..].to_vec(),
                         staged: Some((path.clone(), arguments.to_vec())),
+                        requests: self.staged_requests_since(selection_start),
                     },
                 );
         }
@@ -738,8 +778,9 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 .get(path)
                 .cloned();
             if let Some(hit) = hit {
-                self.replay_generator(&hit.depth, site)?;
-                self.merge(&hit.reads);
+                self.replay_generator(&hit.text.depth, site)?;
+                self.merge(&hit.text.reads);
+                self.replay_staged_requests(&hit.requests);
                 return Ok(());
             }
             if self.stack.enter(path.clone(), site) == Entered::Run {
@@ -747,6 +788,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             }
         }
         let pending_start = self.pending.len();
+        let selection_start = self.selections.len();
         let mut metadata = None;
         let product = self.capture(|worker| {
             worker.implementation(path);
@@ -803,7 +845,13 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                     .generators
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
-                    .insert(path.clone(), completed);
+                    .insert(
+                        path.clone(),
+                        GeneratorProduct {
+                            text: completed,
+                            requests: self.staged_requests_since(selection_start),
+                        },
+                    );
             } else if result.as_ref().is_err_and(|error| error.cacheable())
                 && self.stack.failure_is_own()
             {
@@ -896,6 +944,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 .map_err(|site| self.overflow(site))?;
             self.merge(&hit.reads);
             self.registrations.extend(hit.registrations.iter().cloned());
+            self.replay_staged_requests(&hit.requests);
             return Ok(QueryOutput {
                 value: hit.definition.clone(),
                 diagnostics: hit.diagnostics.clone(),
@@ -903,7 +952,10 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             });
         }
         self.lowered.demand_evicted(&key);
+        self.selections
+            .push(SelectionEvent::LowerComputed(DefId::intern(path)));
         self.stack.begin_requests();
+        let selection_start = self.selections.len();
         let registration_start = self.registrations.len();
         let product = self.capture(|worker| {
             let body = worker.body(path)?;
@@ -960,6 +1012,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             reads: product.reads,
             depth,
             registrations: self.registrations[registration_start..].to_vec(),
+            requests: self.staged_requests_since(selection_start),
             diagnostics: diagnostics.clone(),
             dependencies: dependencies.clone(),
         });
@@ -970,6 +1023,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 &held.depth,
                 &held.registrations,
             ))
+            .saturating_add(crate::memo::retained_staged_request_bytes(&held.requests))
             .saturating_add(crate::memo::retained_lowering_output_bytes(
                 &held.diagnostics,
                 &held.dependencies,

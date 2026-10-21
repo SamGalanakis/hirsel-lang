@@ -1117,7 +1117,31 @@ impl QueryEngine {
         self.staged_values
             .retain(|(path, _), _| self.staged_constants.contains_key(path));
         if !retired.is_empty() {
+            // Reinstalling the same hidden signature does not restore its
+            // materialized instances. Retained callers must reconstruct those
+            // products even if a later registration has the same fingerprint.
+            let retired: BTreeSet<_> = retired.iter().map(DefId::intern).collect();
+            let uses_retired = |reads: &Reads| {
+                reads
+                    .iter()
+                    .any(|(read, _)| matches!(read, ReadKey::Signature(id) if retired.contains(id)))
+            };
+            self.constant_values
+                .retain(|_, value| !uses_retired(&value.executed));
+            let mut lowers = BTreeSet::new();
+            for id in &retired {
+                lowers.extend(
+                    self.graph
+                        .subscribers(&ReadKey::Signature(*id))
+                        .filter(|key| key.kind == QueryKind::Lower)
+                        .copied(),
+                );
+            }
+            for key in lowers {
+                self.forget(&key);
+            }
             self.retire_snapshot();
+            let retired: Vec<_> = retired.iter().map(|id| id.path().clone()).collect();
             self.note_signatures(&retired);
         }
         self.settle_signatures();

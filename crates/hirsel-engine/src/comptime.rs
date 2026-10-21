@@ -1056,6 +1056,16 @@ impl QueryEngine {
             .get(path)
             .cloned()
             .ok_or_else(|| operational("missing staged constant declaration"))?;
+        // The staged declaration is part of execution, even on a value hit.
+        // If indexing retires it, enclosing cached constants/lowerings must
+        // miss and reconstruct the declaration and its selected instances.
+        self.merge_execution(
+            &crate::memo::Reads::from_vec(vec![(
+                crate::memo::ReadKey::Signature(DefId::intern(path)),
+                crate::queries::memos::signature_value(Some(constant.signature.fingerprint)),
+            )])
+            .expect("one staged declaration"),
+        );
         if constant.inputs.len() != arguments.len() {
             return Err(operational("staged constant arity"));
         }

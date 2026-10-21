@@ -17,6 +17,9 @@ pub struct LoweringResult<T = DefinitionRef> {
     pub limit: Option<hirsel_tir::ToolingLimit>,
     pub reads: Arc<Reads>,
     pub depth: Option<DepthEvidence<Span>>,
+    /// This root missed the worker's Lower caches. Scalar fallback is already
+    /// counted by the engine; this flag also covers failed worker queries.
+    pub worker_recomputed: bool,
 }
 #[derive(Clone, Copy)]
 enum RootKind {
@@ -37,6 +40,7 @@ struct RootOutcome {
     phase: Option<QueryKind>,
     limit: Option<hirsel_tir::ToolingLimit>,
     reads: Arc<Reads>,
+    worker_recomputed: bool,
 }
 impl RootOutcome {
     fn lowering<T>(
@@ -57,6 +61,7 @@ impl RootOutcome {
             limit: self.limit,
             reads: self.reads,
             depth,
+            worker_recomputed: self.worker_recomputed,
         }
     }
 }
@@ -861,6 +866,7 @@ impl QueryEngine {
             phase,
             limit: self.last_comptime_limit.clone(),
             reads: Arc::new(reads),
+            worker_recomputed: false,
         }
     }
     fn s1_roots_round(
@@ -894,6 +900,7 @@ impl QueryEngine {
                     phase: Some(QueryKind::Lower),
                     limit: None,
                     reads: Arc::new(value.executed),
+                    worker_recomputed: false,
                 });
             } else {
                 tasks.push((index, definition.clone()));
@@ -993,6 +1000,17 @@ impl QueryEngine {
                 }
             }
         }
+        // Hidden instance paths do not appear in ExecutedBody reads. Retain
+        // exactly the requests made by admitted roots, including cached nested
+        // constants/lowerings, rather than every instance of a demanded owner.
+        let staged_requests: BTreeSet<_> = completed
+            .iter()
+            .flat_map(|(_, _, _, _, _, _, _, events)| events)
+            .filter_map(|event| match event {
+                SelectionEvent::StagedValue(request) => Some(request.clone()),
+                _ => None,
+            })
+            .collect();
         let bodies = source
             .completed
             .into_inner()
@@ -1102,9 +1120,14 @@ impl QueryEngine {
         // Successes reached inside a failed root remain independently valid.
         // Publish only after all worker requests/claims have settled.
         for (path, constant, mut registrations, staged) in shared.into_constants() {
-            if (!prefix || demanded.contains(&DefId::intern(&path)))
-                && self.execution_valid(&path, &constant.executed)
-            {
+            let admitted = !prefix
+                || match &staged {
+                    Some((path, arguments)) => {
+                        staged_requests.contains(&(DefId::intern(path), arguments.clone()))
+                    }
+                    None => demanded.contains(&DefId::intern(&path)),
+                };
+            if admitted && self.execution_valid(&path, &constant.executed) {
                 registrations.sort_by(|a, b| a.path.cmp(&b.path));
                 for registration in registrations {
                     self.install_staged(registration);
@@ -1148,6 +1171,9 @@ impl QueryEngine {
                 results[index] = Some(self.scalar_root_outcome(path, kind));
                 continue;
             };
+            let worker_recomputed = selected.iter().any(|event| {
+                matches!(event, SelectionEvent::LowerComputed(id) if *id == DefId::intern(path))
+            });
             if pending.is_empty() && self.execution_valid(path, &product.reads) {
                 registrations.sort_by(|a, b| a.path.cmp(&b.path));
                 for registration in registrations {
@@ -1160,6 +1186,7 @@ impl QueryEngine {
                     phase,
                     limit: self.last_comptime_limit.clone(),
                     reads: Arc::new(product.reads),
+                    worker_recomputed,
                 });
             } else {
                 // No suspended failure becomes a cached language verdict. A
@@ -1178,6 +1205,7 @@ impl QueryEngine {
                 .cloned();
             for event in selected {
                 match event {
+                    SelectionEvent::StagedValue(_) | SelectionEvent::LowerComputed(_) => {}
                     SelectionEvent::Failed(mut product) => {
                         let definition = product.definition.clone();
                         let cached = self.checked.get(&DefId::intern(&definition)).cloned();
