@@ -91,6 +91,13 @@ pub(crate) struct Completed {
 }
 
 impl Completed {
+    /// Modes carries the final successful output. `result` otherwise records
+    /// the earlier phase that stopped the task before modes was produced.
+    pub(crate) fn result(&self) -> Result<Arc<QueryOutput<AnalyzedBody>>, QueryError> {
+        self.modes
+            .as_ref()
+            .map_or_else(|| self.result.clone(), Product::result)
+    }
     /// The task's completed receipt without mutating an engine. Inherited
     /// phase/cache reads join in the same order as merge_stage publication.
     /// The caller supplies the exact frozen environment and source inputs.
@@ -776,70 +783,8 @@ impl QueryEngine {
         let mut completed = completed;
         completed.sort_by(|a, b| a.definition.cmp(&b.definition).then(a.index.cmp(&b.index)));
         for done in completed {
-            let mut inherited = None;
-            if let Some(product) = done.resolution {
-                let entry = self.merge_stage(
-                    &done.definition,
-                    QueryKind::Resolve,
-                    done.text,
-                    product,
-                    None,
-                );
-                inherited = Some(entry.memo.reads.clone());
-                keep(
-                    &mut self.resolutions,
-                    &mut self.graph,
-                    entry,
-                    self.s1.failure_is_own(),
-                );
-            }
-            if let Some(product) = done.checked {
-                let entry = self.merge_stage(
-                    &done.definition,
-                    QueryKind::Check,
-                    done.text,
-                    product,
-                    inherited.as_deref(),
-                );
-                inherited = Some(entry.memo.reads.clone());
-                keep(
-                    &mut self.checked,
-                    &mut self.graph,
-                    entry,
-                    self.s1.failure_is_own(),
-                );
-            }
-            let result = if let Some(product) = done.modes {
-                let entry = self.merge_stage(
-                    &done.definition,
-                    QueryKind::Modes,
-                    done.text,
-                    product,
-                    inherited.as_deref(),
-                );
-                inherited = Some(entry.memo.reads.clone());
-                let result = self
-                    .store_mode(&done.definition, &entry)
-                    .and_then(|_| self.mode_result(entry.clone()));
-                if matches!(result, Err(QueryError::Operational(_))) {
-                    self.forget(&MemoKey::new(
-                        QueryKind::Modes,
-                        DefId::intern(&done.definition),
-                    ));
-                } else {
-                    keep(
-                        &mut self.modes,
-                        &mut self.graph,
-                        entry,
-                        self.s1.failure_is_own(),
-                    );
-                }
-                result
-            } else {
-                done.result
-            };
-            outputs[done.index] =
-                Some(self.front_outcome(done.definition, result, Some(done.phase), inherited));
+            let index = done.index;
+            outputs[index] = Some(self.merge_completed(done));
         }
         for (index, previous) in duplicates {
             outputs[index] = outputs[previous].clone();
@@ -855,6 +800,73 @@ impl QueryEngine {
                 .flatten();
         }
         outputs
+    }
+    /// Publish one completed immutable task through the same tables, receipts,
+    /// summary capture and diagnostic metadata as an ordinary P frontier.
+    pub(crate) fn merge_completed(&mut self, done: Completed) -> ModeResult {
+        let mut inherited = None;
+        if let Some(product) = done.resolution {
+            let entry = self.merge_stage(
+                &done.definition,
+                QueryKind::Resolve,
+                done.text,
+                product,
+                None,
+            );
+            inherited = Some(entry.memo.reads.clone());
+            keep(
+                &mut self.resolutions,
+                &mut self.graph,
+                entry,
+                self.s1.failure_is_own(),
+            );
+        }
+        if let Some(product) = done.checked {
+            let entry = self.merge_stage(
+                &done.definition,
+                QueryKind::Check,
+                done.text,
+                product,
+                inherited.as_deref(),
+            );
+            inherited = Some(entry.memo.reads.clone());
+            keep(
+                &mut self.checked,
+                &mut self.graph,
+                entry,
+                self.s1.failure_is_own(),
+            );
+        }
+        let result = if let Some(product) = done.modes {
+            let entry = self.merge_stage(
+                &done.definition,
+                QueryKind::Modes,
+                done.text,
+                product,
+                inherited.as_deref(),
+            );
+            inherited = Some(entry.memo.reads.clone());
+            let result = self
+                .store_mode(&done.definition, &entry)
+                .and_then(|_| self.mode_result(entry.clone()));
+            if matches!(result, Err(QueryError::Operational(_))) {
+                self.forget(&MemoKey::new(
+                    QueryKind::Modes,
+                    DefId::intern(&done.definition),
+                ));
+            } else {
+                keep(
+                    &mut self.modes,
+                    &mut self.graph,
+                    entry,
+                    self.s1.failure_is_own(),
+                );
+            }
+            result
+        } else {
+            done.result
+        };
+        self.front_outcome(done.definition, result, Some(done.phase), inherited)
     }
     fn merge_stage<T>(
         &mut self,

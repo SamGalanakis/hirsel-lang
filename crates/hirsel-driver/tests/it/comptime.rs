@@ -615,3 +615,266 @@ fn cached_helper_lowering_preserves_dependency_depth() {
         }
     });
 }
+
+/// Anchor numbers belong to one source map. Compare every error field and
+/// limit site after replacing them by their actual source path and base.
+fn placed_evidence(sources: &hirsel_span::SourceMap, text: String) -> String {
+    let mut out = String::new();
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("Anchor(") {
+        out.push_str(&rest[..at]);
+        rest = &rest[at + "Anchor(".len()..];
+        let end = rest.find(')').unwrap();
+        let anchor = hirsel_span::Anchor(rest[..end].parse().unwrap());
+        let place = sources
+            .anchor(anchor)
+            .map(|(file, base)| (sources.file(file).unwrap().path.clone(), base));
+        out.push_str(&format!("Anchor({place:?})"));
+        rest = &rest[end + 1..];
+    }
+    out + rest
+}
+fn outcome_text(
+    engine: &QueryEngine,
+    result: Result<hirsel_tir::Materialized, QueryError>,
+) -> Result<String, String> {
+    result
+        .map(|value| materialized_text(engine, &value))
+        .map_err(|error| placed_evidence(&engine.sources, format!("{error:?}")))
+}
+fn materialized_text(engine: &QueryEngine, value: &hirsel_tir::Materialized) -> String {
+    let context = hirsel_proof_export::Cx::new(
+        std::rc::Rc::new(|_| hirsel_proof_export::Location::unknown()),
+        engine.types().clone(),
+    );
+    hirsel_codec::to_text_with(value, context).0
+}
+fn frontier_text(
+    engine: &mut QueryEngine,
+    paths: Vec<DefPath>,
+    jobs: usize,
+) -> Vec<Result<String, String>> {
+    engine
+        .materialize_values(paths, hirsel_intern::jobs::Jobs::new(jobs))
+        .into_iter()
+        .map(|value| outcome_text(engine, value))
+        .collect()
+}
+
+/// The production source, checker, V and interpreter must agree with scalar
+/// evaluation under a cold frontier, duplicate roots, partial hits and edits.
+#[test]
+fn frozen_frontier_values_refresh_and_preserve_input_order() {
+    with_compiler_stack(|| {
+        let source = |leaf| {
+            format!(
+                "fn helper() -> u32 {{ {leaf} }}\nconst LEAF: u32 = comptime helper()\nconst A: u32 = comptime (LEAF + 1)\nconst B: u32 = comptime (LEAF + 2)\n"
+            )
+        };
+        let paths = vec![path("B"), path("A"), path("B"), path("LEAF")];
+        for jobs in [1, 2, 8] {
+            let mut candidate = engine(&source(3));
+            candidate.materialize_value(&path("LEAF")).unwrap();
+            for leaf in [3, 9] {
+                let text = source(leaf);
+                let file = candidate.sources.add("comptime.hir", text.clone()).unwrap();
+                candidate.parse_file(file, &default_context()).unwrap();
+                let mut control = engine(&text);
+                let expected: Vec<_> = paths
+                    .iter()
+                    .map(|p| {
+                        let result = control.materialize_value(p);
+                        outcome_text(&control, result)
+                    })
+                    .collect();
+                for _ in 0..2 {
+                    assert_eq!(
+                        frontier_text(&mut candidate, paths.clone(), jobs),
+                        expected,
+                        "jobs={jobs} leaf={leaf}"
+                    );
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_cycles_and_failures_match_serial() {
+    with_compiler_stack(|| {
+        let source = "const GOOD: u32 = comptime 7\nconst A: u32 = comptime B\nconst B: u32 = comptime C\nconst C: u32 = comptime A\nconst BAD: u32 = comptime missing\n";
+        let paths = vec![path("C"), path("A"), path("GOOD"), path("B"), path("BAD")];
+        for jobs in [1, 2, 8] {
+            for warm in [false, true] {
+                let mut control = engine(source);
+                let expected: Vec<_> = paths
+                    .iter()
+                    .map(|p| {
+                        let result = control.materialize_value(p);
+                        outcome_text(&control, result)
+                    })
+                    .collect();
+                let mut candidate = engine(source);
+                if warm {
+                    candidate.materialize_value(&path("GOOD")).unwrap();
+                }
+                let actual = frontier_text(&mut candidate, paths.clone(), jobs);
+                assert_eq!(actual, expected, "jobs={jobs} warm={warm}");
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_depth_and_last_limit_match_serial_with_partial_hits() {
+    with_compiler_stack(|| {
+        let source = "const LEAF: u32 = 1u32\nfn helper() -> u32 { comptime LEAF }\nconst C2: u32 = comptime helper()\nconst C1: u32 = comptime C2\nconst C0: u32 = comptime C1\nconst GOOD: u32 = comptime 7\n";
+        for jobs in [1, 2, 8] {
+            for warm in [false, true] {
+                for names in [["C0", "GOOD"], ["GOOD", "C0"]] {
+                    let paths: Vec<_> = names.map(path).into();
+                    let mut control = engine(source);
+                    control.comptime_limits.call_depth = 3;
+                    let expected: Vec<_> = paths
+                        .iter()
+                        .map(|p| {
+                            let result = control.materialize_value(p);
+                            outcome_text(&control, result)
+                        })
+                        .collect();
+                    let mut candidate = engine(source);
+                    candidate.comptime_limits.call_depth = 3;
+                    candidate.materialize_value(&path("GOOD")).unwrap();
+                    if warm {
+                        candidate.lower_to_tir(&path("helper")).unwrap();
+                    }
+                    let actual = frontier_text(&mut candidate, paths, jobs);
+                    assert_eq!(actual, expected, "jobs={jobs} warm={warm} names={names:?}");
+                    assert_eq!(
+                        placed_evidence(
+                            &candidate.sources,
+                            format!("{:?}", candidate.last_comptime_limit)
+                        ),
+                        placed_evidence(
+                            &control.sources,
+                            format!("{:?}", control.last_comptime_limit)
+                        ),
+                        "jobs={jobs} warm={warm} names={names:?}"
+                    );
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn frozen_frontier_generated_and_staged_demands_retry_whole_roots() {
+    with_compiler_stack(|| {
+        let sources = [
+            "type Point { x: u64 }\nfn gen[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] { Ok(codegen.body(\"fn(v: standalone@0/Point) -> u64 uses {} { 12 }\")) }\nfn width[T](v: T) -> u64 uses {} = comptime gen(shape(T))\nconst VALUE: u64 = comptime width(Point(x: 1))\nconst GOOD: u64 = comptime 7\n",
+            "fn scaled[n:size](xs:Inline[u8,n])->u64 { let _=xs; comptime n*n }\nconst VALUE: u64 = comptime { let xs:Inline[u8,2]=[1,2]; scaled(xs) }\nconst GOOD: u64 = comptime 7\n",
+        ];
+        for source in sources {
+            for jobs in [1, 2, 8] {
+                let paths = vec![path("VALUE"), path("GOOD"), path("VALUE")];
+                let mut control = engine(source);
+                let expected: Vec<_> = paths
+                    .iter()
+                    .map(|p| {
+                        let result = control.materialize_value(p);
+                        outcome_text(&control, result)
+                    })
+                    .collect();
+                assert!(expected.iter().all(Result::is_ok), "{expected:?}");
+                let mut candidate = engine(source);
+                assert_eq!(
+                    frontier_text(&mut candidate, paths, jobs),
+                    expected,
+                    "jobs={jobs}"
+                );
+            }
+        }
+    });
+}
+
+/// A rendezvous inside the real evaluation-lowering adapter proves independent
+/// roots execute on distinct workers. A serial or whole-query-locked facade
+/// times out here instead of accidentally passing the value differential.
+#[test]
+fn frozen_frontier_evaluation_tasks_overlap() {
+    use std::sync::{Arc, Condvar, Mutex};
+    struct Overlap {
+        inner: Arc<dyn LoweringPhase>,
+        workers: Mutex<Vec<std::thread::ThreadId>>,
+        ready: Condvar,
+    }
+    impl LoweringPhase for Overlap {
+        fn lower(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            comptime: &Comptime,
+            signature: &hirsel_types::Signature,
+        ) -> Result<QueryOutput<hirsel_tir::Definition>, QueryError> {
+            self.inner.lower(t, m, body, comptime, signature)
+        }
+        fn lower_evaluation(
+            &self,
+            t: &hirsel_types::TypeInterner,
+            m: &hirsel_types::TypeMemo,
+            body: &AnalyzedBody,
+            staged: &[(hirsel_syntax::ExprId, hirsel_types::TypeId)],
+            signature: &hirsel_types::Signature,
+            expression: hirsel_syntax::ExprId,
+            result: hirsel_types::TypeId,
+            constants: &[(hirsel_syntax::ExprId, hirsel_tir::Materialized)],
+        ) -> Result<hirsel_tir::Definition, QueryError> {
+            let mut workers = self.workers.lock().unwrap();
+            let thread = std::thread::current().id();
+            if !workers.contains(&thread) {
+                workers.push(thread);
+            }
+            self.ready.notify_all();
+            let (workers, _) = self
+                .ready
+                .wait_timeout_while(workers, std::time::Duration::from_secs(10), |workers| {
+                    workers.len() < 2
+                })
+                .unwrap();
+            assert!(workers.len() >= 2, "evaluation work did not overlap");
+            drop(workers);
+            self.inner
+                .lower_evaluation(t, m, body, staged, signature, expression, result, constants)
+        }
+        fn entry_body(&self) -> hirsel_tir::BodyId {
+            self.inner.entry_body()
+        }
+    }
+    with_compiler_stack(|| {
+        for jobs in [2, 8] {
+            let mut adapters = compiler_adapters();
+            let overlap = Arc::new(Overlap {
+                inner: adapters.lowering.take().unwrap(),
+                workers: Mutex::new(vec![]),
+                ready: Condvar::new(),
+            });
+            adapters.lowering = Some(overlap.clone());
+            let mut candidate = QueryEngine::new(default_environment(), adapters);
+            let file = candidate
+                .sources
+                .add(
+                    "overlap.hir",
+                    "const A: u32 = comptime 11\nconst B: u32 = comptime 12\n".into(),
+                )
+                .unwrap();
+            candidate.parse_file(file, &default_context()).unwrap();
+            let values = candidate.materialize_values(
+                vec![path("A"), path("B")],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(values.iter().all(Result::is_ok), "{values:?}");
+            assert!(overlap.workers.lock().unwrap().len() >= 2);
+        }
+    });
+}

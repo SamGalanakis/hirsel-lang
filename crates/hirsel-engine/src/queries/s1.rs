@@ -3,6 +3,7 @@
 //! Like rustc's body tasks (rustc_hir_analysis/src/lib.rs:166-220), a dependency
 //! returns products for its caller to merge, including when evaluation fails.
 use super::*;
+mod source;
 mod worker;
 use hirsel_tir::{DefinitionRef, MaterializedRef, TirProvider};
 use hirsel_types::GenericArgument;
