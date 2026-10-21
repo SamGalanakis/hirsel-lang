@@ -22,10 +22,17 @@ Infrastructure reds have no culprit or lane; each run reports them separately
 and batches them to the orchestrator. Only code reds enter lane-blame history. Then
 docs/api.md is regenerated and, after a full run, the instruction budgets
 ratchet down to what gate-perf-counts measured, each pushed straight to main
-when it changed.
+when it changed. Both exception tables require four nonempty fields, unique
+identities and YYYY-MM-DD dates. Invalid tables stop execution with a
+configuration error. Reports and runs.jsonl include exception_status v1:
+observations before suppression, stage selection, table digests and execution
+provenance. Fresh complete exact passes are recovery candidates; absence,
+cache reuse and partial target populations are not recovery proof.
 """
 
+from datetime import date
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -62,11 +69,62 @@ def git(*arguments, cwd=None):
     return subprocess.run(['git', *arguments], cwd=cwd or TREE, check=True, capture_output=True, text=True).stdout.strip()
 
 
+class TableError(ValueError):
+    """Exception configuration is unusable; no stages may run."""
+
+
 def table(path, columns=4):
-    """A tab-separated table's rows (comments and blank lines skipped) by first field."""
-    lines = path.read_text().splitlines() if path.is_file() else []
-    return {f[0]: f for f in (line.split('\t') for line in lines if line.strip() and not line.startswith('#'))
-            if len(f) == columns}
+    """Strict exception rows, following conformance's reasoned, unique pending entries.
+
+    See crates/hirsel-conformance/src/lib.rs (pending/gate). Unlike pending,
+    these tables retain authored order and accept target and case identities.
+    """
+    found = {}
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip() or line.startswith('#'):
+            continue
+        fields = line.split('\t')
+        problem = None
+        if len(fields) != columns:
+            problem = f'expected {columns} tab-separated columns, got {len(fields)}'
+        elif any(not value.strip() for value in fields):
+            problem = f'empty required field {next(i + 1 for i, value in enumerate(fields) if not value.strip())}'
+        elif fields[0] in found:
+            problem = f'duplicate identity {fields[0]!r}'
+        elif not re.fullmatch(r'\d{4}-\d{2}-\d{2}', fields[3]):
+            problem = 'date must be YYYY-MM-DD'
+        else:
+            try:
+                date.fromisoformat(fields[3])
+            except ValueError:
+                problem = f'invalid date {fields[3]!r}'
+        if problem:
+            raise TableError(f'{path}:{number}: {problem}')
+        found[fields[0]] = fields
+    return found
+
+
+def stage_plan(tier):
+    planned = {}
+    stages(lambda name, command, **_: planned.update({name: command}), tier, planning=True)
+    return planned
+
+
+def exception_tables():
+    tables, revisions = {}, {}
+    for name in ('main-runs-skip.tsv', 'known-failures.tsv'):
+        path = TREE / 'tools' / name
+        try:
+            tables[name] = table(path)
+            revisions[name] = dict(path=f'tools/{name}', sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        except OSError as error:
+            raise TableError(f'{path}: {error.strerror}') from error
+    allowed = stage_plan('full')
+    path = TREE / 'tools/main-runs-skip.tsv'
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        if line.strip() and not line.startswith('#') and line.split('\t')[0] not in allowed:
+            raise TableError(f'{path}:{number}: unknown skip stage {line.split(chr(9))[0]!r}')
+    return tables['main-runs-skip.tsv'], tables['known-failures.tsv'], revisions
 
 
 def rows():
@@ -82,7 +140,7 @@ def checkout(tree, sha):
 
 
 def covers(row, tier):
-    return tier == 'fast' or row.get('tier', 'full') == 'full'
+    return row.get('configuration_error') is None and (tier == 'fast' or row.get('tier', 'full') == 'full')
 
 
 def tick(tier):
@@ -101,11 +159,12 @@ def tick(tier):
     os.execv(PY, [PY, str(RUN_TREE / 'tools/main-runs'), '--run', sha, tier])
 
 
-def stages(stage, tier):
+def stages(stage, tier, *, planning=False):
     """Run the tier's stages, one `stage(name, command)` each: fast is a prefix of full."""
     seed = str(int.from_bytes(os.urandom(4), 'little'))  # a new seed: no cached pass of the seeded tests
     config = ['-c', 'hirsel.full=true', '-c', f'hirsel.test_seed={seed}', '-c', 'hirsel.priority=40']
-    os.environ.update(HIRSEL_BUCK2_CONFIG=' '.join(config), HIRSEL_PRIORITY='40')
+    if not planning:
+        os.environ.update(HIRSEL_BUCK2_CONFIG=' '.join(config), HIRSEL_PRIORITY='40')
     buck2 = [PY, 'tools/buck2/event_logs.py']
     release, timeout, long = ['--target-platforms', '//tools/buck2:release'], ['--timeout', '1800'], ['--timeout', '14400']
     stage('Buck2 toolchains and pool configuration', [PY, 'tools/buck2/prepare.py'])
@@ -116,6 +175,8 @@ def stages(stage, tier):
     stage('tool tests: bench/native/tests', [PY, '-m', 'unittest', 'discover', '-s', 'bench/native/tests'], isolated=True)
 
     def query(expression):
+        if planning:
+            return []
         return subprocess.run([*buck2, 'uquery', *config, expression], cwd=TREE, capture_output=True,
                               text=True, check=True).stdout.split()
     tests = query('(kind("_rust_test", //...) + attrfilter(labels, doctest, //...)) - attrfilter(labels, gate, //...)')
@@ -134,7 +195,7 @@ def stages(stage, tier):
     stage('workspace build', [*buck2, 'build', *config, *query(build_set), '--materializations', 'none'])
     stage('workspace clippy', [PY, 'tools/buck2/clippy.py'])
     stage('formatting', [PY, 'tools/buck2/fmt.py', '--check'])
-    stage('workspace tests', test(*tests))
+    stage('workspace tests', test(*tests), target_inventory=tests)
     if tier == 'fast':
         return
     stage('full gate crate tests', full_crate_tests(*libtests))
@@ -150,7 +211,7 @@ def stages(stage, tier):
           test(*[f'//:gate-native-corpus-shard-{i}' for i in range(1, NATIVE_CORPUS_SHARDS + 1)], '//:gate-native-bugs'))
     stage('checker scaling: six families at N=10, 40 and 160',
           test(*[f'//:gate-checker-scaling-shard-{i}' for i in range(1, 7)]))
-    stage('release tests', test(*release, *tests))
+    stage('release tests', test(*release, *tests), target_inventory=tests)
     stage('full gate crate tests in release', full_crate_tests(*release, *libtests))
     stage('native and Lean checks', ['tools/check-native.sh'])
     stage('native matrix: both targets and named exclusions',
@@ -168,15 +229,96 @@ def failing_ids(target, details):
     return list(dict.fromkeys(ids + re.findall(r'"path"\s*:\s*"(conformance/[^"]+\.hir)"', details)))
 
 
-def run_stages(directory, log, tier):
-    """Every stage's verdict: (reds by key, stages run, skipped stages, the perf measurement)."""
-    skip, known = table(TREE / 'tools/main-runs-skip.tsv'), table(TREE / 'tools/known-failures.tsv')
-    reds, ran, skipped, perf = {}, [], [], []
+def case_observations(target, result):
+    """Explicit libtest identities only; never infer a passing corpus case from a parent."""
+    binary = re.sub(r'-shard-\d+$', '', target)
+    details = result['details']
+    cases = [(f'{binary}::{case}', {'ok': 'pass', 'FAILED': 'failure', 'ignored': 'skipped'}[status])
+             for case, status in re.findall(r'^test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored)\b', details, re.M)]
+    failures = {identity for identity, status in cases if status == 'failure'}
+    cases += [(identity, 'failure') for identity in failing_ids(target, details) if identity not in failures]
+    return cases
 
-    def stage(name, command, isolated=False):
+
+def complete_cases(result):
+    """Libtest's declared population, terminal summary and unique result rows agree.
+
+    This is execution scope, not a universal inventory. Whole-target recovery
+    also requires all explicitly selected shards and no child selection flags.
+    """
+    details = result['details']
+    starts = re.findall(r'^running (\d+) tests?$', details, re.M)
+    summaries = re.findall(r'^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', details, re.M)
+    cases = re.findall(r'^test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored)\b', details, re.M)
+    if len(starts) != 1 or len(summaries) != 1:
+        return False
+    counts = tuple(map(int, summaries[0]))
+    return (int(starts[0]) > 0 and sum(counts) == int(starts[0]) == len(cases)
+            and len({case for case, _ in cases}) == len(cases)
+            and counts == tuple(sum(status == expected for _, status in cases)
+                                for expected in ('ok', 'FAILED', 'ignored')))
+
+
+def filtered_population(result):
+    counts = re.findall(r'^test result: (?:ok|FAILED)\..*; (\d+) filtered out;', result['details'], re.M)
+    return int(counts[0]) if len(counts) == 1 else None
+
+
+def lifecycle(known, observations, selections, revisions):
+    """Every exception's observations survive suppression; absence stays unknown."""
+    entries = []
+    for identity, row in known.items():
+        exact = [o for o in observations if o['identity'] == identity]
+        # A binary-wide exception covers its shards as it does for red suppression.
+        target_scope = '::' not in identity and not identity.startswith('conformance/')
+        matched = ([o for o in observations if o['scope'] == 'target' and
+                    (o['target'] == identity or re.sub(r'-shard-\d+$', '', o['target']) == identity)]
+                   if target_scope else exact)
+        recoveries = []
+        if target_scope:
+            for selection in selections:
+                expected = {arg.split(':')[-1] for arg in selection['command'] if arg.startswith(('//:', 'root//:'))
+                            and (arg.split(':')[-1] == identity or
+                                 re.sub(r'-shard-\d+$', '', arg.split(':')[-1]) == identity)}
+                selected = [o for o in matched if o['stage'] == selection['stage']]
+                # Arbitrary wrappers, filters and empty/partial shard sets prove no whole target.
+                inventory = {label.split(':')[-1] for label in selection.get('target_inventory') or []
+                             if re.sub(r'-shard-\d+$', '', label.split(':')[-1]) == identity}
+                all_shards = identity in expected or bool(inventory and expected == inventory)
+                filtered = any(arg.startswith('--test-arg') or arg.startswith('hirsel.conformance_')
+                               for arg in selection['command'])
+                if (expected and all_shards and not filtered and len(selected) == len(expected)
+                        and {o['target'] for o in selected} == expected
+                        and all(o['state'] == 'pass' and o['provenance']['execution'] == 'fresh'
+                                and o['provenance'].get('command_succeeded') is True
+                                and o['complete'] and not o['ignored'] and o['filtered_out'] == 0 for o in selected)):
+                    recoveries.append(selection['stage'])
+        else:
+            recoveries = [o['stage'] for o in exact if o['state'] == 'pass' and o['complete']
+                          and o['provenance']['execution'] == 'fresh'
+                          and (o['provenance'].get('command_succeeded') is True or o['status'] == event_logs.FAIL)
+                          and sum(other['stage'] == o['stage'] for other in exact) == 1]
+        context = ([] if target_scope else [o for o in observations if o['scope'] == 'target'
+                   and identity.startswith(re.sub(r'-shard-\d+$', '', o['target']) + '::')])
+        states = sorted({o['state'] for o in matched}) or ['unobserved']
+        entries.append(dict(identity=identity, reason=row[1], owner=row[2], date=row[3],
+                            states=states, context=context, recovery_stages=sorted(set(recoveries)), observations=matched))
+    return dict(version=1, tables=revisions, selections=selections, observations=observations, known=entries)
+
+
+def run_stages(directory, log, tier):
+    """Stage verdicts, skips, perf measurement and versioned exception observations."""
+    skip, known, revisions = exception_tables()
+    reds, ran, skipped, perf = {}, [], [], []
+    observations, selections = [], []
+    planned = stage_plan(tier)
+
+    def stage(name, command, isolated=False, target_inventory=None):
         if name in skip:
             return skipped.append(skip[name])
         ran.append(name)
+        selections.append(dict(stage=name, command=command, target_inventory=target_inventory,
+                               inventory_source='workspace test query' if target_inventory is not None else None))
         logs = directory / 'logs' / re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
         logs.mkdir(parents=True, exist_ok=True)
         env = ({k: v for k, v in os.environ.items() if k not in RUN_VARIABLES} if isolated
@@ -186,15 +328,44 @@ def run_stages(directory, log, tier):
         offset = log.tell()
         started = time.monotonic()
         status = subprocess.run(command, cwd=TREE, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
+        selections[-1].update(exit_status=status, seconds=round(time.monotonic() - started, 3))
         say(f'{"pass" if status == 0 else "FAIL"}  {name} ({time.monotonic() - started:.0f} s)')
         reason = None
         if status:
             with open(log.name, errors='replace') as output:
                 output.seek(offset)
                 reason = infra_reason(status) or next((r for line in output if (r := infra_reason(details=line))), None)
+        selections[-1]['infrastructure_reason'] = reason
         failed, infra = False, False
         for events in sorted(logs.glob('*.pb.zst')):
-            for target, result in event_logs.test_results(events).items():
+            try:
+                results = event_logs.test_results(events, all_results=True)
+            except (subprocess.CalledProcessError, OSError, ValueError, KeyError) as error:
+                reds[f'evidence: {name}: {events.name}'] = dict(
+                    stage=name, target=None, ids=[], kind='infra', reason=f'unusable event log: {error}')
+                observations.append(dict(stage=name, target=None, identity=None, scope='evidence',
+                                         state='unusable', provenance=dict(event_log=str(events), execution='unknown'),
+                                         complete=False, ignored=False))
+                continue
+            for target, result in results:
+                test_reason = None
+                if result['status'] not in PASSED:
+                    test_reason = ('missing TestResult' if result.get('missing_result') else
+                                   'Buck2 Infra Failure' if result['status'] == event_logs.INFRA_FAILURE else
+                                   infra_reason(details=result['details'], timed_out=result['status'] == event_logs.TIMED_OUT))
+                    test_reason = test_reason or (reason if not result['details'].strip() else None)
+                state = ('infrastructure' if test_reason else
+                         {event_logs.PASS: 'pass', event_logs.FAIL: 'failure', event_logs.SKIP: 'skipped',
+                          event_logs.OMITTED: 'omitted'}.get(result['status'], 'unusable'))
+                observation = dict(stage=name, target=target, identity=target, scope='target', state=state,
+                                   status=result['status'], provenance=dict(result.get('provenance', {}), event_log=str(events)),
+                                   filtered_out=filtered_population(result), complete=bool(complete_cases(result) and not reason),
+                                   ignored=bool(re.search(r'\.\.\. ignored\b', result['details'])))
+                observation['provenance'].setdefault('execution', 'unknown')
+                observations.append(observation)
+                for identity, case_state in case_observations(target, result):
+                    observations.append(observation | dict(identity=identity, scope='case',
+                                        state=state if state in ('infrastructure', 'unusable', 'skipped', 'omitted') else case_state))
                 if target == 'gate-perf-counts' and result['status'] == event_logs.PASS:
                     perf.extend(json.loads(line.removeprefix(PERF_MARKER)) for line in
                                 result['details'].splitlines() if line.startswith(PERF_MARKER))
@@ -202,18 +373,24 @@ def run_stages(directory, log, tier):
                     continue
                 failed = True
                 ids = failing_ids(target, result['details'])
-                test_reason = ('Buck2 Infra Failure' if result['status'] == event_logs.INFRA_FAILURE else
-                               infra_reason(details=result['details'], timed_out=result['status'] == event_logs.TIMED_OUT))
-                test_reason = test_reason or (reason if not result['details'].strip() else None)
                 infra |= test_reason is not None
                 if test_reason or not ({target, re.sub(r'-shard-\d+$', '', target)} & known.keys()
                         or ids and all(i in known for i in ids)):
                     reds[f'{name}: {target}'] = dict(stage=name, target=target, ids=ids[:20],
                                                     kind='infra' if test_reason else 'code', reason=test_reason)
+        expected = {arg.split(':')[-1] for arg in command if arg.startswith(('//:', 'root//:'))} if 'test' in command else set()
+        observed = {o['target'] for o in observations if o['stage'] == name and o['scope'] == 'target'}
+        for target in sorted(expected - observed):
+            observations.append(dict(stage=name, target=target, identity=target, scope='target', state='unusable',
+                                     provenance=dict(execution='unknown'), complete=False, ignored=False, filtered_out=None))
+            reds[f'evidence: {name}: {target}'] = dict(stage=name, target=target, ids=[], kind='infra',
+                                                      reason='selected target has no TestResult')
         if status and (not failed or reason and not infra):
             reds[f'stage: {name}'] = dict(stage=name, target=None, ids=[], kind='infra' if reason else 'code', reason=reason)
     stages(stage, tier)
-    return reds, ran, skipped, perf[0] if len(perf) == 1 else None
+    status = lifecycle(known, observations, selections, revisions)
+    status.update(skipped=skipped, planned_stages=list(planned), unselected_stages=sorted(set(stage_plan('full')) - set(planned)))
+    return reds, ran, skipped, perf[0] if len(perf) == 1 else None, status
 
 
 def lanes(commits):
@@ -254,8 +431,9 @@ def tell(to, body):
 
 
 def describe(key, red):
-    if red.get('kind') == 'infra':
-        return f'- {key}: infrastructure ({red["reason"]})'
+    if red.get('kind') in ('infra', 'configuration'):
+        label = 'infrastructure' if red['kind'] == 'infra' else 'configuration'
+        return f'- {key}: {label} ({red["reason"]})'
     return (f'- {key}: culprit {(red["culprit"] or "unknown")[:12]}' + (f' ({red["lane"]})' if red['lane'] else '')
             + f', red since {red["since"][:12]}' + (f'; failing {", ".join(red["ids"][:5])}' if red['ids'] else ''))
 
@@ -270,7 +448,7 @@ def route(sha, reds, history, report):
     for key, red in sorted(reds.items()):
         previous = next((r for r in reversed(history) if red['stage'] in r.get('stages', [red['stage']])), None)
         kind = red.get('kind', 'code')
-        if kind == 'infra':
+        if kind in ('infra', 'configuration'):
             red.update(culprit=None, lane=None, since=sha)
             messages.setdefault((ORCHESTRATOR, kind), []).append(describe(key, red))
             continue
@@ -331,7 +509,16 @@ def run(sha, tier):
     directory = RUNS / 'runs' / f'{time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(start))}-{sha[:12]}'
     directory.mkdir(parents=True)
     with open(directory / 'run.log', 'w') as log:
-        reds, ran, skipped, perf = run_stages(directory, log, tier)
+        configuration_error = None
+        try:
+            reds, ran, skipped, perf, status = run_stages(directory, log, tier)
+        except TableError as error:
+            configuration_error = str(error)
+            log.write(configuration_error + '\n')
+            reds = {'configuration: exception tables': dict(stage='configuration', target=None, ids=[],
+                    kind='configuration', reason=configuration_error)}
+            ran, skipped, perf = [], [], None
+            status = dict(version=1, configuration_error=configuration_error, known=[], observations=[], selections=[], tables={})
     report = RUNS / 'reports' / f'{directory.name}.md'
     route(sha, reds, rows(), report)
     pushed, perf_checks = [], []
@@ -339,7 +526,7 @@ def run(sha, tier):
     for name, update in (('Regenerate the API index.', api_index),
                          ('Ratchet the instruction budgets main measured.', ratchet(perf, ratchet_checks) if perf else None)):
         try:
-            if update and (commit := push_to_main(name, update)):
+            if not configuration_error and update and (commit := push_to_main(name, update)):
                 pushed.append(f'{commit[:12]} {name}')
                 if name == 'Ratchet the instruction budgets main measured.':
                     for item in ratchet_checks:
@@ -349,11 +536,36 @@ def run(sha, tier):
             pushed.append(f'{name} failed: {error}')
     minutes = (time.time() - start) / 60
     infra = sum(red.get('kind') == 'infra' for red in reds.values())
-    lines = [f'# {tier} main run {sha[:12]}: {len(reds) - infra} code reds, {infra} infra reds', '',
+    configurations = sum(red.get('kind') == 'configuration' for red in reds.values())
+    lines = [f'# {tier} main run {sha[:12]}: {len(reds) - infra - configurations} code reds, {infra} infra reds, {configurations} configuration errors', '',
              f'{time.strftime("%Y-%m-%d %H:%M", time.gmtime(start))}Z, {minutes:.0f} min; log {directory / "run.log"}', '']
-    for kind, title in (('code', 'Code reds'), ('infra', 'Infrastructure reds')):
+    lines += [f'Configuration: {configuration_error or "valid"}; exception status v1; SHA {sha}; tier {tier}', '']
+    for kind, title in (('code', 'Code reds'), ('infra', 'Infrastructure reds'), ('configuration', 'Configuration errors')):
         lines += [f'## {title}', ''] + [describe(key, red) for key, red in sorted(reds.items())
                                          if red.get('kind', 'code') == kind] + ['']
+    lines += [f'Stages executed: {", ".join(ran) or "none"}',
+              f'Stages outside tier: {", ".join(status.get("unselected_stages", [])) or "none"}', '']
+    lines += ['## Known exception observations', '',
+              f'{len(status["known"])} configured identities; {len(status["observations"])} observations. '
+              'Unobserved identities have unknown selection/absence; cached passes are not fresh recovery.', '']
+    census = {state: sum(state in entry['states'] for entry in status['known'])
+              for state in ('failure', 'pass', 'skipped', 'omitted', 'infrastructure', 'unusable', 'unobserved')}
+    lines += [', '.join(f'{count} {state}' for state, count in census.items()) + '; '
+              + f'{sum(bool(entry["recovery_stages"]) for entry in status["known"])} recovery candidates '
+              '(states may overlap across stages).', '']
+    for name, revision in status['tables'].items():
+        lines.append(f'- table {name}: sha256 {revision["sha256"]}')
+    for entry in status['known']:
+        scopes = ', '.join(f'{o["stage"]}/{o["target"]}: {o["state"]} ({o["provenance"]["execution"]})'
+                           + (' [incomplete evidence]' if not o['complete'] else '')
+                           for o in entry['observations']) or 'unobserved (selection/absence unknown)'
+        if not entry['observations'] and entry['context']:
+            scopes += '; parent context: ' + ', '.join(f'{o["stage"]}/{o["target"]}: {o["state"]}'
+                                                     for o in entry['context'])
+        recovery = ', '.join(entry['recovery_stages']) or 'none'
+        lines.append(f'- {entry["identity"]}: {scopes}; recovery candidate stages: {recovery}; '
+                     f'owner {entry["owner"]}; reason: {entry["reason"]}')
+    lines += ['']
     lines += [f'- skipped: {row[0]}: {row[1]} (owner {row[2]}, since {row[3]})' for row in skipped]
     lines += [f'- pushed: {line}' for line in pushed]
     lines += [f'- PERF-CHECK {item["count"]} {item["old"]} -> {item["new"]} '
@@ -361,14 +573,15 @@ def run(sha, tier):
     report.parent.mkdir(exist_ok=True)
     report.write_text('\n'.join(lines) + '\n')
     (RUNS / 'latest.md').write_text(report.read_text())
-    # Keep the existing lane-blame history schema; infra details live in the report.
+    # Keep lane-blame history unchanged; versioned observation status is additive.
     code_reds = {key: {k: v for k, v in red.items() if k not in ('kind', 'reason')}
                  for key, red in reds.items() if red.get('kind', 'code') == 'code'}
     with open(ROWS, 'a') as out:
         out.write(json.dumps(dict(sha=sha, tier=tier, stages=ran, start=start, minutes=round(minutes), reds=code_reds,
-                                  report=str(report), perf_checks=perf_checks)) + '\n')
+                                  report=str(report), perf_checks=perf_checks, exception_status=status,
+                                  configuration_error=configuration_error)) + '\n')
     say(f'{tier} {sha[:12]}: {len(reds)} reds in {minutes:.0f} min; report {report}')
-    return 0
+    return 1 if configuration_error else 0
 
 
 if __name__ == '__main__':

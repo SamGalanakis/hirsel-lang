@@ -310,6 +310,40 @@ that commit's copy, so a fix to the runner holds from the next run. A run
 executes its tier's stages except those `tools/main-runs-skip.tsv` (stage,
 reason, owner, date) names.
 
+Both exception tables have exactly four nonempty tab-separated fields, unique
+identities and a real `YYYY-MM-DD` date. Blank lines and lines starting with
+`#` are ignored. Skip identities must name a defined stage (including full
+stages during a fast run). A malformed row, duplicate, missing table or
+unknown stage stops execution as a configuration failure, with its filename,
+line and reason; that failed attempt does not cover the SHA for future ticks.
+An owner not yet assigned is written explicitly as `unassigned`.
+
+The report and the existing `runs.jsonl` history add `exception_status`
+version 1 alongside the unchanged code-red routing fields. It records table
+SHA-256 digests, the run SHA/tier, planned and unselected stages, skipped
+rows, selected commands (including flags and queried target inventory), and
+all decoded target/case observations with stage, exact identity, log path
+and TestRun execution provenance. Observed failure, pass, skip, omission,
+infrastructure and unusable evidence remain distinct. Every known identity
+has a disposition even when it is unobserved; absence is not proof that a
+case was missing or outside the selected tier. Parent evidence is context
+for an unobserved case, never an invented child result.
+
+A recovery candidate requires a fresh exact pass and complete libtest
+execution evidence. Cached output retains its digest/timestamps and does
+not count as fresh execution or recovery; absent or ambiguous provenance
+stays unknown. A target-wide row requires its entire expected population:
+an unfiltered, nonempty, complete target execution, or all shards proven by
+the owning workspace query, with no ignored or filtered-out children.
+A passing child or partial shard selection is insufficient. Runners without
+this completeness evidence keep their observed scope and unknown recovery.
+Reason text is explanatory, not a failure signature. Candidates are reported
+for their observed stage; rows are never automatically deleted and no full
+run is started to resolve them. This is an exception census, not a test pass
+percentage. The structure follows the strict pending-entry checks in
+`crates/hirsel-conformance/src/lib.rs`; the reasoned-exclusion accounting
+motivation is Koru's `challenges/016_the_honest_board.md:131–155`.
+
 Each run writes one report, headed with its tier (`$HIRSEL_MAIN_RUNS/reports/<time>-<sha>.md`, the
 newest copied to `latest.md`): every red the known failures do not explain,
 with its likely culprit (of the commits since the last run of its stage, the one that

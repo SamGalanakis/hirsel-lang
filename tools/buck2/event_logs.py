@@ -226,12 +226,42 @@ PASS, FAIL, SKIP, OMITTED, FATAL, TIMED_OUT = 1, 2, 3, 4, 5, 6
 INFRA_FAILURE = 11
 
 
-def test_results(event_log, *, history=None):
+def test_results(event_log, *, history=None, all_results=False):
     """Each test's TestResult event from a `buck2 test` event log, by short
-    name; the per-case costs go to the test history (test_costs.py)."""
+    name; the per-case costs go to the test history (test_costs.py).
+
+    all_results retains repeated results and TestRuns missing their result.
+    Provenance is unknown unless one owning TestRun supplies execution/cache
+    evidence; absent/ambiguous command evidence must not imply a fresh pass.
+    """
     events = subprocess.run([str(BUCK2), 'log', 'show', str(event_log)], cwd=ROOT, check=True,
                             stdout=subprocess.PIPE, text=True, errors='replace').stdout
-    results, rows = {}, []
+    results, rows, observed, executions = {}, [], [], {}
+    # TestResult alone does not prove execution: cached output contains the
+    # original libtest success lines too. Join the owning TestRun's report.
+    for line in events.splitlines():
+        event = json.loads(line).get('Event', {})
+        run = event.get('data', {}).get('SpanEnd', {}).get('data', {}).get('TestRun')
+        if not run:
+            continue
+        suite = run['suite']
+        name = suite['target_label']['label']['name']
+        report = run.get('command_report', {})
+        details = report.get('details') or {}
+        command = details.get('command_kind', {}).get('command', {})
+        remote = command.get('RemoteCommand')
+        execution = 'unknown'
+        if remote is not None:
+            execution = {True: 'cached', False: 'fresh'}.get(remote.get('cache_hit'), 'unknown')
+        elif 'LocalCommand' in command:
+            execution = 'fresh'
+        executions.setdefault(name, []).append(dict(
+            execution=execution, command_kind=next(iter(command), 'unknown'),
+            digest=remote.get('action_digest') if remote else None,
+            start_time=(details.get('metadata') or {}).get('start_time'),
+            configuration=suite['target_label'].get('configuration'),
+            suite=suite.get('suite_name'), report_status=report.get('status'),
+            command_succeeded='Success' in report.get('status', {}) and details.get('signed_exit_code', 0) == 0))
     for line in events.splitlines():
         if '"TestResult"' not in line:
             continue
@@ -245,15 +275,25 @@ def test_results(event_log, *, history=None):
         name = result['name'].removeprefix('root//:').split(' ')[0]
         seconds = (result.get('duration_us') or 0) / 1e6
         details = result.get('details') or ''
-        results[name] = dict(status=result.get('status'), details=details, seconds=seconds)
+        sources = executions.get(name, [])
+        provenance = (sources[0] if len(sources) == 1 else dict(execution='unknown', executions=sources))
+        decoded = dict(status=result.get('status'), details=details, seconds=seconds,
+                       provenance=provenance | dict(event_timestamp=stamp))
+        results[name] = decoded
+        observed.append((name, decoded))
         match = re.fullmatch(r'(.+)-shard-(\d+)', name)
         costs = case_costs(details)
         rows.append(dict(gate=Path(event_log).name.removesuffix('.pb.zst'),
                          target=match[1] if match else name, shard=match[2] if match else '',
                          duration_seconds=seconds, date=date, status=result.get('status'),
                          case_costs=json.dumps(costs, sort_keys=True, separators=(',', ':')) if costs else ''))
+    if all_results:
+        for name, sources in executions.items():
+            if name not in results:
+                observed.append((name, dict(status=None, details='', seconds=0, missing_result=True,
+                                           provenance=dict(execution='unknown', executions=sources))))
     (test_history() if history is None else history).append(rows)
-    return results
+    return observed if all_results else results
 
 
 def run(arguments, *, buck2=None, runner=None, **kwargs):

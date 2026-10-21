@@ -20,6 +20,209 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def empty_status():
+    return dict(version=1, tables={}, known=[], observations=[], selections=[])
+
+
+class ExceptionTables(unittest.TestCase):
+    def setUp(self):
+        self.tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+
+    def test_valid_comments_and_all_malformed_rows(self):
+        valid = 'binary::case\treason\tlane\t2026-10-21\n'
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'known.tsv'
+            path.write_text('# comment\n\n' + valid)
+            self.assertEqual(self.tool['table'](path), {'binary::case': valid.strip().split('\t')})
+            controls = [(valid.replace('reason', ''), 'empty required field 2'),
+                        ('binary\treason\tlane\n', 'expected 4 tab-separated columns, got 3'),
+                        (valid.rstrip() + '\textra\n', 'expected 4 tab-separated columns, got 5'),
+                        (valid + valid, 'duplicate identity'),
+                        (valid.replace('2026-10-21', '2026-02-30'), 'invalid date'),
+                        (valid.replace('2026-10-21', '2026-2-03'), 'date must be YYYY-MM-DD')]
+            for column in (0, 2, 3):
+                fields = valid.rstrip('\n').split('\t')
+                fields[column] = ' '
+                controls.append(('\t'.join(fields), f'empty required field {column + 1}'))
+            for text, reason in controls:
+                with self.subTest(reason=reason):
+                    path.write_text('# comment\n' + text)
+                    with self.assertRaises(self.tool['TableError']) as error:
+                        self.tool['table'](path)
+                    self.assertIn(f'{path}:', str(error.exception))
+                    self.assertIn(reason, str(error.exception))
+            path.write_text(valid + valid)
+            with self.assertRaisesRegex(self.tool['TableError'], r'known.tsv:2: duplicate'):
+                self.tool['table'](path)
+
+    def test_unknown_skip_stage_is_rejected_even_when_out_of_tier(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'tools').mkdir()
+            (root / 'tools/known-failures.tsv').write_text('full-only::case\twhy\tlane\t2026-10-21\n')
+            skip = root / 'tools/main-runs-skip.tsv'
+            skip.write_text('typo\twhy\tlane\t2026-10-21\n')
+            with patch.dict(self.tool['exception_tables'].__globals__, TREE=root):
+                with self.assertRaisesRegex(self.tool['TableError'], r'main-runs-skip.tsv:1: unknown skip stage'):
+                    self.tool['exception_tables']()
+                skip.write_text('instruction count budgets\twhy\tlane\t2026-10-21\n')
+                self.assertIn('full-only::case', self.tool['exception_tables']()[1])
+
+    def test_missing_table_fails_before_execution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.dict(self.tool['run_stages'].__globals__, TREE=Path(temporary)), \
+                    patch('subprocess.run', side_effect=AssertionError('must not run')):
+                with self.assertRaisesRegex(self.tool['TableError'], r'main-runs-skip.tsv: No such file'):
+                    self.tool['exception_tables']()
+
+    def test_configuration_failure_is_reported_nonzero_and_does_not_cover_a_tick(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.dict(self.tool['run'].__globals__, RUNS=root, ROWS=root / 'runs.jsonl',
+                            run_stages=unusable_table(self.tool), route=lambda *args: None,
+                            rows=lambda: [], push_to_main=lambda *args: self.fail('must not publish')):
+                self.assertEqual(self.tool['run']('abc', 'fast'), 1)
+            history = json.loads((root / 'runs.jsonl').read_text())
+            self.assertEqual(history['reds'], {})
+            self.assertFalse(self.tool['covers'](history, 'fast'))
+            self.assertIn('known.tsv:2: empty required field 2', (root / 'latest.md').read_text())
+            self.assertIn('0 code reds, 0 infra reds, 1 configuration errors', (root / 'latest.md').read_text())
+
+
+def unusable_table(tool):
+    def run(*_):
+        raise tool['TableError']('known.tsv:2: empty required field 2')
+    return run
+
+
+class Lifecycle(unittest.TestCase):
+    def setUp(self):
+        self.tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+        self.events = self.tool['event_logs']
+
+    def result(self, cases, status=None, execution='fresh', truncated=False):
+        details = f'running {len(cases)} tests\n' + ''.join(f'test {name} ... {state}\n' for name, state in cases)
+        if not truncated:
+            details += ('test result: ok. ' + '; '.join(f'{sum(state == value for _, state in cases)} {label}'
+                        for value, label in [('ok', 'passed'), ('FAILED', 'failed'), ('ignored', 'ignored')]) + '; 0 measured; 0 filtered out;\n')
+        verdict = status or (self.events.FAIL if any(state == 'FAILED' for _, state in cases) else self.events.PASS)
+        return dict(status=verdict, details=details,
+                    provenance=dict(execution=execution, command_succeeded=verdict == self.events.PASS))
+
+    def observe(self, results, known, command=None, inventory_complete=False, skipped=False, decoder_error=False, inventory=None):
+        known = {name: [name, 'reason', 'lane', '2026-10-21'] for name in known}
+        command = command or ['buck2', 'test', '//:binary']
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            logs = directory / 'logs/workspace-tests'
+            logs.mkdir(parents=True)
+            (logs / 'test.pb.zst').touch()
+            def stages(stage, tier):
+                stage('workspace tests', command, target_inventory=inventory if inventory is not None else (command[2:] if inventory_complete else None))
+            with patch.dict(self.tool['run_stages'].__globals__, stages=stages, stage_plan=lambda tier: {},
+                            exception_tables=lambda: ({'workspace tests': ['workspace tests', 'why', 'lane', '2026-10-21']} if skipped else {},
+                                                       known, {'known-failures.tsv': dict(sha256='digest')})), \
+                    patch('subprocess.run', return_value=subprocess.CompletedProcess([], 0)), \
+                    patch.object(self.events, 'test_results', side_effect=ValueError('truncated') if decoder_error else None,
+                                 return_value=results):
+                with (directory / 'run.log').open('w') as log:
+                    reds, ran, skip, perf, status = self.tool['run_stages'](directory, log, 'fast')
+        return reds, status
+
+    def test_exact_fail_pass_and_unobserved_full_only_case(self):
+        reds, status = self.observe([('binary', self.result([('broken', 'FAILED'), ('fixed', 'ok')]))],
+                                    ['binary::broken', 'binary::fixed', 'full-only::case'])
+        entries = {entry['identity']: entry for entry in status['known']}
+        self.assertEqual(reds, {})
+        self.assertEqual(entries['binary::broken']['states'], ['failure'])
+        self.assertEqual(entries['binary::fixed']['recovery_stages'], ['workspace tests'])
+        self.assertEqual(entries['full-only::case']['states'], ['unobserved'])
+        self.assertEqual(entries['full-only::case']['recovery_stages'], [])
+        self.assertEqual(entries['binary::fixed']['observations'][0]['provenance']['execution'], 'fresh')
+
+    def test_target_needs_complete_fresh_population(self):
+        good = self.result([('one', 'ok'), ('two', 'ok')])
+        for results, command, complete, expected in [
+                ([('binary', good)], None, False, True),
+                ([('binary', self.result([('one', 'ok'), ('two', 'FAILED')]))], None, False, False),
+                ([('binary', self.result([('one', 'ok')], truncated=True))], None, False, False),
+                ([('binary', good)], ['buck2', 'test', '//:binary', '--test-arg=one'], False, False),
+                ([('binary-shard-1', good)], ['buck2', 'test', '//:binary-shard-1'], False, False),
+                ([('binary-shard-1', good)], ['buck2', 'test', '//:binary-shard-1', '//:binary-shard-2'], True, False),
+                ([('binary-shard-1', good), ('binary-shard-2', good)],
+                 ['buck2', 'test', '//:binary-shard-1', '//:binary-shard-2'], True, True),
+                ([('binary', good), ('binary', good)], None, False, False)]:
+            with self.subTest(command=command, results=results):
+                _, status = self.observe(results, ['binary'], command, complete)
+                self.assertEqual(bool(status['known'][0]['recovery_stages']), expected)
+                self.assertEqual(len([o for o in status['observations'] if o['scope'] == 'target'
+                                      and o['provenance'].get('event_log')]), len(results))
+
+    def test_shard_one_of_many_and_filtered_launcher_output_cannot_recover_target(self):
+        good = self.result([('one', 'ok')])
+        _, status = self.observe([('binary-shard-1', good)], ['binary'],
+                                 command=['buck2', 'test', '//:binary-shard-1'],
+                                 inventory=['//:binary-shard-1', '//:binary-shard-2'])
+        self.assertEqual(status['known'][0]['recovery_stages'], [])
+        good['details'] = good['details'].replace('0 filtered out', '8 filtered out')
+        _, status = self.observe([('binary', good)], ['binary', 'binary::one'])
+        self.assertEqual(status['known'][0]['recovery_stages'], [])
+        self.assertEqual(status['known'][1]['recovery_stages'], ['workspace tests'])
+
+    def test_cache_skip_omission_infra_missing_and_truncation_are_not_recovery(self):
+        for name, result in [
+                ('cache', self.result([('case', 'ok')], execution='cached')),
+                ('unknown', self.result([('case', 'ok')], execution='unknown')),
+                ('skip', self.result([('case', 'ignored')], status=self.events.SKIP)),
+                ('omitted', self.result([('case', 'ok')], status=self.events.OMITTED)),
+                ('infra', self.result([('case', 'ok')], status=self.events.INFRA_FAILURE)),
+                ('fatal', self.result([('case', 'ok')], status=self.events.FATAL)),
+                ('truncated', self.result([('case', 'ok')], truncated=True))]:
+            with self.subTest(name=name):
+                reds, status = self.observe([('binary', result)], ['binary::case', 'binary'])
+                for entry in status['known']:
+                    self.assertEqual(entry['recovery_stages'], [])
+                if name == 'infra':
+                    self.assertEqual(reds['workspace tests: binary']['kind'], 'infra')
+                    self.assertEqual(status['known'][0]['states'], ['infrastructure'])
+        for kwargs in ({}, {'skipped': True}, {'decoder_error': True}):
+            _, status = self.observe([], ['binary::case', 'binary'], **kwargs)
+            self.assertTrue(all(not entry['recovery_stages'] for entry in status['known']))
+            self.assertEqual(status['known'][0]['states'], ['unobserved'])
+
+    def test_selected_missing_result_is_unusable_and_duplicate_case_does_not_recover(self):
+        reds, status = self.observe([], ['binary'])
+        self.assertEqual(status['known'][0]['states'], ['unusable'])
+        self.assertEqual(reds['evidence: workspace tests: binary']['kind'], 'infra')
+        good = self.result([('case', 'ok')])
+        _, status = self.observe([('binary', good), ('binary', good)], ['binary::case'])
+        self.assertEqual(status['known'][0]['recovery_stages'], [])
+        good['provenance']['command_succeeded'] = False
+        _, status = self.observe([('binary', good)], ['binary', 'binary::case'])
+        self.assertTrue(all(not entry['recovery_stages'] for entry in status['known']))
+
+    def test_parent_pass_never_invents_an_unobserved_child(self):
+        _, status = self.observe([('binary', self.result([('other', 'ok')]))], ['binary::case'])
+        self.assertEqual(status['known'][0]['states'], ['unobserved'])
+        self.assertEqual(status['known'][0]['context'][0]['state'], 'pass')
+
+    def test_lifecycle_report_and_history_keep_scope_and_cache(self):
+        _, status = self.observe([('binary', self.result([('fixed', 'ok'), ('cached', 'ok')], execution='cached'))],
+                                  ['binary::fixed', 'binary::absent'])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.dict(self.tool['run'].__globals__, RUNS=root, ROWS=root / 'runs.jsonl',
+                            run_stages=lambda *args: ({}, ['workspace tests'], [], None, status),
+                            route=lambda *args: None, rows=lambda: [], push_to_main=lambda *args: None):
+                self.tool['run']('abc', 'fast')
+            history = json.loads((root / 'runs.jsonl').read_text())
+            self.assertEqual(history['exception_status'], status)
+            report = (root / 'latest.md').read_text()
+            for text in ('SHA abc; tier fast', 'sha256 digest', 'binary::fixed', 'pass (cached)',
+                         'recovery candidate stages: none', 'binary::absent: unobserved'):
+                self.assertIn(text, report)
+
+
 class NativeCollection(unittest.TestCase):
     def test_whole_native_stage_explicitly_requests_the_shared_cover(self):
         stages = runpy.run_path(str(ROOT / 'tools/main-runs'))['stages']
@@ -105,7 +308,7 @@ class Route(unittest.TestCase):
         namespace = self.route.__globals__
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            with patch.dict(namespace, stages=lambda stage, tier: stage(
+            with patch.dict(namespace, stage_plan=lambda tier: {}, exception_tables=lambda: ({}, {}, {}), stages=lambda stage, tier: stage(
                     'memory guard', [namespace['PY'], '-c', 'raise SystemExit(71)'])):
                 with (directory / 'run.log').open('w+') as log:
                     reds, *_ = namespace['run_stages'](directory, log, 'fast')
@@ -141,6 +344,14 @@ class Route(unittest.TestCase):
         code = {'workspace tests: oom': dict(stage='workspace tests', target='oom', ids=[], kind='code')}
         self.route(self.commits['bar'], code, [dict(sha=self.commits['foo-2'], reds={})], '/report.md')
         self.assertIn('TO lane-b', self.said.read_text())
+
+    def test_configuration_error_has_no_lane_blame(self):
+        reds = {'configuration: tables': dict(stage='configuration', target=None, ids=[],
+                                             kind='configuration', reason='known.tsv:2: duplicate identity')}
+        self.route(self.commits['bar'], reds, [dict(sha=self.commits['foo-2'], reds={})], '/report.md')
+        self.assertIn('TO @agentlang-24', self.said.read_text())
+        self.assertNotIn('lane-b', self.said.read_text())
+        self.assertIsNone(reds['configuration: tables']['culprit'])
 
     def test_a_lane_that_cannot_be_told_falls_back_to_the_orchestrator(self):
         landings = self.repo / '.git/hirsel-landings.jsonl'
@@ -209,7 +420,7 @@ class PerfChecks(unittest.TestCase):
                         return 'cafebabe' if pushed else None
                 output = io.StringIO()
                 with patch.dict(tool['run'].__globals__, RUNS=root, ROWS=root / 'runs.jsonl',
-                                run_stages=lambda *args: ({}, ['instruction count budgets'], [], measured),
+                                run_stages=lambda *args: ({}, ['instruction count budgets'], [], measured, empty_status()),
                                 route=lambda *args: None, rows=lambda: [], push_to_main=push), \
                         contextlib.redirect_stdout(output):
                     tool['run']('0123456789abcdef', 'full')
@@ -280,8 +491,9 @@ class Reds(unittest.TestCase):
                 'buck infra': dict(status=events.INFRA_FAILURE, details='worker vanished'),
                 'known': dict(status=events.FAIL, details='assertion failed'),
             }
-            with patch.dict(namespace, stages=stages, table=lambda path: {'known': [], 'slow': []}), \
-                    patch.object(events, 'test_results', return_value=results):
+            with patch.dict(namespace, stages=stages, stage_plan=lambda tier: {}, exception_tables=lambda: ({}, {name: [name, 'why', 'lane', '2026-10-21']
+                            for name in ('known', 'slow')}, {})), \
+                    patch.object(events, 'test_results', return_value=list(results.items())):
                 with (directory / 'run.log').open('w') as log:
                     reds, ran, *_ = tool['run_stages'](directory, log, 'fast')
         for name in ('guard', 'signal', 'shell signal', 'timeout', 'capped', 'buck infra', 'remote', 'pool'):
@@ -303,7 +515,7 @@ class Reds(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             with patch.dict(tool['run'].__globals__, RUNS=root, ROWS=root / 'runs.jsonl',
-                            run_stages=lambda *args: (reds, ['x'], [], None),
+                            run_stages=lambda *args: (reds, ['x'], [], None, empty_status()),
                             route=lambda *args: None, rows=lambda: [], push_to_main=lambda *args: None):
                 tool['run']('abc', 'fast')
             history = json.loads((root / 'runs.jsonl').read_text())

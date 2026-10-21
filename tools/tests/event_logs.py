@@ -105,5 +105,50 @@ class Retention(unittest.TestCase):
             self.assertEqual(list(logs.lines(path, buck2=buck)), ['{"event": 1}\n'])
 
 
+class Results(unittest.TestCase):
+    def decode(self, sources, statuses=(logs.PASS,), all_results=False):
+        events = []
+        for command in sources:
+            events.append({'Event': {'data': {'SpanEnd': {'data': {'TestRun': {
+                'suite': {'suite_name': 'binary', 'target_label': {
+                    'label': {'package': 'root//', 'name': 'binary'}, 'configuration': {'full_name': 'dev#hash'}}},
+                'command_report': {'status': {'Success': {}}, 'details': {
+                    'command_kind': {'command': command}, 'metadata': {'start_time': [100, 0]}}},
+            }}}}}})
+        for status in statuses:
+            events.append({'Event': {'timestamp': [101, 0], 'data': {'Instant': {'data': {'TestResult': {
+                'name': 'root//:binary', 'status': status, 'details': 'test case ... ok', 'duration_us': 1000,
+            }}}}}})
+        with patch.object(logs.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                [], 0, '\n'.join(json.dumps(event) for event in events))):
+            return logs.test_results('synthetic.pb.zst', history=logs.NoTestHistory(), all_results=all_results)
+
+    def test_fresh_cache_local_absent_and_ambiguous_provenance(self):
+        for sources, expected in [
+                ([{'RemoteCommand': {'cache_hit': False, 'action_digest': 'digest'}}], 'fresh'),
+                ([{'RemoteCommand': {'cache_hit': True, 'action_digest': 'digest'}}], 'cached'),
+                ([{'LocalCommand': {}}], 'fresh'),
+                ([{'RemoteCommand': {}}], 'unknown'),
+                ([], 'unknown'),
+                ([{'LocalCommand': {}}, {'RemoteCommand': {'cache_hit': True}}], 'unknown')]:
+            with self.subTest(sources=sources):
+                result = self.decode(sources)['binary']
+                self.assertEqual(result['provenance']['execution'], expected)
+                self.assertEqual(result['status'], logs.PASS)
+                self.assertEqual(result['provenance']['event_timestamp'], [101, 0])
+        result = self.decode([{'RemoteCommand': {'cache_hit': False, 'action_digest': 'digest'}}])['binary']
+        self.assertEqual(result['provenance']['digest'], 'digest')
+        self.assertEqual(result['provenance']['configuration'], {'full_name': 'dev#hash'})
+        self.assertTrue(result['provenance']['command_succeeded'])
+
+    def test_all_observations_keeps_repeated_results_and_missing_results(self):
+        observed = self.decode([{'LocalCommand': {}}], [logs.FAIL, logs.PASS], all_results=True)
+        self.assertEqual([result['status'] for _, result in observed], [logs.FAIL, logs.PASS])
+        self.assertEqual(self.decode([{'LocalCommand': {}}], [logs.FAIL, logs.PASS])['binary']['status'], logs.PASS)
+        missing = self.decode([{'LocalCommand': {}}], [], all_results=True)
+        self.assertTrue(missing[0][1]['missing_result'])
+        self.assertEqual(missing[0][1]['provenance']['execution'], 'unknown')
+
+
 if __name__ == '__main__':
     unittest.main()
