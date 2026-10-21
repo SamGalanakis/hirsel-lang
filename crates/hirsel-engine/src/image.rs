@@ -35,6 +35,8 @@ pub(crate) const SIGNATURES: u32 = FIRST_KIND + 2;
 pub(crate) const INPUTS: u32 = FIRST_KIND + 3;
 /// Each definition's checked products.
 pub(crate) const RECORDS: u32 = FIRST_KIND + 4;
+/// Successful per-view V receipts; signatures remain in SIGNATURES.
+pub(crate) const SNAPSHOT: u32 = FIRST_KIND + 5;
 
 /// The image's package and the definitions standing in each of its sources,
 /// in manifest order.
@@ -103,6 +105,7 @@ pub(crate) struct ImageLowering {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ImageRecord {
     pub(crate) node: ImageNode,
+    pub(crate) summary: Option<Arc<crate::PublishedSummary>>,
     pub(crate) lowering: Option<ImageLowering>,
     pub(crate) audit: Option<crate::native_audit::SourceAuditProducts>,
     pub(crate) constant: Option<crate::comptime::EvaluatedConstant>,
@@ -131,6 +134,7 @@ impl Encode for ImageRecord {
                 content: self.node.content.clone(),
                 dependencies: self.node.dependencies.clone(),
             },
+            summary: self.summary.clone(),
             lowering: None,
             audit: self.audit.clone(),
             constant: self.constant.clone(),
@@ -148,6 +152,7 @@ impl<T: Serialize + Send> Encode for Whole<T> {
 /// A mapped std image.
 pub struct StdImage {
     image: Image,
+    snapshot: crate::snapshot::SnapshotSeed,
     package: PackageId,
     files: Vec<Vec<DefId>>,
     generated: BTreeSet<DefId>,
@@ -206,6 +211,7 @@ impl StdImage {
     }
     fn from_image(image: Image) -> Result<Arc<Self>, String> {
         let meta: Meta = image.blob(META)?.ok_or("an image without its package")?;
+        let snapshot = image.blob(SNAPSHOT)?.ok_or("an image without V receipts")?;
         let mut declarations = DeclarationIndex::default();
         for ordinal in 0..image.entries(ROWS) {
             let row: RowImage = image.decode(ROWS, ordinal)?;
@@ -219,6 +225,7 @@ impl StdImage {
             .collect();
         let at = places.iter().map(|(&a, &place)| (place, a)).collect();
         Ok(Arc::new(Self {
+            snapshot,
             signatures: lazy(image.entries(SIGNATURES)),
             inputs: lazy(image.entries(INPUTS)),
             records: lazy(image.entries(RECORDS)),
@@ -233,6 +240,9 @@ impl StdImage {
     }
     pub fn key(&self) -> ContentHash {
         self.image.key()
+    }
+    pub(crate) fn snapshot_seed(&self) -> &crate::snapshot::SnapshotSeed {
+        &self.snapshot
     }
     /// The image's type rows: the core rows, then the package's, at the
     /// positions every value in it names.

@@ -30,6 +30,11 @@ impl QueryEngine {
         {
             return entry.result().map(|output| output.value.clone());
         }
+        if let Some(summary) = self.image_summary(path)
+            && self.seed_definition_summary(summary.clone())
+        {
+            return Ok(summary);
+        }
         let analyzed = self.mode_query(path)?;
         // Only the final mode result contains every planned call. Its complete
         // reads include the checked body's, as well as mode refinements.

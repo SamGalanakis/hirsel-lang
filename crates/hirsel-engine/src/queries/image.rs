@@ -52,6 +52,7 @@ impl QueryEngine {
         let revision = self.manifest_revision();
         self.declarations.inputs_mut().manifest_revision = revision;
         self.published_manifest = Some(revision);
+        self.seed_signature_verdicts(image.snapshot_seed());
         self.image = Some(AdoptedImage {
             image,
             files,
@@ -246,6 +247,9 @@ impl QueryEngine {
     pub(crate) fn image_node(&self, path: &DefPath) -> Option<Arc<ImageRecord>> {
         self.image_record(path)
     }
+    pub(super) fn image_summary(&self, path: &DefPath) -> Option<Arc<PublishedSummary>> {
+        self.image_record(path)?.summary.clone()
+    }
     pub(crate) fn image_audit_products(
         &self,
         path: &DefPath,
@@ -325,6 +329,7 @@ impl QueryEngine {
                 content,
                 dependencies,
             },
+            summary: self.definition_summary(DefId::intern(path)).ok(),
             lowering,
             audit,
             constant,
@@ -385,6 +390,31 @@ impl QueryEngine {
             )));
         }
         let mut writer = hirsel_image::ImageWriter::new(key, self.types.clone());
+        let mut seed = self.signature_snapshot().seed();
+        {
+            let inside = inside(&build.closure);
+            let digests: BTreeSet<_> = seed
+                .public
+                .iter()
+                .chain(&seed.private)
+                .filter(|s| inside(&s.definition.path().0.package))
+                .map(|s| hirsel_validate::digest(&self.types, s))
+                .collect();
+            seed.verdicts.retain(|(digest, reads)| {
+                digests.contains(digest)
+                    && reads.iter().all(|read| match read {
+                        hirsel_validate::VRead::View(d, _)
+                        | hirsel_validate::VRead::Missing(d)
+                        | hirsel_validate::VRead::FirstHeap(Some(d)) => inside(&d.path().0.package),
+                        _ => true,
+                    })
+            });
+        }
+        // Existing image signatures are authoritative. Import only candidate
+        // receipts, checked against the snapshot the program actually builds.
+        seed.public.clear();
+        seed.private.clear();
+        writer.blob(crate::image::SNAPSHOT, Box::new(Whole(seed)));
         writer.anchors(
             self.sources.anchors().filter_map(|(anchor, file, base)| {
                 Some((anchor, *build.ordinal.get(&file)?, base))
@@ -599,6 +629,7 @@ impl QueryEngine {
             && closed!(checked)
             && closed!(modes)
             && closed!(lowered)
+            && closed!(summaries)
             && state
                 .constant_values
                 .iter()
@@ -624,8 +655,17 @@ impl QueryEngine {
                 && self
                     .lowered
                     .get(&id)
+                    .is_none_or(|e| reads_closed(e.reads(), &inside))
+                && self
+                    .summaries
+                    .get(&id)
                     .is_none_or(|e| reads_closed(e.reads(), &inside));
-            for kind in [QueryKind::Check, QueryKind::Modes, QueryKind::Lower] {
+            for kind in [
+                QueryKind::Check,
+                QueryKind::Modes,
+                QueryKind::Lower,
+                QueryKind::Summary,
+            ] {
                 self.forget(&MemoKey::new(kind, id));
             }
         }

@@ -573,3 +573,91 @@ fn imaged_generic_comptime_materializes_selected_client_sizes() {
         cached.engine.import_native_input(actual).unwrap();
     });
 }
+
+/// Published summaries come from the image without retaining or rebuilding a
+/// checked/mode body, and match a source compilation with another TypeInterner.
+#[test]
+fn imaged_summary_equals_source_without_body_recomputation() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let image = library_image(&f, LIBRARY).unwrap();
+        let library = f.0.join("lib.json");
+        let client = f.program("zzz", CLIENT, &library, "lib");
+        let mut cached = load(&client, &StdImages::of(vec![image]));
+        let mut fresh = load(&client, &StdImages::none());
+        let path = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+            package: package("lib"),
+            modules: vec!["lib".into()],
+            name: "value".into(),
+        });
+        let id = DefId::intern(&path);
+        let actual = cached.engine.definition_summary(id).unwrap();
+        let expected = fresh.engine.definition_summary(id).unwrap();
+        let canonical = |engine: &QueryEngine, summary: &PublishedSummary| {
+            placed(
+                &engine.sources,
+                canonical_ids(
+                    engine.types(),
+                    || serde_json::to_vec(summary).unwrap(),
+                    format!("{summary:?}"),
+                ),
+            )
+        };
+        assert_eq!(
+            canonical(&cached.engine, &actual),
+            canonical(&fresh.engine, &expected)
+        );
+        assert!(Arc::ptr_eq(
+            &actual,
+            &cached.engine.definition_summary(id).unwrap()
+        ));
+        for phase in [
+            QueryKind::Resolve,
+            QueryKind::Check,
+            QueryKind::Modes,
+            QueryKind::Summary,
+        ] {
+            assert_eq!(cached.engine.recompute_count(&path, phase), 0, "{phase:?}");
+        }
+        assert_eq!(fresh.engine.recompute_count(&path, QueryKind::Modes), 1);
+    });
+}
+
+/// Only the new program signature needs a V declaration check: core and image
+/// views carry successful receipts checked against independently derived digests.
+#[test]
+fn imaged_snapshot_reuses_signature_verdicts() {
+    let run = || {
+        with_compiler_stack(|| {
+            use hirsel_intern::work::{self, Counter};
+            let f = Fixture::new();
+            let image = library_image(&f, LIBRARY).unwrap();
+            let library = f.0.join("lib.json");
+            let client = f.program("zzz", CLIENT, &library, "lib");
+            let mut cached = load(&client, &StdImages::of(vec![image]));
+            assert!(cached.engine.imaged(&package("lib")));
+            let before = work::read(Counter::ValidateSignatureRows);
+            let snapshot = cached.engine.signature_snapshot();
+            assert_eq!(
+                work::read(Counter::ValidateSignatureRows) - before,
+                1,
+                "only the new program signature should be checked"
+            );
+            assert!(
+                snapshot
+                    .validation(&package("lib"))
+                    .universe_errors()
+                    .1
+                    .is_empty()
+            );
+            "seeded".to_owned()
+        })
+    };
+    if let Some(outputs) = hirsel_intern::under_salts(
+        "image::imaged_snapshot_reuses_signature_verdicts",
+        &[1],
+        run,
+    ) {
+        assert_eq!(outputs, ["seeded"]);
+    }
+}

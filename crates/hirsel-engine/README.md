@@ -438,7 +438,12 @@ The std image (`image.rs`, `queries/image.rs`) is a dependency package checked
 once at toolchain build time. `LoadedProgram::image` refuses diagnostics and
 queries that read outside the package's closure. The mapped file holds declaration
 rows, normalized signatures and private views, canonical type rows, and lazy
-per-definition semantic nodes, validated TIR, audits, constants and execution reads.
+per-definition semantic nodes, validated TIR, audits, constants, execution reads,
+and published final-mode summaries with growth edges. Successful signature-view
+receipts are imported as candidates: V independently computes current digests
+and checks every contextual read before reuse; source/image signatures remain
+authoritative. Summary seeds check their complete body key and reads and restore
+reverse subscriptions without reconstructing checked or mode bodies.
 `StdImage::open` eagerly decodes the declaration index and type base; `OnceLock`
 slots share each decoded record across sessions without a decode-map mutex.
 `StdImages::toolchain()` selects `$HIRSEL_IMAGE` or the executable's sibling
