@@ -626,6 +626,45 @@ pub fn expand(
             e.nominal(path, Actuals::none())?;
         }
     }
+    // Registry callable constants have no source initializer body to request
+    // their library implementations. Expand those named relocations through
+    // the same registry builders used by ordinary function references.
+    for constant in program.constants.values() {
+        let mut pending = vec![&constant.root];
+        while let Some(node) = pending.pop() {
+            match &node.kind {
+                hirsel_tir::ValueKind::FunctionReference {
+                    definition,
+                    arguments,
+                } => {
+                    let request = if let Some(body) = crate::library::body_index(definition) {
+                        Some(crate::library::Request::operation(
+                            program,
+                            body,
+                            definition,
+                            arguments.clone(),
+                        )?)
+                    } else if program.operations.contains_key(definition)
+                        && !program.definitions.contains_key(definition)
+                        && crate::library::value::forwards(definition)
+                    {
+                        Some(crate::library::Request::operation_value(
+                            program,
+                            definition,
+                            arguments.clone(),
+                        )?)
+                    } else {
+                        None
+                    };
+                    if let Some(request) = request {
+                        crate::library::instantiate(e.layouts, &mut e.out, request)?;
+                    }
+                }
+                hirsel_tir::ValueKind::Construct { fields, .. } => pending.extend(fields),
+                _ => (),
+            }
+        }
+    }
     while let Some(id) = e.queue.pop_front() {
         e.visit(id)?;
     }

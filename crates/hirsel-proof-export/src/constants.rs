@@ -189,9 +189,17 @@ pub(super) fn validate(export: &Export) -> Result<(), ImportError> {
         .map(|s| (&s.path, &s.public))
         .collect::<BTreeMap<_, _>>();
     for constant in &export.constants {
-        let signature = signatures
-            .get(&constant.path)
-            .ok_or_else(|| refuse(constant.path.to_string(), "constant lacks a declaration"))?;
+        let Some(signature) = signatures.get(&constant.path) else {
+            // CT-2 generated data instances have no independent source header.
+            // They cannot publish callable graphs through this exception.
+            if callable(&constant.value) {
+                return Err(refuse(
+                    constant.path.to_string(),
+                    "constant lacks a declaration",
+                ));
+            }
+            continue;
+        };
         let definition = export.definitions.iter().find(|d| d.path == constant.path);
         let has_callable_tir = definition.is_some_and(|d| {
             d.tir.bodies.iter().any(|b| {

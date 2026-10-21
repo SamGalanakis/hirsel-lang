@@ -74,6 +74,26 @@ fn dictionary_statics_relocate_named_callable_instances_and_reject_bad_cells() {
 }
 
 #[test]
+fn registry_dictionary_statics_expand_their_library_comparator() {
+    let (_, lowered) = lower("fn main() -> i32 { let by = u32.order; by.compare(2u32, 1u32) }");
+    let data = only(&lowered, "order");
+    data.validate(&lowered.table, 8).unwrap();
+    let [function] = data.blocks[0].functions.as_slice() else {
+        panic!()
+    };
+    assert_eq!(
+        function.symbol.definition,
+        hirsel_syntax::DefPath::core("$intrinsic.OrderCompare_u32")
+    );
+    assert!(
+        lowered
+            .instances
+            .ids()
+            .any(|id| lowered.instances.view(id).key.digest() == function.symbol.instance.unwrap())
+    );
+}
+
+#[test]
 fn a_constant_reaches_its_list_and_byte_blocks_through_reference_cells() {
     let (_, lowered) = lower(
         "type R {\n  xs: List[Bytes],\n}\nconst C: R = R(xs: [b\"x\", b\"yz\"])\nfn main() -> u64 { let built = copy (C).xs\n list.len(built) }",
