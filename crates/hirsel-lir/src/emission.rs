@@ -53,6 +53,13 @@ pub struct FailureCodes {
 /// The rule a bounded arena's exhaustion fails with (MEM-6).
 pub const BOUNDED_RULE: &str = "MEM-6";
 
+/// Whether every-stage validation is on (`--validate-stages` sets
+/// `HIRSEL_VALIDATE_STAGES=1`, as the harnesses do): the backends then also run their
+/// own IR verifiers, which shipped builds skip.
+pub fn validate_stages() -> bool {
+    std::env::var_os("HIRSEL_VALIDATE_STAGES").is_some_and(|v| v == "1")
+}
+
 /// The immutable inputs of one emission. The emitter receives no provider, query engine or
 /// linker, and keeps no reference to any input after it returns.
 #[derive(Clone, Debug)]

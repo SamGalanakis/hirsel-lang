@@ -428,7 +428,12 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 output: output.ok_or("build requires -o")?,
                 target: target.unwrap_or_else(TargetSpec::x86_64_unknown_linux_gnu),
                 profile: profile.unwrap_or_default(),
-                backend: selected.unwrap_or_default(),
+                // A debug build is the edit loop's: Cranelift unless LLVM is asked for.
+                backend: selected.unwrap_or(if profile == Some(BuildProfile::Debug) {
+                    Backend::Cranelift
+                } else {
+                    Backend::Llvm
+                }),
                 proofs: {
                     proofs.check()?;
                     proofs
@@ -1382,7 +1387,8 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                 Path::new(&file),
                 launch.host(arguments.as_deref()),
                 evidence.as_ref(),
-                backend.unwrap_or_default(),
+                // `run --native` is the edit loop's: Cranelift unless LLVM is asked for.
+                backend.unwrap_or(hirsel_driver::native::Backend::Cranelift),
                 hirsel_driver::native::Output::Inherit { json },
                 verify,
             ) {

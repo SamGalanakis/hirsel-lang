@@ -212,11 +212,12 @@ pub(crate) fn isa(target: &TargetSpec, opt: OptLevel) -> Emitted<OwnedTargetIsa>
     for (name, value) in [
         ("opt_level", level),
         ("is_pic", "true"),
-        // Cranelift's own IR verifier checks this backend, not the program:
-        // debug builds, which every test runs, keep it; release builds skip it.
+        // Cranelift's own IR verifier checks this backend, not the program: debug
+        // builds, which every test runs, and every-stage validation keep it; the
+        // shipped compiler skips it, as cg_clif does (src/lib.rs:257).
         (
             "enable_verifier",
-            if cfg!(debug_assertions) {
+            if cfg!(debug_assertions) || hirsel_lir::emission::validate_stages() {
                 "true"
             } else {
                 "false"

@@ -197,7 +197,7 @@ pub fn compile_ir(
             });
         }
         module.set_target(&machine);
-        optimize_and_emit(&module, &machine, opt)?
+        optimize_and_emit(&module, &machine, opt, true)?
     };
     ObjectFile::read(target, bytes).map_err(|message| CodegenError::Object { message })
 }
@@ -206,22 +206,39 @@ fn optimize_and_emit(
     module: &Module<'_>,
     machine: &TargetMachine,
     opt: OptLevel,
+    verify: bool,
 ) -> Result<Vec<u8>, CodegenError> {
-    optimize(module, machine, opt)?;
+    optimize(module, machine, opt, verify)?;
     module
         .emit_object(machine)
         .map_err(|message| CodegenError::Emit { message })
+}
+
+/// Whether unit emission runs LLVM's module verifier before and after its passes: with
+/// every-stage validation (`--validate-stages`, which sets `HIRSEL_VALIDATE_STAGES=1`,
+/// as the harnesses do) and in builds with debug assertions, never in the shipped
+/// compiler: the verifier walks the whole module twice. This is cg_clif's policy
+/// (rustc_codegen_cranelift src/lib.rs:257, `-Zverify-llvm-ir` or debug assertions or
+/// its env switch; rustc's own `verify_llvm_ir` defaults off, rustc_session
+/// src/options.rs:3014), which Cranelift emission shares (`hirsel_cranelift`'s
+/// `enable_verifier`). Text IR (`compile_ir`) and the inspected IR texts are always
+/// verified.
+fn validate_stages() -> bool {
+    cfg!(debug_assertions) || hirsel_lir::emission::validate_stages()
 }
 
 fn optimize(
     module: &Module<'_>,
     machine: &TargetMachine,
     opt: OptLevel,
+    verify: bool,
 ) -> Result<(), CodegenError> {
-    module.verify().map_err(|message| CodegenError::Verify {
-        stage: VerifyStage::BeforeOptimization,
-        message,
-    })?;
+    if verify {
+        module.verify().map_err(|message| CodegenError::Verify {
+            stage: VerifyStage::BeforeOptimization,
+            message,
+        })?;
+    }
     module
         .run_passes(pipeline(opt), machine)
         .map_err(|message| CodegenError::Passes { message })?;
@@ -229,10 +246,13 @@ fn optimize(
     module
         .run_passes("always-inline", machine)
         .map_err(|message| CodegenError::Passes { message })?;
-    module.verify().map_err(|message| CodegenError::Verify {
-        stage: VerifyStage::AfterOptimization,
-        message,
-    })
+    if verify {
+        module.verify().map_err(|message| CodegenError::Verify {
+            stage: VerifyStage::AfterOptimization,
+            message,
+        })?;
+    }
+    Ok(())
 }
 
 /// Emits validated Ready units as one relocatable object for `inputs.target`.
@@ -250,7 +270,7 @@ pub fn emit_object_profile(
     sources: Option<&crate::ProfileSources>,
 ) -> Result<ObjectArtifact, CodegenError> {
     let (bytes, manifested) = lower(units, inputs, sources, |module, machine| {
-        optimize_and_emit(module, machine, inputs.opt)
+        optimize_and_emit(module, machine, inputs.opt, validate_stages())
     })?;
     let file = ObjectFile::read(inputs.target, bytes)
         .map_err(|message| CodegenError::Object { message })?;
@@ -272,7 +292,7 @@ pub fn emit_optimized_ir(
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
     lower(units, inputs, None, |module, machine| {
-        optimize(module, machine, inputs.opt)?;
+        optimize(module, machine, inputs.opt, true)?;
         Ok(module.text())
     })
     .map(|(text, _)| text)
