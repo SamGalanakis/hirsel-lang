@@ -2107,6 +2107,7 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
     let _role = unsafe { role::Guard::new(ctx) };
     // SAFETY: the task's context lies at the top of this stack and is bound to its worker.
     recycle(unsafe { &mut *ctx });
+    free::replay::start(ctx);
     let Some((code, environment, operation_site)) = scheduler(ctx).task(index).code.take() else {
         fault("a task started without code");
     };

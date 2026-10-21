@@ -24,7 +24,8 @@ impl Replay {
 
     /// # Safety
     /// Admission only, before any task runs. This initial replay slice admits
-    /// root scalar atomic operations only; no host/object/task-tree effects.
+    /// scalar atomics and administrative task-tree operations only; no host
+    /// requests or shared-object/cancellation outcome substitution yet.
     #[cfg(test)]
     pub(crate) unsafe fn root(self: &Arc<Self>, ctx: *mut TaskCtx) {
         assert!(unsafe { (*ctx).recording.is_none() && (*ctx).run_ref().free.is_none() });
@@ -93,6 +94,23 @@ pub(crate) fn start(ctx: *mut TaskCtx) {
     if at_cut(ctx) {
         park_final(ctx);
     }
+}
+
+/// Register in the parent's admitted spawn phase. False leaves the child
+/// queued forever, including cuts that contain only its START registration.
+pub(super) fn child(ctx: *mut TaskCtx, path: &[u32]) -> bool {
+    let Some(state) = state(ctx) else { return true };
+    state.with(|session| session.start(path))
+}
+
+/// An unadmitted continuation returns Requested only to unwind temporary
+/// runtime carriers. At their outer check it becomes a permanent saved wait,
+/// while a real external stop still ends the run normally.
+pub(crate) fn cut_rejection(ctx: *mut TaskCtx, stop: &Stop) -> bool {
+    matches!(stop, Stop::Requested)
+        && on(ctx)
+        && unsafe { (*ctx).run_ref().control.stopped().is_none() }
+        && at_cut(ctx)
 }
 
 pub(super) fn begin(ctx: *mut TaskCtx) {

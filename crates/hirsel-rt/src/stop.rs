@@ -281,6 +281,12 @@ pub(crate) unsafe fn check<T>(ctx: *mut TaskCtx, result: Stopped<T>) -> T {
 /// As [`check`].
 #[cold]
 pub(crate) unsafe fn raise(ctx: *mut TaskCtx, stop: Stop) -> ! {
+    // A rejected replay phase has unwound its temporary runtime owners. End
+    // this task at its admitted cut without requesting an external run stop.
+    // Keep this scheduler transition at the executor's terminal boundary.
+    if crate::tasks::free::replay::cut_rejection(ctx, &stop) {
+        crate::tasks::park_final(ctx);
+    }
     if crate::foreign::active() && stop != Stop::Requested {
         eprintln!("hirsel-rt: a run stopped inside a foreign call ({stop:?}); the process ends");
         std::process::abort();

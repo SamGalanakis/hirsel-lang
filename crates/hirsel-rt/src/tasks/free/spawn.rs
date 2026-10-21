@@ -11,7 +11,8 @@ pub(crate) const IMMEDIATE: u64 = 1;
 pub(crate) const OP_FREE: u64 = 2;
 
 pub(super) fn allowed(ctx: *mut TaskCtx, flags: u64) -> bool {
-    flags & (IMMEDIATE | OP_FREE) != 0
+    !super::replay::on(ctx)
+        && flags & (IMMEDIATE | OP_FREE) != 0
         && scheduler(ctx).task(unsafe { (*ctx).task_id }).owner == Owner::Any
         && (flags & IMMEDIATE != 0 || !super::record::on(ctx))
         // Replay always retains independent fibers; recorded immediate children

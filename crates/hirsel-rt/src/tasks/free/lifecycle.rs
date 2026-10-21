@@ -330,6 +330,7 @@ pub(crate) unsafe fn finish(
         s.settle(me);
     })?;
     unsafe { run_next(&mut *ctx) }?;
+    super::replay::start(ctx);
     Ok(STATUS_OK)
 }
 
@@ -449,11 +450,17 @@ pub(crate) unsafe fn spawn(
     task.stack = stack;
     task.inline_context = owned;
     let log = super::record::prepare_child(ctx);
+    let mut starts = true;
     super::record::spawn(ctx, log, |log| unsafe {
         if let Some(log) = &log {
             assert_eq!(log.path(), task.path);
         }
         (*child_ctx).recording = log;
+        starts = super::replay::child(ctx, &task.path);
+        if !starts {
+            task.state = State::Parked;
+            task.wait = Some(Wait::Final);
+        }
         let s = &mut *s;
         let parent = s.task(current);
         parent.spawned = parent
@@ -472,6 +479,9 @@ pub(crate) unsafe fn spawn(
         metrics.spawn(started.elapsed());
     }
     unsafe {
+        if !starts {
+            return try_yield(&mut *ctx);
+        }
         if fast && flags & super::spawn::IMMEDIATE != 0 {
             scheduler(ctx).task(current).deferred = Some(index);
             // The compiler proved the next op is its join. Returning does not
