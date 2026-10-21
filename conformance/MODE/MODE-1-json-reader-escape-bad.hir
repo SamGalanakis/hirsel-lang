@@ -1,0 +1,9 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+// twin: SEM/SEM-3-json-owned-results-run.hir
+// Owned typed results do not strengthen the Reader's borrowed token contract.
+fn escape(mut cursor: json.Reader) -> Result[json.TextView, json.JsonError] uses {} {
+  json.read_text(mut cursor)
+}
+
+pub fn main() -> () {}

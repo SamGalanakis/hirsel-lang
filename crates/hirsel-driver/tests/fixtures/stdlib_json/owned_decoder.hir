@@ -1,0 +1,54 @@
+// Recursive serde-style externally tagged enums; strings are owned tokens.
+type Tree = Leaf(String) | Branch(List[Tree])
+
+fn tree_from_json_reader(mut cursor: json.Reader) -> Result[unique Tree, String] uses {} = comptime derive.from_json_reader(
+  shape(Tree)
+)
+
+fn tree_from_json_bytes(data: Bytes) -> Result[unique Tree, String] uses {} = comptime derive.from_json_bytes(
+  shape(Tree)
+)
+
+// An explicit owned factory, using the unchanged borrowed Reader interface.
+fn direct(data: Bytes) -> Result[unique Tree, String] uses {} {
+  if !json.valid_utf8(data) {
+    return Error("not UTF-8")
+  }
+  let mut cursor = json.reader(data)
+  let decoded = tree_from_json_reader(mut cursor)
+  if results.is_error(decoded) {
+    let mut validation = json.reader(data)
+    derive.read_json(json.skip(mut validation))?
+    derive.read_json(json.finish_reader(mut validation))?
+  } else {
+    derive.read_json(json.finish_reader(mut cursor))?
+  }
+  take decoded
+}
+
+fn count(tree: Tree) -> u64 {
+  match tree {
+    Leaf(s) => string.byte_len(s),
+    Branch(children) => {
+      let mut n = 0u64
+      for child in children {
+        n += count(child)
+      }
+      n
+    },
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let decoded_tree = tree_from_json_bytes(
+    b"{\"Branch\":[{\"Leaf\":\"plain\"},{\"Branch\":[{\"Leaf\":\"es\\u0063aped\"},{\"Leaf\":\"tail\"}]}]}"
+  )
+  let Ok(tree) = take decoded_tree else {
+    return Error(())
+  }
+  if count(tree) == 16u64 {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

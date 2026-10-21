@@ -138,7 +138,8 @@ is not content, and inside a body a `mut` parameter's content is its written rel
 global. This asks nothing of the arguments: an arena-placed map passed to
 `sorted_map.insert` keeps working, and what `sorted_map.remove` gives back stays in its
 arena. A plain result holds no content, and storage whose type can hold no part of the
-content (a `List[u8]` beside a `List[String]`) keeps its own bound.
+content (a `List[u8]` beside a `List[String]`) keeps its own bound. A checked public
+`plain` bound proves no counted content even when an opaque representation is hidden.
 
 ```hirsel
 fn pop(mut xs: unique List[String]) -> Option[String] { list.pop(mut xs) }

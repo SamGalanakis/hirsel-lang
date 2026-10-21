@@ -144,7 +144,17 @@ fn counted_parts(
                 kind: BuiltinType::Iter,
                 ..
             } => return None,
-            TypeKind::Named { .. } => {
+            TypeKind::Named { definition, .. } => {
+                let signature = lookup(*definition)?;
+                let SignatureKind::Type(declaration) = &signature.kind else {
+                    return None;
+                };
+                // A checked public Plain bound proves there is no counted
+                // storage. An opaque export need not reveal its representation
+                // to preserve this proof (for example std's checked Date).
+                if declaration.bounds.contains(&Bound::Plain) {
+                    continue;
+                }
                 parts.push(ty);
                 let representation = expand_representation(
                     store,
@@ -334,6 +344,34 @@ mod tests {
             wrap,
             &mut missing
         ));
+    }
+
+    #[test]
+    fn opaque_plain_parts_cannot_carry_mutable_content() {
+        let store = TypeInterner::new(None);
+        let bytes = store.intern(row(TypeKind::Primitive(Primitive::Bytes)));
+        let opaque = store.intern(row(TypeKind::Named {
+            definition: DefId::intern(&path("Wrap")),
+            arguments: vec![].into(),
+        }));
+        let holder = store.intern(row(TypeKind::Tuple(vec![opaque].into())));
+        let memo = TypeMemo::new();
+        // A public Plain contract proves no counted storage, even when the
+        // opaque representation is unavailable (as for std's checked Date).
+        let plain = nominal(None, vec![Bound::Plain]);
+        assert!(!may_hold_content(&store, &memo, holder, bytes, &mut |_| {
+            Some(plain.clone())
+        }));
+        assert!(!may_hold_content(&store, &memo, bytes, holder, &mut |_| {
+            Some(plain.clone())
+        }));
+        let unknown = nominal(None, vec![]);
+        assert!(may_hold_content(&store, &memo, holder, bytes, &mut |_| {
+            Some(unknown.clone())
+        }));
+        assert!(may_hold_content(&store, &memo, bytes, holder, &mut |_| {
+            Some(unknown.clone())
+        }));
     }
 
     #[test]

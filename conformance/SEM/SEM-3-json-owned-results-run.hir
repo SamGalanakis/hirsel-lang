@@ -1,0 +1,102 @@
+// rule: SEM-3
+// expect: run
+// serde_json 8c535a26 tests/test.rs:1252-1475: records and externally tagged enums.
+// Owned byte results survive their input; the Reader still lends token views.
+type Tree = Leaf(String) | Branch(List[Tree]) | Dated(time.Date)
+
+fn tree_from_json_reader(mut cursor: json.Reader) -> Result[unique Tree, String] uses {} = comptime derive.from_json_reader(
+  shape(Tree)
+)
+
+fn tree_from_json_bytes(data: Bytes) -> Result[unique Tree, String] uses {} = comptime derive.from_json_bytes(
+  shape(Tree)
+)
+
+fn tree_equal(a: Tree, b: Tree) -> bool uses {} = comptime derive.equal(shape(Tree))
+
+@serializable(check = valid)
+pub opaque type Checked: copyable + inert + noalloc_drop uses {} {
+  text: String,
+}
+
+@noalloc
+fn valid(value: Checked) -> bool uses {} {
+  string.byte_len(value.text) > 0
+}
+
+// A custom decoder must preserve its opaque type's validation policy.
+fn checked_from_json_reader(mut cursor: json.Reader) -> Result[unique Checked, String] uses {} {
+  let text = derive.read_json(json.read_owned_text(mut cursor))?
+  let value = Checked(text: take text)
+  if !valid(value) {
+    return Error("empty checked text")
+  }
+  Ok(take value)
+}
+
+type Envelope {
+  forest: List[Tree],
+  checked: Checked,
+  note: Option[String],
+}
+
+fn envelope_from_json_reader(mut cursor: json.Reader) -> Result[unique Envelope, String] uses {} = comptime derive.from_json_reader(
+  shape(Envelope)
+)
+
+fn envelope_from_json_bytes(data: Bytes) -> Result[unique Envelope, String] uses {} = comptime derive.from_json_bytes(
+  shape(Envelope)
+)
+
+fn escaped_input() -> Result[unique Envelope, String] {
+  let source = "{\"forest\":[{\"Branch\":[{\"Leaf\":\"plain\"},{\"Leaf\":\"es\\u0063aped\"}]}],\"checked\":\"valid\",\"note\":\"\\ud834\\udd1e\"}"
+  envelope_from_json_bytes(string.as_bytes(source))
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let Ok(value) = escaped_input() else {
+    return Error(())
+  }
+  test.equal(t, list.len(value.forest), 1u64)
+  test.check(t, tree_equal(value.forest[0], Branch([Leaf("plain"), Leaf("escaped")])))
+  test.equal(t, value.checked.text, "valid")
+  test.equal(t, value.note, Some("𝄞"))
+  let Some(leap_day) = date.new(2024, 2, 29) else {
+    return Error(())
+  }
+  let Ok(dated) = tree_from_json_bytes(b"{\"Dated\":\"2024-02-29\"}") else {
+    return Error(())
+  }
+  test.check(t, tree_equal(dated, Dated(leap_day)))
+  // Reject after allocating a partial recursive graph, and after opaque validation.
+  match envelope_from_json_bytes(
+    b"{\"forest\":[{\"Leaf\":\"built\"}],\"checked\":\"\"}"
+  ) {
+    Error(message) => test.equal(t, message, "empty checked text"),
+    Ok(_) => test.check(t, false),
+  }
+  test.equal(
+    t,
+    tree_from_json_bytes(b"{\"Branch\":[{\"Leaf\":\"built\"},{\"Leaf\":false}]}"),
+    Error("expected a JSON string")
+  )
+  test.equal(
+    t,
+    tree_from_json_bytes(b"{\"Branch\":[{\"Leaf\":\"built\"}]} trailing"),
+    Error("not JSON")
+  )
+  test.equal(
+    t,
+    tree_from_json_bytes(b"{\"Branch\":[{\"Leaf\":\"built\"},"),
+    Error("not JSON")
+  )
+  test.equal(t, tree_from_json_bytes(b"{\"Leaf\":\"\xff\"}"), Error("not UTF-8"))
+  // Reader token views retain their documented relation inside this scope.
+  let input = "\"borrowed\""
+  let mut cursor = json.reader(string.as_bytes(input))
+  let Ok(Unescaped(view)) = json.read_text(mut cursor) else {
+    return Error(())
+  }
+  test.check(t, view == b"borrowed")
+  Ok(())
+}

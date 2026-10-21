@@ -10,7 +10,8 @@ fn fixture(name: &str) -> PathBuf {
     root().join(format!("conformance/SEM/SEM-3-json-{name}-run.hir"))
 }
 fn execute_source(source: &str) {
-    let mut loaded = load_program_source(&fixture("corpus"), Some(source)).unwrap();
+    let mut loaded =
+        load_program_source(&fixture("corpus"), Some(source)).unwrap_or_else(|e| panic!("{e}"));
     loaded.check_for_execution().unwrap();
     let run = run_observed_snapshot(
         &mut loaded.engine,
@@ -55,67 +56,149 @@ fn seeded_bounded_json_fuzz_matches_python_policy_and_exact_numbers() {
     with_compiler_stack(|| execute_source(&python_oracle(true)));
 }
 
+fn native_measurement(source: &str, label: &str) -> String {
+    use hirsel_driver::native::{
+        self, OptLevel, Options, Partition, RuntimeBuild, TargetSpec, Toolchain,
+    };
+    let mut loaded =
+        load_program_source(&fixture("corpus"), Some(source)).unwrap_or_else(|e| panic!("{e}"));
+    loaded
+        .check_for_execution()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let snapshot = loaded.engine.export_native_input().unwrap();
+    let validated = loaded.engine.import_native_input(snapshot).unwrap();
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let mut options = Options::new(target.clone());
+    options.regions = false;
+    let ready = native::build(&validated, &options).unwrap();
+    let dir = std::env::temp_dir().join(format!("hirsel-json-{label}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tools = Toolchain::in_tree_with_runtime(
+        &dir.join("runtime"),
+        &[&target],
+        RuntimeBuild {
+            measurement: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let exe = native::link(
+        &ready,
+        &loaded.entry,
+        OptLevel::Speed,
+        Partition::Whole,
+        &tools,
+        &dir,
+    )
+    .unwrap();
+    let totals = dir.join("totals");
+    let result = Command::new(exe)
+        .env_clear()
+        .env("HIRSEL_RT_MEASUREMENT", &totals)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report = std::fs::read_to_string(totals).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    report
+}
+fn allocations(report: &str) -> u64 {
+    report
+        .lines()
+        .filter_map(|line| line.strip_prefix("class "))
+        .map(|line| {
+            line.split_whitespace()
+                .nth(1)
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        })
+        .sum()
+}
+fn counter(report: &str, name: &str) -> u64 {
+    report
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{name} ")))
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
 #[test]
 fn parsed_short_tokens_copy_only_their_own_storage_when_made_unique() {
     with_compiler_stack(|| {
-        use hirsel_driver::native::{
-            self, OptLevel, Options, Partition, RuntimeBuild, TargetSpec, Toolchain,
-        };
         let source = std::fs::read_to_string(
             root().join("crates/hirsel-driver/tests/fixtures/stdlib_json/owned_tokens.hir"),
         )
         .unwrap();
-        let mut loaded = load_program_source(&fixture("corpus"), Some(&source)).unwrap();
-        loaded.check_for_execution().unwrap();
-        let snapshot = loaded.engine.export_native_input().unwrap();
-        let validated = loaded.engine.import_native_input(snapshot).unwrap();
-        let target = TargetSpec::x86_64_unknown_linux_gnu();
-        let mut options = Options::new(target.clone());
-        options.regions = false;
-        let ready = native::build(&validated, &options).unwrap();
-        let dir =
-            std::env::temp_dir().join(format!("hirsel-json-owned-tokens-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let tools = Toolchain::in_tree_with_runtime(
-            &dir.join("runtime"),
-            &[&target],
-            RuntimeBuild {
-                measurement: true,
-                ..Default::default()
-            },
+        let report = native_measurement(&source, "owned-tokens");
+        // 256 tiny tokens in a 64 KiB document must not copy the whole backing.
+        assert!(counter(&report, "copied_bytes") < 1024 * 1024, "{report}");
+    });
+}
+
+#[test]
+fn derived_byte_decoder_moves_recursive_results_without_detach() {
+    with_compiler_stack(|| {
+        let source = std::fs::read_to_string(
+            root().join("crates/hirsel-driver/tests/fixtures/stdlib_json/owned_decoder.hir"),
         )
         .unwrap();
-        let exe = native::link(
-            &ready,
-            &loaded.entry,
-            OptLevel::Speed,
-            Partition::Whole,
-            &tools,
-            &dir,
-        )
-        .unwrap();
-        let totals = dir.join("totals");
-        let result = Command::new(exe)
-            .env_clear()
-            .env("HIRSEL_RT_MEASUREMENT", &totals)
-            .output()
-            .unwrap();
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
+        let derived = native_measurement(&source, "derived-decoder");
+        let direct = native_measurement(
+            &source.replace(
+                "let decoded_tree = tree_from_json_bytes(",
+                "let decoded_tree = direct(",
+            ),
+            "direct-decoder",
         );
-        let report = std::fs::read_to_string(totals).unwrap();
-        let copied: u64 = report
-            .lines()
-            .find_map(|line| line.strip_prefix("copied_bytes "))
-            .unwrap()
-            .parse()
-            .unwrap();
-        // A 64 KiB padded document with 256 one-byte tokens must not copy the
-        // document 256 times (16 MiB). Allow ample room for container bookkeeping.
-        assert!(copied < 1024 * 1024, "{report}");
-        std::fs::remove_dir_all(dir).unwrap();
+        eprintln!("derived decoder:\n{derived}direct reader factory:\n{direct}");
+        assert_eq!(
+            allocations(&derived),
+            allocations(&direct),
+            "extra decoder allocations\n{derived}\n{direct}"
+        );
+        assert_eq!(
+            counter(&derived, "live_bytes"),
+            0,
+            "early cleanup: {derived}"
+        );
+        assert_eq!(counter(&direct, "deep_copies"), 0, "{direct}");
+        for name in ["deep_copies", "copied_blocks", "copied_bytes"] {
+            assert_eq!(
+                counter(&derived, name),
+                counter(&direct, name),
+                "extra final detach: {name}\n{derived}\n{direct}"
+            );
+        }
+        let errors = format!(
+            "{}{}",
+            source.split("pub fn main()").next().unwrap(),
+            r#"
+        pub fn main() -> Result[(), ()] {
+          let inputs: List[Bytes] = [
+            b"{\"Branch\":[{\"Leaf\":\"built\"},{\"Leaf\":false}]}",
+            b"{\"Branch\":[{\"Leaf\":\"built\"}]} trailing",
+            b"{\"Branch\":[{\"Leaf\":\"built\"},"
+          ]
+          for input in inputs {
+            let decoded = tree_from_json_bytes(input)
+            if results.is_ok(decoded) { return Error(()) }
+          }
+          Ok(())
+        }
+        "#
+        );
+        let cleanup = native_measurement(&errors, "decoder-errors");
+        assert_eq!(
+            counter(&cleanup, "live_bytes"),
+            0,
+            "early error cleanup: {cleanup}"
+        );
     });
 }
 
