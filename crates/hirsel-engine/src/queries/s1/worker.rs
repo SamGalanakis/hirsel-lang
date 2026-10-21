@@ -424,32 +424,47 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         }
         Ok(())
     }
+    fn validate_lowered(
+        &mut self,
+        path: &DefPath,
+        definition: &hirsel_tir::Definition,
+    ) -> Result<(), QueryError> {
+        let inputs = self.source.inputs();
+        if inputs.verify == Verify::Off {
+            return Ok(());
+        }
+        let mut reads = ReadsBuilder::new();
+        FrozenProvider::new(&inputs.snapshot, path.0.package.clone(), &mut reads)
+            .validation_universe();
+        self.merge(&reads.finish().expect("one immutable validation universe"));
+        let _time = timings::phase(Phase::Verify);
+        timings::count(Count::VRuns);
+        let mut observed = vec![];
+        let report = hirsel_validate::validate(
+            definition,
+            inputs.snapshot.types(),
+            inputs.snapshot.validation(&path.0.package),
+            &mut observed,
+        );
+        if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
+            return Err(error);
+        }
+        if report.violations.is_empty() {
+            Ok(())
+        } else {
+            Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "TIR validation".into(),
+                message: format!("{:?}", report.violations),
+            }))
+        }
+    }
     pub(super) fn lower(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
         if let Some((definition, reads, depth)) = self.source.cached_lowering(path) {
+            self.merge(&reads);
+            self.validate_lowered(path, &definition)?;
             self.stack
                 .replay_requests(&depth)
                 .map_err(|site| self.overflow(site))?;
-            if self.source.inputs().verify == Verify::On {
-                let inputs = self.source.inputs();
-                let _time = timings::phase(Phase::Verify);
-                timings::count(Count::VRuns);
-                let report = hirsel_validate::validate(
-                    &definition,
-                    inputs.snapshot.types(),
-                    inputs.snapshot.validation(&path.0.package),
-                    &mut vec![],
-                );
-                if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
-                    return Err(error);
-                }
-                if !report.violations.is_empty() {
-                    return Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                        operation: "TIR validation".into(),
-                        message: format!("{path:?}: {:?}", report.violations),
-                    }));
-                }
-            }
-            self.merge(&reads);
             return Ok(definition);
         }
         if let Some(hit) = self.lowered.get(path).cloned() {
@@ -497,25 +512,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                     &signature,
                 )?
                 .value;
-            if inputs.verify == Verify::On {
-                let _time = timings::phase(Phase::Verify);
-                timings::count(Count::VRuns);
-                let report = hirsel_validate::validate(
-                    &definition,
-                    &types,
-                    inputs.snapshot.validation(&path.0.package),
-                    &mut vec![],
-                );
-                if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
-                    return Err(error);
-                }
-                if !report.violations.is_empty() {
-                    return Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                        operation: "TIR validation".into(),
-                        message: format!("{path:?}: {:?}", report.violations),
-                    }));
-                }
-            }
+            worker.validate_lowered(path, &definition)?;
             Ok(Arc::new(definition))
         });
         let depth = self.stack.finish_requests(self.depth_limit());
@@ -547,8 +544,10 @@ impl<S: TirSource + ?Sized> ComptimeValueSource for TaskWorker<'_, S> {
             .origin
             .span;
         let prepared = input.lower(inputs.snapshot.types(), &inputs.memo, &*inputs.lowering)?;
-        let validated =
-            ValidatedEvaluation::new(prepared, Some(&inputs.snapshot), inputs.verify, site)?;
+        let admission =
+            ValidatedEvaluation::recorded(prepared, &inputs.snapshot, inputs.verify, site);
+        self.merge(&admission.reads);
+        let validated = admission.result?;
         let runtime = self.runtime.clone();
         let product = validated.run(&inputs.sources, inputs.limits, &runtime, self);
         self.merge(&product.value.reads);

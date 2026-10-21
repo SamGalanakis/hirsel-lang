@@ -384,6 +384,11 @@ impl QueryEngine {
         let mut tasks = vec![];
         for (index, definition) in definitions.iter().enumerate() {
             if let Some(value) = self.constant_values.get(definition).cloned()
+                && (self.verify == Verify::Off
+                    || value
+                        .executed
+                        .iter()
+                        .any(|(key, _)| matches!(key, ReadKey::ValidationUniverse(_))))
                 && self.execution_valid(definition, &value.executed)
             {
                 results[index] = Some(Ok(value.value));
@@ -461,7 +466,7 @@ impl QueryEngine {
                 results[index] = Some(self.materialize_value(path));
                 continue;
             };
-            if pending.is_empty() && self.execution_valid(&path, &product.reads) {
+            if pending.is_empty() && self.execution_valid(path, &product.reads) {
                 registrations.sort_by(|a, b| a.path.cmp(&b.path));
                 for registration in registrations {
                     self.install_staged(registration);
@@ -471,7 +476,7 @@ impl QueryEngine {
             } else {
                 // No suspended failure becomes a cached language verdict. A
                 // whole-root retry preserves the requester's original stack.
-                results[index] = Some(self.materialize_value(&path));
+                results[index] = Some(self.materialize_value(path));
             }
         }
         results.into_iter().map(Option::unwrap).collect()

@@ -49,6 +49,30 @@ pub(crate) struct EvaluationOutcome {
     pub(crate) limit: Option<hirsel_tir::ToolingLimit>,
 }
 impl ValidatedEvaluation {
+    /// A worker may publish across later registration epochs. The package's
+    /// complete base V universe identifies every input of the private overlay,
+    /// including formerly valid declarations whose overlay verdict can change.
+    /// Record before admission so failures keep the same proof as successes.
+    pub(crate) fn recorded(
+        prepared: crate::comptime::PreparedEvaluation,
+        snapshot: &SignatureSnapshot,
+        verify: Verify,
+        site: Span,
+    ) -> DependencyProduct<Self> {
+        let mut reads = ReadsBuilder::new();
+        if verify == Verify::On {
+            FrozenProvider::new(
+                snapshot,
+                prepared.definition.path.path().0.package.clone(),
+                &mut reads,
+            )
+            .validation_universe();
+        }
+        DependencyProduct {
+            result: Self::new(prepared, Some(snapshot), verify, site),
+            reads: reads.finish().expect("one immutable validation universe"),
+        }
+    }
     pub(crate) fn new(
         prepared: crate::comptime::PreparedEvaluation,
         snapshot: Option<&SignatureSnapshot>,
@@ -347,6 +371,37 @@ mod tests {
             assert_eq!(result.value.reads, source.reads);
             assert!(result.limit.is_none());
             assert!(runtime.serialization.finish().is_empty());
+        });
+    }
+
+    #[test]
+    fn failed_private_admission_keeps_its_originating_universe_receipt() {
+        crate::with_compiler_stack(|| {
+            let types = hirsel_types::TypeInterner::new(None);
+            let root = DefPath::core("private-admission");
+            let dependency = DefPath::core("constant-dependency");
+            let snapshot = SignatureSnapshot::new(Revision::FIRST, types.clone(), [], [], None);
+            let mut artifact = reading_artifact(&types, &root, &dependency);
+            artifact.definition.entry = BodyId(100);
+            let product =
+                ValidatedEvaluation::recorded(artifact, &snapshot, Verify::On, Span::default());
+            assert!(matches!(product.result, Err(QueryError::Operational(_))));
+            assert_eq!(
+                product
+                    .reads
+                    .get(&ReadKey::ValidationUniverse(crate::memo::PackageKey::of(
+                        &root.0.package
+                    ))),
+                Some(snapshot.validation_input_digest(&root.0.package))
+            );
+            let artifact = reading_artifact(&types, &root, &dependency);
+            let unchecked =
+                ValidatedEvaluation::recorded(artifact, &snapshot, Verify::Off, Span::default());
+            assert!(unchecked.result.is_ok());
+            assert!(
+                unchecked.reads.is_empty(),
+                "verification off creates no acceptance proof"
+            );
         });
     }
 

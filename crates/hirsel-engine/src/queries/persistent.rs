@@ -389,11 +389,12 @@ impl QueryEngine {
         let variant = self.stored_variant(path, QueryKind::Lower)?;
         // Such results also own depth requests/registrations. Until those
         // products have a portable replay record, use their ordinary S1 path.
-        if variant
-            .reads
-            .iter()
-            .any(|(read, _)| matches!(read, ReadKey::ExecutedBody(_)))
-        {
+        if variant.reads.iter().any(|(read, _)| {
+            matches!(
+                read,
+                ReadKey::ExecutedBody(_) | ReadKey::ValidationUniverse(_)
+            )
+        }) {
             return None;
         }
         let mut record: LowerRecord = self.decode_record(&variant.payload)?;
@@ -489,11 +490,12 @@ impl QueryEngine {
         {
             return Ok(());
         }
-        if entry
-            .reads()
-            .iter()
-            .any(|(read, _)| matches!(read, ReadKey::ExecutedBody(_)))
-        {
+        if entry.reads().iter().any(|(read, _)| {
+            matches!(
+                read,
+                ReadKey::ExecutedBody(_) | ReadKey::ValidationUniverse(_)
+            )
+        }) {
             return Ok(());
         }
         let Ok(output) = entry.output() else {

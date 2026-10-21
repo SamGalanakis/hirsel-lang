@@ -795,3 +795,56 @@ fn imaged_helper_lowering_preserves_dependency_depth() {
         assert_eq!(results[0], results[1]);
     });
 }
+
+/// Worker acceptance may depend on the imager's root signatures. Such optional
+/// constants/lowerings must be omitted rather than exported as a closure proof.
+#[test]
+fn frozen_s1_products_do_not_export_root_validation_universe_receipts() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let library =
+            f.library("pub opaque type Hidden: plain uses {} { value: u32 }\npub fn helper()->u32{let h=Hidden(value:7u32);h.value}\npub const VALUE:u32=comptime helper()\n");
+        let main = "pub fn main()->Result[(),()]{Ok(())}\n";
+        let source = format!("{main}const ROOT:u32=comptime lib.helper()\n");
+        let manifest = f.program("imager", &source, &library, "lib");
+        let mut program = load(&manifest, &StdImages::none());
+        let path = DefPath(hirsel_syntax::ItemPath {
+            package: package("lib"),
+            modules: vec!["lib".into()],
+            name: "VALUE".into(),
+        });
+        let root = DefPath(hirsel_syntax::ItemPath {
+            package: package("imager"),
+            modules: vec![],
+            name: "ROOT".into(),
+        });
+        for jobs in [1, 2, 8] {
+            let values = program.engine.materialize_values(
+                vec![path.clone(), root.clone(), path.clone()],
+                hirsel_intern::jobs::Jobs::new(jobs),
+            );
+            assert!(values.iter().all(Result::is_ok), "{values:?}");
+        }
+        program.engine.lower_to_tir(&root).unwrap();
+        let reads = program.engine.memo_reads(&root, QueryKind::Lower).unwrap();
+        for origin in ["lib", "imager"] {
+            assert!(
+                reads
+                    .get(&memo::ReadKey::ValidationUniverse(memo::PackageKey::of(
+                        &package(origin)
+                    )))
+                    .is_some(),
+                "missing {origin} V input in {reads:?}"
+            );
+        }
+        let bytes = image(&f, &mut program, "lib").unwrap();
+        let stored = StdImage::from_bytes(bytes).unwrap();
+        let client = f.program("client", main, &library, "lib");
+        let mut imaged = load(&client, &StdImages::of(vec![stored]));
+        assert!(imaged.engine.imaged(&package("lib")));
+        assert_eq!(
+            imaged.engine.materialize_constant(&path).unwrap(),
+            hirsel_tir::Constant::Integer(7)
+        );
+    });
+}

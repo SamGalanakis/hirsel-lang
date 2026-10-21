@@ -375,7 +375,7 @@ impl QueryEngine {
         } else {
             None
         };
-        let constant = if matches!(
+        let mut constant = if matches!(
             self.item_signature(path)?.value.kind,
             hirsel_types::SignatureKind::Const { .. }
         ) {
@@ -383,7 +383,7 @@ impl QueryEngine {
         } else {
             None
         };
-        let lowering = if executable {
+        let mut lowering = if executable {
             self.execution_stack.push(ReadsBuilder::new());
             self.s1.begin_requests();
             let lowered = self.lower_to_tir(path);
@@ -413,6 +413,24 @@ impl QueryEngine {
         } else {
             None
         };
+        // A whole-universe worker receipt can depend on the imager's root.
+        // These optional products cannot become a package-local proof. Drop
+        // their resident counterparts too, so release checks describe the
+        // products actually written; other closure checks stay authoritative.
+        if constant
+            .as_ref()
+            .is_some_and(|value| has_universe_input(&value.executed))
+        {
+            constant = None;
+            self.constant_values.remove(path);
+        }
+        if lowering
+            .as_ref()
+            .is_some_and(|value| has_universe_input(&value.execution))
+        {
+            lowering = None;
+            self.forget(&MemoKey::new(QueryKind::Lower, DefId::intern(path)));
+        }
         Ok(Some(ImageRecord {
             node: ImageNode {
                 content,
@@ -688,6 +706,12 @@ impl hirsel_image::Encode for Spilled {
 fn inside(closure: &BTreeSet<PackageId>) -> impl Fn(&PackageId) -> bool {
     let core = hirsel_syntax::DefPath::core("Result").0.package;
     move |p: &PackageId| closure.contains(p) || *p == core
+}
+
+fn has_universe_input(reads: &Reads) -> bool {
+    reads
+        .iter()
+        .any(|(key, _)| matches!(key, ReadKey::ValidationUniverse(_)))
 }
 
 /// Every read names only packages `inside` accepts.
